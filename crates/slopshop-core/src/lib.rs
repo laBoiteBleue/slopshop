@@ -9,11 +9,18 @@
 //! - [`edit`]: the only way to mutate a document; every edit yields its inverse.
 //! - [`session`]: a document plus its undo/redo history.
 //! - [`view`]: mapping between output (screen) pixels and document pixels.
+//! - [`composite`]: CPU reference compositor, at full resolution (export oracle and fallback).
+//! - [`convert`]: working-space pixels to a target pixel format, counting every lossy event.
+//! - [`job`]: cancellation and progress of background jobs.
 
+mod blue_noise;
 pub mod color;
+pub mod composite;
+pub mod convert;
 pub mod document;
 pub mod edit;
 pub mod geom;
+pub mod job;
 pub mod raster;
 pub mod session;
 pub mod tile;
@@ -23,5 +30,6 @@ pub use color::{ColorSpace, LinearRgba};
 pub use document::{Document, Layer, LayerContent, LayerId};
 pub use edit::{Edit, EditError};
 pub use geom::{Rect, Size};
+pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;
 pub use session::Session;

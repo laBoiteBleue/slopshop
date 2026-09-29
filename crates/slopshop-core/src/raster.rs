@@ -23,8 +23,11 @@ use crate::tile::{TileCoord, TileGrid};
 /// Tile edge in pixels. 256 × 256 RGBA8 = 256 KiB, a common GPU-friendly size.
 pub const TILE_SIZE: u32 = 256;
 
-/// Magnitude that non-finite float samples (±inf) are read as: the largest half float, so that
-/// sums and matrices stay finite. NaN is read as 0. The stored samples are not modified.
+/// Magnitude that every float sample is clamped to when read for averaging (pyramid, average
+/// color) and display: the largest half float. This applies to finite values too (a sample of
+/// 1e5 is read as 65504), so that sums and matrices stay finite and an opaque layer still hides
+/// what is below it; NaN is read as 0. The stored samples are not modified, and export reads
+/// them without this clamp (see [`crate::composite`]).
 pub const MAX_FINITE_SAMPLE: f32 = 65504.0;
 
 /// Process-unique identity of a [`RasterImage`], used as a cache key (e.g. GPU tile cache).
@@ -282,32 +285,40 @@ fn tile_grid(size: Size) -> TileGrid {
     TileGrid::new(size, NonZeroU32::new(TILE_SIZE).expect("TILE_SIZE > 0"))
 }
 
+/// Linear value of every code of an integer sample type (index = code), exactly as pixels are
+/// decoded on import; empty for float samples. Export quantizes against the same values, which
+/// is what makes 8/16-bit round trips exact (see [`crate::convert`]).
+pub(crate) fn decode_levels(transfer: TransferFunction, sample: SampleType) -> Vec<f32> {
+    match sample {
+        SampleType::U8 => (0..=255u32)
+            .map(|v| transfer.decode(v as f32 / 255.0))
+            .collect(),
+        SampleType::U16 => (0..=65535u32)
+            .map(|v| transfer.decode(v as f32 / 65535.0))
+            .collect(),
+        SampleType::F16 | SampleType::F32 => Vec::new(),
+    }
+}
+
 /// Reads and writes pixels of one format, converting to and from linear premultiplied light.
-struct Codec {
+#[derive(Debug)]
+pub(crate) struct Codec {
     sample: SampleType,
     channels: usize,
     color_channels: usize,
     has_alpha: bool,
     premultiplied: bool,
     transfer: TransferFunction,
-    bytes_per_pixel: usize,
+    pub(crate) bytes_per_pixel: usize,
     /// Raw integer sample → linear, for 8/16-bit data.
     decode_lut: Vec<f32>,
 }
 
 impl Codec {
-    fn new(format: PixelFormat) -> Self {
+    pub(crate) fn new(format: PixelFormat) -> Self {
         let sample = format.sample;
         let transfer = format.color_space.transfer;
-        let decode_lut = match sample {
-            SampleType::U8 => (0..=255u32)
-                .map(|v| transfer.decode(v as f32 / 255.0))
-                .collect(),
-            SampleType::U16 => (0..=65535u32)
-                .map(|v| transfer.decode(v as f32 / 65535.0))
-                .collect(),
-            SampleType::F16 | SampleType::F32 => Vec::new(),
-        };
+        let decode_lut = decode_levels(transfer, sample);
         let channels = format.layout.channels() as usize;
         Self {
             sample,
@@ -321,18 +332,15 @@ impl Codec {
         }
     }
 
-    fn raw(&self, px: &[u8], channel: usize) -> RawSample {
+    /// One sample; float samples go through `map` (see [`Self::read_mapped`]).
+    fn raw(&self, px: &[u8], channel: usize, map: &mut impl FnMut(f32) -> f32) -> RawSample {
         let b = self.sample.bytes() as usize;
         let s = &px[channel * b..][..b];
         match self.sample {
             SampleType::U8 => RawSample::Int(u32::from(s[0])),
             SampleType::U16 => RawSample::Int(u32::from(u16::from_ne_bytes([s[0], s[1]]))),
-            SampleType::F16 => {
-                RawSample::Float(finite(f16_to_f32(u16::from_ne_bytes([s[0], s[1]]))))
-            }
-            SampleType::F32 => {
-                RawSample::Float(finite(f32::from_ne_bytes([s[0], s[1], s[2], s[3]])))
-            }
+            SampleType::F16 => RawSample::Float(map(f16_to_f32(u16::from_ne_bytes([s[0], s[1]])))),
+            SampleType::F32 => RawSample::Float(map(f32::from_ne_bytes([s[0], s[1], s[2], s[3]]))),
         }
     }
 
@@ -346,19 +354,32 @@ impl Codec {
         }
     }
 
-    fn linear(&self, raw: RawSample) -> f32 {
+    fn linear(&self, raw: RawSample, map: &mut impl FnMut(f32) -> f32) -> f32 {
         match raw {
             RawSample::Int(v) => self.decode_lut[v as usize],
             RawSample::Float(v) if self.transfer.is_linear() => v,
             // A finite sample can still decode out of range (HLG grows exponentially).
-            RawSample::Float(v) => finite(self.transfer.decode(v)),
+            RawSample::Float(v) => map(self.transfer.decode(v)),
         }
     }
 
-    /// Linear premultiplied color (gray replicated) and alpha of one pixel.
+    /// Linear premultiplied color (gray replicated) and alpha of one pixel, as read for
+    /// averaging and display (float values clamped, see [`MAX_FINITE_SAMPLE`]).
     fn read(&self, px: &[u8]) -> ([f32; 3], f32) {
+        self.read_mapped(px, &mut finite)
+    }
+
+    /// [`Self::read`] with a custom rule for float values: `map` receives every float sample
+    /// and every decoded float value, and returns what to use instead (e.g. finite values
+    /// unchanged, non-finite ones replaced and counted).
+    pub(crate) fn read_mapped(
+        &self,
+        px: &[u8],
+        map: &mut impl FnMut(f32) -> f32,
+    ) -> ([f32; 3], f32) {
         let alpha = if self.has_alpha {
-            self.unit(self.raw(px, self.channels - 1)).clamp(0.0, 1.0)
+            self.unit(self.raw(px, self.channels - 1, map))
+                .clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -367,17 +388,17 @@ impl Codec {
         let unpremultiply_first = self.premultiplied && !self.transfer.is_linear();
         let mut color = [0.0; 3];
         for (c, value) in color.iter_mut().enumerate().take(self.color_channels) {
-            let raw = self.raw(px, c);
+            let raw = self.raw(px, c, map);
             *value = if unpremultiply_first {
                 if alpha > 0.0 {
-                    finite(self.transfer.decode(self.unit(raw) / alpha)) * alpha
+                    map(self.transfer.decode(self.unit(raw) / alpha)) * alpha
                 } else {
                     0.0
                 }
             } else if self.premultiplied {
-                self.linear(raw)
+                self.linear(raw, map)
             } else {
-                self.linear(raw) * alpha
+                self.linear(raw, map) * alpha
             };
         }
         if self.color_channels == 1 {
@@ -433,7 +454,8 @@ impl Codec {
     }
 }
 
-/// Non-finite float samples as read for averaging and display (see [`MAX_FINITE_SAMPLE`]).
+/// Float values as read for averaging and display: NaN → 0, everything else clamped to
+/// ±[`MAX_FINITE_SAMPLE`] (finite values included).
 fn finite(v: f32) -> f32 {
     if v.is_nan() {
         0.0
