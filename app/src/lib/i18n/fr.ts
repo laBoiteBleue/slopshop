@@ -81,6 +81,8 @@ const fr: Messages = {
   "export.cancelled": "Export de {name} annulé",
   "export.failed": "Impossible d'exporter {name} : {error}",
   "export.dismiss": "Masquer",
+  "export.showInFolder": "Afficher dans le dossier",
+  "export.revealFailed": "Impossible d'afficher le fichier : {error}",
   "export.report.clippedHigh": "{count} valeurs au-dessus de la plage du format ont été écrêtées",
   "export.report.clippedLow": "{count} valeurs négatives ou hors gamut ont été écrêtées",
   "export.report.nonFinite": "{count} valeurs infinies ou NaN ont été remplacées",

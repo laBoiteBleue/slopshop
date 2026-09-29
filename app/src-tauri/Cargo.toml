@@ -25,6 +25,9 @@ tauri = { version = "2", features = [] }
 # IPC DTOs (de)serialization; Tauri already depends on it.
 serde = { version = "1", features = ["derive"] }
 tauri-plugin-dialog = "2"
+# "Show in folder" after an export: selects the file in Explorer / Finder / the Linux file
+# manager (official plugin; its JavaScript commands are not granted, only our command uses it).
+tauri-plugin-opener = "2"
 
 [dev-dependencies]
 # Tests deserialize IPC requests the way Tauri does.

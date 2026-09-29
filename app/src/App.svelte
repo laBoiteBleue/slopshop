@@ -71,6 +71,8 @@
     title: string;
     lines: string[];
     kind: "done" | "notice" | "error";
+    /** The written file, offered to show in its folder. */
+    path?: string;
   };
   let exportResults = $state<ExportResult[]>([]);
   /** Last `local-<n>` key given. */
@@ -453,11 +455,22 @@
   function showExportResult(id: number | undefined | null, result: Omit<ExportResult, "key">) {
     const key = id == null ? `local-${++lastLocalResult}` : `job-${id}`;
     exportResults = [...exportResults.filter((r) => r.key !== key), { key, ...result }];
-    if (result.kind === "done") setTimeout(() => dismissExportResult(key), 4000);
+    // Long enough to reach the "show in folder" link.
+    if (result.kind === "done") setTimeout(() => dismissExportResult(key), 8000);
   }
 
   function dismissExportResult(key: string) {
     exportResults = exportResults.filter((r) => r.key !== key);
+  }
+
+  function revealExport(path: string) {
+    engine.revealInFolder(path).catch((e) => {
+      showExportResult(null, {
+        title: t("export.revealFailed", { error: String(e) }),
+        lines: [],
+        kind: "error",
+      });
+    });
   }
 
   function onExportFinished(finished: ExportFinished) {
@@ -469,6 +482,7 @@
       title: t("export.finished", { name }),
       lines: report,
       kind: report.length > 0 ? "notice" : "done",
+      path: finished.path,
     });
   }
 
@@ -867,6 +881,12 @@
         {#each result.lines as line, i (i)}
           <p>{line}</p>
         {/each}
+        {#if result.path}
+          {@const path = result.path}
+          <button class="card-link" onclick={() => revealExport(path)}>
+            {t("export.showInFolder")}
+          </button>
+        {/if}
       </div>
     {/each}
   </aside>
@@ -945,6 +965,19 @@
     background: none;
     color: var(--text-muted);
     font-size: 9px;
+  }
+
+  .card-link {
+    margin-top: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  .card-link:hover {
+    color: var(--text);
   }
 
   .card-button:hover {

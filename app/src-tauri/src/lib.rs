@@ -25,6 +25,7 @@ use slopshop_render::Renderer;
 use slopshop_render::present::{Presented, Presenter};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::export::ExportJobs;
 use crate::ipc::{
@@ -634,6 +635,18 @@ async fn open_image(app: AppHandle, path: PathBuf) -> Result<DocumentView, Strin
         .map_err(|e| e.to_string())?
 }
 
+/// Show a file in the system's file manager, selected (e.g. an exported file).
+#[tauri::command]
+async fn reveal_in_folder(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Add an image as the new top layer of a document (undoable).
 #[tauri::command]
 async fn add_image_layer(
@@ -958,6 +971,7 @@ fn close_after_exports(window: &tauri::Window, api: &tauri::CloseRequestApi) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .setup(|app| {
             if app.state::<AppState>().requested_presenter == PresenterMode::Window {
@@ -1026,6 +1040,7 @@ pub fn run() {
             render_view,
             presenter_mode,
             present_view,
+            reveal_in_folder,
             export::export_defaults,
             export::export_spaces,
             export::export_document,

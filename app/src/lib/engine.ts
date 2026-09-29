@@ -326,6 +326,8 @@ export const engine = {
   openFailures: () => invoke<OpenFailed[]>("open_failures"),
   /** Decode an image into a new tab (seconds for large images). */
   openImage: (path: string) => invoke<DocumentView>("open_image", { path }),
+  /** Show a file (e.g. an exported one) selected in the system's file manager. */
+  revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   /** Decode an image into a new top layer of a document (undoable). */
   addImageLayer: (documentId: number, path: string) =>
     invoke<DocumentView>("add_image_layer", { documentId, path }),

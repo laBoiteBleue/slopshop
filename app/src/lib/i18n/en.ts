@@ -81,6 +81,8 @@ const en = {
   "export.cancelled": "Export of {name} cancelled",
   "export.failed": "Cannot export {name}: {error}",
   "export.dismiss": "Dismiss",
+  "export.showInFolder": "Show in folder",
+  "export.revealFailed": "Cannot show the file: {error}",
   "export.report.clippedHigh": "{count} values above the format's range were clipped",
   "export.report.clippedLow": "{count} negative or out-of-gamut values were clipped",
   "export.report.nonFinite": "{count} infinite or NaN values were replaced",
