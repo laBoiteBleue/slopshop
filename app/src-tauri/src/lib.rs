@@ -13,7 +13,7 @@ mod ipc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -382,9 +382,62 @@ impl Drop for OpeningGuard<'_> {
     }
 }
 
-/// Decode `path` and put it into `target`. Blocking and heavy: worker threads only. Reports
-/// progress and outcome through events, whoever started the open.
-fn open_path(app: &AppHandle, path: &Path, target: OpenTarget) -> Result<DocumentView, String> {
+/// Puts the results of opens decoded in parallel into their target in the order they were
+/// asked for (the order of the files chosen or dropped), whatever order the decodes end in.
+#[derive(Debug, Default)]
+struct InsertionOrder {
+    /// Index of the next open allowed to insert its result.
+    next: Mutex<usize>,
+    turn_changed: Condvar,
+}
+
+impl InsertionOrder {
+    fn wait_for(&self, index: usize) -> MutexGuard<'_, usize> {
+        // The counter stays consistent even if a holder panicked: keep going.
+        let mut next = self.next.lock().unwrap_or_else(|e| e.into_inner());
+        while *next < index {
+            next = self
+                .turn_changed
+                .wait(next)
+                .unwrap_or_else(|e| e.into_inner());
+        }
+        next
+    }
+}
+
+/// The place of one open in an [`InsertionOrder`]. Dropping it (after the insertion, or after a
+/// failure, even while unwinding) waits for the earlier opens and lets the next one go, so that
+/// a failed open never holds up the others.
+struct Turn<'a> {
+    order: &'a InsertionOrder,
+    index: usize,
+}
+
+impl Turn<'_> {
+    /// Block until every earlier open has inserted its result or failed.
+    fn wait(&self) {
+        drop(self.order.wait_for(self.index));
+    }
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        let mut next = self.order.wait_for(self.index);
+        *next = self.index + 1;
+        drop(next);
+        self.order.turn_changed.notify_all();
+    }
+}
+
+/// Decode `path` and put it into `target`, after the earlier opens of `turn`'s batch if any.
+/// Blocking and heavy: worker threads only. Reports progress and outcome through events,
+/// whoever started the open.
+fn open_path(
+    app: &AppHandle,
+    path: &Path,
+    target: OpenTarget,
+    turn: Option<&Turn<'_>>,
+) -> Result<DocumentView, String> {
     let state = app.state::<AppState>();
     let id = state.next_open_id.fetch_add(1, Ordering::Relaxed);
     let name = file_name(path);
@@ -413,6 +466,9 @@ fn open_path(app: &AppHandle, path: &Path, target: OpenTarget) -> Result<Documen
             slopshop_io::open_image(path).map_err(|e| (e.code(), e.to_string()))
         };
         decoded.and_then(|imported| {
+            if let Some(turn) = turn {
+                turn.wait();
+            }
             insert_imported(&state, path, &name, imported, target).map_err(|e| {
                 let code = if e == DOCUMENT_CLOSED {
                     CODE_DOCUMENT_CLOSED
@@ -627,12 +683,39 @@ async fn open_failures(state: State<'_, AppState>) -> Result<Vec<OpenFailed>, St
         .map_err(|_| "open state is poisoned".to_owned())
 }
 
-/// Open an image in a new tab.
+/// Open images, decoded in parallel: each in a new tab, or each as a new top layer of
+/// `document_id` (undoable, one edit per image). Tabs and layers come in the order of `paths`.
+/// Every outcome arrives as an `open-*` event; this resolves once all are done.
 #[tauri::command]
-async fn open_image(app: AppHandle, path: PathBuf) -> Result<DocumentView, String> {
-    tauri::async_runtime::spawn_blocking(move || open_path(&app, &path, OpenTarget::NewTab))
-        .await
-        .map_err(|e| e.to_string())?
+async fn open_images(
+    app: AppHandle,
+    paths: Vec<PathBuf>,
+    document_id: Option<u64>,
+) -> Result<(), String> {
+    let target = match document_id {
+        Some(document_id) => OpenTarget::Layer { document_id },
+        None => OpenTarget::NewTab,
+    };
+    let order = Arc::new(InsertionOrder::default());
+    let opens: Vec<_> = paths
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let (app, order) = (app.clone(), order.clone());
+            tauri::async_runtime::spawn_blocking(move || {
+                let turn = Turn {
+                    order: &order,
+                    index,
+                };
+                // The outcome is reported by the open's own events.
+                let _ = open_path(&app, &path, target, Some(&turn));
+            })
+        })
+        .collect();
+    for open in opens {
+        open.await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Show a file in the system's file manager, selected (e.g. an exported file).
@@ -642,20 +725,6 @@ async fn reveal_in_folder(app: AppHandle, path: PathBuf) -> Result<(), String> {
         app.opener()
             .reveal_item_in_dir(&path)
             .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Add an image as the new top layer of a document (undoable).
-#[tauri::command]
-async fn add_image_layer(
-    app: AppHandle,
-    document_id: u64,
-    path: PathBuf,
-) -> Result<DocumentView, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        open_path(&app, &path, OpenTarget::Layer { document_id })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -989,7 +1058,7 @@ pub fn run() {
                 }
                 for path in startup_files() {
                     let start = Instant::now();
-                    match open_path(&handle, &path, OpenTarget::NewTab) {
+                    match open_path(&handle, &path, OpenTarget::NewTab, None) {
                         Ok(_) => eprintln!(
                             "opened {} in {:.1} s",
                             path.display(),
@@ -1028,8 +1097,7 @@ pub fn run() {
             rename_document,
             openings,
             open_failures,
-            open_image,
-            add_image_layer,
+            open_images,
             perform,
             perform_live,
             end_gesture,
@@ -1054,6 +1122,46 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_insert_in_the_order_asked_whatever_order_they_end_in() {
+        let order = InsertionOrder::default();
+        let inserted = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for index in 0..6 {
+                let (order, inserted) = (&order, &inserted);
+                scope.spawn(move || {
+                    let turn = Turn { order, index };
+                    // Later files decode faster; file 3 fails and inserts nothing.
+                    std::thread::sleep(Duration::from_millis(60 - 10 * index as u64));
+                    if index != 3 {
+                        turn.wait();
+                        inserted.lock().unwrap().push(index);
+                    }
+                });
+            }
+        });
+        assert_eq!(inserted.into_inner().unwrap(), [0, 1, 2, 4, 5]);
+    }
+
+    #[test]
+    fn a_panicking_open_lets_the_next_ones_insert() {
+        let order = InsertionOrder::default();
+        std::thread::scope(|scope| {
+            let order = &order;
+            let failed = scope.spawn(move || {
+                let _turn = Turn { order, index: 0 };
+                panic!("decoder panicked");
+            });
+            let next = scope.spawn(move || {
+                let turn = Turn { order, index: 1 };
+                turn.wait();
+            });
+            assert!(failed.join().is_err());
+            next.join().unwrap();
+        });
+        assert_eq!(*order.next.lock().unwrap(), 2);
+    }
 
     fn documents_with(count: u64) -> Documents {
         let mut documents = Documents::default();

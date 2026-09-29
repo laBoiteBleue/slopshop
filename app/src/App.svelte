@@ -279,26 +279,18 @@
 
   // --- Opening files ---------------------------------------------------------------------------
 
-  /** Open files in new tabs, or as layers of a document. Progress arrives as events. */
+  /**
+   * Open files in new tabs, or as layers of a document, in the order of `paths`. Progress and
+   * outcomes (new tabs, updated documents, failures) arrive as events.
+   */
   async function openFiles(paths: string[], target: "tab" | { layerOf: number }) {
-    await Promise.all(
-      paths.map(async (path) => {
-        const failuresBefore = openFailureCount;
-        try {
-          if (target === "tab") {
-            const doc = await engine.openImage(path);
-            upsert(doc);
-            activate(doc.id);
-          } else {
-            upsert(await engine.addImageLayer(target.layerOf, path));
-          }
-        } catch (e) {
-          // The failure event normally already showed a localized message; a target tab closed
-          // meanwhile is not an error.
-          if (e !== DOCUMENT_CLOSED && openFailureCount === failuresBefore) showError(String(e));
-        }
-      }),
-    );
+    const failuresBefore = openFailureCount;
+    try {
+      await engine.openImages(paths, target === "tab" ? null : target.layerOf);
+    } catch (e) {
+      // Failures normally come as events, with a localized message.
+      if (openFailureCount === failuresBefore) showError(String(e));
+    }
   }
 
   async function openWithDialog() {
