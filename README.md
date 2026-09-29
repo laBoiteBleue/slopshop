@@ -151,6 +151,8 @@ French**; adding a language means adding one translation catalog (see
 
 The project is too young for outside contributions to be easy, but issues and discussions are
 welcome. Development rules (for humans and AI agents alike) are in [`CLAUDE.md`](CLAUDE.md).
+Image formats are a good place to start: [docs/formats.md](docs/formats.md) lists every format
+Photoshop handles, what SlopShop supports, the priorities and how to add a format.
 
 ## License
 
