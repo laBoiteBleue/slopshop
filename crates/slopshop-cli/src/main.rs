@@ -196,6 +196,26 @@ fn write_png(frame: &Frame, path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// The user documentation of the CLI (docs/cli.md) must cover every option of the usage.
+    #[test]
+    fn every_option_is_documented() {
+        let docs = include_str!("../../../docs/cli.md");
+        let options: Vec<&str> = USAGE
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .filter(|word| word.starts_with("--") && word.len() > 2)
+            .collect();
+        assert!(options.contains(&"--matte"), "{options:?}");
+        for option in options {
+            assert!(
+                docs.contains(option),
+                "{option} is missing from docs/cli.md"
+            );
+        }
+        for command in ["slopshop gpu", "slopshop render", "slopshop export"] {
+            assert!(docs.contains(command), "{command}");
+        }
+    }
+
     #[test]
     fn parses_sizes() {
         assert_eq!(parse_size("640x480"), Ok(Size::new(640, 480)));

@@ -1,7 +1,8 @@
 //! `slopshop export`: an image file, opened as a one-layer document, written to PNG, TIFF,
 //! OpenEXR or JPEG by the export pipeline (ADR 0008, 0010), exactly as a front end would drive
 //! it: the format's default settings, explicit overrides, the GPU renderer as the pixel source
-//! (the CPU compositor without a GPU), and the export report.
+//! (the CPU compositor without a GPU), and the export report. User documentation:
+//! `docs/cli.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

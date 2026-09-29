@@ -120,7 +120,10 @@ Headless CLI:
 ```sh
 cargo run -p slopshop-cli -- gpu
 cargo run -p slopshop-cli -- render --size 1024x768 --out out/demo.png
+cargo run -p slopshop-cli -- export photo.jpg photo.png
 ```
+
+Every command and option is documented in [docs/cli.md](docs/cli.md).
 
 Checks (also run by CI):
 
