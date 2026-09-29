@@ -59,10 +59,7 @@ mod tiff;
 mod webp;
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
@@ -81,23 +78,13 @@ use self::png::PngWriter;
 use self::tiff::TiffWriter;
 pub use self::webp::MAX_SIDE as WEBP_MAX_SIDE;
 use self::webp::{WebpLosslessWriter, WebpLossyWriter};
+use crate::atomic::TempFile;
+#[cfg(test)]
+use crate::atomic::{TEMP_COUNTER, TEMP_SUFFIX, temp_files};
 use crate::icc;
 
 /// Rows per band: one tile row of the engine's grid.
 pub const BAND_ROWS: u32 = slopshop_core::raster::TILE_SIZE;
-
-/// Suffix of the temporary files written next to the destination.
-const TEMP_SUFFIX: &str = ".slopshop-tmp";
-
-/// Characters of the destination's name kept in a temporary file's name: enough to recognize
-/// it, few enough to stay within file-name length limits.
-const TEMP_NAME_CHARS: usize = 64;
-
-/// Existing files skipped before giving up on creating a temporary file.
-const TEMP_ATTEMPTS: u32 = 1000;
-
-/// Numbers the temporary files of this process.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The file formats export can write, without their settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -647,6 +634,12 @@ pub fn export_image(
     let band_values = band_len(size.width, 4).ok_or_else(too_large)?;
     let band_bytes = band_len(size.width, converter.bytes_per_pixel()).ok_or_else(too_large)?;
 
+    if path.file_name().is_none() {
+        return Err(ExportError::InvalidSpec(format!(
+            "{} is not a file path",
+            path.display()
+        )));
+    }
     let (temp, file) = TempFile::create(path)?;
     // A second handle to sync the data once the writer has finished (and dropped its own).
     let sync = file.try_clone()?;
@@ -896,92 +889,6 @@ impl Bands<'_> {
             Ok(report)
         })
     }
-}
-
-/// A temporary file next to the destination, owned by one export: deleted unless it was renamed
-/// over the destination.
-struct TempFile {
-    path: PathBuf,
-    persisted: bool,
-}
-
-impl TempFile {
-    /// Create `.<name>.<pid>-<n>.slopshop-tmp` next to `destination` (`<name>`: the start of the
-    /// destination's name; `<n>`: a counter of this process), empty, for reading and writing.
-    /// It is created exclusively: an existing file (another export's, or one a crash left
-    /// behind) is skipped, never truncated, renamed or deleted.
-    fn create(destination: &Path) -> Result<(Self, File), ExportError> {
-        let name = destination.file_name().ok_or_else(|| {
-            ExportError::InvalidSpec(format!("{} is not a file path", destination.display()))
-        })?;
-        // Only a hint for whoever finds the file: a lossy name is fine.
-        let name: String = name
-            .to_string_lossy()
-            .chars()
-            .take(TEMP_NAME_CHARS)
-            .collect();
-        let pid = std::process::id();
-        let mut skipped = 0;
-        loop {
-            let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = destination.with_file_name(format!(".{name}.{pid}-{n}{TEMP_SUFFIX}"));
-            let created = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&path);
-            match created {
-                Ok(file) => {
-                    let temp = Self {
-                        path,
-                        persisted: false,
-                    };
-                    return Ok((temp, file));
-                }
-                Err(e) if e.kind() == ErrorKind::AlreadyExists && skipped < TEMP_ATTEMPTS => {
-                    skipped += 1;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-    }
-
-    /// Replace `destination` with the temporary file. Every handle on it must be closed.
-    fn persist(mut self, destination: &Path) -> std::io::Result<()> {
-        fs::rename(&self.path, destination)?;
-        self.persisted = true;
-        Ok(())
-    }
-}
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        if !self.persisted {
-            // Best effort: the export's own error matters more than the clean-up's.
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-/// The temporary files of exports to `destination` that still exist (tests: none may be left).
-#[cfg(test)]
-fn temp_files(destination: &Path) -> Vec<PathBuf> {
-    let (Some(dir), Some(name)) = (destination.parent(), destination.file_name()) else {
-        return Vec::new();
-    };
-    let prefix = format!(".{}.", name.to_string_lossy());
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(TEMP_SUFFIX))
-        })
-        .collect()
 }
 
 #[cfg(test)]
