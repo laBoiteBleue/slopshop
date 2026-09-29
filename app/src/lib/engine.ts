@@ -357,13 +357,15 @@ export const engine = {
   /** Opens in progress, and recent failures (for when their events were missed). */
   openings: () => invoke<Opening[]>("openings"),
   openFailures: () => invoke<OpenFailed[]>("open_failures"),
-  /** Decode an image into a new tab (seconds for large images). */
-  openImage: (path: string) => invoke<DocumentView>("open_image", { path }),
+  /**
+   * Decode images in parallel (seconds for large ones), each into a new tab or, with a
+   * `documentId`, each as a new top layer of that document; tabs and layers come in the order
+   * of `paths`. Outcomes arrive as `open-*` events; resolves once every image is done.
+   */
+  openImages: (paths: string[], documentId: number | null) =>
+    invoke<void>("open_images", { paths, documentId }),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
-  /** Decode an image into a new top layer of a document (undoable). */
-  addImageLayer: (documentId: number, path: string) =>
-    invoke<DocumentView>("add_image_layer", { documentId, path }),
   perform: (documentId: number, edit: EditRequest) =>
     serial(() => invoke<DocumentView>("perform", { documentId, edit })),
   /**
