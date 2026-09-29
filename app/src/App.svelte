@@ -127,6 +127,119 @@
   const undo = () => active && sync(engine.undo(active.id));
   const redo = () => active && sync(engine.redo(active.id));
 
+  // --- Tab drag: reorder in the tab bar, or drop on the canvas to copy the tab's layers ---------
+  //
+  // Pointer events, not HTML5 drag and drop (intercepted by the window for file drops on
+  // Windows). A tab is activated on release when it was not dragged, so that dragging another
+  // tab onto the canvas keeps the active document on screen.
+
+  /** Pointer travel, in CSS pixels, before a press on a tab becomes a drag. */
+  const TAB_DRAG_THRESHOLD = 4;
+
+  // Like layer reordering: the tabs stay in place while dragging, the dragged tab is dimmed and
+  // an accent bar marks where it will land.
+  type TabDrag = {
+    id: number;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    /** Insertion position among all tabs (0 = before the first), when over the tab bar and
+     * the drop would move the tab. */
+    slot: number | null;
+    /** Over the canvas of another document: dropping copies the dragged tab's layers there. */
+    overCanvas: boolean;
+  };
+  let tabDrag = $state<TabDrag | null>(null);
+  let tabbar: HTMLDivElement;
+  let copyHint = $derived.by(() => {
+    const doc = tabDrag?.overCanvas ? tabs.find((d) => d.id === tabDrag?.id) : null;
+    return doc ? t("drop.copyLayers", { name: tabTitle(doc) }) : null;
+  });
+
+  function onTabPointerDown(e: PointerEvent, id: number) {
+    if (e.button !== 0) return;
+    tabDrag = {
+      id,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      slot: null,
+      overCanvas: false,
+    };
+  }
+
+  function onTabPointerMove(e: PointerEvent) {
+    const drag = tabDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    if (!drag.moved) {
+      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < TAB_DRAG_THRESHOLD) {
+        return;
+      }
+      drag.moved = true;
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    }
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    drag.overCanvas = activeId !== null && drag.id !== activeId && !!under?.closest(".stage");
+    drag.slot = under?.closest(".tabbar") ? tabSlotAt(e.clientX, drag.id) : null;
+  }
+
+  /** Insertion position among all tabs for a tab dragged to `x`; `null` when dropping there
+   * would leave the tab where it is (right before or after itself). */
+  function tabSlotAt(x: number, draggedId: number): number | null {
+    const elements = [...tabbar.querySelectorAll<HTMLElement>(".tab[data-id]")];
+    const slot = elements.filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.left + rect.width / 2 < x;
+    }).length;
+    const from = tabs.findIndex((d) => d.id === draggedId);
+    return slot === from || slot === from + 1 ? null : slot;
+  }
+
+  function onTabPointerUp(e: PointerEvent) {
+    const drag = tabDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    tabDrag = null;
+    if (!drag.moved) {
+      activate(drag.id);
+    } else if (drag.overCanvas && activeId !== null) {
+      void sync(engine.copyLayers(drag.id, activeId));
+    } else if (drag.slot !== null) {
+      moveTab(drag.id, drag.slot);
+    }
+  }
+
+  /** Move a tab to an insertion position among all tabs (as shown by the drop bar). */
+  function moveTab(id: number, slot: number) {
+    const from = tabs.findIndex((d) => d.id === id);
+    if (from < 0) return;
+    // Position among the other tabs, as the engine counts it.
+    const index = slot > from ? slot - 1 : slot;
+    const [doc] = tabs.splice(from, 1);
+    tabs.splice(index, 0, doc);
+    void sync(engine.moveDocument(id, index).then(() => null));
+  }
+
+  function cancelTabDrag() {
+    tabDrag = null;
+  }
+
+  // Rename a tab: double-click its name. Enter or leaving the field commits, Escape cancels.
+  let renamingTab = $state<number | null>(null);
+
+  function focusAndSelect(input: HTMLInputElement) {
+    input.focus();
+    input.select();
+  }
+
+  function commitTabRename(doc: DocumentView, input: HTMLInputElement) {
+    if (renamingTab !== doc.id) return;
+    renamingTab = null;
+    const name = input.value.trim();
+    if (name && name !== tabTitle(doc)) void sync(engine.renameDocument(doc.id, name));
+  }
+
   // --- Opening files ---------------------------------------------------------------------------
 
   /** Open files in new tabs, or as layers of a document. Progress arrives as events. */
@@ -195,6 +308,10 @@
   // --- Keyboard --------------------------------------------------------------------------------
 
   function onkeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && tabDrag) {
+      cancelTabDrag();
+      return;
+    }
     if (e.ctrlKey && e.key === "Tab") {
       // Ctrl+Tab everywhere, like browsers and most editors (Cmd+Tab belongs to macOS).
       e.preventDefault();
@@ -284,7 +401,7 @@
   });
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window {onkeydown} onblur={cancelTabDrag} />
 
 <div class="app">
   <header class="menubar">
@@ -329,24 +446,57 @@
 
   <main class:has-panel={active !== null}>
     <section class="workspace">
-      <div class="tabbar" class:drop={dropTarget === "tab"} role="tablist">
-        {#each tabs as doc (doc.id)}
+      <div
+        class="tabbar"
+        class:drop={dropTarget === "tab"}
+        class:reordering={tabDrag?.moved}
+        role="tablist"
+        bind:this={tabbar}
+      >
+        {#each tabs as doc, index (doc.id)}
           <div
             class="tab"
             class:active={doc.id === activeId}
+            class:dragging={tabDrag?.moved && tabDrag.id === doc.id}
+            class:drop-before={tabDrag?.slot === index}
+            class:drop-after={index === tabs.length - 1 && tabDrag?.slot === tabs.length}
+            data-id={doc.id}
             role="tab"
             tabindex="-1"
             aria-selected={doc.id === activeId}
-            title={tabTitle(doc)}
-            onpointerdown={(e) => {
-              if (e.button === 0) activate(doc.id);
-            }}
+            title={t("tabs.hint", { name: tabTitle(doc) })}
+            ondblclick={() => (renamingTab = doc.id)}
+            onpointerdown={(e) => onTabPointerDown(e, doc.id)}
+            onpointermove={onTabPointerMove}
+            onpointerup={onTabPointerUp}
+            onpointercancel={cancelTabDrag}
             onauxclick={(e) => {
               // Middle click closes, like browsers.
               if (e.button === 1) void closeTab(doc.id);
             }}
           >
-            <span class="tab-name">{tabTitle(doc)}</span>
+            {#if renamingTab === doc.id}
+              <input
+                class="tab-rename"
+                type="text"
+                value={tabTitle(doc)}
+                aria-label={t("tabs.rename")}
+                spellcheck="false"
+                {@attach focusAndSelect}
+                onpointerdown={(e) => e.stopPropagation()}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") commitTabRename(doc, e.currentTarget);
+                  else if (e.key === "Escape") {
+                    e.stopPropagation();
+                    renamingTab = null;
+                  }
+                }}
+                onblur={(e) => commitTabRename(doc, e.currentTarget)}
+              />
+            {:else}
+              <span class="tab-name">{tabTitle(doc)}</span>
+            {/if}
             {#if doc.id === activeId && frame}
               <span class="tab-zoom">@ {formatZoom(frame.zoom)}</span>
             {/if}
@@ -394,6 +544,8 @@
           <div class="drop-hint" class:layer={dropTarget === "layer"}>
             {t(dropTarget === "layer" ? "drop.layer" : "drop.newTab")}
           </div>
+        {:else if copyHint}
+          <div class="drop-hint layer">{copyHint}</div>
         {/if}
       </div>
     </section>
@@ -553,6 +705,7 @@
   }
 
   .tab {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -573,9 +726,43 @@
     background: var(--hover);
   }
 
+  .tabbar.reordering,
+  .tabbar.reordering .tab {
+    cursor: grabbing;
+  }
+
+  .tab.dragging {
+    opacity: 0.5;
+  }
+
+  /* Where a dragged tab will land, like the layer drop line. */
+  .tab.drop-before::before,
+  .tab.drop-after::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--accent);
+    z-index: 1;
+  }
+
+  .tab.drop-before::before {
+    left: -1px;
+  }
+
+  .tab.drop-after::after {
+    right: -1px;
+  }
+
   .tab-name {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .tab-rename {
+    width: 140px;
+    height: 18px;
   }
 
   .tab-zoom {

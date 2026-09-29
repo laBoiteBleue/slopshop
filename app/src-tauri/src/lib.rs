@@ -144,6 +144,44 @@ impl Documents {
             .find(|d| d.meta.id == id)
             .ok_or_else(|| DOCUMENT_CLOSED.to_owned())
     }
+
+    /// Move a tab to `index` among the others (clamped): the tab order is the document order.
+    fn move_tab(&mut self, id: u64, index: usize) -> Result<(), String> {
+        let from = self
+            .tabs
+            .iter()
+            .position(|d| d.meta.id == id)
+            .ok_or_else(|| DOCUMENT_CLOSED.to_owned())?;
+        let document = self.tabs.remove(from);
+        let index = index.min(self.tabs.len());
+        self.tabs.insert(index, document);
+        Ok(())
+    }
+
+    /// Copy every layer of `source` on top of `target`, as one undoable edit of `target`, with
+    /// their import warnings. Pixels are shared, never copied.
+    fn copy_layers(&mut self, source: u64, target: u64) -> Result<DocumentView, String> {
+        if source == target {
+            return Err("a document cannot be copied into itself".to_owned());
+        }
+        let from = self.get_mut(source)?;
+        let layers = from.session.document().layers().to_vec();
+        let warnings: Vec<Option<Vec<&'static str>>> = layers
+            .iter()
+            .map(|layer| from.layer_warnings.get(&layer.id).cloned())
+            .collect();
+        let to = self.get_mut(target)?;
+        let ids = to
+            .session
+            .insert_layer_copies(&layers)
+            .map_err(|e| e.to_string())?;
+        for (id, warnings) in ids.into_iter().zip(warnings) {
+            if let Some(warnings) = warnings {
+                to.layer_warnings.insert(id, warnings);
+            }
+        }
+        Ok(to.view())
+    }
 }
 
 /// An open in progress (decoding a large file takes seconds).
@@ -519,6 +557,44 @@ async fn close_document(state: State<'_, AppState>, document_id: u64) -> Result<
     Ok(())
 }
 
+/// Rename a document (its tab). The file on disk, if any, keeps its name.
+#[tauri::command]
+async fn rename_document(
+    state: State<'_, AppState>,
+    document_id: u64,
+    name: String,
+) -> Result<DocumentView, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a document name cannot be empty".to_owned());
+    }
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    document.meta.name = Some(name.to_owned());
+    Ok(document.view())
+}
+
+/// Move a tab to `index` among the other tabs.
+#[tauri::command]
+async fn move_document(
+    state: State<'_, AppState>,
+    document_id: u64,
+    index: usize,
+) -> Result<(), String> {
+    state.documents()?.move_tab(document_id, index)
+}
+
+/// Copy every layer of `source_id` on top of `target_id` (e.g. a tab dropped on the canvas),
+/// as one undoable edit of the target.
+#[tauri::command]
+async fn copy_layers(
+    state: State<'_, AppState>,
+    source_id: u64,
+    target_id: u64,
+) -> Result<DocumentView, String> {
+    state.documents()?.copy_layers(source_id, target_id)
+}
+
 /// Opens in progress.
 #[tauri::command]
 async fn openings(state: State<'_, AppState>) -> Result<Vec<Opening>, String> {
@@ -887,6 +963,9 @@ pub fn run() {
             document,
             new_document,
             close_document,
+            move_document,
+            copy_layers,
+            rename_document,
             openings,
             open_failures,
             open_image,
@@ -909,6 +988,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn documents_with(count: u64) -> Documents {
+        let mut documents = Documents::default();
+        for id in 1..=count {
+            let meta = DocumentMeta {
+                id,
+                name: Some(format!("doc {id}")),
+            };
+            documents
+                .tabs
+                .push(OpenDocument::new(blank_session(), meta, Size::new(8, 8)));
+        }
+        documents
+    }
+
+    fn tab_ids(documents: &Documents) -> Vec<u64> {
+        documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn tabs_move_to_an_index_among_the_others() {
+        let mut documents = documents_with(3);
+        documents.move_tab(1, 2).unwrap();
+        assert_eq!(tab_ids(&documents), [2, 3, 1]);
+        documents.move_tab(1, 0).unwrap();
+        assert_eq!(tab_ids(&documents), [1, 2, 3]);
+        documents.move_tab(2, 99).unwrap();
+        assert_eq!(tab_ids(&documents), [1, 3, 2]);
+        assert_eq!(documents.move_tab(9, 0).unwrap_err(), DOCUMENT_CLOSED);
+    }
+
+    #[test]
+    fn copying_a_document_adds_its_layers_as_one_undo_entry() {
+        let mut documents = documents_with(2);
+        let source_layers = documents.tabs[0].session.document().layers().len();
+        let before = documents.tabs[1].session.document().layers().len();
+        let view = documents.copy_layers(1, 2).unwrap();
+        assert_eq!(view.layers.len(), before + source_layers);
+        documents.tabs[1].session.undo().unwrap();
+        assert_eq!(documents.tabs[1].session.document().layers().len(), before);
+        assert!(documents.copy_layers(2, 2).is_err());
+        assert_eq!(documents.copy_layers(9, 2).unwrap_err(), DOCUMENT_CLOSED);
+    }
 
     #[test]
     fn presenter_mode_defaults_to_the_native_surface_on_windows_only() {

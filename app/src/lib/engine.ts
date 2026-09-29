@@ -233,6 +233,15 @@ export const engine = {
   newDocument: () => invoke<DocumentView>("new_document"),
   closeDocument: (documentId: number) =>
     serial(() => invoke<void>("close_document", { documentId })),
+  /** Rename a document (its tab); the file on disk keeps its name. */
+  renameDocument: (documentId: number, name: string) =>
+    serial(() => invoke<DocumentView>("rename_document", { documentId, name })),
+  /** Move a tab to `index` among the other tabs (the engine keeps the tab order). */
+  moveDocument: (documentId: number, index: number) =>
+    serial(() => invoke<void>("move_document", { documentId, index })),
+  /** Copy every layer of `sourceId` on top of `targetId` (one undo entry in the target). */
+  copyLayers: (sourceId: number, targetId: number) =>
+    serial(() => invoke<DocumentView>("copy_layers", { sourceId, targetId })),
   /** Opens in progress, and recent failures (for when their events were missed). */
   openings: () => invoke<Opening[]>("openings"),
   openFailures: () => invoke<OpenFailed[]>("open_failures"),

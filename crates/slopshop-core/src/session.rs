@@ -1,6 +1,6 @@
 //! A document together with its undo/redo history.
 
-use crate::document::{Document, LayerId};
+use crate::document::{Document, Layer, LayerId};
 use crate::edit::{Edit, EditError};
 
 /// An editing session: the document and the inverse edits needed to undo/redo.
@@ -60,6 +60,30 @@ impl Session {
         let inverse = edit.apply(&mut self.document)?;
         self.gesture.push(inverse);
         Ok(())
+    }
+
+    /// Insert copies of `layers` (bottom to top, e.g. another document's stack) above the
+    /// current stack, with fresh ids, as one undoable entry. Raster pixels are shared, never
+    /// copied. Returns the new ids, bottom to top; on error nothing changes.
+    pub fn insert_layer_copies(&mut self, layers: &[Layer]) -> Result<Vec<LayerId>, EditError> {
+        let base = self.document.layers().len();
+        let mut ids = Vec::with_capacity(layers.len());
+        let mut edits = Vec::with_capacity(layers.len());
+        for (offset, layer) in layers.iter().enumerate() {
+            let id = self.document.allocate_layer_id();
+            ids.push(id);
+            edits.push(Edit::InsertLayer {
+                index: base + offset,
+                layer: Layer {
+                    id,
+                    ..layer.clone()
+                },
+            });
+        }
+        if !edits.is_empty() {
+            self.perform(Edit::Batch(edits))?;
+        }
+        Ok(ids)
     }
 
     /// Record the gesture in progress as one undoable entry. No-op if there is none.
@@ -253,6 +277,58 @@ mod tests {
         add_layer(&mut s, "b");
         assert!(!s.can_redo());
         assert_eq!(names(&s), ["b"]);
+    }
+
+    #[test]
+    fn layer_copies_are_one_undo_entry_with_fresh_ids_and_shared_pixels() {
+        use crate::raster::RasterImage;
+        use std::sync::Arc;
+
+        let mut source = Session::new(Document::new(Size::new(16, 16)));
+        add_layer(&mut source, "fill");
+        let image = Arc::new(
+            RasterImage::from_pixels(
+                Size::new(2, 2),
+                crate::color::PixelFormat::RGBA8_SRGB,
+                &[255; 16],
+            )
+            .unwrap(),
+        );
+        let id = source.allocate_layer_id();
+        source
+            .perform(Edit::InsertLayer {
+                index: 1,
+                layer: Layer {
+                    id,
+                    name: "photo".into(),
+                    visible: false,
+                    opacity: 0.5,
+                    content: LayerContent::Raster {
+                        image: image.clone(),
+                    },
+                },
+            })
+            .unwrap();
+
+        let mut target = Session::new(Document::new(Size::new(16, 16)));
+        let existing = add_layer(&mut target, "background");
+        let ids = target
+            .insert_layer_copies(source.document().layers())
+            .unwrap();
+        assert_eq!(names(&target), ["background", "fill", "photo"]);
+        let layers = target.document().layers();
+        assert_eq!(ids, [layers[1].id, layers[2].id]);
+        assert!(!ids.contains(&existing) && ids[0] != ids[1]);
+        // Properties kept, pixels shared.
+        assert!(!layers[2].visible && layers[2].opacity == 0.5);
+        let LayerContent::Raster { image: copied } = &layers[2].content else {
+            panic!("raster expected");
+        };
+        assert!(Arc::ptr_eq(copied, &image));
+        // One undo removes both copies.
+        target.undo().unwrap();
+        assert_eq!(names(&target), ["background"]);
+        assert!(target.insert_layer_copies(&[]).unwrap().is_empty());
     }
 
     #[test]

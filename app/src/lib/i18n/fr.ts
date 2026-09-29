@@ -13,6 +13,9 @@ const fr: Messages = {
 
   "tabs.newHint": "Nouveau document ({mod}+N)",
   "tabs.closeHint": "Fermer ({mod}+W, ou clic du milieu)",
+  "tabs.hint":
+    "{name} : double-clic pour renommer, glisser pour réordonner ou sur l'image pour copier ses calques",
+  "tabs.rename": "Nom du document",
 
   "welcome.title": "Ouvrez une image ou créez un document",
   "welcome.open": "Ouvrir…",
@@ -21,6 +24,7 @@ const fr: Messages = {
 
   "drop.newTab": "Déposez pour ouvrir dans un nouvel onglet",
   "drop.layer": "Déposez pour ajouter comme calque",
+  "drop.copyLayers": "Déposez pour copier {name} en calques",
   "open.opening": "Ouverture de {name}…",
   "open.failed": "Impossible d'ouvrir {name} : {error}",
   "open.warning.iccProfileUnsupported":

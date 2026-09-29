@@ -13,6 +13,9 @@ const en = {
 
   "tabs.newHint": "New document ({mod}+N)",
   "tabs.closeHint": "Close ({mod}+W, or middle click)",
+  "tabs.hint":
+    "{name}: double-click to rename, drag to reorder or onto the image to copy its layers",
+  "tabs.rename": "Document name",
 
   "welcome.title": "Open an image or create a document",
   "welcome.open": "Open…",
@@ -21,6 +24,7 @@ const en = {
 
   "drop.newTab": "Drop to open in a new tab",
   "drop.layer": "Drop to add as a layer",
+  "drop.copyLayers": "Drop to copy {name} as layers",
   "open.opening": "Opening {name}…",
   "open.failed": "Cannot open {name}: {error}",
   "open.warning.iccProfileUnsupported":
