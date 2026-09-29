@@ -1,0 +1,32 @@
+[package]
+name = "slopshop-app"
+description = "SlopShop desktop shell (Tauri). Thin IPC layer over the engine crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# Distinct lib name avoids a bin/lib name clash on Windows (cargo#8519).
+name = "slopshop_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+slopshop-core.workspace = true
+slopshop-render.workspace = true
+# Desktop shell (webview window, IPC).
+tauri = { version = "2", features = [] }
+# IPC DTOs (de)serialization; Tauri already depends on it.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Tests deserialize IPC requests the way Tauri does.
+serde_json = "1"
+
+[lints]
+workspace = true

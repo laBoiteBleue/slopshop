@@ -1,0 +1,97 @@
+/* Design tokens: dense, neutral dark UI in the spirit of professional image editors. */
+:root {
+  color-scheme: dark;
+  --chrome: #2b2b2b;
+  --panel: #323232;
+  --panel-header: #282828;
+  --pasteboard: #202023; /* matches the renderer's pasteboard, avoids a seam around the frame */
+  --field: #1f1f1f;
+  --hover: #3f3f3f;
+  --selected: #4a4a4a;
+  --border-dark: #1c1c1c;
+  --border-strong: #4a4a4a;
+  --text: #d8d8d8;
+  --text-muted: #9b9b9b;
+  --accent: #3b8eea;
+  --brand: #ff6fb5;
+  --brand-muted: #ff6fb522;
+  --danger-bg: #4a1f24;
+  --danger-fg: #ff8f9a;
+
+  font-family:
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    Roboto,
+    sans-serif;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--chrome);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--chrome);
+  user-select: none;
+  cursor: default;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border-radius: 3px;
+  cursor: default;
+}
+
+button:disabled {
+  opacity: 0.35;
+}
+
+input[type="text"],
+input[type="number"],
+input:not([type]),
+select {
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--border-dark);
+  border-radius: 2px;
+  background: var(--field);
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+input:disabled {
+  opacity: 0.4;
+}
+
+/* Number fields: no spinners, like editor value fields. */
+input[type="number"] {
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}

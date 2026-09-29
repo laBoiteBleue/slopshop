@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="slop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6fb5"/>
+      <stop offset="1" stop-color="#8a3ffc"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#1b1c1f"/>
+  <path fill="url(#slop)" d="M96 156Q96 96 156 96H356Q416 96 416 156V252Q416 284 390 284Q364 284 364 314V368Q364 400 336 400Q308 400 308 368V310Q308 284 288 284Q268 284 268 306V420Q268 452 238 452Q208 452 208 420V310Q208 284 182 284H156Q96 284 96 224Z"/>
+</svg>
