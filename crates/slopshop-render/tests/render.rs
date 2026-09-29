@@ -692,3 +692,50 @@ fn gpu_transfer_functions_match_the_cpu() {
         }
     }
 }
+
+#[test]
+fn zoomed_out_rasters_are_area_filtered_not_aliased() {
+    let Some(r) = renderer() else { return };
+    // One-pixel black and white columns seen at 66.7%: every output pixel covers 1.5 columns.
+    // Nearest sampling would show pure black or white; the area filter gives 1/3 or 2/3 of the
+    // light (sRGB ~156 or ~213).
+    let size = Size::new(300, 2);
+    let image = raster_image(size, |x, _| {
+        let v = if x % 2 == 0 { 0 } else { 255 };
+        [v, v, v, 255]
+    });
+    let s = raster_stack(size, &[image]);
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 1.5,
+    };
+    let frame = r
+        .render_view(s.document(), view, Size::new(100, 1))
+        .unwrap();
+    for x in 0..100 {
+        let [v, ..] = pixel(&frame, x, 0);
+        // Pixel k covers [1.5k, 1.5k + 1.5]: the pattern repeats every 4 pixels (6 columns).
+        let expected = if x % 4 < 2 { 1.0 / 3.0 } else { 2.0 / 3.0 };
+        assert_close(pixel(&frame, x, 0), to_display([expected; 3]));
+        assert!((100..240).contains(&v), "pixel {x}: {v}");
+    }
+}
+
+#[test]
+fn document_edges_blend_with_the_pasteboard_not_the_checkerboard() {
+    let Some(r) = renderer() else { return };
+    // An opaque black image; the first output pixel covers [-0.75, 0.75]: half pasteboard, half
+    // image. The checkerboard (light there) must not show through the antialiased edge, or
+    // edges would shimmer while navigating.
+    let size = Size::new(100, 100);
+    let s = raster_stack(size, &[raster_image(size, |_, _| [0, 0, 0, 255])]);
+    let view = ViewTransform {
+        origin: [-0.75, 10.0],
+        scale: 1.5,
+    };
+    let frame = r.render_view(s.document(), view, Size::new(4, 1)).unwrap();
+    let pasteboard = [0.0144, 0.0144, 0.0168];
+    assert_close(pixel(&frame, 0, 0), to_display(pasteboard.map(|v| v * 0.5)));
+    // Fully inside: the image.
+    assert_close(pixel(&frame, 2, 0), [0, 0, 0, 255]);
+}

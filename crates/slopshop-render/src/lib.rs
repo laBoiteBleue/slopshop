@@ -759,10 +759,12 @@ impl LayerFields {
 fn visible_document_rect(document: Size, view: ViewTransform, output: Size) -> Option<[f64; 4]> {
     let [x0, y0] = view.output_to_document(0.0, 0.0);
     let [x1, y1] = view.output_to_document(f64::from(output.width), f64::from(output.height));
-    let x0 = x0.max(0.0);
-    let y0 = y0.max(0.0);
-    let x1 = x1.min(f64::from(document.width));
-    let y1 = y1.min(f64::from(document.height));
+    // The area filter reads half an output pixel beyond the edge pixels' centers.
+    let margin = view.scale;
+    let x0 = (x0 - margin).max(0.0);
+    let y0 = (y0 - margin).max(0.0);
+    let x1 = (x1 + margin).min(f64::from(document.width));
+    let y1 = (y1 + margin).min(f64::from(document.height));
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
 }
 

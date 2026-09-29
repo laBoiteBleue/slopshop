@@ -178,14 +178,13 @@ fn load_texel(layer: Layer, texel: vec2<u32>, slot: u32) -> vec4<f32> {
     }
 }
 
-// Premultiplied working-space color of a raster layer at document point `p` (nearest sample of
-// the chosen pyramid level). Transparent outside the image or where no tile is resident.
-fn sample_raster(layer: Layer, p: vec2<f32>) -> vec4<f32> {
-    let lp = p / layer.level_scale;
-    if any(lp < vec2<f32>(0.0)) || any(lp >= vec2<f32>(layer.level_size)) {
+// Premultiplied working-space color of one texel of a raster layer's planned level.
+// Transparent outside the image or where no tile is resident.
+fn texel_color(layer: Layer, at: vec2<i32>) -> vec4<f32> {
+    if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(layer.level_size)) {
         return vec4<f32>(0.0);
     }
-    let texel = vec2<u32>(lp);
+    let texel = vec2<u32>(at);
     let tile = texel / TILE_SIZE;
     if any(tile < layer.tile_origin) || any(tile >= layer.tile_origin + layer.tile_count) {
         return vec4<f32>(0.0);
@@ -212,7 +211,34 @@ fn sample_raster(layer: Layer, p: vec2<f32>) -> vec4<f32> {
     }
     let rgb = vec3<f32>(dot(layer.m0.xyz, linear), dot(layer.m1.xyz, linear), dot(layer.m2.xyz, linear));
     // Decoding can still overflow (HLG is exponential).
-    return finite(vec4<f32>(rgb, a)) * layer.opacity;
+    return finite(vec4<f32>(rgb, a));
+}
+
+// Most texels read per axis for one output pixel. The planned level has 1 to 2 texels per output
+// pixel, so a footprint spans at most 3; only a document zoomed out beyond its coarsest level
+// needs more, and is then subsampled.
+const MAX_FOOTPRINT_TEXELS = 4;
+
+// Premultiplied working-space color of a raster layer over an output pixel's footprint (the
+// document rectangle `lo`–`hi`): an area (box) filter. The texels it covers are averaged, each
+// weighted by the area it covers, in linear light. Exact at 100% (one texel), free of aliasing
+// when zoomed out, and pixels keep sharp, even edges when zoomed in.
+fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+    let a = lo / layer.level_scale;
+    let b = hi / layer.level_scale;
+    let first = vec2<i32>(floor(a));
+    let last = min(vec2<i32>(ceil(b)) - 1, first + (MAX_FOOTPRINT_TEXELS - 1));
+    var sum = vec4<f32>(0.0);
+    var weight = 0.0;
+    for (var y = first.y; y <= last.y; y++) {
+        let wy = min(f32(y + 1), b.y) - max(f32(y), a.y);
+        for (var x = first.x; x <= last.x; x++) {
+            let w = (min(f32(x + 1), b.x) - max(f32(x), a.x)) * wy;
+            sum += texel_color(layer, vec2<i32>(x, y)) * w;
+            weight += w;
+        }
+    }
+    return sum / max(weight, 1e-12) * layer.opacity;
 }
 
 @compute @workgroup_size(8, 8)
@@ -221,17 +247,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    let p = params.origin + (vec2<f32>(id.xy) + 0.5) * params.scale;
+    // The output pixel's footprint in the document, clipped to the document: layers are averaged
+    // over the part inside it, and the document is blended with the pasteboard by the share of
+    // the pixel it covers. Edge pixels are then antialiased against the pasteboard, never
+    // against the checkerboard (whose squares would make the edges shimmer while navigating).
+    let corner = params.origin + vec2<f32>(id.xy) * params.scale;
     let doc = vec2<f32>(params.doc_size);
+    let lo = max(corner, vec2<f32>(0.0));
+    let hi = min(corner + params.scale, doc);
+    let inside = max(hi - lo, vec2<f32>(0.0));
+    let coverage = (inside.x * inside.y) / (params.scale * params.scale);
 
     var color = PASTEBOARD;
-    if all(p >= vec2<f32>(0.0)) && all(p < doc) {
+    if coverage > 0.0 {
         var acc = vec4<f32>(0.0);
         for (var i = 0u; i < params.layer_count; i++) {
             let layer = layers[i];
             var src = layer.color;
             if layer.kind == KIND_RASTER {
-                src = sample_raster(layer, p);
+                src = sample_raster(layer, lo, hi);
             }
             acc = src + acc * (1.0 - src.a);
         }
@@ -243,7 +277,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         );
         let checker = ((id.x / CHECKER_SIZE) + (id.y / CHECKER_SIZE)) % 2u;
         let background = select(CHECKER_DARK, CHECKER_LIGHT, checker == 0u);
-        color = display + background * (1.0 - acc.a);
+        color = mix(PASTEBOARD, display + background * (1.0 - acc.a), min(coverage, 1.0));
     }
 
     // Clipping only happens here, at the display boundary.
