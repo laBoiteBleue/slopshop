@@ -80,10 +80,16 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   undo/redo, tiling geometry and explicit color/pixel formats.
 - A headless wgpu renderer that composites a view of the document in linear light.
 - A `slopshop` CLI (GPU info, headless render to PNG).
-- A desktop app validating the stack: viewport, layers panel (add fill, visibility, live
-  opacity, rename, drag to reorder, delete), undo/redo, English and French interface.
+- Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
+  float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS.
+  Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
+  JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW, PSD and more are planned
+  ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
+- A desktop app validating the stack: document tabs, smooth zoom and pan, layers panel (add
+  fill, visibility, live opacity, rename, drag to reorder, delete), images dropped on the canvas
+  become layers, undo/redo, English and French interface.
 
-No image import/export, painting, selections, filters or AI yet.
+No export, painting, selections, filters or AI yet.
 
 ## Getting started
 

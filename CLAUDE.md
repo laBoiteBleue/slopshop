@@ -10,12 +10,13 @@ The name is a joke; the engineering is not.
 | ----------------------- | -------------------------------------------------------------------------------------- |
 | `crates/slopshop-core`  | Document model, edits + undo/redo, geometry/tiling, color & pixel formats. No GPU, no UI. |
 | `crates/slopshop-render`| GPU (wgpu) rendering. Headless-capable. Depends on core only.                          |
+| `crates/slopshop-io`    | File formats: decoding images into core rasters. Depends on core only.                 |
 | `crates/slopshop-cli`   | Headless binary. Proves the engine runs without the UI.                                |
 | `app/src-tauri`         | Tauri shell: thin IPC layer (DTOs + commands) over core/render. No image logic.        |
 | `app/src`               | Svelte 5 + TypeScript UI. Presentation and input only.                                 |
 | `docs/`                 | `architecture.md`, `roadmap.md`, ADRs in `docs/adr/`, research in `docs/research/`.    |
 
-Dependency direction is strict: `core` ← `render` ← (`cli`, `app`). Never the reverse.
+Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). Never the reverse.
 
 ## Commands
 
@@ -23,10 +24,12 @@ Dependency direction is strict: `core` ← `render` ← (`cli`, `app`). Never th
 cargo fmt --all                                  # format Rust
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo deny check                                 # licenses (no GPL/AGPL), advisories, sources
 cd app && npm install                             # once
 cd app && npm run format && npm run check        # format + type-check the UI (incl. i18n catalogs)
 cd app && npm run tauri dev                      # run the desktop app
 cargo run -p slopshop-cli -- --help              # headless CLI
+# Dev builds of the app open out/default.jpg (or $SLOPSHOP_OPEN) at startup, if present.
 ```
 
 **Before finishing any task:** format, lint and test (all commands above except `tauri dev`) and
@@ -55,6 +58,12 @@ testing (see Workflow).
     will need error codes rather than strings.
 
 ## Engineering rules
+
+**Priorities**
+- Performance is a primary requirement: when options differ in speed, prefer the most
+  performant one unless it compromises correctness or the architecture (maintainer decision).
+- Import must eventually be universal (every image format, incl. JPEG 2000, WebP, DICOM, camera
+  RAW), and export too. Never design an import path that assumes 8-bit RGB.
 
 **Simplicity**
 - Prefer simple, readable code. Modules have one clear responsibility.

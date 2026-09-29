@@ -17,15 +17,29 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 
 ## Phase 1 — Real images, real viewport
 
-- [ ] Pan and zoom (view state owned by the engine; 100% zoom, fit, wheel zoom around cursor)
-- [ ] 🔶 Viewport presentation path: measure frame cost, decide between frames over IPC and a
-      native wgpu surface ([ADR 0002](adr/0002-viewport-frame-transport.md))
-- [ ] Tile-backed pixel layers in core (copy-on-write tiles shared by snapshots and history)
-- [ ] GPU tile upload/cache; render only visible tiles
-- [ ] Mip levels for zoomed-out views
-- [ ] 🔶 Color management scope (ICC profiles in/out, OCIO later?)
-- [ ] Import PNG/JPEG/TIFF (8/16-bit) with explicit conversion into the working space;
-      export PNG/TIFF
+- [x] Pan and zoom (view state owned by the engine; fit, 100%, preset steps, Ctrl+wheel zoom
+      around the cursor, wheel / Space+drag / middle-drag pan), frame timing in the status bar
+- [x] Viewport presentation direction: native GPU surface, frames as fallback
+      ([ADR 0002](adr/0002-viewport-frame-transport.md))
+- [ ] Native surface spike (Windows, then macOS) against the ADR 0002 criteria
+- [x] Multi-document tabs; open into a new tab; drop on the canvas adds a layer, drop elsewhere
+      opens new tabs; Ctrl+N / Ctrl+W / Ctrl+Tab
+- [x] Universal import strategy decided ([ADR 0006](adr/0006-universal-import-and-licensing.md),
+      [research](research/universal-import.md))
+- [x] Tile-backed pixel layers in core (immutable shared tiles, [ADR 0005](adr/0005-pixel-storage-v0.md))
+- [x] GPU tile upload/cache; render only visible tiles
+- [x] Mip levels for zoomed-out views (nearest sampling for now; filtered sampling to do)
+- [x] Smooth navigation: animated wheel zoom, instant reprojection of the last frame
+- [x] Color management model and working space ([ADR 0007](adr/0007-color-management.md))
+- [x] Open 8-bit PNG/JPEG (dialog, drag and drop, command line; dev builds open a test image)
+- [x] Engine: 8/16-bit and 16/32-bit float storage, gray and alpha, color-managed compositing
+      in linear Rec.2020 ([ADR 0007](adr/0007-color-management.md))
+- [x] Import (phase 1 of [ADR 0006](adr/0006-universal-import-and-licensing.md)): PNG (16-bit),
+      JPEG, TIFF (8/16/32-bit float), WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR,
+      DDS; matrix/TRC ICC profiles; EXIF orientation; license policy enforced by `cargo-deny`
+- [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; PSD/KRA/XCF/ORA,
+      SVG, PDF; optional native backends
+- [ ] Export (PNG/TIFF/EXR first)
 - [ ] 🔶 Document file format v0 (stores layers/nodes and tiles, not a flattened image)
 
 ## Phase 2 — Non-destructive core

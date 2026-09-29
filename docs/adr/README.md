@@ -6,8 +6,11 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | #    | Title                                                               | Status   |
 | ---- | ------------------------------------------------------------------- | -------- |
 | 0001 | [Rust engine, Tauri shell, Svelte UI](0001-stack-and-engine-boundary.md) | accepted |
-| 0002 | [Viewport frame transport](0002-viewport-frame-transport.md)        | proposed |
+| 0002 | [Viewport presentation](0002-viewport-frame-transport.md)           | accepted direction |
 | 0003 | [Document model, edits and history](0003-document-model-edits-history.md) | accepted |
 | 0004 | [UI internationalization](0004-ui-internationalization.md)          | accepted |
+| 0005 | [Pixel storage v0: in-memory tiles and pyramid](0005-pixel-storage-v0.md) | accepted (v0) |
+| 0006 | [Universal import strategy and dependency licensing](0006-universal-import-and-licensing.md) | accepted |
+| 0007 | [Color management and working space](0007-color-management.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
