@@ -71,8 +71,60 @@ previewed first and rendered at full definition later.
 - **Never assume an image fits in memory.** Tiles, regions of interest, caches and mip levels
   are part of the design from day one.
 
-Details: [`docs/architecture.md`](docs/architecture.md) and the decision records in
-[`docs/adr/`](docs/adr/).
+Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
+[`docs/adr/`](docs/adr/) and the [roadmap](docs/roadmap.md).
+
+## What exists today
+
+- A Rust engine with a minimal document model (procedural fill layers), reversible edits with
+  undo/redo, tiling geometry and explicit color/pixel formats.
+- A headless wgpu renderer that composites a view of the document in linear light.
+- A `slopshop` CLI (GPU info, headless render to PNG).
+- A desktop app validating the stack: viewport, layers panel (add fill, visibility, live
+  opacity, rename, drag to reorder, delete), undo/redo, English and French interface.
+
+No image import/export, painting, selections, filters or AI yet.
+
+## Getting started
+
+Prerequisites:
+
+- [Rust](https://rustup.rs) (stable; the exact toolchain is pinned by `rust-toolchain.toml`)
+- [Node.js](https://nodejs.org) 24+ with npm
+- Tauri system dependencies for your OS: see the
+  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (WebView2 on Windows,
+  Xcode Command Line Tools on macOS, WebKitGTK and friends on Linux)
+- A GPU with Vulkan, Metal or DirectX 12 support
+
+Run the desktop app:
+
+```sh
+cd app
+npm install
+npm run tauri dev
+```
+
+Headless CLI:
+
+```sh
+cargo run -p slopshop-cli -- gpu
+cargo run -p slopshop-cli -- render --size 1024x768 --out out/demo.png
+```
+
+Checks (also run by CI):
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cd app && npm run format:check && npm run check && npm run build
+```
+
+## Languages
+
+The code and documentation are in English. The application is available in **English and
+French**; adding a language means adding one translation catalog (see
+[ADR 0004](docs/adr/0004-ui-internationalization.md)).
 
 ## Contributing
 

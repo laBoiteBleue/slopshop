@@ -13,7 +13,7 @@ The name is a joke; the engineering is not.
 | `crates/slopshop-cli`   | Headless binary. Proves the engine runs without the UI.                                |
 | `app/src-tauri`         | Tauri shell: thin IPC layer (DTOs + commands) over core/render. No image logic.        |
 | `app/src`               | Svelte 5 + TypeScript UI. Presentation and input only.                                 |
-| `docs/`                 | `architecture.md`, ADRs in `docs/adr/`, research in `docs/research/`.                  |
+| `docs/`                 | `architecture.md`, `roadmap.md`, ADRs in `docs/adr/`, research in `docs/research/`.    |
 
 Dependency direction is strict: `core` ← `render` ← (`cli`, `app`). Never the reverse.
 
@@ -23,13 +23,36 @@ Dependency direction is strict: `core` ← `render` ← (`cli`, `app`). Never th
 cargo fmt --all                                  # format Rust
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cd app && npm run format && npm run check        # format + type-check the UI
+cd app && npm install                             # once
+cd app && npm run format && npm run check        # format + type-check the UI (incl. i18n catalogs)
 cd app && npm run tauri dev                      # run the desktop app
 cargo run -p slopshop-cli -- --help              # headless CLI
 ```
 
 **Before finishing any task:** format, lint and test (all commands above except `tauri dev`) and
-make sure they pass. Say so explicitly if something could not be run.
+make sure they pass. Say so explicitly if something could not be run. Then hand over for manual
+testing (see Workflow).
+
+## Workflow
+
+- **Never commit before the maintainer has tested the change.** When a change is ready: run
+  the checks below, then stop and describe what to test (commands, expected behavior). Commit
+  only after the maintainer confirms. Never push without being asked.
+- Commits are small and logical, with clear messages (conventional-commit style prefixes).
+
+## Languages
+
+- **Repository and code are in English**: identifiers, comments, docs, commit messages.
+- **The application is multilingual**: English and French from day one, and adding a language
+  must stay trivial.
+  - Every user-visible string goes through i18n (`t("key")` from `app/src/lib/i18n`). Never
+    hard-code UI text.
+  - `en.ts` is the reference catalog; other catalogs are typed against it, so a missing key
+    fails `npm run check`. When adding or changing a string, update **all** catalogs.
+  - Adding a language = one catalog file + one entry in the `locales` registry.
+  - The engine and IPC send identifiers and structured data (ids, codes, numbers), not display
+    text; the UI translates. Engine error messages are not localized yet: user-facing errors
+    will need error codes rather than strings.
 
 ## Engineering rules
 
@@ -46,6 +69,9 @@ make sure they pass. Say so explicitly if something could not be run.
   frames go to the UI, as raw binary (`tauri::ipc::Response`), never JSON/base64.
 - No heavy work on the UI thread: Tauri commands touching the engine are `async` and push
   CPU/GPU work to `spawn_blocking` or worker threads. The Svelte side never blocks either.
+- The UI must feel like a native desktop app, not a web page: no native webview context menu,
+  text selection, browser shortcuts or zoom in production builds. Dev builds may keep them for
+  debugging (`import.meta.env.DEV`).
 - The user sees a layer stack; the model must remain able to evolve into a DAG. Refer to
   things by stable IDs, not indices.
 
@@ -99,4 +125,3 @@ make sure they pass. Say so explicitly if something could not be run.
 ## Honesty
 
 - Never claim in docs, README or UI that a feature exists if it is not implemented.
-- Commits are small and logical, with clear messages (conventional-commit style prefixes).
