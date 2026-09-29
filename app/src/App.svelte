@@ -40,7 +40,6 @@
 
   let gpu = $state<GpuInfo | null>(null);
   let gpuError = $state<string | null>(null);
-  let error = $state<string | null>(null);
   let frame = $state<FrameStats | null>(null);
   /** Viewport of the active tab. */
   let viewport = $state<Viewport | null>(null);
@@ -63,10 +62,11 @@
   /** Exports running (rows done out of total). */
   let exports = $state<{ id: number; name: string; done: number; total: number }[]>([]);
   /**
-   * Export outcomes shown (translated): a title and one line per report entry, oldest first.
-   * `key` is unique: `job-<id>` for a job, `local-<n>` for a failure before any job started.
+   * Toasts shown above the status bar (translated), oldest first: export outcomes (a title and
+   * one line per report entry) and errors. `key` is unique: `job-<id>` for an export job,
+   * `local-<n>` for anything else.
    */
-  type ExportResult = {
+  type Toast = {
     key: string;
     title: string;
     lines: string[];
@@ -74,9 +74,11 @@
     /** The written file, offered to show in its folder. */
     path?: string;
   };
-  let exportResults = $state<ExportResult[]>([]);
+  let toasts = $state<Toast[]>([]);
   /** Last `local-<n>` key given. */
-  let lastLocalResult = 0;
+  let lastLocalToast = 0;
+  /** Open failures reported so far (see `openFiles`). */
+  let openFailureCount = 0;
 
   function tabTitle(doc: DocumentView): string {
     return doc.name ?? t("document.untitled");
@@ -145,13 +147,12 @@
     try {
       const view = await request;
       if (view) upsert(view);
-      error = null;
     } catch (e) {
       if (e === DOCUMENT_CLOSED) {
         // Made for a tab closed meanwhile: nothing was applied.
         await refreshTabs();
       } else {
-        error = String(e);
+        showError(String(e));
       }
     }
   }
@@ -280,9 +281,9 @@
 
   /** Open files in new tabs, or as layers of a document. Progress arrives as events. */
   async function openFiles(paths: string[], target: "tab" | { layerOf: number }) {
-    error = null;
     await Promise.all(
       paths.map(async (path) => {
+        const failuresBefore = openFailureCount;
         try {
           if (target === "tab") {
             const doc = await engine.openImage(path);
@@ -292,9 +293,9 @@
             upsert(await engine.addImageLayer(target.layerOf, path));
           }
         } catch (e) {
-          // The failure event normally already set a localized message; a target tab closed
+          // The failure event normally already showed a localized message; a target tab closed
           // meanwhile is not an error.
-          if (e !== DOCUMENT_CLOSED) error ??= String(e);
+          if (e !== DOCUMENT_CLOSED && openFailureCount === failuresBefore) showError(String(e));
         }
       }),
     );
@@ -328,7 +329,8 @@
     // The target tab was closed during the decode: the user asked for that.
     if (failed.code === "documentClosed") return;
     const reason = t(`open.error.${failed.code}`, { detail: failed.detail });
-    error = t("open.failed", { name: failed.name, error: reason });
+    openFailureCount++;
+    showError(t("open.failed", { name: failed.name, error: reason }));
   }
 
   /** Drop zones: the image of the active tab adds layers; anywhere else opens new tabs. */
@@ -384,7 +386,7 @@
       if (path === null) return;
       const format = formatOfPath(path);
       if (format === null) {
-        showExportResult(null, {
+        showToast(null, {
           title: t("export.unsupportedExtension", { name: fileNameOf(path) }),
           lines: [],
           kind: "error",
@@ -393,7 +395,7 @@
       }
       exportTarget = { documentId: doc.id, path, format };
     } catch (e) {
-      showExportResult(null, { title: String(e), lines: [], kind: "error" });
+      showToast(null, { title: String(e), lines: [], kind: "error" });
     } finally {
       choosingExportFile = false;
     }
@@ -420,7 +422,7 @@
           : { code: "internal", detail: String(e) };
       // Closed meanwhile: the user asked for that.
       if (failed.code === "documentClosed") return;
-      showExportResult(null, {
+      showToast(null, {
         title: t("export.failed", { name: fileNameOf(path), error: exportReason(failed) }),
         lines: [],
         kind: "error",
@@ -447,25 +449,31 @@
     return job?.name ?? (path ? fileNameOf(path) : "");
   }
 
+  /** How long a toast stays, by kind; a report (`notice`) stays until dismissed. */
+  const TOAST_MS = { done: 8000, error: 5000 } as const;
+
   /**
-   * Show the outcome of job `id` (null: a failure before any job started) next to the others.
-   * A plain success disappears by itself after a few seconds; a report or an error stays until
-   * dismissed.
+   * Show a toast next to the others; `id` is the export job it is about (null for anything
+   * else). A success (long enough to reach its "show in folder" link) and an error disappear
+   * by themselves.
    */
-  function showExportResult(id: number | undefined | null, result: Omit<ExportResult, "key">) {
-    const key = id == null ? `local-${++lastLocalResult}` : `job-${id}`;
-    exportResults = [...exportResults.filter((r) => r.key !== key), { key, ...result }];
-    // Long enough to reach the "show in folder" link.
-    if (result.kind === "done") setTimeout(() => dismissExportResult(key), 8000);
+  function showToast(id: number | undefined | null, toast: Omit<Toast, "key">) {
+    const key = id == null ? `local-${++lastLocalToast}` : `job-${id}`;
+    toasts = [...toasts.filter((r) => r.key !== key), { key, ...toast }];
+    if (toast.kind !== "notice") setTimeout(() => dismissToast(key), TOAST_MS[toast.kind]);
   }
 
-  function dismissExportResult(key: string) {
-    exportResults = exportResults.filter((r) => r.key !== key);
+  function showError(title: string) {
+    showToast(null, { title, lines: [], kind: "error" });
+  }
+
+  function dismissToast(key: string) {
+    toasts = toasts.filter((r) => r.key !== key);
   }
 
   function revealExport(path: string) {
     engine.revealInFolder(path).catch((e) => {
-      showExportResult(null, {
+      showToast(null, {
         title: t("export.revealFailed", { error: String(e) }),
         lines: [],
         kind: "error",
@@ -478,7 +486,7 @@
     const report = finished.notices.map((notice) =>
       t(`export.report.${notice.id}`, notice.count === null ? undefined : { count: notice.count }),
     );
-    showExportResult(finished.id, {
+    showToast(finished.id, {
       title: t("export.finished", { name }),
       lines: report,
       kind: report.length > 0 ? "notice" : "done",
@@ -488,7 +496,7 @@
 
   function onExportFailed(failed: ExportFailed) {
     const name = endExport(failed.id, null);
-    showExportResult(
+    showToast(
       failed.id,
       failed.code === "cancelled"
         ? { title: t("export.cancelled", { name }), lines: [], kind: "done" }
@@ -585,7 +593,7 @@
       if (activeId === null) activeId = tabs.at(-1)?.id ?? null;
       pending.forEach(onOpenStarted);
       const lastFailure = failures.at(-1);
-      if (lastFailure && !error) onOpenFailed(lastFailure);
+      if (lastFailure) onOpenFailed(lastFailure);
       ready = true;
     });
     const stopDrop = getCurrentWebview().onDragDropEvent((event) => {
@@ -813,9 +821,7 @@
         {t("open.opening", { name: openings.map((o) => o.name).join(", ") })}
       </span>
     {/if}
-    {#if error}
-      <span class="error">{error}</span>
-    {:else if notices.length > 0}
+    {#if notices.length > 0}
       <span class="notice">{notices.join(" · ")}</span>
     {/if}
     <span class="right">
@@ -845,7 +851,7 @@
 {/if}
 
 <!-- Exports run in the background: progress and outcome in a card above the status bar. -->
-{#if exports.length > 0 || exportResults.length > 0}
+{#if exports.length > 0 || toasts.length > 0}
   <aside class="export-card" aria-live="polite">
     {#each exports as job (job.id)}
       <div class="export-job">
@@ -865,7 +871,7 @@
         <div class="export-bar"><span style:width="{percent(job)}%"></span></div>
       </div>
     {/each}
-    {#each exportResults as result (result.key)}
+    {#each toasts as result (result.key)}
       <div class="export-result {result.kind}">
         <div class="export-row">
           <span class="export-title">{result.title}</span>
@@ -873,7 +879,7 @@
             class="card-button"
             title={t("export.dismiss")}
             aria-label={t("export.dismiss")}
-            onclick={() => dismissExportResult(result.key)}
+            onclick={() => dismissToast(result.key)}
           >
             ✕
           </button>
@@ -1280,12 +1286,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: #e0b35a;
-  }
-
-  .status .error {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--danger-fg);
   }
 
   .status .right {
