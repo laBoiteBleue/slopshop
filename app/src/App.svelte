@@ -842,6 +842,8 @@
   {#key exportTarget}
     <ExportDialog
       documentId={exportDoc.id}
+      width={exportDoc.width}
+      height={exportDoc.height}
       path={exportTarget.path}
       format={exportTarget.format}
       onexport={startExport}

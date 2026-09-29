@@ -812,6 +812,15 @@ fn translucent_raster(size: Size) -> Arc<RasterImage> {
 }
 
 #[test]
+fn size_limits_per_format() {
+    assert_eq!(max_side(ExportFormatKind::Webp), Some(16_383));
+    assert_eq!(max_side(ExportFormatKind::Jpeg), Some(65_500));
+    assert_eq!(max_side(ExportFormatKind::Png), Some(i32::MAX as u32));
+    assert!(max_side(ExportFormatKind::Exr).is_some());
+    assert_eq!(max_side(ExportFormatKind::Tiff), None);
+}
+
+#[test]
 fn flattening_over_the_matte_equals_a_fill_below() {
     let size = Size::new(16, 16);
     let matte = LinearRgba::from_srgb_encoded_to_working(0.9, 0.5, 0.2, 1.0);

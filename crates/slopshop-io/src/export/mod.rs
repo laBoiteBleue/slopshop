@@ -1,4 +1,4 @@
-//! Writing images to files (ADR 0008, and ADR 0010 for JPEG and the matte).
+//! Writing images to files (ADR 0008, and ADR 0010 for JPEG, WebP and the matte).
 //!
 //! Export is a view of a document: [`export_image`] pulls working-space pixels from a source
 //! closure (the GPU renderer or the CPU compositor; `slopshop-io` depends on neither), converts
@@ -21,8 +21,8 @@
 //!
 //! # Format writers
 //!
-//! Each format has a writer in its own module (`png`, `tiff`, `exr`, `jpeg`), driven the same
-//! way by [`export_image`]. A writer is a struct with three methods:
+//! Each format has a writer in its own module (`png`, `tiff`, `exr`, `jpeg`, `webp`), driven the
+//! same way by [`export_image`]. A writer is a struct with three methods:
 //!
 //! - `new(file: File, size: Size, target: PixelFormat, options) -> Result<Self, ExportError>`
 //!   (`options` are the format's settings, when it has some: compression, JPEG quality and
@@ -30,8 +30,9 @@
 //!   writing (so `Write + Seek`, unbuffered: wrap it in a `BufWriter` if needed). `size` is not
 //!   empty. `target` is [`ExportSpec::target_format`]: RGB or RGBA; for TIFF U8/U16 with
 //!   straight alpha or F32 with premultiplied alpha, for EXR F32/F16 with premultiplied alpha,
-//!   for JPEG RGB U8 only; its color space passed [`supports_space`] for the format. Tags and
-//!   headers are written here or in `finish`.
+//!   for JPEG RGB U8 only, for WebP U8 with straight alpha; its color space passed
+//!   [`supports_space`] for the format. Tags and headers are written here or in `finish`. The
+//!   WebP writers also take the export's cancel token, since they encode in `finish`.
 //! - `write_rows(&mut self, first_row: u32, rows: &[u8]) -> Result<(), ExportError>`: called in
 //!   order, from top to bottom, without gaps: `first_row` is 0, then the previous `first_row`
 //!   plus the previous row count. `rows` holds a whole number of rows (a band: [`BAND_ROWS`]
@@ -55,6 +56,7 @@ mod exr;
 mod jpeg;
 mod png;
 mod tiff;
+mod webp;
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -77,6 +79,8 @@ use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::png::PngWriter;
 use self::tiff::TiffWriter;
+pub use self::webp::MAX_SIDE as WEBP_MAX_SIDE;
+use self::webp::{WebpLosslessWriter, WebpLossyWriter};
 use crate::icc;
 
 /// Rows per band: one tile row of the engine's grid.
@@ -102,6 +106,7 @@ pub enum ExportFormatKind {
     Tiff,
     Exr,
     Jpeg,
+    Webp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -145,6 +150,15 @@ pub enum JpegSubsampling {
     S420,
 }
 
+/// How a WebP file is compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WebpCompression {
+    /// VP8 with YUV 4:2:0 color, 0 to 100 (alpha stays lossless).
+    Lossy { quality: u8 },
+    /// VP8L: every sample kept.
+    Lossless,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExrSample {
     F32,
@@ -171,6 +185,9 @@ pub enum ExportFormat {
         quality: u8,
         subsampling: JpegSubsampling,
     },
+    Webp {
+        compression: WebpCompression,
+    },
 }
 
 impl ExportFormat {
@@ -180,6 +197,7 @@ impl ExportFormat {
             ExportFormat::Tiff { .. } => ExportFormatKind::Tiff,
             ExportFormat::Exr { .. } => ExportFormatKind::Exr,
             ExportFormat::Jpeg { .. } => ExportFormatKind::Jpeg,
+            ExportFormat::Webp { .. } => ExportFormatKind::Webp,
         }
     }
 
@@ -199,7 +217,7 @@ impl ExportFormat {
                 ExrSample::F32 => SampleType::F32,
                 ExrSample::F16 => SampleType::F16,
             },
-            ExportFormat::Jpeg { .. } => SampleType::U8,
+            ExportFormat::Jpeg { .. } | ExportFormat::Webp { .. } => SampleType::U8,
         }
     }
 }
@@ -345,6 +363,8 @@ pub enum ExportError {
     InvalidSpec(String),
     /// The encoder failed for another reason than I/O.
     Encode(String),
+    /// The image is too detailed for the format at this size (lossy WebP's first partition).
+    ContentTooComplex,
 }
 
 impl ExportError {
@@ -358,6 +378,7 @@ impl ExportError {
             ExportError::TooLarge { .. } => "tooLarge",
             ExportError::InvalidSpec(_) => "invalidSpec",
             ExportError::Encode(_) => "encode",
+            ExportError::ContentTooComplex => "contentTooComplex",
         }
     }
 }
@@ -377,6 +398,7 @@ impl fmt::Display for ExportError {
                 None => write!(f, "{space:?}"),
             },
             ExportError::TooLarge { width, height } => write!(f, "{width}×{height}"),
+            ExportError::ContentTooComplex => write!(f, "VP8 first partition overflow"),
         }
     }
 }
@@ -386,6 +408,19 @@ impl std::error::Error for ExportError {}
 impl From<std::io::Error> for ExportError {
     fn from(e: std::io::Error) -> Self {
         ExportError::Io(e)
+    }
+}
+
+/// The largest width or height a file of this format can have, if it has a limit short of what
+/// memory allows (TIFF has none: BigTIFF). Checked by [`export_image`] before the file is
+/// created, and offered to front ends so that they can warn before an export starts.
+pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
+    match kind {
+        ExportFormatKind::Png => Some(png::MAX_SIDE),
+        ExportFormatKind::Exr => Some(exr::MAX_SIDE),
+        ExportFormatKind::Jpeg => Some(jpeg::MAX_SIDE),
+        ExportFormatKind::Webp => Some(webp::MAX_SIDE),
+        ExportFormatKind::Tiff => None,
     }
 }
 
@@ -403,14 +438,15 @@ pub fn supports_alpha(kind: ExportFormatKind) -> bool {
 /// - TIFF: spaces an ICC profile can describe (matrix/TRC; not PQ or HLG);
 /// - EXR: linear spaces with valid primaries (`chromaticities` attribute), since EXR samples are
 ///   scene-linear;
-/// - JPEG: spaces an ICC profile can describe (APP2 segments; not PQ or HLG).
+/// - JPEG: spaces an ICC profile can describe (APP2 segments; not PQ or HLG);
+/// - WebP: spaces an ICC profile can describe (ICCP chunk; not PQ or HLG).
 pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_matrix_trc(space).is_ok();
     match kind {
         ExportFormatKind::Png => {
             *space == ColorSpace::SRGB || png::cicp_code(space).is_some() || icc_writable()
         }
-        ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
+        ExportFormatKind::Tiff | ExportFormatKind::Jpeg | ExportFormatKind::Webp => icc_writable(),
         ExportFormatKind::Exr => {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
@@ -495,9 +531,13 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
                 quality: 90,
                 subsampling: JpegSubsampling::S444,
             },
-            unique_space
-                .filter(|space| COMMON_8_BIT_SPACES.contains(space))
-                .unwrap_or(ColorSpace::SRGB),
+            common_8_bit_space(unique_space),
+        ),
+        ExportFormatKind::Webp => (
+            ExportFormat::Webp {
+                compression: WebpCompression::Lossy { quality: 90 },
+            },
+            common_8_bit_space(unique_space),
         ),
     };
     ExportSpec {
@@ -517,6 +557,13 @@ const COMMON_8_BIT_SPACES: [ColorSpace; 3] = [
     ColorSpace::DISPLAY_P3,
     ColorSpace::ADOBE_RGB,
 ];
+
+/// The source space when it is one of [`COMMON_8_BIT_SPACES`], else sRGB.
+fn common_8_bit_space(source: Option<ColorSpace>) -> ColorSpace {
+    source
+        .filter(|space| COMMON_8_BIT_SPACES.contains(space))
+        .unwrap_or(ColorSpace::SRGB)
+}
 
 /// Whether every pixel of the document is opaque by construction: its bottom contributing layer
 /// is an opaque fill, or a raster without alpha covering the canvas, at opacity 1.
@@ -574,10 +621,11 @@ pub fn export_image(
             "{kind:?} cannot store alpha: it is flattened over the matte"
         )));
     }
-    match kind {
-        ExportFormatKind::Png => png::check_size(size)?,
-        ExportFormatKind::Jpeg => jpeg::check_size(size)?,
-        ExportFormatKind::Tiff | ExportFormatKind::Exr => {}
+    if max_side(kind).is_some_and(|max| size.width > max || size.height > max) {
+        return Err(ExportError::TooLarge {
+            width: size.width,
+            height: size.height,
+        });
     }
     let target = spec.target_format();
     let converter = Converter::new(
@@ -622,6 +670,14 @@ pub fn export_image(
             quality,
             subsampling,
         )?)),
+        ExportFormat::Webp { compression } => match compression {
+            WebpCompression::Lossless => FormatWriter::WebpLossless(Box::new(
+                WebpLosslessWriter::new(file, size, target, cancel.clone())?,
+            )),
+            WebpCompression::Lossy { quality } => FormatWriter::WebpLossy(Box::new(
+                WebpLossyWriter::new(file, size, target, quality, cancel.clone())?,
+            )),
+        },
     };
     let bands = Bands {
         size,
@@ -656,6 +712,8 @@ enum FormatWriter {
     Tiff(Box<TiffWriter>),
     Exr(Box<ExrWriter>),
     Jpeg(Box<JpegWriter>),
+    WebpLossless(Box<WebpLosslessWriter>),
+    WebpLossy(Box<WebpLossyWriter>),
 }
 
 impl FormatWriter {
@@ -665,6 +723,8 @@ impl FormatWriter {
             FormatWriter::Tiff(w) => w.write_rows(first_row, rows),
             FormatWriter::Exr(w) => w.write_rows(first_row, rows),
             FormatWriter::Jpeg(w) => w.write_rows(first_row, rows),
+            FormatWriter::WebpLossless(w) => w.write_rows(first_row, rows),
+            FormatWriter::WebpLossy(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -674,6 +734,8 @@ impl FormatWriter {
             FormatWriter::Tiff(w) => (*w).finish(),
             FormatWriter::Exr(w) => (*w).finish(),
             FormatWriter::Jpeg(w) => (*w).finish(),
+            FormatWriter::WebpLossless(w) => (*w).finish(),
+            FormatWriter::WebpLossy(w) => (*w).finish(),
         }
     }
 }

@@ -12,7 +12,8 @@ use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Session, Size};
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, supports_space,
+    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
+    supports_space,
 };
 
 /// Identity of an open document (one per tab). Ids are never reused, so the UI can tell
@@ -330,6 +331,7 @@ pub enum ExportFormatId {
     Tiff,
     Exr,
     Jpeg,
+    Webp,
 }
 
 impl ExportFormatId {
@@ -339,6 +341,7 @@ impl ExportFormatId {
             ExportFormatId::Tiff => ExportFormatKind::Tiff,
             ExportFormatId::Exr => ExportFormatKind::Exr,
             ExportFormatId::Jpeg => ExportFormatKind::Jpeg,
+            ExportFormatId::Webp => ExportFormatKind::Webp,
         }
     }
 }
@@ -353,7 +356,8 @@ pub enum ExportSampleId {
     F32,
 }
 
-/// Compression settings, per format: PNG `fast`/`small`, TIFF `none`/`deflate`/`lzw`.
+/// Compression settings, per format: PNG `fast`/`small`, TIFF `none`/`deflate`/`lzw`, WebP
+/// `lossy`/`lossless`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportCompressionId {
@@ -362,6 +366,8 @@ pub enum ExportCompressionId {
     None,
     Deflate,
     Lzw,
+    Lossy,
+    Lossless,
 }
 
 /// JPEG chroma subsampling.
@@ -385,7 +391,7 @@ pub struct ExportSpecDto {
     pub sample: ExportSampleId,
     /// `null` for EXR, whose compression is fixed (lossless ZIP), and for JPEG.
     pub compression: Option<ExportCompressionId>,
-    /// JPEG only (1 to 100); `null` for the other formats.
+    /// JPEG (1 to 100) and lossy WebP (0 to 100); `null` otherwise.
     pub quality: Option<u8>,
     /// JPEG only; `null` for the other formats.
     pub subsampling: Option<ExportSubsamplingId>,
@@ -453,6 +459,16 @@ impl ExportSpecDto {
                 });
                 (ExportFormatId::Jpeg, S::U8, None)
             }
+            ExportFormat::Webp { compression } => {
+                let compression = match compression {
+                    WebpCompression::Lossy { quality: q } => {
+                        quality = Some(q);
+                        C::Lossy
+                    }
+                    WebpCompression::Lossless => C::Lossless,
+                };
+                (ExportFormatId::Webp, S::U8, Some(compression))
+            }
         };
         Self {
             format,
@@ -484,11 +500,13 @@ impl ExportSpecDto {
         };
         let sample = || invalid(format!("sample type {:?}", self.sample));
         let compression = || invalid(format!("compression {:?}", self.compression));
-        let jpeg_only = || invalid("quality or subsampling".to_owned());
-        if self.format != ExportFormatId::Jpeg
-            && (self.quality.is_some() || self.subsampling.is_some())
-        {
-            return Err(jpeg_only());
+        let quality = || invalid(format!("quality {:?}", self.quality));
+        if self.format != ExportFormatId::Jpeg && self.subsampling.is_some() {
+            return Err(invalid("subsampling".to_owned()));
+        }
+        let lossy_webp = self.format == ExportFormatId::Webp && self.compression == Some(C::Lossy);
+        if self.format != ExportFormatId::Jpeg && !lossy_webp && self.quality.is_some() {
+            return Err(quality());
         }
         let format = match self.format {
             ExportFormatId::Png => ExportFormat::Png {
@@ -539,12 +557,26 @@ impl ExportSpecDto {
                     quality: self
                         .quality
                         .filter(|q| (1..=100).contains(q))
-                        .ok_or_else(|| invalid(format!("quality {:?}", self.quality)))?,
+                        .ok_or_else(quality)?,
                     subsampling: match self.subsampling {
                         Some(ExportSubsamplingId::S444) => JpegSubsampling::S444,
                         Some(ExportSubsamplingId::S422) => JpegSubsampling::S422,
                         Some(ExportSubsamplingId::S420) => JpegSubsampling::S420,
                         None => return Err(invalid("missing subsampling".to_owned())),
+                    },
+                }
+            }
+            ExportFormatId::Webp => {
+                if self.sample != S::U8 {
+                    return Err(sample());
+                }
+                ExportFormat::Webp {
+                    compression: match self.compression {
+                        Some(C::Lossless) => WebpCompression::Lossless,
+                        Some(C::Lossy) => WebpCompression::Lossy {
+                            quality: self.quality.filter(|q| *q <= 100).ok_or_else(quality)?,
+                        },
+                        _ => return Err(compression()),
                     },
                 }
             }
@@ -728,6 +760,7 @@ mod tests {
             ExportFormatId::Tiff,
             ExportFormatId::Exr,
             ExportFormatId::Jpeg,
+            ExportFormatId::Webp,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
@@ -866,6 +899,49 @@ mod tests {
             jpeg(&|d| d.space = "rec2100-pq".to_owned()),
             Err("unsupportedSpace"),
             "JPEG PQ"
+        );
+        let webp = |change: &dyn Fn(&mut ExportSpecDto)| {
+            with(&|d| {
+                d.format = ExportFormatId::Webp;
+                d.compression = Some(C::Lossy);
+                d.quality = Some(0);
+                change(d);
+            })
+        };
+        assert_eq!(webp(&|_| {}), Ok(()), "lossy quality 0");
+        assert_eq!(
+            webp(&|d| {
+                d.compression = Some(C::Lossless);
+                d.quality = None;
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            webp(&|d| d.compression = Some(C::Lossless)),
+            invalid,
+            "quality on lossless"
+        );
+        assert_eq!(
+            webp(&|d| d.quality = None),
+            invalid,
+            "lossy without quality"
+        );
+        assert_eq!(webp(&|d| d.quality = Some(101)), invalid, "quality 101");
+        assert_eq!(webp(&|d| d.compression = None), invalid, "no compression");
+        assert_eq!(
+            webp(&|d| d.compression = Some(C::Fast)),
+            invalid,
+            "PNG compression"
+        );
+        assert_eq!(
+            webp(&|d| d.subsampling = Some(ExportSubsamplingId::S420)),
+            invalid
+        );
+        assert_eq!(webp(&|d| d.sample = S::U16), invalid, "16-bit WebP");
+        assert_eq!(
+            with(&|d| d.compression = Some(C::Lossless)),
+            invalid,
+            "lossless on PNG"
         );
     }
 

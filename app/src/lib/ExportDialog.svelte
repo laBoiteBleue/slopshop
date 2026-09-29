@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import {
+    DEFAULT_QUALITY,
     EXPORT_FORMATS,
     engine,
     type ColorSpaceId,
@@ -12,12 +13,17 @@
 
   let {
     documentId,
+    width,
+    height,
     path,
     format,
     onexport,
     onclose,
   }: {
     documentId: number;
+    /** Size of the document, in pixels. */
+    width: number;
+    height: number;
     /** The file chosen in the save dialog; its extension decided `format`. */
     path: string;
     format: ExportFormat;
@@ -28,11 +34,13 @@
 
   // Like "Save As" in image editors: the file (and so the format) was chosen first; this dialog
   // only holds that format's options, starting from the defaults for this document.
-  const target = untrack(() => ({ documentId, path, format }));
+  const target = untrack(() => ({ documentId, path, format, width, height }));
   let spec = $state<ExportSpec | null>(null);
   /** Color spaces the format can store. */
   let spaces = $state<ColorSpaceId[]>([]);
   let failure = $state<string | null>(null);
+  /** The format's size limit, when the document exceeds it: the export would fail. */
+  let tooLargeFor = $state<number | null>(null);
   let dialog: HTMLDialogElement;
 
   const options = EXPORT_FORMATS[target.format];
@@ -40,10 +48,13 @@
 
   async function load() {
     try {
-      const [defaults, named] = await Promise.all([
+      const [defaults, named, maxSide] = await Promise.all([
         engine.exportDefaults(target.documentId, target.format),
         engine.exportSpaces(target.format),
+        engine.exportMaxSide(target.format),
       ]);
+      tooLargeFor =
+        maxSide !== null && (target.width > maxSide || target.height > maxSide) ? maxSide : null;
       // The document's own unnamed space is only offered when the defaults picked it.
       spaces = defaults.space === "custom" ? [...named, "custom"] : named;
       spec = defaults;
@@ -108,7 +119,16 @@
 
         {#if options.compressions.length > 0}
           <label for="export-compression">{t("export.compression")}</label>
-          <select id="export-compression" bind:value={spec.compression}>
+          <select
+            id="export-compression"
+            bind:value={spec.compression}
+            onchange={() => {
+              // Lossy WebP has a quality, lossless WebP none.
+              if (spec && target.format === "webp") {
+                spec.quality = spec.compression === "lossy" ? DEFAULT_QUALITY : null;
+              }
+            }}
+          >
             {#each options.compressions as compression (compression)}
               <option value={compression}>{t(`export.compression.${compression}`)}</option>
             {/each}
@@ -164,13 +184,23 @@
         {/if}
       {/if}
 
+      {#if tooLargeFor !== null}
+        <p class="failure">
+          {t("export.tooLargeForFormat", {
+            format: t(`export.format.${target.format}`),
+            max: tooLargeFor,
+            width: target.width,
+            height: target.height,
+          })}
+        </p>
+      {/if}
       {#if failure}
         <p class="failure">{failure}</p>
       {/if}
     </div>
     <footer>
       <button type="button" onclick={onclose}>{t("export.cancel")}</button>
-      <button type="submit" class="primary" disabled={!spec}>
+      <button type="submit" class="primary" disabled={!spec || tooLargeFor !== null}>
         {t("export.confirm")}
       </button>
     </footer>

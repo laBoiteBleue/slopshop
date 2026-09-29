@@ -1043,6 +1043,7 @@ pub fn run() {
             reveal_in_folder,
             export::export_defaults,
             export::export_spaces,
+            export::export_max_side,
             export::export_document,
             export::cancel_export
         ])
