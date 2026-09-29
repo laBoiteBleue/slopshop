@@ -7,6 +7,7 @@
 //! Threading: every command is `async` (so it never runs on the main/UI thread) and heavy work
 //! (GPU, decoding) runs in `spawn_blocking` or a worker thread.
 
+mod export;
 mod ipc;
 
 use std::collections::HashMap;
@@ -25,6 +26,7 @@ use slopshop_render::present::{Presented, Presenter};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::export::ExportJobs;
 use crate::ipc::{
     DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo, PresentInfo,
     ViewInfo, ViewRequest,
@@ -246,6 +248,8 @@ struct AppState {
     presenter: Mutex<Option<Presenter>>,
     /// Client area of the main window in physical pixels, kept by window events.
     surface_size: Mutex<Option<Size>>,
+    /// Exports running (see the `export` module).
+    exports: ExportJobs,
 }
 
 impl AppState {
@@ -261,6 +265,7 @@ impl AppState {
             presenter_mode: OnceLock::new(),
             presenter: Mutex::new(None),
             surface_size: Mutex::new(None),
+            exports: ExportJobs::default(),
         }
     }
 
@@ -413,14 +418,7 @@ fn open_path(app: &AppHandle, path: &Path, target: OpenTarget) -> Result<Documen
             })
         })
     }))
-    .unwrap_or_else(|panic| {
-        let detail = panic
-            .downcast_ref::<&str>()
-            .map(|s| (*s).to_owned())
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "decoder panicked".to_owned());
-        Err(("internal", detail))
-    });
+    .unwrap_or_else(|panic| Err(("internal", panic_detail(panic.as_ref(), "decoder panicked"))));
 
     // Leave the "in progress" list before announcing the outcome, so that a UI catching up
     // after the event cannot see this open as still running.
@@ -501,6 +499,15 @@ fn insert_imported(
             Ok(document.view())
         }
     }
+}
+
+/// The message of a caught panic, or `fallback` when it has none.
+fn panic_detail(panic: &(dyn std::any::Any + Send), fallback: &str) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: &T) {
@@ -979,7 +986,11 @@ pub fn run() {
             view,
             render_view,
             presenter_mode,
-            present_view
+            present_view,
+            export::export_defaults,
+            export::export_spaces,
+            export::export_document,
+            export::cancel_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running SlopShop");

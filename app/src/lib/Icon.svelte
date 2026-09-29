@@ -7,6 +7,7 @@
     plus: "M12 5v14 M5 12h14",
     trash: "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v5 M14 11v5",
     open: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",
+    export: "M12 15V4 M8 8l4-4 4 4 M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4",
   } as const;
 
   export type IconName = keyof typeof paths;

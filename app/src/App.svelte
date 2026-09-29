@@ -1,19 +1,28 @@
 <script lang="ts">
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import {
     DOCUMENT_CLOSED,
+    EXPORT_FORMATS,
     engine,
+    onExportEvents,
     onOpenEvents,
     type DocumentView,
     type EditRequest,
+    type ExportFailed,
+    type ExportFinished,
+    type ExportFormat,
+    type ExportProgress,
+    type ExportSpec,
+    type ExportStarted,
     type GpuInfo,
     type OpenFailed,
     type OpenFinished,
     type Opening,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
+  import ExportDialog from "./lib/ExportDialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
   import { formatZoom } from "./lib/format";
@@ -41,6 +50,24 @@
   let dropTarget = $state<"tab" | "layer" | null>(null);
 
   let notices = $derived(active?.warnings.map((w) => t(`open.warning.${w}`)) ?? []);
+
+  /** The file an export's options are being chosen for (after the save dialog). */
+  let exportTarget = $state<{ documentId: number; path: string; format: ExportFormat } | null>(
+    null,
+  );
+  let exportDoc = $derived(tabs.find((d) => d.id === exportTarget?.documentId) ?? null);
+  /** The save dialog is open. */
+  let choosingExportFile = false;
+  /** The dialog opens on the last format used. */
+  let lastExportFormat = $state<ExportFormat>("png");
+  /** Exports running (rows done out of total). */
+  let exports = $state<{ id: number; name: string; done: number; total: number }[]>([]);
+  /** Outcome of the last export (translated): a title and one line per report entry. */
+  let exportResult = $state<{
+    title: string;
+    lines: string[];
+    kind: "done" | "notice" | "error";
+  } | null>(null);
 
   function tabTitle(doc: DocumentView): string {
     return doc.name ?? t("document.untitled");
@@ -305,6 +332,151 @@
     return "tab";
   }
 
+  // --- Export ---------------------------------------------------------------------------------
+
+  /** Formats in the order of the save dialog's file types: the last one used first. */
+  function exportFormatOrder(): ExportFormat[] {
+    const all: ExportFormat[] = ["png", "tiff", "exr"];
+    return [lastExportFormat, ...all.filter((f) => f !== lastExportFormat)];
+  }
+
+  function formatOfPath(path: string): ExportFormat | null {
+    const extension = path.toLowerCase().split(".").pop() ?? "";
+    const formats = Object.entries(EXPORT_FORMATS) as [ExportFormat, { extensions: string[] }][];
+    return formats.find(([, f]) => f.extensions.includes(extension))?.[0] ?? null;
+  }
+
+  /** The document name with `extension`, without characters files cannot have. */
+  function exportFileName(name: string, extension: string): string {
+    const safe = name.replace(/[\\/:*?"<>|]/g, "_");
+    const stem = safe.replace(/\.[^.]+$/, "") || safe;
+    return `${stem}.${extension}`;
+  }
+
+  /**
+   * Export, like "Save As": the save dialog first (its file types are the formats; the system
+   * adds the extension of the chosen type and asks before overwriting), then the options of
+   * the format of the chosen file.
+   */
+  async function chooseExportFile() {
+    const doc = active;
+    if (!doc || choosingExportFile || exportTarget) return;
+    choosingExportFile = true;
+    try {
+      const order = exportFormatOrder();
+      const path = await save({
+        title: t("export.title"),
+        defaultPath: exportFileName(tabTitle(doc), EXPORT_FORMATS[order[0]].extensions[0]),
+        filters: order.map((format) => ({
+          name: t(`export.format.${format}`),
+          extensions: EXPORT_FORMATS[format].extensions,
+        })),
+      });
+      if (path === null) return;
+      const format = formatOfPath(path);
+      if (format === null) {
+        exportResult = {
+          title: t("export.unsupportedExtension", { name: fileNameOf(path) }),
+          lines: [],
+          kind: "error",
+        };
+        return;
+      }
+      exportTarget = { documentId: doc.id, path, format };
+    } catch (e) {
+      exportResult = { title: String(e), lines: [], kind: "error" };
+    } finally {
+      choosingExportFile = false;
+    }
+  }
+
+  function fileNameOf(path: string): string {
+    return path.split(/[\\/]/).pop() || path;
+  }
+
+  function exportReason(failed: ExportFailed): string {
+    return t(`export.error.${failed.code}`, { detail: failed.detail });
+  }
+
+  /** Start exporting (the job reports through events); the dialog closes. */
+  async function startExport(documentId: number, path: string, spec: ExportSpec) {
+    exportTarget = null;
+    lastExportFormat = spec.format;
+    exportResult = null;
+    try {
+      await engine.exportDocument(documentId, path, spec);
+    } catch (e) {
+      const failed: ExportFailed =
+        typeof e === "object" && e !== null && "code" in e
+          ? (e as ExportFailed)
+          : { code: "internal", detail: String(e) };
+      // Closed meanwhile: the user asked for that.
+      if (failed.code === "documentClosed") return;
+      exportResult = {
+        title: t("export.failed", { name: fileNameOf(path), error: exportReason(failed) }),
+        lines: [],
+        kind: "error",
+      };
+    }
+  }
+
+  function onExportStarted(started: ExportStarted) {
+    if (exports.some((job) => job.id === started.id)) return;
+    exports.push({ id: started.id, name: started.name, done: 0, total: 0 });
+  }
+
+  function onExportProgress(progress: ExportProgress) {
+    const job = exports.find((j) => j.id === progress.id);
+    if (!job) return;
+    job.done = progress.done;
+    job.total = progress.total;
+  }
+
+  /** Remove a finished job; its name, for messages. */
+  function endExport(id: number | undefined, path: string | null): string {
+    const job = exports.find((j) => j.id === id);
+    exports = exports.filter((j) => j.id !== id);
+    return job?.name ?? (path ? fileNameOf(path) : "");
+  }
+
+  /** Show an export outcome; a plain success disappears by itself after a few seconds. */
+  function showExportResult(result: NonNullable<typeof exportResult>) {
+    exportResult = result;
+    if (result.kind !== "done") return;
+    setTimeout(() => {
+      if (exportResult === result) exportResult = null;
+    }, 4000);
+  }
+
+  function onExportFinished(finished: ExportFinished) {
+    const name = endExport(finished.id, finished.path);
+    const report = finished.notices.map((notice) =>
+      t(`export.report.${notice.id}`, notice.count === null ? undefined : { count: notice.count }),
+    );
+    showExportResult({
+      title: t("export.finished", { name }),
+      lines: report,
+      kind: report.length > 0 ? "notice" : "done",
+    });
+  }
+
+  function onExportFailed(failed: ExportFailed) {
+    const name = endExport(failed.id, null);
+    showExportResult(
+      failed.code === "cancelled"
+        ? { title: t("export.cancelled"), lines: [], kind: "done" }
+        : {
+            title: t("export.failed", { name, error: exportReason(failed) }),
+            lines: [],
+            kind: "error",
+          },
+    );
+  }
+
+  function percent(job: { done: number; total: number }): number {
+    return job.total > 0 ? Math.floor((job.done * 100) / job.total) : 0;
+  }
+
   // --- Keyboard --------------------------------------------------------------------------------
 
   function onkeydown(e: KeyboardEvent) {
@@ -320,6 +492,12 @@
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
     const key = e.key.toLowerCase();
+    // Also the physical key, like the zoom digits: layouts differ.
+    if (e.shiftKey && (key === "e" || e.code === "KeyE")) {
+      e.preventDefault();
+      if (!e.repeat) void chooseExportFile();
+      return;
+    }
     if (key === "o" && !e.shiftKey) {
       e.preventDefault();
       void openWithDialog();
@@ -349,7 +527,17 @@
 
   onMount(() => {
     let stopEvents: (() => void) | null = null;
+    let stopExportEvents: (() => void) | null = null;
     let destroyed = false;
+    void onExportEvents({
+      started: onExportStarted,
+      progress: onExportProgress,
+      finished: onExportFinished,
+      failed: onExportFailed,
+    }).then((stop) => {
+      if (destroyed) stop();
+      else stopExportEvents = stop;
+    });
     // Subscribe first, then catch up with what happened before (e.g. startup files).
     void onOpenEvents({
       started: onOpenStarted,
@@ -396,6 +584,7 @@
     return () => {
       destroyed = true;
       stopEvents?.();
+      stopExportEvents?.();
       void stopDrop.then((unlisten) => unlisten());
     };
   });
@@ -414,6 +603,14 @@
     </button>
     <button class="icon" onclick={openWithDialog} title={t("open.hint", { mod: modifierLabel })}>
       <Icon name="open" />
+    </button>
+    <button
+      class="icon"
+      onclick={chooseExportFile}
+      disabled={!active}
+      title={t("export.hint", { mod: modifierLabel })}
+    >
+      <Icon name="export" />
     </button>
     <div class="sep"></div>
     <button
@@ -608,7 +805,138 @@
   </footer>
 </div>
 
+{#if exportDoc && exportTarget}
+  {#key exportTarget}
+    <ExportDialog
+      documentId={exportDoc.id}
+      path={exportTarget.path}
+      format={exportTarget.format}
+      onexport={startExport}
+      onclose={() => (exportTarget = null)}
+    />
+  {/key}
+{/if}
+
+<!-- Exports run in the background: progress and outcome in a card above the status bar. -->
+{#if exports.length > 0 || exportResult}
+  <aside class="export-card" aria-live="polite">
+    {#each exports as job (job.id)}
+      <div class="export-job">
+        <div class="export-row">
+          <span class="export-title">
+            {t("export.progress", { name: job.name, percent: percent(job) })}
+          </span>
+          <button
+            class="card-button"
+            title={t("export.stop")}
+            aria-label={t("export.stop")}
+            onclick={() => engine.cancelExport(job.id)}
+          >
+            ✕
+          </button>
+        </div>
+        <div class="export-bar"><span style:width="{percent(job)}%"></span></div>
+      </div>
+    {/each}
+    {#if exportResult}
+      <div class="export-result {exportResult.kind}">
+        <div class="export-row">
+          <span class="export-title">{exportResult.title}</span>
+          <button
+            class="card-button"
+            title={t("export.dismiss")}
+            aria-label={t("export.dismiss")}
+            onclick={() => (exportResult = null)}
+          >
+            ✕
+          </button>
+        </div>
+        {#each exportResult.lines as line, i (i)}
+          <p>{line}</p>
+        {/each}
+      </div>
+    {/if}
+  </aside>
+{/if}
+
 <style>
+  /* Export progress and outcome, above the status bar. Opaque: it floats over the canvas. */
+  .export-card {
+    position: fixed;
+    right: 12px;
+    bottom: 30px;
+    z-index: 10;
+    display: grid;
+    gap: 8px;
+    width: 300px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-dark);
+    border-radius: 4px;
+    background: var(--panel);
+    box-shadow: 0 6px 20px #0008;
+  }
+
+  .export-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .export-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .export-bar {
+    height: 4px;
+    margin-top: 5px;
+    border-radius: 2px;
+    background: var(--slider-track);
+    overflow: hidden;
+  }
+
+  .export-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+
+  .export-result p {
+    margin: 4px 0 0;
+    color: var(--text-muted);
+    user-select: text;
+  }
+
+  .export-result.notice .export-title {
+    color: #e0b35a;
+  }
+
+  .export-result.error .export-title {
+    color: var(--danger-fg);
+    white-space: normal;
+  }
+
+  .card-button {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font-size: 9px;
+  }
+
+  .card-button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+
   .app {
     display: grid;
     grid-template-rows: 30px 1fr 22px;

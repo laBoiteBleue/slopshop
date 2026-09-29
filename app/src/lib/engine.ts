@@ -173,6 +173,77 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
   };
 }
 
+/** Export file formats. */
+export type ExportFormat = "png" | "tiff" | "exr";
+/** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
+export type ExportSample = "u8" | "u16" | "f16" | "f32";
+export type ExportCompression = "fast" | "small" | "none" | "deflate" | "lzw";
+
+/** Export settings (see ExportSpecDto in app/src-tauri/src/ipc.rs). */
+export type ExportSpec = {
+  format: ExportFormat;
+  sample: ExportSample;
+  /** `null` for EXR, whose compression is fixed (lossless). */
+  compression: ExportCompression | null;
+  /** A named space, or `custom` for the document's own unnamed space. */
+  space: ColorSpaceId;
+  keepAlpha: boolean;
+  /** Only applies to 8-bit samples. */
+  dither: boolean;
+};
+
+/**
+ * What the engine accepts for each format (ExportSpecDto::to_spec): file extensions (the first
+ * one is the default), sample types and compressions, in the order the UI lists them.
+ */
+export const EXPORT_FORMATS: Record<
+  ExportFormat,
+  { extensions: string[]; samples: ExportSample[]; compressions: ExportCompression[] }
+> = {
+  png: { extensions: ["png"], samples: ["u8", "u16"], compressions: ["fast", "small"] },
+  tiff: {
+    extensions: ["tif", "tiff"],
+    samples: ["u8", "u16", "f32"],
+    compressions: ["deflate", "lzw", "none"],
+  },
+  exr: { extensions: ["exr"], samples: ["f32", "f16"], compressions: [] },
+};
+
+/** An export job has started. */
+export type ExportStarted = { id: number; documentId: number; path: string; name: string };
+/** Export progress, in rows. */
+export type ExportProgress = { id: number; done: number; total: number };
+
+export type ExportNoticeId =
+  "clippedHigh" | "clippedLow" | "nonFinite" | "halfOverflow" | "precisionReduced" | "bigTiff";
+
+/** A report entry, translated with the `export.report.<id>` keys. */
+export type ExportNotice = { id: ExportNoticeId; count: number | null };
+export type ExportFinished = { id: number; path: string; notices: ExportNotice[] };
+
+export type ExportErrorCode =
+  | "io"
+  | "source"
+  | "cancelled"
+  | "unsupportedSpace"
+  | "tooLarge"
+  | "invalidSpec"
+  | "encode"
+  | "documentClosed"
+  | "internal";
+
+/**
+ * Why an export failed: the `export-failed` event (with the job id), or the rejection of
+ * `exportDocument` when no job could start (without).
+ */
+export type ExportFailed = {
+  id?: number;
+  /** Translated with the `export.error.<code>` keys. */
+  code: ExportErrorCode;
+  /** Technical detail inserted in the translated message. */
+  detail: string;
+};
+
 export type GpuInfo = {
   name: string;
   backend: string;
@@ -306,6 +377,20 @@ export const engine = {
     slot.answered = answer;
     return answer;
   },
+  /** The settings an export of a document to `format` starts with. */
+  exportDefaults: (documentId: number, format: ExportFormat) =>
+    invoke<ExportSpec>("export_defaults", { documentId, format }),
+  /** The named color spaces `format` can store and tag. */
+  exportSpaces: (format: ExportFormat) => invoke<ColorSpaceId[]>("export_spaces", { format }),
+  /**
+   * Start exporting a document to `path` (overwritten): resolves to the job id at once, and
+   * rejects with an `ExportFailed` (no id) when the export cannot start. Queued after the edits
+   * already requested, so that they are exported; later edits are not.
+   */
+  exportDocument: (documentId: number, path: string, spec: ExportSpec) =>
+    serial(() => invoke<number>("export_document", { documentId, path, spec })),
+  /** Ask an export to stop; it then fails with the code `cancelled` (unless already done). */
+  cancelExport: (jobId: number) => invoke<void>("cancel_export", { jobId }),
   /** Render a document's current view into a width × height (device pixels) viewport. */
   renderView: async (documentId: number, width: number, height: number): Promise<Frame> =>
     parseFrame(await invoke<ArrayBuffer>("render_view", { documentId, width, height })),
@@ -324,6 +409,22 @@ export async function onOpenEvents(handlers: {
     listen<Opening>("open-started", (e) => handlers.started(e.payload)),
     listen<OpenFinished>("open-finished", (e) => handlers.finished(e.payload)),
     listen<OpenFailed>("open-failed", (e) => handlers.failed(e.payload)),
+  ]);
+  return () => unlisten.forEach((stop) => stop());
+}
+
+/** Export progress and outcomes. Resolves once the listeners are registered. */
+export async function onExportEvents(handlers: {
+  started: (started: ExportStarted) => void;
+  progress: (progress: ExportProgress) => void;
+  finished: (finished: ExportFinished) => void;
+  failed: (failed: ExportFailed) => void;
+}): Promise<() => void> {
+  const unlisten = await Promise.all([
+    listen<ExportStarted>("export-started", (e) => handlers.started(e.payload)),
+    listen<ExportProgress>("export-progress", (e) => handlers.progress(e.payload)),
+    listen<ExportFinished>("export-finished", (e) => handlers.finished(e.payload)),
+    listen<ExportFailed>("export-failed", (e) => handlers.failed(e.payload)),
   ]);
   return () => unlisten.forEach((stop) => stop());
 }
