@@ -40,6 +40,10 @@ pub struct DocumentView {
     /// Bottom to top, like the core model.
     pub layers: Vec<LayerView>,
     pub warnings: Vec<&'static str>,
+    /// The `.slop` file the document was opened from or saved to, if any.
+    pub path: Option<String>,
+    /// Changed since it was opened, created or last saved.
+    pub dirty: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,8 +74,21 @@ impl DocumentView {
             can_redo: session.can_redo(),
             layers: doc.layers().iter().map(LayerView::new).collect(),
             warnings,
+            path: None,
+            dirty: false,
         }
     }
+}
+
+/// Why a document could not be saved (the error of `save_document`), translated by the UI
+/// (`save.error.<code>`): a `.slop` file error code (`io`, `conflict`, `readOnly`…), `busy`
+/// (a save of the document is already running), `documentClosed` or `internal`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFailed {
+    pub code: &'static str,
+    /// Technical detail, shown inside the translated message.
+    pub detail: String,
 }
 
 impl LayerView {

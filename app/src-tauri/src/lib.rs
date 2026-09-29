@@ -12,7 +12,7 @@ mod ipc;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,7 @@ use slopshop_core::view::Viewport;
 use slopshop_core::{
     Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Rect, Session, Size,
 };
+use slopshop_io::slop::SlopFile;
 use slopshop_render::Renderer;
 use slopshop_render::present::{Presented, Presenter};
 use tauri::ipc::Response;
@@ -30,7 +31,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::export::ExportJobs;
 use crate::ipc::{
     DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo, PresentInfo,
-    ViewInfo, ViewRequest,
+    SaveFailed, ViewInfo, ViewRequest,
 };
 
 /// How the viewport reaches the screen (ADR 0002):
@@ -77,6 +78,9 @@ const PASTEBOARD_SRGB: [f64; 4] = [32.0 / 255.0, 32.0 / 255.0, 35.0 / 255.0, 1.0
 const EVENT_OPEN_STARTED: &str = "open-started";
 const EVENT_OPEN_FINISHED: &str = "open-finished";
 const EVENT_OPEN_FAILED: &str = "open-failed";
+/// The user asked to close the window while some documents have unsaved changes: the UI asks
+/// them, then calls `quit`.
+const EVENT_CLOSE_REQUESTED: &str = "close-requested";
 
 /// Error returned when a request targets a document that is not open (closed tab). The UI
 /// recognizes it and resyncs silently.
@@ -101,17 +105,36 @@ struct OpenDocument {
     /// How each imported layer's source file was interpreted. Keyed by layer so that the
     /// document's warnings follow its layers through undo, redo and deletion.
     layer_warnings: HashMap<LayerId, Vec<&'static str>>,
+    /// The `.slop` file of the document, if it was opened from or saved to one. Taken out while
+    /// a save runs.
+    file: Option<SlopFile>,
+    /// Path of that file (kept while the file is taken out for a save).
+    path: Option<PathBuf>,
+    /// Revision of the document when it was opened, created or last saved.
+    saved_revision: u64,
+    /// A save of this document is running.
+    saving: bool,
 }
 
 impl OpenDocument {
     fn new(session: Session, meta: DocumentMeta, output: Size) -> Self {
         let viewport = Viewport::new(session.document().size(), output);
+        let saved_revision = session.document().revision();
         Self {
             session,
             meta,
             viewport,
             layer_warnings: HashMap::new(),
+            file: None,
+            path: None,
+            saved_revision,
+            saving: false,
         }
+    }
+
+    /// Changed since it was opened, created or last saved.
+    fn dirty(&self) -> bool {
+        self.session.document().revision() != self.saved_revision
     }
 
     /// Warnings of the layers currently in the document, without duplicates.
@@ -128,7 +151,10 @@ impl OpenDocument {
     }
 
     fn view(&self) -> DocumentView {
-        DocumentView::new(&self.session, &self.meta, self.warnings())
+        let mut view = DocumentView::new(&self.session, &self.meta, self.warnings());
+        view.path = self.path.as_ref().map(|p| p.display().to_string());
+        view.dirty = self.dirty();
+        view
     }
 }
 
@@ -238,6 +264,8 @@ const CODE_DOCUMENT_CLOSED: &str = "documentClosed";
 
 struct AppState {
     documents: Mutex<Documents>,
+    /// The user agreed to quit despite unsaved changes.
+    quit_confirmed: AtomicBool,
     /// Created lazily, off the UI thread (adapter/device creation can take a while).
     renderer: OnceLock<Result<Renderer, String>>,
     next_document_id: AtomicU64,
@@ -261,6 +289,7 @@ impl AppState {
     fn new() -> Self {
         Self {
             documents: Mutex::new(Documents::default()),
+            quit_confirmed: AtomicBool::new(false),
             renderer: OnceLock::new(),
             next_document_id: AtomicU64::new(1),
             next_open_id: AtomicU64::new(1),
@@ -272,6 +301,13 @@ impl AppState {
             surface_size: Mutex::new(None),
             exports: ExportJobs::default(),
         }
+    }
+
+    /// Some open document has changes that are not saved, or is being saved.
+    fn has_unsaved(&self) -> bool {
+        // A poisoned lock: nothing reliable to save, let the window close.
+        self.documents()
+            .is_ok_and(|documents| documents.tabs.iter().any(|d| d.dirty() || d.saving))
     }
 
     fn documents(&self) -> Result<MutexGuard<'_, Documents>, String> {
@@ -296,6 +332,17 @@ impl AppState {
         name: Option<String>,
         warnings: Vec<&'static str>,
     ) -> Result<DocumentView, String> {
+        self.add_document_from(session, name, warnings, None)
+    }
+
+    /// [`Self::add_document`], for a document read from `file`.
+    fn add_document_from(
+        &self,
+        session: Session,
+        name: Option<String>,
+        warnings: Vec<&'static str>,
+        file: Option<SlopFile>,
+    ) -> Result<DocumentView, String> {
         let meta = DocumentMeta {
             id: self.next_document_id.fetch_add(1, Ordering::Relaxed),
             name,
@@ -303,6 +350,8 @@ impl AppState {
         let mut documents = self.documents()?;
         let output = documents.output.unwrap_or(Size::new(1, 1));
         let mut document = OpenDocument::new(session, meta, output);
+        document.path = file.as_ref().map(|f| f.path().to_owned());
+        document.file = file;
         if !warnings.is_empty() {
             let ids: Vec<LayerId> = document
                 .session
@@ -441,6 +490,13 @@ fn open_path(
     let state = app.state::<AppState>();
     let id = state.next_open_id.fetch_add(1, Ordering::Relaxed);
     let name = file_name(path);
+    // SlopShop documents are recognized by their content and always open in a new tab.
+    let is_document = slopshop_io::slop::is_slop_file(path).unwrap_or(false);
+    let target = if is_document {
+        OpenTarget::NewTab
+    } else {
+        target
+    };
     let opening = Opening {
         id,
         name: name.clone(),
@@ -460,6 +516,20 @@ fn open_path(
     // Decoders parse untrusted files: a panic in one must still end this open with a failure
     // event (the UI shows a pending tab until then), and must not stop other opens.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if is_document {
+            let (document, file) = SlopFile::open(path).map_err(|e| (e.code(), e.to_string()))?;
+            if let Some(turn) = turn {
+                turn.wait();
+            }
+            return state
+                .add_document_from(
+                    Session::new(document),
+                    Some(name.clone()),
+                    Vec::new(),
+                    Some(file),
+                )
+                .map_err(|e| ("internal", e));
+        }
         let decoded = if target_gone {
             Err((CODE_DOCUMENT_CLOSED, DOCUMENT_CLOSED.to_owned()))
         } else {
@@ -716,6 +786,88 @@ async fn open_images(
         open.await.map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Save a document to its `.slop` file (incrementally), or to `path` (a compact new file, which
+/// the document continues with). Runs on a worker; the document can be edited meanwhile: what
+/// was saved is the document as it was when the save started.
+#[tauri::command]
+async fn save_document(
+    app: AppHandle,
+    document_id: u64,
+    path: Option<PathBuf>,
+) -> Result<DocumentView, SaveFailed> {
+    tauri::async_runtime::spawn_blocking(move || save_to(&app, document_id, path))
+        .await
+        .map_err(|e| SaveFailed {
+            code: "internal",
+            detail: e.to_string(),
+        })?
+}
+
+fn save_to(
+    app: &AppHandle,
+    document_id: u64,
+    path: Option<PathBuf>,
+) -> Result<DocumentView, SaveFailed> {
+    let failed = |code: &'static str, detail: String| SaveFailed { code, detail };
+    let closed = |e: String| {
+        let code = if e == DOCUMENT_CLOSED {
+            "documentClosed"
+        } else {
+            "internal"
+        };
+        failed(code, e)
+    };
+    let state = app.state::<AppState>();
+    let (snapshot, file) = {
+        let mut documents = state.documents().map_err(closed)?;
+        let document = documents.get_mut(document_id).map_err(closed)?;
+        if document.saving {
+            return Err(failed("busy", String::new()));
+        }
+        if path.is_none() && document.file.is_none() {
+            return Err(failed("internal", "no file to save to".to_owned()));
+        }
+        document.session.end_gesture();
+        document.saving = true;
+        (document.session.document().clone(), document.file.take())
+    };
+
+    // The file handle stays valid when a save fails: it describes the last committed save.
+    let (outcome, file) = match (file, &path) {
+        (Some(mut file), None) => (file.save(&snapshot).map(|_| ()), Some(file)),
+        (Some(mut file), Some(path)) => (file.save_as(path, &snapshot).map(|_| ()), Some(file)),
+        (None, Some(path)) => match SlopFile::create(path, &snapshot) {
+            Ok(file) => (Ok(()), Some(file)),
+            Err(e) => (Err(e), None),
+        },
+        (None, None) => unreachable!("checked above"),
+    };
+
+    let mut documents = state.documents().map_err(closed)?;
+    let document = documents.get_mut(document_id).map_err(closed)?;
+    document.saving = false;
+    document.file = file;
+    outcome.map_err(|e| failed(e.code(), e.to_string()))?;
+    if let Some(file) = &document.file {
+        document.path = Some(file.path().to_owned());
+        document.meta.name = Some(file_name(file.path()));
+    }
+    document.saved_revision = snapshot.revision();
+    Ok(document.view())
+}
+
+/// Quit even with unsaved changes (the UI asked the user after `close-requested`).
+#[tauri::command]
+async fn quit(app: AppHandle) -> Result<(), String> {
+    app.state::<AppState>()
+        .quit_confirmed
+        .store(true, Ordering::Relaxed);
+    let window = app
+        .get_webview_window(MAIN_WINDOW)
+        .ok_or("no main window")?;
+    window.close().map_err(|e| e.to_string())
 }
 
 /// Show a file in the system's file manager, selected (e.g. an exported file).
@@ -1078,6 +1230,13 @@ pub fn run() {
                 tauri::WindowEvent::Resized(size) => *size,
                 tauri::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => *new_inner_size,
                 tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // Unsaved changes: the UI asks, then calls `quit` if the user agrees.
+                    let state = window.state::<AppState>();
+                    if !state.quit_confirmed.load(Ordering::Relaxed) && state.has_unsaved() {
+                        api.prevent_close();
+                        emit(window.app_handle(), EVENT_CLOSE_REQUESTED, &());
+                        return;
+                    }
                     close_after_exports(window, api);
                     return;
                 }
@@ -1109,6 +1268,8 @@ pub fn run() {
             presenter_mode,
             present_view,
             reveal_in_folder,
+            save_document,
+            quit,
             export::export_defaults,
             export::export_spaces,
             export::export_max_side,
@@ -1179,6 +1340,38 @@ mod tests {
 
     fn tab_ids(documents: &Documents) -> Vec<u64> {
         documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn a_document_is_dirty_until_saved_again() {
+        let mut documents = documents_with(1);
+        let document = documents.get_mut(1).unwrap();
+        assert!(
+            !document.dirty() && !document.view().dirty,
+            "clean when created"
+        );
+        let id = document.session.allocate_layer_id();
+        let layer = Layer {
+            id,
+            name: "fill".to_owned(),
+            visible: true,
+            opacity: 1.0,
+            content: LayerContent::Fill {
+                color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+            },
+        };
+        let index = document.session.document().layers().len();
+        document
+            .session
+            .perform(Edit::InsertLayer { index, layer })
+            .unwrap();
+        assert!(document.dirty() && document.view().dirty);
+        // What a save records.
+        document.saved_revision = document.session.document().revision();
+        assert!(!document.dirty());
+        // Undoing past the save changes the document again.
+        document.session.undo().unwrap();
+        assert!(document.dirty());
     }
 
     #[test]
