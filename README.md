@@ -79,7 +79,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
 - A Rust engine with a minimal document model (procedural fill layers), reversible edits with
   undo/redo, tiling geometry and explicit color/pixel formats.
 - A headless wgpu renderer that composites a view of the document in linear light.
-- A `slopshop` CLI (GPU info, headless render to PNG, export).
+- A `slopshop` CLI (GPU info, headless render to PNG, export, `.slop` documents).
 - Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float), OpenEXR (32/16-bit float), JPEG
   and WebP (lossy or lossless) at full resolution, streamed in bands (WebP excepted: it holds
   one frame, at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
@@ -95,8 +95,11 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
   fill, visibility, live opacity, rename, drag to reorder, delete), images dropped on the canvas
   become layers, export with progress and cancel, undo/redo, English and French interface.
+- Saving documents with their layers in SlopShop's own `.slop` format: lossless, in the
+  images' native precision, incremental (a save only writes what changed) and crash-safe
+  ([ADR 0009](docs/adr/0009-document-file-format.md)). Undo history is not saved yet.
 
-No document file format (save/reopen with layers), painting, selections, filters or AI yet.
+No painting, selections, filters or AI yet.
 
 ## Getting started
 

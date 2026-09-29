@@ -1,6 +1,7 @@
 # 0009 — Document file format v0
 
-Status: accepted (2026-09-29), not implemented yet. Research:
+Status: accepted and implemented (2026-09-29). Specification:
+[file-format.md](../file-format.md). Research:
 [document-format.md](../research/document-format.md).
 
 ## Context
@@ -208,15 +209,18 @@ code (4), extension `.slop` (1), every pyramid level stored (5), newer files ref
 
 ## Consequences
 
-- Save costs grow with what changed. A first save of a 233 MP RGBA8 document is estimated
-  at about 0.5 s and 0.19–0.25 GB (+35 % with the pyramid). A save with no new pixels takes a
+- Save costs grow with what changed. A first save of a 233 MP RGBA8 document was estimated
+  at about 0.5 s and 0.19–0.25 GB (+35 % with the pyramid). Measured with the implementation
+  (release build, 233 MP 8-bit RGB photo, reference machine): first save 0.81 s, 259 MiB with
+  every level; open 0.22 s. A save with no new pixels takes a
   few milliseconds plus serializing the manifest and index. HDD or USB saves are disk-bound.
 - The user's file is modified in place, append-only, with a two-phase commit. A crash or power
   loss leaves the previous generation readable. This relies on fsync being honest (some
   consumer drives acknowledge early).
 - Files grow between compactions. Dead bytes are tracked and shown by `slopshop-cli inspect`.
-- We own a specification (`docs/file-format.md`), a fuzz target for the reader, and
-  fault-injection tests.
+- We own a specification (`docs/file-format.md`), golden fixtures, and fault-injection
+  tests (a crash at every byte of a save, damaged bytes). A fuzz target for the reader is still
+  to come.
 - Core needs `Document::restore`, `RasterImage::from_tiles` and a pyramid rebuild from tiles.
   Serialization stays in `slopshop-io`.
 - Tile residency can become lazy later (Phase 4) without a format change. The `tile()` API
