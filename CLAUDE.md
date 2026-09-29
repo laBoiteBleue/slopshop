@@ -14,7 +14,7 @@ The name is a joke; the engineering is not.
 | `crates/slopshop-cli`   | Headless binary. Proves the engine runs without the UI.                                |
 | `app/src-tauri`         | Tauri shell: thin IPC layer (DTOs + commands) over core/render. No image logic.        |
 | `app/src`               | Svelte 5 + TypeScript UI. Presentation and input only.                                 |
-| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), ADRs in `docs/adr/`, research in `docs/research/`. |
+| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), `formats.md` (format support and plan), `file-format.md` (`.slop` spec), ADRs in `docs/adr/`, research in `docs/research/`. |
 
 Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). Never the reverse.
 
