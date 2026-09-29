@@ -26,23 +26,27 @@ USAGE:
         output of --size, to a PNG file.
         Defaults: --size 1024x768 --doc 12000x8000 --out slopshop.png
 
-    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg] [--depth u8|u16|f16|f32]
-                    [--space ID] [--compression fast|small|none|deflate|lzw]
-                    [--quality 1-100] [--subsampling 444|422|420]
+    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg|webp]
+                    [--depth u8|u16|f16|f32] [--space ID]
+                    [--compression fast|small|none|deflate|lzw|lossy|lossless]
+                    [--quality 0-100] [--subsampling 444|422|420]
                     [--no-alpha] [--matte RRGGBB] [--no-dither] [--cpu] [--bench]
         Open an image file as a one-layer document and export it to PNG, TIFF,
-        OpenEXR or JPEG with the format's default settings (ADR 0008, 0010); each
-        option overrides one of them. Prints the settings used and the export report.
+        OpenEXR, JPEG or WebP with the format's default settings (ADR 0008, 0010);
+        each option overrides one of them. Prints the settings used and the export
+        report.
         --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
-                       .jpg, .jpeg).
-        --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG: u8.
+                       .jpg, .jpeg, .webp).
+        --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG and
+                       WebP: u8.
                        The color space stays the default one unless --space is given.
         --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
-                       linear-rec2020, rec2100-pq, rec2100-hlg. TIFF and JPEG: all
-                       but PQ and HLG. OpenEXR: linear-srgb, linear-rec2020.
+                       linear-rec2020, rec2100-pq, rec2100-hlg. TIFF, JPEG and WebP:
+                       all but PQ and HLG. OpenEXR: linear-srgb, linear-rec2020.
         --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
                        lossless ZIP, no option. JPEG: see --quality, --subsampling.
-        --quality      JPEG quality, 1 to 100. Default: 90.
+                       WebP: lossy (default), lossless.
+        --quality      JPEG 1 to 100, lossy WebP 0 to 100. Default: 90.
         --subsampling  JPEG chroma subsampling: 444 (full color), 422, 420 (smallest).
                        Default: 444.
         --no-alpha     Drop the alpha channel: the image is flattened over the matte.

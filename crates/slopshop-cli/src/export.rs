@@ -1,5 +1,5 @@
 //! `slopshop export`: an image file, opened as a one-layer document, written to PNG, TIFF,
-//! OpenEXR or JPEG by the export pipeline (ADR 0008, 0010), exactly as a front end would drive
+//! OpenEXR, JPEG or WebP by the export pipeline (ADR 0008, 0010), exactly as a front end would drive
 //! it: the format's default settings, explicit overrides, the GPU renderer as the pixel source
 //! (the CPU compositor without a GPU), and the export report. User documentation:
 //! `docs/cli.md`.
@@ -12,8 +12,8 @@ use slopshop_core::color::{ColorSpace, LinearRgba, SampleType, WORKING_SPACE};
 use slopshop_core::{CancelToken, Document, Edit, Layer, LayerContent, RasterImage, Rect, Size};
 use slopshop_io::export::{
     ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, default_spec,
-    export_image, supports_alpha, supports_space,
+    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
+    default_spec, export_image, supports_alpha, supports_space,
 };
 use slopshop_render::Renderer;
 
@@ -30,11 +30,12 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 4] = [
+const FORMATS: [ExportFormatKind; 5] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
     ExportFormatKind::Jpeg,
+    ExportFormatKind::Webp,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -95,12 +96,13 @@ impl Depth {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
-            ExportFormatKind::Jpeg => self == Depth::U8,
+            ExportFormatKind::Jpeg | ExportFormatKind::Webp => self == Depth::U8,
         }
     }
 }
 
-/// `--compression`: the compression settings of every format (EXR has none to choose).
+/// `--compression`: the compression settings of every format (EXR and JPEG have none to
+/// choose).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Compression {
     Fast,
@@ -108,15 +110,19 @@ enum Compression {
     None,
     Deflate,
     Lzw,
+    Lossy,
+    Lossless,
 }
 
 impl Compression {
-    const ALL: [Compression; 5] = [
+    const ALL: [Compression; 7] = [
         Compression::Fast,
         Compression::Small,
         Compression::None,
         Compression::Deflate,
         Compression::Lzw,
+        Compression::Lossy,
+        Compression::Lossless,
     ];
 
     fn name(self) -> &'static str {
@@ -126,6 +132,8 @@ impl Compression {
             Compression::None => "none",
             Compression::Deflate => "deflate",
             Compression::Lzw => "lzw",
+            Compression::Lossy => "lossy",
+            Compression::Lossless => "lossless",
         }
     }
 
@@ -133,7 +141,7 @@ impl Compression {
         match self {
             Compression::Fast => Some(PngCompression::Fast),
             Compression::Small => Some(PngCompression::Small),
-            Compression::None | Compression::Deflate | Compression::Lzw => None,
+            _ => None,
         }
     }
 
@@ -142,14 +150,19 @@ impl Compression {
             Compression::None => Some(TiffCompression::None),
             Compression::Deflate => Some(TiffCompression::Deflate),
             Compression::Lzw => Some(TiffCompression::Lzw),
-            Compression::Fast | Compression::Small => None,
+            _ => None,
         }
+    }
+
+    fn is_webp(self) -> bool {
+        matches!(self, Compression::Lossy | Compression::Lossless)
     }
 
     fn supported_by(self, kind: ExportFormatKind) -> bool {
         match kind {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
+            ExportFormatKind::Webp => self.is_webp(),
             ExportFormatKind::Exr | ExportFormatKind::Jpeg => false,
         }
     }
@@ -164,7 +177,7 @@ struct Args {
     depth: Option<Depth>,
     space: Option<ColorSpace>,
     compression: Option<Compression>,
-    /// `--quality` (JPEG), 1 to 100.
+    /// `--quality`: JPEG 1 to 100, lossy WebP 0 to 100.
     quality: Option<u8>,
     /// `--subsampling` (JPEG).
     subsampling: Option<JpegSubsampling>,
@@ -311,7 +324,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let format = match format {
         Some(format) => format,
         None => format_of(&output).ok_or(format!(
-            "cannot tell the format from `{}`: use --format png|tiff|exr|jpeg",
+            "cannot tell the format from `{}`: use --format png|tiff|exr|jpeg|webp",
             output.display()
         ))?,
     };
@@ -349,15 +362,28 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             )
         });
     }
-    if format != ExportFormatKind::Jpeg {
-        if quality.is_some() {
-            return Err(format!("--quality is not available for {name} (JPEG only)"));
+    if let Some(quality) = quality {
+        let lossless = compression == Some(Compression::Lossless);
+        match format {
+            ExportFormatKind::Jpeg if quality == 0 => {
+                return Err("--quality 0 is not available for JPEG (1 to 100)".to_owned());
+            }
+            ExportFormatKind::Jpeg => {}
+            ExportFormatKind::Webp if lossless => {
+                return Err("--quality is not available for lossless WebP".to_owned());
+            }
+            ExportFormatKind::Webp => {}
+            _ => {
+                return Err(format!(
+                    "--quality is not available for {name} (JPEG and lossy WebP only)"
+                ));
+            }
         }
-        if subsampling.is_some() {
-            return Err(format!(
-                "--subsampling is not available for {name} (JPEG only)"
-            ));
-        }
+    }
+    if format != ExportFormatKind::Jpeg && subsampling.is_some() {
+        return Err(format!(
+            "--subsampling is not available for {name} (JPEG only)"
+        ));
     }
     if let Some(space) = space.filter(|s| !supports_space(format, s)) {
         let valid: Vec<_> = SPACES
@@ -393,7 +419,7 @@ fn parse_format(s: &str) -> Result<ExportFormatKind, String> {
         .into_iter()
         .find(|kind| format_id(*kind) == s)
         .ok_or(format!(
-            "invalid format `{s}`, expected png, tiff, exr or jpeg"
+            "invalid format `{s}`, expected png, tiff, exr, jpeg or webp"
         ))
 }
 
@@ -409,15 +435,16 @@ fn parse_compression(s: &str) -> Result<Compression, String> {
         .into_iter()
         .find(|c| c.name() == s)
         .ok_or(format!(
-            "invalid compression `{s}`, expected fast, small, none, deflate or lzw"
+            "invalid compression `{s}`, expected fast, small, none, deflate, lzw, lossy or lossless"
         ))
 }
 
+/// 0 to 100; JPEG's lower bound (1) is checked with the format.
 fn parse_quality(s: &str) -> Result<u8, String> {
     s.parse::<u8>()
         .ok()
-        .filter(|q| (1..=100).contains(q))
-        .ok_or(format!("invalid quality `{s}`, expected 1 to 100"))
+        .filter(|q| *q <= 100)
+        .ok_or(format!("invalid quality `{s}`, expected 0 to 100"))
 }
 
 fn parse_subsampling(s: &str) -> Result<JpegSubsampling, String> {
@@ -492,6 +519,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "tif" | "tiff" => Some(ExportFormatKind::Tiff),
         "exr" => Some(ExportFormatKind::Exr),
         "jpg" | "jpeg" => Some(ExportFormatKind::Jpeg),
+        "webp" => Some(ExportFormatKind::Webp),
         _ => None,
     }
 }
@@ -503,6 +531,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Tiff => "tiff",
         ExportFormatKind::Exr => "exr",
         ExportFormatKind::Jpeg => "jpeg",
+        ExportFormatKind::Webp => "webp",
     }
 }
 
@@ -512,6 +541,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Tiff => "TIFF",
         ExportFormatKind::Exr => "OpenEXR",
         ExportFormatKind::Jpeg => "JPEG",
+        ExportFormatKind::Webp => "WebP",
     }
 }
 
@@ -555,6 +585,23 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
             quality: args.quality.unwrap_or(quality),
             subsampling: args.subsampling.unwrap_or(subsampling),
         },
+        ExportFormat::Webp { compression } => {
+            let default_quality = match compression {
+                WebpCompression::Lossy { quality } => quality,
+                WebpCompression::Lossless => 90,
+            };
+            ExportFormat::Webp {
+                compression: match (args.compression, compression) {
+                    (Some(Compression::Lossless), _) => WebpCompression::Lossless,
+                    (Some(Compression::Lossy), _) | (_, WebpCompression::Lossy { .. }) => {
+                        WebpCompression::Lossy {
+                            quality: args.quality.unwrap_or(default_quality),
+                        }
+                    }
+                    (_, WebpCompression::Lossless) => WebpCompression::Lossless,
+                },
+            }
+        }
     };
     if let Some(space) = args.space {
         spec.space = space;
@@ -607,6 +654,13 @@ fn describe(spec: &ExportSpec) -> String {
             None,
         ),
         ExportFormat::Jpeg { .. } => (Depth::U8, None),
+        ExportFormat::Webp { compression } => (
+            Depth::U8,
+            Some(match compression {
+                WebpCompression::Lossy { .. } => Compression::Lossy,
+                WebpCompression::Lossless => Compression::Lossless,
+            }),
+        ),
     };
     let mut text = format!(
         "--format {} --depth {} --space {}",
@@ -626,6 +680,12 @@ fn describe(spec: &ExportSpec) -> String {
             " --quality {quality} --subsampling {}",
             subsampling_name(subsampling)
         );
+    }
+    if let ExportFormat::Webp {
+        compression: WebpCompression::Lossy { quality },
+    } = spec.format
+    {
+        text += &format!(" --quality {quality}");
     }
     if !spec.keep_alpha {
         // Formats without alpha always flatten: no option needed for that.
@@ -1107,6 +1167,94 @@ mod tests {
         let small = fs::metadata(dir.join("small.jpeg")).unwrap().len();
         assert!(small < default, "{small} vs {default}");
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exports_webp_lossy_and_lossless() {
+        let dir = temp_dir("webp");
+        let size = Size::new(70, 300);
+        let input = dir.join("in.png");
+        write_test_png(&input, size);
+        for (name, options, lossless) in [
+            ("lossy.webp", &[][..], false),
+            ("small.webp", &["--quality", "40"][..], false),
+            ("lossless.webp", &["--compression", "lossless"][..], true),
+        ] {
+            let output = dir.join(name);
+            let mut args = vec![input.to_str().unwrap(), output.to_str().unwrap(), "--cpu"];
+            args.extend(options);
+            let outcome = export(&parse(&args).unwrap()).unwrap();
+            assert_eq!(outcome.spec.format.kind(), ExportFormatKind::Webp, "{name}");
+            // The input is translucent: alpha is kept, nothing is reported.
+            assert!(outcome.spec.keep_alpha);
+            assert!(outcome.report.notices.is_empty(), "{name}");
+            let reimported = slopshop_io::open_image(&output).unwrap();
+            assert_eq!(reimported.image.size(), size);
+            assert!(reimported.image.format().layout.has_alpha());
+            if lossless {
+                // Unedited 8-bit pixels come back exactly.
+                let original = slopshop_io::open_image(&input).unwrap();
+                let expected = composite(&single_layer_document(original.image, "in").unwrap());
+                let actual = composite(&single_layer_document(reimported.image, name).unwrap());
+                assert_eq!(max_difference(&expected, &actual), 0.0, "{name}");
+            }
+        }
+        let default = fs::metadata(dir.join("lossy.webp")).unwrap().len();
+        let small = fs::metadata(dir.join("small.webp")).unwrap().len();
+        assert!(small < default, "{small} vs {default}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn webp_options_are_validated() {
+        let args = parse(&["in.png", "out.WEBP", "--quality", "0"]).unwrap();
+        assert_eq!(
+            (args.format, args.quality),
+            (ExportFormatKind::Webp, Some(0))
+        );
+        for bad in [
+            &[
+                "in.png",
+                "out.webp",
+                "--compression",
+                "lossless",
+                "--quality",
+                "80",
+            ][..],
+            &["in.png", "out.webp", "--compression", "fast"],
+            &["in.png", "out.webp", "--subsampling", "420"],
+            &["in.png", "out.webp", "--depth", "u16"],
+            &["in.png", "out.webp", "--space", "rec2100-hlg"],
+            &["in.png", "out.jpg", "--quality", "0"],
+            &["in.png", "out.jpg", "--compression", "lossy"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+
+        let size = Size::new(4, 4);
+        let image = RasterImage::from_pixels(
+            size,
+            slopshop_core::color::PixelFormat::RGBA8_SRGB,
+            &[128u8; 4 * 4 * 4],
+        )
+        .unwrap();
+        let document = single_layer_document(image, "layer").unwrap();
+        let describe_args =
+            |args: &[&str]| describe(&export_spec(&parse(args).unwrap(), &document));
+        assert_eq!(
+            describe_args(&["in.png", "out.webp"]),
+            "--format webp --depth u8 --space srgb --compression lossy --quality 90"
+        );
+        assert_eq!(
+            describe_args(&[
+                "in.png",
+                "out.webp",
+                "--compression",
+                "lossless",
+                "--no-alpha"
+            ]),
+            "--format webp --depth u8 --space srgb --compression lossless --no-alpha --matte ffffff"
+        );
     }
 
     #[test]

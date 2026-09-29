@@ -174,10 +174,11 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
 }
 
 /** Export file formats. */
-export type ExportFormat = "png" | "tiff" | "exr" | "jpeg";
+export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
-export type ExportCompression = "fast" | "small" | "none" | "deflate" | "lzw";
+export type ExportCompression =
+  "fast" | "small" | "none" | "deflate" | "lzw" | "lossy" | "lossless";
 export type ExportSubsampling = "444" | "422" | "420";
 
 /** Export settings (see ExportSpecDto in app/src-tauri/src/ipc.rs). */
@@ -186,7 +187,7 @@ export type ExportSpec = {
   sample: ExportSample;
   /** `null` for EXR, whose compression is fixed (lossless), and for JPEG. */
   compression: ExportCompression | null;
-  /** JPEG only (1 to 100); `null` for the other formats. */
+  /** JPEG (1 to 100) and lossy WebP (0 to 100); `null` otherwise. */
   quality: number | null;
   /** JPEG only; `null` for the other formats. */
   subsampling: ExportSubsampling | null;
@@ -242,7 +243,17 @@ export const EXPORT_FORMATS: Record<
     subsamplings: ["444", "422", "420"],
     alpha: false,
   },
+  webp: {
+    extensions: ["webp"],
+    samples: ["u8"],
+    compressions: ["lossy", "lossless"],
+    subsamplings: [],
+    alpha: true,
+  },
 };
+
+/** The quality a lossy compression starts at, when it is chosen in the dialog. */
+export const DEFAULT_QUALITY = 90;
 
 /** An export job has started. */
 export type ExportStarted = { id: number; documentId: number; path: string; name: string };
@@ -270,6 +281,7 @@ export type ExportErrorCode =
   | "tooLarge"
   | "invalidSpec"
   | "encode"
+  | "contentTooComplex"
   | "documentClosed"
   | "internal";
 
@@ -425,6 +437,8 @@ export const engine = {
     invoke<ExportSpec>("export_defaults", { documentId, format }),
   /** The named color spaces `format` can store and tag. */
   exportSpaces: (format: ExportFormat) => invoke<ColorSpaceId[]>("export_spaces", { format }),
+  /** The largest width or height `format` can store (`null`: no limit). */
+  exportMaxSide: (format: ExportFormat) => invoke<number | null>("export_max_side", { format }),
   /**
    * Start exporting a document to `path` (overwritten): resolves to the job id at once, and
    * rejects with an `ExportFailed` (no id) when the export cannot start. Queued after the edits

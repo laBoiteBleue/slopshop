@@ -37,6 +37,13 @@ flate2 = "1.1.10"
 # streams with bounded memory). `image`'s own JPEG encoder takes whole buffers and drops alpha
 # silently. License (MIT OR Apache-2.0) AND IJG: allowed for this crate only in deny.toml.
 jpeg-encoder = { version = "=0.7.1", features = ["simd"] }
+# Lossless WebP export (ADR 0010): pure Rust, `forbid(unsafe)`; already in the tree through
+# `image`, which does not expose ICC profiles or encoder settings.
+image-webp = "=0.2.4"
+# Lossy WebP export (ADR 0010): libwebp (C, BSD-3-Clause), built with `cc`, no system library.
+# No pure-Rust lossy encoder is usable. Called from our `export::webp::ffi` module only, the one
+# `unsafe` module of this crate. Default features kept: they enable libwebp's threads.
+libwebp-sys = "=0.14.4"
 
 [lints]
 workspace = true

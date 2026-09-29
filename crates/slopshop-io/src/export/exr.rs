@@ -54,7 +54,7 @@ const BLOCK_ROWS: u32 = COMPRESSION.scan_lines_per_block() as u32;
 const QUEUED_BLOCKS: usize = (BAND_ROWS / BLOCK_ROWS) as usize;
 
 /// EXR windows must stay below `i32::MAX / 2` (as in the reference C++ library).
-const MAX_SIDE: u32 = (i32::MAX / 2 - 1) as u32;
+pub(super) const MAX_SIDE: u32 = (i32::MAX / 2 - 1) as u32;
 
 /// File channels in the order EXR requires (sorted by name), with the index of their sample in
 /// our interleaved RGBA pixels. Without alpha: all but the first.

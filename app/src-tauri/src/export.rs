@@ -15,7 +15,9 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use slopshop_core::{CancelToken, ColorSpace, Document, Progress};
-use slopshop_io::export::{ExportReport, ExportSpec, default_spec, export_image, supports_space};
+use slopshop_io::export::{
+    ExportReport, ExportSpec, default_spec, export_image, max_side, supports_space,
+};
 use slopshop_render::Renderer;
 use tauri::{AppHandle, Manager, State};
 
@@ -264,6 +266,12 @@ pub(crate) async fn export_spaces(format: ExportFormatId) -> Vec<&'static str> {
         .filter(|space| supports_space(format.kind(), space))
         .filter_map(ColorSpace::id)
         .collect()
+}
+
+/// The largest width or height `format` can store, if it has a limit.
+#[tauri::command]
+pub(crate) async fn export_max_side(format: ExportFormatId) -> Option<u32> {
+    max_side(format.kind())
 }
 
 /// Start exporting a document to `path` (overwritten). Returns the job id at once; progress

@@ -24,9 +24,10 @@ use crate::icc;
 const CHUNK_SIZE: usize = 1 << 20;
 
 /// PNG stores dimensions as 31-bit integers.
+pub(super) const MAX_SIDE: u32 = i32::MAX as u32;
+
 pub(super) fn check_size(size: Size) -> Result<(), ExportError> {
-    let limit = i32::MAX as u32;
-    if size.width > limit || size.height > limit {
+    if size.width > MAX_SIDE || size.height > MAX_SIDE {
         return Err(ExportError::TooLarge {
             width: size.width,
             height: size.height,
