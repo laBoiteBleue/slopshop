@@ -1,0 +1,18 @@
+[package]
+name = "slopshop-render"
+description = "SlopShop GPU rendering (wgpu). Headless-capable."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+slopshop-core.workspace = true
+# GPU abstraction over Vulkan/Metal/DX12 with the WebGPU API: the core of the "GPU-first" goal.
+wgpu.workspace = true
+# Minimal executor to block on wgpu's async adapter/device requests (no async runtime needed).
+pollster.workspace = true
+
+[lints]
+workspace = true
