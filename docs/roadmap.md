@@ -40,8 +40,10 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       DDS; matrix/TRC ICC profiles; EXIF orientation; license policy enforced by `cargo-deny`
 - [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; PSD/KRA/XCF/ORA,
       SVG, PDF; optional native backends
-- [x] Export (PNG/TIFF/EXR first, [ADR 0008](adr/0008-export.md)); JPEG/WebP and gray targets
-      later
+- [x] Export (PNG/TIFF/EXR first, [ADR 0008](adr/0008-export.md))
+- [x] JPEG and WebP export, background color for alpha-less exports
+      ([ADR 0010](adr/0010-jpeg-webp-export.md))
+- [ ] Export: gray targets, an "encoding" progress phase for WebP
 - [ ] Document file format v0 (`.slop`: layers/nodes and tiles, incremental saves; decided in
       [ADR 0009](adr/0009-document-file-format.md), implementation next)
 

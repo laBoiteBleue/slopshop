@@ -14,6 +14,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0007 | [Color management and working space](0007-color-management.md) | accepted |
 | 0008 | [Export](0008-export.md)                                        | accepted |
 | 0009 | [Document file format v0](0009-document-file-format.md)         | accepted, not implemented |
-| 0010 | [JPEG and WebP export](0010-jpeg-webp-export.md)                | accepted, in progress |
+| 0010 | [JPEG and WebP export](0010-jpeg-webp-export.md)                | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

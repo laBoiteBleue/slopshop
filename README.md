@@ -80,10 +80,12 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   undo/redo, tiling geometry and explicit color/pixel formats.
 - A headless wgpu renderer that composites a view of the document in linear light.
 - A `slopshop` CLI (GPU info, headless render to PNG, export).
-- Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float) and OpenEXR (32/16-bit float) at full
-  resolution, streamed in bands (no whole-image buffer), with the color space always tagged
-  (sRGB/cICP/ICC, EXR chromaticities) and every lossy conversion reported
-  ([ADR 0008](docs/adr/0008-export.md)). No JPEG or WebP export yet.
+- Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float), OpenEXR (32/16-bit float), JPEG
+  and WebP (lossy or lossless) at full resolution, streamed in bands (WebP excepted: it holds
+  one frame, at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
+  chromaticities), transparency flattened over a chosen background when the file has no alpha,
+  and every lossy conversion reported ([ADR 0008](docs/adr/0008-export.md),
+  [ADR 0010](docs/adr/0010-jpeg-webp-export.md)).
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
