@@ -76,7 +76,7 @@ const en = {
   "export.progress": "Exporting {name}… {percent}%",
   "export.stop": "Cancel export",
   "export.finished": "Exported {name}",
-  "export.cancelled": "Export cancelled",
+  "export.cancelled": "Export of {name} cancelled",
   "export.failed": "Cannot export {name}: {error}",
   "export.dismiss": "Dismiss",
   "export.report.clippedHigh": "{count} values above the format's range were clipped",

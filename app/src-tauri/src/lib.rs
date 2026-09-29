@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slopshop_core::view::Viewport;
@@ -83,6 +83,10 @@ const DOCUMENT_CLOSED: &str = "document-closed";
 
 /// How many recent open failures are kept for a UI that missed their events.
 const KEPT_FAILURES: usize = 8;
+
+/// How long closing the app waits for cancelled exports to end (and remove their temporary
+/// files) before quitting anyway.
+const QUIT_EXPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default size of a new blank document.
 const NEW_DOCUMENT_SIZE: Size = Size::new(6000, 4000);
@@ -920,6 +924,36 @@ impl AppState {
     }
 }
 
+/// Handle a close request of the main window. While exports run, the close waits: they are
+/// cancelled, and the window closes once they have ended (removing their temporary files), or
+/// after [`QUIT_EXPORT_TIMEOUT`] anyway. The waiting happens on a worker thread, not on the main
+/// thread, which keeps processing events meanwhile.
+fn close_after_exports(window: &tauri::Window, api: &tauri::CloseRequestApi) {
+    let exports = &window.state::<AppState>().exports;
+    if exports.is_idle() {
+        return;
+    }
+    api.prevent_close();
+    if !exports.stop_all() {
+        // Already closing: the worker below closes the window.
+        return;
+    }
+    let window = window.clone();
+    std::thread::spawn(move || {
+        if !window
+            .state::<AppState>()
+            .exports
+            .wait_idle(QUIT_EXPORT_TIMEOUT)
+        {
+            eprintln!("exports still running after {QUIT_EXPORT_TIMEOUT:?}: quitting anyway");
+        }
+        // Without a new close request, which would wait again.
+        if let Err(e) = window.destroy() {
+            eprintln!("cannot close the main window: {e}");
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -954,16 +988,21 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() != MAIN_WINDOW {
+                return;
+            }
             let size = match event {
                 tauri::WindowEvent::Resized(size) => *size,
                 tauri::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => *new_inner_size,
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    close_after_exports(window, api);
+                    return;
+                }
                 _ => return,
             };
-            if window.label() == MAIN_WINDOW {
-                window
-                    .state::<AppState>()
-                    .set_surface_size(size.width, size.height);
-            }
+            window
+                .state::<AppState>()
+                .set_surface_size(size.width, size.height);
         })
         .invoke_handler(tauri::generate_handler![
             documents,

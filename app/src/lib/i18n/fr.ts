@@ -76,7 +76,7 @@ const fr: Messages = {
   "export.progress": "Export de {name}… {percent} %",
   "export.stop": "Annuler l'export",
   "export.finished": "Export terminé : {name}",
-  "export.cancelled": "Export annulé",
+  "export.cancelled": "Export de {name} annulé",
   "export.failed": "Impossible d'exporter {name} : {error}",
   "export.dismiss": "Masquer",
   "export.report.clippedHigh": "{count} valeurs au-dessus de la plage du format ont été écrêtées",

@@ -4,11 +4,14 @@
 //! shared), so editing can go on meanwhile. Its progress and outcome are events; it can be
 //! cancelled by id. The pixels come from the GPU renderer, or from the CPU compositor when there
 //! is no GPU ([`slopshop_render::export_source`]).
+//!
+//! Closing the main window while exports run cancels them and waits, a few seconds at most, for
+//! them to end, so that they remove their temporary files ([`ExportJobs::stop_all`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use slopshop_core::{CancelToken, ColorSpace, Document, Progress};
@@ -35,6 +38,11 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) struct ExportJobs {
     last_id: AtomicU64,
     running: Mutex<HashMap<u64, CancelToken>>,
+    /// Notified when the last running job ends.
+    idle: Condvar,
+    /// Set by [`Self::stop_all`] (the app is quitting): jobs started from then on are
+    /// cancelled at once.
+    stopping: AtomicBool,
 }
 
 impl ExportJobs {
@@ -43,6 +51,10 @@ impl ExportJobs {
         let id = self.last_id.fetch_add(1, Ordering::Relaxed) + 1;
         let token = CancelToken::new();
         if let Ok(mut running) = self.running.lock() {
+            // Read under the lock: `stop_all` either sees this job or is seen by it.
+            if self.stopping.load(Ordering::SeqCst) {
+                token.cancel();
+            }
             running.insert(id, token.clone());
         }
         (id, token)
@@ -61,7 +73,38 @@ impl ExportJobs {
     fn finish(&self, id: u64) {
         if let Ok(mut running) = self.running.lock() {
             running.remove(&id);
+            if running.is_empty() {
+                self.idle.notify_all();
+            }
         }
+    }
+
+    /// No job is running.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.running.lock().is_ok_and(|running| running.is_empty())
+    }
+
+    /// Cancel every running job, and every job started from now on (the app is quitting).
+    /// False if this was already done.
+    pub(crate) fn stop_all(&self) -> bool {
+        if self.stopping.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        if let Ok(running) = self.running.lock() {
+            running.values().for_each(CancelToken::cancel);
+        }
+        true
+    }
+
+    /// Block until no job is running, at most `timeout`. True if none is running. Jobs end after
+    /// their temporary file is removed, so a cancelled job that has ended left nothing behind.
+    pub(crate) fn wait_idle(&self, timeout: Duration) -> bool {
+        let Ok(running) = self.running.lock() else {
+            return false;
+        };
+        self.idle
+            .wait_timeout_while(running, timeout, |running| !running.is_empty())
+            .is_ok_and(|(_, wait)| !wait.timed_out())
     }
 }
 
@@ -306,6 +349,96 @@ mod tests {
         }));
         assert!(result.is_err());
         assert!(!jobs.cancel(id));
+    }
+
+    #[test]
+    fn waiting_for_idle_returns_when_the_last_job_ends_or_on_timeout() {
+        let jobs = ExportJobs::default();
+        assert!(jobs.is_idle());
+        assert!(jobs.wait_idle(Duration::ZERO), "nothing to wait for");
+
+        let (a, _) = jobs.start();
+        let (b, _) = jobs.start();
+        assert!(!jobs.is_idle());
+        assert!(!jobs.wait_idle(Duration::from_millis(20)), "times out");
+        jobs.finish(a);
+        assert!(!jobs.wait_idle(Duration::from_millis(20)), "b still runs");
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                jobs.finish(b);
+            });
+            assert!(
+                jobs.wait_idle(Duration::from_secs(10)),
+                "woken by the last job"
+            );
+        });
+        assert!(jobs.is_idle());
+    }
+
+    #[test]
+    fn stopping_cancels_running_jobs_and_later_ones() {
+        let jobs = ExportJobs::default();
+        let (_, running) = jobs.start();
+        assert!(jobs.stop_all());
+        assert!(running.is_cancelled());
+        assert!(!jobs.stop_all(), "already stopping");
+
+        let (late, token) = jobs.start();
+        assert!(
+            token.is_cancelled(),
+            "a job started while quitting stops at once"
+        );
+        assert!(jobs.cancel(late), "and is still tracked until it ends");
+    }
+
+    #[test]
+    fn quitting_during_an_export_waits_for_it_to_remove_its_temporary_file() {
+        // Regression: closing the app mid-export left `<name>.slopshop-tmp` behind.
+        let document = &raster_document(Size::new(16, 1200), PixelFormat::RGBA8_SRGB);
+        let spec = &ExportSpecDto::new(&default_spec(ExportFormatId::Png.kind(), document))
+            .to_spec(None)
+            .unwrap();
+        let dir = temp_path("quit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = &dir.join("quit.png");
+        let jobs = &ExportJobs::default();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+
+        let failed = std::thread::scope(|scope| {
+            let job = scope.spawn(move || {
+                let (id, cancel) = jobs.start();
+                let _guard = JobGuard { jobs, id };
+                let mut first = true;
+                // Hold the job in its first progress update (the temporary file is being
+                // written) until the app has asked to quit.
+                let mut progress = |_: Progress| {
+                    if std::mem::take(&mut first) {
+                        started_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    }
+                };
+                run_export(path, document, spec, None, &cancel, &mut progress)
+            });
+            started_rx.recv().unwrap();
+            let writing = std::fs::read_dir(&dir).unwrap().count();
+            assert!(writing > 0, "the temporary file exists while exporting");
+            assert!(!jobs.is_idle());
+            assert!(jobs.stop_all());
+            resume_tx.send(()).unwrap();
+            assert!(jobs.wait_idle(Duration::from_secs(30)), "the job ends");
+            job.join().unwrap()
+        });
+
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(failed.unwrap_err().code, "cancelled");
+        assert!(left.is_empty(), "files left behind: {left:?}");
     }
 
     #[test]

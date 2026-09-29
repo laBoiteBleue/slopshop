@@ -62,12 +62,19 @@
   let lastExportFormat = $state<ExportFormat>("png");
   /** Exports running (rows done out of total). */
   let exports = $state<{ id: number; name: string; done: number; total: number }[]>([]);
-  /** Outcome of the last export (translated): a title and one line per report entry. */
-  let exportResult = $state<{
+  /**
+   * Export outcomes shown (translated): a title and one line per report entry, oldest first.
+   * `key` is unique: `job-<id>` for a job, `local-<n>` for a failure before any job started.
+   */
+  type ExportResult = {
+    key: string;
     title: string;
     lines: string[];
     kind: "done" | "notice" | "error";
-  } | null>(null);
+  };
+  let exportResults = $state<ExportResult[]>([]);
+  /** Last `local-<n>` key given. */
+  let lastLocalResult = 0;
 
   function tabTitle(doc: DocumentView): string {
     return doc.name ?? t("document.untitled");
@@ -375,16 +382,16 @@
       if (path === null) return;
       const format = formatOfPath(path);
       if (format === null) {
-        exportResult = {
+        showExportResult(null, {
           title: t("export.unsupportedExtension", { name: fileNameOf(path) }),
           lines: [],
           kind: "error",
-        };
+        });
         return;
       }
       exportTarget = { documentId: doc.id, path, format };
     } catch (e) {
-      exportResult = { title: String(e), lines: [], kind: "error" };
+      showExportResult(null, { title: String(e), lines: [], kind: "error" });
     } finally {
       choosingExportFile = false;
     }
@@ -402,7 +409,6 @@
   async function startExport(documentId: number, path: string, spec: ExportSpec) {
     exportTarget = null;
     lastExportFormat = spec.format;
-    exportResult = null;
     try {
       await engine.exportDocument(documentId, path, spec);
     } catch (e) {
@@ -412,11 +418,11 @@
           : { code: "internal", detail: String(e) };
       // Closed meanwhile: the user asked for that.
       if (failed.code === "documentClosed") return;
-      exportResult = {
+      showExportResult(null, {
         title: t("export.failed", { name: fileNameOf(path), error: exportReason(failed) }),
         lines: [],
         kind: "error",
-      };
+      });
     }
   }
 
@@ -439,13 +445,19 @@
     return job?.name ?? (path ? fileNameOf(path) : "");
   }
 
-  /** Show an export outcome; a plain success disappears by itself after a few seconds. */
-  function showExportResult(result: NonNullable<typeof exportResult>) {
-    exportResult = result;
-    if (result.kind !== "done") return;
-    setTimeout(() => {
-      if (exportResult === result) exportResult = null;
-    }, 4000);
+  /**
+   * Show the outcome of job `id` (null: a failure before any job started) next to the others.
+   * A plain success disappears by itself after a few seconds; a report or an error stays until
+   * dismissed.
+   */
+  function showExportResult(id: number | undefined | null, result: Omit<ExportResult, "key">) {
+    const key = id == null ? `local-${++lastLocalResult}` : `job-${id}`;
+    exportResults = [...exportResults.filter((r) => r.key !== key), { key, ...result }];
+    if (result.kind === "done") setTimeout(() => dismissExportResult(key), 4000);
+  }
+
+  function dismissExportResult(key: string) {
+    exportResults = exportResults.filter((r) => r.key !== key);
   }
 
   function onExportFinished(finished: ExportFinished) {
@@ -453,7 +465,7 @@
     const report = finished.notices.map((notice) =>
       t(`export.report.${notice.id}`, notice.count === null ? undefined : { count: notice.count }),
     );
-    showExportResult({
+    showExportResult(finished.id, {
       title: t("export.finished", { name }),
       lines: report,
       kind: report.length > 0 ? "notice" : "done",
@@ -463,8 +475,9 @@
   function onExportFailed(failed: ExportFailed) {
     const name = endExport(failed.id, null);
     showExportResult(
+      failed.id,
       failed.code === "cancelled"
-        ? { title: t("export.cancelled"), lines: [], kind: "done" }
+        ? { title: t("export.cancelled", { name }), lines: [], kind: "done" }
         : {
             title: t("export.failed", { name, error: exportReason(failed) }),
             lines: [],
@@ -818,7 +831,7 @@
 {/if}
 
 <!-- Exports run in the background: progress and outcome in a card above the status bar. -->
-{#if exports.length > 0 || exportResult}
+{#if exports.length > 0 || exportResults.length > 0}
   <aside class="export-card" aria-live="polite">
     {#each exports as job (job.id)}
       <div class="export-job">
@@ -838,24 +851,24 @@
         <div class="export-bar"><span style:width="{percent(job)}%"></span></div>
       </div>
     {/each}
-    {#if exportResult}
-      <div class="export-result {exportResult.kind}">
+    {#each exportResults as result (result.key)}
+      <div class="export-result {result.kind}">
         <div class="export-row">
-          <span class="export-title">{exportResult.title}</span>
+          <span class="export-title">{result.title}</span>
           <button
             class="card-button"
             title={t("export.dismiss")}
             aria-label={t("export.dismiss")}
-            onclick={() => (exportResult = null)}
+            onclick={() => dismissExportResult(result.key)}
           >
             ✕
           </button>
         </div>
-        {#each exportResult.lines as line, i (i)}
+        {#each result.lines as line, i (i)}
           <p>{line}</p>
         {/each}
       </div>
-    {/if}
+    {/each}
   </aside>
 {/if}
 
@@ -869,6 +882,8 @@
     display: grid;
     gap: 8px;
     width: 300px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
     padding: 8px 10px;
     border: 1px solid var(--border-dark);
     border-radius: 4px;
