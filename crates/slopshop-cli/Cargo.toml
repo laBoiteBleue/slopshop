@@ -1,0 +1,21 @@
+[package]
+name = "slopshop-cli"
+description = "Headless SlopShop command-line tool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "slopshop"
+path = "src/main.rs"
+
+[dependencies]
+slopshop-core.workspace = true
+slopshop-render.workspace = true
+# PNG encoding for rendered frames (pure Rust, widely used; writing PNG by hand is not worth it).
+png.workspace = true
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/slopshop-core", "crates/slopshop-render"]
+members = ["crates/slopshop-core", "crates/slopshop-render", "crates/slopshop-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,7 @@ slopshop-core = { path = "crates/slopshop-core" }
 slopshop-render = { path = "crates/slopshop-render" }
 wgpu = "30.0.1"
 pollster = "1.0.1"
+png = "0.18.1"
 
 [workspace.lints.rust]
 # `unsafe` must be isolated and justified: opt in locally with `#[allow(unsafe_code)]`.
