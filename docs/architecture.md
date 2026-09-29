@@ -75,9 +75,11 @@ Decodes files into `RasterImage` in their native precision (`image` codecs, `tif
 an in-house matrix/TRC ICC reader and EXIF orientation. Formats not supported yet are recognized
 and refused with an explicit reason; see [ADR 0006](adr/0006-universal-import-and-licensing.md).
 
-Export (`export`) writes PNG (8/16-bit), TIFF (8/16-bit, 32-bit float; BigTIFF when needed)
-and OpenEXR (half/float), always color-tagged, with per-format defaults (`default_spec`) and an
-in-house ICC writer; see [Export data flow](#export-data-flow).
+Export (`export`) writes PNG (8/16-bit), TIFF (8/16-bit, 32-bit float; BigTIFF when needed),
+OpenEXR (half/float), JPEG (`jpeg-encoder`) and WebP (lossless: `image-webp`; lossy: libwebp
+through `export::webp::ffi`, the crate's only `unsafe` module), always color-tagged, with
+per-format defaults (`default_spec`), size limits (`max_side`) and an in-house ICC writer; see
+[Export data flow](#export-data-flow) and [ADR 0010](adr/0010-jpeg-webp-export.md).
 
 ### `slopshop-cli` (implemented, minimal)
 
@@ -96,14 +98,15 @@ rejected. Frames are returned as
 `tauri::ipc::Response` (an `ArrayBuffer` in JS): a 40-byte header (size, fit flag, document
 revision, zoom, engine render time) followed by the pixels, parsed without copy in `engine.ts`.
 
-Export (`src-tauri/src/export.rs`, ADR 0008): `export_defaults` and `export_spaces` give the
-export dialog the settings of a format; `export_document` snapshots the document (raster pixels
+Export (`src-tauri/src/export.rs`, ADR 0008): `export_defaults`, `export_spaces` and
+`export_max_side` give the export dialog the settings and limits of a format; `export_document` snapshots the document (raster pixels
 are shared, not copied), starts a job on a `spawn_blocking` worker (never the main thread) and
 returns the job id at once; `cancel_export` cancels a job by id. Jobs report through the events
 `export-started`, `export-progress` (throttled), `export-finished` (with the ids of the report's
 notices) and `export-failed` (with an error code). Several jobs can run at once: the UI shows
-the progress of each, and each outcome until it is dismissed (a success without notices
-disappears after a few seconds). Closing the main window while jobs run cancels them and waits,
+the progress of each, and each outcome until it is dismissed (a success without notices, and
+an error, disappear after a few seconds). "Show in folder" reveals a finished file through
+`reveal_in_folder` (tauri-plugin-opener, not exposed to JavaScript). Closing the main window while jobs run cancels them and waits,
 off the main thread and a few seconds at most, for them to remove their temporary files.
 
 ## Export data flow
@@ -114,7 +117,9 @@ off the main thread and a few seconds at most, for them to remove their temporar
 document ──▶ pixel source ──▶ band channel ──▶ convert ──▶ format writer ──▶ .<name>.<pid>-<n>.slopshop-tmp
              (render: GPU      (capacity 1)    (core,      (PNG stream;         │ sync, rename
              region, or CPU                     rows in     TIFF/EXR: parallel   ▼
-             compositor)                        parallel)   compression)       <name>
+             compositor)                        parallel;   compression; JPEG:  <name>
+                                                matte for   encoder thread;
+                                                no alpha)   WebP: whole frame)
 ```
 
 - Full-width bands of 256 rows, pyramid level 0 only: premultiplied RGBA f32 in the working

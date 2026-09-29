@@ -48,8 +48,10 @@ exception (2), a white matte everywhere (4), the source space as default when co
 3. **WebP buffers one frame.** A WebP file cannot be written incrementally, so the WebP writers
    keep the whole frame (RGB(A) for lossless, YUV 4:2:0 planes for lossy): an explicit
    exception to ADR 0008's bounded memory, capped by the 16383 px limit and reserved with
-   `try_reserve_exact` (failure → `tooLarge`). The encoding happens in `finish`, which becomes
-   cancellable and reports an "encoding" phase. Lossy encoding scales `partition_limit` with
+   `try_reserve_exact` (failure → `tooLarge`). The encoding happens in `finish`, which is
+   cancellable for lossy WebP (libwebp's progress hook); lossless cannot be interrupted once
+   started (a few seconds at most). An "encoding" progress phase is not implemented yet: the
+   progress stays at 100 % while the frame is encoded. Lossy encoding scales `partition_limit` with
    the image size, retries once with one segment, then fails with a new error code
    `contentTooComplex` (the UI suggests lossless WebP or JPEG).
 4. **Matte.** A target without alpha (JPEG always, other formats when alpha is dropped) is
