@@ -41,6 +41,7 @@ image = { version = "0.25.10", default-features = false, features = [
 tiff = "0.11.3"
 gif = "0.14.2"
 zune-jpeg = "0.5.15"
+exr = "1.74.2"
 
 # Optimize dependencies (wgpu, naga, tauri…) even in dev builds: unoptimized GPU/driver-side
 # code makes interactive testing misleadingly slow. Our own crates stay fast to compile.

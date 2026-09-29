@@ -28,7 +28,8 @@ sources. Rules: never assume sRGB 8-bit, no silent or lossy conversions.
    (linear for float data), with a visible warning. CMYK pixels are refused. Both will go
    through lcms2 (MIT) baking a float 3D LUT, never its GPL plugins.
    Other declared color is honored the same way: PNG cICP > iCCP > sRGB > gAMA/cHRM (PNG
-   3rd edition order), the QOI linear flag; what cannot be represented gives a warning.
+   3rd edition order), the QOI linear flag, OpenEXR chromaticities (primaries of linear data);
+   what cannot be represented gives a warning.
 5. **Display transform**: working space → display space (sRGB for now), clipping only at that
    last step. HDR display comes with the native surface presentation (ADR 0002): the webview
    canvas is 8-bit sRGB.

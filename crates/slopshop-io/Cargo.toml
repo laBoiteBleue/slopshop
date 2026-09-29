@@ -16,14 +16,17 @@ image = { workspace = true }
 tiff = { workspace = true }
 # `tiff` returns half floats as `half::f16`; already in the tree through `tiff` and `exr`.
 half = "2"
-# Header-only reads of what `image` does not expose. All three are already in the tree through
-# `image`, with the same features.
+# Header-only reads of what `image` does not expose. All of them are already in the tree
+# through `image`, with the same features.
 # - PNG color chunks (cICP, sRGB, gAMA, cHRM).
 png = { workspace = true }
 # - GIF frame count without decoding the frames.
 gif = { workspace = true }
 # - JPEG component color space, to refuse CMYK instead of converting it silently.
 zune-jpeg = { workspace = true }
+# - OpenEXR chromaticities (the primaries of the file). Default features: `rayon`, which
+#   `image` already enables on it.
+exr = { workspace = true }
 
 [lints]
 workspace = true

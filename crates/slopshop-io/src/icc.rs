@@ -1,15 +1,18 @@
-//! Minimal ICC profile reader for matrix/TRC profiles (ADR 0007).
+//! Minimal ICC profile reader and writer for matrix/TRC profiles (ADR 0007, ADR 0008).
 //!
-//! Turns an RGB (or gray) ICC profile into a [`ColorSpace`]: primaries recovered from the
-//! colorant tags (undoing the chromatic adaptation to the D50 PCS, described by the `chad` tag
-//! in v4 profiles, or implied by a non-D50 `wtpt` in v2 profiles) and a transfer function from the tone curves. Well-known spaces are recognized and snapped
-//! to their exact definition. LUT-based profiles (CMYK, Lab, device links, A2B-only) are
-//! reported as unsupported; they will go through lcms2 later.
+//! Reading turns an RGB (or gray) ICC profile into a [`ColorSpace`]: primaries recovered from
+//! the colorant tags (undoing the chromatic adaptation to the D50 PCS, described by the `chad`
+//! tag in v4 profiles, or implied by a non-D50 `wtpt` in v2 profiles) and a transfer function
+//! from the tone curves. Well-known spaces are recognized and snapped to their exact
+//! definition. LUT-based profiles (CMYK, Lab, device links, A2B-only) are reported as
+//! unsupported; they will go through lcms2 later. The input is untrusted: every read is
+//! bounds-checked, nothing panics on malformed data.
 //!
-//! The input is untrusted: every read is bounds-checked, nothing panics on malformed data.
+//! Writing does the reverse for export: an ICC v4.4 RGB display profile whose tone curves are
+//! exact parametric curves, so that it reads back as the same space.
 
 use slopshop_core::color::{
-    ColorSpace, D50, Mat3, RgbPrimaries, TransferFunction, bradford, mat_inverse, mat_vec,
+    ColorSpace, D50, Mat3, RgbPrimaries, TransferFunction, bradford, mat_inverse, mat_mul, mat_vec,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,6 +29,11 @@ pub(crate) enum IccError {
     UnsupportedColorModel,
     /// No matrix/TRC description (LUT-based profile).
     LutBased,
+    /// Writing: the transfer function has no ICC tone curve (PQ and HLG, which are tagged with
+    /// cICP instead) or its parameters are outside the ICC number range.
+    UnsupportedTransfer,
+    /// Writing: degenerate primaries, or colorants outside the ICC number range.
+    InvalidPrimaries,
 }
 
 /// D50, the ICC profile connection space white, as XYZ.
@@ -304,7 +312,8 @@ fn transfer_close(a: TransferFunction, b: TransferFunction) -> bool {
 }
 
 /// Replace a color space by the named one it matches, so that well-known profiles get their
-/// exact definition (and a recognizable name).
+/// exact definition (and a recognizable name). Otherwise, a tone curve that matches a named
+/// one (sRGB or Rec.709 written as a parametric curve) still gets its exact definition.
 pub(crate) fn snap(space: ColorSpace) -> ColorSpace {
     const NAMED: [ColorSpace; 7] = [
         ColorSpace::SRGB,
@@ -325,7 +334,211 @@ pub(crate) fn snap(space: ColorSpace) -> ColorSpace {
                 && close_xy(p.white, q.white)
                 && transfer_close(named.transfer, space.transfer)
         })
-        .unwrap_or(space)
+        .unwrap_or_else(|| {
+            let transfer = [TransferFunction::Srgb, TransferFunction::Rec709]
+                .into_iter()
+                .find(|named| transfer_close(*named, space.transfer))
+                .unwrap_or(space.transfer);
+            ColorSpace { transfer, ..space }
+        })
+}
+
+/// Header version field: ICC.1:2022, profile version 4.4.
+const VERSION_4_4: u32 = 0x0440_0000;
+
+/// Creation date and time written in every profile (year, month, day, hour, minute, second).
+/// Fixed, so that a color space always gives the same bytes (reproducible exports).
+const CREATION_DATE: [u16; 6] = [2026, 9, 29, 0, 0, 0];
+
+const COPYRIGHT: &str = "No copyright, use freely";
+
+// ITU-R BT.709 OETF constants at full precision (the engine's decoder uses the same curve).
+const REC709_ALPHA: f64 = 1.099_296_826_809_44;
+const REC709_BETA: f64 = 0.018_053_968_510_807;
+
+/// Build an ICC v4.4 RGB display profile (matrix/TRC) describing `space`: colorants adapted to
+/// the D50 connection space with Bradford (the adaptation stored in `chad`), and tone curves as
+/// exact `para` curves (the parameters are only rounded to the ICC 16.16 fixed-point format).
+/// PQ and HLG have no ICC tone curve: files in those spaces are tagged with cICP instead.
+// Used by the exporter (ADR 0008), which lands separately.
+#[allow(dead_code)]
+pub(crate) fn write_matrix_trc(space: &ColorSpace) -> Result<Vec<u8>, IccError> {
+    let primaries = &space.primaries;
+    if !primaries.is_valid() {
+        return Err(IccError::InvalidPrimaries);
+    }
+    let curve = para(space.transfer)?;
+    let chad = bradford(primaries.white, D50);
+    let colorants = mat_mul(&chad, &primaries.to_xyz());
+    let colorant = |i: usize| {
+        xyz_type([colorants[0][i], colorants[1][i], colorants[2][i]])
+            .ok_or(IccError::InvalidPrimaries)
+    };
+    let tags = [
+        (*b"desc", mluc(description(space))),
+        (*b"cprt", mluc(COPYRIGHT)),
+        // v4: the media white of a display profile is the PCS white.
+        (
+            *b"wtpt",
+            xyz_type(D50_XYZ).ok_or(IccError::InvalidPrimaries)?,
+        ),
+        (
+            *b"chad",
+            sf32_type(&chad).ok_or(IccError::InvalidPrimaries)?,
+        ),
+        (*b"rXYZ", colorant(0)?),
+        (*b"gXYZ", colorant(1)?),
+        (*b"bXYZ", colorant(2)?),
+        (*b"rTRC", curve.clone()),
+        (*b"gTRC", curve.clone()),
+        (*b"bTRC", curve),
+    ];
+    Ok(assemble(b"RGB ", &tags))
+}
+
+/// English name of the space, for the `desc` tag (file metadata, not UI text).
+fn description(space: &ColorSpace) -> &'static str {
+    match space.id() {
+        Some("srgb") => "sRGB",
+        Some("linear-srgb") => "Linear sRGB",
+        Some("display-p3") => "Display P3",
+        Some("adobe-rgb") => "Adobe RGB (1998) compatible",
+        Some("prophoto") => "ProPhoto RGB (ROMM RGB)",
+        Some("rec2020") => "Rec. 2020",
+        Some("linear-rec2020") => "Linear Rec. 2020",
+        _ => "Custom RGB",
+    }
+}
+
+/// A tone curve as a `para` tag: type 0 (pure power) when it is one, type 3 (power with a
+/// linear segment) or type 4 (with offsets) otherwise.
+fn para(transfer: TransferFunction) -> Result<Vec<u8>, IccError> {
+    let (kind, params): (u16, Vec<f64>) = match transfer {
+        TransferFunction::Linear => (0, vec![1.0]),
+        TransferFunction::Gamma(g) if g.is_finite() && g > 0.0 => (0, vec![f64::from(g)]),
+        TransferFunction::Srgb => (
+            3,
+            vec![2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045],
+        ),
+        // Inverse of V = α·L^0.45 − (α − 1) above the knee, V = 4.5·L below.
+        TransferFunction::Rec709 => (
+            3,
+            vec![
+                1.0 / 0.45,
+                1.0 / REC709_ALPHA,
+                (REC709_ALPHA - 1.0) / REC709_ALPHA,
+                1.0 / 4.5,
+                4.5 * REC709_BETA,
+            ],
+        ),
+        TransferFunction::Parametric {
+            g,
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+        } => {
+            if e == 0.0 && f == 0.0 {
+                (3, [g, a, b, c, d].map(f64::from).to_vec())
+            } else {
+                (4, [g, a, b, c, d, e, f].map(f64::from).to_vec())
+            }
+        }
+        TransferFunction::Gamma(_) | TransferFunction::Pq | TransferFunction::Hlg => {
+            return Err(IccError::UnsupportedTransfer);
+        }
+    };
+    let mut data = b"para\0\0\0\0".to_vec();
+    data.extend(kind.to_be_bytes());
+    data.extend(0u16.to_be_bytes());
+    for p in params {
+        data.extend(fixed(p).ok_or(IccError::UnsupportedTransfer)?);
+    }
+    Ok(data)
+}
+
+/// A `mluc` tag holding one English (en-US) string.
+fn mluc(text: &str) -> Vec<u8> {
+    let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+    let mut data = b"mluc\0\0\0\0".to_vec();
+    data.extend(1u32.to_be_bytes()); // one record
+    data.extend(12u32.to_be_bytes()); // record size
+    data.extend(b"enUS");
+    data.extend((utf16.len() as u32).to_be_bytes());
+    data.extend(28u32.to_be_bytes()); // string offset, from the start of the tag
+    data.extend(utf16);
+    data
+}
+
+fn xyz_type(xyz: [f64; 3]) -> Option<Vec<u8>> {
+    let mut data = b"XYZ \0\0\0\0".to_vec();
+    for v in xyz {
+        data.extend(fixed(v)?);
+    }
+    Some(data)
+}
+
+fn sf32_type(m: &Mat3) -> Option<Vec<u8>> {
+    let mut data = b"sf32\0\0\0\0".to_vec();
+    for v in m.iter().flatten() {
+        data.extend(fixed(*v)?);
+    }
+    Some(data)
+}
+
+/// `s15Fixed16Number`, `None` outside its range.
+fn fixed(v: f64) -> Option<[u8; 4]> {
+    let scaled = (v * 65536.0).round();
+    (scaled >= f64::from(i32::MIN) && scaled <= f64::from(i32::MAX))
+        .then(|| (scaled as i32).to_be_bytes())
+}
+
+/// Serialize a display profile: header, tag table, then the tag data, each element starting on
+/// a 4-byte boundary (and the profile padded to one). Tags with identical data share it, as
+/// the three tone curves usually do.
+fn assemble(data_space: &[u8; 4], tags: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let mut out = vec![0u8; 128];
+    out[8..12].copy_from_slice(&VERSION_4_4.to_be_bytes());
+    out[12..16].copy_from_slice(b"mntr");
+    out[16..20].copy_from_slice(data_space);
+    out[20..24].copy_from_slice(b"XYZ ");
+    for (i, v) in CREATION_DATE.iter().enumerate() {
+        out[24 + i * 2..26 + i * 2].copy_from_slice(&v.to_be_bytes());
+    }
+    out[36..40].copy_from_slice(b"acsp");
+    // Rendering intent (64..68): 0, perceptual. Profile ID (84..100): 0, not computed.
+    for (i, v) in D50_XYZ.into_iter().enumerate() {
+        // Invariant: D50 is well inside the fixed-point range.
+        let bytes = fixed(v).unwrap_or_default();
+        out[68 + i * 4..72 + i * 4].copy_from_slice(&bytes);
+    }
+    out.extend((tags.len() as u32).to_be_bytes());
+    let table = out.len();
+    out.resize(table + tags.len() * 12, 0);
+    for (i, (signature, data)) in tags.iter().enumerate() {
+        let shared = tags[..i].iter().position(|(_, earlier)| earlier == data);
+        let offset = match shared {
+            Some(j) => {
+                let at = table + j * 12 + 4;
+                u32::from_be_bytes([out[at], out[at + 1], out[at + 2], out[at + 3]])
+            }
+            None => {
+                let offset = out.len() as u32;
+                out.extend(data);
+                out.resize(out.len().next_multiple_of(4), 0);
+                offset
+            }
+        };
+        let entry = table + i * 12;
+        out[entry..entry + 4].copy_from_slice(signature);
+        out[entry + 4..entry + 8].copy_from_slice(&offset.to_be_bytes());
+        out[entry + 8..entry + 12].copy_from_slice(&(data.len() as u32).to_be_bytes());
+    }
+    let size = out.len() as u32;
+    out[0..4].copy_from_slice(&size.to_be_bytes());
+    out
 }
 
 fn be_u32(bytes: &[u8], at: usize) -> Result<u32, IccError> {
@@ -343,13 +556,24 @@ fn s15f16(bytes: &[u8], at: usize) -> Result<f64, IccError> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use slopshop_core::color::{RgbPrimaries, mat_mul};
 
-    /// Build a matrix/TRC ICC profile (v4 style: colorants adapted to D50 with Bradford, plus
-    /// `chad`) for `space`, with the tone curve written as `curve` tag bytes.
-    pub(crate) fn profile(space: ColorSpace, curve: &[u8], gray: bool) -> Vec<u8> {
+    /// Named spaces that an ICC profile can describe (all but PQ and HLG).
+    const WRITABLE: [ColorSpace; 7] = [
+        ColorSpace::SRGB,
+        ColorSpace::LINEAR_SRGB,
+        ColorSpace::DISPLAY_P3,
+        ColorSpace::ADOBE_RGB,
+        ColorSpace::PROPHOTO,
+        ColorSpace::REC2020,
+        ColorSpace::LINEAR_REC2020,
+    ];
+
+    /// A matrix/TRC profile for `space` with the tone curve given as `curve` tag bytes, to test
+    /// the reader on encodings the writer never produces (`curv` gammas and tables, gray). v4
+    /// style: colorants adapted to D50 with Bradford, plus `chad`.
+    fn profile(space: ColorSpace, curve: &[u8], gray: bool) -> Vec<u8> {
         build(space, curve, gray, false)
     }
 
@@ -360,65 +584,218 @@ pub(crate) mod tests {
 
     fn build(space: ColorSpace, curve: &[u8], gray: bool, v2: bool) -> Vec<u8> {
         let mut tags: Vec<([u8; 4], Vec<u8>)> = Vec::new();
-        let fixed = |v: f64| ((v * 65536.0).round() as i32).to_be_bytes();
-        let xyz_tag = |v: [f64; 3]| {
-            let mut d = b"XYZ \0\0\0\0".to_vec();
-            for c in v {
-                d.extend(fixed(c));
-            }
-            d
-        };
         if gray {
             tags.push((*b"kTRC", curve.to_vec()));
         } else {
             let to_xyz = space.primaries.to_xyz();
-            let chad = bradford(space.primaries.white, slopshop_core::color::D50);
+            let chad = bradford(space.primaries.white, D50);
             let adapted = mat_mul(&chad, &to_xyz);
             for (i, sig) in [b"rXYZ", b"gXYZ", b"bXYZ"].into_iter().enumerate() {
-                tags.push((*sig, xyz_tag([adapted[0][i], adapted[1][i], adapted[2][i]])));
+                let colorant = [adapted[0][i], adapted[1][i], adapted[2][i]];
+                tags.push((*sig, xyz_type(colorant).unwrap()));
             }
             for sig in [b"rTRC", b"gTRC", b"bTRC"] {
                 tags.push((*sig, curve.to_vec()));
             }
             if v2 {
                 let white = mat_vec(&to_xyz, [1.0, 1.0, 1.0]);
-                tags.push((*b"wtpt", xyz_tag(white)));
+                tags.push((*b"wtpt", xyz_type(white).unwrap()));
             } else {
-                let mut sf32 = b"sf32\0\0\0\0".to_vec();
-                for v in chad.iter().flatten() {
-                    sf32.extend(fixed(*v));
-                }
-                tags.push((*b"chad", sf32));
+                tags.push((*b"chad", sf32_type(&chad).unwrap()));
             }
         }
-        let mut out = vec![0u8; 128];
-        out[16..20].copy_from_slice(if gray { b"GRAY" } else { b"RGB " });
-        out[20..24].copy_from_slice(b"XYZ ");
-        out.extend((tags.len() as u32).to_be_bytes());
-        let mut offset = 132 + tags.len() * 12;
-        let mut data: Vec<u8> = Vec::new();
-        for (sig, bytes) in &tags {
-            out.extend(sig);
-            out.extend((offset as u32).to_be_bytes());
-            out.extend((bytes.len() as u32).to_be_bytes());
-            offset += bytes.len();
-            data.extend(bytes);
+        let mut out = assemble(if gray { b"GRAY" } else { b"RGB " }, &tags);
+        if v2 {
+            out[8..12].copy_from_slice(&0x0210_0000u32.to_be_bytes());
         }
-        out.extend(data);
-        let size = out.len() as u32;
-        out[0..4].copy_from_slice(&size.to_be_bytes());
         out
     }
 
-    pub(crate) fn para_srgb() -> Vec<u8> {
-        let fixed = |v: f64| ((v * 65536.0).round() as i32).to_be_bytes();
-        let mut d = b"para\0\0\0\0".to_vec();
-        d.extend(3u16.to_be_bytes());
-        d.extend(0u16.to_be_bytes());
-        for v in [2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045] {
-            d.extend(fixed(v));
+    fn para_srgb() -> Vec<u8> {
+        para(TransferFunction::Srgb).unwrap()
+    }
+
+    /// The English string of a `mluc` tag.
+    fn mluc_text(data: &[u8]) -> String {
+        assert_eq!(&data[0..4], b"mluc");
+        assert_eq!(&data[16..20], b"enUS");
+        let len = be_u32(data, 20).unwrap() as usize;
+        let offset = be_u32(data, 24).unwrap() as usize;
+        let units: Vec<u16> = data[offset..offset + len]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_be_bytes(*b))
+            .collect();
+        String::from_utf16(&units).unwrap()
+    }
+
+    #[test]
+    fn written_profiles_read_back_as_the_same_space() {
+        for space in WRITABLE {
+            let color = parse(&write_matrix_trc(&space).unwrap()).unwrap();
+            assert_eq!(
+                color,
+                IccColor {
+                    space,
+                    approximated: false
+                },
+                "{:?}",
+                space.id()
+            );
         }
-        d
+    }
+
+    #[test]
+    fn written_tone_curves_are_exact() {
+        for space in WRITABLE {
+            let bytes = write_matrix_trc(&space).unwrap();
+            let tags = TagTable::read(&bytes).unwrap();
+            for sig in [b"rTRC", b"gTRC", b"bTRC"] {
+                let (curve, approximated) = tags.curve(sig).unwrap().unwrap();
+                assert!(!approximated);
+                // Only the 16.16 fixed-point rounding of the parameters differs.
+                for i in 0..=1024 {
+                    let x = i as f32 / 1024.0;
+                    let (got, want) = (curve.decode(x), space.transfer.decode(x));
+                    assert!((got - want).abs() < 2e-5, "{:?} at {x}", space.id());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn custom_spaces_round_trip() {
+        // A non-D65 white exercises the chromatic adaptation.
+        let primaries = RgbPrimaries {
+            red: [0.66, 0.33],
+            green: [0.25, 0.68],
+            blue: [0.14, 0.07],
+            white: [0.32, 0.335],
+        };
+        let parametric = |e, f| TransferFunction::Parametric {
+            g: 2.6,
+            a: 0.9,
+            b: 0.1,
+            c: 0.2,
+            d: 0.05,
+            e,
+            f,
+        };
+        for transfer in [
+            TransferFunction::Linear,
+            TransferFunction::Gamma(2.0),
+            TransferFunction::Srgb,
+            TransferFunction::Rec709,
+            parametric(0.0, 0.0),
+            parametric(0.01, 0.005),
+        ] {
+            let space = ColorSpace {
+                primaries,
+                transfer,
+            };
+            let color = parse(&write_matrix_trc(&space).unwrap()).unwrap();
+            assert!(!color.approximated);
+            let p = color.space.primaries;
+            let got = [p.red, p.green, p.blue, p.white];
+            let want = [
+                primaries.red,
+                primaries.green,
+                primaries.blue,
+                primaries.white,
+            ];
+            for (g, w) in got.iter().zip(want) {
+                assert!((g[0] - w[0]).abs() < 1e-4 && (g[1] - w[1]).abs() < 1e-4);
+            }
+            // Named curves come back exactly, others up to the fixed-point rounding.
+            if let TransferFunction::Parametric { .. } = transfer {
+                assert!(transfer_close(color.space.transfer, transfer));
+            } else {
+                assert_eq!(color.space.transfer, transfer);
+            }
+        }
+    }
+
+    #[test]
+    fn spaces_without_a_matrix_trc_description_are_errors() {
+        for space in [ColorSpace::REC2100_PQ, ColorSpace::REC2100_HLG] {
+            assert_eq!(write_matrix_trc(&space), Err(IccError::UnsupportedTransfer));
+        }
+        for transfer in [
+            TransferFunction::Gamma(f32::NAN),
+            TransferFunction::Gamma(0.0),
+            TransferFunction::Parametric {
+                g: 2.0,
+                a: 1e6,
+                b: 0.0,
+                c: 0.0,
+                d: 0.0,
+                e: 0.0,
+                f: 0.0,
+            },
+        ] {
+            let space = ColorSpace {
+                transfer,
+                ..ColorSpace::SRGB
+            };
+            assert_eq!(write_matrix_trc(&space), Err(IccError::UnsupportedTransfer));
+        }
+        let degenerate = ColorSpace {
+            primaries: RgbPrimaries {
+                red: [0.3, 0.3],
+                green: [0.3, 0.3],
+                blue: [0.3, 0.3],
+                white: slopshop_core::color::D65,
+            },
+            transfer: TransferFunction::Linear,
+        };
+        assert_eq!(
+            write_matrix_trc(&degenerate),
+            Err(IccError::InvalidPrimaries)
+        );
+    }
+
+    #[test]
+    fn written_profiles_are_well_formed() {
+        for space in WRITABLE {
+            let bytes = write_matrix_trc(&space).unwrap();
+            let be = |at| be_u32(&bytes, at).unwrap();
+            assert_eq!(be(0) as usize, bytes.len(), "size field");
+            assert_eq!(bytes.len() % 4, 0);
+            assert_eq!(be(8), 0x0440_0000, "version 4.4");
+            assert_eq!(&bytes[12..24], b"mntrRGB XYZ ");
+            assert_eq!(bytes[24..26], 2026u16.to_be_bytes());
+            assert_eq!(&bytes[36..40], b"acsp");
+            assert_eq!(be(64), 0, "perceptual intent");
+            let d50 = [0, 0, 0xf6, 0xd6, 0, 1, 0, 0, 0, 0, 0xd3, 0x2d];
+            assert_eq!(bytes[68..80], d50, "D50 illuminant");
+            let count = be(128) as usize;
+            let data_start = 132 + count * 12;
+            let mut signatures = Vec::new();
+            for i in 0..count {
+                let at = 132 + i * 12;
+                let (offset, size) = (be(at + 4) as usize, be(at + 8) as usize);
+                assert_eq!(offset % 4, 0, "tag data alignment");
+                assert!(offset >= data_start && offset + size <= bytes.len());
+                signatures.push(&bytes[at..at + 4]);
+            }
+            for required in [
+                b"desc", b"cprt", b"wtpt", b"chad", b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC",
+                b"bTRC",
+            ] {
+                assert!(signatures.contains(&&required[..]));
+            }
+            let tags = TagTable::read(&bytes).unwrap();
+            let desc = mluc_text(tags.data(b"desc").unwrap().unwrap());
+            assert_eq!(desc, description(&space));
+            assert_ne!(desc, "Custom RGB");
+            assert_eq!(mluc_text(tags.data(b"cprt").unwrap().unwrap()), COPYRIGHT);
+            let wtpt = tags.xyz(b"wtpt").unwrap().unwrap();
+            assert!((0..3).all(|i| (wtpt[i] - D50_XYZ[i]).abs() < 1e-4));
+        }
+        let p3 = write_matrix_trc(&ColorSpace::DISPLAY_P3).unwrap();
+        let desc = TagTable::read(&p3).unwrap().data(b"desc").unwrap().unwrap();
+        assert_eq!(mluc_text(desc), "Display P3");
     }
 
     fn curv_gamma(gamma: f32) -> Vec<u8> {

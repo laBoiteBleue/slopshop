@@ -3,8 +3,8 @@
 //! Decoding keeps the source as it is and is explicit about everything else:
 //! - native sample types (8/16-bit integer, 16/32-bit float) and gray/color layouts are kept;
 //! - the color space comes from what the file declares (ICC profile for matrix/TRC profiles,
-//!   PNG cICP/sRGB/gAMA/cHRM chunks, QOI linear flag), or is assumed (sRGB for integer data,
-//!   linear sRGB primaries for float data) when the file has none;
+//!   PNG cICP/sRGB/gAMA/cHRM chunks, QOI linear flag, OpenEXR chromaticities), or is assumed
+//!   (sRGB for integer data, linear sRGB primaries for float data) when the file has none;
 //! - EXIF orientation is applied (a lossless transform);
 //! - what cannot be represented faithfully yet is refused with a clear error (CMYK, LUT-based
 //!   color, exotic samples, formats not supported yet such as HEIC, RAW or JPEG 2000) or
@@ -297,6 +297,7 @@ fn decode_generic(path: &Path, head: &[u8]) -> Result<Decoded, ImportError> {
     let mut warnings = Vec::new();
     let space = match format {
         ImageFormat::Png => png_color(path, &mut warnings)?,
+        ImageFormat::OpenExr => exr_color(path, &mut warnings)?,
         // QOI header byte 13: 0 = sRGB with linear alpha, 1 = all channels linear.
         ImageFormat::Qoi if head.get(13) == Some(&1) => Some(ColorSpace::LINEAR_SRGB),
         _ => None,
@@ -385,6 +386,40 @@ fn png_color(
     Ok(Some(icc::snap(ColorSpace {
         primaries,
         transfer,
+    })))
+}
+
+/// Primaries an OpenEXR file declares (`chromaticities` attribute), with linear transfer (EXR
+/// samples are scene-linear). `None`: the default, linear Rec.709/sRGB primaries, which is also
+/// what the OpenEXR specification assumes when the attribute is absent. Reads the headers only.
+fn exr_color(
+    path: &Path,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<Option<ColorSpace>, ImportError> {
+    let meta = exr::meta::MetaData::read_from_file(path, false)
+        .map_err(|e| ImportError::Decode(e.to_string()))?;
+    // The attribute is shared by all the parts of a file (OpenEXR specification).
+    let Some(c) = meta
+        .headers
+        .first()
+        .and_then(|h| h.shared_attributes.chromaticities)
+    else {
+        return Ok(None);
+    };
+    let xy = |v: exr::math::Vec2<f32>| [f64::from(v.0), f64::from(v.1)];
+    let primaries = RgbPrimaries {
+        red: xy(c.red),
+        green: xy(c.green),
+        blue: xy(c.blue),
+        white: xy(c.white),
+    };
+    if !primaries.is_valid() {
+        warnings.push(ImportWarning::ColorInfoUnsupported);
+        return Ok(None);
+    }
+    Ok(Some(icc::snap(ColorSpace {
+        primaries,
+        transfer: TransferFunction::Linear,
     })))
 }
 
@@ -679,7 +714,7 @@ mod tests {
 
     #[test]
     fn embedded_icc_profile_is_applied() {
-        let icc = icc::tests::profile(ColorSpace::DISPLAY_P3, &icc::tests::para_srgb(), false);
+        let icc = icc::write_matrix_trc(&ColorSpace::DISPLAY_P3).unwrap();
         let mut out = std::io::Cursor::new(Vec::new());
         let mut encoder = image::codecs::png::PngEncoder::new(&mut out);
         encoder.set_icc_profile(icc).unwrap();
@@ -749,6 +784,94 @@ mod tests {
             .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(px, [4.0, 0.5, 0.25, 1.0], "HDR value above 1 survives");
+    }
+
+    /// A small RGBA EXR file written by the `exr` crate, with an optional `chromaticities`
+    /// attribute given as (red, green, blue, white) xy.
+    fn exr_with_chromaticities(xy: Option<[[f32; 2]; 4]>) -> Vec<u8> {
+        use exr::prelude::*;
+        let pixels = SpecificChannels::rgba(|Vec2(x, _y): Vec2<usize>| {
+            (x as f32 * 2.0, 0.5f32, 0.25f32, 1.0f32)
+        });
+        let mut image = Image::from_channels((2, 1), pixels);
+        image.attributes.chromaticities = xy.map(|[r, g, b, w]| {
+            let v = |[x, y]: [f32; 2]| Vec2(x, y);
+            exr::meta::attribute::Chromaticities {
+                red: v(r),
+                green: v(g),
+                blue: v(b),
+                white: v(w),
+            }
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image.write().to_buffered(&mut out).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn exr_chromaticities_give_the_primaries() {
+        let rec709 = [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06], [0.3127, 0.3290]];
+        let rec2020 = [
+            [0.708, 0.292],
+            [0.170, 0.797],
+            [0.131, 0.046],
+            [0.3127, 0.3290],
+        ];
+        let p3 = [
+            [0.680, 0.320],
+            [0.265, 0.690],
+            [0.150, 0.060],
+            [0.3127, 0.3290],
+        ];
+        let cases = [
+            (Some(rec2020), ColorSpace::LINEAR_REC2020),
+            (Some(rec709), ColorSpace::LINEAR_SRGB),
+            (
+                Some(p3),
+                ColorSpace {
+                    primaries: RgbPrimaries::DISPLAY_P3,
+                    transfer: TransferFunction::Linear,
+                },
+            ),
+            // Absent: Rec.709 primaries, as the OpenEXR specification says.
+            (None, ColorSpace::LINEAR_SRGB),
+        ];
+        for (xy, expected) in cases {
+            let imported = open_bytes("chroma.exr", &exr_with_chromaticities(xy)).unwrap();
+            let format = imported.image.format();
+            let space = format.color_space;
+            assert_eq!(space.transfer, TransferFunction::Linear);
+            for (got, want) in [
+                (space.primaries.red, expected.primaries.red),
+                (space.primaries.green, expected.primaries.green),
+                (space.primaries.blue, expected.primaries.blue),
+                (space.primaries.white, expected.primaries.white),
+            ] {
+                assert!((got[0] - want[0]).abs() < 1e-6 && (got[1] - want[1]).abs() < 1e-6);
+            }
+            if expected.id().is_some() {
+                assert_eq!(space, expected, "named spaces are snapped exactly");
+            }
+            assert!(imported.warnings.is_empty());
+            // Only the header is read differently: pixels are unchanged.
+            assert_eq!(format.alpha, AlphaMode::Premultiplied);
+            let px: Vec<f32> = stored_pixel(&imported.image, 1, 0)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_ne_bytes(*b))
+                .collect();
+            assert_eq!(px, [2.0, 0.5, 0.25, 1.0]);
+        }
+    }
+
+    #[test]
+    fn degenerate_exr_chromaticities_warn_and_keep_the_default() {
+        let coincident = [[0.3, 0.3], [0.3, 0.3], [0.3, 0.3], [0.3127, 0.3290]];
+        let imported =
+            open_bytes("degenerate.exr", &exr_with_chromaticities(Some(coincident))).unwrap();
+        assert_eq!(imported.image.format().color_space, ColorSpace::LINEAR_SRGB);
+        assert_eq!(imported.warnings, [ImportWarning::ColorInfoUnsupported]);
     }
 
     #[test]

@@ -3758,6 +3758,7 @@ version = "0.1.0"
 name = "slopshop-io"
 version = "0.1.0"
 dependencies = [
+ "exr",
  "gif",
  "half",
  "image",
