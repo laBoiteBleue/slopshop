@@ -2,6 +2,8 @@
 //!
 //! Exists from day one to keep the engine honest: everything it does works without the UI.
 
+mod export;
+
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -24,6 +26,27 @@ USAGE:
         output of --size, to a PNG file.
         Defaults: --size 1024x768 --doc 12000x8000 --out slopshop.png
 
+    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr] [--depth u8|u16|f16|f32]
+                    [--space ID] [--compression fast|small|none|deflate|lzw]
+                    [--no-alpha] [--no-dither] [--cpu] [--bench]
+        Open an image file as a one-layer document and export it to PNG, TIFF or
+        OpenEXR with the format's default settings (ADR 0008); each option
+        overrides one of them. Prints the settings used and the export report.
+        --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr).
+        --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32.
+                       The color space stays the default one unless --space is given.
+        --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
+                       linear-rec2020, rec2100-pq, rec2100-hlg. TIFF: all but PQ and
+                       HLG. OpenEXR: linear-srgb, linear-rec2020.
+        --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
+                       lossless ZIP, no option.
+        --no-alpha     Drop the alpha channel: the image is written over black.
+        --no-dither    No dither for 8-bit samples.
+        --cpu          Composite on the CPU instead of the GPU (also used when no
+                       GPU is available).
+        --bench        Also print timings (open, GPU init, export, throughput, time
+                       in the pixel source) and the number of bands.
+
     slopshop --help | --version
 ";
 
@@ -32,6 +55,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("gpu") => gpu(),
         Some("render") => render(&args[1..]),
+        Some("export") => export::run(&args[1..]),
         Some("--version" | "-V") => {
             println!("slopshop {}", env!("CARGO_PKG_VERSION"));
             Ok(())

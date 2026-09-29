@@ -14,6 +14,8 @@ path = "src/main.rs"
 [dependencies]
 slopshop-core.workspace = true
 slopshop-render.workspace = true
+# `slopshop export`: file decoding and the export pipeline, exactly as the app uses them.
+slopshop-io.workspace = true
 # PNG encoding for rendered frames (pure Rust, widely used; writing PNG by hand is not worth it).
 png.workspace = true
 
