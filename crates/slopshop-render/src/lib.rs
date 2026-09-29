@@ -5,11 +5,17 @@
 //! no window or surface is required; a window surface can be presented to directly
 //! ([`present`]).
 //!
+//! Export reads full-precision working-space pixels of any document region instead
+//! ([`Renderer::render_region`]).
+//!
 //! All methods block the calling thread (GPU submission and readback): call them from worker
 //! threads, never from a UI thread.
 
 pub mod present;
+mod region;
 mod tiles;
+
+pub use region::export_source;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -45,6 +51,22 @@ pub enum RenderError {
     Readback(String),
     /// A window surface could not be created, configured or acquired.
     Surface(String),
+    /// A region to render does not lie within the document.
+    RegionOutsideDocument {
+        region: Rect,
+        document: Size,
+    },
+    /// The buffer given for a region does not hold exactly its RGBA f32 samples.
+    RegionBufferLength {
+        expected: u64,
+        actual: usize,
+    },
+    /// More distinct raster images of one sample type are visible in a region than the tile
+    /// cache holds: not even one tile of the region can be rendered at full resolution.
+    TooManyLayers {
+        images: usize,
+        capacity: u32,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -60,6 +82,19 @@ impl fmt::Display for RenderError {
             ),
             RenderError::Readback(e) => write!(f, "GPU readback failed: {e}"),
             RenderError::Surface(e) => write!(f, "window surface: {e}"),
+            RenderError::RegionOutsideDocument { region, document } => write!(
+                f,
+                "region {}x{} at ({}, {}) is outside the {}x{} document",
+                region.width, region.height, region.x, region.y, document.width, document.height
+            ),
+            RenderError::RegionBufferLength { expected, actual } => write!(
+                f,
+                "region buffer holds {actual} samples, {expected} expected"
+            ),
+            RenderError::TooManyLayers { images, capacity } => write!(
+                f,
+                "{images} raster images of one sample type exceed the tile cache ({capacity} tiles)"
+            ),
         }
     }
 }
@@ -87,7 +122,13 @@ pub struct Renderer {
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    /// Export: `export_main` in composite.wgsl ([`Renderer::render_region`]).
+    export_pipeline: wgpu::ComputePipeline,
+    export_bind_group_layout: wgpu::BindGroupLayout,
+    /// Largest storage buffer that can be bound (and copied from) in one dispatch.
     max_output_bytes: u64,
+    /// Largest dispatch along one axis, in pixels.
+    max_dispatch_pixels: u32,
     /// One cache per storage class ([`GpuTileFormat`]), created on first use: documents
     /// without raster layers of a class need no tile memory for it.
     tile_caches: Mutex<[Option<TileCache>; 4]>,
@@ -167,45 +208,44 @@ impl Renderer {
             },
             count: None,
         };
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("composite"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                storage(1, true),
-                storage(2, false),
-                storage(3, true),
-                tile_binding(4, GpuTileFormat::Unorm8),
-                tile_binding(5, GpuTileFormat::Uint16),
-                tile_binding(6, GpuTileFormat::Float16),
-                tile_binding(7, GpuTileFormat::Float32),
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("composite"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("composite"),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let uniform = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        // Layers, tile table and tile arrays, shared by both entry points.
+        let shared = [
+            storage(1, true),
+            storage(3, true),
+            tile_binding(4, GpuTileFormat::Unorm8),
+            tile_binding(5, GpuTileFormat::Uint16),
+            tile_binding(6, GpuTileFormat::Float16),
+            tile_binding(7, GpuTileFormat::Float32),
+        ];
+        let (bind_group_layout, pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "main",
+            &[&shared[..], &[uniform(0), storage(2, false)]].concat(),
+        );
+        let (export_bind_group_layout, export_pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "export_main",
+            &[&shared[..], &[uniform(8), storage(9, false)]].concat(),
+        );
 
         let max_output_bytes = required_limits
             .max_storage_buffer_binding_size
             .min(required_limits.max_buffer_size);
+        let max_dispatch_pixels = required_limits
+            .max_compute_workgroups_per_dimension
+            .saturating_mul(WORKGROUP_SIZE);
         let placeholder_tiles = GpuTileFormat::ALL.map(|f| tiles::placeholder_view(&device, f));
         let tile_capacity = GpuTileFormat::ALL.map(|f| {
             let budget = u32::try_from(TILE_BUDGET_BYTES / f.tile_bytes()).unwrap_or(u32::MAX);
@@ -222,7 +262,10 @@ impl Renderer {
             queue,
             pipeline,
             bind_group_layout,
+            export_pipeline,
+            export_bind_group_layout,
             max_output_bytes,
+            max_dispatch_pixels,
             tile_caches: Mutex::new([None, None, None, None]),
             tile_capacity,
             placeholder_tiles,
@@ -315,8 +358,7 @@ impl Renderer {
             .lock()
             .map_err(|_| RenderError::Readback("tile cache lock poisoned".into()))?;
         let layers = self.prepare_layers(document, view, output, &mut cache_guard);
-        let layer_count = layers.count;
-        let params = params_bytes(document.size(), view, output, layer_count);
+        let params = params_bytes(document.size(), view, output, layers.count);
 
         use wgpu::util::DeviceExt;
         let params_buffer = self
@@ -326,35 +368,7 @@ impl Renderer {
                 contents: &params,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        // A binding cannot be empty: always upload at least one (unused) entry.
-        let mut layer_bytes = layers.bytes;
-        if layer_bytes.is_empty() {
-            layer_bytes.resize(LAYER_BYTES, 0);
-        }
-        let layers_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("composite layers"),
-                contents: &layer_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-        let mut table = layers.tile_table;
-        if table.is_empty() {
-            table.push(NO_TILE);
-        }
-        let table_bytes: Vec<u8> = table.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let table_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("composite tile table"),
-                contents: &table_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-        let tile_views: Vec<&wgpu::TextureView> = cache_guard
-            .iter()
-            .zip(&self.placeholder_tiles)
-            .map(|(cache, placeholder)| cache.as_ref().map_or(placeholder, TileCache::view))
-            .collect();
+        let layer_buffers = self.layer_buffers(layers);
         // Allocated per frame for now; pooling can come once profiling says it matters.
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("composite output"),
@@ -363,44 +377,21 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("composite"),
-            layout: &self.bind_group_layout,
-            entries: &[
+        let bind_group = self.bind_group(
+            &self.bind_group_layout,
+            &layer_buffers,
+            self.tile_views(&cache_guard),
+            [
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: params_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: layers_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
                     binding: 2,
                     resource: output_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: table_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(tile_views[0]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(tile_views[1]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(tile_views[2]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::TextureView(tile_views[3]),
-                },
             ],
-        });
+        );
 
         let mut encoder = self
             .device
@@ -512,47 +503,137 @@ impl Renderer {
                 }
             }
         }
-
-        let mut prepared = PreparedLayers {
-            count: 0,
-            bytes: Vec::new(),
-            tile_table: Vec::new(),
-        };
-        for ((layer, plan), table) in layers.iter().zip(&plans).zip(tables) {
-            let mut fields = LayerFields::default();
-            match &layer.content {
-                LayerContent::Fill { color } => {
-                    fields.kind = KIND_FILL;
-                    let a = color.a * layer.opacity;
-                    fields.color = [color.r * a, color.g * a, color.b * a, a];
-                }
-                LayerContent::Raster { .. } => {
-                    // Not visible in this view: nothing to sample.
-                    let Some(plan) = plan else { continue };
-                    fields.kind = KIND_RASTER;
-                    fields.opacity = layer.opacity;
-                    let range = plan.range();
-                    let size = plan.image.levels()[plan.level].size();
-                    fields.level_scale = plan.factor() as f32;
-                    fields.table_offset = prepared.tile_table.len() as u32;
-                    fields.tile_origin = [range.x, range.y];
-                    fields.tile_count = [range.width, range.height];
-                    fields.level_size = [size.width, size.height];
-                    fields.format = plan.format.index() as u32;
-                    let stored = plan.image.stored_format();
-                    fields.flags = u32::from(stored.alpha == AlphaMode::Premultiplied);
-                    (fields.transfer, fields.transfer2) =
-                        transfer_fields(stored.color_space.transfer);
-                    fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
-                    prepared.tile_table.extend(table);
-                }
-            }
-            fields.write(&mut prepared.bytes);
-            prepared.count += 1;
-        }
-        prepared
+        encode_layers(&layers, &plans, tables)
     }
 
+    /// Layer and tile table buffers of prepared layers.
+    fn layer_buffers(&self, prepared: PreparedLayers) -> LayerBuffers {
+        use wgpu::util::DeviceExt;
+        // A binding cannot be empty: always upload at least one (unused) entry.
+        let mut layer_bytes = prepared.bytes;
+        if layer_bytes.is_empty() {
+            layer_bytes.resize(LAYER_BYTES, 0);
+        }
+        let layers = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("composite layers"),
+                contents: &layer_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let mut table = prepared.tile_table;
+        if table.is_empty() {
+            table.push(NO_TILE);
+        }
+        let table_bytes: Vec<u8> = table.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let table = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("composite tile table"),
+                contents: &table_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        LayerBuffers { layers, table }
+    }
+
+    /// The tile array of each storage class, or a placeholder where there is no cache.
+    fn tile_views<'a>(&'a self, caches: &'a [Option<TileCache>; 4]) -> [&'a wgpu::TextureView; 4] {
+        std::array::from_fn(|i| {
+            caches[i]
+                .as_ref()
+                .map_or(&self.placeholder_tiles[i], TileCache::view)
+        })
+    }
+
+    /// A bind group of the bindings shared by both entry points plus an entry point's own
+    /// (params and output).
+    fn bind_group(
+        &self,
+        layout: &wgpu::BindGroupLayout,
+        buffers: &LayerBuffers,
+        tile_views: [&wgpu::TextureView; 4],
+        own: [wgpu::BindGroupEntry<'_>; 2],
+    ) -> wgpu::BindGroup {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: buffers.layers.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: buffers.table.as_entire_binding(),
+            },
+        ];
+        entries.extend(
+            (4..)
+                .zip(tile_views)
+                .map(|(binding, view)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }),
+        );
+        entries.extend(own);
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("composite"),
+            layout,
+            entries: &entries,
+        })
+    }
+}
+
+/// Encode visible `layers` (bottom to top) with their raster plans and tile slots. Raster layers
+/// without a plan (nothing of them to sample) are left out.
+fn encode_layers(
+    layers: &[&Layer],
+    plans: &[Option<RasterPlan<'_>>],
+    tables: Vec<Vec<u32>>,
+) -> PreparedLayers {
+    let mut prepared = PreparedLayers {
+        count: 0,
+        bytes: Vec::new(),
+        tile_table: Vec::new(),
+    };
+    for ((layer, plan), table) in layers.iter().zip(plans).zip(tables) {
+        let mut fields = LayerFields::default();
+        match &layer.content {
+            LayerContent::Fill { color } => {
+                fields.kind = KIND_FILL;
+                let a = color.a * layer.opacity;
+                fields.color = [color.r * a, color.g * a, color.b * a, a];
+            }
+            LayerContent::Raster { .. } => {
+                // Not visible in this view or region: nothing to sample.
+                let Some(plan) = plan else { continue };
+                fields.kind = KIND_RASTER;
+                fields.opacity = layer.opacity;
+                let range = plan.range();
+                let size = plan.image.levels()[plan.level].size();
+                fields.level_scale = plan.factor() as f32;
+                fields.table_offset = prepared.tile_table.len() as u32;
+                fields.tile_origin = [range.x, range.y];
+                fields.tile_count = [range.width, range.height];
+                fields.level_size = [size.width, size.height];
+                fields.format = plan.format.index() as u32;
+                let stored = plan.image.stored_format();
+                fields.flags = u32::from(stored.alpha == AlphaMode::Premultiplied);
+                (fields.transfer, fields.transfer2) = transfer_fields(stored.color_space.transfer);
+                fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
+                prepared.tile_table.extend(table);
+            }
+        }
+        fields.write(&mut prepared.bytes);
+        prepared.count += 1;
+    }
+    prepared
+}
+
+/// Layer and tile table buffers bound for one dispatch.
+struct LayerBuffers {
+    layers: wgpu::Buffer,
+    table: wgpu::Buffer,
+}
+
+impl Renderer {
     /// Make the planned tiles resident; returns their cache slots (row-major).
     fn upload(&self, plan: &RasterPlan<'_>, cache: &mut TileCache) -> Vec<u32> {
         let level = &plan.image.levels()[plan.level];
@@ -605,6 +686,11 @@ impl<'a> RasterPlan<'a> {
             visible,
             level,
         }
+    }
+
+    /// Level 0, whatever the tile budget (export).
+    fn full_resolution(image: &'a RasterImage, visible: [f64; 4]) -> Self {
+        Self::new(image, visible, 1.0)
     }
 
     /// Document pixels per pixel of the planned level.
@@ -663,6 +749,33 @@ fn fit_tile_budget(plans: &mut [Option<RasterPlan<'_>>], capacity: [u32; 4]) {
             }
         }
     }
+}
+
+/// A compute pipeline for one entry point of composite.wgsl, with its bind group layout.
+fn compute_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    entry_point: &str,
+    entries: &[wgpu::BindGroupLayoutEntry],
+) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(entry_point),
+        entries,
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(entry_point),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(entry_point),
+        layout: Some(&pipeline_layout),
+        module,
+        entry_point: Some(entry_point),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    });
+    (bind_group_layout, pipeline)
 }
 
 /// A binding for one tile storage class.

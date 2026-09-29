@@ -1,11 +1,15 @@
-// Viewport compositor: one invocation per output pixel.
+// Compositor: one invocation per output pixel.
 //
 // Layers are composited in the working space (linear Rec.2020, unbounded, premultiplied alpha;
 // ADR 0007). Raster tiles are sampled in their source encoding and converted here: transfer
-// function decode, then a 3×3 matrix to the working space. The result is converted to the
-// display space (linear sRGB), composited over a transparency checkerboard and encoded to sRGB
-// 8-bit. Clipping only happens at that last step: it is a *view transform*, the document is
-// never converted.
+// function decode, then a 3×3 matrix to the working space.
+//
+// Two entry points share that code:
+// - `main`, the viewport: the result is converted to the display space (linear sRGB),
+//   composited over a transparency checkerboard and encoded to sRGB 8-bit. Clipping only happens
+//   at that last step: it is a *view transform*, the document is never converted.
+// - `export_main`, export (ADR 0008): the working-space values themselves, as f32, one level-0
+//   texel per output pixel, finite values never clamped.
 
 struct Params {
     // Document coordinate of the output's top-left corner.
@@ -80,6 +84,19 @@ struct Layer {
 @group(0) @binding(6) var tiles_float16: texture_2d_array<f32>;
 @group(0) @binding(7) var tiles_float32: texture_2d_array<f32>;
 
+// Export: a region of the document at full resolution (32 bytes; keep in sync with
+// `export_params_bytes` in region.rs).
+struct ExportParams {
+    // Document pixel of the output's top-left corner.
+    origin: vec2<u32>,
+    size: vec2<u32>,
+    layer_count: u32,
+}
+
+@group(0) @binding(8) var<uniform> export_params: ExportParams;
+// Output pixels, row-major: premultiplied working-space RGBA.
+@group(0) @binding(9) var<storage, read_write> export_output: array<vec4<f32>>;
+
 // Linear sRGB display colors.
 const PASTEBOARD = vec3<f32>(0.0144, 0.0144, 0.0168);
 const CHECKER_LIGHT = vec3<f32>(0.527, 0.527, 0.527);
@@ -93,21 +110,31 @@ fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
     return select(high, low, linear <= vec3<f32>(0.0031308));
 }
 
-// Magnitude that non-finite values are replaced with (MAX_FINITE_SAMPLE in core): sums and
-// matrices stay finite, so an opaque layer still hides what is below it.
+// Display bound on sample magnitudes (MAX_FINITE_SAMPLE in core): sums and matrices stay far
+// from overflow, so an opaque layer still hides what is below it.
 const MAX_FINITE = 65504.0;
+// Largest finite f32: what export maps ±inf to.
+const F32_MAX = 0x1.fffffep+127f;
 
 // Rec.709 constants at full precision (same as core).
 const REC709_ALPHA = 1.0992968;
 const REC709_BETA = 0.018053968;
 
-// NaN → 0, ±inf → ±MAX_FINITE. Tests the bits: `v != v` may be optimized away.
-fn finite(v: vec4<f32>) -> vec4<f32> {
+// NaN → 0. Then, for display, every value (finite or not) is clamped to ±MAX_FINITE; for
+// export (`unbounded`, ADR 0008), only ±inf are mapped, to ±F32_MAX, and finite values are
+// kept. Tests the bits: `v != v` may be optimized away.
+fn finite(v: vec4<f32>, unbounded: bool) -> vec4<f32> {
     let bits = bitcast<vec4<u32>>(v);
     let special = (bits & vec4<u32>(0x7f800000u)) == vec4<u32>(0x7f800000u);
     let nan = special & ((bits & vec4<u32>(0x007fffffu)) != vec4<u32>(0u));
-    let clamped = clamp(v, vec4<f32>(-MAX_FINITE), vec4<f32>(MAX_FINITE));
-    return select(select(clamped, sign(v) * MAX_FINITE, special), vec4<f32>(0.0), nan);
+    var mapped: vec4<f32>;
+    if unbounded {
+        mapped = select(v, sign(v) * F32_MAX, special);
+    } else {
+        let clamped = clamp(v, vec4<f32>(-MAX_FINITE), vec4<f32>(MAX_FINITE));
+        mapped = select(clamped, sign(v) * MAX_FINITE, special);
+    }
+    return select(mapped, vec4<f32>(0.0), nan);
 }
 
 // ICC parametric curve for x ≥ 0: g = t.y, a = t.z, b = t.w, c = t2.x, d = t2.y, e = t2.z,
@@ -179,8 +206,8 @@ fn load_texel(layer: Layer, texel: vec2<u32>, slot: u32) -> vec4<f32> {
 }
 
 // Premultiplied working-space color of one texel of a raster layer's planned level.
-// Transparent outside the image or where no tile is resident.
-fn texel_color(layer: Layer, at: vec2<i32>) -> vec4<f32> {
+// Transparent outside the image or where no tile is resident. `unbounded`: see `finite`.
+fn texel_color(layer: Layer, at: vec2<i32>, unbounded: bool) -> vec4<f32> {
     if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(layer.level_size)) {
         return vec4<f32>(0.0);
     }
@@ -194,7 +221,7 @@ fn texel_color(layer: Layer, at: vec2<i32>) -> vec4<f32> {
     if slot == NO_TILE {
         return vec4<f32>(0.0);
     }
-    let raw = finite(load_texel(layer, texel, slot));
+    let raw = finite(load_texel(layer, texel, slot), unbounded);
     let a = clamp(raw.a, 0.0, 1.0);
     let premultiplied = (layer.flags & FLAG_PREMULTIPLIED) != 0u;
     var linear: vec3<f32>;
@@ -211,7 +238,7 @@ fn texel_color(layer: Layer, at: vec2<i32>) -> vec4<f32> {
     }
     let rgb = vec3<f32>(dot(layer.m0.xyz, linear), dot(layer.m1.xyz, linear), dot(layer.m2.xyz, linear));
     // Decoding can still overflow (HLG is exponential).
-    return finite(vec4<f32>(rgb, a));
+    return finite(vec4<f32>(rgb, a), unbounded);
 }
 
 // Most texels read per axis for one output pixel. The planned level has 1 to 2 texels per output
@@ -234,11 +261,44 @@ fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
         let wy = min(f32(y + 1), b.y) - max(f32(y), a.y);
         for (var x = first.x; x <= last.x; x++) {
             let w = (min(f32(x + 1), b.x) - max(f32(x), a.x)) * wy;
-            sum += texel_color(layer, vec2<i32>(x, y)) * w;
+            sum += texel_color(layer, vec2<i32>(x, y), false) * w;
             weight += w;
         }
     }
     return sum / max(weight, 1e-12) * layer.opacity;
+}
+
+// Where an output pixel samples the document.
+struct Footprint {
+    // Display: the document rectangle covered, area-filtered at each layer's planned level.
+    lo: vec2<f32>,
+    hi: vec2<f32>,
+    // Export (`exact`): exactly this level-0 texel, with the unbounded `finite` rule.
+    texel: vec2<i32>,
+    exact: bool,
+}
+
+// Premultiplied working-space color of the first `layer_count` layers ("over", bottom to top).
+fn composite(footprint: Footprint, layer_count: u32) -> vec4<f32> {
+    var acc = vec4<f32>(0.0);
+    for (var i = 0u; i < layer_count; i++) {
+        let layer = layers[i];
+        var src = layer.color;
+        if layer.kind == KIND_RASTER {
+            if footprint.exact {
+                src = texel_color(layer, footprint.texel, true) * layer.opacity;
+            } else {
+                src = sample_raster(layer, footprint.lo, footprint.hi);
+            }
+        }
+        acc = src + acc * (1.0 - src.a);
+        if footprint.exact {
+            // Unbounded values can overflow here (color above alpha, premultiplied): keep them
+            // finite, or an opaque layer above would compute inf × 0 = NaN.
+            acc = finite(acc, true);
+        }
+    }
+    return acc;
 }
 
 @compute @workgroup_size(8, 8)
@@ -260,15 +320,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var color = PASTEBOARD;
     if coverage > 0.0 {
-        var acc = vec4<f32>(0.0);
-        for (var i = 0u; i < params.layer_count; i++) {
-            let layer = layers[i];
-            var src = layer.color;
-            if layer.kind == KIND_RASTER {
-                src = sample_raster(layer, lo, hi);
-            }
-            acc = src + acc * (1.0 - src.a);
-        }
+        let acc = composite(Footprint(lo, hi, vec2<i32>(0), false), params.layer_count);
         // Working space → display (a linear map, so it commutes with premultiplied "over").
         let display = vec3<f32>(
             dot(params.display0.xyz, acc.rgb),
@@ -283,4 +335,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Clipping only happens here, at the display boundary.
     let encoded = srgb_encode(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)));
     output[id.y * params.out_size.x + id.x] = pack4x8unorm(vec4<f32>(encoded, 1.0));
+}
+
+// Export: premultiplied working-space RGBA of a document region at full resolution. Every raster
+// layer is planned at level 0, so one output pixel is exactly one texel (no filtering). No
+// display matrix, background or clipping.
+@compute @workgroup_size(8, 8)
+fn export_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= export_params.size.x || id.y >= export_params.size.y {
+        return;
+    }
+    let texel = vec2<i32>(export_params.origin + id.xy);
+    let footprint = Footprint(vec2<f32>(0.0), vec2<f32>(0.0), texel, true);
+    export_output[id.y * export_params.size.x + id.x] =
+        composite(footprint, export_params.layer_count);
 }
