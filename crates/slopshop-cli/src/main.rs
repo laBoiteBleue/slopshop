@@ -2,6 +2,7 @@
 //!
 //! Exists from day one to keep the engine honest: everything it does works without the UI.
 
+mod document;
 mod export;
 
 use std::fs::File;
@@ -31,10 +32,10 @@ USAGE:
                     [--compression fast|small|none|deflate|lzw|lossy|lossless]
                     [--quality 0-100] [--subsampling 444|422|420]
                     [--no-alpha] [--matte RRGGBB] [--no-dither] [--cpu] [--bench]
-        Open an image file as a one-layer document and export it to PNG, TIFF,
-        OpenEXR, JPEG or WebP with the format's default settings (ADR 0008, 0010);
-        each option overrides one of them. Prints the settings used and the export
-        report.
+        Open a .slop document, or an image file as a one-layer document, and export
+        it to PNG, TIFF, OpenEXR, JPEG or WebP with the format's default settings
+        (ADR 0008, 0010); each option overrides one of them. Prints the settings used
+        and the export report.
         --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
                        .jpg, .jpeg, .webp).
         --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG and
@@ -59,6 +60,13 @@ USAGE:
         --bench        Also print timings (open, GPU init, export, throughput, time
                        in the pixel source) and the number of bands.
 
+    slopshop save <IMAGE>... --out <FILE.slop> [--bench]
+        Open images and save them as one document, one layer per image (the first at
+        the bottom), in the .slop format (ADR 0009).
+
+    slopshop inspect <FILE.slop> [--bench]
+        Show a document file: generation, size, unused bytes, and its layers.
+
     slopshop --help | --version
 ";
 
@@ -68,6 +76,8 @@ fn main() -> ExitCode {
         Some("gpu") => gpu(),
         Some("render") => render(&args[1..]),
         Some("export") => export::run(&args[1..]),
+        Some("save") => document::save(&args[1..]),
+        Some("inspect") => document::inspect(&args[1..]),
         Some("--version" | "-V") => {
             println!("slopshop {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -215,7 +225,13 @@ mod tests {
                 "{option} is missing from docs/cli.md"
             );
         }
-        for command in ["slopshop gpu", "slopshop render", "slopshop export"] {
+        for command in [
+            "slopshop gpu",
+            "slopshop render",
+            "slopshop export",
+            "slopshop save",
+            "slopshop inspect",
+        ] {
             assert!(docs.contains(command), "{command}");
         }
     }
