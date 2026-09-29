@@ -30,7 +30,7 @@ exr = { workspace = true }
 # TIFF export compresses its own strips (tiff's streaming encoder ignores compression, and its
 # codecs are private) with the codecs tiff uses internally, already in the tree through it:
 # - LZW;
-weezl = "0.1.12"
+weezl = "0.2.1"
 # - Deflate (zlib).
 flate2 = "1.1.10"
 # JPEG export (ADR 0010): pure Rust, fed band by band through its pull API (baseline JPEG
