@@ -42,6 +42,10 @@ testing (see Workflow).
   the checks below, then stop and describe what to test (commands, expected behavior). Commit
   only after the maintainer confirms. Never push without being asked.
 - Commits are small and logical, with clear messages (conventional-commit style prefixes).
+- The maintainer tests on Windows only: macOS/Linux-specific work cannot be validated by them;
+  keep it deferred or rely on CI, and say explicitly what is untested on those platforms.
+- To check the running app visually, capture only its window (e.g. Win32 `PrintWindow`), never
+  a region of the screen: other applications with private data may be in front.
 
 ## Languages
 

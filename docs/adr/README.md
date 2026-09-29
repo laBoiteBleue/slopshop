@@ -12,5 +12,7 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0005 | [Pixel storage v0: in-memory tiles and pyramid](0005-pixel-storage-v0.md) | accepted (v0) |
 | 0006 | [Universal import strategy and dependency licensing](0006-universal-import-and-licensing.md) | accepted |
 | 0007 | [Color management and working space](0007-color-management.md) | accepted |
+| 0008 | [Export](0008-export.md)                                        | accepted |
+| 0009 | [Document file format v0](0009-document-file-format.md)         | accepted, not implemented |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

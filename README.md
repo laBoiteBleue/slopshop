@@ -79,17 +79,22 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
 - A Rust engine with a minimal document model (procedural fill layers), reversible edits with
   undo/redo, tiling geometry and explicit color/pixel formats.
 - A headless wgpu renderer that composites a view of the document in linear light.
-- A `slopshop` CLI (GPU info, headless render to PNG).
+- A `slopshop` CLI (GPU info, headless render to PNG, export).
+- Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float) and OpenEXR (32/16-bit float) at full
+  resolution, streamed in bands (no whole-image buffer), with the color space always tagged
+  (sRGB/cICP/ICC, EXR chromaticities) and every lossy conversion reported
+  ([ADR 0008](docs/adr/0008-export.md)). No JPEG or WebP export yet.
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
   JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW, PSD and more are planned
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
-- A desktop app validating the stack: document tabs, smooth zoom and pan, layers panel (add
+- A desktop app validating the stack: document tabs (reorder, rename, drop a tab on the canvas
+  to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
   fill, visibility, live opacity, rename, drag to reorder, delete), images dropped on the canvas
-  become layers, undo/redo, English and French interface.
+  become layers, export with progress and cancel, undo/redo, English and French interface.
 
-No export, painting, selections, filters or AI yet.
+No document file format (save/reopen with layers), painting, selections, filters or AI yet.
 
 ## Getting started
 

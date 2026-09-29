@@ -40,8 +40,10 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       DDS; matrix/TRC ICC profiles; EXIF orientation; license policy enforced by `cargo-deny`
 - [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; PSD/KRA/XCF/ORA,
       SVG, PDF; optional native backends
-- [ ] Export (PNG/TIFF/EXR first)
-- [ ] 🔶 Document file format v0 (stores layers/nodes and tiles, not a flattened image)
+- [x] Export (PNG/TIFF/EXR first, [ADR 0008](adr/0008-export.md)); JPEG/WebP and gray targets
+      later
+- [ ] Document file format v0 (`.slop`: layers/nodes and tiles, incremental saves; decided in
+      [ADR 0009](adr/0009-document-file-format.md), implementation next)
 
 ## Phase 2 — Non-destructive core
 

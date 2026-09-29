@@ -19,10 +19,16 @@ design must keep satisfiable. Anything not implemented is marked as such.
 │ wgpu, headless       │     │ document, edits,     │    │ headless     │
 │ view → frame         │     │ history, geometry,   │    └──────────────┘
 └──────────────────────┘     │ color; no deps       │
+                             └──────────▲───────────┘
+                             ┌──────────┴───────────┐
+                             │ slopshop-io          │
+                             │ import, export       │
                              └──────────────────────┘
 ```
 
-Dependency direction is strict: `core` ← `render` ← (`cli`, `app`).
+Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). `render` and `io`
+do not depend on each other: export receives its pixel source as a closure (see
+[Export data flow](#export-data-flow)).
 
 ## Crates
 
@@ -44,6 +50,11 @@ Dependency direction is strict: `core` ← `render` ← (`cli`, `app`).
 - `view`: `ViewTransform` mapping output pixels to document pixels, and `Viewport`: fit mode,
   zoom around a point, preset zoom steps, pan, and a clamp that keeps part of the document
   visible. View state is never part of the undo history.
+- Export support ([ADR 0008](adr/0008-export.md)): `composite`, the CPU reference compositor
+  (full resolution, unclipped; the GPU's test oracle and fallback); `convert`, the only
+  conversion from the working space to a file's pixel format (matrix, alpha, range, transfer,
+  exact quantization, blue-noise dither from `blue_noise`), counting every lossy event; `job`,
+  cancellation and progress.
 
 ### `slopshop-render` (implemented, minimal)
 
@@ -52,6 +63,11 @@ checkerboard and encodes sRGB for display, for exactly the output-sized area. Ra
 sampled from a GPU tile cache (texture array, LRU) at the pyramid level matching the zoom; only
 visible tiles are uploaded. The display
 encoding is a *view transform*; the document is never converted. Headless: no surface needed.
+For export, `Renderer::render_region` runs the same compositing code on a document region at
+full resolution (level 0 always) and reads back the working-space values as premultiplied RGBA
+f32, unclipped, in chunks sized to the tile and GPU buffer limits. `export_source` wraps it as
+export's pixel source, with the CPU compositor when there is no renderer or when a region shows
+more raster images than the GPU tile cache holds.
 
 ### `slopshop-io` (implemented, minimal)
 
@@ -59,9 +75,15 @@ Decodes files into `RasterImage` in their native precision (`image` codecs, `tif
 an in-house matrix/TRC ICC reader and EXIF orientation. Formats not supported yet are recognized
 and refused with an explicit reason; see [ADR 0006](adr/0006-universal-import-and-licensing.md).
 
+Export (`export`) writes PNG (8/16-bit), TIFF (8/16-bit, 32-bit float; BigTIFF when needed)
+and OpenEXR (half/float), always color-tagged, with per-format defaults (`default_spec`) and an
+in-house ICC writer; see [Export data flow](#export-data-flow).
+
 ### `slopshop-cli` (implemented, minimal)
 
-`slopshop gpu` and `slopshop render`. Proves the engine runs without the UI.
+`slopshop gpu`, `slopshop render` and `slopshop export` (an image file, opened as a one-layer
+document, exported with the format defaults and optional overrides; `--bench` prints timings).
+Proves the engine runs without the UI.
 
 ### `app` (implemented, minimal)
 
@@ -74,6 +96,38 @@ rejected. Frames are returned as
 `tauri::ipc::Response` (an `ArrayBuffer` in JS): a 40-byte header (size, fit flag, document
 revision, zoom, engine render time) followed by the pixels, parsed without copy in `engine.ts`.
 
+Export (`src-tauri/src/export.rs`, ADR 0008): `export_defaults` and `export_spaces` give the
+export dialog the settings of a format; `export_document` snapshots the document (raster pixels
+are shared, not copied), starts a job on a `spawn_blocking` worker (never the main thread) and
+returns the job id at once; `cancel_export` cancels a job by id. Jobs report through the events
+`export-started`, `export-progress` (throttled), `export-finished` (with the ids of the report's
+notices) and `export-failed` (with an error code). Several jobs can run at once: the UI shows
+the progress of each, and each outcome until it is dismissed (a success without notices
+disappears after a few seconds). Closing the main window while jobs run cancels them and waits,
+off the main thread and a few seconds at most, for them to remove their temporary files.
+
+## Export data flow
+
+[ADR 0008](adr/0008-export.md). Export reads the document (no edit) and streams it:
+
+```
+document ──▶ pixel source ──▶ band channel ──▶ convert ──▶ format writer ──▶ .<name>.<pid>-<n>.slopshop-tmp
+             (render: GPU      (capacity 1)    (core,      (PNG stream;         │ sync, rename
+             region, or CPU                     rows in     TIFF/EXR: parallel   ▼
+             compositor)                        parallel)   compression)       <name>
+```
+
+- Full-width bands of 256 rows, pyramid level 0 only: premultiplied RGBA f32 in the working
+  space, finite values unclipped (NaN → 0 and ±inf → ±65504 by the source, counted). At most 3
+  source bands in memory (produced, queued, converted), so memory depends on the width only.
+- `core::convert` is the only place where values change format; every lossy event (clipping,
+  half-float overflow, non-finite values) is counted into an `ExportReport` of stable ids.
+- Cancellation (`CancelToken`) is checked between bands and progress is reported per band. On
+  error or cancellation the temporary file (unique to the job) is deleted and the destination
+  is untouched.
+- The GPU source works in chunks of at most 128 MiB of output; GPU out-of-memory or validation
+  errors are captured and the export continues on the CPU compositor.
+
 ## Key invariants
 
 1. **Engine owns the document.** The UI holds only views (DTOs) and sends intents.
@@ -81,7 +135,7 @@ revision, zoom, engine render time) followed by the pixels, parsed without copy 
    may bypass history by applying edits directly to the document.
 3. **Ids, not indices**, identify things across time and across the IPC.
 4. **Explicit pixel formats and color spaces**; conversions are named functions; clipping only
-   happens at the display boundary.
+   happens at the display boundary and in export (`core::convert`, counted and reported).
 5. **Nothing assumes a whole image fits in RAM/VRAM**; rendering is driven by the requested
    output region.
 6. **IPC carries small DTOs and viewport-sized frames only**, and identifiers rather than
@@ -99,7 +153,8 @@ revision, zoom, engine render time) followed by the pixels, parsed without copy 
   dependencies and cached results, with invalidation instead of automatic recomputation; see
   [research notes](research/hd-generative-ai.md).
 - **Color management** beyond the two built-in spaces (ICC profiles, OCIO): open question.
-- **A document file format**: not designed yet; must store edits/nodes, not just pixels.
+- **A document file format**: designed ([ADR 0009](adr/0009-document-file-format.md): `.slop`,
+  content-addressed tiles, JSON manifest, incremental saves), not implemented yet.
 
 ## Open questions (hard to change later)
 
