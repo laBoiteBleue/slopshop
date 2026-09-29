@@ -11,12 +11,15 @@
     ongestureend,
   }: {
     doc: DocumentView;
-    /** A discrete edit (one undo entry) of document `documentId`. */
-    onedit: (documentId: number, edit: EditRequest) => void;
+    /** A discrete edit (one undo entry) of document `documentId`; settles once applied. */
+    onedit: (documentId: number, edit: EditRequest) => Promise<void>;
     /** A live edit within a gesture (applied immediately). */
     onlive: (documentId: number, edit: EditRequest) => void;
-    /** End of the gesture: everything since it started becomes one undo entry. */
-    ongestureend: (documentId: number) => void;
+    /**
+     * End of the gesture: everything since it started becomes one undo entry. Settles once the
+     * document reflects the whole gesture.
+     */
+    ongestureend: (documentId: number) => Promise<void>;
   } = $props();
 
   // The panel shows one document for its whole life (it is keyed by document). Capture its id:
@@ -118,17 +121,41 @@
     return layer ? Math.round(layer.opacity * 100) : 100;
   }
 
+  // While the user moves the slider (or steps the field), the slider and the field show their
+  // value, not the document's: engine answers lag behind the input, and writing them back made
+  // the slider jump backwards. The draft is dropped once the last answer has arrived.
+  let opacityDraft = $state<{ layerId: number; percent: number } | null>(null);
+  let draftVersion = 0;
+  let sliderHeld = false;
+  let shownOpacity = $derived(
+    opacityDraft !== null && opacityDraft.layerId === selected?.id
+      ? opacityDraft.percent
+      : opacityPercent(selected),
+  );
+
   function onOpacitySliderInput(value: string) {
     if (!selected) return;
-    live({ kind: "setLayerOpacity", id: selected.id, opacity: Number(value) / 100 });
+    const percent = Number(value);
+    opacityDraft = { layerId: selected.id, percent };
+    draftVersion++;
+    live({ kind: "setLayerOpacity", id: selected.id, opacity: percent / 100 });
+  }
+
+  function endOpacityGesture() {
+    const ended = draftVersion;
+    void gestureEnd().then(() => {
+      if (ended === draftVersion && !sliderHeld) opacityDraft = null;
+    });
   }
 
   function onOpacitySliderPointerDown() {
+    sliderHeld = true;
     const end = () => {
       window.removeEventListener("pointerup", end, true);
       window.removeEventListener("pointercancel", end, true);
       window.removeEventListener("blur", end);
-      gestureEnd();
+      sliderHeld = false;
+      endOpacityGesture();
     };
     window.addEventListener("pointerup", end, true);
     window.addEventListener("pointercancel", end, true);
@@ -149,7 +176,11 @@
     }
     const clamped = Math.min(Math.max(Math.round(n), 0), 100);
     if (clamped !== opacityPercent(target)) {
-      edit({ kind: "setLayerOpacity", id: target.id, opacity: clamped / 100 });
+      const version = ++draftVersion;
+      if (target.id === selectedId) opacityDraft = { layerId: target.id, percent: clamped };
+      void edit({ kind: "setLayerOpacity", id: target.id, opacity: clamped / 100 }).then(() => {
+        if (version === draftVersion && !sliderHeld) opacityDraft = null;
+      });
     }
     // The field always shows the selected layer (written directly: Svelte skips unchanged values).
     input.value = String(target.id === selectedId ? clamped : opacityPercent(selected));
@@ -230,12 +261,12 @@
       type="range"
       min="0"
       max="100"
-      value={opacityPercent(selected)}
+      value={shownOpacity}
       disabled={!selected}
       aria-label={t("layers.opacity")}
       onpointerdown={onOpacitySliderPointerDown}
       oninput={(e) => onOpacitySliderInput(e.currentTarget.value)}
-      onchange={() => gestureEnd()}
+      onchange={endOpacityGesture}
     />
     <input
       id="layer-opacity"
@@ -244,7 +275,7 @@
       min="0"
       max="100"
       autocomplete="off"
-      value={opacityPercent(selected)}
+      value={shownOpacity}
       disabled={!selected}
       onfocus={() => (opacityFieldLayer = selectedId)}
       onblur={() => (opacityFieldLayer = null)}

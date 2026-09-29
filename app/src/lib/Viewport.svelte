@@ -21,7 +21,7 @@
     revision,
     onframe,
   }: {
-    /** Open document; a change resets the displayed frame. */
+    /** Open document. Read once: the viewport is recreated for another document. */
     documentId: number;
     /** Document revision; a change triggers a new frame. */
     revision: number;
@@ -30,7 +30,11 @@
 
   // One viewport per document (it is keyed by document): capture the id, since props are
   // read lazily and work still in flight after a tab switch must not target the new document.
+  // Never depend on the prop in effects either: it is a getter on the parent's document view,
+  // which is a new object after every edit, so the effect would rerun on each edit.
   const docId = untrack(() => documentId);
+  // Same for the revision: only a new value (a derived compares) may trigger a new frame.
+  const currentRevision = $derived(revision);
   /** Set when the component is destroyed: in-flight work and animations stop quietly. */
   let destroyed = false;
   $effect(() => () => {
@@ -78,18 +82,6 @@
     const identity = Math.abs(k - 1) < 1e-9 && Math.abs(tx) < 1e-3 && Math.abs(ty) < 1e-3;
     canvas.style.transform = identity ? "" : `translate(${tx}px, ${ty}px) scale(${k})`;
   }
-
-  $effect(() => {
-    // A new document: whatever is on the canvas, and any navigation in progress, belongs to
-    // the previous one.
-    void documentId;
-    shown = null;
-    target = null;
-    remainingLogZoom = 0;
-    panning = null;
-    canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-    applyReprojection();
-  });
 
   // --- Frames --------------------------------------------------------------------------------
 
@@ -147,9 +139,8 @@
   }
 
   $effect(() => {
-    // Dependencies: redraw when the document, the view or the viewport size changes.
-    void documentId;
-    void revision;
+    // Dependencies: redraw when the document content, the view or the viewport size changes.
+    void currentRevision;
     void viewEpoch;
     void size.width;
     void size.height;
