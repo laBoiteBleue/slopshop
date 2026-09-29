@@ -3,6 +3,9 @@
 //! An [`Edit`] is the only way to mutate a [`Document`]. Applying an edit validates it first
 //! (a failed edit leaves the document untouched) and returns its exact inverse, which is what
 //! the undo/redo history stores.
+//!
+//! On error the document content is unchanged. (A failing [`Edit::Batch`] rolls back what it
+//! applied; its revision still advances, since revisions must never be reused.)
 
 use std::fmt;
 
@@ -31,6 +34,13 @@ pub enum Edit {
         id: LayerId,
         name: String,
     },
+    /// Move a layer so that it ends up at `index` in the stack (0 = bottom).
+    MoveLayer {
+        id: LayerId,
+        index: usize,
+    },
+    /// Several edits applied in order as a single unit: all of them or none.
+    Batch(Vec<Edit>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,7 +82,7 @@ impl fmt::Display for EditError {
 impl std::error::Error for EditError {}
 
 impl Edit {
-    /// Apply the edit and return its inverse. On error the document is unchanged.
+    /// Apply the edit and return its inverse. On error the document content is unchanged.
     pub fn apply(self, doc: &mut Document) -> Result<Edit, EditError> {
         let inverse = match self {
             Edit::InsertLayer { index, layer } => {
@@ -107,6 +117,34 @@ impl Edit {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.name, name);
                 Edit::RenameLayer { id, name: previous }
+            }
+            Edit::MoveLayer { id, index } => {
+                let from = doc.layer_index(id).ok_or(EditError::UnknownLayer(id))?;
+                let len = doc.layers().len();
+                if index >= len {
+                    return Err(EditError::IndexOutOfRange { index, len });
+                }
+                let layer = doc.layers_mut().remove(from);
+                doc.layers_mut().insert(index, layer);
+                Edit::MoveLayer { id, index: from }
+            }
+            Edit::Batch(edits) => {
+                let mut inverses = Vec::with_capacity(edits.len());
+                for edit in edits {
+                    match edit.apply(doc) {
+                        Ok(inverse) => inverses.push(inverse),
+                        Err(err) => {
+                            for inverse in inverses.into_iter().rev() {
+                                // Exact inverses of edits that just succeeded cannot fail.
+                                let rolled_back = inverse.apply(doc);
+                                debug_assert!(rolled_back.is_ok(), "rollback failed");
+                            }
+                            return Err(err);
+                        }
+                    }
+                }
+                inverses.reverse();
+                Edit::Batch(inverses)
             }
         };
         doc.bump_revision();
@@ -213,6 +251,99 @@ mod tests {
         ] {
             assert_round_trip(&mut doc, edit);
         }
+    }
+
+    fn stack(doc: &mut Document, names: &[&str]) -> Vec<LayerId> {
+        names
+            .iter()
+            .map(|name| {
+                let layer = fill_layer(doc, name);
+                let id = layer.id;
+                let index = doc.layers().len();
+                Edit::InsertLayer { index, layer }.apply(doc).unwrap();
+                id
+            })
+            .collect()
+    }
+
+    #[test]
+    fn move_layer_and_inverse() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b", "c", "d"]);
+
+        let inverse = Edit::MoveLayer {
+            id: ids[0],
+            index: 3,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(names(&doc), ["b", "c", "d", "a"]);
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(names(&doc), ["a", "b", "c", "d"]);
+
+        Edit::MoveLayer {
+            id: ids[3],
+            index: 1,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(names(&doc), ["a", "d", "b", "c"]);
+        assert_round_trip(
+            &mut doc,
+            Edit::MoveLayer {
+                id: ids[1],
+                index: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn move_layer_out_of_range() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        assert_eq!(
+            Edit::MoveLayer {
+                id: ids[0],
+                index: 2
+            }
+            .apply(&mut doc),
+            Err(EditError::IndexOutOfRange { index: 2, len: 2 })
+        );
+        assert_eq!(names(&doc), ["a", "b"]);
+    }
+
+    #[test]
+    fn batch_is_all_or_nothing() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        let batch = Edit::Batch(vec![
+            Edit::SetLayerOpacity {
+                id: ids[0],
+                opacity: 0.5,
+            },
+            Edit::MoveLayer {
+                id: ids[0],
+                index: 1,
+            },
+            Edit::RemoveLayer {
+                id: LayerId::from_raw(999),
+            },
+        ]);
+        let before = doc.layers().to_vec();
+        assert!(batch.apply(&mut doc).is_err());
+        assert_eq!(doc.layers(), before.as_slice());
+
+        let batch = Edit::Batch(vec![
+            Edit::SetLayerOpacity {
+                id: ids[0],
+                opacity: 0.5,
+            },
+            Edit::MoveLayer {
+                id: ids[0],
+                index: 1,
+            },
+        ]);
+        assert_round_trip(&mut doc, batch);
     }
 
     #[test]

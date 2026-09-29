@@ -5,13 +5,16 @@ use crate::edit::{Edit, EditError};
 
 /// An editing session: the document and the inverse edits needed to undo/redo.
 ///
-/// History is linear: performing a new edit discards the redo stack. Grouping edits (e.g. a
-/// slider drag) and bounding history memory are not needed yet.
+/// History is linear: performing a new edit discards the redo stack. Continuous interactions
+/// (e.g. a slider drag) are *gestures*: applied live, recorded as one entry. Bounding history
+/// memory is not needed yet.
 #[derive(Debug)]
 pub struct Session {
     document: Document,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
+    /// Inverses of the edits applied by the gesture in progress, in application order.
+    gesture: Vec<Edit>,
 }
 
 impl Session {
@@ -20,6 +23,7 @@ impl Session {
             document,
             undo: Vec::new(),
             redo: Vec::new(),
+            gesture: Vec::new(),
         }
     }
 
@@ -33,29 +37,61 @@ impl Session {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
+        !self.undo.is_empty() || !self.gesture.is_empty()
     }
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
 
-    /// Apply an edit and record it. On error nothing changes, history included.
+    /// Apply an edit and record it. Ends any gesture in progress first. On error nothing
+    /// changes, history included.
     pub fn perform(&mut self, edit: Edit) -> Result<(), EditError> {
+        self.end_gesture();
         let inverse = edit.apply(&mut self.document)?;
-        self.undo.push(inverse);
-        self.redo.clear();
+        self.push_undo(inverse);
         Ok(())
     }
 
-    /// Undo the last edit. Returns `Ok(false)` if there was nothing to undo.
+    /// Apply an edit as part of a continuous gesture (e.g. dragging a slider): the document
+    /// changes immediately, and all edits of the gesture become a single history entry when
+    /// [`Self::end_gesture`] is called.
+    pub fn perform_in_gesture(&mut self, edit: Edit) -> Result<(), EditError> {
+        let inverse = edit.apply(&mut self.document)?;
+        self.gesture.push(inverse);
+        Ok(())
+    }
+
+    /// Record the gesture in progress as one undoable entry. No-op if there is none.
+    pub fn end_gesture(&mut self) {
+        let mut inverses = std::mem::take(&mut self.gesture);
+        let entry = match inverses.len() {
+            0 => return,
+            1 => inverses.remove(0),
+            _ => {
+                inverses.reverse();
+                Edit::Batch(inverses)
+            }
+        };
+        self.push_undo(entry);
+    }
+
+    /// Undo the last edit (ending any gesture first). Returns `Ok(false)` if there was nothing
+    /// to undo.
     pub fn undo(&mut self) -> Result<bool, EditError> {
+        self.end_gesture();
         Self::step(&mut self.document, &mut self.undo, &mut self.redo)
     }
 
     /// Redo the last undone edit. Returns `Ok(false)` if there was nothing to redo.
     pub fn redo(&mut self) -> Result<bool, EditError> {
+        self.end_gesture();
         Self::step(&mut self.document, &mut self.redo, &mut self.undo)
+    }
+
+    fn push_undo(&mut self, inverse: Edit) {
+        self.undo.push(inverse);
+        self.redo.clear();
     }
 
     fn step(
@@ -143,6 +179,69 @@ mod tests {
         while s.undo().unwrap() {}
         assert!(s.document().layers().is_empty());
         assert!(s.can_redo());
+    }
+
+    #[test]
+    fn gesture_is_one_history_entry() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        let entries_before = s.undo.len();
+
+        for opacity in [0.9, 0.6, 0.3] {
+            s.perform_in_gesture(Edit::SetLayerOpacity { id: a, opacity })
+                .unwrap();
+            // Live: the document reflects the gesture immediately.
+            assert_eq!(s.document().layer(a).unwrap().opacity, opacity);
+        }
+        assert!(s.can_undo());
+        s.end_gesture();
+        assert_eq!(s.undo.len(), entries_before + 1);
+
+        assert!(s.undo().unwrap());
+        assert_eq!(s.document().layer(a).unwrap().opacity, 1.0);
+        assert!(s.redo().unwrap());
+        assert_eq!(s.document().layer(a).unwrap().opacity, 0.3);
+    }
+
+    #[test]
+    fn undo_or_perform_ends_pending_gesture() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        s.perform_in_gesture(Edit::SetLayerOpacity {
+            id: a,
+            opacity: 0.5,
+        })
+        .unwrap();
+        // Undo without an explicit end: the gesture is recorded, then undone.
+        assert!(s.undo().unwrap());
+        assert_eq!(s.document().layer(a).unwrap().opacity, 1.0);
+
+        s.perform_in_gesture(Edit::SetLayerVisible {
+            id: a,
+            visible: false,
+        })
+        .unwrap();
+        s.perform(Edit::RenameLayer {
+            id: a,
+            name: "b".into(),
+        })
+        .unwrap();
+        s.undo().unwrap();
+        assert!(
+            !s.document().layer(a).unwrap().visible,
+            "rename undone alone"
+        );
+        s.undo().unwrap();
+        assert!(s.document().layer(a).unwrap().visible, "then the gesture");
+    }
+
+    #[test]
+    fn end_gesture_without_gesture_is_noop() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        add_layer(&mut s, "a");
+        s.undo().unwrap();
+        s.end_gesture();
+        assert!(s.can_redo(), "an empty gesture must not clear redo");
     }
 
     #[test]
