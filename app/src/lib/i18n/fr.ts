@@ -68,7 +68,9 @@ const fr: Messages = {
   "export.compression.deflate": "Deflate",
   "export.compression.lzw": "LZW (compatibilité)",
   "export.alpha": "Conserver la transparence",
-  "export.alpha.hint": "Sinon, les zones transparentes sont écrites sur fond noir",
+  "export.alpha.hint": "Sinon, les zones transparentes sont aplaties sur la couleur de fond",
+  "export.matte": "Fond",
+  "export.matte.hint": "Les zones transparentes sont aplaties sur cette couleur",
   "export.dither": "Tramage (réduit l'effet de bandes)",
   "export.confirm": "Exporter…",
   "export.cancel": "Annuler",
@@ -86,6 +88,8 @@ const fr: Messages = {
   "export.report.precisionReduced": "Écrit en flottants 16 bits : moins précis que l'image",
   "export.report.bigTiff":
     "Écrit en BigTIFF (plus de 4 Go) : certains anciens logiciels ne peuvent pas le lire",
+  "export.report.alphaFlattened":
+    "{count} pixels partiellement transparents ont été aplatis sur la couleur de fond",
   "export.error.io": "impossible d'écrire le fichier ({detail})",
   "export.error.source": "échec du rendu ({detail})",
   "export.error.cancelled": "annulé",

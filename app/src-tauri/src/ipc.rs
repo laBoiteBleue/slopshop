@@ -376,6 +376,9 @@ pub struct ExportSpecDto {
     /// space when [`default_spec`](slopshop_io::export::default_spec) picked it.
     pub space: String,
     pub keep_alpha: bool,
+    /// The color transparency is flattened over when alpha is dropped: sRGB-encoded RGB in
+    /// `[0, 1]`, as UI color pickers produce it; explicitly converted to the working space.
+    pub matte: [f32; 3],
     /// Only applies to 8-bit samples.
     pub dither: bool,
 }
@@ -427,6 +430,12 @@ impl ExportSpecDto {
             compression,
             space: color_space_id(spec.space).to_owned(),
             keep_alpha: spec.keep_alpha,
+            // Rounded to 8-bit steps, as the UI's color picker shows it (and so that white
+            // stays exactly 1 despite the matrices' rounding).
+            matte: {
+                let [r, g, b, _] = spec.matte.working_to_srgb_encoded();
+                [r, g, b].map(|c| (c * 255.0).round() / 255.0)
+            },
             dither: spec.dither,
         }
     }
@@ -491,10 +500,18 @@ impl ExportSpecDto {
         if !supports_space(format.kind(), &space) {
             return Err(ExportError::UnsupportedSpace(space));
         }
+        let [r, g, b] = self.matte;
+        if !self.matte.iter().all(|c| (0.0..=1.0).contains(c)) {
+            return Err(ExportError::InvalidSpec(format!(
+                "matte {:?} is not an sRGB color in [0, 1]",
+                self.matte
+            )));
+        }
         Ok(ExportSpec {
             format,
             space,
             keep_alpha: self.keep_alpha,
+            matte: LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0),
             dither: self.dither,
         })
     }
@@ -525,7 +542,8 @@ pub struct ExportProgress {
 #[serde(rename_all = "camelCase")]
 pub struct ExportNoticeView {
     pub id: &'static str,
-    /// Number of samples concerned, for the notices that count something.
+    /// Number of samples concerned (pixels for `alphaFlattened`), for the notices that count
+    /// something.
     pub count: Option<u64>,
 }
 
@@ -586,7 +604,7 @@ pub struct GpuInfo {
 mod tests {
     use super::*;
     use slopshop_core::color::{RgbPrimaries, TransferFunction};
-    use slopshop_io::export::default_spec;
+    use slopshop_io::export::{WHITE_MATTE, default_spec};
 
     fn dto(json: &str) -> ExportSpecDto {
         serde_json::from_str(json).unwrap()
@@ -610,7 +628,7 @@ mod tests {
 
     #[test]
     fn export_specs_travel_as_ids() {
-        let json = r#"{"format":"png","sample":"u16","compression":"small","space":"display-p3","keepAlpha":true,"dither":false}"#;
+        let json = r#"{"format":"png","sample":"u16","compression":"small","space":"display-p3","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":false}"#;
         let spec = dto(json).to_spec(None).unwrap();
         assert_eq!(
             spec,
@@ -621,6 +639,7 @@ mod tests {
                 },
                 space: ColorSpace::DISPLAY_P3,
                 keep_alpha: true,
+                matte: WHITE_MATTE,
                 dither: false,
             }
         );
@@ -630,7 +649,7 @@ mod tests {
         );
 
         let exr = dto(
-            r#"{"format":"exr","sample":"f16","compression":null,"space":"linear-rec2020","keepAlpha":false,"dither":false}"#,
+            r#"{"format":"exr","sample":"f16","compression":null,"space":"linear-rec2020","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#,
         );
         assert_eq!(
             exr.to_spec(None).unwrap().format,
@@ -660,6 +679,7 @@ mod tests {
             },
             space: ColorSpace::LINEAR_REC2020,
             keep_alpha: true,
+            matte: WHITE_MATTE,
             dither: true,
         };
         assert_eq!(ExportSpecDto::new(&tiff).to_spec(None).unwrap(), tiff);
@@ -668,7 +688,7 @@ mod tests {
     #[test]
     fn invalid_export_specs_are_rejected() {
         let base = dto(
-            r#"{"format":"png","sample":"u8","compression":"fast","space":"srgb","keepAlpha":true,"dither":true}"#,
+            r#"{"format":"png","sample":"u8","compression":"fast","space":"srgb","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":true}"#,
         );
         let with = |change: &dyn Fn(&mut ExportSpecDto)| {
             let mut dto = base.clone();
@@ -715,6 +735,16 @@ mod tests {
         );
         assert_eq!(with(&|d| d.space = "bogus".to_owned()), invalid);
         assert_eq!(
+            with(&|d| d.matte = [1.5, 0.0, 0.0]),
+            invalid,
+            "matte above 1"
+        );
+        assert_eq!(
+            with(&|d| d.matte = [f32::NAN, 0.0, 0.0]),
+            invalid,
+            "NaN matte"
+        );
+        assert_eq!(
             with(&|d| d.space = CUSTOM_SPACE.to_owned()),
             invalid,
             "no custom space to stand for"
@@ -730,7 +760,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<ExportSpecDto>(
-                r#"{"format":"jpeg","sample":"u8","compression":null,"space":"srgb","keepAlpha":false,"dither":false}"#
+                r#"{"format":"jpeg","sample":"u8","compression":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#
             )
             .is_err()
         );
@@ -750,6 +780,7 @@ mod tests {
             },
             space: unnamed,
             keep_alpha: false,
+            matte: WHITE_MATTE,
             dither: true,
         };
         let dto = ExportSpecDto::new(&spec);
@@ -759,14 +790,18 @@ mod tests {
 
     #[test]
     fn export_events_serialize_for_the_ui() {
-        let notices: Vec<ExportNoticeView> = [ExportNotice::ClippedHigh(12), ExportNotice::BigTiff]
-            .into_iter()
-            .map(ExportNoticeView::new)
-            .collect();
+        let notices: Vec<ExportNoticeView> = [
+            ExportNotice::ClippedHigh(12),
+            ExportNotice::BigTiff,
+            ExportNotice::AlphaFlattened(7),
+        ]
+        .into_iter()
+        .map(ExportNoticeView::new)
+        .collect();
         let json = serde_json::to_string(&notices).unwrap();
         assert_eq!(
             json,
-            r#"[{"id":"clippedHigh","count":12},{"id":"bigTiff","count":null}]"#
+            r#"[{"id":"clippedHigh","count":12},{"id":"bigTiff","count":null},{"id":"alphaFlattened","count":7}]"#
         );
         let failed = ExportFailed::new(Some(3), &ExportError::Cancelled);
         assert_eq!(

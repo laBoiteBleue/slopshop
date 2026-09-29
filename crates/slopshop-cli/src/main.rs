@@ -28,7 +28,7 @@ USAGE:
 
     slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr] [--depth u8|u16|f16|f32]
                     [--space ID] [--compression fast|small|none|deflate|lzw]
-                    [--no-alpha] [--no-dither] [--cpu] [--bench]
+                    [--no-alpha] [--matte RRGGBB] [--no-dither] [--cpu] [--bench]
         Open an image file as a one-layer document and export it to PNG, TIFF or
         OpenEXR with the format's default settings (ADR 0008); each option
         overrides one of them. Prints the settings used and the export report.
@@ -40,7 +40,9 @@ USAGE:
                        HLG. OpenEXR: linear-srgb, linear-rec2020.
         --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
                        lossless ZIP, no option.
-        --no-alpha     Drop the alpha channel: the image is written over black.
+        --no-alpha     Drop the alpha channel: the image is flattened over the matte.
+        --matte        The color transparency is flattened over when alpha is dropped,
+                       as sRGB RRGGBB. Default: ffffff (white).
         --no-dither    No dither for 8-bit samples.
         --cpu          Composite on the CPU instead of the GPU (also used when no
                        GPU is available).

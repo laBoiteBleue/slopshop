@@ -7,11 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slopshop_core::color::{ColorSpace, SampleType};
+use slopshop_core::color::{ColorSpace, LinearRgba, SampleType, WORKING_SPACE};
 use slopshop_core::{CancelToken, Document, Edit, Layer, LayerContent, RasterImage, Rect, Size};
 use slopshop_io::export::{
-    ExportFormat, ExportFormatKind, ExportReport, ExportSpec, ExrSample, PngCompression, PngDepth,
-    TiffCompression, TiffSample, default_spec, export_image, supports_space,
+    ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
+    PngCompression, PngDepth, TiffCompression, TiffSample, default_spec, export_image,
+    supports_space,
 };
 use slopshop_render::Renderer;
 
@@ -154,6 +155,8 @@ struct Args {
     space: Option<ColorSpace>,
     compression: Option<Compression>,
     no_alpha: bool,
+    /// `--matte`: sRGB-encoded 8-bit components.
+    matte: Option<[u8; 3]>,
     no_dither: bool,
     cpu: bool,
     bench: bool,
@@ -221,7 +224,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Stable ids and numbers, as the engine reports them (the app translates them).
     for notice in &outcome.report.notices {
         match notice.count() {
-            Some(count) => println!("report: {} ({count} samples)", notice.id()),
+            Some(count) => {
+                let unit = match notice {
+                    ExportNotice::AlphaFlattened(_) => "pixels",
+                    _ => "samples",
+                };
+                println!("report: {} ({count} {unit})", notice.id());
+            }
             None => println!("report: {}", notice.id()),
         }
     }
@@ -252,6 +261,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut depth = None;
     let mut space = None;
     let mut compression = None;
+    let mut matte = None;
     let (mut no_alpha, mut no_dither, mut cpu, mut bench) = (false, false, false, false);
 
     let mut it = args.iter();
@@ -262,6 +272,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--depth" => depth = Some(parse_depth(value()?)?),
             "--space" => space = Some(parse_space(value()?)?),
             "--compression" => compression = Some(parse_compression(value()?)?),
+            "--matte" => matte = Some(parse_matte(value()?)?),
             "--no-alpha" => no_alpha = true,
             "--no-dither" => no_dither = true,
             "--cpu" => cpu = true,
@@ -335,6 +346,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         space,
         compression,
         no_alpha,
+        matte,
         no_dither,
         cpu,
         bench,
@@ -362,6 +374,40 @@ fn parse_compression(s: &str) -> Result<Compression, String> {
         .ok_or(format!(
             "invalid compression `{s}`, expected fast, small, none, deflate or lzw"
         ))
+}
+
+/// `RRGGBB` or `#RRGGBB`, sRGB-encoded.
+fn parse_matte(s: &str) -> Result<[u8; 3], String> {
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    let invalid = || format!("invalid matte `{s}`, expected an sRGB color as RRGGBB");
+    if hex.len() != 6 || !hex.is_ascii() {
+        return Err(invalid());
+    }
+    let mut rgb = [0u8; 3];
+    for (i, c) in rgb.iter_mut().enumerate() {
+        *c = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| invalid())?;
+    }
+    Ok(rgb)
+}
+
+/// The working-space matte of an sRGB `--matte`.
+fn matte_color([r, g, b]: [u8; 3]) -> LinearRgba {
+    let unit = |c: u8| f32::from(c) / 255.0;
+    LinearRgba::from_srgb_encoded_to_working(unit(r), unit(g), unit(b), 1.0)
+}
+
+/// A working-space matte as `--matte` spells it (rounded to 8-bit sRGB).
+fn matte_hex(matte: LinearRgba) -> String {
+    let srgb = matte
+        .transform(&WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB))
+        .to_srgb_encoded();
+    let code = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!(
+        "{:02x}{:02x}{:02x}",
+        code(srgb[0]),
+        code(srgb[1]),
+        code(srgb[2])
+    )
 }
 
 fn parse_space(s: &str) -> Result<ColorSpace, String> {
@@ -445,6 +491,9 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
     if args.no_alpha {
         spec.keep_alpha = false;
     }
+    if let Some(matte) = args.matte {
+        spec.matte = matte_color(matte);
+    }
     if args.no_dither {
         spec.dither = false;
     }
@@ -497,7 +546,7 @@ fn describe(spec: &ExportSpec) -> String {
         text += &format!(" --compression {}", compression.name());
     }
     if !spec.keep_alpha {
-        text += " --no-alpha";
+        text += &format!(" --no-alpha --matte {}", matte_hex(spec.matte));
     }
     // Dither only applies to 8-bit samples.
     if !spec.dither && spec.format.sample_type() == SampleType::U8 {
@@ -646,6 +695,7 @@ mod tests {
                 space: Some(ColorSpace::DISPLAY_P3),
                 compression: Some(Compression::Small),
                 no_alpha: true,
+                matte: None,
                 no_dither: true,
                 cpu: true,
                 bench: true,
@@ -742,6 +792,33 @@ mod tests {
     }
 
     #[test]
+    fn matte_is_an_srgb_hex_color() {
+        assert_eq!(parse_matte("ff8000"), Ok([255, 128, 0]));
+        assert_eq!(parse_matte("#0A0b0C"), Ok([10, 11, 12]));
+        for bad in ["fff", "ff80000", "gg0000", "#", "ff 800", "ééé"] {
+            assert!(parse_matte(bad).is_err(), "{bad}");
+        }
+        // The working-space color comes back to the same 8-bit code.
+        for rgb in [[255, 255, 255], [0, 0, 0], [255, 128, 0], [10, 11, 12]] {
+            let hex = format!("{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+            assert_eq!(matte_hex(matte_color(rgb)), hex);
+        }
+
+        let size = Size::new(4, 4);
+        let pixels = vec![128u8; 4 * 4 * 4];
+        let image =
+            RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &pixels)
+                .unwrap();
+        let document = single_layer_document(image, "layer").unwrap();
+        let args = parse(&["in.png", "out.png", "--no-alpha", "--matte", "#FF8000"]).unwrap();
+        assert_eq!(args.matte, Some([255, 128, 0]));
+        let spec = export_spec(&args, &document);
+        assert_eq!(spec.matte, matte_color([255, 128, 0]));
+        assert!(describe(&spec).ends_with("--no-alpha --matte ff8000"));
+        assert!(parse(&["in.png", "out.png", "--matte", "red"]).is_err());
+    }
+
+    #[test]
     fn options_override_the_format_defaults() {
         let size = Size::new(4, 4);
         let pixels = vec![128u8; 4 * 4 * 4];
@@ -784,7 +861,7 @@ mod tests {
         // Dither is not shown for float samples, which never have it.
         assert_eq!(
             describe(&spec),
-            "--format tiff --depth f32 --space linear-rec2020 --compression lzw --no-alpha"
+            "--format tiff --depth f32 --space linear-rec2020 --compression lzw --no-alpha --matte ffffff"
         );
         let args = parse(&["in.png", "out.tif", "--no-dither"]).unwrap();
         assert_eq!(

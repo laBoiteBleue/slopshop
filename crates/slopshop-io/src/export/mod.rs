@@ -63,8 +63,9 @@ use std::sync::mpsc;
 use std::thread;
 
 use slopshop_core::color::{
-    AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType, TransferFunction,
+    AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType, TransferFunction,
 };
+pub use slopshop_core::convert::WHITE_MATTE;
 use slopshop_core::convert::{ConversionReport, ConvertError, ConvertOptions, Converter};
 use slopshop_core::document::{Document, LayerContent};
 use slopshop_core::{CancelToken, Progress, Rect, Size};
@@ -186,9 +187,12 @@ pub struct ExportSpec {
     pub format: ExportFormat,
     /// Color space of the file; must pass [`supports_space`] for the format.
     pub space: ColorSpace,
-    /// Write an alpha channel. Without it, the color written is the image over black: only
-    /// drop alpha for opaque images.
+    /// Write an alpha channel. Without it, the image is flattened over `matte` (and flattened
+    /// pixels are reported as [`ExportNotice::AlphaFlattened`]).
     pub keep_alpha: bool,
+    /// Opaque color that a target without alpha is flattened over, in the working space
+    /// (linear light; ADR 0010). Its alpha is ignored. White by default ([`WHITE_MATTE`]).
+    pub matte: LinearRgba,
     /// Blue-noise dither for 8-bit samples (ignored for the other sample types).
     pub dither: bool,
 }
@@ -222,7 +226,8 @@ impl ExportSpec {
     }
 }
 
-/// Something the user should know about what the export did. Counts are in samples.
+/// Something the user should know about what the export did. Counts are in samples, except
+/// [`ExportNotice::AlphaFlattened`] (pixels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportNotice {
     /// Values above the format's range were clipped.
@@ -237,6 +242,9 @@ pub enum ExportNotice {
     PrecisionReduced,
     /// The file was written as BigTIFF (over 4 GiB): some older software cannot read it.
     BigTiff,
+    /// Partly transparent pixels were flattened over the matte (the target has no alpha).
+    /// Counted in pixels, not samples.
+    AlphaFlattened(u64),
 }
 
 impl ExportNotice {
@@ -249,6 +257,7 @@ impl ExportNotice {
             ExportNotice::HalfOverflow(_) => "halfOverflow",
             ExportNotice::PrecisionReduced => "precisionReduced",
             ExportNotice::BigTiff => "bigTiff",
+            ExportNotice::AlphaFlattened(_) => "alphaFlattened",
         }
     }
 
@@ -258,7 +267,8 @@ impl ExportNotice {
             ExportNotice::ClippedHigh(n)
             | ExportNotice::ClippedLow(n)
             | ExportNotice::NonFinite(n)
-            | ExportNotice::HalfOverflow(n) => Some(n),
+            | ExportNotice::HalfOverflow(n)
+            | ExportNotice::AlphaFlattened(n) => Some(n),
             ExportNotice::PrecisionReduced | ExportNotice::BigTiff => None,
         }
     }
@@ -280,6 +290,7 @@ impl ExportReport {
             (conversion.clipped_low, ExportNotice::ClippedLow),
             (conversion.non_finite, ExportNotice::NonFinite),
             (conversion.half_overflow, ExportNotice::HalfOverflow),
+            (conversion.alpha_flattened, ExportNotice::AlphaFlattened),
         ];
         let mut notices: Vec<ExportNotice> = counted
             .into_iter()
@@ -454,6 +465,7 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         format,
         space,
         keep_alpha: !is_structurally_opaque(document),
+        matte: WHITE_MATTE,
         // It only applies to 8-bit samples, which EXR never has.
         dither: kind != ExportFormatKind::Exr,
     }
@@ -518,6 +530,7 @@ pub fn export_image(
         ConvertOptions {
             dither: spec.dither,
             big_endian: spec.format.kind() == ExportFormatKind::Png,
+            matte: spec.matte,
         },
     )
     .map_err(|e| match e {

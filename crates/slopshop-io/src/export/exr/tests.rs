@@ -4,7 +4,7 @@ use ::exr::image::FlatSamples;
 use ::exr::meta::MetaData;
 use half::f16;
 use slopshop_core::color::ColorSpace;
-use slopshop_core::convert::{ConvertOptions, Converter};
+use slopshop_core::convert::{ConvertOptions, Converter, WHITE_MATTE};
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::tile::TileCoord;
 use slopshop_core::{CancelToken, RasterImage, Rect};
@@ -54,6 +54,7 @@ fn exr_spec(sample: ExrSample, space: ColorSpace, keep_alpha: bool) -> ExportSpe
         format: ExportFormat::Exr { sample },
         space,
         keep_alpha,
+        matte: WHITE_MATTE,
         dither: false,
     }
 }
@@ -63,6 +64,7 @@ fn expected_f32(size: Size, spec: &ExportSpec) -> Vec<f32> {
     let options = ConvertOptions {
         dither: false,
         big_endian: false,
+        matte: WHITE_MATTE,
     };
     let converter = Converter::new(spec.target_format(), options).unwrap();
     let mut samples = Vec::new();

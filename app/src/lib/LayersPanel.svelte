@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hexToSrgb } from "./color";
   import { tick, untrack } from "svelte";
   import type { DocumentView, EditRequest, LayerView } from "./engine";
   import Icon from "./Icon.svelte";
@@ -57,14 +58,9 @@
   }
 
   /** `#rrggbb` → sRGB-encoded RGBA in [0, 1]. The engine converts it to its working space. */
-  function hexToSrgb(hex: string): [number, number, number, number] {
-    const n = parseInt(hex.slice(1), 16);
-    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, 1];
-  }
-
   function addFill() {
     const name = t("layers.defaultFillName", { n: doc.layers.length + 1 });
-    edit({ kind: "addFillLayer", name, color: hexToSrgb(newColor) });
+    edit({ kind: "addFillLayer", name, color: [...hexToSrgb(newColor), 1] });
   }
 
   // Rename: double-click on the name, or F2 on the selected layer.

@@ -188,6 +188,8 @@ export type ExportSpec = {
   /** A named space, or `custom` for the document's own unnamed space. */
   space: ColorSpaceId;
   keepAlpha: boolean;
+  /** Color transparency is flattened over without alpha: sRGB-encoded [r, g, b] in [0, 1]. */
+  matte: [number, number, number];
   /** Only applies to 8-bit samples. */
   dither: boolean;
 };
@@ -215,7 +217,13 @@ export type ExportStarted = { id: number; documentId: number; path: string; name
 export type ExportProgress = { id: number; done: number; total: number };
 
 export type ExportNoticeId =
-  "clippedHigh" | "clippedLow" | "nonFinite" | "halfOverflow" | "precisionReduced" | "bigTiff";
+  | "clippedHigh"
+  | "clippedLow"
+  | "nonFinite"
+  | "halfOverflow"
+  | "precisionReduced"
+  | "bigTiff"
+  | "alphaFlattened";
 
 /** A report entry, translated with the `export.report.<id>` keys. */
 export type ExportNotice = { id: ExportNoticeId; count: number | null };

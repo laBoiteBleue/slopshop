@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use ::tiff::decoder::{Decoder, DecodingResult};
 use ::tiff::encoder::{Compression, colortype};
 use slopshop_core::color::ColorSpace;
-use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter};
+use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter, WHITE_MATTE};
 use slopshop_core::{CancelToken, Rect};
 
 use super::*;
-use crate::export::{ExportFormat, ExportReport, ExportSpec, TiffSample, export_image, temp_files};
+use crate::export::{
+    ExportFormat, ExportNotice, ExportReport, ExportSpec, TiffSample, export_image, temp_files,
+};
 use crate::open_image;
 
 fn temp_path(name: &str) -> PathBuf {
@@ -38,6 +40,7 @@ fn expected(size: Size, spec: &ExportSpec) -> Vec<u8> {
     let options = ConvertOptions {
         dither: spec.dither,
         big_endian: false,
+        matte: WHITE_MATTE,
     };
     let converter = Converter::new(spec.target_format(), options).unwrap();
     let row_bytes = size.width as usize * converter.bytes_per_pixel();
@@ -64,6 +67,7 @@ fn tiff_spec(sample: TiffSample, compression: TiffCompression, keep_alpha: bool)
             TiffSample::U8 | TiffSample::U16 => ColorSpace::REC2020,
         },
         keep_alpha,
+        matte: WHITE_MATTE,
         dither: true,
     }
 }
@@ -134,8 +138,14 @@ fn every_combination_round_trips() {
                 let target = spec.target_format();
                 let path = temp_path("round-trip.tif");
                 let report = export_pattern(&path, ODD_SIZE, &spec);
-                // Nothing clipped, classic TIFF.
-                assert_eq!(report, ExportReport::default(), "{case}");
+                // Nothing clipped, classic TIFF; the translucent pattern is flattened without
+                // alpha.
+                let (flattened, others): (Vec<&ExportNotice>, Vec<&ExportNotice>) = report
+                    .notices
+                    .iter()
+                    .partition(|n| matches!(n, ExportNotice::AlphaFlattened(_)));
+                assert!(others.is_empty(), "{case}: {others:?}");
+                assert_eq!(flattened.is_empty(), keep_alpha, "{case}");
 
                 // Through tiff: the exact samples, and the tags.
                 let mut tiff = decoder(&path);

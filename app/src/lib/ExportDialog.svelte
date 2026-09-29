@@ -7,6 +7,7 @@
     type ExportFormat,
     type ExportSpec,
   } from "./engine";
+  import { hexToSrgb, srgbToHex } from "./color";
   import { t } from "./i18n/index.svelte";
 
   let {
@@ -116,6 +117,18 @@
           <input type="checkbox" bind:checked={spec.keepAlpha} />
           {t("export.alpha")}
         </label>
+        {#if !spec.keepAlpha}
+          <label for="export-matte">{t("export.matte")}</label>
+          <input
+            id="export-matte"
+            type="color"
+            title={t("export.matte.hint")}
+            value={srgbToHex(spec.matte)}
+            oninput={(e) => {
+              if (spec) spec.matte = hexToSrgb(e.currentTarget.value);
+            }}
+          />
+        {/if}
         {#if spec.sample === "u8"}
           <label class="check">
             <input type="checkbox" bind:checked={spec.dither} />
@@ -182,6 +195,14 @@
 
   select {
     min-width: 0;
+  }
+
+  input[type="color"] {
+    width: 40px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    background: none;
   }
 
   .check {
