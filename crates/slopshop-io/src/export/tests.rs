@@ -53,6 +53,7 @@ fn png_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool) -> ExportSpec 
         keep_alpha,
         matte: WHITE_MATTE,
         dither: true,
+        gray: false,
     }
 }
 
@@ -545,6 +546,7 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         keep_alpha: true,
         matte: WHITE_MATTE,
         dither: false,
+        gray: false,
     };
     let report = export(&doc, &path, &spec).unwrap();
     std::fs::remove_file(&path).ok();
@@ -576,6 +578,7 @@ fn unsupported_spaces_are_rejected_before_writing() {
             keep_alpha: true,
             matte: WHITE_MATTE,
             dither: false,
+            gray: false,
         };
         let result = export_image(
             &path,
@@ -643,6 +646,7 @@ fn target_formats_follow_the_format_conventions() {
         keep_alpha: true,
         matte: WHITE_MATTE,
         dither: false,
+        gray: false,
     };
     let alpha = |format| spec(format).target_format().alpha;
     let tiff = |sample| ExportFormat::Tiff {
@@ -879,4 +883,230 @@ fn white_is_the_default_matte() {
     let output = image::open(&path).unwrap().to_rgb8();
     std::fs::remove_file(&path).ok();
     assert!(output.pixels().all(|p| p.0 == [255, 255, 255]));
+}
+
+fn gray_spec(format: ExportFormat, space: ColorSpace, keep_alpha: bool) -> ExportSpec {
+    ExportSpec {
+        format,
+        space,
+        keep_alpha,
+        matte: WHITE_MATTE,
+        dither: true,
+        gray: true,
+    }
+}
+
+#[test]
+fn gray_png_round_trips_bit_exact() {
+    let (w, h) = (ODD_SIZE.width, ODD_SIZE.height);
+    let luma = image::GrayImage::from_fn(w, h, |x, y| image::Luma([(x * 7 + y * 3) as u8]));
+    let spec = ExportSpec {
+        gray: true,
+        ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
+    };
+    let (output, report) = round_trip("gray8", luma.clone().into(), &spec);
+    assert_eq!(output.color(), image::ColorType::L8);
+    assert!(output.to_luma8() == luma, "8-bit gray is not bit-exact");
+    assert_eq!(report, ExportReport::default());
+
+    let luma_alpha = image::ImageBuffer::<image::LumaA<u16>, _>::from_fn(w, h, |x, y| {
+        image::LumaA([
+            (x * 211 + y * 13) as u16,
+            1 + ((x * 257 + y * 97) % 65535) as u16,
+        ])
+    });
+    let spec = ExportSpec {
+        gray: true,
+        ..png_spec(PngDepth::U16, ColorSpace::SRGB, true)
+    };
+    let (output, report) = round_trip("gray16a", luma_alpha.clone().into(), &spec);
+    assert_eq!(output.color(), image::ColorType::La16);
+    assert!(
+        output.to_luma_alpha16() == luma_alpha,
+        "16-bit gray + alpha is not bit-exact"
+    );
+    assert_eq!(report, ExportReport::default());
+}
+
+/// A gray 16-bit document with a gradient, in the sRGB tone curve.
+fn gray_gradient() -> (Document, Vec<u16>) {
+    let size = Size::new(300, 40);
+    let values: Vec<u16> = (0..size.pixel_count())
+        .map(|i| ((i % 300) * 218) as u16)
+        .collect();
+    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let format = PixelFormat {
+        layout: ChannelLayout::Gray,
+        sample: SampleType::U16,
+        color_space: ColorSpace::SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let image = RasterImage::from_pixels(size, format, &bytes).unwrap();
+    (raster_document(image), values)
+}
+
+#[test]
+fn gray_tiff_and_jpeg_are_gray_files_tagged_with_their_curve() {
+    let (doc, values) = gray_gradient();
+    let tiff = ExportFormat::Tiff {
+        sample: TiffSample::U16,
+        compression: TiffCompression::Deflate,
+    };
+    let path = temp_path("gray.tif");
+    let report = export(&doc, &path, &gray_spec(tiff, ColorSpace::SRGB, false)).unwrap();
+    assert_eq!(report, ExportReport::default());
+    // Checked with the tiff crate (image is built without its TIFF codec).
+    let mut decoder = ::tiff::decoder::Decoder::new(File::open(&path).unwrap()).unwrap();
+    assert_eq!(decoder.colortype().unwrap(), ::tiff::ColorType::Gray(16));
+    match decoder.read_image().unwrap() {
+        ::tiff::decoder::DecodingResult::U16(decoded) => assert_eq!(decoded, values),
+        _ => panic!("not 16-bit samples"),
+    }
+    let reimported = open_image(&path).unwrap().image.format();
+    assert_eq!(reimported.layout, ChannelLayout::Gray);
+    assert_eq!(reimported.color_space, ColorSpace::SRGB);
+
+    // Another curve: declared by the gray profile, read back as the same curve.
+    let report = export(&doc, &path, &gray_spec(tiff, ColorSpace::REC2020, false)).unwrap();
+    assert_eq!(report, ExportReport::default());
+    let reimported = open_image(&path).unwrap().image.format();
+    assert_eq!(reimported.color_space.transfer, TransferFunction::Rec709);
+    std::fs::remove_file(&path).ok();
+
+    let jpeg = ExportFormat::Jpeg {
+        quality: 100,
+        subsampling: JpegSubsampling::S420,
+    };
+    let path = temp_path("gray.jpg");
+    export(&doc, &path, &gray_spec(jpeg, ColorSpace::SRGB, false)).unwrap();
+    let decoded = image::open(&path).unwrap();
+    assert_eq!(decoded.color(), image::ColorType::L8);
+    let worst = decoded
+        .to_luma8()
+        .pixels()
+        .zip(&values)
+        .map(|(p, &v)| p.0[0].abs_diff((f32::from(v) / 257.0).round() as u8))
+        .max()
+        .unwrap();
+    assert!(worst <= 2, "gray JPEG off by {worst}");
+    assert_eq!(
+        open_image(&path).unwrap().image.format().layout,
+        ChannelLayout::Gray
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn colors_exported_as_gray_become_their_luminance_and_are_reported() {
+    let red = LinearRgba::from_srgb_encoded_to_working(1.0, 0.0, 0.0, 1.0);
+    let size = Size::new(20, 10);
+    let doc = fill_document(size, red);
+    let path = temp_path("red-as-gray.png");
+    let spec = ExportSpec {
+        gray: true,
+        dither: false,
+        ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
+    };
+    let report = export(&doc, &path, &spec).unwrap();
+    assert_eq!(
+        report.notices,
+        [ExportNotice::ColorDiscarded(size.pixel_count())]
+    );
+    // Rec. 709 luminance of pure sRGB red, sRGB-encoded.
+    let expected = (TransferFunction::Srgb.encode(0.2126) * 255.0).round() as u8;
+    let decoded = image::open(&path).unwrap().to_luma8();
+    assert!(decoded.pixels().all(|p| p.0[0].abs_diff(expected) <= 1));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn gray_support_per_format() {
+    use ExportFormatKind::{Exr, Jpeg, Png, Tiff, Webp};
+    for space in [
+        ColorSpace::SRGB,
+        ColorSpace::ADOBE_RGB,
+        ColorSpace::REC2020,
+        ColorSpace::LINEAR_SRGB,
+    ] {
+        for kind in [Png, Tiff, Jpeg] {
+            assert!(supports_gray(kind, &space), "{kind:?} {space:?}");
+        }
+        assert!(!supports_gray(Exr, &space) && !supports_gray(Webp, &space));
+    }
+    // PQ and HLG have no ICC curve, and PNG declares them with cICP, for RGB only.
+    assert!(!supports_gray(Png, &ColorSpace::REC2100_PQ));
+    assert!(supports_space(Png, &ColorSpace::REC2100_PQ));
+    assert!(has_gray(Png) && has_gray(Tiff) && has_gray(Jpeg));
+    assert!(!has_gray(Exr) && !has_gray(Webp));
+
+    let webp = gray_spec(
+        ExportFormat::Webp {
+            compression: WebpCompression::Lossless,
+        },
+        ColorSpace::SRGB,
+        true,
+    );
+    let pq = gray_spec(
+        ExportFormat::Png {
+            depth: PngDepth::U16,
+            compression: PngCompression::Fast,
+        },
+        ColorSpace::REC2100_PQ,
+        true,
+    );
+    let path = temp_path("gray-refused.webp");
+    for (spec, code) in [(webp, "invalidSpec"), (pq, "unsupportedSpace")] {
+        let result = export_image(
+            &path,
+            Size::new(4, 4),
+            &spec,
+            |_, _| panic!("the source must not be called"),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(result.unwrap_err().code(), code);
+        assert!(!path.exists() && temp_files(&path).is_empty());
+    }
+}
+
+#[test]
+fn gray_documents_export_as_gray_by_default() {
+    use ExportFormatKind::{Exr, Jpeg, Png, Tiff, Webp};
+    let size = Size::new(4, 4);
+    let mut doc = Document::new(size);
+    let neutral = LinearRgba::new(0.5, 0.5, 0.5, 1.0);
+    push_layer(&mut doc, LayerContent::Fill { color: neutral }, 1.0);
+    // A neutral fill alone is not a gray source.
+    assert!(!default_spec(Png, &doc).gray);
+    let gray = Arc::new(raster(
+        size,
+        ChannelLayout::Gray,
+        SampleType::U16,
+        ColorSpace::SRGB,
+    ));
+    push_layer(&mut doc, LayerContent::Raster { image: gray }, 1.0);
+    for kind in [Png, Tiff, Jpeg] {
+        let spec = default_spec(kind, &doc);
+        assert!(spec.gray, "{kind:?}");
+        assert!(supports_gray(kind, &spec.space), "{kind:?}");
+    }
+    assert!(!default_spec(Webp, &doc).gray && !default_spec(Exr, &doc).gray);
+
+    // Any color makes it a color export...
+    let tint = LinearRgba::new(0.5, 0.4, 0.5, 1.0);
+    let id = push_layer(&mut doc, LayerContent::Fill { color: tint }, 0.1);
+    assert!(!default_spec(Png, &doc).gray);
+    // ...unless that layer is hidden.
+    Edit::SetLayerVisible { id, visible: false }
+        .apply(&mut doc)
+        .unwrap();
+    assert!(default_spec(Png, &doc).gray);
+    let rgb = Arc::new(raster(
+        size,
+        ChannelLayout::Rgb,
+        SampleType::U8,
+        ColorSpace::SRGB,
+    ));
+    push_layer(&mut doc, LayerContent::Raster { image: rgb }, 1.0);
+    assert!(!default_spec(Png, &doc).gray);
 }

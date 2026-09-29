@@ -2,8 +2,10 @@
 //!
 //! - Interleaved baseline (sequential DCT, standard Annex K tables and Huffman codes), 8-bit
 //!   YCbCr, chroma subsampled 4:4:4, 4:2:2 or 4:2:0 as the spec says, chroma averaged over each
-//!   block (the crate's default, nearest, costs quality and bytes).
-//! - Always tagged: the ICC profile of the space in APP2 segments (sRGB included). No EXIF or
+//!   block (the crate's default, nearest, costs quality and bytes); or a single gray component
+//!   for gray targets (subsampling does not apply).
+//! - Always tagged: the ICC profile of the space in APP2 segments (sRGB included; a gray profile
+//!   for gray files). No EXIF or
 //!   XMP: none is carried, and an orientation tag must never be written.
 //! - No alpha: JPEG cannot store it, so the export flattens it over the matte first.
 //! - At most [`MAX_SIDE`] pixels per side: the file format allows 65535, but the libjpeg family
@@ -50,11 +52,11 @@ pub(super) fn check_size(size: Size) -> Result<(), ExportError> {
     Ok(())
 }
 
-/// A band of rows as YCbCr planes, from `first_row`.
+/// A band of rows as YCbCr planes (or one gray plane), from `first_row`.
 struct Band {
     first_row: u32,
     rows: u32,
-    /// Y, Cb and Cr, `width × rows` bytes each.
+    /// Y, Cb and Cr, `width × rows` bytes each; only the first for gray images.
     planes: [Vec<u8>; 3],
 }
 
@@ -67,6 +69,8 @@ pub(super) struct JpegWriter {
     encoder: Option<JoinHandle<Result<(), ExportError>>>,
     size: Size,
     next_row: u32,
+    /// One gray component instead of YCbCr.
+    gray: bool,
 }
 
 impl JpegWriter {
@@ -77,7 +81,8 @@ impl JpegWriter {
         quality: u8,
         subsampling: JpegSubsampling,
     ) -> Result<Self, ExportError> {
-        if target.layout != ChannelLayout::Rgb || target.sample != SampleType::U8 {
+        let gray = target.layout == ChannelLayout::Gray;
+        if !(gray || target.layout == ChannelLayout::Rgb) || target.sample != SampleType::U8 {
             return Err(ExportError::InvalidSpec(format!(
                 "JPEG export cannot store {target:?}"
             )));
@@ -94,8 +99,12 @@ impl JpegWriter {
             )));
         }
         check_size(size)?;
-        let profile = icc::write_matrix_trc(&target.color_space)
-            .map_err(|_| ExportError::UnsupportedSpace(target.color_space))?;
+        let profile = if gray {
+            icc::write_gray_trc(&target.color_space)
+        } else {
+            icc::write_matrix_trc(&target.color_space)
+        }
+        .map_err(|_| ExportError::UnsupportedSpace(target.color_space))?;
         let (bands, received) = mpsc::sync_channel(1);
         let (spares_back, spares) = mpsc::channel();
         let settings = Settings {
@@ -103,6 +112,7 @@ impl JpegWriter {
             quality,
             subsampling,
             profile,
+            gray,
         };
         let encoder = thread::Builder::new()
             .name("jpeg-writer".to_owned())
@@ -113,12 +123,13 @@ impl JpegWriter {
             encoder: Some(encoder),
             size,
             next_row: 0,
+            gray,
         })
     }
 
     pub(super) fn write_rows(&mut self, first_row: u32, rows: &[u8]) -> Result<(), ExportError> {
         let width = self.size.width as usize;
-        let row_bytes = width * 3;
+        let row_bytes = width * if self.gray { 1 } else { 3 };
         let count = rows.len() / row_bytes;
         if first_row != self.next_row
             || !rows.len().is_multiple_of(row_bytes)
@@ -145,11 +156,15 @@ impl JpegWriter {
                 })?;
         }
         let [y, cb, cr] = &mut planes;
-        for pixel in rows.as_chunks::<3>().0 {
-            let (luma, blue, red) = rgb_to_ycbcr(pixel[0], pixel[1], pixel[2]);
-            y.push(luma);
-            cb.push(blue);
-            cr.push(red);
+        if self.gray {
+            y.extend_from_slice(rows);
+        } else {
+            for pixel in rows.as_chunks::<3>().0 {
+                let (luma, blue, red) = rgb_to_ycbcr(pixel[0], pixel[1], pixel[2]);
+                y.push(luma);
+                cb.push(blue);
+                cr.push(red);
+            }
         }
         let band = Band {
             first_row,
@@ -207,6 +222,7 @@ struct Settings {
     quality: u8,
     subsampling: JpegSubsampling,
     profile: Vec<u8>,
+    gray: bool,
 }
 
 /// The encoding thread: header, ICC profile, then every row pulled from the bands received.
@@ -233,6 +249,7 @@ fn encode(
         .map_err(encode_error)?;
     let source = Source {
         size: settings.size,
+        components: if settings.gray { 1 } else { 3 },
         state: RefCell::new(SourceState {
             bands,
             spares,
@@ -281,6 +298,8 @@ impl Write for Sink {
 /// times, to pad the last row of blocks).
 struct Source {
     size: Size,
+    /// 1 (gray) or 3 (YCbCr).
+    components: usize,
     state: RefCell<SourceState>,
     aborted: Rc<Cell<bool>>,
 }
@@ -294,7 +313,11 @@ struct SourceState {
 
 impl ImageBuffer for Source {
     fn get_jpeg_color_type(&self) -> JpegColorType {
-        JpegColorType::Ycbcr
+        if self.components == 1 {
+            JpegColorType::Luma
+        } else {
+            JpegColorType::Ycbcr
+        }
     }
 
     fn width(&self) -> u16 {
@@ -329,13 +352,14 @@ impl ImageBuffer for Source {
         match (&state.band, self.aborted.get()) {
             (Some(band), false) => {
                 let start = (y - band.first_row) as usize * width;
-                for (buffer, plane) in buffers.iter_mut().zip(&band.planes) {
+                let planes = &band.planes[..self.components];
+                for (buffer, plane) in buffers.iter_mut().zip(planes) {
                     buffer.extend_from_slice(&plane[start..start + width]);
                 }
             }
             // Aborted: any bytes will do, the next write fails.
             _ => {
-                for buffer in &mut buffers[..3] {
+                for buffer in &mut buffers[..self.components] {
                     buffer.resize(buffer.len() + width, 0);
                 }
             }

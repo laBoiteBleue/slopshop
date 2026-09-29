@@ -36,8 +36,10 @@
   // only holds that format's options, starting from the defaults for this document.
   const target = untrack(() => ({ documentId, path, format, width, height }));
   let spec = $state<ExportSpec | null>(null);
-  /** Color spaces the format can store. */
-  let spaces = $state<ColorSpaceId[]>([]);
+  /** Color spaces the format can store, for color and for gray samples. */
+  let colorSpaces = $state<ColorSpaceId[]>([]);
+  let graySpaces = $state<ColorSpaceId[]>([]);
+  let spaces = $derived(spec?.gray ? graySpaces : colorSpaces);
   let failure = $state<string | null>(null);
   /** The format's size limit, when the document exceeds it: the export would fail. */
   let tooLargeFor = $state<number | null>(null);
@@ -48,19 +50,29 @@
 
   async function load() {
     try {
-      const [defaults, named, maxSide] = await Promise.all([
+      const [defaults, named, namedGray, maxSide] = await Promise.all([
         engine.exportDefaults(target.documentId, target.format),
-        engine.exportSpaces(target.format),
+        engine.exportSpaces(target.format, false),
+        options.gray ? engine.exportSpaces(target.format, true) : Promise.resolve([]),
         engine.exportMaxSide(target.format),
       ]);
       tooLargeFor =
         maxSide !== null && (target.width > maxSide || target.height > maxSide) ? maxSide : null;
       // The document's own unnamed space is only offered when the defaults picked it.
-      spaces = defaults.space === "custom" ? [...named, "custom"] : named;
+      const custom: ColorSpaceId[] = defaults.space === "custom" ? ["custom"] : [];
+      colorSpaces = [...named, ...custom];
+      graySpaces = [...namedGray, ...custom];
       spec = defaults;
       failure = null;
     } catch (e) {
       failure = t("export.loadFailed", { error: String(e) });
+    }
+  }
+
+  /** Gray on or off: keep the space if the file can still declare it, else sRGB. */
+  function onGrayChange() {
+    if (spec && !spaces.includes(spec.space)) {
+      spec.space = spaces.includes("srgb") ? "srgb" : (spaces[0] ?? spec.space);
     }
   }
 
@@ -117,6 +129,13 @@
           {/each}
         </select>
 
+        {#if options.gray}
+          <label class="check" title={t("export.gray.hint")}>
+            <input type="checkbox" bind:checked={spec.gray} onchange={onGrayChange} />
+            {t("export.gray")}
+          </label>
+        {/if}
+
         {#if options.compressions.length > 0}
           <label for="export-compression">{t("export.compression")}</label>
           <select
@@ -149,7 +168,8 @@
           </div>
         {/if}
 
-        {#if options.subsamplings.length > 0}
+        <!-- Gray JPEG has no color to subsample. -->
+        {#if options.subsamplings.length > 0 && !spec.gray}
           <label for="export-subsampling">{t("export.subsampling")}</label>
           <select id="export-subsampling" bind:value={spec.subsampling}>
             {#each options.subsamplings as subsampling (subsampling)}

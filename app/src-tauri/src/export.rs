@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use slopshop_core::{CancelToken, ColorSpace, Document, Progress};
 use slopshop_io::export::{
-    ExportReport, ExportSpec, default_spec, export_image, max_side, supports_space,
+    ExportReport, ExportSpec, default_spec, export_image, max_side, supports_gray, supports_space,
 };
 use slopshop_render::Renderer;
 use tauri::{AppHandle, Manager, State};
@@ -258,12 +258,19 @@ pub(crate) async fn export_defaults(
     Ok(ExportSpecDto::new(&default_spec(format.kind(), &document)))
 }
 
-/// Identifiers of the named color spaces `format` can store and tag.
+/// Identifiers of the named color spaces `format` can store and tag, for color or gray samples.
 #[tauri::command]
-pub(crate) async fn export_spaces(format: ExportFormatId) -> Vec<&'static str> {
+pub(crate) async fn export_spaces(format: ExportFormatId, gray: bool) -> Vec<&'static str> {
+    let kind = format.kind();
     NAMED_SPACES
         .iter()
-        .filter(|space| supports_space(format.kind(), space))
+        .filter(|space| {
+            if gray {
+                supports_gray(kind, space)
+            } else {
+                supports_space(kind, space)
+            }
+        })
         .filter_map(ColorSpace::id)
         .collect()
 }

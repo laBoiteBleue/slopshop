@@ -45,6 +45,7 @@ fn jpeg_spec(quality: u8, subsampling: JpegSubsampling) -> ExportSpec {
         keep_alpha: false,
         matte: WHITE_MATTE,
         dither: false,
+        gray: false,
     }
 }
 

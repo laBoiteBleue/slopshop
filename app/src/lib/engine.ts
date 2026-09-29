@@ -229,12 +229,15 @@ export type ExportSpec = {
   matte: [number, number, number];
   /** Only applies to 8-bit samples. */
   dither: boolean;
+  /** Gray samples (formats with `gray` in EXPORT_FORMATS): the luminance of the image. */
+  gray: boolean;
 };
 
 /**
  * What the engine accepts for each format (ExportSpecDto::to_spec): file extensions (the first
  * one is the default), sample types, compressions and JPEG subsamplings, in the order the UI
- * lists them, and whether the format can keep alpha.
+ * lists them, whether the format can keep alpha and whether it can write gray samples
+ * (`has_gray` in crates/slopshop-io/src/export/mod.rs).
  */
 export const EXPORT_FORMATS: Record<
   ExportFormat,
@@ -244,6 +247,7 @@ export const EXPORT_FORMATS: Record<
     compressions: ExportCompression[];
     subsamplings: ExportSubsampling[];
     alpha: boolean;
+    gray: boolean;
   }
 > = {
   png: {
@@ -252,6 +256,7 @@ export const EXPORT_FORMATS: Record<
     compressions: ["fast", "small"],
     subsamplings: [],
     alpha: true,
+    gray: true,
   },
   tiff: {
     extensions: ["tif", "tiff"],
@@ -259,6 +264,7 @@ export const EXPORT_FORMATS: Record<
     compressions: ["deflate", "lzw", "none"],
     subsamplings: [],
     alpha: true,
+    gray: true,
   },
   exr: {
     extensions: ["exr"],
@@ -266,6 +272,7 @@ export const EXPORT_FORMATS: Record<
     compressions: [],
     subsamplings: [],
     alpha: true,
+    gray: false,
   },
   jpeg: {
     extensions: ["jpg", "jpeg"],
@@ -273,6 +280,7 @@ export const EXPORT_FORMATS: Record<
     compressions: [],
     subsamplings: ["444", "422", "420"],
     alpha: false,
+    gray: true,
   },
   webp: {
     extensions: ["webp"],
@@ -280,6 +288,7 @@ export const EXPORT_FORMATS: Record<
     compressions: ["lossy", "lossless"],
     subsamplings: [],
     alpha: true,
+    gray: false,
   },
 };
 
@@ -298,7 +307,8 @@ export type ExportNoticeId =
   | "halfOverflow"
   | "precisionReduced"
   | "bigTiff"
-  | "alphaFlattened";
+  | "alphaFlattened"
+  | "colorDiscarded";
 
 /** A report entry, translated with the `export.report.<id>` keys. */
 export type ExportNotice = { id: ExportNoticeId; count: number | null };
@@ -478,7 +488,9 @@ export const engine = {
   exportDefaults: (documentId: number, format: ExportFormat) =>
     invoke<ExportSpec>("export_defaults", { documentId, format }),
   /** The named color spaces `format` can store and tag. */
-  exportSpaces: (format: ExportFormat) => invoke<ColorSpaceId[]>("export_spaces", { format }),
+  /** Named spaces the format can store and tag, for color or gray samples. */
+  exportSpaces: (format: ExportFormat, gray: boolean) =>
+    invoke<ColorSpaceId[]>("export_spaces", { format, gray }),
   /** The largest width or height `format` can store (`null`: no limit). */
   exportMaxSide: (format: ExportFormat) => invoke<number | null>("export_max_side", { format }),
   /**

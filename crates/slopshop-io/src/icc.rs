@@ -8,8 +8,8 @@
 //! unsupported; they will go through lcms2 later. The input is untrusted: every read is
 //! bounds-checked, nothing panics on malformed data.
 //!
-//! Writing does the reverse for export: an ICC v4.4 RGB display profile whose tone curves are
-//! exact parametric curves, so that it reads back as the same space.
+//! Writing does the reverse for export: an ICC v4.4 RGB (or gray) display profile whose tone
+//! curves are exact parametric curves, so that it reads back as the same space.
 
 use slopshop_core::color::{
     ColorSpace, D50, Mat3, RgbPrimaries, TransferFunction, bradford, mat_inverse, mat_mul, mat_vec,
@@ -394,6 +394,43 @@ pub(crate) fn write_matrix_trc(space: &ColorSpace) -> Result<Vec<u8>, IccError> 
     Ok(assemble(b"RGB ", &tags))
 }
 
+/// Build an ICC v4.4 gray display profile for gray samples encoded with `space`'s transfer:
+/// one exact `para` tone curve (`kTRC`), mapping gray to the luminance of the connection space.
+/// The primaries only define which luminance the gray is (they must be valid); the profile
+/// reads back with the same transfer.
+pub(crate) fn write_gray_trc(space: &ColorSpace) -> Result<Vec<u8>, IccError> {
+    if !space.primaries.is_valid() {
+        return Err(IccError::InvalidPrimaries);
+    }
+    let chad = bradford(space.primaries.white, D50);
+    let tags = [
+        (*b"desc", mluc(gray_description(space.transfer))),
+        (*b"cprt", mluc(COPYRIGHT)),
+        (
+            *b"wtpt",
+            xyz_type(D50_XYZ).ok_or(IccError::InvalidPrimaries)?,
+        ),
+        (
+            *b"chad",
+            sf32_type(&chad).ok_or(IccError::InvalidPrimaries)?,
+        ),
+        (*b"kTRC", para(space.transfer)?),
+    ];
+    Ok(assemble(b"GRAY", &tags))
+}
+
+/// English name of a gray encoding, for the `desc` tag (file metadata, not UI text).
+fn gray_description(transfer: TransferFunction) -> &'static str {
+    match transfer {
+        TransferFunction::Srgb => "Gray, sRGB tone curve",
+        TransferFunction::Linear => "Linear gray",
+        TransferFunction::Rec709 => "Gray, Rec. 709 tone curve",
+        TransferFunction::Gamma(2.2) => "Gray gamma 2.2",
+        TransferFunction::Gamma(1.8) => "Gray gamma 1.8",
+        _ => "Custom gray",
+    }
+}
+
 /// English name of the space, for the `desc` tag (file metadata, not UI text).
 fn description(space: &ColorSpace) -> &'static str {
     match space.id() {
@@ -641,6 +678,35 @@ mod tests {
                 "{:?}",
                 space.id()
             );
+        }
+    }
+
+    #[test]
+    fn written_gray_profiles_read_back_with_the_same_transfer() {
+        for space in [
+            ColorSpace::SRGB,
+            ColorSpace::LINEAR_SRGB,
+            ColorSpace::ADOBE_RGB,
+            ColorSpace::PROPHOTO,
+            ColorSpace::REC2020,
+        ] {
+            let profile = write_gray_trc(&space).unwrap();
+            assert_eq!(&profile[16..20], b"GRAY");
+            let read = parse(&profile).unwrap();
+            // Exact up to the 16.16 fixed point of the curve parameters.
+            assert!(
+                transfer_close(read.space.transfer, space.transfer),
+                "{space:?}: {:?}",
+                read.space.transfer
+            );
+            assert!(!read.approximated, "{space:?}");
+        }
+        for transfer in [TransferFunction::Pq, TransferFunction::Hlg] {
+            let space = ColorSpace {
+                transfer,
+                ..ColorSpace::REC2020
+            };
+            assert_eq!(write_gray_trc(&space), Err(IccError::UnsupportedTransfer));
         }
     }
 

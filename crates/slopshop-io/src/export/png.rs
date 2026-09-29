@@ -1,10 +1,11 @@
-//! PNG writer (ADR 0008): rows streamed through `png::StreamWriter`, 8/16-bit RGB/RGBA with
-//! straight alpha, 16-bit samples big-endian.
+//! PNG writer (ADR 0008): rows streamed through `png::StreamWriter`, 8/16-bit RGB/RGBA or
+//! gray/gray + alpha with straight alpha, 16-bit samples big-endian.
 //!
 //! Color is always declared: sRGB with the sRGB chunk; spaces with H.273 code points with a cICP
 //! chunk (png 0.18 never writes it: it is written by hand, before the image data), plus an iCCP
 //! profile when ICC can describe the space too, for readers that ignore cICP (not PQ or HLG);
-//! other spaces with an iCCP profile only.
+//! other spaces with an iCCP profile only. Gray files: the sRGB chunk for the sRGB curve, else
+//! an iCCP gray profile (cICP describes RGB only).
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -79,9 +80,14 @@ impl PngWriter {
         check_size(size)?;
         let color_type = match target.layout {
             ChannelLayout::Rgb => ::png::ColorType::Rgb,
+            ChannelLayout::Gray => ::png::ColorType::Grayscale,
             ChannelLayout::Rgba if target.alpha == AlphaMode::Straight => ::png::ColorType::Rgba,
+            ChannelLayout::GrayAlpha if target.alpha == AlphaMode::Straight => {
+                ::png::ColorType::GrayscaleAlpha
+            }
             _ => return Err(invalid_target(&target)),
         };
+        let gray = target.layout.is_gray();
         let bit_depth = match target.sample {
             SampleType::U8 => ::png::BitDepth::Eight,
             SampleType::U16 => ::png::BitDepth::Sixteen,
@@ -89,11 +95,15 @@ impl PngWriter {
         };
         let space = target.color_space;
         let srgb = space == ColorSpace::SRGB;
-        let cicp = if srgb { None } else { cicp_code(&space) };
-        let profile = if srgb {
+        let cicp = if srgb || gray {
             None
         } else {
-            icc::write_matrix_trc(&space).ok()
+            cicp_code(&space)
+        };
+        let profile = match (srgb, gray) {
+            (true, _) => None,
+            (false, true) => icc::write_gray_trc(&space).ok(),
+            (false, false) => icc::write_matrix_trc(&space).ok(),
         };
         if !srgb && cicp.is_none() && profile.is_none() {
             return Err(ExportError::UnsupportedSpace(space));
