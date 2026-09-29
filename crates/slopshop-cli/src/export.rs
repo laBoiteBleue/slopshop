@@ -1,17 +1,19 @@
-//! `slopshop export`: an image file, opened as a one-layer document, written to PNG, TIFF or
-//! OpenEXR by the export pipeline (ADR 0008), exactly as a front end would drive it: the
-//! format's default settings, explicit overrides, the GPU renderer as the pixel source (the
-//! CPU compositor without a GPU), and the export report.
+//! `slopshop export`: an image file, opened as a one-layer document, written to PNG, TIFF,
+//! OpenEXR or JPEG by the export pipeline (ADR 0008, 0010), exactly as a front end would drive
+//! it: the format's default settings, explicit overrides, the GPU renderer as the pixel source
+//! (the CPU compositor without a GPU), and the export report. User documentation:
+//! `docs/cli.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slopshop_core::color::{ColorSpace, SampleType};
+use slopshop_core::color::{ColorSpace, LinearRgba, SampleType, WORKING_SPACE};
 use slopshop_core::{CancelToken, Document, Edit, Layer, LayerContent, RasterImage, Rect, Size};
 use slopshop_io::export::{
-    ExportFormat, ExportFormatKind, ExportReport, ExportSpec, ExrSample, PngCompression, PngDepth,
-    TiffCompression, TiffSample, default_spec, export_image, supports_space,
+    ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
+    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, default_spec,
+    export_image, supports_alpha, supports_space,
 };
 use slopshop_render::Renderer;
 
@@ -28,10 +30,18 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 3] = [
+const FORMATS: [ExportFormatKind; 4] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
+    ExportFormatKind::Jpeg,
+];
+
+/// `--subsampling`, as it spells each value.
+const SUBSAMPLINGS: [(JpegSubsampling, &str); 3] = [
+    (JpegSubsampling::S444, "444"),
+    (JpegSubsampling::S422, "422"),
+    (JpegSubsampling::S420, "420"),
 ];
 
 /// `--depth`: the sample type, whatever the format (each format accepts some of them).
@@ -85,6 +95,7 @@ impl Depth {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
+            ExportFormatKind::Jpeg => self == Depth::U8,
         }
     }
 }
@@ -139,7 +150,7 @@ impl Compression {
         match kind {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
-            ExportFormatKind::Exr => false,
+            ExportFormatKind::Exr | ExportFormatKind::Jpeg => false,
         }
     }
 }
@@ -153,7 +164,13 @@ struct Args {
     depth: Option<Depth>,
     space: Option<ColorSpace>,
     compression: Option<Compression>,
+    /// `--quality` (JPEG), 1 to 100.
+    quality: Option<u8>,
+    /// `--subsampling` (JPEG).
+    subsampling: Option<JpegSubsampling>,
     no_alpha: bool,
+    /// `--matte`: sRGB-encoded 8-bit components.
+    matte: Option<[u8; 3]>,
     no_dither: bool,
     cpu: bool,
     bench: bool,
@@ -221,7 +238,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Stable ids and numbers, as the engine reports them (the app translates them).
     for notice in &outcome.report.notices {
         match notice.count() {
-            Some(count) => println!("report: {} ({count} samples)", notice.id()),
+            Some(count) => {
+                let unit = match notice {
+                    ExportNotice::AlphaFlattened(_) => "pixels",
+                    _ => "samples",
+                };
+                println!("report: {} ({count} {unit})", notice.id());
+            }
             None => println!("report: {}", notice.id()),
         }
     }
@@ -252,6 +275,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut depth = None;
     let mut space = None;
     let mut compression = None;
+    let mut quality = None;
+    let mut subsampling = None;
+    let mut matte = None;
     let (mut no_alpha, mut no_dither, mut cpu, mut bench) = (false, false, false, false);
 
     let mut it = args.iter();
@@ -262,6 +288,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--depth" => depth = Some(parse_depth(value()?)?),
             "--space" => space = Some(parse_space(value()?)?),
             "--compression" => compression = Some(parse_compression(value()?)?),
+            "--quality" => quality = Some(parse_quality(value()?)?),
+            "--subsampling" => subsampling = Some(parse_subsampling(value()?)?),
+            "--matte" => matte = Some(parse_matte(value()?)?),
             "--no-alpha" => no_alpha = true,
             "--no-dither" => no_dither = true,
             "--cpu" => cpu = true,
@@ -282,7 +311,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let format = match format {
         Some(format) => format,
         None => format_of(&output).ok_or(format!(
-            "cannot tell the format from `{}`: use --format png|tiff|exr",
+            "cannot tell the format from `{}`: use --format png|tiff|exr|jpeg",
             output.display()
         ))?,
     };
@@ -306,7 +335,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             .map(|c| c.name())
             .collect();
         return Err(if valid.is_empty() {
-            format!("{name} has no --compression option (it always uses lossless ZIP)")
+            match format {
+                ExportFormatKind::Jpeg => {
+                    format!("{name} has no --compression option (use --quality and --subsampling)")
+                }
+                _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
+            }
         } else {
             format!(
                 "--compression {} is not available for {name} (valid: {})",
@@ -314,6 +348,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 valid.join(", ")
             )
         });
+    }
+    if format != ExportFormatKind::Jpeg {
+        if quality.is_some() {
+            return Err(format!("--quality is not available for {name} (JPEG only)"));
+        }
+        if subsampling.is_some() {
+            return Err(format!(
+                "--subsampling is not available for {name} (JPEG only)"
+            ));
+        }
     }
     if let Some(space) = space.filter(|s| !supports_space(format, s)) {
         let valid: Vec<_> = SPACES
@@ -334,7 +378,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         depth,
         space,
         compression,
+        quality,
+        subsampling,
         no_alpha,
+        matte,
         no_dither,
         cpu,
         bench,
@@ -345,7 +392,9 @@ fn parse_format(s: &str) -> Result<ExportFormatKind, String> {
     FORMATS
         .into_iter()
         .find(|kind| format_id(*kind) == s)
-        .ok_or(format!("invalid format `{s}`, expected png, tiff or exr"))
+        .ok_or(format!(
+            "invalid format `{s}`, expected png, tiff, exr or jpeg"
+        ))
 }
 
 fn parse_depth(s: &str) -> Result<Depth, String> {
@@ -362,6 +411,64 @@ fn parse_compression(s: &str) -> Result<Compression, String> {
         .ok_or(format!(
             "invalid compression `{s}`, expected fast, small, none, deflate or lzw"
         ))
+}
+
+fn parse_quality(s: &str) -> Result<u8, String> {
+    s.parse::<u8>()
+        .ok()
+        .filter(|q| (1..=100).contains(q))
+        .ok_or(format!("invalid quality `{s}`, expected 1 to 100"))
+}
+
+fn parse_subsampling(s: &str) -> Result<JpegSubsampling, String> {
+    SUBSAMPLINGS
+        .into_iter()
+        .find(|(_, name)| *name == s)
+        .map(|(subsampling, _)| subsampling)
+        .ok_or(format!(
+            "invalid subsampling `{s}`, expected 444, 422 or 420"
+        ))
+}
+
+fn subsampling_name(subsampling: JpegSubsampling) -> &'static str {
+    SUBSAMPLINGS
+        .into_iter()
+        .find(|(s, _)| *s == subsampling)
+        .map_or("?", |(_, name)| name)
+}
+
+/// `RRGGBB` or `#RRGGBB`, sRGB-encoded.
+fn parse_matte(s: &str) -> Result<[u8; 3], String> {
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    let invalid = || format!("invalid matte `{s}`, expected an sRGB color as RRGGBB");
+    if hex.len() != 6 || !hex.is_ascii() {
+        return Err(invalid());
+    }
+    let mut rgb = [0u8; 3];
+    for (i, c) in rgb.iter_mut().enumerate() {
+        *c = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| invalid())?;
+    }
+    Ok(rgb)
+}
+
+/// The working-space matte of an sRGB `--matte`.
+fn matte_color([r, g, b]: [u8; 3]) -> LinearRgba {
+    let unit = |c: u8| f32::from(c) / 255.0;
+    LinearRgba::from_srgb_encoded_to_working(unit(r), unit(g), unit(b), 1.0)
+}
+
+/// A working-space matte as `--matte` spells it (rounded to 8-bit sRGB).
+fn matte_hex(matte: LinearRgba) -> String {
+    let srgb = matte
+        .transform(&WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB))
+        .to_srgb_encoded();
+    let code = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!(
+        "{:02x}{:02x}{:02x}",
+        code(srgb[0]),
+        code(srgb[1]),
+        code(srgb[2])
+    )
 }
 
 fn parse_space(s: &str) -> Result<ColorSpace, String> {
@@ -384,6 +491,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "png" => Some(ExportFormatKind::Png),
         "tif" | "tiff" => Some(ExportFormatKind::Tiff),
         "exr" => Some(ExportFormatKind::Exr),
+        "jpg" | "jpeg" => Some(ExportFormatKind::Jpeg),
         _ => None,
     }
 }
@@ -394,6 +502,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Png => "png",
         ExportFormatKind::Tiff => "tiff",
         ExportFormatKind::Exr => "exr",
+        ExportFormatKind::Jpeg => "jpeg",
     }
 }
 
@@ -402,6 +511,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Png => "PNG",
         ExportFormatKind::Tiff => "TIFF",
         ExportFormatKind::Exr => "OpenEXR",
+        ExportFormatKind::Jpeg => "JPEG",
     }
 }
 
@@ -438,12 +548,22 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
         ExportFormat::Exr { sample } => ExportFormat::Exr {
             sample: args.depth.and_then(Depth::exr).unwrap_or(sample),
         },
+        ExportFormat::Jpeg {
+            quality,
+            subsampling,
+        } => ExportFormat::Jpeg {
+            quality: args.quality.unwrap_or(quality),
+            subsampling: args.subsampling.unwrap_or(subsampling),
+        },
     };
     if let Some(space) = args.space {
         spec.space = space;
     }
     if args.no_alpha {
         spec.keep_alpha = false;
+    }
+    if let Some(matte) = args.matte {
+        spec.matte = matte_color(matte);
     }
     if args.no_dither {
         spec.dither = false;
@@ -486,6 +606,7 @@ fn describe(spec: &ExportSpec) -> String {
             },
             None,
         ),
+        ExportFormat::Jpeg { .. } => (Depth::U8, None),
     };
     let mut text = format!(
         "--format {} --depth {} --space {}",
@@ -496,8 +617,22 @@ fn describe(spec: &ExportSpec) -> String {
     if let Some(compression) = compression {
         text += &format!(" --compression {}", compression.name());
     }
+    if let ExportFormat::Jpeg {
+        quality,
+        subsampling,
+    } = spec.format
+    {
+        text += &format!(
+            " --quality {quality} --subsampling {}",
+            subsampling_name(subsampling)
+        );
+    }
     if !spec.keep_alpha {
-        text += " --no-alpha";
+        // Formats without alpha always flatten: no option needed for that.
+        if supports_alpha(spec.format.kind()) {
+            text += " --no-alpha";
+        }
+        text += &format!(" --matte {}", matte_hex(spec.matte));
     }
     // Dither only applies to 8-bit samples.
     if !spec.dither && spec.format.sample_type() == SampleType::U8 {
@@ -645,7 +780,10 @@ mod tests {
                 depth: Some(Depth::U16),
                 space: Some(ColorSpace::DISPLAY_P3),
                 compression: Some(Compression::Small),
+                quality: None,
+                subsampling: None,
                 no_alpha: true,
+                matte: None,
                 no_dither: true,
                 cpu: true,
                 bench: true,
@@ -681,11 +819,11 @@ mod tests {
         let error = |args: &[&str]| parse(args).unwrap_err();
         assert!(error(&["in.png"]).contains("got 1 path"));
         assert!(error(&["a.png", "b.png", "c.png"]).contains("got 3 path"));
-        assert!(error(&["in.png", "out.jpg"]).contains("--format"));
+        assert!(error(&["in.png", "out.gif"]).contains("--format"));
         assert!(error(&["in.png", "out"]).contains("--format"));
         assert!(error(&["in.png", "out.png", "--depth"]).contains("missing value"));
         assert!(error(&["in.png", "out.png", "--depth", "u12"]).contains("invalid depth"));
-        assert!(error(&["in.png", "out.png", "--format", "jpeg"]).contains("invalid format"));
+        assert!(error(&["in.png", "out.png", "--format", "gif"]).contains("invalid format"));
         assert!(error(&["in.png", "out.png", "--space", "cmyk"]).contains("unknown color space"));
         assert!(error(&["in.png", "out.png", "--compression", "zip"]).contains("invalid"));
         assert!(error(&["in.png", "out.png", "--alpha"]).contains("unknown option `--alpha`"));
@@ -742,6 +880,33 @@ mod tests {
     }
 
     #[test]
+    fn matte_is_an_srgb_hex_color() {
+        assert_eq!(parse_matte("ff8000"), Ok([255, 128, 0]));
+        assert_eq!(parse_matte("#0A0b0C"), Ok([10, 11, 12]));
+        for bad in ["fff", "ff80000", "gg0000", "#", "ff 800", "ééé"] {
+            assert!(parse_matte(bad).is_err(), "{bad}");
+        }
+        // The working-space color comes back to the same 8-bit code.
+        for rgb in [[255, 255, 255], [0, 0, 0], [255, 128, 0], [10, 11, 12]] {
+            let hex = format!("{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+            assert_eq!(matte_hex(matte_color(rgb)), hex);
+        }
+
+        let size = Size::new(4, 4);
+        let pixels = vec![128u8; 4 * 4 * 4];
+        let image =
+            RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &pixels)
+                .unwrap();
+        let document = single_layer_document(image, "layer").unwrap();
+        let args = parse(&["in.png", "out.png", "--no-alpha", "--matte", "#FF8000"]).unwrap();
+        assert_eq!(args.matte, Some([255, 128, 0]));
+        let spec = export_spec(&args, &document);
+        assert_eq!(spec.matte, matte_color([255, 128, 0]));
+        assert!(describe(&spec).ends_with("--no-alpha --matte ff8000"));
+        assert!(parse(&["in.png", "out.png", "--matte", "red"]).is_err());
+    }
+
+    #[test]
     fn options_override_the_format_defaults() {
         let size = Size::new(4, 4);
         let pixels = vec![128u8; 4 * 4 * 4];
@@ -784,7 +949,7 @@ mod tests {
         // Dither is not shown for float samples, which never have it.
         assert_eq!(
             describe(&spec),
-            "--format tiff --depth f32 --space linear-rec2020 --compression lzw --no-alpha"
+            "--format tiff --depth f32 --space linear-rec2020 --compression lzw --no-alpha --matte ffffff"
         );
         let args = parse(&["in.png", "out.tif", "--no-dither"]).unwrap();
         assert_eq!(
@@ -909,6 +1074,83 @@ mod tests {
             assert!(difference <= tolerance, "{name}: {difference}");
         }
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exports_jpeg_flattened_and_tagged() {
+        let dir = temp_dir("jpeg");
+        let size = Size::new(70, 300);
+        let input = dir.join("in.png");
+        write_test_png(&input, size);
+        for (name, options) in [
+            ("out.jpg", &[][..]),
+            (
+                "small.jpeg",
+                &["--quality", "60", "--subsampling", "420"][..],
+            ),
+        ] {
+            let output = dir.join(name);
+            let mut args = vec![input.to_str().unwrap(), output.to_str().unwrap(), "--cpu"];
+            args.extend(options);
+            let outcome = export(&parse(&args).unwrap()).unwrap();
+            assert_eq!(outcome.spec.format.kind(), ExportFormatKind::Jpeg, "{name}");
+            assert!(!outcome.spec.keep_alpha);
+            // The translucent input is flattened over the (white) matte, and reported.
+            let ids: Vec<_> = outcome.report.notices.iter().map(|n| n.id()).collect();
+            assert_eq!(ids, ["alphaFlattened"], "{name}");
+            let reimported = slopshop_io::open_image(&output).unwrap();
+            assert_eq!(reimported.image.size(), size);
+            assert_eq!(reimported.image.format().color_space, ColorSpace::SRGB);
+            assert!(!reimported.image.format().layout.has_alpha());
+        }
+        let default = fs::metadata(dir.join("out.jpg")).unwrap().len();
+        let small = fs::metadata(dir.join("small.jpeg")).unwrap().len();
+        assert!(small < default, "{small} vs {default}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn jpeg_options_are_validated() {
+        let args = parse(&[
+            "in.png",
+            "out.JPG",
+            "--quality",
+            "75",
+            "--subsampling",
+            "422",
+        ]);
+        let args = args.unwrap();
+        assert_eq!(args.format, ExportFormatKind::Jpeg);
+        assert_eq!(
+            (args.quality, args.subsampling),
+            (Some(75), Some(JpegSubsampling::S422))
+        );
+        for bad in [
+            &["in.png", "out.jpg", "--quality", "0"][..],
+            &["in.png", "out.jpg", "--quality", "101"],
+            &["in.png", "out.jpg", "--subsampling", "411"],
+            &["in.png", "out.jpg", "--depth", "u16"],
+            &["in.png", "out.jpg", "--compression", "fast"],
+            &["in.png", "out.jpg", "--space", "rec2100-pq"],
+            &["in.png", "out.png", "--quality", "90"],
+            &["in.png", "out.tif", "--subsampling", "420"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+
+        let size = Size::new(4, 4);
+        let image = RasterImage::from_pixels(
+            size,
+            slopshop_core::color::PixelFormat::RGBA8_SRGB,
+            &[128u8; 4 * 4 * 4],
+        )
+        .unwrap();
+        let document = single_layer_document(image, "layer").unwrap();
+        let spec = export_spec(&parse(&["in.png", "out.jpg"]).unwrap(), &document);
+        assert_eq!(
+            describe(&spec),
+            "--format jpeg --depth u8 --space srgb --quality 90 --subsampling 444 --matte ffffff"
+        );
     }
 
     /// The GPU is the default source; the CPU compositor replaces it without an adapter

@@ -26,7 +26,11 @@ allow = [
     "MPL-2.0",
 ]
 confidence-threshold = 0.9
-exceptions = []
+exceptions = [
+    # jpeg-encoder is (MIT OR Apache-2.0) AND IJG: the IJG license only asks for an
+    # acknowledgement in the documentation (ADR 0010). Allowed for this crate only.
+    { allow = ["IJG"], crate = "jpeg-encoder" },
+]
 
 [bans]
 multiple-versions = "allow"

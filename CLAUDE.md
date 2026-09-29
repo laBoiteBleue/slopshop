@@ -14,7 +14,7 @@ The name is a joke; the engineering is not.
 | `crates/slopshop-cli`   | Headless binary. Proves the engine runs without the UI.                                |
 | `app/src-tauri`         | Tauri shell: thin IPC layer (DTOs + commands) over core/render. No image logic.        |
 | `app/src`               | Svelte 5 + TypeScript UI. Presentation and input only.                                 |
-| `docs/`                 | `architecture.md`, `roadmap.md`, ADRs in `docs/adr/`, research in `docs/research/`.    |
+| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), ADRs in `docs/adr/`, research in `docs/research/`. |
 
 Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). Never the reverse.
 
@@ -38,9 +38,15 @@ testing (see Workflow).
 
 ## Workflow
 
+- **One branch and one pull request per feature or fix**, one at a time: branch from an
+  up-to-date `main` (`feat/…`, `fix/…`) before the first change. CI runs on every pull
+  request (Linux, macOS, Windows).
 - **Never commit before the maintainer has tested the change.** When a change is ready: run
   the checks below, then stop and describe what to test (commands, expected behavior). Commit
-  only after the maintainer confirms. Never push without being asked.
+  only after the maintainer confirms. Once they have, push the branch and open the pull request
+  (`gh pr create`); push nothing else without being asked.
+- **Never merge without the maintainer's go-ahead.** Pull requests are merged with "Rebase and
+  merge", so `main` stays linear and keeps the individual commits.
 - Commits are small and logical, with clear messages (conventional-commit style prefixes).
 - The maintainer tests on Windows only: macOS/Linux-specific work cannot be validated by them;
   keep it deferred or rely on CI, and say explicitly what is untested on those platforms.

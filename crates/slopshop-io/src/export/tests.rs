@@ -50,6 +50,7 @@ fn png_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool) -> ExportSpec 
         },
         space,
         keep_alpha,
+        matte: WHITE_MATTE,
         dither: true,
     }
 }
@@ -541,6 +542,7 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         },
         space: ColorSpace::LINEAR_REC2020,
         keep_alpha: true,
+        matte: WHITE_MATTE,
         dither: false,
     };
     let report = export(&doc, &path, &spec).unwrap();
@@ -571,6 +573,7 @@ fn unsupported_spaces_are_rejected_before_writing() {
             format,
             space,
             keep_alpha: true,
+            matte: WHITE_MATTE,
             dither: false,
         };
         let result = export_image(
@@ -637,6 +640,7 @@ fn target_formats_follow_the_format_conventions() {
         format,
         space: ColorSpace::LINEAR_SRGB,
         keep_alpha: true,
+        matte: WHITE_MATTE,
         dither: false,
     };
     let alpha = |format| spec(format).target_format().alpha;
@@ -791,4 +795,78 @@ fn alpha_is_dropped_only_for_structurally_opaque_documents() {
     let small = Arc::new(raster(size, Rgb, SampleType::U8, ColorSpace::SRGB));
     push_layer(&mut doc, LayerContent::Raster { image: small }, 1.0);
     assert!(keeps_alpha(&doc));
+}
+
+/// A translucent RGBA8 raster in sRGB, every alpha from 0 to 255.
+fn translucent_raster(size: Size) -> Arc<RasterImage> {
+    let format = PixelFormat {
+        layout: ChannelLayout::Rgba,
+        sample: SampleType::U8,
+        color_space: ColorSpace::SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let bytes: Vec<u8> = (0..size.pixel_count())
+        .flat_map(|i| [(i * 7) as u8, (i * 3) as u8, (i * 11) as u8, i as u8])
+        .collect();
+    Arc::new(RasterImage::from_pixels(size, format, &bytes).unwrap())
+}
+
+#[test]
+fn flattening_over_the_matte_equals_a_fill_below() {
+    let size = Size::new(16, 16);
+    let matte = LinearRgba::from_srgb_encoded_to_working(0.9, 0.5, 0.2, 1.0);
+    let spec = ExportSpec {
+        matte,
+        dither: false,
+        ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
+    };
+
+    let mut flattened_doc = Document::new(size);
+    let image = translucent_raster(size);
+    push_layer(
+        &mut flattened_doc,
+        LayerContent::Raster {
+            image: image.clone(),
+        },
+        1.0,
+    );
+    let flattened_path = temp_path("matte-flattened.png");
+    let report = export(&flattened_doc, &flattened_path, &spec).unwrap();
+    // Every pixel but the one with alpha 255.
+    assert_eq!(report.notices, [ExportNotice::AlphaFlattened(255)]);
+
+    let mut fill_doc = Document::new(size);
+    push_layer(&mut fill_doc, LayerContent::Fill { color: matte }, 1.0);
+    push_layer(&mut fill_doc, LayerContent::Raster { image }, 1.0);
+    let fill_path = temp_path("matte-fill.png");
+    assert_eq!(
+        export(&fill_doc, &fill_path, &spec).unwrap(),
+        ExportReport::default()
+    );
+
+    let flattened = image::open(&flattened_path).unwrap().to_rgb8();
+    let fill = image::open(&fill_path).unwrap().to_rgb8();
+    std::fs::remove_file(&flattened_path).ok();
+    std::fs::remove_file(&fill_path).ok();
+    assert!(
+        flattened == fill,
+        "flattening differs from a fill layer below"
+    );
+}
+
+#[test]
+fn white_is_the_default_matte() {
+    let size = Size::new(4, 4);
+    let doc = Document::new(size);
+    let spec = ExportSpec {
+        keep_alpha: false,
+        ..default_spec(ExportFormatKind::Png, &doc)
+    };
+    assert_eq!(spec.matte, WHITE_MATTE);
+    let path = temp_path("default-matte.png");
+    let report = export(&doc, &path, &spec).unwrap();
+    assert_eq!(report.notices, [ExportNotice::AlphaFlattened(16)]);
+    let output = image::open(&path).unwrap().to_rgb8();
+    std::fs::remove_file(&path).ok();
+    assert!(output.pixels().all(|p| p.0 == [255, 255, 255]));
 }

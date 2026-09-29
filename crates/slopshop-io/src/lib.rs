@@ -1347,6 +1347,60 @@ mod tests {
         ));
     }
 
+    /// An 8-bit PNG of `color`, one row of `data`, with a `tRNS` chunk.
+    fn png_with_trns(color: ::png::ColorType, palette: &[u8], trns: &[u8], data: &[u8]) -> Vec<u8> {
+        let width = (data.len() / color.samples()) as u32;
+        let mut out = Vec::new();
+        let mut encoder = ::png::Encoder::new(&mut out, width, 1);
+        encoder.set_color(color);
+        encoder.set_depth(::png::BitDepth::Eight);
+        if !palette.is_empty() {
+            encoder.set_palette(palette.to_vec());
+        }
+        encoder.set_trns(trns.to_vec());
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(data).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    #[test]
+    fn png_trns_transparency_becomes_alpha() {
+        // Palette with partial alpha: red transparent, green half, blue opaque (no entry).
+        let palette = png_with_trns(
+            ::png::ColorType::Indexed,
+            &[255, 0, 0, 0, 255, 0, 0, 0, 255],
+            &[0, 128],
+            &[0, 1, 2],
+        );
+        let image = open_bytes("palette-trns.png", &palette).unwrap().image;
+        assert!(image.format().layout.has_alpha());
+        assert_eq!(stored_pixel(&image, 0, 0)[3], 0);
+        assert_eq!(stored_pixel(&image, 1, 0), [0, 255, 0, 128]);
+        assert_eq!(stored_pixel(&image, 2, 0), [0, 0, 255, 255]);
+
+        // RGB with one transparent color (16-bit sample values in tRNS).
+        let rgb = png_with_trns(
+            ::png::ColorType::Rgb,
+            &[],
+            &[0, 10, 0, 20, 0, 30],
+            &[10, 20, 30, 1, 2, 3],
+        );
+        let image = open_bytes("rgb-trns.png", &rgb).unwrap().image;
+        assert!(image.format().layout.has_alpha());
+        assert_eq!(stored_pixel(&image, 0, 0)[3], 0);
+        assert_eq!(stored_pixel(&image, 1, 0), [1, 2, 3, 255]);
+
+        // Gray with one transparent level.
+        let gray = png_with_trns(::png::ColorType::Grayscale, &[], &[0, 7], &[7, 200]);
+        let image = open_bytes("gray-trns.png", &gray).unwrap().image;
+        let format = image.format();
+        assert!(format.layout.has_alpha(), "{format:?}");
+        let (transparent, opaque) = (stored_pixel(&image, 0, 0), stored_pixel(&image, 1, 0));
+        assert_eq!(transparent.last(), Some(&0));
+        assert_eq!(opaque.last(), Some(&255));
+    }
+
     #[test]
     fn missing_file_is_an_io_error() {
         assert!(matches!(

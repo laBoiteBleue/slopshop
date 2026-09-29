@@ -261,7 +261,7 @@ mod tests {
         AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType,
         TransferFunction, WORKING_SPACE, srgb_decode,
     };
-    use crate::convert::{ConversionReport, ConvertOptions, Converter};
+    use crate::convert::{ConversionReport, ConvertOptions, Converter, WHITE_MATTE};
     use crate::document::{Layer, LayerId};
     use crate::edit::Edit;
     use crate::raster::RasterImage;
@@ -535,6 +535,8 @@ mod tests {
         let options = ConvertOptions {
             dither,
             big_endian: false,
+            // Irrelevant: the source is opaque or keeps its alpha.
+            matte: WHITE_MATTE,
         };
         let converter = Converter::new(format, options).unwrap();
         let bpp = converter.bytes_per_pixel();

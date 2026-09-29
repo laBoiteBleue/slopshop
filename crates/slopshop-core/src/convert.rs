@@ -8,11 +8,13 @@
 //! Each pixel goes through, in this order:
 //! 1. non-finite inputs: NaN → 0; ±inf is kept for float targets and becomes ±`f32::MAX` (then
 //!    clipped) for integer targets; always counted;
-//! 2. the matrix from the working space to the target primaries (in f64);
-//! 3. un-premultiplying for straight-alpha targets (alpha 0 gives color 0). RGB targets keep the
-//!    premultiplied color, i.e. the image over black: callers drop alpha only when the document
-//!    is opaque;
-//! 4. the range policy: integer targets clip each channel to the range of their codes and count
+//! 2. for targets without alpha, flattening over the matte of [`ConvertOptions`]:
+//!    `color + (1 − alpha) × matte`, in the working space (linear light, before any matrix).
+//!    Pixels whose alpha is below 1 by more than the rounding noise are counted in
+//!    [`ConversionReport::alpha_flattened`] (ADR 0010);
+//! 3. the matrix from the working space to the target primaries (in f64);
+//! 4. un-premultiplying for straight-alpha targets (alpha 0 gives color 0);
+//! 5. the range policy: integer targets clip each channel to the range of their codes and count
 //!    it; float targets keep every finite value (half floats count what overflows their range).
 //!    A value outside the range by less than the working space's rounding noise
 //!    (`ROUND_TRIP_NOISE` of the pixel's largest channel, e.g. a channel that should be 0 after
@@ -20,7 +22,7 @@
 //!    end code like any value beyond the range, but it is not counted. Without this, in-gamut
 //!    colors would be reported as clipped where the curve leaves no margin: at 0 for pure power
 //!    curves (Adobe RGB, ProPhoto) at 16 bits, at the top for PQ (whose decode saturates);
-//! 5. transfer encoding and quantization. For 8/16-bit, both are done at once and exactly with a
+//! 6. transfer encoding and quantization. For 8/16-bit, both are done at once and exactly with a
 //!    threshold table: code `k` covers the linear values between the decoded midpoints
 //!    `(k ± ½) / max`, adjusted so that `decode(k / max)` — what import produces — always gives
 //!    `k` back. So an unedited source exported in its own format through the CPU compositor
@@ -31,7 +33,7 @@
 //!    (~1e-9 across channels through the matrices), so some of them come back a few codes off
 //!    (see `unedited_integer_sources_export_bit_exact` in `composite`). The GPU source rounds
 //!    differently and is not covered by this guarantee;
-//! 6. dithering (8-bit only, optional): blue noise of ±0.49 step added in the encoded domain
+//! 7. dithering (8-bit only, optional): blue noise of ±0.49 step added in the encoded domain
 //!    before rounding, indexed by absolute pixel position so that bands and tiles do not matter.
 //!    A value exactly on a level never moves. The same offset is used for R, G and B (neutral
 //!    noise, no color speckles).
@@ -44,7 +46,7 @@ use std::fmt;
 
 use crate::blue_noise;
 use crate::color::{
-    AlphaMode, ChannelLayout, ColorSpace, IDENTITY, Mat3, PixelFormat, SampleType,
+    AlphaMode, ChannelLayout, ColorSpace, IDENTITY, LinearRgba, Mat3, PixelFormat, SampleType,
     TransferFunction, WORKING_SPACE, f32_to_f16, mat_vec,
 };
 use crate::raster::decode_levels;
@@ -56,13 +58,19 @@ use crate::raster::decode_levels;
 /// Integer targets do not count values outside their range by less than this as clipped.
 const ROUND_TRIP_NOISE: f64 = 8.0 * f32::EPSILON as f64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConvertOptions {
     /// Blue-noise dither for 8-bit targets (ignored by the others).
     pub dither: bool,
     /// Byte order of 16/32-bit samples: big-endian (PNG) or little-endian (TIFF, EXR).
     pub big_endian: bool,
+    /// Color that targets without alpha are flattened over, in [`WORKING_SPACE`] (linear
+    /// light). Its alpha is ignored: the matte is opaque. Ignored by targets with alpha.
+    pub matte: LinearRgba,
 }
+
+/// The default matte: white.
+pub const WHITE_MATTE: LinearRgba = LinearRgba::new(1.0, 1.0, 1.0, 1.0);
 
 /// Lossy events of a conversion, counted per output sample (per input sample for
 /// `non_finite`). An infinity clipped for an integer target counts in both places.
@@ -77,6 +85,9 @@ pub struct ConversionReport {
     pub non_finite: u64,
     /// Finite values beyond the half-float range, written as ±65504 (f16 targets).
     pub half_overflow: u64,
+    /// Pixels (not samples) flattened over the matte: targets without alpha, input alpha below
+    /// 1 by more than the rounding noise (NaN alpha included).
+    pub alpha_flattened: u64,
 }
 
 impl ConversionReport {
@@ -86,6 +97,7 @@ impl ConversionReport {
         self.clipped_low += other.clipped_low;
         self.non_finite += other.non_finite;
         self.half_overflow += other.half_overflow;
+        self.alpha_flattened += other.alpha_flattened;
     }
 }
 
@@ -95,6 +107,8 @@ pub enum ConvertError {
     UnsupportedLayout(ChannelLayout),
     /// The target primaries do not define a usable RGB space.
     InvalidColorSpace(ColorSpace),
+    /// The matte has a non-finite component.
+    InvalidMatte(LinearRgba),
     /// The source is not whole RGBA pixels, or the destination does not hold exactly as many
     /// target pixels.
     BufferSizeMismatch { source_len: usize, dest_len: usize },
@@ -107,6 +121,7 @@ impl fmt::Display for ConvertError {
                 write!(f, "cannot convert to the {layout:?} layout")
             }
             ConvertError::InvalidColorSpace(space) => write!(f, "invalid color space {space:?}"),
+            ConvertError::InvalidMatte(matte) => write!(f, "invalid matte {matte:?}"),
             ConvertError::BufferSizeMismatch {
                 source_len,
                 dest_len,
@@ -140,6 +155,10 @@ impl Converter {
         let space = target.color_space;
         if !space.primaries.is_valid() {
             return Err(ConvertError::InvalidColorSpace(space));
+        }
+        let matte = options.matte;
+        if ![matte.r, matte.g, matte.b].iter().all(|c| c.is_finite()) {
+            return Err(ConvertError::InvalidMatte(matte));
         }
         let matrix = WORKING_SPACE.matrix_to(&space);
         let quantizer = match target.sample {
@@ -221,14 +240,25 @@ impl Converter {
                 }
             };
         }
-        let alpha = input[3].clamp(0.0, 1.0);
-        let premultiplied = [input[0], input[1], input[2]];
+        let has_alpha = self.target.layout.has_alpha();
+        let mut alpha = input[3].clamp(0.0, 1.0);
+        let mut premultiplied = [input[0], input[1], input[2]];
+        if !has_alpha {
+            if alpha < 1.0 - ROUND_TRIP_NOISE {
+                report.alpha_flattened += 1;
+            }
+            let matte = self.options.matte;
+            let cover = 1.0 - alpha;
+            for (c, m) in premultiplied.iter_mut().zip([matte.r, matte.g, matte.b]) {
+                *c += cover * f64::from(m);
+            }
+            alpha = 1.0;
+        }
         let color = match &self.matrix {
             Some(m) => mat_vec(m, premultiplied),
             None => premultiplied,
         };
 
-        let has_alpha = self.target.layout.has_alpha();
         let straight = has_alpha && self.target.alpha == AlphaMode::Straight;
         // `encode(color / alpha) × alpha`, see the module documentation.
         let encoded_premultiplied = has_alpha
@@ -530,12 +560,16 @@ mod tests {
         }
     }
 
+    /// Black matte: targets without alpha get the premultiplied color as it is.
     fn options(dither: bool) -> ConvertOptions {
         ConvertOptions {
             dither,
             big_endian: false,
+            matte: BLACK,
         }
     }
+
+    const BLACK: LinearRgba = LinearRgba::new(0.0, 0.0, 0.0, 1.0);
 
     fn convert(
         format: PixelFormat,
@@ -851,8 +885,8 @@ mod tests {
         );
         let src = grays(&[258.0 / 65535.0]);
         let big = ConvertOptions {
-            dither: false,
             big_endian: true,
+            ..options(false)
         };
         assert_eq!(convert(format, big, &src, 0, 0).0, [1, 2, 1, 2, 1, 2]);
         assert_eq!(
@@ -1003,9 +1037,18 @@ mod tests {
                     ] {
                         let format = target(layout, sample, space, alpha_mode);
                         let (_, report) = convert(format, options(false), &src, 0, 0);
+                        // Translucent pixels are flattened (black matte) for RGB, not clipped.
+                        let flattened = if layout.has_alpha() || alpha == 1.0 {
+                            0
+                        } else {
+                            colors.len() as u64
+                        };
                         assert_eq!(
                             report,
-                            ConversionReport::default(),
+                            ConversionReport {
+                                alpha_flattened: flattened,
+                                ..ConversionReport::default()
+                            },
                             "{space:?} {sample:?} {layout:?} {alpha_mode:?} alpha {alpha}"
                         );
                     }
@@ -1038,6 +1081,7 @@ mod tests {
             clipped_low: 2,
             non_finite: 3,
             half_overflow: 4,
+            alpha_flattened: 5,
         };
         a.merge(&a.clone());
         assert_eq!(
@@ -1047,7 +1091,123 @@ mod tests {
                 clipped_low: 4,
                 non_finite: 6,
                 half_overflow: 8,
+                alpha_flattened: 10,
             }
         );
+    }
+
+    fn matte(color: LinearRgba) -> ConvertOptions {
+        ConvertOptions {
+            matte: color,
+            ..options(false)
+        }
+    }
+
+    const LINEAR_RGB32: PixelFormat = PixelFormat {
+        layout: ChannelLayout::Rgb,
+        sample: SampleType::F32,
+        color_space: WORKING_SPACE,
+        alpha: AlphaMode::Straight,
+    };
+
+    #[test]
+    fn targets_without_alpha_are_flattened_over_the_matte() {
+        let red = LinearRgba::new(0.8, 0.1, 0.2, 1.0);
+        // Premultiplied inputs: transparent, half-covered green, opaque blue.
+        let src = [
+            0.0, 0.0, 0.0, 0.0, //
+            0.0, 0.25, 0.0, 0.5, //
+            0.0, 0.0, 0.6, 1.0,
+        ];
+        let (out, report) = convert(LINEAR_RGB32, matte(red), &src, 0, 0);
+        let expected = [
+            0.8, 0.1, 0.2, //
+            0.4, 0.3, 0.1, //
+            0.0, 0.0, 0.6,
+        ];
+        for (got, want) in f32s(&out).iter().zip(expected) {
+            assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+        }
+        assert_eq!(report.alpha_flattened, 2);
+        // The matte's own alpha is ignored: it is opaque.
+        let see_through = LinearRgba { a: 0.0, ..red };
+        assert_eq!(convert(LINEAR_RGB32, matte(see_through), &src, 0, 0).0, out);
+    }
+
+    #[test]
+    fn white_matte_whitens_transparency_in_every_space() {
+        let format = target(
+            ChannelLayout::Rgb,
+            SampleType::U8,
+            ColorSpace::SRGB,
+            AlphaMode::Straight,
+        );
+        let (out, report) = convert(format, matte(WHITE_MATTE), &[0.0; 4], 0, 0);
+        assert_eq!(out, [255, 255, 255]);
+        assert_eq!(
+            report,
+            ConversionReport {
+                alpha_flattened: 1,
+                ..ConversionReport::default()
+            }
+        );
+    }
+
+    #[test]
+    fn opaque_pixels_and_alpha_targets_are_not_flattened() {
+        let red = LinearRgba::new(0.8, 0.1, 0.2, 1.0);
+        // Alpha within rounding noise of 1, and above 1 (clamped): opaque, not counted.
+        let almost = 1.0 - f32::EPSILON;
+        let src = [0.5, 0.5, 0.5, almost, 0.5, 0.5, 0.5, 1.5];
+        let (_, report) = convert(LINEAR_RGB32, matte(red), &src, 0, 0);
+        assert_eq!(report.alpha_flattened, 0);
+        // A target with alpha keeps it and ignores the matte.
+        let rgba = PixelFormat {
+            layout: ChannelLayout::Rgba,
+            ..LINEAR_RGB32
+        };
+        let half = [0.0, 0.25, 0.0, 0.5];
+        let (out, report) = convert(rgba, matte(red), &half, 0, 0);
+        assert_eq!(f32s(&out), [0.0, 0.5, 0.0, 0.5]);
+        assert_eq!(report.alpha_flattened, 0);
+    }
+
+    #[test]
+    fn nan_alpha_is_flattened_and_counted() {
+        let red = LinearRgba::new(0.8, 0.1, 0.2, 1.0);
+        let (out, report) = convert(LINEAR_RGB32, matte(red), &[0.0, 0.0, 0.0, f32::NAN], 0, 0);
+        assert_eq!(f32s(&out), [0.8, 0.1, 0.2]);
+        assert_eq!(report.alpha_flattened, 1);
+        assert_eq!(report.non_finite, 1);
+    }
+
+    #[test]
+    fn flattened_pixels_are_dithered_like_any_other() {
+        let format = target(
+            ChannelLayout::Rgb,
+            SampleType::U8,
+            ColorSpace::SRGB,
+            AlphaMode::Straight,
+        );
+        // A transparent row over a mid-gray matte, which falls between two codes.
+        let gray = LinearRgba::new(0.2, 0.2, 0.2, 1.0);
+        let src = vec![0.0f32; 64 * 4];
+        let (plain, _) = convert(format, matte(gray), &src, 0, 0);
+        let dithered_options = ConvertOptions {
+            dither: true,
+            ..matte(gray)
+        };
+        let (dithered, _) = convert(format, dithered_options, &src, 0, 0);
+        assert!(plain.iter().all(|&c| c == plain[0]));
+        assert!(dithered.iter().any(|&c| c != plain[0]));
+    }
+
+    #[test]
+    fn rejects_non_finite_mattes() {
+        let broken = LinearRgba::new(f32::NAN, 0.0, 0.0, 1.0);
+        assert!(matches!(
+            Converter::new(LINEAR_RGB32, matte(broken)),
+            Err(ConvertError::InvalidMatte(_))
+        ));
     }
 }

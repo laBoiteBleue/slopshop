@@ -90,7 +90,7 @@ impl Renderer {
             return Ok(Presented::Skipped);
         }
         if presenter.stale || presenter.configured != Some(surface_size) {
-            self.configure(presenter, surface_size);
+            self.configure(presenter, surface_size)?;
         }
         let frame = match presenter.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -194,24 +194,37 @@ impl Renderer {
         Ok(Presented::Frame)
     }
 
-    fn configure(&self, presenter: &mut Presenter, size: Size) {
-        presenter.surface.configure(
-            &self.device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
-                format: SURFACE_FORMAT,
-                color_space: wgpu::SurfaceColorSpace::Auto,
-                width: size.width,
-                height: size.height,
-                present_mode: wgpu::PresentMode::AutoVsync,
-                // One frame queued at most: input-to-screen latency over throughput.
-                desired_maximum_frame_latency: 1,
-                alpha_mode: presenter.alpha_mode,
-                view_formats: Vec::new(),
-            },
-        );
+    /// Configure the surface for `size`. A size the device cannot handle (e.g. beyond its
+    /// texture size limit) is an error, not a panic, and leaves the surface unconfigured.
+    fn configure(&self, presenter: &mut Presenter, size: Size) -> Result<(), RenderError> {
+        let max = self.device.limits().max_texture_dimension_2d;
+        if size.width > max || size.height > max {
+            return Err(RenderError::Surface(format!(
+                "surface size {}×{} exceeds the device's texture size limit ({max})",
+                size.width, size.height
+            )));
+        }
+        self.capture_errors(|| {
+            presenter.surface.configure(
+                &self.device,
+                &wgpu::SurfaceConfiguration {
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+                    format: SURFACE_FORMAT,
+                    color_space: wgpu::SurfaceColorSpace::Auto,
+                    width: size.width,
+                    height: size.height,
+                    present_mode: wgpu::PresentMode::AutoVsync,
+                    // One frame queued at most: input-to-screen latency over throughput.
+                    desired_maximum_frame_latency: 1,
+                    alpha_mode: presenter.alpha_mode,
+                    view_formats: Vec::new(),
+                },
+            );
+            Ok(())
+        })?;
         presenter.configured = Some(size);
         presenter.stale = false;
+        Ok(())
     }
 }
 

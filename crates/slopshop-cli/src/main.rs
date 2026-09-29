@@ -26,21 +26,29 @@ USAGE:
         output of --size, to a PNG file.
         Defaults: --size 1024x768 --doc 12000x8000 --out slopshop.png
 
-    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr] [--depth u8|u16|f16|f32]
+    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg] [--depth u8|u16|f16|f32]
                     [--space ID] [--compression fast|small|none|deflate|lzw]
-                    [--no-alpha] [--no-dither] [--cpu] [--bench]
-        Open an image file as a one-layer document and export it to PNG, TIFF or
-        OpenEXR with the format's default settings (ADR 0008); each option
-        overrides one of them. Prints the settings used and the export report.
-        --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr).
-        --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32.
+                    [--quality 1-100] [--subsampling 444|422|420]
+                    [--no-alpha] [--matte RRGGBB] [--no-dither] [--cpu] [--bench]
+        Open an image file as a one-layer document and export it to PNG, TIFF,
+        OpenEXR or JPEG with the format's default settings (ADR 0008, 0010); each
+        option overrides one of them. Prints the settings used and the export report.
+        --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
+                       .jpg, .jpeg).
+        --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG: u8.
                        The color space stays the default one unless --space is given.
         --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
-                       linear-rec2020, rec2100-pq, rec2100-hlg. TIFF: all but PQ and
-                       HLG. OpenEXR: linear-srgb, linear-rec2020.
+                       linear-rec2020, rec2100-pq, rec2100-hlg. TIFF and JPEG: all
+                       but PQ and HLG. OpenEXR: linear-srgb, linear-rec2020.
         --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
-                       lossless ZIP, no option.
-        --no-alpha     Drop the alpha channel: the image is written over black.
+                       lossless ZIP, no option. JPEG: see --quality, --subsampling.
+        --quality      JPEG quality, 1 to 100. Default: 90.
+        --subsampling  JPEG chroma subsampling: 444 (full color), 422, 420 (smallest).
+                       Default: 444.
+        --no-alpha     Drop the alpha channel: the image is flattened over the matte.
+                       JPEG has no alpha: it is always flattened.
+        --matte        The color transparency is flattened over when alpha is dropped,
+                       as sRGB RRGGBB. Default: ffffff (white).
         --no-dither    No dither for 8-bit samples.
         --cpu          Composite on the CPU instead of the GPU (also used when no
                        GPU is available).
@@ -187,6 +195,26 @@ fn write_png(frame: &Frame, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user documentation of the CLI (docs/cli.md) must cover every option of the usage.
+    #[test]
+    fn every_option_is_documented() {
+        let docs = include_str!("../../../docs/cli.md");
+        let options: Vec<&str> = USAGE
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .filter(|word| word.starts_with("--") && word.len() > 2)
+            .collect();
+        assert!(options.contains(&"--matte"), "{options:?}");
+        for option in options {
+            assert!(
+                docs.contains(option),
+                "{option} is missing from docs/cli.md"
+            );
+        }
+        for command in ["slopshop gpu", "slopshop render", "slopshop export"] {
+            assert!(docs.contains(command), "{command}");
+        }
+    }
 
     #[test]
     fn parses_sizes() {
