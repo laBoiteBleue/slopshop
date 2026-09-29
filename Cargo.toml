@@ -52,6 +52,10 @@ opt-level = 2
 [profile.dev.package.slopshop-core]
 opt-level = 2
 
+# Same for the file formats' own byte loops (e.g. the `.slop` tile filters).
+[profile.dev.package.slopshop-io]
+opt-level = 2
+
 [workspace.lints.rust]
 # `unsafe` must be isolated and justified: opt in locally with `#[allow(unsafe_code)]`.
 unsafe_code = "deny"

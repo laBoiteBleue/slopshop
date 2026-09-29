@@ -15,6 +15,7 @@ mod atomic;
 pub mod export;
 mod icc;
 mod orient;
+pub mod slop;
 mod tiff_import;
 
 use std::fmt;
