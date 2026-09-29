@@ -141,7 +141,8 @@ opacity above 0) is an opaque fill, or a raster without alpha covering the canva
 ### Out of scope
 
 - JPEG and WebP (`image` 0.25: 8-bit only; JPEG ≤ 65535 px per side and drops alpha silently;
-  WebP lossless only, whole buffer, ≤ 16384 px per side).
+  WebP lossless only, whole buffer, ≤ 16384 px per side). Added by [ADR 0010](0010-jpeg-webp-export.md),
+  which also replaces the "over black" of alpha-less targets with a matte.
 - Gray targets (the converter accepts RGB and RGBA only), TIFF tiles, the TIFF floating-point
   predictor, 16-bit dither, non-linear EXR.
 - Tone mapping, gamut compression and soft proofing: document operations, not export options.
