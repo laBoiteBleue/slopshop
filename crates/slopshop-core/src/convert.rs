@@ -2,8 +2,8 @@
 //!
 //! Input: rows of premultiplied RGBA `f32` in [`WORKING_SPACE`] (linear Rec.2020, unbounded),
 //! as the compositors produce them. Output: interleaved samples of a target [`PixelFormat`]
-//! (RGB or RGBA; 8/16-bit integer or 16/32-bit float; any valid color space; straight or
-//! premultiplied alpha), ready for an encoder.
+//! (RGB, RGBA, gray or gray + alpha; 8/16-bit integer or 16/32-bit float; any valid color space;
+//! straight or premultiplied alpha), ready for an encoder.
 //!
 //! Each pixel goes through, in this order:
 //! 1. non-finite inputs: NaN → 0; ±inf is kept for float targets and becomes ±`f32::MAX` (then
@@ -13,6 +13,10 @@
 //!    Pixels whose alpha is below 1 by more than the rounding noise are counted in
 //!    [`ConversionReport::alpha_flattened`] (ADR 0010);
 //! 3. the matrix from the working space to the target primaries (in f64);
+//!    gray targets then keep the **luminance** of the color: `Y` of the target primaries (the
+//!    second row of their RGB → XYZ matrix, whose white has `Y` = 1), as ICC gray profiles
+//!    define gray. A neutral color keeps its value exactly (the row sums to 1); pixels that had
+//!    color, beyond the rounding noise, are counted in [`ConversionReport::color_discarded`];
 //! 4. un-premultiplying for straight-alpha targets (alpha 0 gives color 0);
 //! 5. the range policy: integer targets clip each channel to the range of their codes and count
 //!    it; float targets keep every finite value (half floats count what overflows their range).
@@ -46,8 +50,8 @@ use std::fmt;
 
 use crate::blue_noise;
 use crate::color::{
-    AlphaMode, ChannelLayout, ColorSpace, IDENTITY, LinearRgba, Mat3, PixelFormat, SampleType,
-    TransferFunction, WORKING_SPACE, f32_to_f16, mat_vec,
+    AlphaMode, ColorSpace, IDENTITY, LinearRgba, Mat3, PixelFormat, SampleType, TransferFunction,
+    WORKING_SPACE, f32_to_f16, mat_vec,
 };
 use crate::raster::decode_levels;
 
@@ -88,6 +92,9 @@ pub struct ConversionReport {
     /// Pixels (not samples) flattened over the matte: targets without alpha, input alpha below
     /// 1 by more than the rounding noise (NaN alpha included).
     pub alpha_flattened: u64,
+    /// Pixels (not samples) whose color was replaced by its luminance: gray targets, channels
+    /// differing from the luminance by more than the rounding noise.
+    pub color_discarded: u64,
 }
 
 impl ConversionReport {
@@ -98,14 +105,14 @@ impl ConversionReport {
         self.non_finite += other.non_finite;
         self.half_overflow += other.half_overflow;
         self.alpha_flattened += other.alpha_flattened;
+        self.color_discarded += other.color_discarded;
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConvertError {
-    /// Only RGB and RGBA targets are supported.
-    UnsupportedLayout(ChannelLayout),
-    /// The target primaries do not define a usable RGB space.
+    /// The target primaries do not define a usable RGB space (gray targets included: their
+    /// luminance is defined by the primaries).
     InvalidColorSpace(ColorSpace),
     /// The matte has a non-finite component.
     InvalidMatte(LinearRgba),
@@ -117,9 +124,6 @@ pub enum ConvertError {
 impl fmt::Display for ConvertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConvertError::UnsupportedLayout(layout) => {
-                write!(f, "cannot convert to the {layout:?} layout")
-            }
             ConvertError::InvalidColorSpace(space) => write!(f, "invalid color space {space:?}"),
             ConvertError::InvalidMatte(matte) => write!(f, "invalid matte {matte:?}"),
             ConvertError::BufferSizeMismatch {
@@ -143,15 +147,14 @@ pub struct Converter {
     options: ConvertOptions,
     /// Working space → target primaries; `None` when they are the same.
     matrix: Option<Mat3>,
+    /// Gray targets: the luminance (`Y`) of each target primary.
+    luminance: Option<[f64; 3]>,
     /// Integer targets only.
     quantizer: Option<Quantizer>,
 }
 
 impl Converter {
     pub fn new(target: PixelFormat, options: ConvertOptions) -> Result<Self, ConvertError> {
-        if target.layout.is_gray() {
-            return Err(ConvertError::UnsupportedLayout(target.layout));
-        }
         let space = target.color_space;
         if !space.primaries.is_valid() {
             return Err(ConvertError::InvalidColorSpace(space));
@@ -170,6 +173,7 @@ impl Converter {
             options,
             // Skipping the identity also keeps infinities intact (inf × 0 would be NaN).
             matrix: (matrix != IDENTITY).then_some(matrix),
+            luminance: target.layout.is_gray().then(|| space.primaries.to_xyz()[1]),
             quantizer,
         })
     }
@@ -254,10 +258,25 @@ impl Converter {
             }
             alpha = 1.0;
         }
-        let color = match &self.matrix {
+        let rgb = match &self.matrix {
             Some(m) => mat_vec(m, premultiplied),
             None => premultiplied,
         };
+        let largest = rgb.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+        let (values, channels) = match self.luminance {
+            Some([yr, yg, yb]) => {
+                let y = yr * rgb[0] + yg * rgb[1] + yb * rgb[2];
+                if rgb
+                    .iter()
+                    .any(|c| (c - y).abs() > ROUND_TRIP_NOISE * largest)
+                {
+                    report.color_discarded += 1;
+                }
+                ([y, 0.0, 0.0], 1)
+            }
+            None => (rgb, 3),
+        };
+        let color = &values[..channels];
 
         let straight = has_alpha && self.target.alpha == AlphaMode::Straight;
         // `encode(color / alpha) × alpha`, see the module documentation.
@@ -266,11 +285,11 @@ impl Converter {
             && !self.target.color_space.transfer.is_linear();
         let unpremultiply = |c: f64| if alpha > 0.0 { c / alpha } else { 0.0 };
         // Outside the range by less than this (premultiplied): rounding, not clipping.
-        let rounding = ROUND_TRIP_NOISE * color.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+        let rounding = ROUND_TRIP_NOISE * largest;
 
         let sample_bytes = self.target.sample.bytes() as usize;
         let mut samples = out.chunks_exact_mut(sample_bytes);
-        for c in color {
+        for &c in color {
             let c = if c.is_nan() { 0.0 } else { c };
             let Some(sample) = samples.next() else { return };
             match &self.quantizer {
@@ -516,7 +535,7 @@ impl Quantizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::RgbPrimaries;
+    use crate::color::{ChannelLayout, RgbPrimaries};
 
     const NAMED: [TransferFunction; 8] = [
         TransferFunction::Linear,
@@ -612,14 +631,6 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_targets() {
-        let gray = PixelFormat {
-            layout: ChannelLayout::Gray,
-            ..PixelFormat::RGBA8_SRGB
-        };
-        assert_eq!(
-            Converter::new(gray, options(false)).unwrap_err(),
-            ConvertError::UnsupportedLayout(ChannelLayout::Gray)
-        );
         let mut broken = PixelFormat::RGBA8_SRGB;
         broken.color_space.primaries.green = broken.color_space.primaries.red;
         assert!(matches!(
@@ -1082,6 +1093,7 @@ mod tests {
             non_finite: 3,
             half_overflow: 4,
             alpha_flattened: 5,
+            color_discarded: 6,
         };
         a.merge(&a.clone());
         assert_eq!(
@@ -1092,6 +1104,7 @@ mod tests {
                 non_finite: 6,
                 half_overflow: 8,
                 alpha_flattened: 10,
+                color_discarded: 12,
             }
         );
     }
@@ -1209,5 +1222,78 @@ mod tests {
             Converter::new(LINEAR_RGB32, matte(broken)),
             Err(ConvertError::InvalidMatte(_))
         ));
+    }
+
+    #[test]
+    fn every_gray_code_round_trips_for_every_transfer() {
+        // Gray imports are neutral colors: decoded code k, as (v, v, v), must come back as k.
+        for tf in NAMED {
+            let space = rec2020(tf);
+            for sample in [SampleType::U8, SampleType::U16] {
+                let levels = decode_levels(tf, sample);
+                for layout in [ChannelLayout::Gray, ChannelLayout::GrayAlpha] {
+                    let format = target(layout, sample, space, AlphaMode::Straight);
+                    let (bytes, report) = convert(format, options(false), &grays(&levels), 0, 0);
+                    let codes: Vec<u32> = match sample {
+                        SampleType::U8 => bytes.iter().map(|&b| u32::from(b)).collect(),
+                        _ => u16s(&bytes).into_iter().map(u32::from).collect(),
+                    };
+                    let channels = layout.channels() as usize;
+                    for (k, px) in codes.chunks_exact(channels).enumerate() {
+                        assert_eq!(px[0], k as u32, "{tf:?} {sample:?} {layout:?} code {k}");
+                    }
+                    assert_eq!(report, ConversionReport::default(), "{tf:?} {sample:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gray_is_the_luminance_of_the_target_primaries() {
+        // Pure sRGB primaries (in the working space) become their Rec. 709 luminance in a
+        // linear sRGB gray target; the color is reported as discarded, per pixel.
+        let to_working = ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE);
+        let src: Vec<f32> = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            .iter()
+            .flat_map(|rgb| {
+                let [r, g, b] = mat_vec(&to_working, *rgb);
+                [r as f32, g as f32, b as f32, 1.0]
+            })
+            .collect();
+        let format = target(
+            ChannelLayout::Gray,
+            SampleType::F32,
+            ColorSpace::LINEAR_SRGB,
+            AlphaMode::Straight,
+        );
+        let (bytes, report) = convert(format, options(false), &src, 0, 0);
+        let y = ColorSpace::LINEAR_SRGB.primaries.to_xyz()[1];
+        for (got, want) in f32s(&bytes).iter().zip(y) {
+            assert!((f64::from(*got) - want).abs() < 1e-6, "{got} vs {want}");
+        }
+        assert!((y[0] - 0.2126).abs() < 1e-4 && (y[1] - 0.7152).abs() < 1e-4);
+        assert_eq!(report.color_discarded, 3);
+    }
+
+    #[test]
+    fn gray_alpha_targets_unpremultiply_and_flatten_like_color_ones() {
+        let format = target(
+            ChannelLayout::GrayAlpha,
+            SampleType::U8,
+            ColorSpace::LINEAR_REC2020,
+            AlphaMode::Straight,
+        );
+        let (bytes, report) = convert(format, options(false), &[0.25, 0.25, 0.25, 0.5], 0, 0);
+        assert_eq!(bytes, [128, 128]);
+        assert_eq!(report, ConversionReport::default());
+        // Without alpha: flattened over a neutral matte, still neutral.
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            ..format
+        };
+        let white = matte(WHITE_MATTE);
+        let (bytes, report) = convert(gray, white, &[0.25, 0.25, 0.25, 0.5], 0, 0);
+        assert_eq!(bytes, [191]);
+        assert_eq!((report.alpha_flattened, report.color_discarded), (1, 0));
     }
 }
