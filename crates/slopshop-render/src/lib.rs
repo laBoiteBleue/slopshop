@@ -189,9 +189,11 @@ impl Renderer {
         }
 
         // Baseline limits, raised to what the adapter offers for buffer sizes so that large
-        // (e.g. 8K display) viewports fit in one storage buffer.
+        // (e.g. 8K display) viewports fit in one storage buffer, and for texture sizes so that
+        // window surfaces larger than the baseline's 2048 px can be configured.
         let adapter_limits = adapter.limits();
         let required_limits = wgpu::Limits {
+            max_texture_dimension_2d: adapter_limits.max_texture_dimension_2d,
             max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
             max_buffer_size: adapter_limits.max_buffer_size,
             max_texture_array_layers: adapter_limits.max_texture_array_layers,
@@ -1018,6 +1020,17 @@ mod tests {
             ViewTransform::fit(document.size(), output, 0),
             output,
         )
+    }
+
+    #[test]
+    fn device_allows_the_adapters_texture_size() {
+        let Some(r) = renderer() else { return };
+        // Regression: the baseline limits capped textures at 2048 px, so configuring the
+        // surface of a 2560 px wide window panicked.
+        assert_eq!(
+            r.device.limits().max_texture_dimension_2d,
+            r.adapter.limits().max_texture_dimension_2d
+        );
     }
 
     #[test]
