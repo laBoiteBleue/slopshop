@@ -170,7 +170,7 @@ fn validate_new_layer(doc: &Document, index: usize, layer: &Layer) -> Result<(),
     }
 }
 
-fn validate_opacity(opacity: f32) -> Result<(), EditError> {
+pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
     if (0.0..=1.0).contains(&opacity) {
         Ok(())
     } else {

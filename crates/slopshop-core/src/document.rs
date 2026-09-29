@@ -4,6 +4,7 @@
 //! every change is undoable. Users see a layer stack; code refers to layers by [`LayerId`]
 //! (stable, never reused) so that the model can later evolve into a DAG of nodes.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -86,8 +87,54 @@ impl Document {
         }
     }
 
+    /// Rebuild a document saved earlier (e.g. read from a file), keeping its layer ids and its
+    /// id counter so that ids are never reused after a reload. Everything is validated as edits
+    /// would: ids are unique and below `next_layer_id` (and not 0), opacities are in `[0, 1]`,
+    /// fill colors are finite. Only the engine's working space is supported. The revision
+    /// starts at 0.
+    pub fn restore(
+        size: Size,
+        working_space: ColorSpace,
+        layers: Vec<Layer>,
+        next_layer_id: u64,
+    ) -> Result<Self, RestoreError> {
+        if working_space != WORKING_SPACE {
+            return Err(RestoreError::UnsupportedWorkingSpace(working_space));
+        }
+        let mut seen = HashSet::with_capacity(layers.len());
+        for layer in &layers {
+            let id = layer.id;
+            if id.0 == 0 || id.0 >= next_layer_id {
+                return Err(RestoreError::IdOutOfRange { id, next_layer_id });
+            }
+            if !seen.insert(id) {
+                return Err(RestoreError::DuplicateId(id));
+            }
+            if crate::edit::validate_opacity(layer.opacity).is_err() {
+                return Err(RestoreError::InvalidOpacity(id));
+            }
+            if let LayerContent::Fill { color } = &layer.content
+                && !color.is_finite()
+            {
+                return Err(RestoreError::InvalidColor(id));
+            }
+        }
+        Ok(Self {
+            size,
+            working_space,
+            layers,
+            next_layer_id,
+            revision: 0,
+        })
+    }
+
     pub fn size(&self) -> Size {
         self.size
+    }
+
+    /// The id the next allocated layer will get: every id below it was handed out already.
+    pub fn next_layer_id(&self) -> u64 {
+        self.next_layer_id
     }
 
     pub fn working_space(&self) -> ColorSpace {
@@ -139,5 +186,130 @@ impl Document {
     /// Whether `id` was ever handed out by [`Self::allocate_layer_id`].
     pub(crate) fn is_allocated(&self, id: LayerId) -> bool {
         id.0 != 0 && id.0 < self.next_layer_id
+    }
+}
+
+/// Why [`Document::restore`] refused its input.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RestoreError {
+    /// The engine composites in [`WORKING_SPACE`] only.
+    UnsupportedWorkingSpace(ColorSpace),
+    /// 0, or not below the id counter.
+    IdOutOfRange {
+        id: LayerId,
+        next_layer_id: u64,
+    },
+    DuplicateId(LayerId),
+    /// Opacity outside `[0, 1]` (or NaN).
+    InvalidOpacity(LayerId),
+    /// A fill color with a non-finite component.
+    InvalidColor(LayerId),
+}
+
+impl fmt::Display for RestoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RestoreError::UnsupportedWorkingSpace(space) => {
+                write!(f, "unsupported working space {space:?}")
+            }
+            RestoreError::IdOutOfRange { id, next_layer_id } => {
+                write!(f, "{id} is not below the id counter {next_layer_id}")
+            }
+            RestoreError::DuplicateId(id) => write!(f, "{id} appears twice"),
+            RestoreError::InvalidOpacity(id) => write!(f, "{id} has an invalid opacity"),
+            RestoreError::InvalidColor(id) => write!(f, "{id} has a non-finite color"),
+        }
+    }
+}
+
+impl std::error::Error for RestoreError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edit::Edit;
+
+    fn fill(id: u64, opacity: f32) -> Layer {
+        Layer {
+            id: LayerId(id),
+            name: format!("fill {id}"),
+            visible: true,
+            opacity,
+            content: LayerContent::Fill {
+                color: LinearRgba::new(0.1, 0.2, 0.3, 1.0),
+            },
+        }
+    }
+
+    #[test]
+    fn restore_keeps_ids_and_the_counter() {
+        let mut doc = Document::new(Size::new(4, 3));
+        for _ in 0..3 {
+            let id = doc.allocate_layer_id();
+            let index = doc.layers().len();
+            let layer = Layer {
+                id,
+                ..fill(id.get(), 0.5)
+            };
+            Edit::InsertLayer { index, layer }.apply(&mut doc).unwrap();
+        }
+        // A removed layer: its id is never given out again.
+        let removed = doc.layers()[1].id;
+        Edit::RemoveLayer { id: removed }.apply(&mut doc).unwrap();
+
+        let mut restored = Document::restore(
+            doc.size(),
+            doc.working_space(),
+            doc.layers().to_vec(),
+            doc.next_layer_id(),
+        )
+        .unwrap();
+        assert_eq!(restored.layers(), doc.layers());
+        assert_eq!(restored.size(), doc.size());
+        assert_eq!(restored.revision(), 0);
+        assert_eq!(restored.allocate_layer_id(), LayerId(4));
+    }
+
+    #[test]
+    fn restore_validates_like_edits() {
+        let size = Size::new(2, 2);
+        let restore = |layers: Vec<Layer>, next: u64| {
+            Document::restore(size, WORKING_SPACE, layers, next).map(|_| ())
+        };
+        assert_eq!(restore(vec![fill(1, 1.0), fill(2, 0.0)], 3), Ok(()));
+        assert_eq!(restore(vec![], 1), Ok(()));
+        assert_eq!(
+            restore(vec![fill(0, 1.0)], 3),
+            Err(RestoreError::IdOutOfRange {
+                id: LayerId(0),
+                next_layer_id: 3
+            })
+        );
+        assert!(matches!(
+            restore(vec![fill(3, 1.0)], 3),
+            Err(RestoreError::IdOutOfRange { .. })
+        ));
+        assert_eq!(
+            restore(vec![fill(1, 1.0), fill(1, 1.0)], 3),
+            Err(RestoreError::DuplicateId(LayerId(1)))
+        );
+        for opacity in [-0.1, 1.5, f32::NAN] {
+            assert_eq!(
+                restore(vec![fill(1, opacity)], 2),
+                Err(RestoreError::InvalidOpacity(LayerId(1)))
+            );
+        }
+        let mut infinite = fill(1, 1.0);
+        infinite.content = LayerContent::Fill {
+            color: LinearRgba::new(f32::INFINITY, 0.0, 0.0, 1.0),
+        };
+        assert_eq!(
+            restore(vec![infinite], 2),
+            Err(RestoreError::InvalidColor(LayerId(1)))
+        );
+        assert!(matches!(
+            Document::restore(size, ColorSpace::SRGB, vec![], 1),
+            Err(RestoreError::UnsupportedWorkingSpace(_))
+        ));
     }
 }

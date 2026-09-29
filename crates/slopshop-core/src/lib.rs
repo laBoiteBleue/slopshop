@@ -27,7 +27,7 @@ pub mod tile;
 pub mod view;
 
 pub use color::{ColorSpace, LinearRgba};
-pub use document::{Document, Layer, LayerContent, LayerId};
+pub use document::{Document, Layer, LayerContent, LayerId, RestoreError};
 pub use edit::{Edit, EditError};
 pub use geom::{Rect, Size};
 pub use job::{CancelToken, Progress};
