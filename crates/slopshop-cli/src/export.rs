@@ -13,7 +13,7 @@ use slopshop_core::{CancelToken, Document, Edit, Layer, LayerContent, RasterImag
 use slopshop_io::export::{
     ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
     JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
-    default_spec, export_image, supports_alpha, supports_space,
+    default_spec, export_image, has_gray, supports_alpha, supports_gray, supports_space,
 };
 use slopshop_render::Renderer;
 
@@ -185,6 +185,8 @@ struct Args {
     /// `--matte`: sRGB-encoded 8-bit components.
     matte: Option<[u8; 3]>,
     no_dither: bool,
+    /// `--gray` (`Some(true)`) or `--color` (`Some(false)`); the default depends on the document.
+    gray: Option<bool>,
     cpu: bool,
     bench: bool,
 }
@@ -292,6 +294,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut subsampling = None;
     let mut matte = None;
     let (mut no_alpha, mut no_dither, mut cpu, mut bench) = (false, false, false, false);
+    let mut gray = None;
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -306,6 +309,13 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--matte" => matte = Some(parse_matte(value()?)?),
             "--no-alpha" => no_alpha = true,
             "--no-dither" => no_dither = true,
+            "--gray" | "--color" => {
+                let wanted = arg == "--gray";
+                if gray.is_some_and(|g| g != wanted) {
+                    return Err("--gray and --color exclude each other".to_owned());
+                }
+                gray = Some(wanted);
+            }
             "--cpu" => cpu = true,
             "--bench" => bench = true,
             other if other.starts_with('-') && other != "-" => {
@@ -385,14 +395,31 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--subsampling is not available for {name} (JPEG only)"
         ));
     }
-    if let Some(space) = space.filter(|s| !supports_space(format, s)) {
+    if gray == Some(true) && !has_gray(format) {
+        return Err(format!(
+            "--gray is not available for {name} (PNG, TIFF and JPEG only)"
+        ));
+    }
+    let taggable = |s: &ColorSpace| {
+        if gray == Some(true) {
+            supports_gray(format, s)
+        } else {
+            supports_space(format, s)
+        }
+    };
+    if let Some(space) = space.filter(|s| !taggable(s)) {
         let valid: Vec<_> = SPACES
             .iter()
-            .filter(|s| supports_space(format, s))
+            .filter(|s| taggable(s))
             .filter_map(ColorSpace::id)
             .collect();
+        let what = if gray == Some(true) {
+            "gray samples in the color space"
+        } else {
+            "the color space"
+        };
         return Err(format!(
-            "{name} cannot store and tag the color space `{}` (valid: {})",
+            "{name} cannot store and tag {what} `{}` (valid: {})",
             space_name(&space),
             valid.join(", ")
         ));
@@ -409,6 +436,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         no_alpha,
         matte,
         no_dither,
+        gray,
         cpu,
         bench,
     })
@@ -615,6 +643,9 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
     if args.no_dither {
         spec.dither = false;
     }
+    if let Some(gray) = args.gray {
+        spec.gray = gray;
+    }
     spec
 }
 
@@ -697,6 +728,9 @@ fn describe(spec: &ExportSpec) -> String {
     // Dither only applies to 8-bit samples.
     if !spec.dither && spec.format.sample_type() == SampleType::U8 {
         text += " --no-dither";
+    }
+    if spec.gray {
+        text += " --gray";
     }
     text
 }
@@ -827,6 +861,24 @@ mod tests {
     }
 
     #[test]
+    fn gray_is_checked_against_the_format_and_the_space() {
+        let error = |args: &[&str]| parse(args).unwrap_err();
+        assert!(error(&["in.png", "out.exr", "--gray"]).contains("PNG, TIFF and JPEG only"));
+        assert!(error(&["in.png", "out.webp", "--gray"]).contains("PNG, TIFF and JPEG only"));
+        assert!(error(&["in.png", "out.png", "--gray", "--color"]).contains("exclude"));
+        let pq = error(&["in.png", "out.png", "--gray", "--space", "rec2100-pq"]);
+        assert!(pq.contains("gray samples"), "{pq}");
+        assert!(!pq.contains("rec2100-pq,"), "{pq}");
+        // Color PQ is fine in PNG.
+        assert!(parse(&["in.png", "out.png", "--space", "rec2100-pq"]).is_ok());
+        let args = parse(&["in.png", "out.jpg", "--gray"]).unwrap();
+        let document = Document::new(Size::new(4, 4));
+        let spec = export_spec(&args, &document);
+        assert!(spec.gray);
+        assert!(describe(&spec).ends_with(" --gray"));
+    }
+
+    #[test]
     fn parses_paths_and_options_in_any_order() {
         let args = parse(&[
             "--depth",
@@ -839,6 +891,7 @@ mod tests {
             "--compression",
             "small",
             "--no-dither",
+            "--gray",
             "--cpu",
             "--bench",
         ])
@@ -857,6 +910,7 @@ mod tests {
                 no_alpha: true,
                 matte: None,
                 no_dither: true,
+                gray: Some(true),
                 cpu: true,
                 bench: true,
             }
@@ -868,6 +922,11 @@ mod tests {
             (None, None, None)
         );
         assert!(!args.no_alpha && !args.no_dither && !args.cpu && !args.bench);
+        assert_eq!(args.gray, None);
+        assert_eq!(
+            parse(&["in.png", "out.png", "--color"]).unwrap().gray,
+            Some(false)
+        );
         assert_eq!(
             parse(&["in.png", "out.tiff"]).unwrap().format,
             ExportFormatKind::Tiff
