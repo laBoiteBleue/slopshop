@@ -65,6 +65,11 @@ impl RasterLevel {
         self.grid
     }
 
+    /// Every tile, row-major (see [`Self::tile`]).
+    pub fn tiles(&self) -> &[Arc<[u8]>] {
+        &self.tiles
+    }
+
     /// Pixels of a tile (`TILE_SIZE²` pixels, row-major, stored format), or `None` outside
     /// the grid.
     pub fn tile(&self, coord: TileCoord) -> Option<&Arc<[u8]>> {
@@ -97,6 +102,24 @@ pub enum RasterError {
     },
     /// The color space's primaries do not define a usable RGB space.
     InvalidColorSpace(ColorSpace),
+    /// [`RasterImage::from_tiles`]: not one list of tiles per pyramid level.
+    LevelCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    /// [`RasterImage::from_tiles`]: a level does not have one tile per grid cell.
+    TileCountMismatch {
+        level: usize,
+        expected: usize,
+        actual: usize,
+    },
+    /// [`RasterImage::from_tiles`]: a tile does not hold `TILE_SIZE²` stored pixels.
+    TileLengthMismatch {
+        level: usize,
+        index: usize,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl std::fmt::Display for RasterError {
@@ -109,6 +132,23 @@ impl std::fmt::Display for RasterError {
             RasterError::InvalidColorSpace(space) => {
                 write!(f, "invalid color space {space:?}")
             }
+            RasterError::LevelCountMismatch { expected, actual } => {
+                write!(f, "{actual} pyramid levels, expected {expected}")
+            }
+            RasterError::TileCountMismatch {
+                level,
+                expected,
+                actual,
+            } => write!(f, "level {level} has {actual} tiles, expected {expected}"),
+            RasterError::TileLengthMismatch {
+                level,
+                index,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "tile {index} of level {level} has {actual} bytes, expected {expected}"
+            ),
         }
     }
 }
@@ -123,12 +163,7 @@ impl RasterImage {
         format: PixelFormat,
         pixels: &[u8],
     ) -> Result<Self, RasterError> {
-        if size.is_empty() {
-            return Err(RasterError::EmptyImage);
-        }
-        if !format.layout.is_gray() && !format.color_space.primaries.is_valid() {
-            return Err(RasterError::InvalidColorSpace(format.color_space));
-        }
+        check_format(size, format)?;
         let expected = size.pixel_count() * u64::from(format.bytes_per_pixel());
         if pixels.len() as u64 != expected {
             return Err(RasterError::SizeMismatch {
@@ -162,6 +197,81 @@ impl RasterImage {
             levels,
             average,
         })
+    }
+
+    /// Rebuild an image from the tiles of every pyramid level, finest first (e.g. read from a
+    /// document file): row-major, `TILE_SIZE²` pixels each in the stored format of `format`
+    /// (RGB stored as RGBA), edge tiles padded by repeating the last row and column. Nothing is
+    /// copied: the tiles are shared. The levels must be the ones [`Self::level_sizes`] gives.
+    pub fn from_tiles(
+        size: Size,
+        format: PixelFormat,
+        levels: Vec<Vec<Arc<[u8]>>>,
+    ) -> Result<Self, RasterError> {
+        check_format(size, format)?;
+        let sizes = Self::level_sizes(size);
+        if levels.len() != sizes.len() {
+            return Err(RasterError::LevelCountMismatch {
+                expected: sizes.len(),
+                actual: levels.len(),
+            });
+        }
+        let stored = Codec::new(stored_format(format));
+        let levels = sizes
+            .into_iter()
+            .zip(levels)
+            .enumerate()
+            .map(|(level, (size, tiles))| checked_level(level, size, tiles, &stored))
+            .collect::<Result<Vec<_>, _>>()?;
+        let average = average_of(&levels[levels.len() - 1], &stored);
+        Ok(Self {
+            id: ImageId::next(),
+            format,
+            levels,
+            average,
+        })
+    }
+
+    /// [`Self::from_tiles`] from level 0 only: the rest of the pyramid is rebuilt tile by tile
+    /// from the tiles below, exactly as [`Self::from_pixels`] builds it.
+    pub fn from_level0_tiles(
+        size: Size,
+        format: PixelFormat,
+        tiles: Vec<Arc<[u8]>>,
+    ) -> Result<Self, RasterError> {
+        check_format(size, format)?;
+        let stored = Codec::new(stored_format(format));
+        let mut levels = vec![checked_level(0, size, tiles, &stored)?];
+        while let Some(finer) = levels.last()
+            && (finer.size.width > TILE_SIZE || finer.size.height > TILE_SIZE)
+        {
+            let coarser = downsample_level(finer, &stored);
+            levels.push(coarser);
+        }
+        let average = average_of(&levels[levels.len() - 1], &stored);
+        Ok(Self {
+            id: ImageId::next(),
+            format,
+            levels,
+            average,
+        })
+    }
+
+    /// Sizes of the pyramid levels of an image of `size`, finest first: each level half the
+    /// previous one (rounded up), down to the first that fits in one tile.
+    pub fn level_sizes(size: Size) -> Vec<Size> {
+        let mut sizes = vec![size];
+        let mut level = size;
+        while level.width > TILE_SIZE || level.height > TILE_SIZE {
+            level = Size::new(level.width.div_ceil(2), level.height.div_ceil(2));
+            sizes.push(level);
+        }
+        sizes
+    }
+
+    /// Bytes of one tile of an image of `format` (its stored format).
+    pub fn tile_bytes(format: PixelFormat) -> usize {
+        TILE_SIZE as usize * TILE_SIZE as usize * stored_format(format).bytes_per_pixel() as usize
     }
 
     /// Upper bound of the RAM that [`Self::from_pixels`] needs for an image of this size and
@@ -235,6 +345,49 @@ impl RasterImage {
             self.format.color_space.matrix_to(target)
         }
     }
+}
+
+/// What every constructor checks: pixels exist, and color images have a usable RGB space.
+fn check_format(size: Size, format: PixelFormat) -> Result<(), RasterError> {
+    if size.is_empty() {
+        return Err(RasterError::EmptyImage);
+    }
+    if !format.layout.is_gray() && !format.color_space.primaries.is_valid() {
+        return Err(RasterError::InvalidColorSpace(format.color_space));
+    }
+    Ok(())
+}
+
+/// A level of `size` from its tiles, after checking their count and length.
+fn checked_level(
+    level: usize,
+    size: Size,
+    tiles: Vec<Arc<[u8]>>,
+    stored: &Codec,
+) -> Result<RasterLevel, RasterError> {
+    let grid = tile_grid(size);
+    let expected = grid.tile_count() as usize;
+    if tiles.len() != expected {
+        return Err(RasterError::TileCountMismatch {
+            level,
+            expected,
+            actual: tiles.len(),
+        });
+    }
+    let tile_bytes = TILE_SIZE as usize * TILE_SIZE as usize * stored.bytes_per_pixel;
+    if let Some((index, tile)) = tiles
+        .iter()
+        .enumerate()
+        .find(|(_, t)| t.len() != tile_bytes)
+    {
+        return Err(RasterError::TileLengthMismatch {
+            level,
+            index,
+            expected: tile_bytes,
+            actual: tile.len(),
+        });
+    }
+    Ok(RasterLevel { size, grid, tiles })
 }
 
 fn stored_format(format: PixelFormat) -> PixelFormat {
@@ -511,6 +664,69 @@ fn tile_level(size: Size, pixels: &[u8], source: &Codec, stored: &Codec) -> Rast
     RasterLevel { size, grid, tiles }
 }
 
+/// The next pyramid level of `finer`, computed tile by tile: each output pixel averages the
+/// same 2×2 block as [`downsample`] does on packed rows, and output tiles are padded like
+/// [`tile_level`] pads them. The result is identical: padding repeats the last row and column,
+/// so reading a padded position gives the edge pixel that [`downsample`] clamps to.
+fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
+    let size = Size::new(finer.size.width.div_ceil(2), finer.size.height.div_ceil(2));
+    let grid = tile_grid(size);
+    let t = TILE_SIZE as usize;
+    let bpp = stored.bytes_per_pixel;
+    let (fw, fh) = (finer.size.width as usize, finer.size.height as usize);
+    let (w, h) = (size.width as usize, size.height as usize);
+    let columns = grid.columns() as usize;
+    let finer_columns = finer.grid.columns() as usize;
+    let mut tiles: Vec<Arc<[u8]>> = Vec::with_capacity(grid.tile_count() as usize);
+    let count = grid.tile_count() as usize;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = count.div_ceil(threads).max(1);
+    let mut computed: Vec<Vec<Arc<[u8]>>> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..count)
+            .step_by(per_thread)
+            .map(|first| {
+                scope.spawn(move || {
+                    (first..(first + per_thread).min(count))
+                        .map(|index| {
+                            let (col, row) = (index % columns, index / columns);
+                            let mut tile = vec![0u8; t * t * bpp];
+                            for (i, dst) in tile.chunks_exact_mut(bpp).enumerate() {
+                                // Padding: the last valid pixel of the level.
+                                let x = (col * t + i % t).min(w - 1);
+                                let y = (row * t + i / t).min(h - 1);
+                                let mut color = [0.0f32; 3];
+                                let mut alpha = 0.0f32;
+                                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                                    let fx = (x * 2 + dx).min(fw - 1);
+                                    let fy = (y * 2 + dy).min(fh - 1);
+                                    let source = &finer.tiles[(fy / t) * finer_columns + fx / t];
+                                    let at = ((fy % t) * t + fx % t) * bpp;
+                                    let (c, a) = stored.read(&source[at..]);
+                                    for k in 0..3 {
+                                        color[k] += c[k];
+                                    }
+                                    alpha += a;
+                                }
+                                stored.write(color.map(|c| c / 4.0), alpha / 4.0, dst);
+                            }
+                            Arc::from(tile)
+                        })
+                        .collect::<Vec<Arc<[u8]>>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: the closure above does not panic on valid levels.
+            computed.push(worker.join().expect("pyramid worker panicked"));
+        }
+    });
+    for part in computed {
+        tiles.extend(part);
+    }
+    RasterLevel { size, grid, tiles }
+}
+
 /// Halve an image (rounding up), averaging 2×2 blocks in linear light with premultiplied
 /// alpha, as correct downsampling requires. Reads `source`, writes `stored`.
 fn downsample(pixels: &[u8], size: Size, source: &Codec, stored: &Codec) -> (Vec<u8>, Size) {
@@ -670,6 +886,152 @@ mod tests {
             .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(floats, [2.5, -0.25, 1e-6, 1.0]);
+    }
+
+    /// Every layout and sample type, with values that exercise rounding (not only 0 and max).
+    fn formats() -> Vec<PixelFormat> {
+        let mut formats = Vec::new();
+        for layout in [
+            ChannelLayout::Gray,
+            ChannelLayout::GrayAlpha,
+            ChannelLayout::Rgb,
+            ChannelLayout::Rgba,
+        ] {
+            for sample in [
+                SampleType::U8,
+                SampleType::U16,
+                SampleType::F16,
+                SampleType::F32,
+            ] {
+                for alpha in [AlphaMode::Straight, AlphaMode::Premultiplied] {
+                    formats.push(PixelFormat {
+                        layout,
+                        sample,
+                        color_space: ColorSpace::SRGB,
+                        alpha,
+                    });
+                }
+            }
+        }
+        formats
+    }
+
+    /// Deterministic pseudo-random bytes (valid for every sample type: floats come out as
+    /// ordinary finite values or, rarely, NaN/inf, which the pyramid must handle alike).
+    fn noise(len: usize, seed: u64) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (0..len)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 33) as u8
+            })
+            .collect()
+    }
+
+    fn all_tiles(img: &RasterImage) -> Vec<Vec<Arc<[u8]>>> {
+        img.levels().iter().map(|l| l.tiles().to_vec()).collect()
+    }
+
+    #[test]
+    fn tile_by_tile_pyramid_matches_from_pixels() {
+        // Odd sizes at every level, one exact multiple of the tile size, and a thin strip.
+        let sizes = [
+            Size::new(600, 530),
+            Size::new(513, 257),
+            Size::new(1024, 512),
+            Size::new(1100, 3),
+        ];
+        for (i, format) in formats().into_iter().enumerate() {
+            for (j, size) in sizes.into_iter().enumerate() {
+                let len = size.pixel_count() as usize * format.bytes_per_pixel() as usize;
+                let pixels = noise(len, (i * 10 + j) as u64);
+                let reference = RasterImage::from_pixels(size, format, &pixels).unwrap();
+                let level0 = reference.levels()[0].tiles().to_vec();
+                let rebuilt = RasterImage::from_level0_tiles(size, format, level0).unwrap();
+                let (a, b) = (all_tiles(&reference), all_tiles(&rebuilt));
+                assert_eq!(a.len(), b.len(), "{format:?} {size:?}");
+                for (level, (a, b)) in a.iter().zip(&b).enumerate() {
+                    assert!(
+                        a.iter().zip(b).all(|(x, y)| x[..] == y[..]),
+                        "{format:?} {size:?}: level {level} differs"
+                    );
+                }
+                assert_eq!(
+                    reference
+                        .average_color(&WORKING_SPACE)
+                        .to_srgb_encoded()
+                        .map(f32::to_bits),
+                    rebuilt
+                        .average_color(&WORKING_SPACE)
+                        .to_srgb_encoded()
+                        .map(f32::to_bits),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn from_tiles_shares_the_tiles_it_is_given() {
+        let size = Size::new(700, 300);
+        let format = PixelFormat::RGBA8_SRGB;
+        let pixels = noise(size.pixel_count() as usize * 4, 7);
+        let reference = RasterImage::from_pixels(size, format, &pixels).unwrap();
+        let tiles = all_tiles(&reference);
+        let rebuilt = RasterImage::from_tiles(size, format, tiles.clone()).unwrap();
+        assert_ne!(rebuilt.id(), reference.id());
+        for (level, original) in tiles.iter().enumerate() {
+            for (a, b) in original.iter().zip(rebuilt.levels()[level].tiles()) {
+                assert!(Arc::ptr_eq(a, b), "tiles must not be copied");
+            }
+        }
+        assert_eq!(
+            RasterImage::level_sizes(size),
+            reference
+                .levels()
+                .iter()
+                .map(|l| l.size())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(RasterImage::tile_bytes(format), 256 * 256 * 4);
+    }
+
+    #[test]
+    fn from_tiles_rejects_inconsistent_tiles() {
+        let size = Size::new(300, 20);
+        let format = PixelFormat::RGBA8_SRGB;
+        let reference =
+            RasterImage::from_pixels(size, format, &solid(size, [1, 2, 3, 255])).unwrap();
+        let tiles = all_tiles(&reference);
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(
+            RasterImage::from_tiles(size, format, tiles[..1].to_vec()).unwrap_err(),
+            RasterError::LevelCountMismatch {
+                expected: 2,
+                actual: 1
+            }
+        );
+        let mut missing = tiles.clone();
+        missing[0].pop();
+        assert!(matches!(
+            RasterImage::from_tiles(size, format, missing).unwrap_err(),
+            RasterError::TileCountMismatch { level: 0, .. }
+        ));
+        let mut short = tiles.clone();
+        short[1][0] = Arc::from(vec![0u8; 10]);
+        assert!(matches!(
+            RasterImage::from_tiles(size, format, short).unwrap_err(),
+            RasterError::TileLengthMismatch {
+                level: 1,
+                index: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            RasterImage::from_level0_tiles(Size::new(0, 5), format, vec![]).unwrap_err(),
+            RasterError::EmptyImage
+        ));
     }
 
     #[test]
