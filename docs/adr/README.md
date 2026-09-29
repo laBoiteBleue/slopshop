@@ -13,7 +13,8 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0006 | [Universal import strategy and dependency licensing](0006-universal-import-and-licensing.md) | accepted |
 | 0007 | [Color management and working space](0007-color-management.md) | accepted |
 | 0008 | [Export](0008-export.md)                                        | accepted |
-| 0009 | [Document file format v0](0009-document-file-format.md)         | accepted, not implemented |
+| 0009 | [Document file format v0](0009-document-file-format.md)         | accepted |
 | 0010 | [JPEG and WebP export](0010-jpeg-webp-export.md)                | accepted |
+| 0011 | [Gray export](0011-gray-export.md)                              | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

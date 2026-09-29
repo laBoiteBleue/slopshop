@@ -84,8 +84,9 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   and WebP (lossy or lossless) at full resolution, streamed in bands (WebP excepted: it holds
   one frame, at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
   chromaticities), transparency flattened over a chosen background when the file has no alpha,
-  and every lossy conversion reported ([ADR 0008](docs/adr/0008-export.md),
-  [ADR 0010](docs/adr/0010-jpeg-webp-export.md)).
+  gray files (PNG, TIFF, JPEG; the default for gray images), and every lossy conversion
+  reported ([ADR 0008](docs/adr/0008-export.md), [ADR 0010](docs/adr/0010-jpeg-webp-export.md),
+  [ADR 0011](docs/adr/0011-gray-export.md)).
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
