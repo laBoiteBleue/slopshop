@@ -80,6 +80,8 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 | `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG never has alpha |
 | `--matte` | `RRGGBB` or `#RRGGBB` | Color transparency is flattened over when there is no alpha, as sRGB hex. Default: `ffffff` (white) |
 | `--no-dither` | | No dither for 8-bit samples (dither reduces banding; it is on by default) |
+| `--gray` | | Gray samples (PNG, TIFF and JPEG): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
+| `--color` | | Color samples, even for a gray document |
 | `--cpu` | | Composite on the CPU instead of the GPU |
 | `--bench` | | Also print timings (open, GPU init, export, throughput, time in the pixel source) and the number of bands |
 
@@ -95,6 +97,7 @@ Options can come in any order, before or after the paths. An option the format d
 | Default space | 8-bit: sRGB; 16-bit: the source space if PNG can tag it, else sRGB | the source space if it can be tagged, else Rec.2020 (integers) or linear Rec.2020 (float) | linear sRGB | the source space if it is sRGB, Display P3 or Adobe RGB, else sRGB | as JPEG |
 | Compression | `fast` | `deflate` | ZIP (fixed) | quality 90, `444` | `lossy`, quality 90 (alpha kept losslessly) |
 | Alpha | kept unless the document is opaque | kept unless the document is opaque | kept unless the document is opaque | never: flattened over the matte | kept unless the document is opaque |
+| Gray | yes, default for gray documents | yes, default for gray documents | no | yes, default for gray documents | no |
 | Size limit | 2³¹−1 px per side | BigTIFF above 4 GiB | about 2³⁰ px per side | 65 500 px per side | 16 383 px per side |
 
 Lossy WebP stores its image modes in a first partition limited to 512 KiB: very detailed
@@ -103,7 +106,8 @@ images near the size limit may not fit, even at low quality. The export then fai
 
 The **source space** is the color space of the input image (from its ICC profile, cICP, gAMA/cHRM
 or format convention). A document is **opaque** when its bottom layer is an opaque fill or an
-image without alpha covering the whole canvas.
+image without alpha covering the whole canvas. A document is **gray** when every visible layer is
+a gray image or a neutral fill, with one image at least: its gray samples are then kept.
 
 ### Color spaces
 
@@ -127,6 +131,10 @@ Which spaces each format can store *and tag* so that it reads back as the same s
 - **TIFF**, **JPEG** and **WebP**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
 - **OpenEXR**: `linear-srgb` and `linear-rec2020` (EXR samples are linear; the primaries go in
   the `chromaticities` attribute).
+
+Gray files keep only the tone curve of the space (and its primaries define the luminance): PNG
+tags them with the sRGB chunk or an ICC gray profile, TIFF and JPEG with an ICC gray profile, so
+`rec2100-pq` and `rec2100-hlg` are not available for gray.
 
 ### Output
 
