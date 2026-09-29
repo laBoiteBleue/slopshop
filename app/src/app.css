@@ -31,6 +31,13 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* Native presentation (ADR 0002): the page is see-through where it draws nothing, so that the
+   engine's window surface shows in the canvas area. Every panel has its own background. */
+:root.native-canvas,
+:root.native-canvas body {
+  background: transparent;
+}
+
 * {
   box-sizing: border-box;
 }

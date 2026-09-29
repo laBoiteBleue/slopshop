@@ -12,19 +12,25 @@
 
 <script lang="ts">
   import { untrack } from "svelte";
-  import { engine, type ViewInfo, type ViewRequest } from "./engine";
+  import { engine, type DeviceRect, type ViewInfo, type ViewRequest } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
 
   let {
     documentId,
     revision,
+    native = false,
     onframe,
   }: {
     /** Open document. Read once: the viewport is recreated for another document. */
     documentId: number;
     /** Document revision; a change triggers a new frame. */
     revision: number;
+    /**
+     * Native presentation: the engine presents to the window under this (transparent) area
+     * instead of sending frames. Read once, like the document.
+     */
+    native?: boolean;
     onframe?: (stats: FrameStats) => void;
   } = $props();
 
@@ -33,6 +39,7 @@
   // Never depend on the prop in effects either: it is a getter on the parent's document view,
   // which is a new object after every edit, so the effect would rerun on each edit.
   const docId = untrack(() => documentId);
+  const presentsNatively = untrack(() => native);
   // Same for the revision: only a new value (a derived compares) may trigger a new frame.
   const currentRevision = $derived(revision);
   /** Set when the component is destroyed: in-flight work and animations stop quietly. */
@@ -69,6 +76,7 @@
   let viewResponses = 0;
 
   function applyReprojection() {
+    if (presentsNatively) return;
     if (!shown || !target) {
       canvas.style.transform = "";
       return;
@@ -90,6 +98,39 @@
   let inFlight = false;
   let pending = false;
 
+  /** Canvas area in physical pixels of the window's client area. */
+  function deviceRect(): DeviceRect {
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio;
+    return {
+      x: Math.round(rect.left * dpr),
+      y: Math.round(rect.top * dpr),
+      width: size.width,
+      height: size.height,
+    };
+  }
+
+  /** Native presents skipped in a row (occluded or busy swapchain), retried a few times. */
+  let skippedPresents = 0;
+
+  async function present() {
+    const start = performance.now();
+    const info = await engine.presentView(docId, deviceRect());
+    if (destroyed) return;
+    error = null;
+    report({
+      zoom: info.zoom,
+      fit: info.fit,
+      renderMs: info.renderMs,
+      totalMs: performance.now() - start,
+    });
+    if (info.presented) {
+      skippedPresents = 0;
+    } else if (skippedPresents++ < 3) {
+      pending = true;
+    }
+  }
+
   async function draw() {
     if (destroyed) return;
     if (inFlight) {
@@ -99,6 +140,20 @@
     const { width, height } = size;
     if (width === 0 || height === 0) return;
     inFlight = true;
+    if (presentsNatively) {
+      try {
+        await present();
+      } catch (e) {
+        error = String(e);
+      } finally {
+        inFlight = false;
+        if (pending) {
+          pending = false;
+          requestAnimationFrame(() => void draw());
+        }
+      }
+      return;
+    }
     try {
       const start = performance.now();
       const responsesAtStart = viewResponses;
@@ -397,6 +452,7 @@
 
 <div
   class="viewport"
+  class:native={presentsNatively}
   class:hand={spaceHeld}
   class:panning={panning !== null}
   bind:this={container}
@@ -407,7 +463,7 @@
   onpointercancel={endPan}
   onauxclick={(e) => e.preventDefault()}
 >
-  <canvas bind:this={canvas}></canvas>
+  <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
   {#if error}
     <p class="error" role="alert">{t("viewport.renderFailed", { error })}</p>
   {/if}
@@ -421,6 +477,15 @@
     background: var(--pasteboard);
     overflow: hidden;
     touch-action: none;
+  }
+
+  /* Native presentation: the engine draws this area under the page. */
+  .viewport.native {
+    background: transparent;
+  }
+
+  canvas.hidden {
+    display: none;
   }
 
   .viewport.hand {

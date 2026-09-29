@@ -26,6 +26,8 @@
   let activeId = $state<number | null>(null);
   let active = $derived(tabs.find((d) => d.id === activeId) ?? null);
   let ready = $state(false);
+  /** Native presentation: the engine draws the canvas area under the page (ADR 0002). */
+  let nativeCanvas = $state(false);
 
   let gpu = $state<GpuInfo | null>(null);
   let gpuError = $state<string | null>(null);
@@ -239,11 +241,14 @@
     }).then(async (stop) => {
       if (destroyed) return stop();
       stopEvents = stop;
-      const [documents, pending, failures] = await Promise.all([
+      const [mode, documents, pending, failures] = await Promise.all([
+        engine.presenterMode(),
         engine.documents(),
         engine.openings(),
         engine.openFailures(),
       ]);
+      nativeCanvas = mode === "window";
+      document.documentElement.classList.toggle("native-canvas", nativeCanvas);
       documents.forEach(upsert);
       if (activeId === null) activeId = tabs.at(-1)?.id ?? null;
       pending.forEach(onOpenStarted);
@@ -363,11 +368,12 @@
         {/each}
       </div>
 
-      <div class="stage">
+      <div class="stage" class:see-through={nativeCanvas && active}>
         {#if active}
           {#key active.id}
             <Viewport
               bind:this={viewport}
+              native={nativeCanvas}
               documentId={active.id}
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
@@ -522,6 +528,11 @@
     grid-template-columns: 1fr 260px;
   }
 
+  /* Native presentation: the canvas area shows the window surface drawn by the engine. */
+  :global(.native-canvas) main {
+    background: transparent;
+  }
+
   .workspace {
     display: grid;
     grid-template-rows: 26px 1fr;
@@ -620,6 +631,10 @@
     min-width: 0;
     min-height: 0;
     background: var(--pasteboard);
+  }
+
+  .stage.see-through {
+    background: transparent;
   }
 
   .welcome {

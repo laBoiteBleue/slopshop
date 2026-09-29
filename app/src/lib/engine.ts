@@ -64,6 +64,25 @@ export type ViewInfo = {
   fit: boolean;
 };
 
+/**
+ * How the viewport reaches the screen (ADR 0002): `frames` are drawn by the UI in a canvas;
+ * with `window`, the engine presents directly to the window, under the (transparent) page.
+ */
+export type PresenterMode = "frames" | "window";
+
+/** A canvas area of the window, in physical pixels of its client area. */
+export type DeviceRect = { x: number; y: number; width: number; height: number };
+
+/** Outcome of a native present (see PresentInfo in app/src-tauri/src/ipc.rs). */
+export type PresentInfo = {
+  /** False when nothing was shown (window occluded, swapchain busy): present again later. */
+  presented: boolean;
+  revision: number;
+  zoom: number;
+  fit: boolean;
+  renderMs: number;
+};
+
 /** Where an opened image goes. */
 export type OpenTarget = { kind: "newTab" } | { kind: "layer"; documentId: number };
 
@@ -245,6 +264,10 @@ export const engine = {
   undo: (documentId: number) => serial(() => invoke<DocumentView>("undo", { documentId })),
   redo: (documentId: number) => serial(() => invoke<DocumentView>("redo", { documentId })),
   gpuInfo: () => invoke<GpuInfo>("gpu_info"),
+  presenterMode: () => invoke<PresenterMode>("presenter_mode"),
+  /** Native presentation: show a document's current view in `rect` of the window. */
+  presentView: (documentId: number, rect: DeviceRect) =>
+    invoke<PresentInfo>("present_view", { documentId, ...rect }),
   /**
    * Change a document's view. Resolves to `null` when merged into a request that was already
    * waiting: that one resolves with the combined result, and this one right after it, so that

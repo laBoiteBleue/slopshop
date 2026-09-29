@@ -215,6 +215,20 @@ impl ViewRequest {
 
 /// The view after a change: enough for the UI to reproject the frame it is showing
 /// (`document = origin + output / zoom`, output in device pixels) until the new one arrives.
+/// Outcome of presenting a view directly to the window (native presentation).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentInfo {
+    /// False when nothing was shown (window occluded, swapchain busy): present again later.
+    pub presented: bool,
+    pub revision: u64,
+    /// 1.0 = 100%.
+    pub zoom: f64,
+    pub fit: bool,
+    /// Engine-side time (composite + copy + present call), in ms.
+    pub render_ms: f32,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewInfo {

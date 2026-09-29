@@ -18,16 +18,57 @@ use std::time::Instant;
 use serde::Serialize;
 use slopshop_core::view::Viewport;
 use slopshop_core::{
-    Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Session, Size,
+    Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Rect, Session, Size,
 };
 use slopshop_render::Renderer;
+use slopshop_render::present::{Presented, Presenter};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ipc::{
-    DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo, ViewInfo,
-    ViewRequest,
+    DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo, PresentInfo,
+    ViewInfo, ViewRequest,
 };
+
+/// How the viewport reaches the screen (ADR 0002):
+/// - `window` (default on Windows): the engine presents to the window surface, drawn under a
+///   transparent webview; the UI leaves the canvas area transparent;
+/// - `frames` (default elsewhere, and the fallback): frames over IPC, drawn by the UI in a
+///   canvas.
+///
+/// `SLOPSHOP_PRESENTER=frames|window` overrides the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PresenterMode {
+    Frames,
+    Window,
+}
+
+impl PresenterMode {
+    fn from_env() -> Self {
+        Self::requested(std::env::var("SLOPSHOP_PRESENTER").ok().as_deref())
+    }
+
+    fn requested(value: Option<&str>) -> Self {
+        match value {
+            Some("frames") => Self::Frames,
+            Some("window") => Self::Window,
+            _ if cfg!(windows) => Self::Window,
+            _ => Self::Frames,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Frames => "frames",
+            Self::Window => "window",
+        }
+    }
+}
+
+/// The main window's label (the only window).
+const MAIN_WINDOW: &str = "main";
+/// Surface clear color around the canvas area: the pasteboard, sRGB-encoded (`--pasteboard`).
+const PASTEBOARD_SRGB: [f64; 4] = [32.0 / 255.0, 32.0 / 255.0, 35.0 / 255.0, 1.0];
 
 /// Events about opens, whoever started them (the UI, or the startup file).
 const EVENT_OPEN_STARTED: &str = "open-started";
@@ -159,6 +200,14 @@ struct AppState {
     openings: Mutex<Vec<Opening>>,
     /// Recent failures (newest last), for a UI that subscribed to events too late.
     failures: Mutex<Vec<OpenFailed>>,
+    /// Presentation asked for at startup.
+    requested_presenter: PresenterMode,
+    /// Presentation in use, decided once (see [`AppState::presenter_mode`]).
+    presenter_mode: OnceLock<PresenterMode>,
+    /// Window surface (native presentation only).
+    presenter: Mutex<Option<Presenter>>,
+    /// Client area of the main window in physical pixels, kept by window events.
+    surface_size: Mutex<Option<Size>>,
 }
 
 impl AppState {
@@ -170,6 +219,10 @@ impl AppState {
             next_open_id: AtomicU64::new(1),
             openings: Mutex::new(Vec::new()),
             failures: Mutex::new(Vec::new()),
+            requested_presenter: PresenterMode::from_env(),
+            presenter_mode: OnceLock::new(),
+            presenter: Mutex::new(None),
+            surface_size: Mutex::new(None),
         }
     }
 
@@ -649,12 +702,153 @@ async fn render_view(
     .map_err(|e| e.to_string())?
 }
 
+/// How the viewport is presented: `frames` or `window` (see [`PresenterMode`]). The first call
+/// decides, creating the window surface if needed (so it waits for the GPU).
+#[tauri::command]
+async fn presenter_mode(app: AppHandle) -> Result<&'static str, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().presenter_mode(&app).id())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Present the document's view directly to the window (native presentation): into the
+/// `width × height` canvas area at (`x`, `y`), in physical pixels of the window's client area.
+/// Nothing crosses the IPC but this small request and its answer.
+#[tauri::command]
+async fn present_view(
+    app: AppHandle,
+    document_id: u64,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<PresentInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if state.presenter_mode.get() != Some(&PresenterMode::Window) {
+            return Err("native presentation is not enabled".to_owned());
+        }
+        let renderer = state.renderer()?;
+        let output = Size::new(width, height);
+        let (doc, viewport) = {
+            let mut documents = state.documents()?;
+            documents.output = Some(output);
+            let document = documents.get_mut(document_id)?;
+            let doc = document.session.document().clone();
+            if !output.is_empty() && document.viewport.output() != output {
+                document.viewport.resize(doc.size(), output);
+            }
+            (doc, document.viewport)
+        };
+        let surface_size = state.surface_size(&app)?;
+
+        let mut guard = state
+            .presenter
+            .lock()
+            .map_err(|_| "presenter lock poisoned".to_owned())?;
+        let presenter = guard.as_mut().ok_or("no window surface")?;
+        let start = Instant::now();
+        let presented = if output.is_empty() {
+            Presented::Skipped
+        } else {
+            renderer
+                .present_view(
+                    presenter,
+                    &doc,
+                    viewport.transform(),
+                    Rect::new(x, y, width, height),
+                    surface_size,
+                    PASTEBOARD_SRGB,
+                )
+                .map_err(|e| e.to_string())?
+        };
+        Ok(PresentInfo {
+            presented: presented == Presented::Frame,
+            revision: doc.revision(),
+            zoom: viewport.zoom(),
+            fit: viewport.is_fit(),
+            render_ms: start.elapsed().as_secs_f32() * 1000.0,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+impl AppState {
+    /// The presentation in use. Decided on the first call: native presentation falls back to
+    /// frames if the window surface cannot be created (reported on stderr).
+    fn presenter_mode(&self, app: &AppHandle) -> PresenterMode {
+        *self.presenter_mode.get_or_init(|| {
+            if self.requested_presenter == PresenterMode::Frames {
+                return PresenterMode::Frames;
+            }
+            match self.create_presenter(app) {
+                Ok(()) => PresenterMode::Window,
+                Err(e) => {
+                    eprintln!("native presentation unavailable, using frames: {e}");
+                    // The page draws the canvas itself again: no need to see through it.
+                    if let Some(window) = app.get_webview_window(MAIN_WINDOW)
+                        && let Err(e) = window.set_background_color(None)
+                    {
+                        eprintln!("cannot restore the webview background: {e}");
+                    }
+                    PresenterMode::Frames
+                }
+            }
+        })
+    }
+
+    fn create_presenter(&self, app: &AppHandle) -> Result<(), String> {
+        let window = app
+            .get_webview_window(MAIN_WINDOW)
+            .ok_or("main window not found")?;
+        let presenter = self
+            .renderer()?
+            .create_presenter(window)
+            .map_err(|e| e.to_string())?;
+        *self
+            .presenter
+            .lock()
+            .map_err(|_| "presenter lock poisoned".to_owned())? = Some(presenter);
+        Ok(())
+    }
+
+    /// Client size of the main window, as last reported by window events.
+    fn surface_size(&self, app: &AppHandle) -> Result<Size, String> {
+        let mut size = self
+            .surface_size
+            .lock()
+            .map_err(|_| "surface size lock poisoned".to_owned())?;
+        if let Some(size) = *size {
+            return Ok(size);
+        }
+        // No resize event yet: ask the window once.
+        let window = app
+            .get_webview_window(MAIN_WINDOW)
+            .ok_or("main window not found")?;
+        let inner = window.inner_size().map_err(|e| e.to_string())?;
+        Ok(*size.insert(Size::new(inner.width, inner.height)))
+    }
+
+    fn set_surface_size(&self, width: u32, height: u32) {
+        if let Ok(mut size) = self.surface_size.lock() {
+            *size = Some(Size::new(width, height));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .setup(|app| {
+            if app.state::<AppState>().requested_presenter == PresenterMode::Window {
+                // The engine draws the canvas area under the webview: let it show through.
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                    window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)))?;
+                }
+            }
             // Warm up the GPU in the background so the first frame is fast, then open the
             // startup files, if any (decoding a large image takes seconds).
             let handle = app.handle().clone();
@@ -676,6 +870,18 @@ pub fn run() {
             });
             Ok(())
         })
+        .on_window_event(|window, event| {
+            let size = match event {
+                tauri::WindowEvent::Resized(size) => *size,
+                tauri::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => *new_inner_size,
+                _ => return,
+            };
+            if window.label() == MAIN_WINDOW {
+                window
+                    .state::<AppState>()
+                    .set_surface_size(size.width, size.height);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             documents,
             document,
@@ -692,7 +898,9 @@ pub fn run() {
             redo,
             gpu_info,
             view,
-            render_view
+            render_view,
+            presenter_mode,
+            present_view
         ])
         .run(tauri::generate_context!())
         .expect("error while running SlopShop");
@@ -701,6 +909,25 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presenter_mode_defaults_to_the_native_surface_on_windows_only() {
+        assert_eq!(
+            PresenterMode::requested(Some("frames")),
+            PresenterMode::Frames
+        );
+        assert_eq!(
+            PresenterMode::requested(Some("window")),
+            PresenterMode::Window
+        );
+        let default = if cfg!(windows) {
+            PresenterMode::Window
+        } else {
+            PresenterMode::Frames
+        };
+        assert_eq!(PresenterMode::requested(None), default);
+        assert_eq!(PresenterMode::requested(Some("bogus")), default);
+    }
 
     fn meta() -> DocumentMeta {
         DocumentMeta { id: 1, name: None }

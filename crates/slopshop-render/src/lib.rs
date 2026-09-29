@@ -2,11 +2,13 @@
 //!
 //! Renders a view of a document (a region at a given scale) into a display frame. Only the
 //! output-sized area is ever computed or read back, never the whole document. Works headless:
-//! no window or surface is required.
+//! no window or surface is required; a window surface can be presented to directly
+//! ([`present`]).
 //!
 //! All methods block the calling thread (GPU submission and readback): call them from worker
 //! threads, never from a UI thread.
 
+pub mod present;
 mod tiles;
 
 use std::collections::HashSet;
@@ -36,8 +38,13 @@ pub enum RenderError {
     NoAdapter(String),
     Device(String),
     EmptyOutput,
-    OutputTooLarge { size: Size, max_bytes: u64 },
+    OutputTooLarge {
+        size: Size,
+        max_bytes: u64,
+    },
     Readback(String),
+    /// A window surface could not be created, configured or acquired.
+    Surface(String),
 }
 
 impl fmt::Display for RenderError {
@@ -52,6 +59,7 @@ impl fmt::Display for RenderError {
                 size.width, size.height
             ),
             RenderError::Readback(e) => write!(f, "GPU readback failed: {e}"),
+            RenderError::Surface(e) => write!(f, "window surface: {e}"),
         }
     }
 }
@@ -70,6 +78,10 @@ pub struct AdapterSummary {
 /// GPU device plus the viewport compositing pipeline and the raster tile cache.
 #[derive(Debug)]
 pub struct Renderer {
+    /// Kept to create window surfaces later ([`present`]): surfaces must come from the
+    /// instance that owns the adapter.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     adapter_info: wgpu::AdapterInfo,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -99,7 +111,13 @@ const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
 impl Renderer {
     /// Pick a GPU and build the pipelines. Blocking, and can take a noticeable time.
     pub fn new() -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // Windows: DX12, whose swapchains (flip model) are what direct presentation needs and
+        // which reconfigures much faster than Vulkan on resize. `WGPU_BACKEND` overrides.
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        if cfg!(windows) {
+            descriptor.backends = wgpu::Backends::DX12;
+        }
+        let instance = wgpu::Instance::new(descriptor.with_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
@@ -197,7 +215,9 @@ impl Renderer {
                 .max(1)
         });
         Ok(Self {
+            instance,
             adapter_info: adapter.get_info(),
+            adapter,
             device,
             queue,
             pipeline,
@@ -264,9 +284,32 @@ impl Renderer {
         out: &mut Vec<u8>,
     ) -> Result<(), RenderError> {
         let byte_len = self.output_byte_len(output)?;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("composite readback"),
+            size: byte_len,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        self.composite(document, view, output, |encoder, pixels| {
+            encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
+        })?;
+        self.read_buffer_into(&readback, out)
+    }
 
-        // The cache lock is held for the whole frame: tiles resident for this frame must not be
-        // evicted before the GPU work is submitted.
+    /// Composite `view` of `document` into an `output`-sized buffer of packed RGBA8 sRGB pixels
+    /// (rows of `output.width` pixels), let `finish` record what to do with it (read back, copy
+    /// to a surface…), and submit. Does not wait for the GPU.
+    fn composite(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+        finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
+    ) -> Result<(), RenderError> {
+        let byte_len = self.output_byte_len(output)?;
+
+        // The cache lock is held until the GPU work is submitted: tiles resident for this frame
+        // must not be evicted before.
         let mut cache_guard = self
             .tile_caches
             .lock()
@@ -317,12 +360,6 @@ impl Renderer {
             label: Some("composite output"),
             size: byte_len,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("composite readback"),
-            size: byte_len,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
@@ -383,11 +420,10 @@ impl Renderer {
                 1,
             );
         }
-        encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
+        finish(&mut encoder, &output_buffer);
         self.queue.submit([encoder.finish()]);
         drop(cache_guard);
-
-        self.read_buffer_into(&readback, out)
+        Ok(())
     }
 
     /// Map a `MAP_READ` buffer and append its content to `out`. This copy is required: mapped

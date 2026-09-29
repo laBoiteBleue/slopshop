@@ -105,7 +105,7 @@ revision, zoom, engine render time) followed by the pixels, parsed without copy 
 
 | Topic                         | Current choice                          | Decide before                     |
 | ----------------------------- | --------------------------------------- | --------------------------------- |
-| Viewport presentation         | Frames over IPC ([ADR 0002](adr/0002-viewport-frame-transport.md)) | interactive tools (brush, pan/zoom at 60 fps) |
+| Viewport presentation         | Native surface on Windows, frames over IPC elsewhere ([ADR 0002](adr/0002-viewport-frame-transport.md)) | interactive tools (brush, pan/zoom at 60 fps) |
 | Document model (stack vs DAG) | Stack of layers with stable ids         | first non-trivial node type       |
 | Color management              | Named spaces (linear sRGB working)      | first real image import           |
 | Tile storage / out-of-core    | Geometry only                           | pixel layers                      |

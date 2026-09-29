@@ -21,7 +21,8 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       around the cursor, wheel / Space+drag / middle-drag pan), frame timing in the status bar
 - [x] Viewport presentation direction: native GPU surface, frames as fallback
       ([ADR 0002](adr/0002-viewport-frame-transport.md))
-- [ ] Native surface spike (Windows, then macOS) against the ADR 0002 criteria
+- [x] Native surface on Windows: the engine presents under a transparent webview (ADR 0002)
+- [ ] Native surface on macOS (Metal view; needs a Mac)
 - [x] Multi-document tabs; open into a new tab; drop on the canvas adds a layer, drop elsewhere
       opens new tabs; Ctrl+N / Ctrl+W / Ctrl+Tab
 - [x] Universal import strategy decided ([ADR 0006](adr/0006-universal-import-and-licensing.md),
