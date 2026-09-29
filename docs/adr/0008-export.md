@@ -143,8 +143,9 @@ opacity above 0) is an opaque fill, or a raster without alpha covering the canva
 - JPEG and WebP (`image` 0.25: 8-bit only; JPEG ≤ 65535 px per side and drops alpha silently;
   WebP lossless only, whole buffer, ≤ 16384 px per side). Added by [ADR 0010](0010-jpeg-webp-export.md),
   which also replaces the "over black" of alpha-less targets with a matte.
-- Gray targets (the converter accepts RGB and RGBA only), TIFF tiles, the TIFF floating-point
-  predictor, 16-bit dither, non-linear EXR.
+- Gray targets (the converter accepted RGB and RGBA only; added by
+  [ADR 0011](0011-gray-export.md)), TIFF tiles, the TIFF floating-point predictor, 16-bit
+  dither, non-linear EXR.
 - Tone mapping, gamut compression and soft proofing: document operations, not export options.
 - Re-embedding the source's ICC profile verbatim (rasters do not carry it).
 - A report estimated before exporting: the report is exact and comes after the export.

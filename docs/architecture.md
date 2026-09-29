@@ -52,8 +52,9 @@ do not depend on each other: export receives its pixel source as a closure (see
   visible. View state is never part of the undo history.
 - Export support ([ADR 0008](adr/0008-export.md)): `composite`, the CPU reference compositor
   (full resolution, unclipped; the GPU's test oracle and fallback); `convert`, the only
-  conversion from the working space to a file's pixel format (matrix, alpha, range, transfer,
-  exact quantization, blue-noise dither from `blue_noise`), counting every lossy event; `job`,
+  conversion from the working space to a file's pixel format (matrix, luminance for gray
+  targets, alpha, range, transfer, exact quantization, blue-noise dither from `blue_noise`),
+  counting every lossy event; `job`,
   cancellation and progress.
 
 ### `slopshop-render` (implemented, minimal)
@@ -135,7 +136,8 @@ document ──▶ pixel source ──▶ band channel ──▶ convert ──�
   space, finite values unclipped (NaN → 0 and ±inf → ±65504 by the source, counted). At most 3
   source bands in memory (produced, queued, converted), so memory depends on the width only.
 - `core::convert` is the only place where values change format; every lossy event (clipping,
-  half-float overflow, non-finite values) is counted into an `ExportReport` of stable ids.
+  half-float overflow, non-finite values, flattened alpha, color dropped by a gray export) is
+  counted into an `ExportReport` of stable ids.
 - Cancellation (`CancelToken`) is checked between bands and progress is reported per band. On
   error or cancellation the temporary file (unique to the job) is deleted and the destination
   is untouched.

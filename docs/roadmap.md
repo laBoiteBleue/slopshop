@@ -29,7 +29,7 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       [research](research/universal-import.md))
 - [x] Tile-backed pixel layers in core (immutable shared tiles, [ADR 0005](adr/0005-pixel-storage-v0.md))
 - [x] GPU tile upload/cache; render only visible tiles
-- [x] Mip levels for zoomed-out views (nearest sampling for now; filtered sampling to do)
+- [x] Mip levels for zoomed-out views, area-filtered in linear light
 - [x] Smooth navigation: animated wheel zoom, instant reprojection of the last frame
 - [x] Color management model and working space ([ADR 0007](adr/0007-color-management.md))
 - [x] Open 8-bit PNG/JPEG (dialog, drag and drop, command line; dev builds open a test image)
@@ -43,7 +43,11 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [x] Export (PNG/TIFF/EXR first, [ADR 0008](adr/0008-export.md))
 - [x] JPEG and WebP export, background color for alpha-less exports
       ([ADR 0010](adr/0010-jpeg-webp-export.md))
-- [ ] Export: gray targets, an "encoding" progress phase for WebP
+- [x] Gray export: PNG, TIFF, JPEG, the default for gray documents
+      ([ADR 0011](adr/0011-gray-export.md))
+- [ ] Export: an "encoding" progress phase for WebP; gray EXR (needs a luminance-only reader)
+- [ ] Open a folder or a zip archive like a multi-file open: its compatible images become tabs,
+      or layers when dropped on the canvas
 - [x] Document file format v0 (`.slop`: layers/nodes and tiles, incremental crash-safe saves,
       [ADR 0009](adr/0009-document-file-format.md), [specification](file-format.md)); Save /
       Save As in the app, `slopshop save` / `inspect` in the CLI
