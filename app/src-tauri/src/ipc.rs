@@ -7,7 +7,7 @@
 //! Layer ids travel as JSON numbers: exact up to 2^53, far beyond what a session allocates.
 
 use serde::{Deserialize, Serialize};
-use slopshop_core::color::ColorSpace;
+use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::{Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Session};
 
 #[derive(Debug, Serialize)]
@@ -53,8 +53,14 @@ impl DocumentView {
 
 impl LayerView {
     fn new(layer: &Layer) -> Self {
-        let (kind, swatch) = match layer.content {
-            LayerContent::Fill { color } => ("fill", color.to_srgb_encoded()),
+        let (kind, swatch) = match &layer.content {
+            LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded()),
+            LayerContent::Raster { image } => (
+                "raster",
+                image
+                    .average_color(&WORKING_SPACE)
+                    .working_to_srgb_encoded(),
+            ),
         };
         Self {
             id: layer.id.get(),
@@ -69,10 +75,7 @@ impl LayerView {
 
 /// Stable identifiers, not display text: the UI owns all user-visible (translated) strings.
 fn color_space_id(space: ColorSpace) -> &'static str {
-    match space {
-        ColorSpace::LinearSrgb => "linear-srgb",
-        ColorSpace::Srgb => "srgb",
-    }
+    space.id().unwrap_or("custom")
 }
 
 /// Edits the UI can request. Translated into core [`Edit`]s; the engine validates them.
@@ -125,7 +128,7 @@ impl EditRequest {
                         visible: true,
                         opacity: 1.0,
                         content: LayerContent::Fill {
-                            color: LinearRgba::from_srgb_encoded(r, g, b, a),
+                            color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                         },
                     },
                 }

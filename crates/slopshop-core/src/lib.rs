@@ -4,6 +4,7 @@
 //! - [`geom`] and [`tile`]: integer geometry and tiling, the basis for regions of interest and
 //!   out-of-core images.
 //! - [`color`]: explicit color spaces, pixel formats and named transfer functions.
+//! - [`raster`]: immutable tiled pixel images with a display pyramid.
 //! - [`document`]: the document and its layers (read-only from the outside).
 //! - [`edit`]: the only way to mutate a document; every edit yields its inverse.
 //! - [`session`]: a document plus its undo/redo history.
@@ -13,6 +14,7 @@ pub mod color;
 pub mod document;
 pub mod edit;
 pub mod geom;
+pub mod raster;
 pub mod session;
 pub mod tile;
 pub mod view;
@@ -21,4 +23,5 @@ pub use color::{ColorSpace, LinearRgba};
 pub use document::{Document, Layer, LayerContent, LayerId};
 pub use edit::{Edit, EditError};
 pub use geom::{Rect, Size};
+pub use raster::RasterImage;
 pub use session::Session;

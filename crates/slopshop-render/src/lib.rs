@@ -7,12 +7,21 @@
 //! All methods block the calling thread (GPU submission and readback): call them from worker
 //! threads, never from a UI thread.
 
-use std::fmt;
-use std::sync::mpsc;
+mod tiles;
 
-use slopshop_core::color::PixelFormat;
+use std::collections::HashSet;
+use std::fmt;
+use std::sync::{Mutex, mpsc};
+
+use slopshop_core::color::{
+    AlphaMode, ColorSpace, Mat3, PixelFormat, TransferFunction, WORKING_SPACE,
+};
+use slopshop_core::raster::TILE_SIZE;
+use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
-use slopshop_core::{Document, LayerContent, Size};
+use slopshop_core::{Document, Layer, LayerContent, RasterImage, Rect, Size};
+
+use crate::tiles::{GpuTileFormat, TileCache, TileKey, gpu_texels};
 
 /// A rendered frame, tightly packed rows, top to bottom.
 #[derive(Debug, Clone)]
@@ -58,7 +67,7 @@ pub struct AdapterSummary {
     pub driver: String,
 }
 
-/// GPU device plus the viewport compositing pipeline.
+/// GPU device plus the viewport compositing pipeline and the raster tile cache.
 #[derive(Debug)]
 pub struct Renderer {
     adapter_info: wgpu::AdapterInfo,
@@ -67,7 +76,22 @@ pub struct Renderer {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     max_output_bytes: u64,
+    /// One cache per storage class ([`GpuTileFormat`]), created on first use: documents
+    /// without raster layers of a class need no tile memory for it.
+    tile_caches: Mutex<[Option<TileCache>; 4]>,
+    tile_capacity: [u32; 4],
+    placeholder_tiles: [wgpu::TextureView; 4],
 }
+
+/// Upper bound on cached tiles per storage class.
+const MAX_TILE_CAPACITY: u32 = 1024;
+/// VRAM budget per storage class: 1024 8-bit tiles, 768 16-bit tiles or 384 f32 tiles, enough
+/// for a 4K viewport at full detail in the common cases (coarser levels are used otherwise).
+const TILE_BUDGET_BYTES: u64 = 384 * 1024 * 1024;
+/// Marks a tile that is not resident (see `NO_TILE` in composite.wgsl).
+const NO_TILE: u32 = u32::MAX;
+const KIND_FILL: u32 = 0;
+const KIND_RASTER: u32 = 1;
 
 const WORKGROUP_SIZE: u32 = 8;
 const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
@@ -101,6 +125,7 @@ impl Renderer {
         let required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
             max_buffer_size: adapter_limits.max_buffer_size,
+            max_texture_array_layers: adapter_limits.max_texture_array_layers,
             ..wgpu::Limits::downlevel_defaults()
         };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -139,6 +164,11 @@ impl Renderer {
                 },
                 storage(1, true),
                 storage(2, false),
+                storage(3, true),
+                tile_binding(4, GpuTileFormat::Unorm8),
+                tile_binding(5, GpuTileFormat::Uint16),
+                tile_binding(6, GpuTileFormat::Float16),
+                tile_binding(7, GpuTileFormat::Float32),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -158,6 +188,14 @@ impl Renderer {
         let max_output_bytes = required_limits
             .max_storage_buffer_binding_size
             .min(required_limits.max_buffer_size);
+        let placeholder_tiles = GpuTileFormat::ALL.map(|f| tiles::placeholder_view(&device, f));
+        let tile_capacity = GpuTileFormat::ALL.map(|f| {
+            let budget = u32::try_from(TILE_BUDGET_BYTES / f.tile_bytes()).unwrap_or(u32::MAX);
+            budget
+                .min(MAX_TILE_CAPACITY)
+                .min(required_limits.max_texture_array_layers)
+                .max(1)
+        });
         Ok(Self {
             adapter_info: adapter.get_info(),
             device,
@@ -165,6 +203,9 @@ impl Renderer {
             pipeline,
             bind_group_layout,
             max_output_bytes,
+            tile_caches: Mutex::new([None, None, None, None]),
+            tile_capacity,
+            placeholder_tiles,
         })
     }
 
@@ -187,19 +228,51 @@ impl Renderer {
         view: ViewTransform,
         output: Size,
     ) -> Result<Frame, RenderError> {
+        let mut data = Vec::new();
+        self.render_view_into(document, view, output, &mut data)?;
+        Ok(Frame {
+            size: output,
+            format: OUTPUT_FORMAT,
+            data,
+        })
+    }
+
+    /// Size in bytes of an `output`-sized frame, or why it cannot be rendered (empty, or larger
+    /// than the GPU buffer limit). Callers can check before allocating anything.
+    pub fn output_byte_len(&self, output: Size) -> Result<u64, RenderError> {
         if output.is_empty() {
             return Err(RenderError::EmptyOutput);
         }
-        let byte_len = output.pixel_count() * u64::from(OUTPUT_FORMAT.bytes_per_pixel());
-        if byte_len > self.max_output_bytes {
-            return Err(RenderError::OutputTooLarge {
+        output
+            .pixel_count()
+            .checked_mul(u64::from(OUTPUT_FORMAT.bytes_per_pixel()))
+            .filter(|&len| len <= self.max_output_bytes)
+            .ok_or(RenderError::OutputTooLarge {
                 size: output,
                 max_bytes: self.max_output_bytes,
-            });
-        }
+            })
+    }
 
-        let layers = layer_colors(document);
-        let layer_count = (layers.len() / 4) as u32;
+    /// Like [`Self::render_view`], but appends the RGBA8 sRGB pixels to `out`. Lets callers put
+    /// a header before the pixels (or reuse an allocation) without copying the frame again.
+    /// On error, `out` is left as it was.
+    pub fn render_view_into(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+        out: &mut Vec<u8>,
+    ) -> Result<(), RenderError> {
+        let byte_len = self.output_byte_len(output)?;
+
+        // The cache lock is held for the whole frame: tiles resident for this frame must not be
+        // evicted before the GPU work is submitted.
+        let mut cache_guard = self
+            .tile_caches
+            .lock()
+            .map_err(|_| RenderError::Readback("tile cache lock poisoned".into()))?;
+        let layers = self.prepare_layers(document, view, output, &mut cache_guard);
+        let layer_count = layers.count;
         let params = params_bytes(document.size(), view, output, layer_count);
 
         use wgpu::util::DeviceExt;
@@ -211,11 +284,10 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         // A binding cannot be empty: always upload at least one (unused) entry.
-        let layer_bytes: Vec<u8> = if layers.is_empty() {
-            vec![0; 16]
-        } else {
-            layers.iter().flat_map(|v| v.to_le_bytes()).collect()
-        };
+        let mut layer_bytes = layers.bytes;
+        if layer_bytes.is_empty() {
+            layer_bytes.resize(LAYER_BYTES, 0);
+        }
         let layers_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -223,6 +295,23 @@ impl Renderer {
                 contents: &layer_bytes,
                 usage: wgpu::BufferUsages::STORAGE,
             });
+        let mut table = layers.tile_table;
+        if table.is_empty() {
+            table.push(NO_TILE);
+        }
+        let table_bytes: Vec<u8> = table.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let table_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("composite tile table"),
+                contents: &table_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let tile_views: Vec<&wgpu::TextureView> = cache_guard
+            .iter()
+            .zip(&self.placeholder_tiles)
+            .map(|(cache, placeholder)| cache.as_ref().map_or(placeholder, TileCache::view))
+            .collect();
         // Allocated per frame for now; pooling can come once profiling says it matters.
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("composite output"),
@@ -253,6 +342,26 @@ impl Renderer {
                     binding: 2,
                     resource: output_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: table_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(tile_views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(tile_views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(tile_views[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(tile_views[3]),
+                },
             ],
         });
 
@@ -276,18 +385,18 @@ impl Renderer {
         }
         encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback, 0, byte_len);
         self.queue.submit([encoder.finish()]);
+        drop(cache_guard);
 
-        let data = self.read_buffer(&readback)?;
-        Ok(Frame {
-            size: output,
-            format: OUTPUT_FORMAT,
-            data,
-        })
+        self.read_buffer_into(&readback, out)
     }
 
-    /// Map a `MAP_READ` buffer and copy it out. This copy is required: mapped GPU memory cannot
-    /// outlive the mapping.
-    fn read_buffer(&self, buffer: &wgpu::Buffer) -> Result<Vec<u8>, RenderError> {
+    /// Map a `MAP_READ` buffer and append its content to `out`. This copy is required: mapped
+    /// GPU memory cannot outlive the mapping.
+    fn read_buffer_into(
+        &self,
+        buffer: &wgpu::Buffer,
+        out: &mut Vec<u8>,
+    ) -> Result<(), RenderError> {
         let slice = buffer.slice(..);
         let (tx, rx) = mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -300,39 +409,356 @@ impl Renderer {
         rx.recv()
             .map_err(|e| RenderError::Readback(e.to_string()))?
             .map_err(|e| RenderError::Readback(e.to_string()))?;
-        let data = slice
-            .get_mapped_range()
-            .map_err(|e| RenderError::Readback(e.to_string()))?
-            .to_vec();
+        {
+            let mapped = slice
+                .get_mapped_range()
+                .map_err(|e| RenderError::Readback(e.to_string()))?;
+            out.extend_from_slice(&mapped);
+        }
         buffer.unmap();
-        Ok(data)
+        Ok(())
     }
 }
 
-/// Visible layers, bottom to top, as premultiplied linear RGBA with opacity applied.
-fn layer_colors(document: &Document) -> Vec<f32> {
-    document
-        .layers()
-        .iter()
-        .filter(|l| l.visible)
-        .flat_map(|l| match l.content {
-            LayerContent::Fill { color } => {
-                let a = color.a * l.opacity;
-                [color.r * a, color.g * a, color.b * a, a]
-            }
-        })
-        .collect()
+/// Size of one `Layer` in composite.wgsl.
+const LAYER_BYTES: usize = 144;
+
+/// GPU-ready description of the visible layers of one frame.
+struct PreparedLayers {
+    count: u32,
+    /// `count` × [`LAYER_BYTES`].
+    bytes: Vec<u8>,
+    /// Cache slots of the visible raster tiles, per layer range.
+    tile_table: Vec<u32>,
 }
 
-/// Uniform block matching `Params` in `composite.wgsl` (32 bytes, std140-compatible).
+impl Renderer {
+    /// Encode the visible layers bottom to top, making the raster tiles they need resident.
+    fn prepare_layers(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+        caches: &mut [Option<TileCache>; 4],
+    ) -> PreparedLayers {
+        let visible_doc = visible_document_rect(document.size(), view, output);
+        let layers: Vec<&Layer> = document.layers().iter().filter(|l| l.visible).collect();
+
+        // Plan the pyramid level of every raster layer together, so that all visible tiles
+        // fit in the cache: coarser levels rather than missing layers.
+        let mut plans: Vec<Option<RasterPlan<'_>>> = layers
+            .iter()
+            .map(|layer| match (&layer.content, visible_doc) {
+                (LayerContent::Raster { image }, Some(visible)) => {
+                    Some(RasterPlan::new(image, visible, view.scale))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut tables: Vec<Vec<u32>> = vec![Vec::new(); layers.len()];
+        if plans.iter().any(Option::is_some) {
+            fit_tile_budget(&mut plans, self.tile_capacity);
+            for format in GpuTileFormat::ALL {
+                if plans.iter().flatten().any(|p| p.format == format) {
+                    let capacity = self.tile_capacity[format.index()];
+                    caches[format.index()]
+                        .get_or_insert_with(|| TileCache::new(&self.device, format, capacity))
+                        .begin_frame();
+                }
+            }
+            // Top layer first: if even the coarsest levels do not fit (more visible raster
+            // layers than cache slots), the layers left out are the bottom ones.
+            for (plan, table) in plans.iter().zip(tables.iter_mut()).rev() {
+                if let Some(plan) = plan
+                    && let Some(cache) = caches[plan.format.index()].as_mut()
+                {
+                    *table = self.upload(plan, cache);
+                }
+            }
+        }
+
+        let mut prepared = PreparedLayers {
+            count: 0,
+            bytes: Vec::new(),
+            tile_table: Vec::new(),
+        };
+        for ((layer, plan), table) in layers.iter().zip(&plans).zip(tables) {
+            let mut fields = LayerFields::default();
+            match &layer.content {
+                LayerContent::Fill { color } => {
+                    fields.kind = KIND_FILL;
+                    let a = color.a * layer.opacity;
+                    fields.color = [color.r * a, color.g * a, color.b * a, a];
+                }
+                LayerContent::Raster { .. } => {
+                    // Not visible in this view: nothing to sample.
+                    let Some(plan) = plan else { continue };
+                    fields.kind = KIND_RASTER;
+                    fields.opacity = layer.opacity;
+                    let range = plan.range();
+                    let size = plan.image.levels()[plan.level].size();
+                    fields.level_scale = plan.factor() as f32;
+                    fields.table_offset = prepared.tile_table.len() as u32;
+                    fields.tile_origin = [range.x, range.y];
+                    fields.tile_count = [range.width, range.height];
+                    fields.level_size = [size.width, size.height];
+                    fields.format = plan.format.index() as u32;
+                    let stored = plan.image.stored_format();
+                    fields.flags = u32::from(stored.alpha == AlphaMode::Premultiplied);
+                    (fields.transfer, fields.transfer2) =
+                        transfer_fields(stored.color_space.transfer);
+                    fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
+                    prepared.tile_table.extend(table);
+                }
+            }
+            fields.write(&mut prepared.bytes);
+            prepared.count += 1;
+        }
+        prepared
+    }
+
+    /// Make the planned tiles resident; returns their cache slots (row-major).
+    fn upload(&self, plan: &RasterPlan<'_>, cache: &mut TileCache) -> Vec<u32> {
+        let level = &plan.image.levels()[plan.level];
+        let stored = plan.image.stored_format();
+        plan.keys()
+            .map(|key| {
+                let coord = TileCoord {
+                    col: key.col,
+                    row: key.row,
+                };
+                level
+                    .tile(coord)
+                    .and_then(|tile| cache.ensure(&self.queue, key, || gpu_texels(tile, stored)))
+                    .unwrap_or(NO_TILE)
+            })
+            .collect()
+    }
+
+    /// Limit every tile cache to `capacity` tiles (at least 1). For tests and
+    /// memory-constrained setups; resets the caches.
+    #[doc(hidden)]
+    pub fn with_tile_capacity(mut self, capacity: u32) -> Self {
+        self.tile_capacity = self.tile_capacity.map(|c| capacity.clamp(1, c.max(1)));
+        self.tile_caches = Mutex::new([None, None, None, None]);
+        self
+    }
+}
+
+/// How one visible raster layer is sampled in a frame.
+struct RasterPlan<'a> {
+    image: &'a RasterImage,
+    format: GpuTileFormat,
+    /// Document area to cover: `[x0, y0, x1, y1]`.
+    visible: [f64; 4],
+    level: usize,
+}
+
+impl<'a> RasterPlan<'a> {
+    /// Start at the finest level whose pixels are not smaller than output pixels.
+    fn new(image: &'a RasterImage, visible: [f64; 4], scale: f64) -> Self {
+        let coarsest = image.levels().len() - 1;
+        let level = if scale > 1.0 {
+            (scale.log2().floor() as usize).min(coarsest)
+        } else {
+            0
+        };
+        Self {
+            image,
+            format: GpuTileFormat::for_sample(image.stored_format().sample),
+            visible,
+            level,
+        }
+    }
+
+    /// Document pixels per pixel of the planned level.
+    fn factor(&self) -> f64 {
+        f64::from(1u32 << self.level)
+    }
+
+    fn can_coarsen(&self) -> bool {
+        self.level + 1 < self.image.levels().len()
+    }
+
+    /// Visible tiles of the planned level.
+    fn range(&self) -> Rect {
+        let grid = self.image.levels()[self.level].grid();
+        tile_range(self.visible, self.factor(), grid.columns(), grid.rows())
+    }
+
+    fn keys(&self) -> impl Iterator<Item = TileKey> + '_ {
+        let range = self.range();
+        let (image, level) = (self.image.id(), self.level as u32);
+        (range.y..range.y + range.height).flat_map(move |row| {
+            (range.x..range.x + range.width).map(move |col| TileKey {
+                image,
+                level,
+                col,
+                row,
+            })
+        })
+    }
+}
+
+/// Coarsen plans until the distinct visible tiles of each storage class fit in that class's
+/// cache: each step coarsens the plan of an over-budget class that needs the most tiles. Layers
+/// sharing an image at the same level count once.
+fn fit_tile_budget(plans: &mut [Option<RasterPlan<'_>>], capacity: [u32; 4]) {
+    for format in GpuTileFormat::ALL {
+        loop {
+            let needed: HashSet<TileKey> = plans
+                .iter()
+                .flatten()
+                .filter(|p| p.format == format)
+                .flat_map(RasterPlan::keys)
+                .collect();
+            if needed.len() <= capacity[format.index()] as usize {
+                break;
+            }
+            let largest = plans
+                .iter_mut()
+                .flatten()
+                .filter(|plan| plan.format == format && plan.can_coarsen())
+                .max_by_key(|plan| plan.range().width * plan.range().height);
+            match largest {
+                Some(plan) => plan.level += 1,
+                // All at their coarsest level: the upload order decides what is left out.
+                None => break,
+            }
+        }
+    }
+}
+
+/// A binding for one tile storage class.
+fn tile_binding(binding: u32, format: GpuTileFormat) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: format.binding_type(),
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+/// A transfer function as the (kind, g, a, b) and (c, d, e, f) fields of composite.wgsl.
+fn transfer_fields(transfer: TransferFunction) -> ([f32; 4], [f32; 4]) {
+    match transfer {
+        TransferFunction::Linear => ([0.0; 4], [0.0; 4]),
+        TransferFunction::Srgb => ([1.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        TransferFunction::Gamma(g) => ([2.0, g, 0.0, 0.0], [0.0; 4]),
+        TransferFunction::Rec709 => ([3.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        TransferFunction::Parametric {
+            g,
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+        } => ([4.0, g, a, b], [c, d, e, f]),
+        TransferFunction::Pq => ([5.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        TransferFunction::Hlg => ([6.0, 0.0, 0.0, 0.0], [0.0; 4]),
+    }
+}
+
+/// Rows of a 3×3 matrix as three padded vec4.
+fn matrix_rows(m: &Mat3) -> [[f32; 4]; 3] {
+    m.map(|row| [row[0] as f32, row[1] as f32, row[2] as f32, 0.0])
+}
+
+/// Mirrors `Layer` in composite.wgsl.
+#[derive(Default)]
+struct LayerFields {
+    color: [f32; 4],
+    kind: u32,
+    opacity: f32,
+    level_scale: f32,
+    table_offset: u32,
+    tile_origin: [u32; 2],
+    tile_count: [u32; 2],
+    level_size: [u32; 2],
+    format: u32,
+    flags: u32,
+    transfer: [f32; 4],
+    transfer2: [f32; 4],
+    matrix: [[f32; 4]; 3],
+}
+
+impl LayerFields {
+    fn write(&self, out: &mut Vec<u8>) {
+        let start = out.len();
+        for v in self.color {
+            out.extend(v.to_le_bytes());
+        }
+        out.extend(self.kind.to_le_bytes());
+        out.extend(self.opacity.to_le_bytes());
+        out.extend(self.level_scale.to_le_bytes());
+        out.extend(self.table_offset.to_le_bytes());
+        for v in self
+            .tile_origin
+            .iter()
+            .chain(&self.tile_count)
+            .chain(&self.level_size)
+        {
+            out.extend(v.to_le_bytes());
+        }
+        out.extend(self.format.to_le_bytes());
+        out.extend(self.flags.to_le_bytes());
+        for v in self
+            .transfer
+            .iter()
+            .chain(&self.transfer2)
+            .chain(self.matrix.iter().flatten())
+        {
+            out.extend(v.to_le_bytes());
+        }
+        debug_assert_eq!(out.len() - start, LAYER_BYTES);
+    }
+}
+
+/// Document area covered by the output, clipped to the document: `[x0, y0, x1, y1]`.
+fn visible_document_rect(document: Size, view: ViewTransform, output: Size) -> Option<[f64; 4]> {
+    let [x0, y0] = view.output_to_document(0.0, 0.0);
+    let [x1, y1] = view.output_to_document(f64::from(output.width), f64::from(output.height));
+    let x0 = x0.max(0.0);
+    let y0 = y0.max(0.0);
+    let x1 = x1.min(f64::from(document.width));
+    let y1 = y1.min(f64::from(document.height));
+    (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+}
+
+/// Tiles of a level (`factor` document pixels per level pixel) covering a document area.
+fn tile_range(visible: [f64; 4], factor: f64, columns: u32, rows: u32) -> Rect {
+    let tile = f64::from(TILE_SIZE) * factor;
+    let col0 = ((visible[0] / tile).floor() as u32).min(columns);
+    let row0 = ((visible[1] / tile).floor() as u32).min(rows);
+    let col1 = ((visible[2] / tile).ceil() as u32).min(columns);
+    let row1 = ((visible[3] / tile).ceil() as u32).min(rows);
+    Rect::new(
+        col0,
+        row0,
+        col1.saturating_sub(col0),
+        row1.saturating_sub(row0),
+    )
+}
+
+/// Uniform block matching `Params` in `composite.wgsl` (80 bytes, std140-compatible).
 fn params_bytes(doc: Size, view: ViewTransform, output: Size, layer_count: u32) -> Vec<u8> {
     // f32 is plenty for display: at 100k px the step is ~0.01 px.
-    let mut bytes = Vec::with_capacity(32);
+    let mut bytes = Vec::with_capacity(80);
     bytes.extend((view.origin[0] as f32).to_le_bytes());
     bytes.extend((view.origin[1] as f32).to_le_bytes());
     bytes.extend((view.scale as f32).to_le_bytes());
     bytes.extend(layer_count.to_le_bytes());
     for v in [output.width, output.height, doc.width, doc.height] {
+        bytes.extend(v.to_le_bytes());
+    }
+    // The display is sRGB for now (8-bit frames); HDR display comes with ADR 0002's surface.
+    let display = matrix_rows(&WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB));
+    for v in display.iter().flatten() {
         bytes.extend(v.to_le_bytes());
     }
     bytes

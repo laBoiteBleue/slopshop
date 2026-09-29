@@ -5,9 +5,11 @@
 //! (stable, never reused) so that the model can later evolve into a DAG of nodes.
 
 use std::fmt;
+use std::sync::Arc;
 
-use crate::color::{ColorSpace, LinearRgba};
+use crate::color::{ColorSpace, LinearRgba, WORKING_SPACE};
 use crate::geom::Size;
+use crate::raster::RasterImage;
 
 /// Stable identifier of a layer within a document. Never reused, even after undo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -31,12 +33,25 @@ impl fmt::Display for LayerId {
     }
 }
 
-/// What a layer produces. Only procedural content exists so far; pixel layers (tiled, possibly
-/// out-of-core) and adjustment/AI nodes come later.
-#[derive(Debug, Clone, PartialEq)]
+/// What a layer produces. Adjustment and AI nodes come later.
+#[derive(Debug, Clone)]
 pub enum LayerContent {
     /// A uniform color over the whole canvas, in the document working space.
     Fill { color: LinearRgba },
+    /// Source pixels, placed at the document origin. The image is immutable and shared:
+    /// cloning the layer (snapshots, undo) never copies pixels.
+    Raster { image: Arc<RasterImage> },
+}
+
+impl PartialEq for LayerContent {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fill { color: a }, Self::Fill { color: b }) => a == b,
+            // Immutable images: same allocation, same content.
+            (Self::Raster { image: a }, Self::Raster { image: b }) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,7 +79,7 @@ impl Document {
     pub fn new(size: Size) -> Self {
         Self {
             size,
-            working_space: ColorSpace::LinearSrgb,
+            working_space: WORKING_SPACE,
             layers: Vec::new(),
             next_layer_id: 1,
             revision: 0,

@@ -1,8 +1,11 @@
 // Viewport compositor: one invocation per output pixel.
 //
-// Layers are composited in linear light (premultiplied alpha) over a transparency
-// checkerboard, then encoded to sRGB 8-bit for display. The encoding is a *view transform*:
-// the document itself is never converted.
+// Layers are composited in the working space (linear Rec.2020, unbounded, premultiplied alpha;
+// ADR 0007). Raster tiles are sampled in their source encoding and converted here: transfer
+// function decode, then a 3×3 matrix to the working space. The result is converted to the
+// display space (linear sRGB), composited over a transparency checkerboard and encoded to sRGB
+// 8-bit. Clipping only happens at that last step: it is a *view transform*, the document is
+// never converted.
 
 struct Params {
     // Document coordinate of the output's top-left corner.
@@ -12,15 +15,72 @@ struct Params {
     layer_count: u32,
     out_size: vec2<u32>,
     doc_size: vec2<u32>,
+    // Working space → display (linear sRGB), rows of a 3×3 matrix.
+    display0: vec4<f32>,
+    display1: vec4<f32>,
+    display2: vec4<f32>,
+}
+
+const KIND_FILL: u32 = 0u;
+const KIND_RASTER: u32 = 1u;
+const NO_TILE: u32 = 0xffffffffu;
+const TILE_SIZE: u32 = 256u;
+
+// Tile storage classes (GpuTileFormat in tiles.rs).
+const FORMAT_UNORM8: u32 = 0u;
+const FORMAT_UINT16: u32 = 1u;
+const FORMAT_FLOAT16: u32 = 2u;
+
+const FLAG_PREMULTIPLIED: u32 = 1u;
+
+// Transfer function kinds (transfer_fields in lib.rs).
+const TF_LINEAR: u32 = 0u;
+const TF_SRGB: u32 = 1u;
+const TF_GAMMA: u32 = 2u;
+const TF_REC709: u32 = 3u;
+const TF_PARAMETRIC: u32 = 4u;
+const TF_PQ: u32 = 5u;
+const TF_HLG: u32 = 6u;
+
+// 144 bytes; keep in sync with `LayerFields` in lib.rs.
+struct Layer {
+    // Fill: working-space linear RGBA, premultiplied, opacity applied. Raster: unused.
+    color: vec4<f32>,
+    kind: u32,
+    opacity: f32,
+    // Raster: document pixels per pixel of the sampled pyramid level (2^level).
+    level_scale: f32,
+    // Raster: where this layer's tile table starts in `tile_table`.
+    table_offset: u32,
+    // Raster: visible tile range of the level, and the level size in pixels.
+    tile_origin: vec2<u32>,
+    tile_count: vec2<u32>,
+    level_size: vec2<u32>,
+    format: u32,
+    flags: u32,
+    // Raster: source transfer function (kind, g, a, b) and (c, d, e, f).
+    transfer: vec4<f32>,
+    transfer2: vec4<f32>,
+    // Raster: source linear RGB → working space, rows of a 3×3 matrix.
+    m0: vec4<f32>,
+    m1: vec4<f32>,
+    m2: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
-// Visible layers, bottom to top: linear RGBA, premultiplied, opacity already applied.
-@group(0) @binding(1) var<storage, read> layers: array<vec4<f32>>;
+// Visible layers, bottom to top.
+@group(0) @binding(1) var<storage, read> layers: array<Layer>;
 // Output pixels, tightly packed, RGBA8 sRGB (one u32 per pixel, R in the lowest byte).
 @group(0) @binding(2) var<storage, read_write> output: array<u32>;
+// Raster layers: cache slot of each visible tile, row-major within the layer's tile range.
+@group(0) @binding(3) var<storage, read> tile_table: array<u32>;
+// Cached tiles, one array per storage class, values as stored in the source.
+@group(0) @binding(4) var tiles_unorm8: texture_2d_array<f32>;
+@group(0) @binding(5) var tiles_uint16: texture_2d_array<u32>;
+@group(0) @binding(6) var tiles_float16: texture_2d_array<f32>;
+@group(0) @binding(7) var tiles_float32: texture_2d_array<f32>;
 
-// Linear-light display colors.
+// Linear sRGB display colors.
 const PASTEBOARD = vec3<f32>(0.0144, 0.0144, 0.0168);
 const CHECKER_LIGHT = vec3<f32>(0.527, 0.527, 0.527);
 const CHECKER_DARK = vec3<f32>(0.314, 0.314, 0.314);
@@ -31,6 +91,128 @@ fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
     let low = linear * 12.92;
     let high = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(high, low, linear <= vec3<f32>(0.0031308));
+}
+
+// Magnitude that non-finite values are replaced with (MAX_FINITE_SAMPLE in core): sums and
+// matrices stay finite, so an opaque layer still hides what is below it.
+const MAX_FINITE = 65504.0;
+
+// Rec.709 constants at full precision (same as core).
+const REC709_ALPHA = 1.0992968;
+const REC709_BETA = 0.018053968;
+
+// NaN → 0, ±inf → ±MAX_FINITE. Tests the bits: `v != v` may be optimized away.
+fn finite(v: vec4<f32>) -> vec4<f32> {
+    let bits = bitcast<vec4<u32>>(v);
+    let special = (bits & vec4<u32>(0x7f800000u)) == vec4<u32>(0x7f800000u);
+    let nan = special & ((bits & vec4<u32>(0x007fffffu)) != vec4<u32>(0u));
+    let clamped = clamp(v, vec4<f32>(-MAX_FINITE), vec4<f32>(MAX_FINITE));
+    return select(select(clamped, sign(v) * MAX_FINITE, special), vec4<f32>(0.0), nan);
+}
+
+// ICC parametric curve for x ≥ 0: g = t.y, a = t.z, b = t.w, c = t2.x, d = t2.y, e = t2.z,
+// f = t2.w.
+fn parametric(x: vec3<f32>, t: vec4<f32>, t2: vec4<f32>) -> vec3<f32> {
+    let curve = pow(max(t.z * x + t.w, vec3<f32>(0.0)), vec3<f32>(t.y)) + t2.z;
+    return select(curve, t2.x * x + t2.w, x < vec3<f32>(t2.y));
+}
+
+// Encoded → linear, mirrored for negative values (see TransferFunction::decode in core).
+fn decode_transfer(v: vec3<f32>, t: vec4<f32>, t2: vec4<f32>) -> vec3<f32> {
+    if u32(t.x) == TF_PARAMETRIC {
+        // Mirrored about the value at 0, which offsets make non-zero.
+        let y0 = parametric(vec3<f32>(0.0), t, t2);
+        return select(parametric(v, t, t2), 2.0 * y0 - parametric(-v, t, t2), v < vec3<f32>(0.0));
+    }
+    let x = abs(v);
+    var y = x;
+    switch u32(t.x) {
+        case TF_SRGB: {
+            y = select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+        }
+        case TF_GAMMA: {
+            y = pow(x, vec3<f32>(t.y));
+        }
+        case TF_REC709: {
+            let high = pow((x + (REC709_ALPHA - 1.0)) / REC709_ALPHA, vec3<f32>(1.0 / 0.45));
+            y = select(high, x / 4.5, x < vec3<f32>(4.5 * REC709_BETA));
+        }
+        case TF_PQ: {
+            let m1 = 2610.0 / 16384.0;
+            let m2 = 2523.0 / 4096.0 * 128.0;
+            let c1 = 3424.0 / 4096.0;
+            let c2 = 2413.0 / 4096.0 * 32.0;
+            let c3 = 2392.0 / 4096.0 * 32.0;
+            // Defined on [0, 1]: saturate above, where the formula would divide by ≤ 0.
+            let p = pow(min(x, vec3<f32>(1.0)), vec3<f32>(1.0 / m2));
+            let nits = pow(max(p - c1, vec3<f32>(0.0)) / (c2 - c3 * p), vec3<f32>(1.0 / m1)) * 10000.0;
+            y = nits / 203.0;
+        }
+        case TF_HLG: {
+            let a = 0.17883277;
+            let b = 1.0 - 4.0 * a;
+            let c = 0.5599107;
+            let scene = select((exp((x - c) / a) + b) / 12.0, x * x / 3.0, x <= vec3<f32>(0.5));
+            y = scene / 0.26496252;
+        }
+        default: {}
+    }
+    return select(y, -y, v < vec3<f32>(0.0));
+}
+
+fn load_texel(layer: Layer, texel: vec2<u32>, slot: u32) -> vec4<f32> {
+    let local = texel % TILE_SIZE;
+    switch layer.format {
+        case FORMAT_UNORM8: {
+            return textureLoad(tiles_unorm8, local, slot, 0);
+        }
+        case FORMAT_UINT16: {
+            return vec4<f32>(textureLoad(tiles_uint16, local, slot, 0)) / 65535.0;
+        }
+        case FORMAT_FLOAT16: {
+            return textureLoad(tiles_float16, local, slot, 0);
+        }
+        default: {
+            return textureLoad(tiles_float32, local, slot, 0);
+        }
+    }
+}
+
+// Premultiplied working-space color of a raster layer at document point `p` (nearest sample of
+// the chosen pyramid level). Transparent outside the image or where no tile is resident.
+fn sample_raster(layer: Layer, p: vec2<f32>) -> vec4<f32> {
+    let lp = p / layer.level_scale;
+    if any(lp < vec2<f32>(0.0)) || any(lp >= vec2<f32>(layer.level_size)) {
+        return vec4<f32>(0.0);
+    }
+    let texel = vec2<u32>(lp);
+    let tile = texel / TILE_SIZE;
+    if any(tile < layer.tile_origin) || any(tile >= layer.tile_origin + layer.tile_count) {
+        return vec4<f32>(0.0);
+    }
+    let local = tile - layer.tile_origin;
+    let slot = tile_table[layer.table_offset + local.y * layer.tile_count.x + local.x];
+    if slot == NO_TILE {
+        return vec4<f32>(0.0);
+    }
+    let raw = finite(load_texel(layer, texel, slot));
+    let a = clamp(raw.a, 0.0, 1.0);
+    let premultiplied = (layer.flags & FLAG_PREMULTIPLIED) != 0u;
+    var linear: vec3<f32>;
+    if premultiplied && u32(layer.transfer.x) != TF_LINEAR {
+        // The file multiplied *encoded* values by alpha: decode the straight value, then
+        // premultiply again (the matrix below is linear, so the order does not matter).
+        let straight = select(vec3<f32>(0.0), raw.rgb / a, a > 0.0);
+        linear = decode_transfer(straight, layer.transfer, layer.transfer2) * a;
+    } else {
+        linear = decode_transfer(raw.rgb, layer.transfer, layer.transfer2);
+        if !premultiplied {
+            linear = linear * a;
+        }
+    }
+    let rgb = vec3<f32>(dot(layer.m0.xyz, linear), dot(layer.m1.xyz, linear), dot(layer.m2.xyz, linear));
+    // Decoding can still overflow (HLG is exponential).
+    return finite(vec4<f32>(rgb, a)) * layer.opacity;
 }
 
 @compute @workgroup_size(8, 8)
@@ -46,12 +228,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if all(p >= vec2<f32>(0.0)) && all(p < doc) {
         var acc = vec4<f32>(0.0);
         for (var i = 0u; i < params.layer_count; i++) {
-            let src = layers[i];
+            let layer = layers[i];
+            var src = layer.color;
+            if layer.kind == KIND_RASTER {
+                src = sample_raster(layer, p);
+            }
             acc = src + acc * (1.0 - src.a);
         }
+        // Working space → display (a linear map, so it commutes with premultiplied "over").
+        let display = vec3<f32>(
+            dot(params.display0.xyz, acc.rgb),
+            dot(params.display1.xyz, acc.rgb),
+            dot(params.display2.xyz, acc.rgb),
+        );
         let checker = ((id.x / CHECKER_SIZE) + (id.y / CHECKER_SIZE)) % 2u;
         let background = select(CHECKER_DARK, CHECKER_LIGHT, checker == 0u);
-        color = acc.rgb + background * (1.0 - acc.a);
+        color = display + background * (1.0 - acc.a);
     }
 
     // Clipping only happens here, at the display boundary.

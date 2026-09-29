@@ -114,12 +114,12 @@ fn demo_document(size: Size) -> Result<Session, String> {
     let layers = [
         (
             "Background",
-            LinearRgba::from_srgb_encoded(0.10, 0.12, 0.16, 1.0),
+            LinearRgba::from_srgb_encoded_to_working(0.10, 0.12, 0.16, 1.0),
             1.0,
         ),
         (
             "Slop",
-            LinearRgba::from_srgb_encoded(0.91, 0.30, 0.64, 1.0),
+            LinearRgba::from_srgb_encoded_to_working(0.91, 0.30, 0.64, 1.0),
             0.6,
         ),
     ];

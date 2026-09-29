@@ -166,7 +166,7 @@ fn validate_new_layer(doc: &Document, index: usize, layer: &Layer) -> Result<(),
     validate_opacity(layer.opacity)?;
     match &layer.content {
         LayerContent::Fill { color } if !color.is_finite() => Err(EditError::InvalidColor),
-        LayerContent::Fill { .. } => Ok(()),
+        LayerContent::Fill { .. } | LayerContent::Raster { .. } => Ok(()),
     }
 }
 
