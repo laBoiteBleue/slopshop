@@ -262,6 +262,7 @@
       min="0"
       max="100"
       value={shownOpacity}
+      style:--fill="{shownOpacity}%"
       disabled={!selected}
       aria-label={t("layers.opacity")}
       onpointerdown={onOpacitySliderPointerDown}
@@ -393,14 +394,13 @@
   }
 
   .opacity-range {
-    flex: 1;
+    width: 96px;
     min-width: 0;
-    height: 14px;
-    accent-color: var(--accent);
   }
 
   .opacity-field {
-    width: 42px;
+    width: 36px;
+    height: 18px;
     text-align: right;
   }
 

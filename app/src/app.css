@@ -15,6 +15,7 @@
   --accent: #3b8eea;
   --brand: #ff6fb5;
   --brand-muted: #ff6fb522;
+  --slider-track: #555555;
   --danger-bg: #4a1f24;
   --danger-fg: #ff8f9a;
 
@@ -91,6 +92,45 @@ select:focus {
 
 input:disabled {
   opacity: 0.4;
+}
+
+/* Sliders: a thin track, filled up to the value, and a small round thumb. Components set
+   `--fill` (0% to 100%) from their value; WebKit and Chromium (the app's webviews) only. */
+input[type="range"] {
+  --fill: 0%;
+  appearance: none;
+  height: 14px;
+  margin: 0;
+  background: transparent;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(to right, var(--accent) var(--fill), var(--slider-track) var(--fill));
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 9px;
+  height: 9px;
+  margin-top: -3.5px;
+  border: 1px solid var(--border-dark);
+  border-radius: 50%;
+  background: var(--text);
+}
+
+input[type="range"]:hover:not(:disabled)::-webkit-slider-thumb,
+input[type="range"]:active::-webkit-slider-thumb {
+  background: #ffffff;
+}
+
+input[type="range"]:focus-visible {
+  outline: none;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* Number fields: no spinners, like editor value fields. */

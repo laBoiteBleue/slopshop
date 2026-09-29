@@ -32,6 +32,7 @@
   let lastRequest: Promise<void> = Promise.resolve();
 
   let position = $derived(draft ?? (zoom === null ? 0 : Math.log2(zoom)));
+  let fill = $derived(((position - MIN) / (MAX - MIN)) * 100);
   let shown = $derived(draft === null ? zoom : 2 ** draft);
 
   function onInput(value: number) {
@@ -84,6 +85,7 @@
     max={MAX}
     step="any"
     value={position}
+    style:--fill="{fill}%"
     disabled={zoom === null}
     aria-label={t("view.zoom")}
     aria-valuetext={shown === null ? undefined : formatZoom(shown)}
@@ -114,9 +116,6 @@
   }
 
   input {
-    width: 110px;
-    height: 12px;
-    margin: 0;
-    accent-color: var(--accent);
+    width: 88px;
   }
 </style>
