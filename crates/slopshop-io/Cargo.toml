@@ -1,0 +1,29 @@
+[package]
+name = "slopshop-io"
+description = "SlopShop file formats: decoding images into the engine's tiled rasters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+slopshop-core.workspace = true
+# Pure-Rust decoders for the common formats (explicit feature list, no C code; ADR 0006).
+image = { workspace = true }
+# TIFF directly (not through `image`, which maps CMYK to RGB silently): native bit depths,
+# ICC and orientation tags, multi-page detection.
+tiff = { workspace = true }
+# `tiff` returns half floats as `half::f16`; already in the tree through `tiff` and `exr`.
+half = "2"
+# Header-only reads of what `image` does not expose. All three are already in the tree through
+# `image`, with the same features.
+# - PNG color chunks (cICP, sRGB, gAMA, cHRM).
+png = { workspace = true }
+# - GIF frame count without decoding the frames.
+gif = { workspace = true }
+# - JPEG component color space, to refuse CMYK instead of converting it silently.
+zune-jpeg = { workspace = true }
+
+[lints]
+workspace = true

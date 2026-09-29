@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/slopshop-core", "crates/slopshop-render", "crates/slopshop-cli", "app/src-tauri"]
+members = [
+    "crates/slopshop-core",
+    "crates/slopshop-render",
+    "crates/slopshop-io",
+    "crates/slopshop-cli",
+    "app/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,9 +18,29 @@ repository = "https://github.com/laBoiteBleue/slopshop"
 [workspace.dependencies]
 slopshop-core = { path = "crates/slopshop-core", version = "0.1.0" }
 slopshop-render = { path = "crates/slopshop-render", version = "0.1.0" }
+slopshop-io = { path = "crates/slopshop-io", version = "0.1.0" }
 wgpu = "30.0.1"
 pollster = "1.0.1"
 png = "0.18.1"
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+    "tga",
+    "ico",
+    "pnm",
+    "qoi",
+    "ff",
+    "hdr",
+    "exr",
+    "dds",
+    "rayon",
+] }
+tiff = "0.11.3"
+gif = "0.14.2"
+zune-jpeg = "0.5.15"
 
 # Optimize dependencies (wgpu, naga, tauri…) even in dev builds: unoptimized GPU/driver-side
 # code makes interactive testing misleadingly slow. Our own crates stay fast to compile.

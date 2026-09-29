@@ -1,0 +1,49 @@
+# Dependency policy (ADR 0006), checked in CI with `cargo deny check`.
+
+[graph]
+all-features = false
+
+[licenses]
+version = 2
+# Permissive licenses only. LGPL is allowed only for isolated, replaceable components (separate
+# crate behind a feature, dynamically linked or in a worker process): add each one as an
+# explicit exception below, with a reference to its ADR. GPL and AGPL are never allowed.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "CC0-1.0",
+    "NCSA",
+    # File-level copyleft (modified MPL files must stay MPL); compatible with MIT distribution.
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+exceptions = []
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[advisories]
+version = 2
+# "Unmaintained" notices (no known vulnerability) for build-time macro crates we cannot replace
+# ourselves. Re-check when the upstream crates move on.
+ignore = [
+    # paste: proc macro used by pulp ← exr ← image (OpenEXR decoding).
+    { id = "RUSTSEC-2024-0436", reason = "build-time macro via exr; no vulnerability" },
+    # proc-macro-error: used by gtk-rs 0.18 macros ← Tauri on Linux (GTK3 webview).
+    { id = "RUSTSEC-2024-0370", reason = "build-time macro via Tauri's GTK3 stack on Linux" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

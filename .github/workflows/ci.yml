@@ -34,6 +34,14 @@ jobs:
       - run: npm run check
       - run: npm run build
 
+  dependencies:
+    name: Dependencies (licenses, advisories, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Policy in deny.toml (ADR 0006): permissive licenses only, no GPL/AGPL.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   rust:
     name: Rust (${{ matrix.os }})
     strategy:
