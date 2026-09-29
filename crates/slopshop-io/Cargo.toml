@@ -27,6 +27,12 @@ zune-jpeg = { workspace = true }
 # - OpenEXR chromaticities (the primaries of the file). Default features: `rayon`, which
 #   `image` already enables on it.
 exr = { workspace = true }
+# TIFF export compresses its own strips (tiff's streaming encoder ignores compression, and its
+# codecs are private) with the codecs tiff uses internally, already in the tree through it:
+# - LZW;
+weezl = "0.1.12"
+# - Deflate (zlib).
+flate2 = "1.1.10"
 
 [lints]
 workspace = true

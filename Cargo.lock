@@ -3759,12 +3759,14 @@ name = "slopshop-io"
 version = "0.1.0"
 dependencies = [
  "exr",
+ "flate2",
  "gif",
  "half",
  "image",
  "png 0.18.1",
  "slopshop-core",
  "tiff",
+ "weezl",
  "zune-jpeg",
 ]
 

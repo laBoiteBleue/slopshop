@@ -1,4 +1,5 @@
-//! Reading image files into the engine's [`RasterImage`] (ADR 0006).
+//! Reading image files into the engine's [`RasterImage`] (ADR 0006), and writing images to
+//! files ([`export`], ADR 0008).
 //!
 //! Decoding keeps the source as it is and is explicit about everything else:
 //! - native sample types (8/16-bit integer, 16/32-bit float) and gray/color layouts are kept;
@@ -10,6 +11,7 @@
 //!   color, exotic samples, formats not supported yet such as HEIC, RAW or JPEG 2000) or
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
+pub mod export;
 mod icc;
 mod orient;
 mod tiff_import;

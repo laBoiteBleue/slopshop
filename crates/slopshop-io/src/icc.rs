@@ -360,8 +360,6 @@ const REC709_BETA: f64 = 0.018_053_968_510_807;
 /// the D50 connection space with Bradford (the adaptation stored in `chad`), and tone curves as
 /// exact `para` curves (the parameters are only rounded to the ICC 16.16 fixed-point format).
 /// PQ and HLG have no ICC tone curve: files in those spaces are tagged with cICP instead.
-// Used by the exporter (ADR 0008), which lands separately.
-#[allow(dead_code)]
 pub(crate) fn write_matrix_trc(space: &ColorSpace) -> Result<Vec<u8>, IccError> {
     let primaries = &space.primaries;
     if !primaries.is_valid() {
