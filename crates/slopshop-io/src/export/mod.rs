@@ -1,4 +1,4 @@
-//! Writing images to files (ADR 0008).
+//! Writing images to files (ADR 0008, and ADR 0010 for JPEG and the matte).
 //!
 //! Export is a view of a document: [`export_image`] pulls working-space pixels from a source
 //! closure (the GPU renderer or the CPU compositor; `slopshop-io` depends on neither), converts
@@ -21,16 +21,17 @@
 //!
 //! # Format writers
 //!
-//! Each format has a writer in its own module (`png`, `tiff`, `exr`), driven the same way by
-//! [`export_image`]. A writer is a struct with three methods:
+//! Each format has a writer in its own module (`png`, `tiff`, `exr`, `jpeg`), driven the same
+//! way by [`export_image`]. A writer is a struct with three methods:
 //!
 //! - `new(file: File, size: Size, target: PixelFormat, options) -> Result<Self, ExportError>`
-//!   (`options` is the format's compression setting, when it has one). `file` is the temporary
-//!   file, just created, empty, opened for reading and writing (so `Write + Seek`, unbuffered:
-//!   wrap it in a `BufWriter` if needed). `size` is not empty. `target` is
-//!   [`ExportSpec::target_format`]: RGB or RGBA; for TIFF U8/U16 with straight alpha or F32 with
-//!   premultiplied alpha, for EXR F32/F16 with premultiplied alpha; its color space passed
-//!   [`supports_space`] for the format. Tags and headers are written here or in `finish`.
+//!   (`options` are the format's settings, when it has some: compression, JPEG quality and
+//!   subsampling). `file` is the temporary file, just created, empty, opened for reading and
+//!   writing (so `Write + Seek`, unbuffered: wrap it in a `BufWriter` if needed). `size` is not
+//!   empty. `target` is [`ExportSpec::target_format`]: RGB or RGBA; for TIFF U8/U16 with
+//!   straight alpha or F32 with premultiplied alpha, for EXR F32/F16 with premultiplied alpha,
+//!   for JPEG RGB U8 only; its color space passed [`supports_space`] for the format. Tags and
+//!   headers are written here or in `finish`.
 //! - `write_rows(&mut self, first_row: u32, rows: &[u8]) -> Result<(), ExportError>`: called in
 //!   order, from top to bottom, without gaps: `first_row` is 0, then the previous `first_row`
 //!   plus the previous row count. `rows` holds a whole number of rows (a band: [`BAND_ROWS`]
@@ -48,9 +49,10 @@
 //! [`ExportError::Encode`] for encoder failures, [`ExportError::TooLarge`] for sizes the format
 //! cannot store, [`ExportError::InvalidSpec`] for targets it does not handle. Inside the format
 //! modules, refer to the encoder crates with a leading `::` (`::png`, `::tiff`, `::exr`), since
-//! the modules have the same names.
+//! the modules have the same names (`::jpeg_encoder` has another name).
 
 mod exr;
+mod jpeg;
 mod png;
 mod tiff;
 
@@ -71,6 +73,8 @@ use slopshop_core::document::{Document, LayerContent};
 use slopshop_core::{CancelToken, Progress, Rect, Size};
 
 use self::exr::ExrWriter;
+use self::jpeg::JpegWriter;
+pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::png::PngWriter;
 use self::tiff::TiffWriter;
 use crate::icc;
@@ -97,6 +101,7 @@ pub enum ExportFormatKind {
     Png,
     Tiff,
     Exr,
+    Jpeg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,6 +134,17 @@ pub enum TiffCompression {
     Lzw,
 }
 
+/// Chroma subsampling of JPEG files: how much the color (not the luminance) is reduced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JpegSubsampling {
+    /// Full color resolution.
+    S444,
+    /// Half the color resolution horizontally.
+    S422,
+    /// Half the color resolution in both directions: the smallest files.
+    S420,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExrSample {
     F32,
@@ -150,6 +166,11 @@ pub enum ExportFormat {
     Exr {
         sample: ExrSample,
     },
+    Jpeg {
+        /// 1 to 100, on the IJG scale (Annex K tables scaled).
+        quality: u8,
+        subsampling: JpegSubsampling,
+    },
 }
 
 impl ExportFormat {
@@ -158,6 +179,7 @@ impl ExportFormat {
             ExportFormat::Png { .. } => ExportFormatKind::Png,
             ExportFormat::Tiff { .. } => ExportFormatKind::Tiff,
             ExportFormat::Exr { .. } => ExportFormatKind::Exr,
+            ExportFormat::Jpeg { .. } => ExportFormatKind::Jpeg,
         }
     }
 
@@ -177,6 +199,7 @@ impl ExportFormat {
                 ExrSample::F32 => SampleType::F32,
                 ExrSample::F16 => SampleType::F16,
             },
+            ExportFormat::Jpeg { .. } => SampleType::U8,
         }
     }
 }
@@ -366,6 +389,12 @@ impl From<std::io::Error> for ExportError {
     }
 }
 
+/// Whether a file of this format can store an alpha channel (JPEG cannot: its exports are
+/// always flattened over the matte).
+pub fn supports_alpha(kind: ExportFormatKind) -> bool {
+    kind != ExportFormatKind::Jpeg
+}
+
 /// Whether a file of this format can store `space` and declare it, so that it reads back as
 /// the same space:
 /// - PNG: sRGB (sRGB chunk), spaces with H.273 code points (cICP chunk: Rec.709/sRGB, Display
@@ -373,14 +402,15 @@ impl From<std::io::Error> for ExportError {
 ///   or spaces an ICC profile can describe (iCCP chunk);
 /// - TIFF: spaces an ICC profile can describe (matrix/TRC; not PQ or HLG);
 /// - EXR: linear spaces with valid primaries (`chromaticities` attribute), since EXR samples are
-///   scene-linear.
+///   scene-linear;
+/// - JPEG: spaces an ICC profile can describe (APP2 segments; not PQ or HLG).
 pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_matrix_trc(space).is_ok();
     match kind {
         ExportFormatKind::Png => {
             *space == ColorSpace::SRGB || png::cicp_code(space).is_some() || icc_writable()
         }
-        ExportFormatKind::Tiff => icc_writable(),
+        ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
         ExportFormatKind::Exr => {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
@@ -460,16 +490,33 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             },
             ColorSpace::LINEAR_SRGB,
         ),
+        ExportFormatKind::Jpeg => (
+            ExportFormat::Jpeg {
+                quality: 90,
+                subsampling: JpegSubsampling::S444,
+            },
+            unique_space
+                .filter(|space| COMMON_8_BIT_SPACES.contains(space))
+                .unwrap_or(ColorSpace::SRGB),
+        ),
     };
     ExportSpec {
         format,
         space,
-        keep_alpha: !is_structurally_opaque(document),
+        keep_alpha: supports_alpha(kind) && !is_structurally_opaque(document),
         matte: WHITE_MATTE,
         // It only applies to 8-bit samples, which EXR never has.
         dither: kind != ExportFormatKind::Exr,
     }
 }
+
+/// Spaces an 8-bit export keeps from its source (ADR 0010): common enough to be read correctly
+/// almost everywhere, and wide enough not to clip phone photos (Display P3).
+const COMMON_8_BIT_SPACES: [ColorSpace; 3] = [
+    ColorSpace::SRGB,
+    ColorSpace::DISPLAY_P3,
+    ColorSpace::ADOBE_RGB,
+];
 
 /// Whether every pixel of the document is opaque by construction: its bottom contributing layer
 /// is an opaque fill, or a raster without alpha covering the canvas, at opacity 1.
@@ -518,11 +565,19 @@ pub fn export_image(
             size.width, size.height
         )));
     }
-    if !supports_space(spec.format.kind(), &spec.space) {
+    let kind = spec.format.kind();
+    if !supports_space(kind, &spec.space) {
         return Err(ExportError::UnsupportedSpace(spec.space));
     }
-    if let ExportFormat::Png { .. } = spec.format {
-        png::check_size(size)?;
+    if spec.keep_alpha && !supports_alpha(kind) {
+        return Err(ExportError::InvalidSpec(format!(
+            "{kind:?} cannot store alpha: it is flattened over the matte"
+        )));
+    }
+    match kind {
+        ExportFormatKind::Png => png::check_size(size)?,
+        ExportFormatKind::Jpeg => jpeg::check_size(size)?,
+        ExportFormatKind::Tiff | ExportFormatKind::Exr => {}
     }
     let target = spec.target_format();
     let converter = Converter::new(
@@ -557,6 +612,16 @@ pub fn export_image(
         ExportFormat::Exr { .. } => {
             FormatWriter::Exr(Box::new(ExrWriter::new(file, size, target)?))
         }
+        ExportFormat::Jpeg {
+            quality,
+            subsampling,
+        } => FormatWriter::Jpeg(Box::new(JpegWriter::new(
+            file,
+            size,
+            target,
+            quality,
+            subsampling,
+        )?)),
     };
     let bands = Bands {
         size,
@@ -590,6 +655,7 @@ enum FormatWriter {
     Png(Box<PngWriter>),
     Tiff(Box<TiffWriter>),
     Exr(Box<ExrWriter>),
+    Jpeg(Box<JpegWriter>),
 }
 
 impl FormatWriter {
@@ -598,6 +664,7 @@ impl FormatWriter {
             FormatWriter::Png(w) => w.write_rows(first_row, rows),
             FormatWriter::Tiff(w) => w.write_rows(first_row, rows),
             FormatWriter::Exr(w) => w.write_rows(first_row, rows),
+            FormatWriter::Jpeg(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -606,6 +673,7 @@ impl FormatWriter {
             FormatWriter::Png(w) => (*w).finish(),
             FormatWriter::Tiff(w) => (*w).finish(),
             FormatWriter::Exr(w) => (*w).finish(),
+            FormatWriter::Jpeg(w) => (*w).finish(),
         }
     }
 }

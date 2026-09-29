@@ -174,17 +174,22 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
 }
 
 /** Export file formats. */
-export type ExportFormat = "png" | "tiff" | "exr";
+export type ExportFormat = "png" | "tiff" | "exr" | "jpeg";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression = "fast" | "small" | "none" | "deflate" | "lzw";
+export type ExportSubsampling = "444" | "422" | "420";
 
 /** Export settings (see ExportSpecDto in app/src-tauri/src/ipc.rs). */
 export type ExportSpec = {
   format: ExportFormat;
   sample: ExportSample;
-  /** `null` for EXR, whose compression is fixed (lossless). */
+  /** `null` for EXR, whose compression is fixed (lossless), and for JPEG. */
   compression: ExportCompression | null;
+  /** JPEG only (1 to 100); `null` for the other formats. */
+  quality: number | null;
+  /** JPEG only; `null` for the other formats. */
+  subsampling: ExportSubsampling | null;
   /** A named space, or `custom` for the document's own unnamed space. */
   space: ColorSpaceId;
   keepAlpha: boolean;
@@ -196,19 +201,47 @@ export type ExportSpec = {
 
 /**
  * What the engine accepts for each format (ExportSpecDto::to_spec): file extensions (the first
- * one is the default), sample types and compressions, in the order the UI lists them.
+ * one is the default), sample types, compressions and JPEG subsamplings, in the order the UI
+ * lists them, and whether the format can keep alpha.
  */
 export const EXPORT_FORMATS: Record<
   ExportFormat,
-  { extensions: string[]; samples: ExportSample[]; compressions: ExportCompression[] }
+  {
+    extensions: string[];
+    samples: ExportSample[];
+    compressions: ExportCompression[];
+    subsamplings: ExportSubsampling[];
+    alpha: boolean;
+  }
 > = {
-  png: { extensions: ["png"], samples: ["u8", "u16"], compressions: ["fast", "small"] },
+  png: {
+    extensions: ["png"],
+    samples: ["u8", "u16"],
+    compressions: ["fast", "small"],
+    subsamplings: [],
+    alpha: true,
+  },
   tiff: {
     extensions: ["tif", "tiff"],
     samples: ["u8", "u16", "f32"],
     compressions: ["deflate", "lzw", "none"],
+    subsamplings: [],
+    alpha: true,
   },
-  exr: { extensions: ["exr"], samples: ["f32", "f16"], compressions: [] },
+  exr: {
+    extensions: ["exr"],
+    samples: ["f32", "f16"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+  },
+  jpeg: {
+    extensions: ["jpg", "jpeg"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: ["444", "422", "420"],
+    alpha: false,
+  },
 };
 
 /** An export job has started. */

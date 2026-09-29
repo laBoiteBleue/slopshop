@@ -12,7 +12,7 @@ use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Session, Size};
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
-    PngCompression, PngDepth, TiffCompression, TiffSample, supports_space,
+    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, supports_space,
 };
 
 /// Identity of an open document (one per tab). Ids are never reused, so the UI can tell
@@ -329,6 +329,7 @@ pub enum ExportFormatId {
     Png,
     Tiff,
     Exr,
+    Jpeg,
 }
 
 impl ExportFormatId {
@@ -337,6 +338,7 @@ impl ExportFormatId {
             ExportFormatId::Png => ExportFormatKind::Png,
             ExportFormatId::Tiff => ExportFormatKind::Tiff,
             ExportFormatId::Exr => ExportFormatKind::Exr,
+            ExportFormatId::Jpeg => ExportFormatKind::Jpeg,
         }
     }
 }
@@ -362,6 +364,17 @@ pub enum ExportCompressionId {
     Lzw,
 }
 
+/// JPEG chroma subsampling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportSubsamplingId {
+    #[serde(rename = "444")]
+    S444,
+    #[serde(rename = "422")]
+    S422,
+    #[serde(rename = "420")]
+    S420,
+}
+
 /// Export settings (see [`ExportSpec`]), flattened for the UI: which values are valid depends
 /// on the format, and [`ExportSpecDto::to_spec`] rejects the combinations that make no sense.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -370,8 +383,12 @@ pub struct ExportSpecDto {
     pub format: ExportFormatId,
     /// PNG: `u8`, `u16`; TIFF: `u8`, `u16`, `f32`; EXR: `f32`, `f16`.
     pub sample: ExportSampleId,
-    /// `null` for EXR, whose compression is fixed (lossless ZIP).
+    /// `null` for EXR, whose compression is fixed (lossless ZIP), and for JPEG.
     pub compression: Option<ExportCompressionId>,
+    /// JPEG only (1 to 100); `null` for the other formats.
+    pub quality: Option<u8>,
+    /// JPEG only; `null` for the other formats.
+    pub subsampling: Option<ExportSubsamplingId>,
     /// A named space ([`NAMED_SPACES`]), or [`CUSTOM_SPACE`] for the document's own unnamed
     /// space when [`default_spec`](slopshop_io::export::default_spec) picked it.
     pub space: String,
@@ -387,6 +404,7 @@ impl ExportSpecDto {
     pub fn new(spec: &ExportSpec) -> Self {
         use ExportCompressionId as C;
         use ExportSampleId as S;
+        let (mut quality, mut subsampling) = (None, None);
         let (format, sample, compression) = match spec.format {
             ExportFormat::Png { depth, compression } => (
                 ExportFormatId::Png,
@@ -423,11 +441,25 @@ impl ExportSpecDto {
                 },
                 None,
             ),
+            ExportFormat::Jpeg {
+                quality: q,
+                subsampling: s,
+            } => {
+                quality = Some(q);
+                subsampling = Some(match s {
+                    JpegSubsampling::S444 => ExportSubsamplingId::S444,
+                    JpegSubsampling::S422 => ExportSubsamplingId::S422,
+                    JpegSubsampling::S420 => ExportSubsamplingId::S420,
+                });
+                (ExportFormatId::Jpeg, S::U8, None)
+            }
         };
         Self {
             format,
             sample,
             compression,
+            quality,
+            subsampling,
             space: color_space_id(spec.space).to_owned(),
             keep_alpha: spec.keep_alpha,
             // Rounded to 8-bit steps, as the UI's color picker shows it (and so that white
@@ -452,6 +484,12 @@ impl ExportSpecDto {
         };
         let sample = || invalid(format!("sample type {:?}", self.sample));
         let compression = || invalid(format!("compression {:?}", self.compression));
+        let jpeg_only = || invalid("quality or subsampling".to_owned());
+        if self.format != ExportFormatId::Jpeg
+            && (self.quality.is_some() || self.subsampling.is_some())
+        {
+            return Err(jpeg_only());
+        }
         let format = match self.format {
             ExportFormatId::Png => ExportFormat::Png {
                 depth: match self.sample {
@@ -487,6 +525,29 @@ impl ExportSpecDto {
                     (_, Some(_)) => return Err(compression()),
                 },
             },
+            ExportFormatId::Jpeg => {
+                if self.sample != S::U8 {
+                    return Err(sample());
+                }
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                if self.keep_alpha {
+                    return Err(invalid("alpha".to_owned()));
+                }
+                ExportFormat::Jpeg {
+                    quality: self
+                        .quality
+                        .filter(|q| (1..=100).contains(q))
+                        .ok_or_else(|| invalid(format!("quality {:?}", self.quality)))?,
+                    subsampling: match self.subsampling {
+                        Some(ExportSubsamplingId::S444) => JpegSubsampling::S444,
+                        Some(ExportSubsamplingId::S422) => JpegSubsampling::S422,
+                        Some(ExportSubsamplingId::S420) => JpegSubsampling::S420,
+                        None => return Err(invalid("missing subsampling".to_owned())),
+                    },
+                }
+            }
         };
         let space = if self.space == CUSTOM_SPACE {
             custom.ok_or_else(|| {
@@ -628,7 +689,7 @@ mod tests {
 
     #[test]
     fn export_specs_travel_as_ids() {
-        let json = r#"{"format":"png","sample":"u16","compression":"small","space":"display-p3","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":false}"#;
+        let json = r#"{"format":"png","sample":"u16","compression":"small","quality":null,"subsampling":null,"space":"display-p3","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":false}"#;
         let spec = dto(json).to_spec(None).unwrap();
         assert_eq!(
             spec,
@@ -649,7 +710,7 @@ mod tests {
         );
 
         let exr = dto(
-            r#"{"format":"exr","sample":"f16","compression":null,"space":"linear-rec2020","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#,
+            r#"{"format":"exr","sample":"f16","compression":null,"quality":null,"subsampling":null,"space":"linear-rec2020","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#,
         );
         assert_eq!(
             exr.to_spec(None).unwrap().format,
@@ -666,6 +727,7 @@ mod tests {
             ExportFormatId::Png,
             ExportFormatId::Tiff,
             ExportFormatId::Exr,
+            ExportFormatId::Jpeg,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
@@ -688,7 +750,7 @@ mod tests {
     #[test]
     fn invalid_export_specs_are_rejected() {
         let base = dto(
-            r#"{"format":"png","sample":"u8","compression":"fast","space":"srgb","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":true}"#,
+            r#"{"format":"png","sample":"u8","compression":"fast","quality":null,"subsampling":null,"space":"srgb","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":true}"#,
         );
         let with = |change: &dyn Fn(&mut ExportSpecDto)| {
             let mut dto = base.clone();
@@ -760,9 +822,50 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<ExportSpecDto>(
-                r#"{"format":"jpeg","sample":"u8","compression":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#
+                r#"{"format":"gif","sample":"u8","compression":null,"quality":null,"subsampling":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#
             )
             .is_err()
+        );
+        assert_eq!(with(&|d| d.quality = Some(90)), invalid, "quality on PNG");
+        assert_eq!(
+            with(&|d| d.subsampling = Some(ExportSubsamplingId::S420)),
+            invalid,
+            "subsampling on PNG"
+        );
+        let jpeg = |change: &dyn Fn(&mut ExportSpecDto)| {
+            with(&|d| {
+                d.format = ExportFormatId::Jpeg;
+                d.compression = None;
+                d.keep_alpha = false;
+                d.quality = Some(90);
+                d.subsampling = Some(ExportSubsamplingId::S444);
+                change(d);
+            })
+        };
+        assert_eq!(jpeg(&|_| {}), Ok(()));
+        assert_eq!(jpeg(&|d| d.keep_alpha = true), invalid, "JPEG with alpha");
+        assert_eq!(jpeg(&|d| d.quality = Some(0)), invalid, "JPEG quality 0");
+        assert_eq!(
+            jpeg(&|d| d.quality = Some(101)),
+            invalid,
+            "JPEG quality 101"
+        );
+        assert_eq!(jpeg(&|d| d.quality = None), invalid, "JPEG without quality");
+        assert_eq!(
+            jpeg(&|d| d.subsampling = None),
+            invalid,
+            "JPEG without subsampling"
+        );
+        assert_eq!(jpeg(&|d| d.sample = S::U16), invalid, "JPEG 16-bit");
+        assert_eq!(
+            jpeg(&|d| d.compression = Some(C::Fast)),
+            invalid,
+            "JPEG compression"
+        );
+        assert_eq!(
+            jpeg(&|d| d.space = "rec2100-pq".to_owned()),
+            Err("unsupportedSpace"),
+            "JPEG PQ"
         );
     }
 

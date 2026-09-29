@@ -347,7 +347,7 @@
 
   /** Formats in the order of the save dialog's file types: the last one used first. */
   function exportFormatOrder(): ExportFormat[] {
-    const all: ExportFormat[] = ["png", "tiff", "exr"];
+    const all = Object.keys(EXPORT_FORMATS) as ExportFormat[];
     return [lastExportFormat, ...all.filter((f) => f !== lastExportFormat)];
   }
 

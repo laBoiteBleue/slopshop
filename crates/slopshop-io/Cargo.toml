@@ -33,6 +33,10 @@ exr = { workspace = true }
 weezl = "0.1.12"
 # - Deflate (zlib).
 flate2 = "1.1.10"
+# JPEG export (ADR 0010): pure Rust, fed band by band through its pull API (baseline JPEG
+# streams with bounded memory). `image`'s own JPEG encoder takes whole buffers and drops alpha
+# silently. License (MIT OR Apache-2.0) AND IJG: allowed for this crate only in deny.toml.
+jpeg-encoder = { version = "=0.7.1", features = ["simd"] }
 
 [lints]
 workspace = true

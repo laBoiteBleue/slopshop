@@ -90,12 +90,14 @@
     <p class="file" title={target.path}>{fileName}</p>
     <div class="fields">
       {#if spec}
-        <label for="export-depth">{t("export.depth")}</label>
-        <select id="export-depth" bind:value={spec.sample}>
-          {#each options.samples as sample (sample)}
-            <option value={sample}>{t(`export.depth.${sample}`)}</option>
-          {/each}
-        </select>
+        {#if options.samples.length > 1}
+          <label for="export-depth">{t("export.depth")}</label>
+          <select id="export-depth" bind:value={spec.sample}>
+            {#each options.samples as sample (sample)}
+              <option value={sample}>{t(`export.depth.${sample}`)}</option>
+            {/each}
+          </select>
+        {/if}
 
         <label for="export-space">{t("export.colorSpace")}</label>
         <select id="export-space" bind:value={spec.space}>
@@ -113,10 +115,35 @@
           </select>
         {/if}
 
-        <label class="check" title={t("export.alpha.hint")}>
-          <input type="checkbox" bind:checked={spec.keepAlpha} />
-          {t("export.alpha")}
-        </label>
+        {#if spec.quality !== null}
+          <label for="export-quality">{t("export.quality")}</label>
+          <div class="quality">
+            <input
+              type="range"
+              min="1"
+              max="100"
+              aria-label={t("export.quality")}
+              bind:value={spec.quality}
+            />
+            <input id="export-quality" type="number" min="1" max="100" bind:value={spec.quality} />
+          </div>
+        {/if}
+
+        {#if options.subsamplings.length > 0}
+          <label for="export-subsampling">{t("export.subsampling")}</label>
+          <select id="export-subsampling" bind:value={spec.subsampling}>
+            {#each options.subsamplings as subsampling (subsampling)}
+              <option value={subsampling}>{t(`export.subsampling.${subsampling}`)}</option>
+            {/each}
+          </select>
+        {/if}
+
+        {#if options.alpha}
+          <label class="check" title={t("export.alpha.hint")}>
+            <input type="checkbox" bind:checked={spec.keepAlpha} />
+            {t("export.alpha")}
+          </label>
+        {/if}
         {#if !spec.keepAlpha}
           <label for="export-matte">{t("export.matte")}</label>
           <input
@@ -195,6 +222,23 @@
 
   select {
     min-width: 0;
+  }
+
+  .quality {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .quality input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--accent);
+  }
+
+  .quality input[type="number"] {
+    width: 44px;
   }
 
   input[type="color"] {
