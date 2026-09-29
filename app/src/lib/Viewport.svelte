@@ -190,6 +190,18 @@
     viewEpoch++;
   }
 
+  /** Zoom about the viewport center (zoom slider). Replaces any wheel zoom still animating. */
+  export function zoomTo(zoom: number): Promise<void> {
+    remainingLogZoom = 0;
+    return changeView({ kind: "setZoom", zoom });
+  }
+
+  /** Step to the next zoom preset about the viewport center. */
+  export function stepZoom(zoomIn: boolean): Promise<void> {
+    remainingLogZoom = 0;
+    return changeView({ kind: "step", zoomIn, x: null, y: null });
+  }
+
   let lastStats: FrameStats | null = null;
   function report(stats: FrameStats) {
     lastStats = stats;

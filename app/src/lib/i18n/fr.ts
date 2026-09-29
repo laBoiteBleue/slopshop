@@ -68,6 +68,7 @@ const fr: Messages = {
 
   "viewport.renderFailed": "Échec du rendu : {error}",
 
+  "view.zoom": "Zoom",
   "view.hint":
     "Molette ou pincement : zoom · Bouton du milieu ou Espace+glisser : déplacer · {mod}+0 : ajuster · {mod}+1 : 100 % · {mod}+/- : paliers de zoom",
 

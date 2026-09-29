@@ -16,8 +16,10 @@
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import Icon from "./lib/Icon.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
+  import { formatZoom } from "./lib/format";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
+  import ZoomSlider from "./lib/ZoomSlider.svelte";
 
   /** Open documents, in tab order. */
   let tabs = $state<DocumentView[]>([]);
@@ -29,22 +31,14 @@
   let gpuError = $state<string | null>(null);
   let error = $state<string | null>(null);
   let frame = $state<FrameStats | null>(null);
+  /** Viewport of the active tab. */
+  let viewport = $state<Viewport | null>(null);
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
   /** Where a file being dragged over the window would go. */
   let dropTarget = $state<"tab" | "layer" | null>(null);
 
   let notices = $derived(active?.warnings.map((w) => t(`open.warning.${w}`)) ?? []);
-
-  /** Zoom as a localized percentage, with more decimals when very small. */
-  function formatZoom(zoom: number): string {
-    const percent = zoom * 100;
-    const digits = percent < 1 ? 2 : percent < 10 ? 1 : 0;
-    return new Intl.NumberFormat(getLocale(), {
-      style: "percent",
-      maximumFractionDigits: digits,
-    }).format(zoom);
-  }
 
   function tabTitle(doc: DocumentView): string {
     return doc.name ?? t("document.untitled");
@@ -373,6 +367,7 @@
         {#if active}
           {#key active.id}
             <Viewport
+              bind:this={viewport}
               documentId={active.id}
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
@@ -405,10 +400,13 @@
   </main>
 
   <footer class="status">
-    {#if frame}
-      <span class="zoom" title={t("view.hint", { mod: modifierLabel })}>
-        {formatZoom(frame.zoom)}
-      </span>
+    {#if active}
+      <ZoomSlider
+        zoom={frame?.zoom ?? null}
+        hint={t("view.hint", { mod: modifierLabel })}
+        onzoom={(zoom) => viewport?.zoomTo(zoom) ?? Promise.resolve()}
+        onstep={(zoomIn) => void viewport?.stepZoom(zoomIn)}
+      />
     {/if}
     {#if active}
       <span class="doc-meta">
@@ -690,13 +688,6 @@
     color: var(--text-muted);
     font-size: 10px;
     white-space: nowrap;
-  }
-
-  .status .zoom {
-    min-width: 5ch;
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-    cursor: help;
   }
 
   .status .doc-meta {

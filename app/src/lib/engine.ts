@@ -52,6 +52,10 @@ export type ViewRequest =
   | { kind: "step"; zoomIn: boolean; x: number | null; y: number | null }
   | { kind: "pan"; dx: number; dy: number };
 
+/** Zoom range of the engine (MIN_ZOOM, MAX_ZOOM in crates/slopshop-core/src/view.rs). */
+export const MIN_ZOOM = 0.001;
+export const MAX_ZOOM = 64;
+
 /** document = origin + output / zoom (output in device pixels). */
 export type ViewInfo = {
   /** 1 = 100%. */
@@ -177,10 +181,16 @@ const serialView = makeQueue();
 // only within the same document.
 let waitingLive: { documentId: number; edit: EditRequest } | null = null;
 
-// Pans and wheel zooms are coalesced into the last request still waiting in the queue (same
-// document): deltas add up, zoom factors multiply (around the latest anchor), so fast input
-// never builds a backlog. Requests that cannot be merged are queued after it, in order.
-let waitingView: { documentId: number; request: ViewRequest } | null = null;
+// Pans and zooms are coalesced into the last request still waiting in the queue (same
+// document): deltas add up, zoom factors multiply (around the latest anchor), absolute zooms
+// replace each other, so fast input never builds a backlog. Requests that cannot be merged are
+// queued after it, in order.
+let waitingView: {
+  documentId: number;
+  request: ViewRequest;
+  /** Settles once the (possibly merged) request has been answered. */
+  answered: Promise<unknown>;
+} | null = null;
 
 function merge(pending: ViewRequest, next: ViewRequest): ViewRequest | null {
   if (pending.kind === "pan" && next.kind === "pan") {
@@ -189,6 +199,7 @@ function merge(pending: ViewRequest, next: ViewRequest): ViewRequest | null {
   if (pending.kind === "zoomBy" && next.kind === "zoomBy") {
     return { ...next, factor: pending.factor * next.factor };
   }
+  if (pending.kind === "setZoom" && next.kind === "setZoom") return next;
   return null;
 }
 
@@ -236,22 +247,32 @@ export const engine = {
   gpuInfo: () => invoke<GpuInfo>("gpu_info"),
   /**
    * Change a document's view. Resolves to `null` when merged into a request that was already
-   * waiting (that one resolves with the combined result).
+   * waiting: that one resolves with the combined result, and this one right after it, so that
+   * awaiting any request means the view has taken it into account.
    */
   view: (documentId: number, request: ViewRequest): Promise<ViewInfo | null> => {
     if (waitingView && waitingView.documentId === documentId) {
       const merged = merge(waitingView.request, request);
       if (merged) {
         waitingView.request = merged;
-        return Promise.resolve(null);
+        return waitingView.answered.then(
+          () => null,
+          () => null,
+        );
       }
     }
-    const slot = { documentId, request };
+    const slot: NonNullable<typeof waitingView> = {
+      documentId,
+      request,
+      answered: Promise.resolve(),
+    };
     waitingView = slot;
-    return serialView(() => {
+    const answer = serialView(() => {
       if (waitingView === slot) waitingView = null;
       return invoke<ViewInfo>("view", { documentId, request: slot.request });
     });
+    slot.answered = answer;
+    return answer;
   },
   /** Render a document's current view into a width × height (device pixels) viewport. */
   renderView: async (documentId: number, width: number, height: number): Promise<Frame> =>

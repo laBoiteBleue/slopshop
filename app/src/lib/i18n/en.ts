@@ -68,6 +68,7 @@ const en = {
 
   "viewport.renderFailed": "Render failed: {error}",
 
+  "view.zoom": "Zoom",
   "view.hint":
     "Wheel or pinch: zoom · Middle button or Space+drag: pan · {mod}+0: fit · {mod}+1: 100% · {mod}+/-: zoom steps",
 
