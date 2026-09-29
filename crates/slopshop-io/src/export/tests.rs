@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier};
 
 use slopshop_core::color::LinearRgba;

@@ -11,6 +11,7 @@
 //!   color, exotic samples, formats not supported yet such as HEIC, RAW or JPEG 2000) or
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
+mod atomic;
 pub mod export;
 mod icc;
 mod orient;
