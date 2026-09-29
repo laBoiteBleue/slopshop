@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/slopshop-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/laBoiteBleue/slopshop"
+
+[workspace.dependencies]
+slopshop-core = { path = "crates/slopshop-core" }
+
+[workspace.lints.rust]
+# `unsafe` must be isolated and justified: opt in locally with `#[allow(unsafe_code)]`.
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+dbg_macro = "warn"
+todo = "warn"

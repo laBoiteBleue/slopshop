@@ -1,0 +1,14 @@
+[package]
+name = "slopshop-core"
+description = "SlopShop document model, edits and history, geometry and pixel formats. No GPU, no UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Intentionally dependency-free (see CLAUDE.md).
+[dependencies]
+
+[lints]
+workspace = true
