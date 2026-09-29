@@ -9,12 +9,15 @@
 //!   calling thread converts the previous band (rows in parallel) and feeds the writer. Band
 //!   buffers are recycled;
 //! - cancellation is checked between bands, progress is reported after each band (in rows);
-//! - the file is written to `<path>.slopshop-tmp` in the same directory, synced, then renamed
-//!   over `path`. On error or cancellation the temporary file is deleted and `path` is left
-//!   untouched.
+//! - the file is written to a temporary file of its own in the same directory
+//!   (`.<name>.<pid>-<n>.slopshop-tmp`, created exclusively, so that concurrent exports, even
+//!   to the same destination, never share one), synced, then renamed over `path`. On error or
+//!   cancellation that temporary file is deleted and `path` is left untouched. When several
+//!   exports to one destination succeed, the last one to finish replaces the others, whole.
 //!
-//! Every lossy event is counted and returned in an [`ExportReport`] of stable ids; nothing is
-//! converted silently, and files are always color-tagged ([`supports_space`]).
+//! Every lossy event is counted and returned in an [`ExportReport`] of stable ids (including
+//! the non-finite samples the source replaced, which it counts); nothing is converted silently,
+//! and files are always color-tagged ([`supports_space`]).
 //!
 //! # Format writers
 //!
@@ -52,8 +55,10 @@ mod png;
 mod tiff;
 
 use std::fmt;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
@@ -72,8 +77,18 @@ use crate::icc;
 /// Rows per band: one tile row of the engine's grid.
 pub const BAND_ROWS: u32 = slopshop_core::raster::TILE_SIZE;
 
-/// Suffix of the temporary file written next to the destination.
+/// Suffix of the temporary files written next to the destination.
 const TEMP_SUFFIX: &str = ".slopshop-tmp";
+
+/// Characters of the destination's name kept in a temporary file's name: enough to recognize
+/// it, few enough to stay within file-name length limits.
+const TEMP_NAME_CHARS: usize = 64;
+
+/// Existing files skipped before giving up on creating a temporary file.
+const TEMP_ATTEMPTS: u32 = 1000;
+
+/// Numbers the temporary files of this process.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The file formats export can write, without their settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -214,7 +229,7 @@ pub enum ExportNotice {
     ClippedHigh(u64),
     /// Negative or out-of-gamut values were clipped.
     ClippedLow(u64),
-    /// Infinite or NaN values were replaced.
+    /// Infinite or NaN values were replaced (by the pixel source or the conversion).
     NonFinite(u64),
     /// Finite values beyond the half-float range were written as ±65504.
     HalfOverflow(u64),
@@ -471,14 +486,16 @@ fn is_structurally_opaque(document: &Document) -> bool {
 /// Export an image of `size` pixels to `path` (see the module documentation).
 ///
 /// `source(region, out)` fills `out` with `region` (full-width bands, top to bottom) as
-/// premultiplied RGBA `f32` in the working space, row-major; it runs on another thread.
+/// premultiplied RGBA `f32` in the working space, row-major, and returns the number of
+/// non-finite (NaN, ±inf) samples it replaced to produce it (reported as
+/// [`ExportNotice::NonFinite`], with those the conversion meets); it runs on another thread.
 /// `progress` is called on the calling thread after each band, in rows. Blocking and CPU-heavy:
 /// call it off the UI thread.
 pub fn export_image(
     path: &Path,
     size: Size,
     spec: &ExportSpec,
-    source: impl FnMut(Rect, &mut [f32]) -> Result<(), String> + Send,
+    source: impl FnMut(Rect, &mut [f32]) -> Result<u64, String> + Send,
     cancel: &CancelToken,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<ExportReport, ExportError> {
@@ -514,13 +531,7 @@ pub fn export_image(
     let band_values = band_len(size.width, 4).ok_or_else(too_large)?;
     let band_bytes = band_len(size.width, converter.bytes_per_pixel()).ok_or_else(too_large)?;
 
-    let temp = TempFile::new(path)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&temp.path)?;
+    let (temp, file) = TempFile::create(path)?;
     // A second handle to sync the data once the writer has finished (and dropped its own).
     let sync = file.try_clone()?;
     let mut writer = match spec.format {
@@ -591,6 +602,8 @@ struct Band {
     y: u32,
     rows: u32,
     pixels: Vec<f32>,
+    /// Non-finite samples the source replaced in this band.
+    non_finite: u64,
 }
 
 /// The band pipeline of one export.
@@ -607,7 +620,7 @@ impl Bands<'_> {
     /// Produce every band on a helper thread, convert and write them here.
     fn run(
         &self,
-        source: impl FnMut(Rect, &mut [f32]) -> Result<(), String> + Send,
+        source: impl FnMut(Rect, &mut [f32]) -> Result<u64, String> + Send,
         writer: &mut FormatWriter,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<ConversionReport, ExportError> {
@@ -628,7 +641,7 @@ impl Bands<'_> {
 
     fn produce(
         &self,
-        mut source: impl FnMut(Rect, &mut [f32]) -> Result<(), String>,
+        mut source: impl FnMut(Rect, &mut [f32]) -> Result<u64, String>,
         bands: mpsc::SyncSender<Result<Band, ExportError>>,
         spares: mpsc::Receiver<Vec<f32>>,
     ) {
@@ -644,7 +657,12 @@ impl Bands<'_> {
                 Ok(()) => {
                     pixels.resize(len, 0.0);
                     source(Rect::new(0, y, width, rows), &mut pixels)
-                        .map(|()| Band { y, rows, pixels })
+                        .map(|non_finite| Band {
+                            y,
+                            rows,
+                            pixels,
+                            non_finite,
+                        })
                         .map_err(ExportError::Source)
                 }
             };
@@ -677,6 +695,7 @@ impl Bands<'_> {
             let band = band?;
             converted.resize(self.band_bytes / BAND_ROWS as usize * band.rows as usize, 0);
             report.merge(&self.convert(&band, &mut converted)?);
+            report.non_finite = report.non_finite.saturating_add(band.non_finite);
             writer.write_rows(band.y, &converted)?;
             done = band.y + band.rows;
             // The producer may be gone already (last band): nothing to recycle then.
@@ -736,23 +755,52 @@ impl Bands<'_> {
     }
 }
 
-/// The temporary file next to the destination, deleted unless it was renamed over it.
+/// A temporary file next to the destination, owned by one export: deleted unless it was renamed
+/// over the destination.
 struct TempFile {
     path: PathBuf,
     persisted: bool,
 }
 
 impl TempFile {
-    fn new(destination: &Path) -> Result<Self, ExportError> {
+    /// Create `.<name>.<pid>-<n>.slopshop-tmp` next to `destination` (`<name>`: the start of the
+    /// destination's name; `<n>`: a counter of this process), empty, for reading and writing.
+    /// It is created exclusively: an existing file (another export's, or one a crash left
+    /// behind) is skipped, never truncated, renamed or deleted.
+    fn create(destination: &Path) -> Result<(Self, File), ExportError> {
         let name = destination.file_name().ok_or_else(|| {
             ExportError::InvalidSpec(format!("{} is not a file path", destination.display()))
         })?;
-        let mut temp = name.to_os_string();
-        temp.push(TEMP_SUFFIX);
-        Ok(Self {
-            path: destination.with_file_name(temp),
-            persisted: false,
-        })
+        // Only a hint for whoever finds the file: a lossy name is fine.
+        let name: String = name
+            .to_string_lossy()
+            .chars()
+            .take(TEMP_NAME_CHARS)
+            .collect();
+        let pid = std::process::id();
+        let mut skipped = 0;
+        loop {
+            let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = destination.with_file_name(format!(".{name}.{pid}-{n}{TEMP_SUFFIX}"));
+            let created = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path);
+            match created {
+                Ok(file) => {
+                    let temp = Self {
+                        path,
+                        persisted: false,
+                    };
+                    return Ok((temp, file));
+                }
+                Err(e) if e.kind() == ErrorKind::AlreadyExists && skipped < TEMP_ATTEMPTS => {
+                    skipped += 1;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     /// Replace `destination` with the temporary file. Every handle on it must be closed.
@@ -766,10 +814,31 @@ impl TempFile {
 impl Drop for TempFile {
     fn drop(&mut self) {
         if !self.persisted {
-            // Best effort: the file may not even have been created.
+            // Best effort: the export's own error matters more than the clean-up's.
             let _ = fs::remove_file(&self.path);
         }
     }
+}
+
+/// The temporary files of exports to `destination` that still exist (tests: none may be left).
+#[cfg(test)]
+fn temp_files(destination: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(name)) = (destination.parent(), destination.file_name()) else {
+        return Vec::new();
+    };
+    let prefix = format!(".{}.", name.to_string_lossy());
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(TEMP_SUFFIX))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Barrier};
 
 use slopshop_core::color::LinearRgba;
 use slopshop_core::composite::composite_region;
@@ -12,10 +13,6 @@ use crate::open_image;
 
 fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("slopshop-export-{}-{name}", std::process::id()))
-}
-
-fn temp_of(path: &Path) -> PathBuf {
-    TempFile::new(path).unwrap().path.clone()
 }
 
 fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerId {
@@ -61,7 +58,7 @@ fn png_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool) -> ExportSpec 
 fn export(doc: &Document, path: &Path, spec: &ExportSpec) -> Result<ExportReport, ExportError> {
     let source = |region: Rect, out: &mut [f32]| {
         composite_region(doc, region, out)
-            .map(|_| ())
+            .map(|report| report.non_finite)
             .map_err(|e| e.to_string())
     };
     export_image(
@@ -89,7 +86,7 @@ fn round_trip(
 
     let path = temp_path(&format!("{name}-out.png"));
     let report = export(&doc, &path, spec).unwrap();
-    assert!(!temp_of(&path).exists());
+    assert!(temp_files(&path).is_empty());
     let output = image::open(&path).unwrap();
     // Our importer reads the tag back.
     let reimported = open_image(&path).unwrap();
@@ -219,7 +216,7 @@ fn progress_is_monotonic_and_ends_at_the_total() {
         &png_spec(PngDepth::U8, ColorSpace::SRGB, false),
         |region, out| {
             composite_region(&doc, region, out)
-                .map(|_| ())
+                .map(|report| report.non_finite)
                 .map_err(|e| e.to_string())
         },
         &CancelToken::new(),
@@ -244,7 +241,7 @@ fn bands_are_full_width_and_aligned() {
         |region, out| {
             regions.push(region);
             out.fill(0.25);
-            Ok(())
+            Ok(0)
         },
         &CancelToken::new(),
         &mut |_| {},
@@ -272,7 +269,7 @@ fn cancelling_leaves_neither_file_nor_temp_file() {
         &png_spec(PngDepth::U8, ColorSpace::SRGB, false),
         |region, out| {
             composite_region(&doc, region, out)
-                .map(|_| ())
+                .map(|report| report.non_finite)
                 .map_err(|e| e.to_string())
         },
         &cancel,
@@ -281,7 +278,7 @@ fn cancelling_leaves_neither_file_nor_temp_file() {
     );
     assert_eq!(result.unwrap_err().code(), "cancelled");
     assert!(!path.exists());
-    assert!(!temp_of(&path).exists());
+    assert!(temp_files(&path).is_empty());
 }
 
 #[test]
@@ -299,7 +296,7 @@ fn a_failing_source_keeps_the_existing_file() {
                 return Err("device lost".to_owned());
             }
             out.fill(0.5);
-            Ok(())
+            Ok(0)
         },
         &CancelToken::new(),
         &mut |_| {},
@@ -308,7 +305,7 @@ fn a_failing_source_keeps_the_existing_file() {
     assert_eq!(error.code(), "source");
     assert_eq!(error.to_string(), "device lost");
     assert_eq!(std::fs::read(&path).unwrap(), b"previous");
-    assert!(!temp_of(&path).exists());
+    assert!(temp_files(&path).is_empty());
     std::fs::remove_file(&path).ok();
 }
 
@@ -325,7 +322,7 @@ fn a_panicking_source_is_an_error() {
     );
     assert_eq!(result.unwrap_err().code(), "source");
     assert!(!path.exists());
-    assert!(!temp_of(&path).exists());
+    assert!(temp_files(&path).is_empty());
 }
 
 #[test]
@@ -341,8 +338,214 @@ fn export_replaces_an_existing_file() {
     .unwrap();
     let output = image::open(&path).unwrap().to_rgb8();
     assert!(output.pixels().all(|p| p.0 == [255, 255, 255]));
-    assert!(!temp_of(&path).exists());
+    assert!(temp_files(&path).is_empty());
     std::fs::remove_file(&path).ok();
+}
+
+/// Size of the concurrent exports: three bands.
+const RACE_SIZE: Size = Size::new(4, 600);
+
+/// A gray source for the concurrent exports. Its first call waits at `start` (so that both
+/// exports have created their temporary file), records how many temporary files exist, and
+/// waits again (so that both have looked); its call for the second band runs
+/// `on_second_band`; its call for the last band waits for `last_band` (if any).
+fn gated_gray<'a>(
+    gray: f32,
+    path: &'a Path,
+    start: &'a Barrier,
+    seen: &'a AtomicUsize,
+    last_band: Option<mpsc::Receiver<()>>,
+    on_second_band: impl Fn() + Send + 'a,
+) -> impl FnMut(Rect, &mut [f32]) -> Result<u64, String> + Send + 'a {
+    move |region, out| {
+        match region.y {
+            0 => {
+                start.wait();
+                seen.fetch_max(temp_files(path).len(), Ordering::SeqCst);
+                start.wait();
+            }
+            BAND_ROWS => on_second_band(),
+            _ => {
+                if let Some(go) = &last_band {
+                    go.recv().map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        out.as_chunks_mut::<4>().0.fill([gray, gray, gray, 1.0]);
+        Ok(0)
+    }
+}
+
+/// The 8-bit sRGB code of a linear gray.
+fn gray_code_of(gray: f32) -> u8 {
+    (TransferFunction::Srgb.encode(gray) * 255.0).round() as u8
+}
+
+/// The single gray code of an 8-bit gray PNG made by `gated_gray`.
+fn gray_code(path: &Path) -> u8 {
+    let pixels = image::open(path).unwrap().to_rgb8();
+    let first = pixels.get_pixel(0, 0).0[0];
+    assert!(pixels.pixels().all(|p| p.0 == [first; 3]), "mixed content");
+    first
+}
+
+fn race_spec() -> ExportSpec {
+    ExportSpec {
+        dither: false,
+        ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
+    }
+}
+
+fn race_export(
+    path: &Path,
+    spec: &ExportSpec,
+    source: impl FnMut(Rect, &mut [f32]) -> Result<u64, String> + Send,
+    cancel: &CancelToken,
+) -> Result<ExportReport, ExportError> {
+    export_image(path, RACE_SIZE, spec, source, cancel, &mut |_| {})
+}
+
+#[test]
+fn concurrent_exports_to_one_path_write_separate_files() {
+    // Regression: both exports used `<name>.slopshop-tmp`. The second truncated the first's
+    // file, the first renamed it (reporting success for what became the second's pixels), and
+    // the second then failed.
+    let path = temp_path("race.png");
+    let spec = race_spec();
+    let (start, seen) = (Barrier::new(2), AtomicUsize::new(0));
+    thread::scope(|scope| {
+        // Dropped if an assertion fails here, which stops the waiting export instead of
+        // leaving the scope waiting for it.
+        let (go, wait) = mpsc::channel();
+        let first = gated_gray(0.2, &path, &start, &seen, None, || {});
+        let second = gated_gray(0.6, &path, &start, &seen, Some(wait), || {});
+        let (path, spec) = (&path, &spec);
+        let first = scope.spawn(move || race_export(path, spec, first, &CancelToken::new()));
+        let second = scope.spawn(move || race_export(path, spec, second, &CancelToken::new()));
+
+        // The first finishes while the second is still writing: the file is the first's.
+        assert_eq!(first.join().unwrap().unwrap(), ExportReport::default());
+        assert_eq!(gray_code(path), gray_code_of(0.2));
+        // Then the second finishes and replaces it, whole.
+        go.send(()).unwrap();
+        assert_eq!(second.join().unwrap().unwrap(), ExportReport::default());
+        assert_eq!(gray_code(path), gray_code_of(0.6));
+    });
+    assert_eq!(seen.load(Ordering::SeqCst), 2, "one temporary file each");
+    assert!(temp_files(&path).is_empty());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn cancelling_one_of_two_exports_to_one_path_spares_the_other() {
+    // Regression: the cancelled export deleted the shared temporary file, and the other one
+    // failed.
+    let path = temp_path("race-cancel.png");
+    std::fs::write(&path, b"previous").unwrap();
+    let spec = race_spec();
+    let (start, seen) = (Barrier::new(2), AtomicUsize::new(0));
+    let cancel = CancelToken::new();
+    thread::scope(|scope| {
+        // See `concurrent_exports_to_one_path_write_separate_files`.
+        let (go, wait) = mpsc::channel();
+        let kept = gated_gray(0.2, &path, &start, &seen, Some(wait), || {});
+        let cancelled = gated_gray(0.6, &path, &start, &seen, None, || cancel.cancel());
+        let kept = scope.spawn(|| race_export(&path, &spec, kept, &CancelToken::new()));
+        let cancelled = scope.spawn(|| race_export(&path, &spec, cancelled, &cancel));
+
+        assert_eq!(cancelled.join().unwrap().unwrap_err().code(), "cancelled");
+        // The destination is untouched, the other export still has its temporary file.
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+        assert_eq!(temp_files(&path).len(), 1);
+        go.send(()).unwrap();
+        assert_eq!(kept.join().unwrap().unwrap(), ExportReport::default());
+    });
+    assert_eq!(seen.load(Ordering::SeqCst), 2, "one temporary file each");
+    assert_eq!(gray_code(&path), gray_code_of(0.2));
+    assert!(temp_files(&path).is_empty());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn existing_temporary_files_are_left_alone() {
+    // Files with the names the next exports would try (e.g. left by a crashed process that had
+    // the same id) are skipped, neither truncated nor deleted.
+    let path = temp_path("stale.png");
+    let doc = fill_document(Size::new(3, 2), LinearRgba::new(1.0, 1.0, 1.0, 1.0));
+    let spec = png_spec(PngDepth::U8, ColorSpace::SRGB, false);
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    let pid = std::process::id();
+    // Other tests take numbers too: cover the next ones generously.
+    let next = TEMP_COUNTER.load(Ordering::SeqCst);
+    let stale: Vec<PathBuf> = (next..next + 64)
+        .map(|n| path.with_file_name(format!(".{name}.{pid}-{n}{TEMP_SUFFIX}")))
+        .collect();
+    for file in &stale {
+        std::fs::write(file, b"stale").unwrap();
+    }
+    export(&doc, &path, &spec).unwrap();
+    assert!(image::open(&path).is_ok());
+    for file in &stale {
+        assert_eq!(std::fs::read(file).unwrap(), b"stale");
+        std::fs::remove_file(file).unwrap();
+    }
+    assert!(temp_files(&path).is_empty());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn non_finite_samples_replaced_by_the_source_are_reported() {
+    // The source reports what it replaced (1, 2 and 3 samples in the three bands); the
+    // conversion adds what it meets (one NaN in the first band). Rec.2020, like the working
+    // space: no matrix to turn the NaN (read as 0) into an out-of-gamut value.
+    let path = temp_path("non-finite.png");
+    let report = export_image(
+        &path,
+        RACE_SIZE,
+        &png_spec(PngDepth::U8, ColorSpace::REC2020, false),
+        |region, out| {
+            out.as_chunks_mut::<4>().0.fill([0.5, 0.5, 0.5, 1.0]);
+            if region.y == 0 {
+                out[0] = f32::NAN;
+            }
+            Ok(u64::from(region.y / BAND_ROWS) + 1)
+        },
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(report.notices, [ExportNotice::NonFinite(7)]);
+    assert_eq!(report.notices[0].id(), "nonFinite");
+
+    // Through the CPU compositor: a NaN and an infinity in a float raster.
+    let mut doc = Document::new(Size::new(2, 1));
+    let pixels = [[f32::NAN, 0.5, 0.5, 1.0], [f32::INFINITY, 0.5, 0.5, 1.0]];
+    let bytes: Vec<u8> = pixels
+        .as_flattened()
+        .iter()
+        .flat_map(|v| v.to_ne_bytes())
+        .collect();
+    let format = PixelFormat {
+        layout: ChannelLayout::Rgba,
+        sample: SampleType::F32,
+        color_space: ColorSpace::LINEAR_REC2020,
+        alpha: AlphaMode::Straight,
+    };
+    let image = Arc::new(RasterImage::from_pixels(doc.size(), format, &bytes).unwrap());
+    push_layer(&mut doc, LayerContent::Raster { image }, 1.0);
+    let path = temp_path("non-finite.exr");
+    let spec = ExportSpec {
+        format: ExportFormat::Exr {
+            sample: ExrSample::F32,
+        },
+        space: ColorSpace::LINEAR_REC2020,
+        keep_alpha: true,
+        dither: false,
+    };
+    let report = export(&doc, &path, &spec).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(report.notices, [ExportNotice::NonFinite(2)]);
 }
 
 #[test]
@@ -380,7 +583,7 @@ fn unsupported_spaces_are_rejected_before_writing() {
         );
         assert!(matches!(result, Err(ExportError::UnsupportedSpace(s)) if s == space));
         assert!(!path.exists());
-        assert!(!temp_of(&path).exists());
+        assert!(temp_files(&path).is_empty());
     }
 }
 
@@ -392,7 +595,7 @@ fn invalid_requests_are_rejected() {
             path,
             size,
             &spec,
-            |_, _| Ok(()),
+            |_, _| Ok(0),
             &CancelToken::new(),
             &mut |_| {},
         )

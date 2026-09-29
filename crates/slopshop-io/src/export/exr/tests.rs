@@ -44,7 +44,7 @@ fn export_exr(path: &Path, size: Size, spec: &ExportSpec) -> ExportReport {
             let (x, y) = (i as u32 % region.width, i as u32 / region.width);
             *px = source_pixel(region.x + x, region.y + y, opaque);
         }
-        Ok(())
+        Ok(0)
     };
     export_image(path, size, spec, source, &CancelToken::new(), &mut |_| {}).unwrap()
 }
@@ -203,7 +203,7 @@ fn half_floats_report_overflow_and_precision() {
         &spec,
         |_, out| {
             out.as_chunks_mut::<4>().0.fill([1.0e6, 0.1, -2.5, 1.0]);
-            Ok(())
+            Ok(0)
         },
         &CancelToken::new(),
         &mut |_| {},

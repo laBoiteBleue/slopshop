@@ -13,11 +13,24 @@
 //!    premultiplied color, i.e. the image over black: callers drop alpha only when the document
 //!    is opaque;
 //! 4. the range policy: integer targets clip each channel to the range of their codes and count
-//!    it; float targets keep every finite value (half floats count what overflows their range);
+//!    it; float targets keep every finite value (half floats count what overflows their range).
+//!    A value outside the range by less than the working space's rounding noise
+//!    (`ROUND_TRIP_NOISE` of the pixel's largest channel, e.g. a channel that should be 0 after
+//!    a round trip through the working-space matrices) is rounding, not clipping: it gets the
+//!    end code like any value beyond the range, but it is not counted. Without this, in-gamut
+//!    colors would be reported as clipped where the curve leaves no margin: at 0 for pure power
+//!    curves (Adobe RGB, ProPhoto) at 16 bits, at the top for PQ (whose decode saturates);
 //! 5. transfer encoding and quantization. For 8/16-bit, both are done at once and exactly with a
 //!    threshold table: code `k` covers the linear values between the decoded midpoints
 //!    `(k ± ½) / max`, adjusted so that `decode(k / max)` — what import produces — always gives
-//!    `k` back. Unedited 8/16-bit sources therefore export bit-exact;
+//!    `k` back. So an unedited source exported in its own format through the CPU compositor
+//!    comes back bit-exact when it is 8-bit (every named space), or 16-bit with a transfer that
+//!    is not a pure power law at 0 (sRGB, Display P3, Rec.709/Rec.2020, HLG, PQ, linear). A pure
+//!    power law (Adobe RGB, ProPhoto) has an infinite slope at 0: at 16 bits its lowest codes
+//!    are closer together (down to ~1e-12 apart) than the f32 rounding of the working space
+//!    (~1e-9 across channels through the matrices), so some of them come back a few codes off
+//!    (see `unedited_integer_sources_export_bit_exact` in `composite`). The GPU source rounds
+//!    differently and is not covered by this guarantee;
 //! 6. dithering (8-bit only, optional): blue noise of ±0.49 step added in the encoded domain
 //!    before rounding, indexed by absolute pixel position so that bands and tiles do not matter.
 //!    A value exactly on a level never moves. The same offset is used for R, G and B (neutral
@@ -35,6 +48,13 @@ use crate::color::{
     TransferFunction, WORKING_SPACE, f32_to_f16, mat_vec,
 };
 use crate::raster::decode_levels;
+
+/// Rounding noise of working-space values, relative to the largest channel of their pixel:
+/// working-space values are `f32` (relative error 2⁻²⁴ each), and a matrix to other primaries
+/// mixes three of them with coefficients whose absolute sum per row stays below 3 for the named
+/// spaces; the GPU's `f32` arithmetic adds a few more units. 8 ε (about 1e-6) covers both.
+/// Integer targets do not count values outside their range by less than this as clipped.
+const ROUND_TRIP_NOISE: f64 = 8.0 * f32::EPSILON as f64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConvertOptions {
@@ -181,7 +201,7 @@ impl Converter {
     fn convert_pixel(
         &self,
         px: &[f32; 4],
-        noise: Option<f32>,
+        dither: Option<f32>,
         out: &mut [u8],
         report: &mut ConversionReport,
     ) {
@@ -215,6 +235,8 @@ impl Converter {
             && self.target.alpha == AlphaMode::Premultiplied
             && !self.target.color_space.transfer.is_linear();
         let unpremultiply = |c: f64| if alpha > 0.0 { c / alpha } else { 0.0 };
+        // Outside the range by less than this (premultiplied): rounding, not clipping.
+        let rounding = ROUND_TRIP_NOISE * color.iter().fold(0.0f64, |m, c| m.max(c.abs()));
 
         let sample_bytes = self.target.sample.bytes() as usize;
         let mut samples = out.chunks_exact_mut(sample_bytes);
@@ -228,15 +250,20 @@ impl Converter {
                             q.quantize_premultiplied(
                                 unpremultiply(c) as f32,
                                 alpha as f32,
-                                noise,
+                                unpremultiply(rounding) as f32,
+                                dither,
                                 report,
                             )
                         } else {
                             0
                         }
                     } else {
-                        let value = if straight { unpremultiply(c) } else { c };
-                        q.quantize(value as f32, noise, report)
+                        let (value, rounding) = if straight {
+                            (unpremultiply(c), unpremultiply(rounding))
+                        } else {
+                            (c, rounding)
+                        };
+                        q.quantize(value as f32, rounding as f32, dither, report)
                     };
                     self.put_int(code, sample);
                 }
@@ -331,7 +358,9 @@ struct Quantizer {
     levels: Vec<f32>,
     /// `thresholds[k]`: lowest linear value of code `k + 1`, sorted.
     thresholds: Vec<f32>,
-    /// Values beyond these are clipped (the codes' range, plus half a step on each side).
+    /// Values beyond these are clipped (the codes' range, plus half a step on each side where
+    /// the curve has one); only those beyond them by more than the rounding noise are counted
+    /// ([`ROUND_TRIP_NOISE`]).
     low_clip: f32,
     high_clip: f32,
 }
@@ -378,15 +407,25 @@ impl Quantizer {
         }
     }
 
-    /// Code of a linear value, clipped to the codes' range (counted) and optionally dithered by
-    /// `noise` (in steps).
-    fn quantize(&self, v: f32, noise: Option<f32>, report: &mut ConversionReport) -> u32 {
+    /// Code of a linear value, clipped to the codes' range (counted unless it is outside by less
+    /// than `rounding`) and optionally dithered by `noise` (in steps).
+    fn quantize(
+        &self,
+        v: f32,
+        rounding: f32,
+        noise: Option<f32>,
+        report: &mut ConversionReport,
+    ) -> u32 {
         if v > self.high_clip {
-            report.clipped_high += 1;
+            if v > self.high_clip + rounding {
+                report.clipped_high += 1;
+            }
             return self.max;
         }
         if v < self.low_clip {
-            report.clipped_low += 1;
+            if v < self.low_clip - rounding {
+                report.clipped_low += 1;
+            }
             return 0;
         }
         let k = self.thresholds.partition_point(|&t| t <= v);
@@ -416,19 +455,21 @@ impl Quantizer {
     }
 
     /// Code of `encode(straight) × alpha` (premultiplied target, non-linear transfer,
-    /// `0 < alpha < 1`), clipping `straight` to the codes' range first.
+    /// `0 < alpha < 1`), clipping `straight` to the codes' range first (counted unless it is
+    /// outside by less than `rounding`).
     fn quantize_premultiplied(
         &self,
         straight: f32,
         alpha: f32,
+        rounding: f32,
         noise: Option<f32>,
         report: &mut ConversionReport,
     ) -> u32 {
         let first = self.levels.first().copied().unwrap_or(0.0);
         let last = self.levels.last().copied().unwrap_or(1.0);
-        if straight > self.high_clip {
+        if straight > self.high_clip + rounding {
             report.clipped_high += 1;
-        } else if straight < self.low_clip {
+        } else if straight < self.low_clip - rounding {
             report.clipped_low += 1;
         }
         let encoded = self
@@ -915,6 +956,78 @@ mod tests {
                     assert_eq!(report, ConversionReport::default());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn in_gamut_colors_are_not_reported_as_clipped() {
+        // Regression: sRGB primaries and secondaries, decoded as import does and taken to the
+        // working space, exported to wider spaces. The channels that should be 0 come out at
+        // about ±1e-9 through the matrices, below the -5e-12 that half a 16-bit step of Adobe
+        // RGB's pure power curve allows: they were counted as clipped.
+        let levels = decode_levels(TransferFunction::Srgb, SampleType::U8);
+        let to_working = ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE);
+        let colors: [[usize; 3]; 10] = [
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [255, 255, 0],
+            [0, 255, 255],
+            [255, 0, 255],
+            [255, 255, 255],
+            [0, 0, 0],
+            [255, 128, 0],
+            [0, 64, 255],
+        ];
+        for alpha in [1.0f32, 0.5, 1.0 / 255.0] {
+            let src: Vec<f32> = colors
+                .iter()
+                .flat_map(|rgb| {
+                    let linear = rgb.map(|code| f64::from(levels[code] * alpha));
+                    let [r, g, b] = mat_vec(&to_working, linear);
+                    [r as f32, g as f32, b as f32, alpha]
+                })
+                .collect();
+            for space in [
+                ColorSpace::ADOBE_RGB,
+                ColorSpace::PROPHOTO,
+                ColorSpace::DISPLAY_P3,
+                ColorSpace::REC2020,
+                ColorSpace::SRGB,
+            ] {
+                for sample in [SampleType::U8, SampleType::U16] {
+                    for (layout, alpha_mode) in [
+                        (ChannelLayout::Rgba, AlphaMode::Straight),
+                        (ChannelLayout::Rgba, AlphaMode::Premultiplied),
+                        (ChannelLayout::Rgb, AlphaMode::Straight),
+                    ] {
+                        let format = target(layout, sample, space, alpha_mode);
+                        let (_, report) = convert(format, options(false), &src, 0, 0);
+                        assert_eq!(
+                            report,
+                            ConversionReport::default(),
+                            "{space:?} {sample:?} {layout:?} {alpha_mode:?} alpha {alpha}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn values_well_below_the_range_are_still_counted() {
+        // The rounding tolerance is relative to the pixel: a real out-of-gamut value is still
+        // counted, however small the pixel.
+        let format = target(
+            ChannelLayout::Rgb,
+            SampleType::U16,
+            ColorSpace::ADOBE_RGB,
+            AlphaMode::Straight,
+        );
+        for scale in [1.0f32, 1e-3, 1e-6] {
+            // Pure Rec.2020 green: negative red and blue in Adobe RGB.
+            let (_, report) = convert(format, options(false), &[0.0, scale, 0.0, 1.0], 0, 0);
+            assert_eq!(report.clipped_low, 2, "scale {scale}");
         }
     }
 

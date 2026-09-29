@@ -5,24 +5,31 @@
 //! premultiplied RGBA `f32` in the working space: visible layers from bottom to top, combined
 //! with premultiplied "over". Raster texels are decoded exactly like the raster codec does on
 //! import, except for the display clamp: finite values are kept as they are, however large.
-//! Only NaN (read as 0) and ±inf (read as ±`f32::MAX`) are replaced, and counted.
+//! Only non-finite values are replaced, and counted: NaN reads as 0, and ±inf as
+//! ±[`MAX_FINITE_SAMPLE`] (the display bound, also the largest half float). Not ±`f32::MAX`:
+//! through a color matrix, such a value would swamp the other channels of the pixel (f32
+//! rounding at 1e38 is about 1e31), while at ±65504 they keep about 1e-2 of absolute accuracy
+//! through a round trip between gamuts. The GPU export path (`export_main` in the renderer)
+//! applies the same rule.
 //!
 //! Accumulation is done in `f64` so that huge values cannot overflow into infinities (and then
-//! NaN, as `inf × 0`) between layers; results beyond the `f32` range saturate.
+//! NaN, as `inf × 0`) between layers; results beyond the `f32` range saturate to ±`f32::MAX`,
+//! and are counted too.
 
 use std::fmt;
 
 use crate::color::{IDENTITY, Mat3, mat_vec};
 use crate::document::{Document, LayerContent};
 use crate::geom::{Rect, Size};
-use crate::raster::{Codec, RasterLevel, TILE_SIZE};
+use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterLevel, TILE_SIZE};
 use crate::tile::TileCoord;
 
 /// Lossy events of a composite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CompositeReport {
-    /// Non-finite values met: NaN and ±inf raster samples (or decoded values), and composited
-    /// values beyond the `f32` range, saturated. One infinity may count more than once.
+    /// Non-finite values replaced: NaN and ±inf raster samples (or decoded values), and
+    /// composited values beyond the `f32` range, saturated. One infinity may count more than
+    /// once (e.g. a sample, then the composite it overflows).
     pub non_finite: u64,
 }
 
@@ -209,7 +216,7 @@ fn texel(
             if v.is_nan() {
                 0.0
             } else {
-                f32::MAX.copysign(v)
+                MAX_FINITE_SAMPLE.copysign(v)
             }
         }
     };
@@ -251,8 +258,8 @@ mod tests {
 
     use super::*;
     use crate::color::{
-        AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType, WORKING_SPACE,
-        srgb_decode,
+        AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType,
+        TransferFunction, WORKING_SPACE, srgb_decode,
     };
     use crate::convert::{ConversionReport, ConvertOptions, Converter};
     use crate::document::{Layer, LayerId};
@@ -439,8 +446,8 @@ mod tests {
         assert_eq!(
             out,
             [
-                [f32::MAX, 0.0, 0.25, 1.0],
-                [-f32::MAX, 0.0, 0.0, 1.0],
+                [MAX_FINITE_SAMPLE, 0.0, 0.25, 1.0],
+                [-MAX_FINITE_SAMPLE, 0.0, 0.0, 1.0],
                 // NaN alpha is 0: the fill below shows through.
                 [0.5, 0.5, 0.5, 1.0],
             ]
@@ -450,6 +457,50 @@ mod tests {
         // A region only counts what it covers.
         let (_, report) = composite(&doc, Rect::new(1, 0, 1, 1));
         assert_eq!(report.non_finite, 1);
+    }
+
+    /// Regression: ±inf used to be read as ±`f32::MAX`, and the matrices to the working space
+    /// and back turned the other channels of the pixel (0.5) into ±1e30.
+    #[test]
+    fn an_infinite_sample_keeps_the_other_channels_of_its_pixel() {
+        let size = Size::new(3, 1);
+        let format = PixelFormat {
+            layout: ChannelLayout::Rgba,
+            sample: SampleType::F32,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Premultiplied,
+        };
+        let pixels = [
+            [f32::NAN, 0.5, 0.5, 1.0],
+            [f32::INFINITY, 0.5, 0.5, 1.0],
+            [0.5, f32::NEG_INFINITY, 0.5, 1.0],
+        ];
+        let bytes: Vec<u8> = pixels
+            .iter()
+            .flatten()
+            .flat_map(|v| v.to_ne_bytes())
+            .collect();
+        let mut doc = Document::new(size);
+        add(&mut doc, raster(size, format, &bytes), 1.0, true);
+        let (out, report) = composite(&doc, size.bounds());
+        assert_eq!(report.non_finite, 3);
+        // Back to linear sRGB, as an export to that space does.
+        let back = WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB);
+        let expected = [
+            [0.0, 0.5, 0.5],
+            [f64::from(MAX_FINITE_SAMPLE), 0.5, 0.5],
+            [0.5, -f64::from(MAX_FINITE_SAMPLE), 0.5],
+        ];
+        for (px, expected) in out.as_chunks::<4>().0.iter().zip(expected) {
+            let rgb = mat_vec(&back, [px[0], px[1], px[2]].map(f64::from));
+            for (v, e) in rgb.iter().zip(expected) {
+                assert!(
+                    (v - e).abs() < 0.02,
+                    "{px:?} → {rgb:?}, expected {expected:?}"
+                );
+            }
+            assert_eq!(px[3], 1.0);
+        }
     }
 
     #[test]
@@ -476,7 +527,7 @@ mod tests {
         format: PixelFormat,
         pixels: &[u8],
         dither: bool,
-    ) -> Vec<u8> {
+    ) -> (Vec<u8>, ConversionReport) {
         let mut doc = Document::new(size);
         add(&mut doc, raster(size, format, pixels), 1.0, true);
         let (linear, report) = composite(&doc, size.bounds());
@@ -499,13 +550,29 @@ mod tests {
                 .convert_row(src, 0, y as u32, dst, &mut conversion)
                 .unwrap();
         }
-        assert_eq!(conversion, ConversionReport::default());
-        out
+        (out, conversion)
     }
+
+    /// Every named color space.
+    const NAMED_SPACES: [ColorSpace; 9] = [
+        ColorSpace::SRGB,
+        ColorSpace::LINEAR_SRGB,
+        ColorSpace::DISPLAY_P3,
+        ColorSpace::ADOBE_RGB,
+        ColorSpace::PROPHOTO,
+        ColorSpace::REC2020,
+        ColorSpace::LINEAR_REC2020,
+        ColorSpace::REC2100_PQ,
+        ColorSpace::REC2100_HLG,
+    ];
 
     #[test]
     fn unedited_integer_sources_export_bit_exact() {
-        // 8-bit sRGB: every value in every channel, at every non-zero alpha.
+        // What `convert`'s module documentation promises, on the CPU path: an unedited source
+        // exported in its own format comes back bit-exact, with an empty report, except for the
+        // lowest 16-bit codes of pure power curves.
+
+        // 8-bit: every value in every channel, at every non-zero alpha, in every named space.
         let size = Size::new(256, 255);
         let pixels: Vec<u8> = (0..size.pixel_count() as usize)
             .flat_map(|i| {
@@ -513,36 +580,55 @@ mod tests {
                 [x, 255 - x, x.wrapping_mul(7).wrapping_add(y), y + 1]
             })
             .collect();
-        for dither in [false, true] {
-            let out = export_single_raster(size, PixelFormat::RGBA8_SRGB, &pixels, dither);
-            assert!(out == pixels, "8-bit sRGB, dither {dither}");
+        for space in NAMED_SPACES {
+            let format = PixelFormat {
+                color_space: space,
+                ..PixelFormat::RGBA8_SRGB
+            };
+            for dither in [false, true] {
+                let (out, report) = export_single_raster(size, format, &pixels, dither);
+                assert!(out == pixels, "8-bit {space:?}, dither {dither}");
+                assert_eq!(report, ConversionReport::default(), "8-bit {space:?}");
+            }
         }
 
-        // 16-bit Rec.2020 and Display P3 (through a matrix): every code in every channel.
+        // 16-bit: every code in every channel, in every named space.
         let size = Size::new(256, 256);
-        let pixels: Vec<u8> = (0..=u16::MAX)
-            .flat_map(|v| {
-                [v, v.wrapping_mul(31), u16::MAX - v, 65535 - (v % 7) * 1000]
-                    .into_iter()
-                    .flat_map(u16::to_ne_bytes)
-            })
+        let codes: Vec<u16> = (0..=u16::MAX)
+            .flat_map(|v| [v, v.wrapping_mul(31), u16::MAX - v, 65535 - (v % 7) * 1000])
             .collect();
-        for space in [ColorSpace::REC2020, ColorSpace::DISPLAY_P3] {
+        let pixels: Vec<u8> = codes.iter().flat_map(|c| c.to_ne_bytes()).collect();
+        for space in NAMED_SPACES {
             let format = PixelFormat {
                 layout: ChannelLayout::Rgba,
                 sample: SampleType::U16,
                 color_space: space,
                 alpha: AlphaMode::Straight,
             };
-            let out = export_single_raster(size, format, &pixels, false);
-            // The converter writes little-endian, the raster holds native-endian samples.
-            let native: Vec<u8> = out
-                .as_chunks::<2>()
-                .0
+            let (out, report) = export_single_raster(size, format, &pixels, false);
+            assert_eq!(report, ConversionReport::default(), "16-bit {space:?}");
+            // The converter writes little-endian.
+            let wrong: Vec<(u16, u16)> = codes
                 .iter()
-                .flat_map(|b| u16::from_le_bytes(*b).to_ne_bytes())
+                .zip(out.as_chunks::<2>().0)
+                .map(|(&expected, bytes)| (expected, u16::from_le_bytes(*bytes)))
+                .filter(|(expected, actual)| expected != actual)
                 .collect();
-            assert!(native == pixels, "16-bit {space:?}");
+            match space.transfer {
+                // Infinite slope at 0: the lowest codes are closer together than the rounding
+                // of the working space. Measured: Adobe RGB 74 samples wrong (codes up to 70,
+                // off by up to 6), ProPhoto 2 (codes up to 2, off by up to 2).
+                TransferFunction::Gamma(_) => {
+                    assert!(wrong.len() < 256, "16-bit {space:?}: {} wrong", wrong.len());
+                    for (expected, actual) in wrong {
+                        assert!(
+                            expected < 256 && actual.abs_diff(expected) <= 8,
+                            "16-bit {space:?}: {expected} became {actual}"
+                        );
+                    }
+                }
+                _ => assert!(wrong.is_empty(), "16-bit {space:?}: {:?}…", wrong.first()),
+            }
         }
     }
 }

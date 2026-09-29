@@ -67,6 +67,10 @@ pub enum RenderError {
         images: usize,
         capacity: u32,
     },
+    /// The GPU ran out of memory (e.g. for a buffer or a tile array).
+    OutOfMemory(String),
+    /// Any other error reported by the GPU device (validation, internal).
+    Gpu(String),
 }
 
 impl fmt::Display for RenderError {
@@ -95,6 +99,8 @@ impl fmt::Display for RenderError {
                 f,
                 "{images} raster images of one sample type exceed the tile cache ({capacity} tiles)"
             ),
+            RenderError::OutOfMemory(e) => write!(f, "GPU out of memory: {e}"),
+            RenderError::Gpu(e) => write!(f, "GPU error: {e}"),
         }
     }
 }
@@ -145,6 +151,10 @@ const TILE_BUDGET_BYTES: u64 = 384 * 1024 * 1024;
 const NO_TILE: u32 = u32::MAX;
 const KIND_FILL: u32 = 0;
 const KIND_RASTER: u32 = 1;
+/// Layer flags (see composite.wgsl).
+const FLAG_PREMULTIPLIED: u32 = 1;
+/// Gray source: green and blue of its GPU texels are copies of red ([`gpu_texels`]).
+const FLAG_GRAY: u32 = 2;
 
 const WORKGROUP_SIZE: u32 = 8;
 const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
@@ -237,7 +247,11 @@ impl Renderer {
             &device,
             &module,
             "export_main",
-            &[&shared[..], &[uniform(8), storage(9, false)]].concat(),
+            &[
+                &shared[..],
+                &[uniform(8), storage(9, false), storage(10, false)],
+            ]
+            .concat(),
         );
 
         let max_output_bytes = required_limits
@@ -327,16 +341,52 @@ impl Renderer {
         out: &mut Vec<u8>,
     ) -> Result<(), RenderError> {
         let byte_len = self.output_byte_len(output)?;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("composite readback"),
-            size: byte_len,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        self.composite(document, view, output, |encoder, pixels| {
-            encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
-        })?;
-        self.read_buffer_into(&readback, out)
+        let len = out.len();
+        self.capture_errors(|| {
+            let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("composite readback"),
+                size: byte_len,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.composite(document, view, output, |encoder, pixels| {
+                encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
+            })?;
+            self.read_buffer_into(&readback, out)
+        })
+        // A GPU error found after the pixels were appended: leave `out` as it was.
+        .inspect_err(|_| out.truncate(len))
+    }
+
+    /// Run `f`, capturing the GPU errors it causes on this thread (out of memory, validation,
+    /// internal) as a [`RenderError`]. Without this, wgpu's default handler panics, possibly
+    /// while a lock is held. A captured error takes precedence over the result of `f`, which
+    /// may have gone on with invalid GPU objects.
+    fn capture_errors<T>(
+        &self,
+        f: impl FnOnce() -> Result<T, RenderError>,
+    ) -> Result<T, RenderError> {
+        let scopes = [
+            wgpu::ErrorFilter::Internal,
+            wgpu::ErrorFilter::Validation,
+            wgpu::ErrorFilter::OutOfMemory,
+        ]
+        .map(|filter| self.device.push_error_scope(filter));
+        let result = f();
+        // Scopes pop in reverse order; the first error (out of memory first) is the cause.
+        let mut captured = None;
+        for scope in scopes.into_iter().rev() {
+            if let Some(error) = pollster::block_on(scope.pop()) {
+                captured.get_or_insert(error);
+            }
+        }
+        match captured {
+            Some(wgpu::Error::OutOfMemory { source }) => {
+                Err(RenderError::OutOfMemory(source.to_string()))
+            }
+            Some(error) => Err(RenderError::Gpu(error.to_string())),
+            None => result,
+        }
     }
 
     /// Composite `view` of `document` into an `output`-sized buffer of packed RGBA8 sRGB pixels
@@ -353,11 +403,36 @@ impl Renderer {
 
         // The cache lock is held until the GPU work is submitted: tiles resident for this frame
         // must not be evicted before.
-        let mut cache_guard = self
-            .tile_caches
-            .lock()
-            .map_err(|_| RenderError::Readback("tile cache lock poisoned".into()))?;
-        let layers = self.prepare_layers(document, view, output, &mut cache_guard);
+        let mut cache_guard = self.tile_caches.lock().unwrap_or_else(|poisoned| {
+            // A panic while the caches were locked may have left them inconsistent: start
+            // afresh rather than failing every later frame.
+            let mut guard = poisoned.into_inner();
+            *guard = [None, None, None, None];
+            self.tile_caches.clear_poison();
+            guard
+        });
+        let result = self.capture_errors(|| {
+            self.composite_locked(document, view, output, byte_len, &mut cache_guard, finish)
+        });
+        if result.is_err() {
+            // Tiles may have been recorded as resident in a cache whose texture or upload
+            // failed: rebuild the caches on the next frame.
+            *cache_guard = [None, None, None, None];
+        }
+        result
+    }
+
+    /// [`Self::composite`] with the tile caches locked.
+    fn composite_locked(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+        byte_len: u64,
+        cache_guard: &mut [Option<TileCache>; 4],
+        finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
+    ) -> Result<(), RenderError> {
+        let layers = self.prepare_layers(document, view, output, cache_guard);
         let params = params_bytes(document.size(), view, output, layers.count);
 
         use wgpu::util::DeviceExt;
@@ -380,7 +455,7 @@ impl Renderer {
         let bind_group = self.bind_group(
             &self.bind_group_layout,
             &layer_buffers,
-            self.tile_views(&cache_guard),
+            self.tile_views(cache_guard),
             [
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -413,7 +488,6 @@ impl Renderer {
         }
         finish(&mut encoder, &output_buffer);
         self.queue.submit([encoder.finish()]);
-        drop(cache_guard);
         Ok(())
     }
 
@@ -546,13 +620,13 @@ impl Renderer {
     }
 
     /// A bind group of the bindings shared by both entry points plus an entry point's own
-    /// (params and output).
-    fn bind_group(
+    /// (params and output; export adds its non-finite counter).
+    fn bind_group<const N: usize>(
         &self,
         layout: &wgpu::BindGroupLayout,
         buffers: &LayerBuffers,
         tile_views: [&wgpu::TextureView; 4],
-        own: [wgpu::BindGroupEntry<'_>; 2],
+        own: [wgpu::BindGroupEntry<'_>; N],
     ) -> wgpu::BindGroup {
         let mut entries = vec![
             wgpu::BindGroupEntry {
@@ -615,7 +689,12 @@ fn encode_layers(
                 fields.level_size = [size.width, size.height];
                 fields.format = plan.format.index() as u32;
                 let stored = plan.image.stored_format();
-                fields.flags = u32::from(stored.alpha == AlphaMode::Premultiplied);
+                if stored.alpha == AlphaMode::Premultiplied {
+                    fields.flags |= FLAG_PREMULTIPLIED;
+                }
+                if stored.layout.is_gray() {
+                    fields.flags |= FLAG_GRAY;
+                }
                 (fields.transfer, fields.transfer2) = transfer_fields(stored.color_space.transfer);
                 fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
                 prepared.tile_table.extend(table);
@@ -913,4 +992,70 @@ fn params_bytes(doc: Size, view: ViewTransform, output: Size, layer_count: u32) 
         bytes.extend(v.to_le_bytes());
     }
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn renderer() -> Option<Renderer> {
+        match Renderer::new() {
+            Ok(r) => Some(r),
+            Err(e) if std::env::var("SLOPSHOP_REQUIRE_GPU").as_deref() == Ok("1") => {
+                panic!("GPU required but unavailable: {e}")
+            }
+            Err(e) => {
+                eprintln!("skipping GPU test: {e}");
+                None
+            }
+        }
+    }
+
+    fn view(r: &Renderer, document: &Document) -> Result<Frame, RenderError> {
+        let output = Size::new(32, 16);
+        r.render_view(
+            document,
+            ViewTransform::fit(document.size(), output, 0),
+            output,
+        )
+    }
+
+    #[test]
+    fn gpu_errors_are_captured_not_panics() {
+        let Some(r) = renderer() else { return };
+        // A buffer beyond the device limit: a validation error, which wgpu's default handler
+        // would turn into a panic.
+        let too_large = r.max_output_bytes.max(r.device.limits().max_buffer_size) + 4;
+        let result = r.capture_errors(|| {
+            let _buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("too large"),
+                size: too_large,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            Ok(())
+        });
+        assert!(matches!(result, Err(RenderError::Gpu(_))), "{result:?}");
+        // Without errors, the result of the work comes through.
+        assert_eq!(r.capture_errors(|| Ok(7)).unwrap(), 7);
+        // The device still works.
+        view(&r, &Document::new(Size::new(64, 32))).unwrap();
+    }
+
+    /// Regression: a panic while the tile caches were locked poisoned the lock, and every later
+    /// frame failed until the app restarted.
+    #[test]
+    fn a_poisoned_tile_cache_is_rebuilt() {
+        let Some(r) = renderer() else { return };
+        let document = Document::new(Size::new(64, 32));
+        let before = view(&r, &document).unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = r.tile_caches.lock();
+            panic!("in a frame");
+        }));
+        assert!(panicked.is_err());
+        assert!(r.tile_caches.is_poisoned());
+        assert_eq!(view(&r, &document).unwrap().data, before.data);
+        assert!(!r.tile_caches.is_poisoned());
+    }
 }

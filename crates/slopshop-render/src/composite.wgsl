@@ -9,7 +9,9 @@
 //   composited over a transparency checkerboard and encoded to sRGB 8-bit. Clipping only happens
 //   at that last step: it is a *view transform*, the document is never converted.
 // - `export_main`, export (ADR 0008): the working-space values themselves, as f32, one level-0
-//   texel per output pixel, finite values never clamped.
+//   texel per output pixel, finite values never clamped. Non-finite values are replaced (see
+//   `finite` and `saturated`) and counted in `export_non_finite`, like the CPU reference
+//   compositor (slopshop_core::composite) does.
 
 struct Params {
     // Document coordinate of the output's top-left corner.
@@ -35,7 +37,11 @@ const FORMAT_UNORM8: u32 = 0u;
 const FORMAT_UINT16: u32 = 1u;
 const FORMAT_FLOAT16: u32 = 2u;
 
+// Layer flags (keep in sync with lib.rs).
 const FLAG_PREMULTIPLIED: u32 = 1u;
+// Gray source: only the first color channel of a texel is a stored sample (the others are
+// copies of it, see gpu_texels in tiles.rs).
+const FLAG_GRAY: u32 = 2u;
 
 // Transfer function kinds (transfer_fields in lib.rs).
 const TF_LINEAR: u32 = 0u;
@@ -96,6 +102,9 @@ struct ExportParams {
 @group(0) @binding(8) var<uniform> export_params: ExportParams;
 // Output pixels, row-major: premultiplied working-space RGBA.
 @group(0) @binding(9) var<storage, read_write> export_output: array<vec4<f32>>;
+// Non-finite values replaced in the dispatch, as a 64-bit count: low word, then high word.
+// Cleared before each dispatch.
+@group(0) @binding(10) var<storage, read_write> export_non_finite: array<atomic<u32>, 2>;
 
 // Linear sRGB display colors.
 const PASTEBOARD = vec3<f32>(0.0144, 0.0144, 0.0168);
@@ -111,30 +120,50 @@ fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
 }
 
 // Display bound on sample magnitudes (MAX_FINITE_SAMPLE in core): sums and matrices stay far
-// from overflow, so an opaque layer still hides what is below it.
+// from overflow, so an opaque layer still hides what is below it. Export maps ±inf samples to it.
 const MAX_FINITE = 65504.0;
-// Largest finite f32: what export maps ±inf to.
+// Largest finite f32: what export saturates overflowing composites to.
 const F32_MAX = 0x1.fffffep+127f;
 
 // Rec.709 constants at full precision (same as core).
 const REC709_ALPHA = 1.0992968;
 const REC709_BETA = 0.018053968;
 
-// NaN → 0. Then, for display, every value (finite or not) is clamped to ±MAX_FINITE; for
-// export (`unbounded`, ADR 0008), only ±inf are mapped, to ±F32_MAX, and finite values are
-// kept. Tests the bits: `v != v` may be optimized away.
-fn finite(v: vec4<f32>, unbounded: bool) -> vec4<f32> {
+// Components that are ±inf or NaN. Tests the bits: `v != v` may be optimized away.
+fn non_finite(v: vec4<f32>) -> vec4<bool> {
     let bits = bitcast<vec4<u32>>(v);
-    let special = (bits & vec4<u32>(0x7f800000u)) == vec4<u32>(0x7f800000u);
-    let nan = special & ((bits & vec4<u32>(0x007fffffu)) != vec4<u32>(0u));
-    var mapped: vec4<f32>;
-    if unbounded {
-        mapped = select(v, sign(v) * F32_MAX, special);
-    } else {
-        let clamped = clamp(v, vec4<f32>(-MAX_FINITE), vec4<f32>(MAX_FINITE));
-        mapped = select(clamped, sign(v) * MAX_FINITE, special);
+    return (bits & vec4<u32>(0x7f800000u)) == vec4<u32>(0x7f800000u);
+}
+
+// Components that are NaN.
+fn is_nan(v: vec4<f32>) -> vec4<bool> {
+    return non_finite(v) & ((bitcast<vec4<u32>>(v) & vec4<u32>(0x007fffffu)) != vec4<u32>(0u));
+}
+
+// Number of non-finite components of `v` among those selected by `mask`.
+fn count_non_finite(v: vec4<f32>, mask: vec4<bool>) -> u32 {
+    let n = select(vec4<u32>(0u), vec4<u32>(1u), non_finite(v) & mask);
+    return n.x + n.y + n.z + n.w;
+}
+
+// Sample values: NaN → 0 and ±inf → ±MAX_FINITE. For display, finite values are clamped to
+// ±MAX_FINITE too; for export (`unbounded`, ADR 0008), they are kept. ±inf does not become
+// ±F32_MAX: through a color matrix it would swamp the pixel's other channels (f32 rounding at
+// 1e38 is about 1e31). Same rule as the CPU reference compositor.
+fn finite(v: vec4<f32>, unbounded: bool) -> vec4<f32> {
+    var mapped = select(v, sign(v) * MAX_FINITE, non_finite(v));
+    if !unbounded {
+        mapped = clamp(mapped, vec4<f32>(-MAX_FINITE), vec4<f32>(MAX_FINITE));
     }
-    return select(mapped, vec4<f32>(0.0), nan);
+    return select(mapped, vec4<f32>(0.0), is_nan(v));
+}
+
+// Export: computed values that overflowed the f32 range saturate to ±F32_MAX (NaN, as inf − inf,
+// to 0), counted in `count`.
+fn saturated(v: vec4<f32>, count: ptr<function, u32>) -> vec4<f32> {
+    *count += count_non_finite(v, vec4<bool>(true));
+    let mapped = select(v, sign(v) * F32_MAX, non_finite(v));
+    return select(mapped, vec4<f32>(0.0), is_nan(v));
 }
 
 // ICC parametric curve for x ≥ 0: g = t.y, a = t.z, b = t.w, c = t2.x, d = t2.y, e = t2.z,
@@ -206,8 +235,10 @@ fn load_texel(layer: Layer, texel: vec2<u32>, slot: u32) -> vec4<f32> {
 }
 
 // Premultiplied working-space color of one texel of a raster layer's planned level.
-// Transparent outside the image or where no tile is resident. `unbounded`: see `finite`.
-fn texel_color(layer: Layer, at: vec2<i32>, unbounded: bool) -> vec4<f32> {
+// Transparent outside the image or where no tile is resident. `unbounded` (export): see
+// `finite`; the non-finite values replaced are added to `count` (stored samples and decoded
+// values, like the CPU reference compositor). Display does not count.
+fn texel_color(layer: Layer, at: vec2<i32>, unbounded: bool, count: ptr<function, u32>) -> vec4<f32> {
     if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(layer.level_size)) {
         return vec4<f32>(0.0);
     }
@@ -221,24 +252,37 @@ fn texel_color(layer: Layer, at: vec2<i32>, unbounded: bool) -> vec4<f32> {
     if slot == NO_TILE {
         return vec4<f32>(0.0);
     }
-    let raw = finite(load_texel(layer, texel, slot), unbounded);
+    let stored = load_texel(layer, texel, slot);
+    let raw = finite(stored, unbounded);
     let a = clamp(raw.a, 0.0, 1.0);
     let premultiplied = (layer.flags & FLAG_PREMULTIPLIED) != 0u;
-    var linear: vec3<f32>;
-    if premultiplied && u32(layer.transfer.x) != TF_LINEAR {
+    let unpremultiply_first = premultiplied && u32(layer.transfer.x) != TF_LINEAR;
+    var encoded = raw.rgb;
+    if unpremultiply_first {
         // The file multiplied *encoded* values by alpha: decode the straight value, then
         // premultiply again (the matrix below is linear, so the order does not matter).
-        let straight = select(vec3<f32>(0.0), raw.rgb / a, a > 0.0);
-        linear = decode_transfer(straight, layer.transfer, layer.transfer2) * a;
-    } else {
-        linear = decode_transfer(raw.rgb, layer.transfer, layer.transfer2);
-        if !premultiplied {
-            linear = linear * a;
-        }
+        encoded = select(vec3<f32>(0.0), raw.rgb / a, a > 0.0);
+    }
+    // Decoding can overflow (HLG is exponential, and a huge value raised to a power): mapped
+    // like a sample, before the matrix.
+    let decoded = vec4<f32>(decode_transfer(encoded, layer.transfer, layer.transfer2), 1.0);
+    var linear = finite(decoded, unbounded).rgb;
+    if unpremultiply_first || !premultiplied {
+        linear = linear * a;
+    }
+    if unbounded {
+        // Gray: one stored color sample, copied to green and blue.
+        let gray = (layer.flags & FLAG_GRAY) != 0u;
+        let samples = vec4<bool>(true, !gray, !gray, true);
+        *count += count_non_finite(stored, samples) + count_non_finite(decoded, samples);
     }
     let rgb = vec3<f32>(dot(layer.m0.xyz, linear), dot(layer.m1.xyz, linear), dot(layer.m2.xyz, linear));
-    // Decoding can still overflow (HLG is exponential).
-    return finite(vec4<f32>(rgb, a), unbounded);
+    let color = vec4<f32>(rgb, a);
+    if unbounded {
+        // Values near the f32 limit can still overflow through the matrix.
+        return saturated(color, count);
+    }
+    return finite(color, false);
 }
 
 // Most texels read per axis for one output pixel. The planned level has 1 to 2 texels per output
@@ -251,6 +295,7 @@ const MAX_FOOTPRINT_TEXELS = 4;
 // weighted by the area it covers, in linear light. Exact at 100% (one texel), free of aliasing
 // when zoomed out, and pixels keep sharp, even edges when zoomed in.
 fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+    var uncounted = 0u;
     let a = lo / layer.level_scale;
     let b = hi / layer.level_scale;
     let first = vec2<i32>(floor(a));
@@ -261,7 +306,7 @@ fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
         let wy = min(f32(y + 1), b.y) - max(f32(y), a.y);
         for (var x = first.x; x <= last.x; x++) {
             let w = (min(f32(x + 1), b.x) - max(f32(x), a.x)) * wy;
-            sum += texel_color(layer, vec2<i32>(x, y), false) * w;
+            sum += texel_color(layer, vec2<i32>(x, y), false, &uncounted) * w;
             weight += w;
         }
     }
@@ -279,14 +324,15 @@ struct Footprint {
 }
 
 // Premultiplied working-space color of the first `layer_count` layers ("over", bottom to top).
-fn composite(footprint: Footprint, layer_count: u32) -> vec4<f32> {
+// Export adds the non-finite values it replaces to `count`.
+fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) -> vec4<f32> {
     var acc = vec4<f32>(0.0);
     for (var i = 0u; i < layer_count; i++) {
         let layer = layers[i];
         var src = layer.color;
         if layer.kind == KIND_RASTER {
             if footprint.exact {
-                src = texel_color(layer, footprint.texel, true) * layer.opacity;
+                src = texel_color(layer, footprint.texel, true, count) * layer.opacity;
             } else {
                 src = sample_raster(layer, footprint.lo, footprint.hi);
             }
@@ -295,7 +341,7 @@ fn composite(footprint: Footprint, layer_count: u32) -> vec4<f32> {
         if footprint.exact {
             // Unbounded values can overflow here (color above alpha, premultiplied): keep them
             // finite, or an opaque layer above would compute inf × 0 = NaN.
-            acc = finite(acc, true);
+            acc = saturated(acc, count);
         }
     }
     return acc;
@@ -320,7 +366,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var color = PASTEBOARD;
     if coverage > 0.0 {
-        let acc = composite(Footprint(lo, hi, vec2<i32>(0), false), params.layer_count);
+        var uncounted = 0u;
+        let acc = composite(Footprint(lo, hi, vec2<i32>(0), false), params.layer_count, &uncounted);
         // Working space → display (a linear map, so it commutes with premultiplied "over").
         let display = vec3<f32>(
             dot(params.display0.xyz, acc.rgb),
@@ -347,6 +394,14 @@ fn export_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let texel = vec2<i32>(export_params.origin + id.xy);
     let footprint = Footprint(vec2<f32>(0.0), vec2<f32>(0.0), texel, true);
+    var count = 0u;
     export_output[id.y * export_params.size.x + id.x] =
-        composite(footprint, export_params.layer_count);
+        composite(footprint, export_params.layer_count, &count);
+    if count > 0u {
+        // 64-bit add: carry into the high word when the low word wraps.
+        let low = atomicAdd(&export_non_finite[0], count);
+        if low > 0xffffffffu - count {
+            atomicAdd(&export_non_finite[1], 1u);
+        }
+    }
 }

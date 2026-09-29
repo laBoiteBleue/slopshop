@@ -174,7 +174,7 @@ fn float_values_are_not_clamped() {
 }
 
 #[test]
-fn non_finite_samples_are_mapped() {
+fn non_finite_samples_are_mapped_and_counted() {
     let Some(r) = renderer() else { return };
     let size = Size::new(2, 1);
     let straight = float_format(WORKING_SPACE, AlphaMode::Straight);
@@ -188,18 +188,147 @@ fn non_finite_samples_are_mapped() {
     let mut s = Session::new(Document::new(size));
     push_layer(&mut s, raster(&img), 1.0);
     let region = size.bounds();
-    let out = render(&r, s.document(), region);
-    assert_eq!(at(&out, region, 0, 0), [f32::MAX, -f32::MAX, 0.0, 1.0]);
+    let mut out = vec![0.0; 8];
+    assert_eq!(r.render_region(s.document(), region, &mut out).unwrap(), 4);
+    // ±inf reads as ±65504, not ±f32::MAX (see `an_infinity_keeps_the_other_channels`).
+    assert_eq!(at(&out, region, 0, 0), [65504.0, -65504.0, 0.0, 1.0]);
     // A NaN alpha is transparent.
     assert_eq!(at(&out, region, 1, 0), [0.0; 4]);
 
-    // Under an opaque layer, nothing shows through.
+    // Under an opaque layer, nothing shows through; the samples are still replaced.
     let blue = LinearRgba::new(0.0, 0.0, 1.0, 1.0);
     push_layer(&mut s, LayerContent::Fill { color: blue }, 1.0);
-    let out = render(&r, s.document(), region);
+    assert_eq!(r.render_region(s.document(), region, &mut out).unwrap(), 4);
     for x in 0..2 {
         assert_eq!(at(&out, region, x, 0), [0.0, 0.0, 1.0, 1.0], "pixel {x}");
     }
+}
+
+/// Render the whole document through both export sources: same values (within float
+/// rounding) and the same non-finite count, `expected`. Returns the GPU output.
+fn both_sources(r: &Renderer, doc: &Document, expected: u64) -> Vec<f32> {
+    let region = doc.size().bounds();
+    let mut cpu = vec![0.0; region.size().pixel_count() as usize * 4];
+    let mut gpu = cpu.clone();
+    let cpu_count = slopshop_render::export_source(None, doc)(region, &mut cpu).unwrap();
+    let gpu_count = slopshop_render::export_source(Some(r), doc)(region, &mut gpu).unwrap();
+    assert_eq!(
+        (cpu_count, gpu_count),
+        (expected, expected),
+        "CPU, GPU counts"
+    );
+    for (i, (g, c)) in gpu.iter().zip(&cpu).enumerate() {
+        assert!(
+            (g - c).abs() <= 1e-4 * c.abs().max(1.0),
+            "sample {i}: GPU {g} vs CPU {c}"
+        );
+    }
+    gpu
+}
+
+/// Regression: NaN and ±inf samples were replaced without being counted, and ±inf became
+/// ±f32::MAX, which the matrices to the working space and back spread to the pixel's other
+/// channels (0.5 became about ±1e30).
+#[test]
+fn an_infinity_keeps_the_other_channels() {
+    let Some(r) = renderer() else { return };
+    // Linear sRGB (a matrix to the working space), specials in four different tiles.
+    let size = Size::new(600, 300);
+    let specials = [
+        ((0, 0), [f32::NAN, 0.5, 0.5, 1.0]),
+        ((300, 10), [f32::INFINITY, 0.5, 0.5, 1.0]),
+        ((520, 280), [0.5, f32::NEG_INFINITY, 0.5, 1.0]),
+        ((10, 290), [0.5, 0.5, 0.5, f32::NAN]),
+    ];
+    let pixel = |x, y| {
+        let special = specials.iter().find(|(at, _)| *at == (x, y));
+        special.map_or([0.25, 0.5, 0.75, 1.0], |(_, v)| *v)
+    };
+    let img = image(
+        size,
+        float_format(ColorSpace::LINEAR_SRGB, AlphaMode::Straight),
+        |x, y| floats(pixel(x, y)),
+    );
+    let mut s = Session::new(Document::new(size));
+    push_layer(&mut s, raster(&img), 1.0);
+    let out = both_sources(&r, s.document(), 4);
+    // Chunked (one tile per chunk): the counts of every chunk add up.
+    let tiny = Renderer::new().unwrap().with_tile_capacity(1);
+    let region = size.bounds();
+    let mut chunked = vec![0.0; out.len()];
+    assert_eq!(
+        tiny.render_region(s.document(), region, &mut chunked)
+            .unwrap(),
+        4
+    );
+    assert!(
+        chunked
+            .iter()
+            .zip(&out)
+            .all(|(a, b)| a.to_bits() == b.to_bits())
+    );
+
+    // Back in linear sRGB, as an export to that space reads them.
+    let back = WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB);
+    let expected = [
+        [0.0, 0.5, 0.5, 1.0],
+        [65504.0, 0.5, 0.5, 1.0],
+        [0.5, -65504.0, 0.5, 1.0],
+        // NaN alpha: transparent.
+        [0.0, 0.0, 0.0, 0.0],
+    ];
+    for (((x, y), _), expected) in specials.iter().zip(expected) {
+        let [red, green, blue, alpha] = at(&out, region, *x, *y);
+        let rgb = mat_vec(&back, [red, green, blue].map(f64::from));
+        let actual = [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, alpha];
+        let close = actual
+            .iter()
+            .zip(expected)
+            .all(|(a, e)| (a - e).abs() < 0.02);
+        assert!(close, "({x}, {y}): {actual:?} != {expected:?}");
+    }
+}
+
+#[test]
+fn non_finite_counts_follow_stored_samples_and_decoded_values() {
+    let Some(r) = renderer() else { return };
+    // Gray: one stored sample per pixel, even though the GPU sees it three times.
+    let gray = PixelFormat {
+        layout: ChannelLayout::Gray,
+        sample: SampleType::F32,
+        color_space: ColorSpace::LINEAR_SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let values = [f32::INFINITY, f32::NAN, 0.5];
+    let img = image(Size::new(3, 1), gray, |x, _| {
+        values[x as usize].to_ne_bytes().to_vec()
+    });
+    let mut s = Session::new(Document::new(Size::new(3, 1)));
+    push_layer(&mut s, raster(&img), 1.0);
+    both_sources(&r, s.document(), 2);
+
+    // A finite sample whose decoded value overflows (sRGB curve of 1e30): replaced, counted.
+    let img = image(
+        Size::new(2, 1),
+        float_format(ColorSpace::SRGB, AlphaMode::Straight),
+        |x, _| {
+            floats(if x == 0 {
+                [1e30, 0.5, 0.5, 1.0]
+            } else {
+                [0.5; 4]
+            })
+        },
+    );
+    let mut s = Session::new(Document::new(Size::new(2, 1)));
+    push_layer(&mut s, raster(&img), 1.0);
+    // A layer at opacity 0 changes nothing and is not read: its samples are not counted.
+    let hidden = image(
+        Size::new(2, 1),
+        float_format(WORKING_SPACE, AlphaMode::Straight),
+        |_, _| floats([f32::NAN; 4]),
+    );
+    push_layer(&mut s, raster(&hidden), 0.0);
+    both_sources(&r, s.document(), 1);
 }
 
 #[test]
@@ -214,7 +343,8 @@ fn overflowing_composites_stay_finite() {
     push_layer(&mut s, raster(&opaque), 1.0);
     push_layer(&mut s, raster(&glow), 1.0);
     let region = size.bounds();
-    let out = render(&r, s.document(), region);
+    // Saturated, and counted (the CPU saturates the same values).
+    let out = both_sources(&r, s.document(), 3);
     let [red, green, blue, alpha] = at(&out, region, 0, 0);
     assert_eq!([red, green, blue], [f32::MAX; 3]);
     assert!((alpha - 1.0).abs() < 1e-6, "{alpha}");

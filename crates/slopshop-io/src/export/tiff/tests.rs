@@ -9,7 +9,7 @@ use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter};
 use slopshop_core::{CancelToken, Rect};
 
 use super::*;
-use crate::export::{ExportFormat, ExportReport, ExportSpec, TempFile, TiffSample, export_image};
+use crate::export::{ExportFormat, ExportReport, ExportSpec, TiffSample, export_image, temp_files};
 use crate::open_image;
 
 fn temp_path(name: &str) -> PathBuf {
@@ -20,7 +20,7 @@ fn temp_path(name: &str) -> PathBuf {
 const ODD_SIZE: Size = Size::new(300, 520);
 
 /// A deterministic image: premultiplied working-space RGBA within [0, 1], alpha > 0.
-fn pattern(region: Rect, out: &mut [f32]) -> Result<(), String> {
+fn pattern(region: Rect, out: &mut [f32]) -> Result<u64, String> {
     for (i, px) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = region.x + i as u32 % region.width;
         let y = region.y + i as u32 / region.width;
@@ -30,7 +30,7 @@ fn pattern(region: Rect, out: &mut [f32]) -> Result<(), String> {
         let b = ((x ^ y) % 200) as f32 / 199.0;
         *px = [r * alpha, g * alpha, b * alpha, alpha];
     }
-    Ok(())
+    Ok(0)
 }
 
 /// The samples the file must hold: the pattern through the same conversion.
@@ -269,6 +269,96 @@ fn forced_big_tiff_round_trips() {
     }
 }
 
+/// Offset of the first directory of a little-endian (Big)TIFF, and the offset of each value it
+/// stores out of line, with its tag.
+fn value_offsets(bytes: &[u8]) -> (u64, Vec<(u16, u64)>) {
+    let u16_at = |i: usize| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
+    let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+    let u64_at = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+    let big = u16_at(2) == 43;
+    let (ifd, first, len, inline) = if big {
+        let ifd = u64_at(8);
+        (ifd, ifd as usize + 8, 20, 8)
+    } else {
+        let ifd = u64::from(u32_at(4));
+        (ifd, ifd as usize + 2, 12, 4)
+    };
+    let values = entries(bytes)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, (tag, ty, count))| {
+            let size = match ty {
+                1 | 2 | 6 | 7 => 1,
+                3 | 8 => 2,
+                4 | 9 | 11 => 4,
+                5 | 10 | 12 | 16 => 8,
+                other => panic!("unexpected type {other}"),
+            };
+            let field = first + i * len + if big { 12 } else { 8 };
+            (count * size > inline).then(|| {
+                let offset = if big {
+                    u64_at(field)
+                } else {
+                    u64::from(u32_at(field))
+                };
+                (tag, offset)
+            })
+        })
+        .collect();
+    (ifd, values)
+}
+
+#[test]
+fn directory_and_values_are_word_aligned() {
+    // Odd width, 8-bit RGB: rows of an odd number of bytes, so that the strips often end at an
+    // odd offset, compressed or not. TIFF 6.0 wants the directory and its values at even ones.
+    let mut odd_strip_ends = 0;
+    for compression in [
+        TiffCompression::None,
+        TiffCompression::Lzw,
+        TiffCompression::Deflate,
+    ] {
+        for height in [1, 2, 3, 5] {
+            let case = format!("{compression:?} height {height}");
+            let size = Size::new(301, height);
+            let spec = tiff_spec(TiffSample::U8, compression, false);
+            let path = temp_path("aligned.tif");
+            export_pattern(&path, size, &spec);
+            let bytes = std::fs::read(&path).unwrap();
+            let mut tiff = decoder(&path);
+            let offsets = tiff.get_tag_u64_vec(Tag::StripOffsets).unwrap();
+            let counts = tiff.get_tag_u64_vec(Tag::StripByteCounts).unwrap();
+            let strip_end = offsets.last().unwrap() + counts.last().unwrap();
+            odd_strip_ends += strip_end % 2;
+
+            let (ifd, values) = value_offsets(&bytes);
+            assert_eq!(ifd % 2, 0, "{case}: directory at {ifd}");
+            // At least BitsPerSample, the resolutions, SampleFormat and the ICC profile.
+            assert!(values.len() >= 5, "{case}: {values:?}");
+            for (tag, offset) in values {
+                assert_eq!(offset % 2, 0, "{case}: tag {tag} at {offset}");
+            }
+            // Still read correctly.
+            assert_eq!(decode(&mut tiff), expected(size, &spec), "{case}");
+            std::fs::remove_file(&path).ok();
+        }
+    }
+    // The padding really was exercised.
+    assert!(odd_strip_ends > 0);
+
+    // BigTIFF likewise.
+    let spec = tiff_spec(TiffSample::U8, TiffCompression::None, false);
+    let path = temp_path("aligned-big.tif");
+    write_big(&path, Size::new(301, 3), &spec);
+    let (ifd, values) = value_offsets(&std::fs::read(&path).unwrap());
+    assert_eq!(ifd % 2, 0, "BigTIFF directory at {ifd}");
+    assert!(!values.is_empty());
+    for (tag, offset) in values {
+        assert_eq!(offset % 2, 0, "BigTIFF tag {tag} at {offset}");
+    }
+    std::fs::remove_file(&path).ok();
+}
+
 #[test]
 fn icc_profile_reads_back_as_the_same_space() {
     let size = Size::new(8, 4);
@@ -406,7 +496,7 @@ fn cancelling_a_tiff_export_leaves_no_file() {
     );
     assert_eq!(result.unwrap_err().code(), "cancelled");
     assert!(!path.exists());
-    assert!(!TempFile::new(&path).unwrap().path.exists());
+    assert!(temp_files(&path).is_empty());
 }
 
 #[test]

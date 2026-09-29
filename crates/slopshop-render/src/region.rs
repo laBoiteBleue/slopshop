@@ -3,7 +3,7 @@
 //! Same compositing code as the viewport (`export_main` in composite.wgsl), but the output is
 //! the working-space values themselves: premultiplied RGBA f32, one level-0 texel per pixel,
 //! with no display conversion, background or clipping. A region is rendered in chunks when its
-//! tiles do not fit in the tile cache or its pixels in one GPU buffer; the result is the same.
+//! tiles do not fit in the tile cache or its pixels in the chunk budget; the result is the same.
 
 use std::collections::HashSet;
 use std::sync::mpsc;
@@ -17,26 +17,116 @@ use crate::{NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_l
 /// One RGBA f32 pixel.
 const PIXEL_BYTES: u64 = 16;
 
+/// Most bytes of one chunk's output buffer (its readback buffer is as large). The device's
+/// binding limit (up to 2 GiB) says what can be bound, not what VRAM has room for next to the
+/// viewport's caches: export must not assume a large region fits (ADR 0008).
+const CHUNK_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+
+/// The non-finite counter of `export_main`: two u32 words (low, high).
+const COUNTER_BYTES: u64 = 8;
+
 /// Pixel source for export (`slopshop_io::export::export_image`): full-resolution regions of
 /// `document`, rendered by `renderer`, or by the CPU reference compositor
-/// (`slopshop_core::composite`) when there is no renderer or when a region needs more tile
-/// slots than the GPU cache has ([`RenderError::TooManyLayers`]). Both give the same values
-/// (within float rounding). Other GPU errors are reported, not hidden by a fallback.
+/// (`slopshop_core::composite`) when there is no renderer. Both give the same values (within
+/// float rounding) and return the number of non-finite values they replaced (NaN and ±inf
+/// samples; see [`Renderer::render_region`]).
+///
+/// GPU errors that the CPU can work around fall back to it (see [`on_gpu_error`]): a region
+/// that needs more tile slots than the GPU cache has ([`RenderError::TooManyLayers`]) is
+/// rendered on the CPU, and after an out-of-memory or other device error
+/// ([`RenderError::OutOfMemory`], [`RenderError::Gpu`]) every remaining region is. Other errors
+/// (e.g. a failed readback) are reported.
 pub fn export_source<'a>(
     renderer: Option<&'a Renderer>,
     document: &'a Document,
-) -> impl FnMut(Rect, &mut [f32]) -> Result<(), String> + Send + 'a {
+) -> impl FnMut(Rect, &mut [f32]) -> Result<u64, String> + Send + 'a {
+    // The chunk buffers are kept across regions (bands): allocated once per export.
+    let mut gpu = renderer.map(|renderer| (renderer, RegionBuffers::default()));
     move |region, out| {
-        if let Some(renderer) = renderer {
-            match renderer.render_region(document, region, out) {
-                Ok(()) => return Ok(()),
-                Err(RenderError::TooManyLayers { .. }) => {}
-                Err(e) => return Err(e.to_string()),
+        if let Some((renderer, buffers)) = &mut gpu {
+            match renderer.render_region_with(document, region, out, buffers) {
+                Ok(non_finite) => return Ok(non_finite),
+                Err(e) => match on_gpu_error(&e) {
+                    OnGpuError::CpuForRegion => {}
+                    OnGpuError::CpuFromNowOn => gpu = None,
+                    OnGpuError::Fail => return Err(e.to_string()),
+                },
             }
         }
         slopshop_core::composite::composite_region(document, region, out)
-            .map(|_| ())
+            .map(|report| report.non_finite)
             .map_err(|e| e.to_string())
+    }
+}
+
+/// What [`export_source`] does after a GPU error.
+#[derive(Debug, PartialEq, Eq)]
+enum OnGpuError {
+    /// Render this region on the CPU; the next one may fit the GPU.
+    CpuForRegion,
+    /// Render this region and every later one on the CPU: the GPU is short of memory or
+    /// failing, and retrying each band would only repeat the failure.
+    CpuFromNowOn,
+    /// Report the error.
+    Fail,
+}
+
+fn on_gpu_error(error: &RenderError) -> OnGpuError {
+    match error {
+        RenderError::TooManyLayers { .. } => OnGpuError::CpuForRegion,
+        RenderError::OutOfMemory(_) | RenderError::Gpu(_) => OnGpuError::CpuFromNowOn,
+        _ => OnGpuError::Fail,
+    }
+}
+
+/// GPU buffers of region rendering, kept across the calls of one export so that every band
+/// does not allocate (and have wgpu zero) them again. Grown on demand, never beyond the chunk
+/// budget.
+#[derive(Debug, Default)]
+pub(crate) struct RegionBuffers(Option<ChunkBuffers>);
+
+#[derive(Debug)]
+struct ChunkBuffers {
+    /// Pixels of a chunk, as written by `export_main`.
+    output: wgpu::Buffer,
+    /// `export_main`'s non-finite counter.
+    counter: wgpu::Buffer,
+    /// Mappable copy: the chunk's pixels, then the counter right after them.
+    readback: wgpu::Buffer,
+    /// Pixel bytes the buffers hold.
+    capacity: u64,
+}
+
+impl RegionBuffers {
+    /// Buffers for chunks of up to `bytes` pixel bytes.
+    fn reserve(&mut self, device: &wgpu::Device, bytes: u64) -> &ChunkBuffers {
+        if self.0.as_ref().is_some_and(|b| b.capacity < bytes) {
+            // Freed before the larger ones are allocated.
+            self.0 = None;
+        }
+        self.0.get_or_insert_with(|| ChunkBuffers {
+            output: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("region output"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            counter: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("region non-finite counter"),
+                size: COUNTER_BYTES,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            readback: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("region readback"),
+                size: bytes + COUNTER_BYTES,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            capacity: bytes,
+        })
     }
 }
 
@@ -48,23 +138,39 @@ impl Renderer {
     ///
     /// Always at full resolution: raster layers are read at pyramid level 0, one texel per
     /// pixel, never at a coarser level. Values are not clipped: finite values are kept as they
-    /// are (negative, above 1, above the half-float range); NaN samples read as 0 and ±inf as
-    /// ±`f32::MAX`. Outside a raster smaller than the document, that layer is transparent.
+    /// are (negative, above 1, above the half-float range). Non-finite values are replaced, like
+    /// the CPU reference compositor (`slopshop_core::composite`) does: NaN samples read as 0,
+    /// ±inf samples as ±65504 (not ±`f32::MAX`, which the color matrices would spread to the
+    /// pixel's other channels), and composited values beyond the f32 range saturate to
+    /// ±`f32::MAX`. Returns how many values were replaced (one infinity may count more than
+    /// once). Outside a raster smaller than the document, that layer is transparent.
     ///
     /// The tiles needed are uploaded to tile arrays owned by the call: the viewport's cache is
-    /// neither used nor evicted. Regions too large for the tile cache or the GPU buffer limits
-    /// are split into chunks internally. Blocks until the pixels are read back.
+    /// neither used nor evicted. Regions too large for the tile cache or the chunk budget are
+    /// split into chunks internally. Blocks until the pixels are read back.
     ///
     /// Fails on an empty region ([`RenderError::EmptyOutput`]), a region not inside the
-    /// document, an `out` of the wrong length, or when more distinct raster images of one sample
-    /// type are visible in the region than the tile cache holds ([`RenderError::TooManyLayers`]).
-    /// On error, the content of `out` is unspecified.
+    /// document, an `out` of the wrong length, when more distinct raster images of one sample
+    /// type are visible in the region than the tile cache holds ([`RenderError::TooManyLayers`]),
+    /// or when the GPU runs out of memory or reports an error ([`RenderError::OutOfMemory`],
+    /// [`RenderError::Gpu`]; never a panic). On error, the content of `out` is unspecified.
     pub fn render_region(
         &self,
         document: &Document,
         region: Rect,
         out: &mut [f32],
-    ) -> Result<(), RenderError> {
+    ) -> Result<u64, RenderError> {
+        self.render_region_with(document, region, out, &mut RegionBuffers::default())
+    }
+
+    /// [`Self::render_region`] with chunk buffers kept by the caller.
+    pub(crate) fn render_region_with(
+        &self,
+        document: &Document,
+        region: Rect,
+        out: &mut [f32],
+        buffers: &mut RegionBuffers,
+    ) -> Result<u64, RenderError> {
         if region.is_empty() {
             return Err(RenderError::EmptyOutput);
         }
@@ -83,55 +189,63 @@ impl Renderer {
             });
         }
 
-        let layers: Vec<&Layer> = document.layers().iter().filter(|l| l.visible).collect();
+        // Layers at opacity 0 change nothing (and are skipped by the CPU compositor too, so
+        // that both count the same non-finite values).
+        let layers: Vec<&Layer> = document
+            .layers()
+            .iter()
+            .filter(|l| l.visible && l.opacity > 0.0)
+            .collect();
         let tiles_per_chunk = self.tiles_per_chunk(&layers, region)?;
         let chunks = region_chunks(
             region,
             tiles_per_chunk,
-            self.max_output_bytes / PIXEL_BYTES,
+            max_chunk_pixels(self.max_output_bytes),
             self.max_dispatch_pixels,
         );
 
         // Per-call tile arrays, sized for the chunk that needs the most tiles (tiles of one
         // chunk are never evicted by that chunk: every class holds all its tiles).
         let most_tiles = chunks.iter().map(|c| tile_span(*c)).max().unwrap_or(1);
-        let mut caches: [Option<TileCache>; 4] = [None, None, None, None];
-        for format in GpuTileFormat::ALL {
-            let images = raster_images(&layers, region, format).len() as u64;
-            if images > 0 {
-                let capacity = self.tile_capacity[format.index()];
-                let needed = u32::try_from(images * most_tiles).unwrap_or(u32::MAX);
-                caches[format.index()] = Some(TileCache::new(
-                    &self.device,
-                    format,
-                    needed.clamp(1, capacity),
-                ));
-            }
-        }
-
         let largest = chunks
             .iter()
             .map(|c| c.size().pixel_count())
             .max()
             .unwrap_or(0)
             * PIXEL_BYTES;
-        let output = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("region output"),
-            size: largest,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
+        let result = self.capture_errors(|| {
+            let mut caches: [Option<TileCache>; 4] = [None, None, None, None];
+            for format in GpuTileFormat::ALL {
+                let images = raster_images(&layers, region, format).len() as u64;
+                if images > 0 {
+                    let capacity = self.tile_capacity[format.index()];
+                    let needed = u32::try_from(images * most_tiles).unwrap_or(u32::MAX);
+                    caches[format.index()] = Some(TileCache::new(
+                        &self.device,
+                        format,
+                        needed.clamp(1, capacity),
+                    ));
+                }
+            }
+            buffers.reserve(&self.device, largest);
+            Ok(caches)
         });
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("region readback"),
-            size: largest,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
+        let result = result.and_then(|mut caches| {
+            let mut non_finite = 0;
+            for chunk in chunks {
+                non_finite += self.capture_errors(|| {
+                    let buffers = buffers.reserve(&self.device, largest);
+                    self.render_chunk(&layers, chunk, &mut caches, buffers)?;
+                    self.read_chunk(buffers, chunk, region, out)
+                })?;
+            }
+            Ok(non_finite)
         });
-        for chunk in chunks {
-            self.render_chunk(&layers, chunk, &mut caches, &output, &readback)?;
-            self.read_chunk(&readback, chunk, region, out)?;
+        if result.is_err() {
+            // The buffers may be invalid (failed allocation) or still mapped.
+            *buffers = RegionBuffers::default();
         }
-        Ok(())
+        result
     }
 
     /// Most level-0 tiles per chunk such that every class's tiles of a chunk fit in its cache,
@@ -152,14 +266,15 @@ impl Renderer {
         Ok(tiles)
     }
 
-    /// Composite one chunk into `output` and copy it to `readback`, both from offset 0.
+    /// Composite one chunk into `buffers.output`, count its non-finite values in
+    /// `buffers.counter`, and copy both to `buffers.readback` (pixels from offset 0, the
+    /// counter right after them).
     fn render_chunk(
         &self,
         layers: &[&Layer],
         chunk: Rect,
         caches: &mut [Option<TileCache>; 4],
-        output: &wgpu::Buffer,
-        readback: &wgpu::Buffer,
+        buffers: &ChunkBuffers,
     ) -> Result<(), RenderError> {
         let area = [
             f64::from(chunk.x),
@@ -215,10 +330,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: output,
+                        buffer: &buffers.output,
                         offset: 0,
                         size: wgpu::BufferSize::new(bytes),
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.counter.as_entire_binding(),
                 },
             ],
         );
@@ -228,6 +347,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("region"),
             });
+        encoder.clear_buffer(&buffers.counter, 0, None);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("region"),
@@ -241,16 +361,18 @@ impl Renderer {
                 1,
             );
         }
-        encoder.copy_buffer_to_buffer(output, 0, readback, 0, bytes);
+        encoder.copy_buffer_to_buffer(&buffers.output, 0, &buffers.readback, 0, bytes);
+        encoder.copy_buffer_to_buffer(&buffers.counter, 0, &buffers.readback, bytes, COUNTER_BYTES);
         let submission = self.queue.submit([encoder.finish()]);
 
         let (tx, rx) = mpsc::channel();
-        readback
-            .slice(..bytes)
-            .map_async(wgpu::MapMode::Read, move |result| {
+        buffers.readback.slice(..bytes + COUNTER_BYTES).map_async(
+            wgpu::MapMode::Read,
+            move |result| {
                 // The receiver only disappears if we already returned; nothing to report then.
                 let _ = tx.send(result);
-            });
+            },
+        );
         self.device
             .poll(wgpu::PollType::Wait {
                 submission_index: Some(submission),
@@ -262,25 +384,29 @@ impl Renderer {
             .map_err(|e| RenderError::Readback(e.to_string()))
     }
 
-    /// Copy a mapped chunk from `readback` to its place in `out` (rows of `region.width`
-    /// pixels), then unmap. This copy is required: mapped GPU memory cannot outlive the
-    /// mapping, and chunk rows are not contiguous in `out`.
+    /// Copy a mapped chunk from `buffers.readback` to its place in `out` (rows of
+    /// `region.width` pixels), then unmap; returns the chunk's non-finite count. This copy is
+    /// required: mapped GPU memory cannot outlive the mapping, and chunk rows are not
+    /// contiguous in `out`.
     fn read_chunk(
         &self,
-        readback: &wgpu::Buffer,
+        buffers: &ChunkBuffers,
         chunk: Rect,
         region: Rect,
         out: &mut [f32],
-    ) -> Result<(), RenderError> {
+    ) -> Result<u64, RenderError> {
         let bytes = chunk.size().pixel_count() * PIXEL_BYTES;
+        let non_finite;
         {
-            let mapped = readback
-                .slice(..bytes)
+            let mapped = buffers
+                .readback
+                .slice(..bytes + COUNTER_BYTES)
                 .get_mapped_range()
                 .map_err(|e| RenderError::Readback(e.to_string()))?;
             // Chunks lie within the region, whose samples fit in `out`: indices fit in usize.
+            let (pixels, counter) = mapped.split_at(bytes as usize);
             let row_samples = chunk.width as usize * 4;
-            for (row, src) in mapped.chunks_exact(row_samples * 4).enumerate() {
+            for (row, src) in pixels.chunks_exact(row_samples * 4).enumerate() {
                 let y = (chunk.y - region.y) as usize + row;
                 let start = (y * region.width as usize + (chunk.x - region.x) as usize) * 4;
                 let dst = &mut out[start..start + row_samples];
@@ -289,10 +415,18 @@ impl Renderer {
                     *d = f32::from_ne_bytes(*s);
                 }
             }
+            let (words, _) = counter.as_chunks::<4>();
+            let [low, high] = [0, 1].map(|i| words.get(i).map_or(0, |w| u32::from_ne_bytes(*w)));
+            non_finite = u64::from(high) << 32 | u64::from(low);
         }
-        readback.unmap();
-        Ok(())
+        buffers.readback.unmap();
+        Ok(non_finite)
     }
+}
+
+/// Most pixels of one chunk: within the device's binding limit and the chunk budget.
+fn max_chunk_pixels(max_output_bytes: u64) -> u64 {
+    (max_output_bytes.min(CHUNK_BUDGET_BYTES) / PIXEL_BYTES).max(1)
 }
 
 /// Distinct images of a storage class shown by `layers` within `region`.
@@ -457,6 +591,46 @@ mod tests {
         check_partition(region, u64::MAX, 500, 64);
         check_partition(region, 3, 300, 100);
         check_partition(Rect::new(0, 0, 5, 5), u64::MAX, 1, 1);
+    }
+
+    #[test]
+    fn chunks_stay_within_the_memory_budget() {
+        // DX12 binds up to 2 GiB - 1: the budget, not the binding limit, sizes chunks.
+        let dx12 = max_chunk_pixels((1 << 31) - 1);
+        assert_eq!(dx12 * PIXEL_BYTES, CHUNK_BUDGET_BYTES);
+        // A device with less than the budget keeps its own limit.
+        assert_eq!(max_chunk_pixels(64 << 20), (64 << 20) / PIXEL_BYTES);
+        assert_eq!(max_chunk_pixels(0), 1);
+
+        // One 256-row band of a 200 000 px wide image (800 MiB of RGBA f32): several chunks,
+        // none above the budget.
+        let band = Rect::new(0, 256, 200_000, 256);
+        let chunks = check_partition(band, 1024, dx12, 65535 * 8);
+        assert!(chunks.len() >= 7, "{}", chunks.len());
+        for chunk in chunks {
+            assert!(chunk.size().pixel_count() * PIXEL_BYTES <= CHUNK_BUDGET_BYTES);
+        }
+    }
+
+    #[test]
+    fn gpu_errors_fall_back_to_the_cpu_when_it_can_help() {
+        let too_many = RenderError::TooManyLayers {
+            images: 3,
+            capacity: 2,
+        };
+        assert_eq!(on_gpu_error(&too_many), OnGpuError::CpuForRegion);
+        for error in [
+            RenderError::OutOfMemory("buffer".into()),
+            RenderError::Gpu("validation".into()),
+        ] {
+            assert_eq!(on_gpu_error(&error), OnGpuError::CpuFromNowOn);
+        }
+        for error in [
+            RenderError::Readback("device lost".into()),
+            RenderError::EmptyOutput,
+        ] {
+            assert_eq!(on_gpu_error(&error), OnGpuError::Fail);
+        }
     }
 
     #[test]

@@ -12,7 +12,9 @@
 //!   while the next band is converted;
 //! - writes every tag explicitly once all strips are written: dimensions, samples, compression,
 //!   predictor, strip tables, `ExtraSamples` (2 = straight alpha, 1 = premultiplied), and the
-//!   ICC profile with the `UNDEFINED` type, as the TIFF/ICC specifications ask.
+//!   ICC profile with the `UNDEFINED` type, as the TIFF/ICC specifications ask. The directory
+//!   and every value it points to start at an even offset (TIFF 6.0 word alignment), which
+//!   `DirectoryEncoder` does not ensure after the strips.
 //!
 //! Classic TIFF stores 32-bit offsets. Whether the file needs BigTIFF is decided before
 //! anything is written, from a worst-case bound of its size ([`size_bound`]); BigTIFF is
@@ -431,6 +433,7 @@ fn write_file<K: TiffKind>(
         )));
     }
     write_tags(&mut dir, layout, profile, &offsets, &byte_counts)?;
+    pad_to_word(&mut dir)?;
     dir.finish().map_err(tiff_error)?;
     // BufWriter ignores errors when dropped.
     out.flush()?;
@@ -505,23 +508,40 @@ fn write_tags<W: Write + Seek, K: TiffKind>(
     write_entry(dir, Tag::IccProfile, Type::UNDEFINED, profile)
 }
 
+/// A tag, its value written (if not inline) at an even offset.
 fn write_tag<W: Write + Seek, K: TiffKind, T: TiffValue>(
     dir: &mut DirectoryEncoder<'_, W, K>,
     tag: Tag,
     value: T,
 ) -> Result<(), ExportError> {
+    pad_to_word(dir)?;
     dir.write_tag(tag, value).map_err(tiff_error)
 }
 
-/// A tag of an explicit type, from bytes in the file's (native) byte order.
+/// A tag of an explicit type, from bytes in the file's (native) byte order, written (if not
+/// inline) at an even offset.
 fn write_entry<W: Write + Seek, K: TiffKind>(
     dir: &mut DirectoryEncoder<'_, W, K>,
     tag: Tag,
     ty: Type,
     bytes: &[u8],
 ) -> Result<(), ExportError> {
+    pad_to_word(dir)?;
     let entry = dir.write_entry_bytes(ty, bytes).map_err(tiff_error)?;
     dir.extend_from(&Directory::from_iter([(tag, entry)]));
+    Ok(())
+}
+
+/// Write a zero byte if the file ends at an odd offset: TIFF 6.0 wants the directory and the
+/// values it points to on word boundaries.
+fn pad_to_word<W: Write + Seek, K: TiffKind>(
+    dir: &mut DirectoryEncoder<'_, W, K>,
+) -> Result<(), ExportError> {
+    // Writing nothing returns the current offset.
+    let offset = dir.write_data(&[0u8; 0][..]).map_err(tiff_error)?;
+    if offset % 2 == 1 {
+        dir.write_data(&[0u8][..]).map_err(tiff_error)?;
+    }
     Ok(())
 }
 
