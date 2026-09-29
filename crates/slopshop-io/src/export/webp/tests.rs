@@ -39,6 +39,7 @@ fn webp_spec(compression: WebpCompression, keep_alpha: bool) -> ExportSpec {
         keep_alpha,
         matte: WHITE_MATTE,
         dither: false,
+        gray: false,
     }
 }
 

@@ -111,6 +111,8 @@ const en = {
   "export.alpha.hint": "Without it, transparent areas are flattened over the background color",
   "export.matte": "Background",
   "export.matte.hint": "Transparent areas are flattened over this color",
+  "export.gray": "Grayscale",
+  "export.gray.hint": "Write gray samples: each pixel becomes the luminance of its color",
   "export.dither": "Dither (reduces banding)",
   "export.confirm": "Export…",
   "export.cancel": "Cancel",
@@ -133,6 +135,7 @@ const en = {
   "export.report.bigTiff": "Written as BigTIFF (over 4 GB): some older software cannot read it",
   "export.report.alphaFlattened":
     "{count} partly transparent pixels were flattened over the background color",
+  "export.report.colorDiscarded": "{count} pixels had color and were written as their luminance",
   "export.error.io": "cannot write the file ({detail})",
   "export.error.source": "rendering failed ({detail})",
   "export.error.cancelled": "cancelled",

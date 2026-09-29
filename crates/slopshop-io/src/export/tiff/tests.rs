@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use ::tiff::decoder::{Decoder, DecodingResult};
 use ::tiff::encoder::{Compression, colortype};
-use slopshop_core::color::ColorSpace;
+use slopshop_core::color::{ChannelLayout, ColorSpace};
 use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter, WHITE_MATTE};
 use slopshop_core::{CancelToken, Rect};
 
@@ -69,6 +69,7 @@ fn tiff_spec(sample: TiffSample, compression: TiffCompression, keep_alpha: bool)
         keep_alpha,
         matte: WHITE_MATTE,
         dither: true,
+        gray: false,
     }
 }
 
@@ -522,10 +523,14 @@ fn unsupported_targets_are_rejected() {
         color_space: ColorSpace::REC2100_PQ,
         ..target(ChannelLayout::Rgb, SampleType::U16)
     };
+    let gray_pq = PixelFormat {
+        layout: ChannelLayout::Gray,
+        ..pq
+    };
     for (format, code) in [
-        (target(ChannelLayout::Gray, SampleType::U8), "invalidSpec"),
         (target(ChannelLayout::Rgba, SampleType::F16), "invalidSpec"),
         (pq, "unsupportedSpace"),
+        (gray_pq, "unsupportedSpace"),
     ] {
         let file = File::create(&path).unwrap();
         let result = TiffWriter::new(file, Size::new(2, 2), format, TiffCompression::None);

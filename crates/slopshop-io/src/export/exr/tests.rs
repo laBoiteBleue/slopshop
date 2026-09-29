@@ -56,6 +56,7 @@ fn exr_spec(sample: ExrSample, space: ColorSpace, keep_alpha: bool) -> ExportSpe
         keep_alpha,
         matte: WHITE_MATTE,
         dither: false,
+        gray: false,
     }
 }
 

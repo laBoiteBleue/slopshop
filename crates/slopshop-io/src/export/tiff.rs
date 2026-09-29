@@ -1,5 +1,5 @@
-//! TIFF writer (ADR 0008): baseline RGB/RGBA strips of 8/16-bit integer or 32-bit float
-//! samples, little-endian, always tagged with an ICC profile.
+//! TIFF writer (ADR 0008): baseline RGB/RGBA or gray/gray + alpha strips of 8/16-bit integer or
+//! 32-bit float samples, little-endian, always tagged with an ICC profile (RGB or gray).
 //!
 //! The strips are ours, written through `::tiff`'s low-level `DirectoryEncoder`: tiff 0.11.3's
 //! streaming `ImageEncoder::write_strip` ignores the compression it declares (corrupt LZW and
@@ -35,7 +35,7 @@ use ::tiff::tags::{
 };
 use ::tiff::{Directory, TiffError};
 use slopshop_core::Size;
-use slopshop_core::color::{AlphaMode, ChannelLayout, PixelFormat, SampleType};
+use slopshop_core::color::{AlphaMode, PixelFormat, SampleType};
 
 use super::{BAND_ROWS, ExportError, ExportNotice, TiffCompression};
 use crate::icc;
@@ -100,8 +100,12 @@ impl TiffWriter {
             ));
         }
         let layout = Layout::new(size, target, compression)?;
-        let profile = icc::write_matrix_trc(&target.color_space)
-            .map_err(|_| ExportError::UnsupportedSpace(target.color_space))?;
+        let profile = if layout.gray {
+            icc::write_gray_trc(&target.color_space)
+        } else {
+            icc::write_matrix_trc(&target.color_space)
+        }
+        .map_err(|_| ExportError::UnsupportedSpace(target.color_space))?;
         let bound = size_bound(&layout, profile.len()).ok_or_else(|| layout.too_large())?;
         let big = bound > threshold;
 
@@ -200,6 +204,8 @@ struct Layout {
     width: u32,
     height: u32,
     channels: u16,
+    /// Gray (`BlackIsZero`) rather than RGB samples.
+    gray: bool,
     sample: SampleType,
     /// `None` without an alpha channel.
     alpha: Option<AlphaMode>,
@@ -218,11 +224,7 @@ impl Layout {
             return Err(ExportError::InvalidSpec("empty image".to_owned()));
         }
         let invalid = || ExportError::InvalidSpec(format!("TIFF cannot store {target:?}"));
-        let alpha = match target.layout {
-            ChannelLayout::Rgb => None,
-            ChannelLayout::Rgba => Some(target.alpha),
-            ChannelLayout::Gray | ChannelLayout::GrayAlpha => return Err(invalid()),
-        };
+        let alpha = target.layout.has_alpha().then_some(target.alpha);
         if !matches!(
             target.sample,
             SampleType::U8 | SampleType::U16 | SampleType::F32
@@ -240,8 +242,9 @@ impl Layout {
         Ok(Self {
             width: size.width,
             height: size.height,
-            // 3 or 4.
+            // 1 to 4.
             channels: target.layout.channels() as u16,
+            gray: target.layout.is_gray(),
             sample: target.sample,
             alpha,
             compression,
@@ -465,7 +468,11 @@ fn write_tags<W: Write + Seek, K: TiffKind>(
     write_tag(
         dir,
         Tag::PhotometricInterpretation,
-        PhotometricInterpretation::RGB,
+        if layout.gray {
+            PhotometricInterpretation::BlackIsZero
+        } else {
+            PhotometricInterpretation::RGB
+        },
     )?;
     write_tag(dir, Tag::SamplesPerPixel, layout.channels)?;
     write_tag(dir, Tag::RowsPerStrip, layout.strip_rows)?;

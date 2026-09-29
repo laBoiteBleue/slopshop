@@ -116,6 +116,9 @@ const fr: Messages = {
   "export.alpha.hint": "Sinon, les zones transparentes sont aplaties sur la couleur de fond",
   "export.matte": "Fond",
   "export.matte.hint": "Les zones transparentes sont aplaties sur cette couleur",
+  "export.gray": "Niveaux de gris",
+  "export.gray.hint":
+    "Écrire des échantillons gris : chaque pixel devient la luminance de sa couleur",
   "export.dither": "Tramage (réduit l'effet de bandes)",
   "export.confirm": "Exporter…",
   "export.cancel": "Annuler",
@@ -139,6 +142,7 @@ const fr: Messages = {
     "Écrit en BigTIFF (plus de 4 Go) : certains anciens logiciels ne peuvent pas le lire",
   "export.report.alphaFlattened":
     "{count} pixels partiellement transparents ont été aplatis sur la couleur de fond",
+  "export.report.colorDiscarded": "{count} pixels en couleur ont été écrits en luminance",
   "export.error.io": "impossible d'écrire le fichier ({detail})",
   "export.error.source": "échec du rendu ({detail})",
   "export.error.cancelled": "annulé",

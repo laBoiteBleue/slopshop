@@ -28,10 +28,11 @@
 //!   (`options` are the format's settings, when it has some: compression, JPEG quality and
 //!   subsampling). `file` is the temporary file, just created, empty, opened for reading and
 //!   writing (so `Write + Seek`, unbuffered: wrap it in a `BufWriter` if needed). `size` is not
-//!   empty. `target` is [`ExportSpec::target_format`]: RGB or RGBA; for TIFF U8/U16 with
-//!   straight alpha or F32 with premultiplied alpha, for EXR F32/F16 with premultiplied alpha,
-//!   for JPEG RGB U8 only, for WebP U8 with straight alpha; its color space passed
-//!   [`supports_space`] for the format. Tags and headers are written here or in `finish`. The
+//!   empty. `target` is [`ExportSpec::target_format`]: RGB, RGBA, gray or gray + alpha (gray for
+//!   PNG, TIFF and JPEG only, see [`has_gray`]); for TIFF U8/U16 with straight alpha or F32 with
+//!   premultiplied alpha, for EXR F32/F16 with premultiplied alpha, for JPEG RGB or gray U8
+//!   without alpha, for WebP U8 with straight alpha; its color space passed
+//!   [`supports_space`] (color) or [`supports_gray`] (gray) for the format. Tags and headers are written here or in `finish`. The
 //!   WebP writers also take the export's cancel token, since they encode in `finish`.
 //! - `write_rows(&mut self, first_row: u32, rows: &[u8]) -> Result<(), ExportError>`: called in
 //!   order, from top to bottom, without gaps: `first_row` is 0, then the previous `first_row`
@@ -223,11 +224,14 @@ pub struct ExportSpec {
     pub matte: LinearRgba,
     /// Blue-noise dither for 8-bit samples (ignored for the other sample types).
     pub dither: bool,
+    /// Write gray samples: the luminance of the image in `space` (colors are reported as
+    /// [`ExportNotice::ColorDiscarded`]). Only for the formats of [`supports_gray`].
+    pub gray: bool,
 }
 
 impl ExportSpec {
-    /// Pixel format written to the file: RGB or RGBA, the format's sample type, the spec's
-    /// space. Alpha is straight, except where the format stores it premultiplied (float TIFF,
+    /// Pixel format written to the file: RGB, RGBA, gray or gray + alpha, the format's sample
+    /// type, the spec's space. Alpha is straight, except where the format stores it premultiplied (float TIFF,
     /// EXR; ADR 0008).
     pub fn target_format(&self) -> PixelFormat {
         let premultiplied = matches!(
@@ -238,10 +242,11 @@ impl ExportSpec {
             } | ExportFormat::Exr { .. }
         );
         PixelFormat {
-            layout: if self.keep_alpha {
-                ChannelLayout::Rgba
-            } else {
-                ChannelLayout::Rgb
+            layout: match (self.gray, self.keep_alpha) {
+                (false, true) => ChannelLayout::Rgba,
+                (false, false) => ChannelLayout::Rgb,
+                (true, true) => ChannelLayout::GrayAlpha,
+                (true, false) => ChannelLayout::Gray,
             },
             sample: self.format.sample_type(),
             color_space: self.space,
@@ -255,7 +260,7 @@ impl ExportSpec {
 }
 
 /// Something the user should know about what the export did. Counts are in samples, except
-/// [`ExportNotice::AlphaFlattened`] (pixels).
+/// [`ExportNotice::AlphaFlattened`] and [`ExportNotice::ColorDiscarded`] (pixels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportNotice {
     /// Values above the format's range were clipped.
@@ -273,6 +278,8 @@ pub enum ExportNotice {
     /// Partly transparent pixels were flattened over the matte (the target has no alpha).
     /// Counted in pixels, not samples.
     AlphaFlattened(u64),
+    /// Pixels that had color were written as their luminance (gray export). Counted in pixels.
+    ColorDiscarded(u64),
 }
 
 impl ExportNotice {
@@ -286,6 +293,7 @@ impl ExportNotice {
             ExportNotice::PrecisionReduced => "precisionReduced",
             ExportNotice::BigTiff => "bigTiff",
             ExportNotice::AlphaFlattened(_) => "alphaFlattened",
+            ExportNotice::ColorDiscarded(_) => "colorDiscarded",
         }
     }
 
@@ -296,7 +304,8 @@ impl ExportNotice {
             | ExportNotice::ClippedLow(n)
             | ExportNotice::NonFinite(n)
             | ExportNotice::HalfOverflow(n)
-            | ExportNotice::AlphaFlattened(n) => Some(n),
+            | ExportNotice::AlphaFlattened(n)
+            | ExportNotice::ColorDiscarded(n) => Some(n),
             ExportNotice::PrecisionReduced | ExportNotice::BigTiff => None,
         }
     }
@@ -319,6 +328,7 @@ impl ExportReport {
             (conversion.non_finite, ExportNotice::NonFinite),
             (conversion.half_overflow, ExportNotice::HalfOverflow),
             (conversion.alpha_flattened, ExportNotice::AlphaFlattened),
+            (conversion.color_discarded, ExportNotice::ColorDiscarded),
         ];
         let mut notices: Vec<ExportNotice> = counted
             .into_iter()
@@ -440,6 +450,30 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     }
 }
 
+/// Whether a gray file of this format can store gray samples encoded in `space` and declare
+/// them, so that they read back as the same values (the primaries only define the luminance):
+/// - PNG: the sRGB curve (sRGB chunk), or curves an ICC gray profile can describe (iCCP; not PQ
+///   or HLG, which PNG only declares with cICP, for RGB);
+/// - TIFF and JPEG: curves an ICC gray profile can describe;
+/// - EXR: not yet (luminance-only files are not read back by our importer);
+/// - WebP: never (it has no gray samples).
+pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
+    let icc_writable = || icc::write_gray_trc(space).is_ok();
+    match kind {
+        ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
+        ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
+        ExportFormatKind::Exr | ExportFormatKind::Webp => false,
+    }
+}
+
+/// Whether some space can be written as gray to this format (PNG, TIFF, JPEG).
+pub fn has_gray(kind: ExportFormatKind) -> bool {
+    matches!(
+        kind,
+        ExportFormatKind::Png | ExportFormatKind::Tiff | ExportFormatKind::Jpeg
+    )
+}
+
 /// The settings an export of `document` to `kind` starts with (ADR 0008, "Defaults per format"):
 /// - PNG: 8-bit if every visible raster is 8-bit, else 16-bit; 8-bit in sRGB, 16-bit in the
 ///   source space when all visible rasters share one that PNG can tag, else sRGB; fast
@@ -449,6 +483,9 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
 /// - EXR: 32-bit float, linear Rec.709 (with chromaticities);
 /// - alpha kept unless the document is structurally opaque (its bottom visible layer is an
 ///   opaque fill, or an alpha-less raster covering the canvas, at opacity 1);
+/// - gray when the format has gray samples and the document is gray by construction: every
+///   visible layer is a gray raster or a neutral fill, with at least one raster (so gray
+///   sources keep their channels, losslessly);
 /// - dither on for PNG and TIFF (it only applies to 8-bit samples).
 pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
     let rasters: Vec<PixelFormat> = document
@@ -464,6 +501,15 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         .first()
         .map(|format| format.color_space)
         .filter(|space| rasters.iter().all(|format| format.color_space == *space));
+    let gray = has_gray(kind) && is_structurally_gray(document);
+    // The source space is kept only if the file can declare it for the samples it will have.
+    let taggable = |space: &ColorSpace| {
+        if gray {
+            supports_gray(kind, space)
+        } else {
+            supports_space(kind, space)
+        }
+    };
     let (format, space) = match kind {
         ExportFormatKind::Png => {
             let depth = if rasters.iter().all(|format| format.sample == SampleType::U8) {
@@ -473,9 +519,7 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             };
             let space = match depth {
                 PngDepth::U8 => ColorSpace::SRGB,
-                PngDepth::U16 => unique_space
-                    .filter(|space| supports_space(kind, space))
-                    .unwrap_or(ColorSpace::SRGB),
+                PngDepth::U16 => unique_space.filter(taggable).unwrap_or(ColorSpace::SRGB),
             };
             let compression = PngCompression::Fast;
             (ExportFormat::Png { depth, compression }, space)
@@ -495,9 +539,7 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
                 TiffSample::F32 => ColorSpace::LINEAR_REC2020,
                 TiffSample::U8 | TiffSample::U16 => ColorSpace::REC2020,
             };
-            let space = unique_space
-                .filter(|space| supports_space(kind, space))
-                .unwrap_or(fallback);
+            let space = unique_space.filter(taggable).unwrap_or(fallback);
             let compression = TiffCompression::Deflate;
             (
                 ExportFormat::Tiff {
@@ -534,7 +576,24 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         matte: WHITE_MATTE,
         // It only applies to 8-bit samples, which EXR never has.
         dither: kind != ExportFormatKind::Exr,
+        gray,
     }
+}
+
+/// Whether the document has no color by construction: every visible layer is a gray raster or
+/// a neutral fill (equal working-space channels: neutral in every space), and one at least is a
+/// raster.
+fn is_structurally_gray(document: &Document) -> bool {
+    let mut visible = document.layers().iter().filter(|layer| layer.visible);
+    let mut raster = false;
+    let neutral = visible.all(|layer| match &layer.content {
+        LayerContent::Raster { image } => {
+            raster = true;
+            image.format().layout.is_gray()
+        }
+        LayerContent::Fill { color } => color.r == color.g && color.g == color.b,
+    });
+    neutral && raster
 }
 
 /// Spaces an 8-bit export keeps from its source (ADR 0010): common enough to be read correctly
@@ -600,7 +659,17 @@ pub fn export_image(
         )));
     }
     let kind = spec.format.kind();
-    if !supports_space(kind, &spec.space) {
+    if spec.gray && !has_gray(kind) {
+        return Err(ExportError::InvalidSpec(format!(
+            "{kind:?} export has no gray samples"
+        )));
+    }
+    let taggable = if spec.gray {
+        supports_gray(kind, &spec.space)
+    } else {
+        supports_space(kind, &spec.space)
+    };
+    if !taggable {
         return Err(ExportError::UnsupportedSpace(spec.space));
     }
     if spec.keep_alpha && !supports_alpha(kind) {

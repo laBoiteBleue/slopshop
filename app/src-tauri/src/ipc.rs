@@ -13,7 +13,7 @@ use slopshop_core::{Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Se
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
     JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
-    supports_space,
+    has_gray, supports_gray, supports_space,
 };
 
 /// Identity of an open document (one per tab). Ids are never reused, so the UI can tell
@@ -421,6 +421,8 @@ pub struct ExportSpecDto {
     pub matte: [f32; 3],
     /// Only applies to 8-bit samples.
     pub dither: bool,
+    /// Gray samples (PNG, TIFF, JPEG): the luminance of the image in `space`.
+    pub gray: bool,
 }
 
 impl ExportSpecDto {
@@ -502,6 +504,7 @@ impl ExportSpecDto {
                 [r, g, b].map(|c| (c * 255.0).round() / 255.0)
             },
             dither: spec.dither,
+            gray: spec.gray,
         }
     }
 
@@ -607,7 +610,18 @@ impl ExportSpecDto {
                 ExportError::InvalidSpec(format!("unknown color space {:?}", self.space))
             })?
         };
-        if !supports_space(format.kind(), &space) {
+        let kind = format.kind();
+        if self.gray && !has_gray(kind) {
+            return Err(ExportError::InvalidSpec(format!(
+                "{kind:?} export has no gray samples"
+            )));
+        }
+        let taggable = if self.gray {
+            supports_gray(kind, &space)
+        } else {
+            supports_space(kind, &space)
+        };
+        if !taggable {
             return Err(ExportError::UnsupportedSpace(space));
         }
         let [r, g, b] = self.matte;
@@ -623,6 +637,7 @@ impl ExportSpecDto {
             keep_alpha: self.keep_alpha,
             matte: LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0),
             dither: self.dither,
+            gray: self.gray,
         })
     }
 }
@@ -652,8 +667,8 @@ pub struct ExportProgress {
 #[serde(rename_all = "camelCase")]
 pub struct ExportNoticeView {
     pub id: &'static str,
-    /// Number of samples concerned (pixels for `alphaFlattened`), for the notices that count
-    /// something.
+    /// Number of samples concerned (pixels for `alphaFlattened` and `colorDiscarded`), for the
+    /// notices that count something.
     pub count: Option<u64>,
 }
 
@@ -738,7 +753,7 @@ mod tests {
 
     #[test]
     fn export_specs_travel_as_ids() {
-        let json = r#"{"format":"png","sample":"u16","compression":"small","quality":null,"subsampling":null,"space":"display-p3","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":false}"#;
+        let json = r#"{"format":"png","sample":"u16","compression":"small","quality":null,"subsampling":null,"space":"display-p3","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":false,"gray":false}"#;
         let spec = dto(json).to_spec(None).unwrap();
         assert_eq!(
             spec,
@@ -751,6 +766,7 @@ mod tests {
                 keep_alpha: true,
                 matte: WHITE_MATTE,
                 dither: false,
+                gray: false,
             }
         );
         assert_eq!(
@@ -759,7 +775,7 @@ mod tests {
         );
 
         let exr = dto(
-            r#"{"format":"exr","sample":"f16","compression":null,"quality":null,"subsampling":null,"space":"linear-rec2020","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#,
+            r#"{"format":"exr","sample":"f16","compression":null,"quality":null,"subsampling":null,"space":"linear-rec2020","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false,"gray":false}"#,
         );
         assert_eq!(
             exr.to_spec(None).unwrap().format,
@@ -793,6 +809,7 @@ mod tests {
             keep_alpha: true,
             matte: WHITE_MATTE,
             dither: true,
+            gray: false,
         };
         assert_eq!(ExportSpecDto::new(&tiff).to_spec(None).unwrap(), tiff);
     }
@@ -800,7 +817,7 @@ mod tests {
     #[test]
     fn invalid_export_specs_are_rejected() {
         let base = dto(
-            r#"{"format":"png","sample":"u8","compression":"fast","quality":null,"subsampling":null,"space":"srgb","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":true}"#,
+            r#"{"format":"png","sample":"u8","compression":"fast","quality":null,"subsampling":null,"space":"srgb","keepAlpha":true,"matte":[1.0,1.0,1.0],"dither":true,"gray":false}"#,
         );
         let with = |change: &dyn Fn(&mut ExportSpecDto)| {
             let mut dto = base.clone();
@@ -872,9 +889,27 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<ExportSpecDto>(
-                r#"{"format":"gif","sample":"u8","compression":null,"quality":null,"subsampling":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false}"#
+                r#"{"format":"gif","sample":"u8","compression":null,"quality":null,"subsampling":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false,"gray":false}"#
             )
             .is_err()
+        );
+        assert_eq!(with(&|d| d.gray = true), Ok(()), "gray PNG");
+        assert_eq!(
+            with(&|d| {
+                d.gray = true;
+                d.space = "rec2100-pq".to_owned();
+            }),
+            Err("unsupportedSpace"),
+            "gray PQ"
+        );
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Webp;
+                d.compression = Some(C::Lossless);
+                d.gray = true;
+            }),
+            invalid,
+            "gray WebP"
         );
         assert_eq!(with(&|d| d.quality = Some(90)), invalid, "quality on PNG");
         assert_eq!(
@@ -978,6 +1013,7 @@ mod tests {
             keep_alpha: false,
             matte: WHITE_MATTE,
             dither: true,
+            gray: false,
         };
         let dto = ExportSpecDto::new(&spec);
         assert_eq!(dto.space, CUSTOM_SPACE);
