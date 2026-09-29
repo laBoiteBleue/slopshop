@@ -33,6 +33,10 @@ export type DocumentView = {
   layers: LayerView[];
   /** How the source file was interpreted; translated with the `open.warning.<id>` keys. */
   warnings: ImportWarning[];
+  /** The `.slop` file the document was opened from or saved to, or null. */
+  path: string | null;
+  /** Changed since it was opened, created or last saved. */
+  dirty: boolean;
 };
 
 export type EditRequest =
@@ -128,7 +132,34 @@ export type OpenErrorCode =
   | "unsupportedPixels"
   | "tooLarge"
   | "unrecognized"
+  | "notASlopFile"
+  | "newerVersion"
+  | "unsupportedFeatures"
+  | "corrupt"
   | "internal";
+
+/** Extension of SlopShop documents (ADR 0009). */
+export const DOCUMENT_EXTENSION = "slop";
+
+export type SaveErrorCode =
+  | "io"
+  | "notASlopFile"
+  | "newerVersion"
+  | "unsupportedFeatures"
+  | "corrupt"
+  | "conflict"
+  | "readOnly"
+  | "busy"
+  | "documentClosed"
+  | "internal";
+
+/** Why a save failed (the rejection of `saveDocument`). */
+export type SaveFailed = {
+  /** Translated with the `save.error.<code>` keys. */
+  code: SaveErrorCode;
+  /** Technical detail inserted in the translated message. */
+  detail: string;
+};
 
 /** A rendered viewport frame (see FrameHeader in app/src-tauri/src/ipc.rs). */
 export type Frame = {
@@ -376,6 +407,15 @@ export const engine = {
    */
   openImages: (paths: string[], documentId: number | null) =>
     invoke<void>("open_images", { paths, documentId }),
+  /**
+   * Save a document to its `.slop` file (incremental), or to `path` (Save As: a new compact
+   * file the document continues with). Rejects with a `SaveFailed`. Queued after the edits
+   * already sent, so the save includes them.
+   */
+  saveDocument: (documentId: number, path: string | null) =>
+    serial(() => invoke<DocumentView>("save_document", { documentId, path })),
+  /** Close the window even with unsaved changes (after asking the user). */
+  quit: () => invoke<void>("quit"),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   perform: (documentId: number, edit: EditRequest) =>

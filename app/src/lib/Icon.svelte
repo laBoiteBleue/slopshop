@@ -8,6 +8,9 @@
     trash: "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v5 M14 11v5",
     open: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",
     export: "M12 15V4 M8 8l4-4 4 4 M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4",
+    save: "M5 4h11l4 4v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z M8 4v5h7V4 M8 20v-6h8v6",
+    saveAs:
+      "M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h11l4 4v4 M8 4v5h7V4 M8 20v-6h4 M18 15v6 M15 18h6",
   } as const;
 
   export type IconName = keyof typeof paths;

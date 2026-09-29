@@ -9,7 +9,7 @@ const fr: Messages = {
 
   "document.untitled": "Sans titre",
 
-  "open.hint": "Ouvrir des images dans de nouveaux onglets ({mod}+O)",
+  "open.hint": "Ouvrir des images ou des documents dans de nouveaux onglets ({mod}+O)",
 
   "tabs.newHint": "Nouveau document ({mod}+N)",
   "tabs.closeHint": "Fermer ({mod}+W, ou clic du milieu)",
@@ -45,7 +45,43 @@ const fr: Messages = {
   "open.error.unsupportedPixels": "ce type de pixels n'est pas encore pris en charge ({detail})",
   "open.error.tooLarge": "l'image est trop grande pour être ouverte ({detail})",
   "open.error.unrecognized": "format d'image non reconnu",
+  "open.error.notASlopFile": "ce n'est pas un document SlopShop",
+  "open.error.newerVersion": "créé par une version plus récente de SlopShop ({detail})",
+  "open.error.unsupportedFeatures":
+    "utilise des fonctions que cette version ne gère pas ({detail})",
+  "open.error.corrupt": "document endommagé ({detail})",
   "open.error.internal": "erreur interne ({detail})",
+
+  "save.hint": "Enregistrer ({mod}+S)",
+  "save.asHint": "Enregistrer sous… ({mod}+Maj+S)",
+  "save.title": "Enregistrer le document",
+  "save.documentType": "Document SlopShop",
+  "save.saving": "Enregistrement de {name}…",
+  "save.done": "{name} enregistré",
+  "save.failed": "Impossible d'enregistrer {name} : {error}",
+  "save.unsavedMark": "Modifications non enregistrées",
+  "save.error.io": "impossible d'écrire le fichier ({detail})",
+  "save.error.notASlopFile": "le fichier n'est pas un document SlopShop",
+  "save.error.newerVersion":
+    "le fichier a été créé par une version plus récente de SlopShop ({detail})",
+  "save.error.unsupportedFeatures":
+    "le fichier utilise des fonctions que cette version ne gère pas ({detail})",
+  "save.error.corrupt": "le fichier est endommagé ({detail})",
+  "save.error.conflict":
+    "le fichier a été modifié par un autre programme depuis son ouverture : utilisez Enregistrer sous",
+  "save.error.readOnly":
+    "cette version de SlopShop peut seulement lire ce fichier : utilisez Enregistrer sous",
+  "save.error.busy": "un enregistrement de ce document est déjà en cours",
+  "save.error.documentClosed": "le document a été fermé",
+  "save.error.internal": "erreur interne ({detail})",
+  "close.title": "Modifications non enregistrées",
+  "close.unsaved": "Enregistrer les modifications de {name} avant de fermer ?",
+  "close.save": "Enregistrer",
+  "close.discard": "Ne pas enregistrer",
+  "close.cancel": "Annuler",
+  "quit.unsaved":
+    "Des documents ont des modifications non enregistrées : {names}. Quitter sans les enregistrer ?",
+  "quit.discard": "Quitter sans enregistrer",
 
   "export.hint": "Exporter ({mod}+Maj+E)",
   "export.title": "Exporter",

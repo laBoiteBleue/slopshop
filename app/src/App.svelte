@@ -1,9 +1,11 @@
 <script lang="ts">
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
+  import { listen } from "@tauri-apps/api/event";
+  import { message, open as openDialog, save } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import {
     DOCUMENT_CLOSED,
+    DOCUMENT_EXTENSION,
     EXPORT_FORMATS,
     engine,
     onExportEvents,
@@ -20,6 +22,7 @@
     type OpenFailed,
     type OpenFinished,
     type Opening,
+    type SaveFailed,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
@@ -114,6 +117,7 @@
     if (closing.has(id) || !tabs.some((d) => d.id === id)) return;
     closing.add(id);
     try {
+      if (!(await confirmClose(id))) return;
       await engine.closeDocument(id);
     } finally {
       closing.delete(id);
@@ -335,6 +339,104 @@
     return "tab";
   }
 
+  // --- Saving ----------------------------------------------------------------------------------
+
+  /** Documents being saved (a save of a large document takes seconds). */
+  let saving = $state<number[]>([]);
+
+  /**
+   * Save a document: to its file (incrementally), or, for Save As and a document that has no
+   * file yet, to a file chosen in the save dialog. False when it was not saved (dialog
+   * cancelled, error shown).
+   */
+  async function saveDocument(id: number, saveAs: boolean): Promise<boolean> {
+    const doc = tabs.find((d) => d.id === id);
+    if (!doc || saving.includes(id)) return false;
+    let path: string | null = null;
+    if (saveAs || doc.path === null) {
+      try {
+        path = await save({
+          title: t("save.title"),
+          defaultPath: doc.path ?? exportFileName(tabTitle(doc), DOCUMENT_EXTENSION),
+          filters: [{ name: t("save.documentType"), extensions: [DOCUMENT_EXTENSION] }],
+        });
+      } catch (e) {
+        showError(String(e));
+        return false;
+      }
+      if (path === null) return false;
+    }
+    const name = path ? fileNameOf(path) : tabTitle(doc);
+    saving.push(id);
+    try {
+      const view = await engine.saveDocument(id, path);
+      upsert(view);
+      // Save As and first saves say where the file went; plain saves only clear the mark.
+      if (path !== null) {
+        showToast(null, {
+          title: t("save.done", { name }),
+          lines: [],
+          kind: "done",
+          path: view.path ?? undefined,
+        });
+      }
+      return true;
+    } catch (e) {
+      const failed: SaveFailed =
+        typeof e === "object" && e !== null && "code" in e
+          ? (e as SaveFailed)
+          : { code: "internal", detail: String(e) };
+      // Closed meanwhile: the user asked for that.
+      if (failed.code !== "documentClosed") {
+        const error = t(`save.error.${failed.code}`, { detail: failed.detail });
+        showError(t("save.failed", { name, error }));
+      }
+      return false;
+    } finally {
+      saving = saving.filter((s) => s !== id);
+    }
+  }
+
+  const saveActive = (saveAs: boolean) => activeId !== null && void saveDocument(activeId, saveAs);
+
+  /** Ask before closing a tab with unsaved changes; true when it can close. */
+  async function confirmClose(id: number): Promise<boolean> {
+    const doc = tabs.find((d) => d.id === id);
+    if (!doc?.dirty) return true;
+    activate(id);
+    const buttons = { yes: t("close.save"), no: t("close.discard"), cancel: t("close.cancel") };
+    const answer = await message(t("close.unsaved", { name: tabTitle(doc) }), {
+      title: t("close.title"),
+      kind: "warning",
+      buttons,
+    });
+    // The clicked label, or the standard name on platforms that report it.
+    if (answer === buttons.yes || answer === "Yes") return saveDocument(id, false);
+    return answer === buttons.no || answer === "No";
+  }
+
+  /** The window is closing with unsaved changes (the engine held it): ask, then quit. */
+  let confirmingQuit = false;
+
+  async function confirmQuit() {
+    if (confirmingQuit) return;
+    confirmingQuit = true;
+    try {
+      const names = tabs.filter((d) => d.dirty || saving.includes(d.id)).map(tabTitle);
+      const buttons = { ok: t("quit.discard"), cancel: t("close.cancel") };
+      const answer = await message(t("quit.unsaved", { names: names.join(", ") }), {
+        title: t("close.title"),
+        kind: "warning",
+        buttons,
+      });
+      if (answer === buttons.ok || answer === "Ok") await engine.quit();
+    } catch (e) {
+      showError(String(e));
+    } finally {
+      confirmingQuit = false;
+    }
+  }
+
   // --- Export ---------------------------------------------------------------------------------
 
   /** Formats in the order of the save dialog's file types: the last one used first. */
@@ -525,6 +627,11 @@
       if (!e.repeat) void chooseExportFile();
       return;
     }
+    if (key === "s" || e.code === "KeyS") {
+      e.preventDefault();
+      if (!e.repeat) saveActive(e.shiftKey);
+      return;
+    }
     if (key === "o" && !e.shiftKey) {
       e.preventDefault();
       void openWithDialog();
@@ -604,6 +711,7 @@
         );
       }
     });
+    const stopClose = listen("close-requested", () => void confirmQuit());
     engine.gpuInfo().then(
       (info) => (gpu = info),
       (e) => (gpuError = String(e)),
@@ -613,6 +721,7 @@
       stopEvents?.();
       stopExportEvents?.();
       void stopDrop.then((unlisten) => unlisten());
+      void stopClose.then((unlisten) => unlisten());
     };
   });
 </script>
@@ -630,6 +739,22 @@
     </button>
     <button class="icon" onclick={openWithDialog} title={t("open.hint", { mod: modifierLabel })}>
       <Icon name="open" />
+    </button>
+    <button
+      class="icon"
+      onclick={() => saveActive(false)}
+      disabled={!active || saving.includes(active.id)}
+      title={t("save.hint", { mod: modifierLabel })}
+    >
+      <Icon name="save" />
+    </button>
+    <button
+      class="icon"
+      onclick={() => saveActive(true)}
+      disabled={!active || saving.includes(active.id)}
+      title={t("save.asHint", { mod: modifierLabel })}
+    >
+      <Icon name="saveAs" />
     </button>
     <button
       class="icon"
@@ -720,6 +845,21 @@
               />
             {:else}
               <span class="tab-name">{tabTitle(doc)}</span>
+            {/if}
+            {#if saving.includes(doc.id)}
+              <span
+                class="spinner"
+                title={t("save.saving", { name: tabTitle(doc) })}
+                aria-label={t("save.saving", { name: tabTitle(doc) })}
+              ></span>
+            {:else if doc.dirty}
+              <span
+                class="tab-dirty"
+                title={t("save.unsavedMark")}
+                aria-label={t("save.unsavedMark")}
+              >
+                ●
+              </span>
             {/if}
             {#if doc.id === activeId && frame}
               <span class="tab-zoom">@ {formatZoom(frame.zoom)}</span>
@@ -1144,6 +1284,11 @@
   .tab-zoom {
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .tab-dirty {
+    color: var(--text-muted);
+    font-size: 9px;
   }
 
   .tab-close {
