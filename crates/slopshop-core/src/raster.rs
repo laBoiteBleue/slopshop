@@ -642,8 +642,10 @@ mod tests {
         assert_eq!(img.stored_format().layout, ChannelLayout::Rgba);
         let px = tile_pixel(&img, 0, 0, 0);
         let floats: Vec<f32> = px
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(floats, [2.5, -0.25, 1e-6, 1.0]);
     }
@@ -701,8 +703,10 @@ mod tests {
         );
         let img = RasterImage::from_pixels(size, fmt, &px).unwrap();
         let level1: Vec<f32> = tile_pixel(&img, 1, 0, 0)
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(level1, [2.0, 2.0, 2.0, 1.0]);
     }
@@ -769,8 +773,10 @@ mod tests {
         };
         let img = RasterImage::from_pixels(size, fmt, &px).unwrap();
         let level1: Vec<f32> = tile_pixel(&img, 1, 0, 0)
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(level1, [0.25, 0.0, 0.0, 0.25]);
     }
@@ -849,8 +855,10 @@ mod tests {
         let img = RasterImage::from_pixels(size, fmt, &px).unwrap();
         for x in 0..2 {
             let level1: Vec<f32> = tile_pixel(&img, 1, x, 0)
-                .chunks_exact(4)
-                .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_ne_bytes(*b))
                 .collect();
             assert!(level1.iter().all(|v| v.is_finite()), "{level1:?}");
         }

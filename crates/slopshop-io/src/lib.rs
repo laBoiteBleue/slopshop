@@ -252,11 +252,15 @@ fn finish(decoded: Decoded) -> Result<Imported, ImportError> {
 fn has_non_finite(pixels: &[u8], sample: SampleType) -> bool {
     match sample {
         SampleType::F16 => pixels
-            .chunks_exact(2)
-            .any(|b| u16::from_ne_bytes([b[0], b[1]]) & 0x7c00 == 0x7c00),
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .any(|b| u16::from_ne_bytes(*b) & 0x7c00 == 0x7c00),
         SampleType::F32 => pixels
-            .chunks_exact(4)
-            .any(|b| !f32::from_ne_bytes([b[0], b[1], b[2], b[3]]).is_finite()),
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|b| !f32::from_ne_bytes(*b).is_finite()),
         SampleType::U8 | SampleType::U16 => false,
     }
 }
@@ -522,7 +526,14 @@ fn heif_brand(head: &[u8]) -> Option<ImportError> {
     let end = box_size.clamp(16, head.len().max(16)).min(head.len());
     // Major brand, then compatible brands after the minor version.
     let brands: Vec<&[u8]> = std::iter::once(&head[8..12])
-        .chain(head.get(16..end).unwrap_or_default().chunks_exact(4))
+        .chain(
+            head.get(16..end)
+                .unwrap_or_default()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| b.as_slice()),
+        )
         .collect();
     let any = |names: &[&[u8; 4]]| brands.iter().any(|b| names.iter().any(|n| *b == *n));
     if any(&[b"avif", b"avis"]) {
@@ -696,8 +707,10 @@ mod tests {
         assert_eq!(image.format().sample, SampleType::F32);
         assert_eq!(image.format().color_space, ColorSpace::LINEAR_SRGB);
         let px: Vec<f32> = stored_pixel(&image, 0, 0)
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(px, [2.5, -0.25, 1e-6, 1.0]);
     }
@@ -730,8 +743,10 @@ mod tests {
         assert_eq!(format.alpha, AlphaMode::Premultiplied);
         assert!(format.color_space.transfer.is_linear());
         let px: Vec<f32> = stored_pixel(&imported.image, 0, 0)
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
             .collect();
         assert_eq!(px, [4.0, 0.5, 0.25, 1.0], "HDR value above 1 survives");
     }

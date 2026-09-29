@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned so that local builds and CI lint and test with the same compiler (a floating
+# `stable` let CI pick up new clippy lints first). Bump deliberately.
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]
