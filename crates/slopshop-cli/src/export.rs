@@ -704,11 +704,23 @@ fn describe(spec: &ExportSpec) -> String {
 /// Open, build the document, export.
 fn export(args: &Args) -> Result<Outcome, String> {
     let started = Instant::now();
-    let imported = slopshop_io::open_image(&args.input)
-        .map_err(|e| format!("cannot open {}: {e}", args.input.display()))?;
+    let cannot_open =
+        |e: &dyn std::fmt::Display| format!("cannot open {}: {e}", args.input.display());
+    // A .slop document (recognized by its content), or an image as a one-layer document.
+    let is_document = slopshop_io::slop::is_slop_file(&args.input).unwrap_or(false);
+    let (document, import_warnings) = if is_document {
+        let (document, _) =
+            slopshop_io::slop::SlopFile::open(&args.input).map_err(|e| cannot_open(&e))?;
+        (document, Vec::new())
+    } else {
+        let imported = slopshop_io::open_image(&args.input).map_err(|e| cannot_open(&e))?;
+        let warnings = imported.warnings.iter().map(|w| w.id()).collect();
+        (
+            single_layer_document(imported.image, &layer_name(&args.input))?,
+            warnings,
+        )
+    };
     let open = started.elapsed();
-    let import_warnings = imported.warnings.iter().map(|w| w.id()).collect();
-    let document = single_layer_document(imported.image, &layer_name(&args.input))?;
     let spec = export_spec(args, &document);
 
     let started = Instant::now();

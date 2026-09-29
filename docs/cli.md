@@ -16,7 +16,9 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 |---|---|
 | [`slopshop gpu`](#slopshop-gpu) | Show the GPU adapter the engine would use |
 | [`slopshop render`](#slopshop-render) | Render a built-in demo document to a PNG file |
-| [`slopshop export`](#slopshop-export) | Open an image file and export it to PNG, TIFF, OpenEXR, JPEG or WebP |
+| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG or WebP |
+| [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
+| [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
 | `slopshop --help`, `slopshop -h` | Print the usage |
 | `slopshop --version`, `slopshop -V` | Print the version |
 
@@ -52,8 +54,9 @@ export pipeline.
 slopshop export <INPUT> <OUTPUT> [options]
 ```
 
-Opens `INPUT` (any format the importer reads: PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO,
-PNM/PFM, QOI, farbfeld, OpenEXR, HDR, DDS) as a one-layer document and writes it to `OUTPUT`
+Opens `INPUT` (a `.slop` document, recognized by its content, or any image format the importer
+reads: PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, OpenEXR, HDR, DDS, as a
+one-layer document) and writes the composited image to `OUTPUT`
 through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export.md),
 [ADR 0010](adr/0010-jpeg-webp-export.md)):
 
@@ -175,4 +178,37 @@ slopshop export icon.png icon.webp --compression lossless
 
 # Measure throughput without the GPU
 slopshop export big.tif out.tif --cpu --bench
+```
+
+## `slopshop save`
+
+```sh
+slopshop save <IMAGE>... --out <FILE.slop> [--bench]
+```
+
+Opens the images and saves them as one document in SlopShop's own format
+([ADR 0009](adr/0009-document-file-format.md)): one layer per image, the first at the bottom,
+the canvas as large as the largest image. Pixels are kept exactly as imported (8/16-bit, half
+or float, with their color space), compressed losslessly.
+
+| Option | Meaning |
+|---|---|
+| `--out FILE` | The document to write (replaced whole if it exists) |
+| `--bench` | Also print how long opening the images and saving took |
+
+## `slopshop inspect`
+
+```sh
+slopshop inspect <FILE.slop> [--bench]
+```
+
+Opens a document and prints its generation (number of saves), its size and how much of it is
+unused (older data, reclaimed when a save compacts the file), the canvas size and every layer
+(id, name, image format or fill color, opacity, visibility). `--bench` also prints how long
+opening took.
+
+```sh
+slopshop save background.tif overlay.png --out montage.slop
+slopshop inspect montage.slop
+slopshop export montage.slop montage.png
 ```
