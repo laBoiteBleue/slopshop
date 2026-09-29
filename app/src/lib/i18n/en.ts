@@ -2,17 +2,58 @@
 // (enforced by the `Messages` type). Placeholders use `{name}`.
 const en = {
   "app.preAlpha": "pre-alpha",
-  "app.loading": "Loading document…",
   "app.language": "Language",
 
-  "toolbar.undoHint": "Undo (Ctrl+Z)",
-  "toolbar.redoHint": "Redo (Ctrl+Shift+Z)",
+  "toolbar.undoHint": "Undo ({mod}+Z)",
+  "toolbar.redoHint": "Redo ({mod}+Shift+Z)",
 
   "document.untitled": "Untitled",
+
+  "open.hint": "Open images in new tabs ({mod}+O)",
+
+  "tabs.newHint": "New document ({mod}+N)",
+  "tabs.closeHint": "Close ({mod}+W, or middle click)",
+
+  "welcome.title": "Open an image or create a document",
+  "welcome.open": "Open…",
+  "welcome.new": "New document",
+  "welcome.drop": "…or drop files here",
+
+  "drop.newTab": "Drop to open in a new tab",
+  "drop.layer": "Drop to add as a layer",
+  "open.opening": "Opening {name}…",
+  "open.failed": "Cannot open {name}: {error}",
+  "open.warning.iccProfileUnsupported":
+    "Embedded color profile not supported yet (LUT-based): colors read as sRGB",
+  "open.warning.iccCurveApproximated": "Color profile tone curve approximated",
+  "open.warning.firstFrameOnly": "Animated image: only the first frame was opened",
+  "open.warning.firstPageOnly": "Several pages: only the first was opened",
+  "open.warning.precisionReduced": "64-bit float samples stored as 32-bit floats",
+  "open.warning.nonFiniteSamples":
+    "Infinite or undefined (NaN) values: shown as the brightest value or as 0",
+  "open.warning.colorInfoUnsupported":
+    "The file's color information is not supported yet: colors read as sRGB",
+
+  "open.error.io": "cannot read the file ({detail})",
+  "open.error.decode": "damaged file or invalid image ({detail})",
+  "open.error.notYetSupported": "the {detail} format is not supported yet",
+  "open.error.heic": "HEIC/HEIF is not supported (HEVC patents)",
+  "open.error.unsupportedPixels": "this kind of pixels is not supported yet ({detail})",
+  "open.error.tooLarge": "the image is too large to open ({detail})",
+  "open.error.unrecognized": "unrecognized image format",
+  "open.error.internal": "internal error ({detail})",
   "document.info": "{width} × {height} px · {space}",
 
-  "colorSpace.linear-srgb": "Linear sRGB",
   "colorSpace.srgb": "sRGB",
+  "colorSpace.linear-srgb": "Linear sRGB",
+  "colorSpace.display-p3": "Display P3",
+  "colorSpace.adobe-rgb": "Adobe RGB",
+  "colorSpace.prophoto": "ProPhoto RGB",
+  "colorSpace.rec2020": "Rec.2020",
+  "colorSpace.linear-rec2020": "Linear Rec.2020",
+  "colorSpace.rec2100-pq": "Rec.2100 PQ",
+  "colorSpace.rec2100-hlg": "Rec.2100 HLG",
+  "colorSpace.custom": "Custom",
 
   "layers.title": "Layers",
   "layers.empty": "No layers",
@@ -27,10 +68,13 @@ const en = {
 
   "viewport.renderFailed": "Render failed: {error}",
 
+  "view.hint":
+    "Wheel or pinch: zoom · Middle button or Space+drag: pan · {mod}+0: fit · {mod}+1: 100% · {mod}+/-: zoom steps",
+
   "status.gpu": "GPU: {name} ({backend})",
   "status.gpuInit": "Initializing GPU…",
   "status.gpuUnavailable": "GPU unavailable: {error}",
-  "status.frameTime": "frame {ms} ms",
+  "status.frameTime": "render {render} ms · frame {total} ms",
   "status.revision": "rev. {revision}",
 } satisfies Record<string, string>;
 

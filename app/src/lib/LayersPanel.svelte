@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick, untrack } from "svelte";
   import type { DocumentView, EditRequest, LayerView } from "./engine";
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
@@ -10,13 +11,21 @@
     ongestureend,
   }: {
     doc: DocumentView;
-    /** A discrete edit (one undo entry). */
-    onedit: (edit: EditRequest) => void;
+    /** A discrete edit (one undo entry) of document `documentId`. */
+    onedit: (documentId: number, edit: EditRequest) => void;
     /** A live edit within a gesture (applied immediately). */
-    onlive: (edit: EditRequest) => void;
+    onlive: (documentId: number, edit: EditRequest) => void;
     /** End of the gesture: everything since it started becomes one undo entry. */
-    ongestureend: () => void;
+    ongestureend: (documentId: number) => void;
   } = $props();
+
+  // The panel shows one document for its whole life (it is keyed by document). Capture its id:
+  // props are read lazily, and an edit committed while the panel is torn down (e.g. a rename
+  // blurred by a tab switch) must still go to this document, not to the newly active one.
+  const documentId = untrack(() => doc.id);
+  const edit = (request: EditRequest) => onedit(documentId, request);
+  const live = (request: EditRequest) => onlive(documentId, request);
+  const gestureEnd = () => ongestureend(documentId);
 
   // Panels list layers top to bottom, like every image editor.
   let rows = $derived([...doc.layers].reverse());
@@ -37,7 +46,7 @@
   });
 
   let newColor = $state("#e84ca3");
-  let renaming = $state<number | null>(null);
+  let list: HTMLUListElement;
 
   function swatch(layer: LayerView): string {
     const [r, g, b] = layer.swatch.map((v) => Math.round(Math.min(Math.max(v, 0), 1) * 255));
@@ -52,15 +61,31 @@
 
   function addFill() {
     const name = t("layers.defaultFillName", { n: doc.layers.length + 1 });
-    onedit({ kind: "addFillLayer", name, color: hexToSrgb(newColor) });
+    edit({ kind: "addFillLayer", name, color: hexToSrgb(newColor) });
   }
 
-  function commitRename(layer: LayerView, input: HTMLInputElement) {
+  // Rename: double-click on the name, or F2 on the selected layer.
+  let renaming = $state<number | null>(null);
+
+  /** Give keyboard focus back to the list, so F2 keeps working after a rename. */
+  async function focusList() {
+    await tick();
+    list?.focus({ preventScroll: true });
+  }
+
+  function commitRename(layer: LayerView, input: HTMLInputElement, next: EventTarget | null) {
     // Blur can fire after Escape or after the field is gone: only commit an active rename.
     if (renaming !== layer.id) return;
     renaming = null;
     const name = input.value.trim();
-    if (name && name !== layer.name) onedit({ kind: "renameLayer", id: layer.id, name });
+    if (name && name !== layer.name) edit({ kind: "renameLayer", id: layer.id, name });
+    // Refocus the list only if focus is not moving to another control (click, Tab).
+    if (!(next instanceof Node) || list.contains(next)) void focusList();
+  }
+
+  function cancelRename() {
+    renaming = null;
+    void focusList();
   }
 
   function focusAndSelect(node: HTMLInputElement) {
@@ -68,37 +93,99 @@
     node.select();
   }
 
-  // Opacity: live while dragging, one undo entry per drag.
+  function isTextField(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
+    );
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && drag?.active) {
+      drag = null;
+      return;
+    }
+    if (e.key !== "F2" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (isTextField(e.target) || !selected || renaming !== null || drag?.active) return;
+    e.preventDefault();
+    renaming = selected.id;
+  }
+
+  // Opacity: live while dragging the slider, one undo entry per drag. `change` does not fire
+  // when a drag ends on its starting value, so the gesture also ends on any pointer release.
   function opacityPercent(layer: LayerView | null): number {
     return layer ? Math.round(layer.opacity * 100) : 100;
   }
 
-  function setOpacity(value: string, live: boolean) {
-    const percent = Math.min(Math.max(Number(value), 0), 100);
-    if (!selected || !Number.isFinite(percent)) return;
-    const edit: EditRequest = { kind: "setLayerOpacity", id: selected.id, opacity: percent / 100 };
-    if (live) onlive(edit);
-    else onedit(edit);
+  function onOpacitySliderInput(value: string) {
+    if (!selected) return;
+    live({ kind: "setLayerOpacity", id: selected.id, opacity: Number(value) / 100 });
+  }
+
+  function onOpacitySliderPointerDown() {
+    const end = () => {
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+      window.removeEventListener("blur", end);
+      gestureEnd();
+    };
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("blur", end);
+  }
+
+  // The field edits the layer that was selected when it got focus, even if the selection
+  // changes before `change` fires (clicking another row commits the field on blur).
+  let opacityFieldLayer: number | null = null;
+
+  function onOpacityFieldChange(input: HTMLInputElement) {
+    const target = doc.layers.find((l) => l.id === (opacityFieldLayer ?? selectedId)) ?? null;
+    const n = input.valueAsNumber;
+    // Empty or invalid: restore the displayed value instead of treating it as 0.
+    if (!target || input.value.trim() === "" || !Number.isFinite(n)) {
+      input.value = String(opacityPercent(selected));
+      return;
+    }
+    const clamped = Math.min(Math.max(Math.round(n), 0), 100);
+    if (clamped !== opacityPercent(target)) {
+      edit({ kind: "setLayerOpacity", id: target.id, opacity: clamped / 100 });
+    }
+    // The field always shows the selected layer (written directly: Svelte skips unchanged values).
+    input.value = String(target.id === selectedId ? clamped : opacityPercent(selected));
   }
 
   // Drag to reorder, with pointer events (HTML5 drag and drop is intercepted by Tauri on
   // Windows, where the window handles file drops). The pointer is captured only once a drag
   // really starts: capturing on pointerdown would retarget click/dblclick to the row and break
-  // the buttons inside it (rename, visibility).
+  // the buttons inside it (rename, visibility). Releases are tracked on the window, so a press
+  // that leaves the list before the threshold cannot leave a stale drag behind.
   const DRAG_THRESHOLD = 4;
-  let list: HTMLUListElement;
   type Drag = { id: number; from: number; startY: number; active: boolean; slot: number };
   let drag = $state<Drag | null>(null);
 
   function onRowPointerDown(e: PointerEvent, row: number, layer: LayerView) {
-    if (e.button !== 0 || renaming !== null) return;
+    drag = null;
+    if (e.button !== 0) return;
+    if (renaming !== null) {
+      // A press on the row being renamed belongs to its input.
+      if (renaming === layer.id) return;
+      // Commit first (blur runs commitRename synchronously), then handle the press normally.
+      list.querySelector<HTMLInputElement>("input.rename")?.blur();
+    }
     if ((e.target as HTMLElement).closest("button.eye")) return;
     selectedId = layer.id;
+    list.focus({ preventScroll: true });
     drag = { id: layer.id, from: row, startY: e.clientY, active: false, slot: row };
   }
 
   function onRowPointerMove(e: PointerEvent) {
     if (!drag) return;
+    // A move without the primary button means the release was missed: drop the drag.
+    if ((e.buttons & 1) === 0) {
+      drag = null;
+      return;
+    }
     if (!drag.active) {
       if (Math.abs(e.clientY - drag.startY) < DRAG_THRESHOLD) return;
       drag.active = true;
@@ -113,16 +200,23 @@
     }).length;
   }
 
-  function onRowPointerUp() {
+  function onWindowPointerUp() {
     if (!drag) return;
     const { id, from, active, slot } = drag;
     drag = null;
     if (!active || slot === from || slot === from + 1) return;
     const finalRow = slot > from ? slot - 1 : slot;
     // Rows are displayed top to bottom; the stack index counts from the bottom.
-    onedit({ kind: "moveLayer", id, index: rows.length - 1 - finalRow });
+    edit({ kind: "moveLayer", id, index: rows.length - 1 - finalRow });
   }
 </script>
+
+<svelte:window
+  onkeydown={onWindowKeydown}
+  onpointerup={onWindowPointerUp}
+  onpointercancel={() => (drag = null)}
+  onblur={() => (drag = null)}
+/>
 
 <section class="panel" aria-label={t("layers.title")}>
   <div class="tabs">
@@ -139,8 +233,9 @@
       value={opacityPercent(selected)}
       disabled={!selected}
       aria-label={t("layers.opacity")}
-      oninput={(e) => setOpacity(e.currentTarget.value, true)}
-      onchange={() => ongestureend()}
+      onpointerdown={onOpacitySliderPointerDown}
+      oninput={(e) => onOpacitySliderInput(e.currentTarget.value)}
+      onchange={() => gestureEnd()}
     />
     <input
       id="layer-opacity"
@@ -148,14 +243,17 @@
       type="number"
       min="0"
       max="100"
+      autocomplete="off"
       value={opacityPercent(selected)}
       disabled={!selected}
-      onchange={(e) => setOpacity(e.currentTarget.value, false)}
+      onfocus={() => (opacityFieldLayer = selectedId)}
+      onblur={() => (opacityFieldLayer = null)}
+      onchange={(e) => onOpacityFieldChange(e.currentTarget)}
     />
     <span class="unit">%</span>
   </div>
 
-  <ul bind:this={list} class:dragging={drag?.active}>
+  <ul bind:this={list} tabindex="-1" class:dragging={drag?.active}>
     {#each rows as layer, row (layer.id)}
       <li
         data-row={row}
@@ -165,14 +263,12 @@
         class:drop-after={drag?.active && row === rows.length - 1 && drag.slot === rows.length}
         onpointerdown={(e) => onRowPointerDown(e, row, layer)}
         onpointermove={onRowPointerMove}
-        onpointerup={onRowPointerUp}
-        onpointercancel={() => (drag = null)}
       >
         <button
           class="eye"
           title={t(layer.visible ? "layers.hide" : "layers.show")}
           aria-pressed={layer.visible}
-          onclick={() => onedit({ kind: "setLayerVisible", id: layer.id, visible: !layer.visible })}
+          onclick={() => edit({ kind: "setLayerVisible", id: layer.id, visible: !layer.visible })}
         >
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
@@ -181,22 +277,23 @@
           <input
             class="rename"
             value={layer.name}
+            spellcheck="false"
+            autocomplete="off"
+            autocorrect="off"
             use:focusAndSelect
             onpointerdown={(e) => e.stopPropagation()}
-            onblur={(e) => commitRename(layer, e.currentTarget)}
+            onblur={(e) => commitRename(layer, e.currentTarget, e.relatedTarget)}
             onkeydown={(e) => {
               if (e.key === "Enter") e.currentTarget.blur();
-              if (e.key === "Escape") renaming = null;
+              if (e.key === "Escape") cancelRename();
             }}
           />
         {:else}
           <button
             class="name"
+            tabindex="-1"
             title={t("layers.renameHint")}
             ondblclick={() => (renaming = layer.id)}
-            onkeydown={(e) => {
-              if (e.key === "F2") renaming = layer.id;
-            }}
           >
             {layer.name}
           </button>
@@ -216,7 +313,7 @@
       class="tool"
       title={t("layers.delete")}
       disabled={!selected}
-      onclick={() => selected && onedit({ kind: "removeLayer", id: selected.id })}
+      onclick={() => selected && edit({ kind: "removeLayer", id: selected.id })}
     >
       <Icon name="trash" />
     </button>
@@ -286,6 +383,10 @@
     padding: 0;
     list-style: none;
     overflow-y: auto;
+  }
+
+  ul:focus {
+    outline: none;
   }
 
   ul.dragging {

@@ -43,6 +43,12 @@ body {
   cursor: default;
 }
 
+/* Images and links are not draggable like on a web page. */
+img,
+a {
+  -webkit-user-drag: none;
+}
+
 button,
 input,
 select {
