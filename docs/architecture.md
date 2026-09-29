@@ -81,16 +81,25 @@ through `export::webp::ffi`, the crate's only `unsafe` module), always color-tag
 per-format defaults (`default_spec`), size limits (`max_side`) and an in-house ICC writer; see
 [Export data flow](#export-data-flow) and [ADR 0010](adr/0010-jpeg-webp-export.md).
 
+Documents (`slop`) are saved as `.slop` files ([ADR 0009](adr/0009-document-file-format.md),
+[specification](file-format.md)): content-addressed tiles compressed in parallel, a JSON
+manifest, an append-only log with two commit slots, so a save only writes what changed and a
+crash leaves the previous save readable. `SlopFile` keeps what the file already holds between
+saves. Full writes (first save, Save As, compaction, exports) share `atomic::TempFile`.
+
 ### `slopshop-cli` (implemented, minimal)
 
-`slopshop gpu`, `slopshop render` and `slopshop export` (an image file, opened as a one-layer
-document, exported with the format defaults and optional overrides; `--bench` prints timings).
+`slopshop gpu`, `slopshop render`, `slopshop export` (a `.slop` document or an image file,
+opened as a one-layer document, exported with the format defaults and optional overrides),
+`slopshop save` (images to a `.slop` document, one layer each) and `slopshop inspect`;
+`--bench` prints timings.
 Proves the engine runs without the UI.
 
 ### `app` (implemented, minimal)
 
 Tauri shell + Svelte UI: viewport, layer panel (visibility, live opacity, rename, drag to
-reorder, delete, add fill), undo/redo, FR/EN interface. The IPC client serializes mutations so
+reorder, delete, add fill), undo/redo, Save / Save As of `.slop` documents (asking before
+unsaved changes are lost), FR/EN interface. The IPC client serializes mutations so
 they reach the engine in order (Tauri runs async commands concurrently). Commands are `async` (never on the main thread); GPU work runs in
 `spawn_blocking`. The shell owns the open documents (one per tab, each with its own history and
 view state `Viewport`); every request names its document, and requests for a closed document are
@@ -158,8 +167,6 @@ document ──▶ pixel source ──▶ band channel ──▶ convert ──�
   dependencies and cached results, with invalidation instead of automatic recomputation; see
   [research notes](research/hd-generative-ai.md).
 - **Color management** beyond the two built-in spaces (ICC profiles, OCIO): open question.
-- **A document file format**: designed ([ADR 0009](adr/0009-document-file-format.md): `.slop`,
-  content-addressed tiles, JSON manifest, incremental saves), not implemented yet.
 
 ## Open questions (hard to change later)
 
@@ -170,4 +177,4 @@ document ──▶ pixel source ──▶ band channel ──▶ convert ──�
 | Color management              | Named spaces (linear sRGB working)      | first real image import           |
 | Tile storage / out-of-core    | Geometry only                           | pixel layers                      |
 | HD generative AI strategy     | Research only                           | first AI feature                  |
-| File format                   | None                                    | save/load                         |
+| File format                   | `.slop` v0 ([ADR 0009](adr/0009-document-file-format.md)), frozen at 1.0 | 1.0 |

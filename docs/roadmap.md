@@ -44,8 +44,10 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [x] JPEG and WebP export, background color for alpha-less exports
       ([ADR 0010](adr/0010-jpeg-webp-export.md))
 - [ ] Export: gray targets, an "encoding" progress phase for WebP
-- [ ] Document file format v0 (`.slop`: layers/nodes and tiles, incremental saves; decided in
-      [ADR 0009](adr/0009-document-file-format.md), implementation next)
+- [x] Document file format v0 (`.slop`: layers/nodes and tiles, incremental crash-safe saves,
+      [ADR 0009](adr/0009-document-file-format.md), [specification](file-format.md)); Save /
+      Save As in the app, `slopshop save` / `inspect` in the CLI
+- [ ] Document format: a fuzz target for the reader
 
 ## Phase 2 — Non-destructive core
 
