@@ -44,6 +44,17 @@ image-webp = "=0.2.4"
 # No pure-Rust lossy encoder is usable. Called from our `export::webp::ffi` module only, the one
 # `unsafe` module of this crate. Default features kept: they enable libwebp's threads.
 libwebp-sys = "=0.14.4"
+# Document files (.slop, ADR 0009):
+# - tile identity and integrity (content addressing): std has no cryptographic hash, and
+#   xxh3's collisions can be crafted. Default build (SIMD through cc).
+blake3 = "1.8.7"
+# - tile, table and manifest compression: libzstd (C, BSD-3-Clause), an accepted exception to
+#   "no C code" (ADR 0009) for its ratio and speed; the codec is recorded per blob.
+zstd = "0.14.0"
+# - the JSON manifest, through explicit DTOs (never derives on core types). Both are already in
+#   the tree through Tauri.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
 [lints]
 workspace = true
