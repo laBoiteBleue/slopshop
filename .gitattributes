@@ -1,0 +1,9 @@
+# Normalize line endings: LF in the repository and in working trees,
+# so rustfmt/prettier produce identical output on every platform.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff2 binary

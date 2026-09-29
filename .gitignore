@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+/app/dist/
+/app/.vite/
+*.tsbuildinfo
+
+# Tauri generated files
+/app/src-tauri/gen/schemas/
+
+# Local outputs (CLI renders, experiments, scratch files)
+/out/
+*.local.*
+
+# Environment and secrets
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
