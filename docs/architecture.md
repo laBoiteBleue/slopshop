@@ -42,7 +42,10 @@ do not depend on each other: export receives its pixel source as a closure (see
 - `raster`: immutable tiled images (256 px tiles in the source format, shared via `Arc`) with a
   display pyramid ([ADR 0005](adr/0005-pixel-storage-v0.md)).
 - `document`: a layer stack, bottom to top, addressed by stable `LayerId`s that are never
-  reused. Layers are procedural *fills* or *rasters*. `revision` increases on every change.
+  reused. Layers are procedural *fills* or *rasters*, each with an opacity and a blend mode; the
+  document has a blend space. `revision` increases on every change.
+- `blend`: blend modes and blend spaces ([ADR 0012](adr/0012-blend-modes.md)), the reference
+  math that the CPU compositor uses and the GPU shader mirrors.
 - `edit`: `Edit` is the only mutation path. Edits are validated (failure leaves the document
   untouched) and return their exact inverse.
 - `session`: document + linear undo/redo history made of inverse edits. *Gestures* (e.g. a
@@ -99,7 +102,7 @@ Proves the engine runs without the UI.
 ### `app` (implemented, minimal)
 
 Tauri shell + Svelte UI: viewport, layer panel (visibility, live opacity, rename, drag to
-reorder, delete, add fill), undo/redo, Save / Save As of `.slop` documents (asking before
+reorder, delete, add fill, blend mode, document blend space), undo/redo, Save / Save As of `.slop` documents (asking before
 unsaved changes are lost), FR/EN interface. The IPC client serializes mutations so
 they reach the engine in order (Tauri runs async commands concurrently). Commands are `async` (never on the main thread); GPU work runs in
 `spawn_blocking`. The shell owns the open documents (one per tab, each with its own history and

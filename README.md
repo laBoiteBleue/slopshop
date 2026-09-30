@@ -94,7 +94,8 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
 - A desktop app validating the stack: document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
-  fill, visibility, live opacity, rename, drag to reorder, delete), images dropped on the canvas
+  fill, visibility, live opacity, Photoshop's blend modes, rename, drag to reorder, delete) with
+  perceptual or linear blending per document, images dropped on the canvas
   become layers, export with progress and cancel, undo/redo, English and French interface.
 - Saving documents with their layers in SlopShop's own `.slop` format: lossless, in the
   images' native precision, incremental (a save only writes what changed) and crash-safe
