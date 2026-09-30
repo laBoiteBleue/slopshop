@@ -410,6 +410,10 @@ impl Document {
         }
     }
 
+    pub(crate) fn set_size(&mut self, size: Size) -> Size {
+        std::mem::replace(&mut self.size, size)
+    }
+
     pub(crate) fn set_blend_space(&mut self, space: BlendSpace) -> BlendSpace {
         std::mem::replace(&mut self.blend_space, space)
     }
