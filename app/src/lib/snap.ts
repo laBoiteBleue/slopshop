@@ -144,16 +144,27 @@ export function snapHandle(
     const size = vertical ? t.right - t.left : t.bottom - t.top;
     if (size <= 0) continue;
     const shift = anchor + (direction * size) / span - handle;
-    // The same size: a measure along the box and along the target.
+    // The same size: a measure across the middle of the box and of the target.
+    const middle = (lo: number, hi: number) => (lo + hi) / 2;
     consider(shift, (box) =>
       vertical
         ? [
-            { x1: box.left, x2: box.right, y1: box.bottom, y2: box.bottom },
-            { x1: t.left, x2: t.right, y1: t.bottom, y2: t.bottom },
+            {
+              x1: box.left,
+              x2: box.right,
+              y1: middle(box.top, box.bottom),
+              y2: middle(box.top, box.bottom),
+            },
+            { x1: t.left, x2: t.right, y1: middle(t.top, t.bottom), y2: middle(t.top, t.bottom) },
           ]
         : [
-            { x1: box.right, x2: box.right, y1: box.top, y2: box.bottom },
-            { x1: t.right, x2: t.right, y1: t.top, y2: t.bottom },
+            {
+              x1: middle(box.left, box.right),
+              x2: middle(box.left, box.right),
+              y1: box.top,
+              y2: box.bottom,
+            },
+            { x1: middle(t.left, t.right), x2: middle(t.left, t.right), y1: t.top, y2: t.bottom },
           ],
     );
   }
