@@ -21,6 +21,7 @@
     type ExportSpec,
     type ExportStarted,
     type GpuInfo,
+    type ImageTurn,
     type Bounds,
     type LayerView,
     type Matrix,
@@ -32,6 +33,7 @@
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
+  import SizeDialog from "./lib/SizeDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
   import { formatZoom } from "./lib/format";
@@ -478,6 +480,31 @@
     matrix[4] = Math.round(matrix[4]);
     matrix[5] = Math.round(matrix[5]);
     void edit(doc.id, { kind: "transformLayers", ids, matrix });
+  }
+
+  // Image > Image Size and Canvas Size (dialogs), and Image Rotation (ADR 0017): the whole
+  // image, through the layers' transforms; nothing is cut or rewritten.
+  let sizeDialog = $state<{ mode: "image" | "canvas"; document: number } | null>(null);
+  let sizeDoc = $derived(sizeDialog && tabs.find((d) => d.id === sizeDialog?.document));
+
+  function openSizeDialog(mode: "image" | "canvas") {
+    if (active) sizeDialog = { mode, document: active.id };
+  }
+
+  function applySize(width: number, height: number, anchor: [number, number]) {
+    const dialog = sizeDialog;
+    sizeDialog = null;
+    if (!dialog) return;
+    void edit(
+      dialog.document,
+      dialog.mode === "image"
+        ? { kind: "resizeImage", width, height }
+        : { kind: "canvasSize", width, height, anchor },
+    );
+  }
+
+  function rotateImage(turn: ImageTurn) {
+    if (active) void edit(active.id, { kind: "rotateImage", turn });
   }
 
   /** A thumbnail of the dragged layers following the pointer. */
@@ -1203,6 +1230,32 @@
       {
         label: t("menu.image"),
         items: [
+          cmd(
+            t("menu.image.imageSize"),
+            () => openSizeDialog("image"),
+            keys("alt", "mod", "I"),
+            !doc,
+          ),
+          cmd(
+            t("menu.image.canvasSize"),
+            () => openSizeDialog("canvas"),
+            keys("alt", "mod", "C"),
+            !doc,
+          ),
+          {
+            kind: "submenu",
+            label: t("menu.image.rotation"),
+            disabled: !doc,
+            items: [
+              cmd(t("menu.image.rotation.halfTurn"), () => rotateImage("halfTurn")),
+              cmd(t("menu.image.rotation.clockwise"), () => rotateImage("clockwise")),
+              cmd(t("menu.image.rotation.counterClockwise"), () => rotateImage("counterClockwise")),
+              separator,
+              cmd(t("menu.image.rotation.flipHorizontal"), () => rotateImage("flipHorizontal")),
+              cmd(t("menu.image.rotation.flipVertical"), () => rotateImage("flipVertical")),
+            ],
+          },
+          separator,
           {
             kind: "submenu",
             label: t("layers.blendSpace"),
@@ -1280,6 +1333,13 @@
 
   // --- Keyboard --------------------------------------------------------------------------------
 
+  function isTextField(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
+    );
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && layerTransfer) {
       endTransfer();
@@ -1294,6 +1354,15 @@
       e.preventDefault();
       cycleTabs(e.shiftKey ? -1 : 1);
       return;
+    }
+    // Alt+Ctrl: Image Size (I) and Canvas Size (C), by the physical key (Alt changes the
+    // character on some layouts).
+    if (hasShortcutModifier(e) && e.altKey && !e.shiftKey && !isTextField(e.target)) {
+      if (e.code === "KeyI" || e.code === "KeyC") {
+        e.preventDefault();
+        if (!e.repeat) openSizeDialog(e.code === "KeyI" ? "image" : "canvas");
+        return;
+      }
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
     const key = e.key.toLowerCase();
@@ -1661,6 +1730,18 @@
     </span>
   </footer>
 </div>
+
+{#if sizeDialog && sizeDoc}
+  {#key sizeDialog}
+    <SizeDialog
+      mode={sizeDialog.mode}
+      width={sizeDoc.width}
+      height={sizeDoc.height}
+      onapply={applySize}
+      onclose={() => (sizeDialog = null)}
+    />
+  {/key}
+{/if}
 
 {#if exportDoc && exportTarget}
   {#key exportTarget}
