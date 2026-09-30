@@ -17,7 +17,7 @@ use crate::color::{
     AlphaMode, ChannelLayout, ColorSpace, IDENTITY, LinearRgba, PixelFormat, SampleType,
     TransferFunction, f16_to_f32, f32_to_f16,
 };
-use crate::geom::Size;
+use crate::geom::{Rect, Size};
 use crate::tile::{TileCoord, TileGrid};
 
 /// Tile edge in pixels. 256 × 256 RGBA8 = 256 KiB, a common GPU-friendly size.
@@ -120,6 +120,11 @@ pub enum RasterError {
         expected: usize,
         actual: usize,
     },
+    /// [`RasterImage::from_placed`]: the rectangle does not fit in the image.
+    RectOutside {
+        rect: Rect,
+        size: Size,
+    },
 }
 
 impl std::fmt::Display for RasterError {
@@ -148,6 +153,11 @@ impl std::fmt::Display for RasterError {
             } => write!(
                 f,
                 "tile {index} of level {level} has {actual} bytes, expected {expected}"
+            ),
+            RasterError::RectOutside { rect, size } => write!(
+                f,
+                "rectangle {rect:?} does not fit in {}×{}",
+                size.width, size.height
             ),
         }
     }
@@ -255,6 +265,42 @@ impl RasterImage {
             levels,
             average,
         })
+    }
+
+    /// An image of `size` holding `pixels` (packed rows of `format`, `rect.size()` of them) in
+    /// `rect` and the pixel `background` (one pixel of `format`) everywhere else: a layer
+    /// smaller than its canvas (e.g. a Photoshop layer). The tiles that hold only background
+    /// are one shared allocation, and so are their pyramid tiles: the background costs almost
+    /// no memory. `rect` may be empty (background only).
+    pub fn from_placed(
+        size: Size,
+        format: PixelFormat,
+        rect: Rect,
+        pixels: &[u8],
+        background: &[u8],
+    ) -> Result<Self, RasterError> {
+        check_format(size, format)?;
+        let bpp = format.bytes_per_pixel() as usize;
+        if background.len() != bpp {
+            return Err(RasterError::SizeMismatch {
+                expected: bpp as u64,
+                actual: background.len() as u64,
+            });
+        }
+        if rect.right() > u64::from(size.width) || rect.bottom() > u64::from(size.height) {
+            return Err(RasterError::RectOutside { rect, size });
+        }
+        let expected = rect.size().pixel_count() * bpp as u64;
+        if pixels.len() as u64 != expected {
+            return Err(RasterError::SizeMismatch {
+                expected,
+                actual: pixels.len() as u64,
+            });
+        }
+        let source = Codec::new(format);
+        let stored = Codec::new(stored_format(format));
+        let tiles = placed_tiles(size, rect, pixels, background, &source, &stored);
+        Self::from_level0_tiles(size, format, tiles)
     }
 
     /// Sizes of the pyramid levels of an image of `size`, finest first: each level half the
@@ -696,6 +742,92 @@ fn tile_level(size: Size, pixels: &[u8], source: &Codec, stored: &Codec) -> Rast
     RasterLevel { size, grid, tiles }
 }
 
+/// Level-0 tiles of [`RasterImage::from_placed`]: `pixels` in `rect`, `background` elsewhere,
+/// padded like [`tile_level`] pads them. Tiles outside `rect` (padding included) are all one
+/// shared background tile.
+fn placed_tiles(
+    size: Size,
+    rect: Rect,
+    pixels: &[u8],
+    background: &[u8],
+    source: &Codec,
+    stored: &Codec,
+) -> Vec<Arc<[u8]>> {
+    let grid = tile_grid(size);
+    let t = TILE_SIZE as usize;
+    let (src_bpp, dst_bpp) = (source.bytes_per_pixel, stored.bytes_per_pixel);
+    let opaque = stored.opaque();
+    // One source pixel into one stored pixel (RGB gains an opaque alpha).
+    let put = |dst: &mut [u8], src: &[u8]| {
+        dst[..src_bpp].copy_from_slice(src);
+        if src_bpp != dst_bpp {
+            dst[src_bpp..].copy_from_slice(&opaque);
+        }
+    };
+    let mut stored_background = vec![0u8; dst_bpp];
+    put(&mut stored_background, background);
+    let shared: Arc<[u8]> = stored_background.repeat(t * t).into();
+
+    let (rx, ry) = (rect.x as usize, rect.y as usize);
+    let (rw, rh) = (rect.width as usize, rect.height as usize);
+    let mut tiles = Vec::with_capacity(grid.tile_count() as usize);
+    for row in 0..grid.rows() as usize {
+        for col in 0..grid.columns() as usize {
+            let (x0, y0) = (col * t, row * t);
+            // Valid part of the tile; the rest repeats its last row and column.
+            let w = (size.width as usize - x0).min(t);
+            let h = (size.height as usize - y0).min(t);
+            let overlaps =
+                !rect.is_empty() && x0 < rx + rw && rx < x0 + w && y0 < ry + rh && ry < y0 + h;
+            if !overlaps {
+                tiles.push(Arc::clone(&shared));
+                continue;
+            }
+            let mut tile = vec![0u8; t * t * dst_bpp];
+            // Columns of the tile inside `rect`: [start, end).
+            let start = rx.saturating_sub(x0).min(w);
+            let end = (rx + rw).saturating_sub(x0).min(w);
+            for ty in 0..h {
+                let y = y0 + ty;
+                let dst = &mut tile[ty * t * dst_bpp..][..t * dst_bpp];
+                let inside = if (ry..ry + rh).contains(&y) {
+                    start..end
+                } else {
+                    0..0
+                };
+                for (tx, px) in dst.chunks_exact_mut(dst_bpp).take(w).enumerate() {
+                    if !inside.contains(&tx) {
+                        px.copy_from_slice(&stored_background);
+                    }
+                }
+                if !inside.is_empty() {
+                    let from = ((y - ry) * rw + x0 + inside.start - rx) * src_bpp;
+                    let src = &pixels[from..][..inside.len() * src_bpp];
+                    let dst = &mut dst[inside.start * dst_bpp..inside.end * dst_bpp];
+                    if src_bpp == dst_bpp {
+                        dst.copy_from_slice(src);
+                    } else {
+                        for (s, d) in src.chunks_exact(src_bpp).zip(dst.chunks_exact_mut(dst_bpp)) {
+                            put(d, s);
+                        }
+                    }
+                }
+                let last = dst[(w - 1) * dst_bpp..w * dst_bpp].to_vec();
+                for px in dst[w * dst_bpp..].chunks_exact_mut(dst_bpp) {
+                    px.copy_from_slice(&last);
+                }
+            }
+            let (valid, padding) = tile.split_at_mut(h * t * dst_bpp);
+            let last = &valid[(h - 1) * t * dst_bpp..];
+            for padded_row in padding.chunks_exact_mut(t * dst_bpp) {
+                padded_row.copy_from_slice(last);
+            }
+            tiles.push(Arc::from(tile));
+        }
+    }
+    tiles
+}
+
 /// The next pyramid level of `finer`, computed tile by tile: each output pixel averages the
 /// same 2×2 block as [`downsample`] does on packed rows, and output tiles are padded like
 /// [`tile_level`] pads them. The result is identical: padding repeats the last row and column,
@@ -711,6 +843,8 @@ fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
     let finer_columns = finer.grid.columns() as usize;
     let mut tiles: Vec<Arc<[u8]>> = Vec::with_capacity(grid.tile_count() as usize);
     let count = grid.tile_count() as usize;
+    let shared = shared_coarse_tiles(finer, columns, count, stored);
+    let shared = &shared;
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let per_thread = count.div_ceil(threads).max(1);
     let mut computed: Vec<Vec<Arc<[u8]>>> = Vec::new();
@@ -721,6 +855,9 @@ fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
                 scope.spawn(move || {
                     (first..(first + per_thread).min(count))
                         .map(|index| {
+                            if let Some(tile) = &shared[index] {
+                                return Arc::clone(tile);
+                            }
                             let (col, row) = (index % columns, index / columns);
                             let mut tile = vec![0u8; t * t * bpp];
                             for (i, dst) in tile.chunks_exact_mut(bpp).enumerate() {
@@ -757,6 +894,65 @@ fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
         tiles.extend(part);
     }
     RasterLevel { size, grid, tiles }
+}
+
+/// Coarse tiles of the next level that need no computing, by index: a coarse tile whose finer
+/// tiles are all one shared, uniform tile (e.g. the background of [`RasterImage::from_placed`])
+/// is uniform too, and is itself shared. Its pixel is averaged exactly as the general path
+/// averages it, so the result is identical.
+fn shared_coarse_tiles(
+    finer: &RasterLevel,
+    columns: usize,
+    count: usize,
+    stored: &Codec,
+) -> Vec<Option<Arc<[u8]>>> {
+    let t = TILE_SIZE as usize;
+    let bpp = stored.bytes_per_pixel;
+    let finer_columns = finer.grid.columns() as usize;
+    let finer_rows = finer.grid.rows() as usize;
+    // By address of the finer tile: its coarse tile, or `None` if it is not uniform.
+    let mut known: std::collections::HashMap<*const u8, Option<Arc<[u8]>>> =
+        std::collections::HashMap::new();
+    (0..count)
+        .map(|index| {
+            let (col, row) = (index % columns, index / columns);
+            let first = &finer.tiles
+                [(2 * row).min(finer_rows - 1) * finer_columns + (2 * col).min(finer_columns - 1)];
+            let same = (0..2).all(|dy| {
+                (0..2).all(|dx| {
+                    let (c, r) = (
+                        (2 * col + dx).min(finer_columns - 1),
+                        (2 * row + dy).min(finer_rows - 1),
+                    );
+                    Arc::ptr_eq(first, &finer.tiles[r * finer_columns + c])
+                })
+            });
+            if !same {
+                return None;
+            }
+            known
+                .entry(first.as_ptr())
+                .or_insert_with(|| {
+                    let pixel = &first[..bpp];
+                    if !first.chunks_exact(bpp).all(|px| px == pixel) {
+                        return None;
+                    }
+                    let mut color = [0.0f32; 3];
+                    let mut alpha = 0.0f32;
+                    for _ in 0..4 {
+                        let (c, a) = stored.read(pixel);
+                        for k in 0..3 {
+                            color[k] += c[k];
+                        }
+                        alpha += a;
+                    }
+                    let mut coarse = vec![0u8; bpp];
+                    stored.write(color.map(|c| c / 4.0), alpha / 4.0, &mut coarse);
+                    Some(coarse.repeat(t * t).into())
+                })
+                .clone()
+        })
+        .collect()
 }
 
 /// Halve an image (rounding up), averaging 2×2 blocks in linear light with premultiplied
@@ -1002,6 +1198,73 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn placed_images_match_their_full_buffer_and_share_the_background() {
+        let size = Size::new(1100, 700);
+        let rects = [
+            Rect::new(300, 260, 200, 150),
+            // Touching the right and bottom edges (padded tiles).
+            Rect::new(900, 500, 200, 200),
+            Rect::new(0, 0, 1100, 700),
+            Rect::new(10, 10, 0, 0),
+        ];
+        for (i, format) in formats().into_iter().enumerate() {
+            let bpp = format.bytes_per_pixel() as usize;
+            let background = noise(bpp, 100 + i as u64);
+            for (j, rect) in rects.into_iter().enumerate() {
+                let pixels = noise(
+                    rect.size().pixel_count() as usize * bpp,
+                    (i * 10 + j) as u64,
+                );
+                let mut full = background.repeat(size.pixel_count() as usize);
+                for y in 0..rect.height as usize {
+                    let row = &pixels[y * rect.width as usize * bpp..][..rect.width as usize * bpp];
+                    let at = ((rect.y as usize + y) * size.width as usize + rect.x as usize) * bpp;
+                    full[at..at + row.len()].copy_from_slice(row);
+                }
+                let reference = RasterImage::from_pixels(size, format, &full).unwrap();
+                let placed =
+                    RasterImage::from_placed(size, format, rect, &pixels, &background).unwrap();
+                let (a, b) = (all_tiles(&reference), all_tiles(&placed));
+                assert_eq!(a.len(), b.len());
+                for (level, (a, b)) in a.iter().zip(&b).enumerate() {
+                    assert!(
+                        a.iter().zip(b).all(|(x, y)| x[..] == y[..]),
+                        "{format:?} {rect:?}: level {level} differs"
+                    );
+                }
+                if j == 0 {
+                    // Level 0 (5 × 3 tiles): every tile but the one the rectangle covers is the same.
+                    let level0 = &b[0];
+                    let shared = level0.iter().filter(|t| Arc::ptr_eq(t, &level0[0])).count();
+                    assert_eq!(shared, level0.len() - 1, "{format:?}");
+                    // Level 1 (3 × 2 tiles): the last column comes from background only.
+                    assert!(Arc::ptr_eq(&b[1][2], &b[1][5]), "{format:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn placed_images_check_their_rectangle_and_buffers() {
+        let size = Size::new(100, 50);
+        let format = PixelFormat::RGBA8_SRGB;
+        let rect = Rect::new(90, 40, 20, 5);
+        assert_eq!(
+            RasterImage::from_placed(size, format, rect, &[0; 400], &[0; 4]).unwrap_err(),
+            RasterError::RectOutside { rect, size }
+        );
+        let rect = Rect::new(0, 0, 2, 2);
+        assert!(matches!(
+            RasterImage::from_placed(size, format, rect, &[0; 15], &[0; 4]),
+            Err(RasterError::SizeMismatch { .. })
+        ));
+        assert!(matches!(
+            RasterImage::from_placed(size, format, rect, &[0; 16], &[0; 3]),
+            Err(RasterError::SizeMismatch { .. })
+        ));
     }
 
     #[test]
