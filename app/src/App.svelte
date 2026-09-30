@@ -1730,17 +1730,8 @@
     </section>
 
     {#if active}
-      <!-- Properties (the selected adjustment layer's, ADR 0020) above Layers, as in Photoshop. -->
+      <!-- Properties (the selected adjustment layer's, ADR 0020) below Layers: the list never moves. -->
       <div class="sidebar">
-        {#if selectedAdjustment}
-          <PropertiesPanel
-            documentId={active.id}
-            layer={selectedAdjustment}
-            onedit={edit}
-            onlive={live}
-            ongestureend={endGesture}
-          />
-        {/if}
         {#key active.id}
           <LayersPanel
             bind:this={layersPanel}
@@ -1752,6 +1743,15 @@
             onlayerdrag={onLayerDrag}
           />
         {/key}
+        {#if selectedAdjustment}
+          <PropertiesPanel
+            documentId={active.id}
+            layer={selectedAdjustment}
+            onedit={edit}
+            onlive={live}
+            ongestureend={endGesture}
+          />
+        {/if}
       </div>
     {/if}
     {#if dragGhost}
@@ -2048,7 +2048,7 @@
     min-height: 0;
   }
 
-  .sidebar > :global(:last-child) {
+  .sidebar > :global(:first-child) {
     flex: 1 1 0;
   }
 

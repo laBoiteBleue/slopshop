@@ -72,8 +72,8 @@ built. Contributors: propose here first.
   undoable, and nothing is cut: pixels outside the canvas are kept, resizing resamples when
   shown.
 - Adjustment layers (Layer > New Adjustment Layer): Exposure, Hue/Saturation, Levels, placed
-  above the active layer (in its folder) and selected. A Properties panel above Layers, as in
-  Photoshop, shows the selected adjustment's parameters: sliders applied live (one undo entry
+  above the active layer (in its folder) and selected. A Properties panel below Layers (the
+  list never moves; the maintainer's choice) shows the selected adjustment's parameters: sliders applied live (one undo entry
   per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays
   normal for now.
 - Crop tool (C, Image > Crop): a frame on the whole image with eight handles, the outside
