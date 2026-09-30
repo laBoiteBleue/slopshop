@@ -251,8 +251,9 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   - v5 (schema 0.6, [ADR 0017](adr/0017-non-destructive-transforms.md)) adds `params.transform`,
     `[a, b, c, d, e, f]`: the point `(x, y)` of the node's content goes to
     `(a·x + c·y + e, b·x + d·y + f)` in its parent (the document or its group). Only nodes that
-    are not at the identity are written at v5; this version reads whole-pixel translations and
-    refuses other transforms as coming from a newer SlopShop.
+    are not at the identity are written at v5. The transform must be finite and invertible
+    (magnitudes below 1e9, |a·d − b·c| ≥ 1e-9, [ADR 0018](adr/0018-resampling.md)); earlier
+    versions of SlopShop read only whole-pixel translations and refuse the others.
   - `opacity` is in [0, 1]. `inputs` is empty for rasters and fills.
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`

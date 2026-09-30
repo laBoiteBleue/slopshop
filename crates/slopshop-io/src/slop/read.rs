@@ -399,8 +399,7 @@ pub(super) fn read_node(
     })
 }
 
-/// A node's transform (version 5; the identity before). One this version cannot apply comes
-/// from a newer SlopShop.
+/// A node's transform (version 5; the identity before): finite and invertible (ADR 0018).
 fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
     let values = match node.params.get("transform") {
         None | Some(Value::Null) => return Ok(slopshop_core::Affine::IDENTITY),
@@ -412,11 +411,8 @@ fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
         .try_into()
         .map_err(|_| corrupt("a transform has six numbers"))?;
     let transform = slopshop_core::Affine::from_array(array);
-    if !transform.is_finite() {
+    if !transform.is_valid_layer_transform() {
         return Err(corrupt("invalid transform"));
-    }
-    if transform.integer_translation().is_none() {
-        return Err(FileError::UnknownNodeType("transform".to_owned()));
     }
     Ok(transform)
 }

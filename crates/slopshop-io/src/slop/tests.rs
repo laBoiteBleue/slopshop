@@ -955,4 +955,18 @@ fn damaged_layer_trees_are_refused() {
         })
         .collect();
     assert_eq!(read(&chain.join(","), "[1]"), Err("corrupt"));
+
+    // Transforms (ADR 0017, 0018): any finite invertible affine, nothing degenerate.
+    let moved = |transform: &str| {
+        format!(
+            r#""1":{{"type":"slopshop.fill","version":5,"name":"f","visible":true,"opacity":1.0,"params":{{"blend_mode":"normal","color":[0,0,0,1],"transform":{transform}}},"inputs":[]}}"#
+        )
+    };
+    let rotated = read(&moved("[0.8,0.6,-0.6,0.8,2.5,-1.25]"), "[1]").unwrap();
+    assert_eq!(
+        rotated[0].transform.to_array(),
+        [0.8, 0.6, -0.6, 0.8, 2.5, -1.25]
+    );
+    assert_eq!(read(&moved("[1,0,2,0,0,0]"), "[1]"), Err("corrupt"));
+    assert_eq!(read(&moved("[1,0,0,1,0]"), "[1]"), Err("corrupt"));
 }
