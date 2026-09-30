@@ -25,6 +25,9 @@ const en = {
   "menu.image": "Image",
   "menu.layer": "Layer",
   "menu.layer.rename": "Rename Layer",
+  "menu.layer.newGroup": "New Group",
+  "menu.layer.group": "Group Layers",
+  "menu.layer.ungroup": "Ungroup Layers",
   "menu.layer.mask": "Layer Mask",
   "menu.layer.maskFromTransparency": "From Transparency",
   "menu.layer.maskDisable": "Disable",
@@ -233,6 +236,10 @@ const en = {
   "layers.deleteSelected": "Delete layers",
   "layers.fillColor": "Fill color",
   "layers.addFill": "Add fill layer",
+  "layers.newGroup": "New group",
+  "layers.defaultGroupName": "Group {n}",
+  "layers.expand": "Expand group",
+  "layers.collapse": "Collapse group",
   "layers.defaultFillName": "Fill {n}",
 
   "viewport.renderFailed": "Render failed: {error}",
@@ -248,6 +255,7 @@ const en = {
   "status.revision": "rev. {revision}",
 
   "blendMode.normal": "Normal",
+  "blendMode.passThrough": "Pass Through",
   "blendMode.dissolve": "Dissolve",
   "blendMode.darken": "Darken",
   "blendMode.multiply": "Multiply",

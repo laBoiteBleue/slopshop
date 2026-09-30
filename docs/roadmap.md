@@ -87,8 +87,9 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
       `.slop` 0.4
-- [ ] Groups in the layers panel (folders, Ctrl+G), PSD groups, a `.slop` or PSD imported into
-      a document arriving as a group
+- [x] Groups in the layers panel: folders that fold, New Group, Group Layers (Ctrl+G), Ungroup
+      Layers (Shift+Ctrl+G), drag into and out of groups, Pass Through in the blend modes
+- [ ] PSD groups, a `.slop` or PSD imported into a document arriving as a group
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation

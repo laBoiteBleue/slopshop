@@ -814,6 +814,20 @@
             ],
           },
           separator,
+          cmd(t("menu.layer.newGroup"), () => layersPanel?.newGroup(), undefined, !doc),
+          cmd(
+            t("menu.layer.group"),
+            () => layersPanel?.groupSelected(),
+            keys("mod", "G"),
+            selectedCount === 0,
+          ),
+          cmd(
+            t("menu.layer.ungroup"),
+            () => layersPanel?.ungroupSelected(),
+            keys("shift", "mod", "G"),
+            layer?.kind !== "group",
+          ),
+          separator,
           cmd(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
           cmd(
             t(selectedCount > 1 ? "layers.deleteSelected" : "layers.delete"),

@@ -25,6 +25,9 @@ const fr: Messages = {
   "menu.image": "Image",
   "menu.layer": "Calque",
   "menu.layer.rename": "Renommer le calque",
+  "menu.layer.newGroup": "Nouveau groupe",
+  "menu.layer.group": "Grouper les calques",
+  "menu.layer.ungroup": "Dissocier les calques",
   "menu.layer.mask": "Masque de fusion",
   "menu.layer.maskFromTransparency": "Depuis la transparence",
   "menu.layer.maskDisable": "Désactiver",
@@ -242,6 +245,10 @@ const fr: Messages = {
   "layers.deleteSelected": "Supprimer les calques",
   "layers.fillColor": "Couleur de remplissage",
   "layers.addFill": "Ajouter un calque de remplissage",
+  "layers.newGroup": "Nouveau groupe",
+  "layers.defaultGroupName": "Groupe {n}",
+  "layers.expand": "Déplier le groupe",
+  "layers.collapse": "Replier le groupe",
   "layers.defaultFillName": "Remplissage {n}",
 
   "viewport.renderFailed": "Échec du rendu : {error}",
@@ -257,6 +264,7 @@ const fr: Messages = {
   "status.revision": "rév. {revision}",
 
   "blendMode.normal": "Normal",
+  "blendMode.passThrough": "Transfert",
   "blendMode.dissolve": "Fondu",
   "blendMode.darken": "Obscurcir",
   "blendMode.multiply": "Produit",

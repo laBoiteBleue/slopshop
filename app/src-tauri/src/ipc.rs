@@ -217,10 +217,41 @@ pub enum EditRequest {
         id: u64,
         name: String,
     },
-    /// Move a layer so that it ends up at `index` (0 = bottom).
+    /// Move a layer so that it ends up at `index` (0 = bottom) among the layers of `parent`
+    /// (absent: the top level).
     MoveLayer {
         id: u64,
+        #[serde(default)]
+        parent: Option<u64>,
         index: usize,
+    },
+    /// Move several layers together (keeping their order) into `parent` (absent: the top
+    /// level), at `index` among its layers that do not move.
+    MoveLayers {
+        ids: Vec<u64>,
+        #[serde(default)]
+        parent: Option<u64>,
+        index: usize,
+    },
+    /// A new empty pass-through group at `index` among the layers of `parent`.
+    AddGroup {
+        name: String,
+        #[serde(default)]
+        parent: Option<u64>,
+        index: usize,
+    },
+    /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
+    GroupLayers {
+        ids: Vec<u64>,
+        name: String,
+    },
+    /// Replace a group by its layers (Layer > Ungroup Layers).
+    Ungroup {
+        id: u64,
+    },
+    SetGroupPassThrough {
+        id: u64,
+        pass_through: bool,
     },
     /// `mode`: a blend mode identifier (`BlendMode::id`).
     SetLayerBlendMode {
@@ -283,10 +314,36 @@ impl EditRequest {
                 id: LayerId::from_raw(id),
                 name,
             },
-            EditRequest::MoveLayer { id, index } => Edit::MoveLayer {
-                parent: None,
+            EditRequest::MoveLayer { id, parent, index } => Edit::MoveLayer {
                 id: LayerId::from_raw(id),
+                parent: parent.map(LayerId::from_raw),
                 index,
+            },
+            EditRequest::MoveLayers { ids, parent, index } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                let parent = parent.map(LayerId::from_raw);
+                Edit::move_layers(session.document(), &ids, parent, index)
+                    .map_err(|e| e.to_string())?
+            }
+            EditRequest::AddGroup {
+                name,
+                parent,
+                index,
+            } => Edit::InsertLayer {
+                parent: parent.map(LayerId::from_raw),
+                index,
+                layer: new_group(session, name),
+            },
+            EditRequest::GroupLayers { ids, name } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                let group = new_group(session, name);
+                Edit::group_layers(session.document(), group, &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::Ungroup { id } => Edit::ungroup(session.document(), LayerId::from_raw(id))
+                .map_err(|e| e.to_string())?,
+            EditRequest::SetGroupPassThrough { id, pass_through } => Edit::SetGroupPassThrough {
+                id: LayerId::from_raw(id),
+                pass_through,
             },
             EditRequest::SetLayerBlendMode { id, mode } => Edit::SetLayerBlendMode {
                 id: LayerId::from_raw(id),
@@ -311,6 +368,22 @@ impl EditRequest {
                     .collect::<Result<_, _>>()?,
             ),
         })
+    }
+}
+
+/// A new empty group, passing through as in Photoshop, with a fresh id.
+fn new_group(session: &mut Session, name: String) -> Layer {
+    Layer {
+        id: session.allocate_layer_id(),
+        name,
+        visible: true,
+        opacity: 1.0,
+        blend_mode: BlendMode::Normal,
+        mask: None,
+        content: LayerContent::Group {
+            children: Vec::new(),
+            pass_through: true,
+        },
     }
 }
 
