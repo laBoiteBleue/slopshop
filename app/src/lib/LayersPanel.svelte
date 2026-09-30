@@ -498,7 +498,15 @@
     </select>
   </div>
 
-  <ul bind:this={list} tabindex="-1" class:dragging={drag?.active}>
+  <!-- A click in the empty area below the layers deselects them, as in Photoshop. -->
+  <ul
+    bind:this={list}
+    tabindex="-1"
+    class:dragging={drag?.active}
+    onpointerdown={(e) => {
+      if (e.button === 0 && e.target === e.currentTarget) deselectLayers();
+    }}
+  >
     {#each rows as layer, row (layer.id)}
       <li
         data-row={row}
