@@ -15,7 +15,7 @@ pub mod present;
 mod region;
 mod tiles;
 
-pub use region::export_source;
+pub use region::{export_renderer, export_source};
 
 use std::collections::HashSet;
 use std::fmt;
