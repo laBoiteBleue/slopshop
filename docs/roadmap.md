@@ -60,8 +60,8 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [x] Menu bar in Photoshop's order and names, with its shortcuts
       ([ADR 0013](adr/0013-familiar-layout.md)); tools, options bar and more panels come with
       the features that need them
-- [ ] Window behavior: a second launch focuses the running window (and opens its files in
-      tabs); window size and position remembered
+- [x] Window behavior: a second launch focuses the running window (and opens its files in
+      tabs); window size, position and maximized state remembered
 - [x] Layer thumbnails in the layers panel
 - [x] Paste (Ctrl+V): a copied image becomes a layer (or a new tab), copied files open like
       dropped ones
