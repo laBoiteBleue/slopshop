@@ -69,6 +69,8 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [x] Window behavior: a second launch focuses the running window (and opens its files in
       tabs); window size, position and maximized state remembered
 - [x] Layer thumbnails in the layers panel
+- [x] Right-click menu on layers (the Layer menu's commands), Duplicate Layer (Ctrl+J), Hide or
+      Show Layers
 - [x] Layer multi-selection (Ctrl/Shift+click, Select > All Layers): delete, move, opacity and
       blend mode apply to every selected layer, as one undo entry
 - [x] Paste (Ctrl+V): a copied image becomes a layer (or a new tab), copied files open like

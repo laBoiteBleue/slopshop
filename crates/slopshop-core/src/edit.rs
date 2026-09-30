@@ -429,7 +429,10 @@ impl Edit {
 
 /// `ids` without those inside another of them (they move with it), in stacking order: depth
 /// first, each group before its layers, bottom to top.
-fn outermost_in_order(doc: &Document, ids: &[LayerId]) -> Result<Vec<LayerId>, EditError> {
+pub(crate) fn outermost_in_order(
+    doc: &Document,
+    ids: &[LayerId],
+) -> Result<Vec<LayerId>, EditError> {
     let wanted: HashSet<LayerId> = ids.iter().copied().collect();
     for &id in &wanted {
         doc.layer(id).ok_or(EditError::UnknownLayer(id))?;

@@ -109,6 +109,8 @@ export type EditRequest =
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }
   | { kind: "ungroup"; id: number }
+  /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */
+  | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
   | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }

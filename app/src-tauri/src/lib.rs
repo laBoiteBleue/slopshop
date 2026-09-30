@@ -2213,6 +2213,21 @@ mod tests {
             .map(|l| l.name.as_str())
             .collect();
         assert_eq!(names, ["a", "b", "inner"]);
+
+        apply(
+            &mut s,
+            format!(
+                r#"{{"kind":"duplicateLayers","ids":[{}],"nameFormat":"{{name}} copie"}}"#,
+                ids[1]
+            ),
+        );
+        let names: Vec<&str> = s
+            .document()
+            .layers()
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect();
+        assert_eq!(names, ["a", "a copie", "b", "inner"]);
     }
 
     #[test]

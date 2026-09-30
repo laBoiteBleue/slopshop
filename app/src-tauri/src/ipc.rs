@@ -249,6 +249,13 @@ pub enum EditRequest {
     Ungroup {
         id: u64,
     },
+    /// Copies of layers, each right above its original (Layer > Duplicate Layer). A copy is
+    /// named by `name_format` with `{name}` replaced by the original's name (the UI translates
+    /// it, e.g. `{name} copy`).
+    DuplicateLayers {
+        ids: Vec<u64>,
+        name_format: String,
+    },
     SetGroupPassThrough {
         id: u64,
         pass_through: bool,
@@ -341,6 +348,12 @@ impl EditRequest {
             }
             EditRequest::Ungroup { id } => Edit::ungroup(session.document(), LayerId::from_raw(id))
                 .map_err(|e| e.to_string())?,
+            EditRequest::DuplicateLayers { ids, name_format } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                session
+                    .duplicate_layers_edit(&ids, |name| name_format.replace("{name}", name))
+                    .map_err(|e| e.to_string())?
+            }
             EditRequest::SetGroupPassThrough { id, pass_through } => Edit::SetGroupPassThrough {
                 id: LayerId::from_raw(id),
                 pass_through,
