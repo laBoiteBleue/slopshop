@@ -107,7 +107,11 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [ ] A detail option for enlargements (Photoshop's Preserve Details crispness): a detail pass
       after resampling, clamped to the local range (see the comparison of 2026-09-30)
 - [ ] Image > Crop to the selection, with selections
-- [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
+- [x] Adjustment layers, engine ([ADR 0020](adr/0020-adjustment-layers.md)): Exposure,
+      Hue/Saturation and Levels, applied to what is below (opacity, mask, clipping, groups),
+      CPU and GPU, `.slop` 0.7
+- [ ] Adjustment layers, UI: Layer > New Adjustment Layer, a Properties panel with live sliders
+- [ ] Curves (with a curve editor), then Brightness/Contrast, Vibrance, Color Balance…
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
       `.slop` 0.4

@@ -1333,6 +1333,9 @@ async fn add_mask_from_transparency(
             LayerContent::Raster { image } => image.clone(),
             LayerContent::Fill { .. } => return Err("a fill layer has no transparency".to_owned()),
             LayerContent::Group { .. } => return Err("a group has no transparency".to_owned()),
+            LayerContent::Adjustment { .. } => {
+                return Err("an adjustment layer has no transparency".to_owned());
+            }
         }
     };
     let mask = tauri::async_runtime::spawn_blocking(move || LayerMask::from_transparency(&image))
@@ -1383,6 +1386,9 @@ async fn layer_thumbnail(
             }
             (LayerContent::Group { .. }, _, false) => {
                 return Err("groups have no thumbnail".to_owned());
+            }
+            (LayerContent::Adjustment { .. }, _, false) => {
+                return Err("adjustment layers have no thumbnail".to_owned());
             }
         }
     };

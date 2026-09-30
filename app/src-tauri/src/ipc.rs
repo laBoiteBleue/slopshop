@@ -70,6 +70,8 @@ pub struct LayerView {
     pub mask: Option<MaskView>,
     /// Display swatch, sRGB-encoded RGBA in `[0, 1]` (explicitly converted, see `color`).
     pub swatch: [f32; 4],
+    /// An adjustment layer's adjustment (ADR 0020), for the Properties panel.
+    pub adjustment: Option<AdjustmentView>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
     pub children: Vec<LayerView>,
     /// A group whose layers blend through it.
@@ -120,6 +122,7 @@ impl LayerView {
         let (kind, swatch, content_key, has_alpha) = match &layer.content {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
             LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
+            LayerContent::Adjustment { .. } => ("adjustment", [0.0; 4], 0, false),
             LayerContent::Raster { image } => (
                 "raster",
                 image
@@ -143,6 +146,13 @@ impl LayerView {
                 content_key: mask.image.id().get(),
             }),
             swatch,
+            adjustment: match &layer.content {
+                LayerContent::Adjustment { adjustment } => Some(AdjustmentView {
+                    id: adjustment.id(),
+                    values: adjustment.params(),
+                }),
+                _ => None,
+            },
             children: layer
                 .children()
                 .map_or_else(Vec::new, |c| c.iter().map(LayerView::new).collect()),
@@ -157,6 +167,15 @@ impl LayerView {
             transform: layer.transform.to_array(),
         }
     }
+}
+
+/// An adjustment layer's adjustment: its identifier and its five parameters
+/// (`Adjustment::params` order).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjustmentView {
+    pub id: &'static str,
+    pub values: [f32; 5],
 }
 
 /// A layer's mask, as the layers panel shows it.
