@@ -32,7 +32,8 @@ export type LayerView = {
   /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
   transform: [number, number, number, number, number, number];
   /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
-  adjustment: { id: AdjustmentId; values: [number, number, number, number, number] } | null;
+  /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). */
+  adjustment: { id: AdjustmentId; values: number[] } | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
@@ -42,6 +43,10 @@ export type AdjustmentId =
   | "exposure"
   | "vibrance"
   | "hueSaturation"
+  | "colorBalance"
+  | "blackWhite"
+  | "photoFilter"
+  | "channelMixer"
   | "invert"
   | "posterize"
   | "threshold";
@@ -53,10 +58,17 @@ export const ADJUSTMENTS: AdjustmentId[] = [
   "exposure",
   "vibrance",
   "hueSaturation",
+  "colorBalance",
+  "blackWhite",
+  "photoFilter",
+  "channelMixer",
   "invert",
   "posterize",
   "threshold",
 ];
+
+/** Number of parameters of an adjustment (`PARAM_COUNT` in crates/slopshop-core/src/adjust.rs). */
+export const ADJUSTMENT_PARAMS = 16;
 
 /** Turns and flips of Image > Image Rotation. */
 export type ImageTurn =
@@ -156,12 +168,13 @@ export type EditRequest =
       parent: number | null;
       index: number;
     }
-  /** An adjustment layer's five parameters (`LayerView.adjustment.values` order). */
+  /** An adjustment layer's parameters (`LayerView.adjustment.values` order, at most
+   * `ADJUSTMENT_PARAMS`). */
   | {
       kind: "setAdjustment";
       id: number;
       adjustment: AdjustmentId;
-      values: [number, number, number, number, number];
+      values: number[];
     }
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }

@@ -2524,7 +2524,30 @@ mod tests {
         assert_eq!(view.layers[1].kind, "adjustment");
         let adjustment = view.layers[1].adjustment.as_ref().unwrap();
         assert_eq!(adjustment.id, "levels");
-        assert_eq!(adjustment.values, [0.1, 0.9, 1.5, 0.0, 1.0]);
+        assert_eq!(adjustment.values[..6], [0.1, 0.9, 1.5, 0.0, 1.0, 0.0]);
+        // More than five values, for the adjustments that have them.
+        let json = format!(
+            r#"{{"kind":"setAdjustment","id":{},"adjustment":"channelMixer","values":[0,0,100,0,0,100,0,0,100,0,0,0,1]}}"#,
+            id.get()
+        );
+        let edit = serde_json::from_str::<EditRequest>(&json)
+            .unwrap()
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let adjustment = view.layers[1].adjustment.as_ref().unwrap();
+        assert_eq!(adjustment.id, "channelMixer");
+        assert_eq!(adjustment.values[12], 1.0);
+        let too_many = format!(
+            r#"{{"kind":"setAdjustment","id":{},"adjustment":"invert","values":[{}]}}"#,
+            id.get(),
+            ["0"; 17].join(",")
+        );
+        let edit = serde_json::from_str::<EditRequest>(&too_many)
+            .unwrap()
+            .into_edit(&mut s);
+        assert!(edit.is_err());
         let unknown = serde_json::from_str::<EditRequest>(
             r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"curves","parent":null,"index":0}"#,
         )
