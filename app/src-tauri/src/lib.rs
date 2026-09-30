@@ -2501,6 +2501,39 @@ mod tests {
     }
 
     #[test]
+    fn adjustment_requests_add_and_change_adjustment_layers() {
+        let mut s = blank_session();
+        let edit = serde_json::from_str::<EditRequest>(
+            r#"{"kind":"addAdjustmentLayer","name":"Levels 1","adjustment":"levels","parent":null,"index":1}"#,
+        )
+        .unwrap()
+        .into_edit(&mut s)
+        .unwrap();
+        s.perform(edit).unwrap();
+        let id = s.document().layers()[1].id;
+        let json = format!(
+            r#"{{"kind":"setAdjustment","id":{},"adjustment":"levels","values":[0.1,0.9,1.5,0,1]}}"#,
+            id.get()
+        );
+        let edit = serde_json::from_str::<EditRequest>(&json)
+            .unwrap()
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[1].kind, "adjustment");
+        let adjustment = view.layers[1].adjustment.as_ref().unwrap();
+        assert_eq!(adjustment.id, "levels");
+        assert_eq!(adjustment.values, [0.1, 0.9, 1.5, 0.0, 1.0]);
+        let unknown = serde_json::from_str::<EditRequest>(
+            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"curves","parent":null,"index":0}"#,
+        )
+        .unwrap()
+        .into_edit(&mut s);
+        assert!(unknown.is_err());
+    }
+
+    #[test]
     fn transform_requests_replace_the_gesture_so_far() {
         let mut s = blank_session();
         let id = s.document().layers()[0].id;

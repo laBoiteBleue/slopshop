@@ -7,6 +7,7 @@
 //! Layer ids travel as JSON numbers: exact up to 2^53, far beyond what a session allocates.
 
 use serde::{Deserialize, Serialize};
+use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
@@ -267,6 +268,21 @@ pub enum EditRequest {
         parent: Option<u64>,
         index: usize,
     },
+    /// A new adjustment layer (ADR 0020) at its neutral parameters, at `index` among the layers
+    /// of `parent` (absent: the top level). `adjustment`: `exposure`, `hueSaturation`, `levels`.
+    AddAdjustmentLayer {
+        name: String,
+        adjustment: String,
+        #[serde(default)]
+        parent: Option<u64>,
+        index: usize,
+    },
+    /// An adjustment layer's parameters (`values`, in `Adjustment::params` order).
+    SetAdjustment {
+        id: u64,
+        adjustment: String,
+        values: [f32; 5],
+    },
     /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
     GroupLayers {
         ids: Vec<u64>,
@@ -411,6 +427,39 @@ impl EditRequest {
                 parent: parent.map(LayerId::from_raw),
                 index,
                 layer: new_group(session, name),
+            },
+            EditRequest::AddAdjustmentLayer {
+                name,
+                adjustment,
+                parent,
+                index,
+            } => {
+                let adjustment = Adjustment::neutral(&adjustment)
+                    .ok_or(format!("unknown adjustment {adjustment}"))?;
+                Edit::InsertLayer {
+                    parent: parent.map(LayerId::from_raw),
+                    index,
+                    layer: Layer {
+                        transform: slopshop_core::Affine::IDENTITY,
+                        clipped: false,
+                        id: session.allocate_layer_id(),
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::Adjustment { adjustment },
+                    },
+                }
+            }
+            EditRequest::SetAdjustment {
+                id,
+                adjustment,
+                values,
+            } => Edit::SetAdjustment {
+                id: LayerId::from_raw(id),
+                adjustment: Adjustment::from_params(&adjustment, values)
+                    .ok_or(format!("unknown adjustment {adjustment}"))?,
             },
             EditRequest::GroupLayers { ids, name } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();

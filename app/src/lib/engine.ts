@@ -128,6 +128,21 @@ export type EditRequest =
   /** `index` counts the layers of `parent` that do not move (0 = below them all). */
   | { kind: "moveLayers"; ids: number[]; parent: number | null; index: number }
   | { kind: "addGroup"; name: string; parent: number | null; index: number }
+  /** A new adjustment layer at its neutral parameters (`index` among `parent`'s layers). */
+  | {
+      kind: "addAdjustmentLayer";
+      name: string;
+      adjustment: AdjustmentId;
+      parent: number | null;
+      index: number;
+    }
+  /** An adjustment layer's five parameters (`LayerView.adjustment.values` order). */
+  | {
+      kind: "setAdjustment";
+      id: number;
+      adjustment: AdjustmentId;
+      values: [number, number, number, number, number];
+    }
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }
   | { kind: "ungroup"; id: number }
