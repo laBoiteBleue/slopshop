@@ -71,6 +71,11 @@ built. Contributors: propose here first.
   Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All
   undoable, and nothing is cut: pixels outside the canvas are kept, resizing resamples when
   shown.
+- Adjustment layers (Layer > New Adjustment Layer): Exposure, Hue/Saturation, Levels, placed
+  above the active layer (in its folder) and selected. A Properties panel above Layers, as in
+  Photoshop, shows the selected adjustment's parameters: sliders applied live (one undo entry
+  per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays
+  normal for now.
 - Crop tool (C, Image > Crop): a frame on the whole image with eight handles, the outside
   shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
   a corner keeps the proportions), outside to draw a new one; edges snap to the canvas, the

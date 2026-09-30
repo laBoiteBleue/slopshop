@@ -40,6 +40,7 @@
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
+  import PropertiesPanel from "./lib/PropertiesPanel.svelte";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
@@ -62,6 +63,11 @@
   let viewport = $state<Viewport | null>(null);
   /** Layers panel of the active tab (the Layer menu acts on its selection). */
   let layersPanel = $state<LayersPanel | null>(null);
+  /** The active layer when it is an adjustment layer: the Properties panel shows it. */
+  let selectedAdjustment = $derived.by(() => {
+    const layer = layersPanel?.selectedLayer() ?? null;
+    return layer?.kind === "adjustment" ? layer : null;
+  });
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
   /** Where a file being dragged over the window would go. */
@@ -1316,6 +1322,16 @@
           cmd(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
           {
             kind: "submenu",
+            label: t("menu.layer.newAdjustment"),
+            disabled: !doc,
+            items: (["exposure", "hueSaturation", "levels"] as const).map((adjustment) =>
+              cmd(`${t(`adjustment.${adjustment}`)}…`, () =>
+                layersPanel?.addAdjustment(adjustment),
+              ),
+            ),
+          },
+          {
+            kind: "submenu",
             label: t("menu.layer.mask"),
             disabled: !layer,
             items: [
@@ -1714,17 +1730,29 @@
     </section>
 
     {#if active}
-      {#key active.id}
-        <LayersPanel
-          bind:this={layersPanel}
-          doc={active}
-          onedit={edit}
-          onlive={live}
-          ongestureend={endGesture}
-          contextMenu={layerContextMenu}
-          onlayerdrag={onLayerDrag}
-        />
-      {/key}
+      <!-- Properties (the selected adjustment layer's, ADR 0020) above Layers, as in Photoshop. -->
+      <div class="sidebar">
+        {#if selectedAdjustment}
+          <PropertiesPanel
+            documentId={active.id}
+            layer={selectedAdjustment}
+            onedit={edit}
+            onlive={live}
+            ongestureend={endGesture}
+          />
+        {/if}
+        {#key active.id}
+          <LayersPanel
+            bind:this={layersPanel}
+            doc={active}
+            onedit={edit}
+            onlive={live}
+            ongestureend={endGesture}
+            contextMenu={layerContextMenu}
+            onlayerdrag={onLayerDrag}
+          />
+        {/key}
+      </div>
     {/if}
     {#if dragGhost}
       {@const ghostDoc = tabs.find((d) => d.id === dragGhost?.document)}
@@ -2011,6 +2039,17 @@
   /* Native presentation: the canvas area shows the window surface drawn by the engine. */
   :global(.native-canvas) main {
     background: transparent;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .sidebar > :global(:last-child) {
+    flex: 1 1 0;
   }
 
   .workspace {
