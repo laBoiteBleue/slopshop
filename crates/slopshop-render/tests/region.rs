@@ -7,7 +7,7 @@ use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, Mat3, PixelFormat, SampleType, WORKING_SPACE, mat_vec,
     srgb_decode,
 };
-use slopshop_core::{BlendMode, BlendSpace, LayerId, Size};
+use slopshop_core::{Affine, BlendMode, BlendSpace, LayerId, Size};
 use slopshop_core::{Document, Edit, Layer, LayerContent, LinearRgba, RasterImage, Rect, Session};
 use slopshop_render::{RenderError, Renderer};
 
@@ -1044,4 +1044,175 @@ fn gpu_moved_layers_match_the_cpu_reference_compositor() {
             }
         }
     }
+}
+
+/// Give layer `id` a transform.
+fn transform(session: &mut Session, id: LayerId, transform: Affine) {
+    session
+        .perform(Edit::SetLayerTransform { id, transform })
+        .unwrap();
+}
+
+/// GPU and CPU renders of `region` agree. f32 texel coordinates on the GPU make the weights
+/// differ slightly from the CPU's f64; and a texel right at the anti-ringing boundary
+/// (`resample::ANTIRING_R2`) can bound one side and not the other, which moves that sample by
+/// at most the kernel's overshoot: allowed for 1 sample in 100 000.
+fn assert_matches_cpu(r: &Renderer, doc: &Document, region: Rect, what: &str) {
+    let gpu = render(r, doc, region);
+    let mut cpu = vec![0.0; gpu.len()];
+    slopshop_core::composite::composite_region(doc, region, &mut cpu).unwrap();
+    let mut outliers = 0;
+    for (i, (g, c)) in gpu.iter().zip(&cpu).enumerate() {
+        let scale = c.abs().max(1.0);
+        let d = (g - c).abs();
+        assert!(
+            d <= 0.05 * scale,
+            "{what} {region:?} sample {i}: GPU {g} vs CPU {c}"
+        );
+        if d > 1e-3 * scale {
+            outliers += 1;
+        }
+    }
+    assert!(
+        outliers <= gpu.len() / 100_000,
+        "{what} {region:?}: {outliers} of {} samples beyond 1e-3",
+        gpu.len()
+    );
+}
+
+#[test]
+fn gpu_resampled_layers_match_the_cpu_reference_compositor() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        let mut s = Session::new(Document::new(size));
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        // A rotated background, larger than the canvas.
+        let background = image(Size::new(420, 400), PixelFormat::RGBA8_SRGB, pattern);
+        let bg = push_into(&mut s, None, raster(&background), BlendMode::Normal, 1.0);
+        transform(
+            &mut s,
+            bg,
+            Affine::rotation(0.3).then(Affine::translation(40.0, -90.0)),
+        );
+        // An enlarged small layer whose mask replaces its alpha, in multiply.
+        let small = image(Size::new(40, 30), PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![
+                (x * 6) as u8,
+                (y * 8) as u8,
+                90,
+                ((x * 7 + y * 13) % 256) as u8,
+            ]
+        });
+        let big = push_into(&mut s, None, raster(&small), BlendMode::Multiply, 0.8);
+        let mask = slopshop_core::LayerMask::from_transparency(&small).unwrap();
+        s.perform(Edit::SetLayerMask {
+            id: big,
+            mask: Some(mask),
+        })
+        .unwrap();
+        transform(
+            &mut s,
+            big,
+            Affine::scale(2.7, 3.1).then(Affine::translation(12.25, 30.5)),
+        );
+        // A strongly reduced, rotated layer (a coarser level) in a scaled, masked group.
+        let folder = push_into(&mut s, None, group(false), BlendMode::Screen, 0.9);
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let ramp = image(Size::new(200, 200), gray, |x, y| {
+            vec![((x + y) % 256) as u8]
+        });
+        s.perform(Edit::SetLayerMask {
+            id: folder,
+            mask: Some(slopshop_core::LayerMask {
+                image: ramp,
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        })
+        .unwrap();
+        transform(
+            &mut s,
+            folder,
+            Affine::scale(0.9, 1.2).then(Affine::translation(100.5, 20.0)),
+        );
+        let wide = image(Size::new(600, 500), PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![
+                (x * 7) as u8,
+                (y * 3) as u8,
+                ((x + y) * 5) as u8,
+                (x ^ y) as u8,
+            ]
+        });
+        let reduced = push_into(&mut s, Some(folder), raster(&wide), BlendMode::Normal, 1.0);
+        transform(
+            &mut s,
+            reduced,
+            Affine::scale(0.3, 0.2)
+                .then(Affine::rotation(-0.7))
+                .then(Affine::translation(10.0, 80.0)),
+        );
+        // A quarter turn with a flip at a whole-pixel place (copied texels), and a layer
+        // clipped to the rotated background.
+        let turned = push_into(&mut s, None, raster(&small), BlendMode::Overlay, 1.0);
+        transform(
+            &mut s,
+            turned,
+            Affine {
+                a: 0.0,
+                b: -1.0,
+                c: -1.0,
+                d: 0.0,
+                e: 250.0,
+                f: 200.0,
+            },
+        );
+        let hdr = image(
+            Size::new(90, 70),
+            float_format(ColorSpace::LINEAR_SRGB, AlphaMode::Straight),
+            |x, y| {
+                floats([
+                    x as f32 / 30.0,
+                    0.3,
+                    y as f32 / 70.0,
+                    ((x + y) % 7) as f32 / 6.0,
+                ])
+            },
+        );
+        let clipped = push_into(&mut s, None, raster(&hdr), BlendMode::Normal, 1.0);
+        clip(&mut s, clipped);
+        transform(
+            &mut s,
+            clipped,
+            Affine::rotation(1.1).then(Affine::translation(150.0, 60.0)),
+        );
+
+        for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
+            assert_matches_cpu(&r, s.document(), region, &format!("{space:?}"));
+        }
+    }
+}
+
+#[test]
+fn transformed_layers_needing_more_tiles_than_their_chunk_are_split_to_fit() {
+    let Some(r) = renderer() else { return };
+    // A rotated 1000 × 900 image reads tiles well beyond each chunk's own: with 4 slots (a
+    // sample reads at most 2 × 2 tiles),
+    // chunks must shrink until their tiles fit.
+    let r = r.with_tile_capacity(4);
+    let size = Size::new(700, 600);
+    let mut s = Session::new(Document::new(size));
+    let wide = image(Size::new(1000, 900), PixelFormat::RGBA8_SRGB, pattern);
+    let id = push_into(&mut s, None, raster(&wide), BlendMode::Normal, 1.0);
+    transform(
+        &mut s,
+        id,
+        Affine::rotation(0.785).then(Affine::translation(300.0, -300.0)),
+    );
+    assert_matches_cpu(&r, s.document(), size.bounds(), "small cache");
 }

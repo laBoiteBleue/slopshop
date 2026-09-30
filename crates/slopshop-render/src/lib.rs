@@ -27,6 +27,7 @@ use slopshop_core::color::{
 use slopshop_core::composite::{Step, steps};
 use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
+use slopshop_core::resample::{self, Filter, Resampling};
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{
@@ -144,6 +145,8 @@ pub struct Renderer {
     tile_caches: Mutex<[Option<TileCache>; 4]>,
     tile_capacity: [u32; 4],
     placeholder_tiles: [wgpu::TextureView; 4],
+    /// The resampling kernel table (ADR 0018, `resample::weight_table`), as a uniform block.
+    ewa_table: wgpu::Buffer,
 }
 
 /// Upper bound on cached tiles per storage class.
@@ -174,6 +177,9 @@ const FLAG_ISOLATED: u32 = 32;
 const FLAG_ATOP: u32 = 64;
 /// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
 const BLEND_SHIFT: u32 = 8;
+/// Filters of resampled rasters (`resample_q.w` in composite.wgsl; 0: a whole-pixel offset).
+const RESAMPLE_NEAREST: u32 = 1;
+const RESAMPLE_EWA: u32 = 2;
 
 const WORKGROUP_SIZE: u32 = 8;
 const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
@@ -252,7 +258,9 @@ impl Renderer {
             },
             count: None,
         };
-        // Layers, tile table and tile arrays, shared by both entry points.
+        // Layers, tile table, tile arrays and the resampling kernel, shared by both entry points.
+        // The kernel is a uniform block: downlevel devices bind at most 4 storage buffers per
+        // stage, and export already uses 4.
         let shared = [
             storage(1, true),
             storage(3, true),
@@ -260,6 +268,7 @@ impl Renderer {
             tile_binding(5, GpuTileFormat::Uint16),
             tile_binding(6, GpuTileFormat::Float16),
             tile_binding(7, GpuTileFormat::Float32),
+            uniform(11),
         ];
         let (bind_group_layout, pipeline) = compute_pipeline(
             &device,
@@ -285,6 +294,18 @@ impl Renderer {
             .max_compute_workgroups_per_dimension
             .saturating_mul(WORKGROUP_SIZE);
         let placeholder_tiles = GpuTileFormat::ALL.map(|f| tiles::placeholder_view(&device, f));
+        let ewa_table = {
+            use wgpu::util::DeviceExt;
+            let bytes: Vec<u8> = resample::weight_table()
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect();
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("resampling kernel"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            })
+        };
         let tile_capacity = GpuTileFormat::ALL.map(|f| {
             let budget = u32::try_from(TILE_BUDGET_BYTES / f.tile_bytes()).unwrap_or(u32::MAX);
             budget
@@ -307,6 +328,7 @@ impl Renderer {
             tile_caches: Mutex::new([None, None, None, None]),
             tile_capacity,
             placeholder_tiles,
+            ewa_table,
         })
     }
 
@@ -546,7 +568,7 @@ impl Renderer {
 }
 
 /// Size of one `Layer` in composite.wgsl.
-const LAYER_BYTES: usize = 208;
+const LAYER_BYTES: usize = 304;
 
 /// GPU-ready description of the visible layers of one frame.
 struct PreparedLayers {
@@ -576,12 +598,8 @@ impl Renderer {
             .iter()
             .flat_map(|step| {
                 step_rasters(step).map(|raster| {
-                    let (image, at) = raster?;
-                    Some(RasterPlan::new(
-                        image,
-                        shifted(visible_doc?, at),
-                        view.scale,
-                    ))
+                    let (image, transform) = raster?;
+                    RasterPlan::new(image, visible_doc?, transform, view.scale)
                 })
             })
             .collect();
@@ -666,6 +684,10 @@ impl Renderer {
                 binding: 3,
                 resource: buffers.table.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: self.ewa_table.as_entire_binding(),
+            },
         ];
         entries.extend(
             (4..)
@@ -684,37 +706,29 @@ impl Renderer {
     }
 }
 
-/// The rasters a step samples: a raster layer's image, then its (or a group's) enabled mask.
-fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, [i32; 2])>; 2] {
+/// The rasters a step samples, with their transforms to the document: a raster layer's image,
+/// then its (or a group's) enabled mask.
+fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
     match step {
         Step::Layer {
             layer, transform, ..
         } => {
-            let at = offset(*transform);
             let content = match &layer.content {
-                LayerContent::Raster { image } => Some((image.as_ref(), at)),
+                LayerContent::Raster { image } => Some((image.as_ref(), *transform)),
                 _ => None,
             };
-            [content, enabled_mask(layer).map(|image| (image, at))]
+            [
+                content,
+                enabled_mask(layer).map(|image| (image, *transform)),
+            ]
         }
         Step::Begin { .. } => [None, None],
         Step::End {
             mask,
             mask_transform,
             ..
-        } => [
-            None,
-            mask.map(|m| (m.image.as_ref(), offset(*mask_transform))),
-        ],
+        } => [None, mask.map(|m| (m.image.as_ref(), *mask_transform))],
     }
-}
-
-/// The whole-pixel offset of a composed transform (documents hold whole-pixel translations
-/// only, ADR 0017), clamped to the shader's `i32`.
-fn offset(transform: Affine) -> [i32; 2] {
-    let (x, y) = transform.integer_translation().unwrap_or((0, 0));
-    let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-    [clamp(x), clamp(y)]
 }
 
 /// A document rectangle `[x0, y0, x1, y1]` seen from an image at `offset`.
@@ -757,14 +771,14 @@ fn encode_layers(
         let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
         let table = tables.next().unwrap_or_default();
         let mask_table = tables.next().unwrap_or_default();
-        let (layer, mode, opacity, atop, at) = match step {
+        let (layer, mode, opacity, atop) = match step {
             Step::Layer {
                 layer,
                 mode,
                 opacity,
                 atop,
-                transform,
-            } => (*layer, *mode, *opacity, *atop, offset(*transform)),
+                ..
+            } => (*layer, *mode, *opacity, *atop),
             Step::Begin { isolated } => {
                 let fields = LayerFields {
                     kind: KIND_GROUP_BEGIN,
@@ -777,11 +791,11 @@ fn encode_layers(
             }
             Step::End {
                 mask,
-                mask_transform,
                 mode,
                 opacity,
                 isolated,
                 atop,
+                ..
             } => {
                 let hidden = mask.is_some() && mask_plan.is_none();
                 let mut fields = LayerFields {
@@ -791,7 +805,6 @@ fn encode_layers(
                         | if *isolated { FLAG_ISOLATED } else { 0 }
                         | if *atop { FLAG_ATOP } else { 0 },
                     opacity: if hidden { 0.0 } else { *opacity },
-                    mask_offset: offset(*mask_transform),
                     ..LayerFields::default()
                 };
                 if let Some(mask) = mask_plan {
@@ -807,8 +820,6 @@ fn encode_layers(
         }
         let mut fields = LayerFields {
             flags: mode.index() << BLEND_SHIFT | perceptual | if atop { FLAG_ATOP } else { 0 },
-            offset: at,
-            mask_offset: at,
             ..LayerFields::default()
         };
         let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
@@ -824,6 +835,8 @@ fn encode_layers(
                 let Some(plan) = plan else { continue };
                 fields.kind = KIND_RASTER;
                 fields.opacity = opacity;
+                fields.offset = plan.offset();
+                fields.resample = resample_fields(plan);
                 let range = plan.range();
                 let size = plan.image.levels()[plan.level].size();
                 fields.level_scale = plan.factor() as f32;
@@ -874,7 +887,28 @@ fn set_mask_fields(
     fields.mask_tile_count = [range.width, range.height];
     fields.mask_level_size = [size.width, size.height];
     fields.mask_format = mask.format.index() as u32;
+    fields.mask_offset = mask.offset();
+    fields.mask_resample = resample_fields(mask);
     tile_table.extend(slots);
+}
+
+/// The `resample_*` fields of composite.wgsl for a plan: zeros for a whole-pixel offset; else
+/// the map from document points to the planned level's texels (and the texel box's half-size)
+/// in the first two rows, the ellipse's quadratic form and the filter in the third.
+fn resample_fields(plan: &RasterPlan<'_>) -> [[f32; 4]; 3] {
+    let Some(r) = plan.resampling() else {
+        return [[0.0; 4]; 3];
+    };
+    let t = r.to_texel;
+    let (filter, q, extent) = match r.filter {
+        Filter::Nearest => (RESAMPLE_NEAREST, [0.0; 3], [0.5, 0.5]),
+        Filter::Ewa { q, extent } => (RESAMPLE_EWA, q, extent),
+    };
+    [
+        [t.a as f32, t.c as f32, t.e as f32, extent[0] as f32],
+        [t.b as f32, t.d as f32, t.f as f32, extent[1] as f32],
+        [q[0] as f32, q[1] as f32, q[2] as f32, filter as f32],
+    ]
 }
 
 /// Layer and tile table buffers bound for one dispatch.
@@ -917,30 +951,70 @@ struct RasterPlan<'a> {
     image: &'a RasterImage,
     format: GpuTileFormat,
     /// Document area to cover: `[x0, y0, x1, y1]`.
-    visible: [f64; 4],
+    area: [f64; 4],
+    place: Place,
     level: usize,
 }
 
+/// Where a planned raster is in the document.
+#[derive(Debug, Clone, Copy)]
+enum Place {
+    /// A whole-pixel offset (ADR 0017), clamped to the shader's `i32`.
+    Offset([i32; 2]),
+    /// Any other transform: resampled (ADR 0018), from the plan's level.
+    Resampled(Resampling),
+}
+
 impl<'a> RasterPlan<'a> {
-    /// Start at the finest level whose pixels are not smaller than output pixels.
-    fn new(image: &'a RasterImage, visible: [f64; 4], scale: f64) -> Self {
+    /// Sampling `image`, placed by `transform`, over the document `area` for output pixels of
+    /// `scale` document pixels: at the finest level whose pixels are not smaller than output
+    /// pixels (for a whole-pixel offset), or the resampling's level. `None` for a transform
+    /// that is not invertible (edits refuse them).
+    fn new(image: &'a RasterImage, area: [f64; 4], transform: Affine, scale: f64) -> Option<Self> {
         let coarsest = image.levels().len() - 1;
-        let level = if scale > 1.0 {
-            (scale.log2().floor() as usize).min(coarsest)
-        } else {
-            0
+        let (place, level) = match transform.integer_translation() {
+            Some((x, y)) => {
+                let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                let level = if scale > 1.0 {
+                    (scale.log2().floor() as usize).min(coarsest)
+                } else {
+                    0
+                };
+                (Place::Offset([clamp(x), clamp(y)]), level)
+            }
+            None => {
+                let r = Resampling::new(transform, scale, image.levels().len())?;
+                (Place::Resampled(r), r.level)
+            }
         };
-        Self {
+        Some(Self {
             image,
             format: GpuTileFormat::for_sample(image.stored_format().sample),
-            visible,
+            area,
+            place,
             level,
+        })
+    }
+
+    /// Level 0 (or the resampling's level), whatever the tile budget (export).
+    fn full_resolution(image: &'a RasterImage, area: [f64; 4], transform: Affine) -> Option<Self> {
+        Self::new(image, area, transform, 1.0)
+    }
+
+    /// The whole-pixel offset; zero when resampled.
+    fn offset(&self) -> [i32; 2] {
+        match self.place {
+            Place::Offset(offset) => offset,
+            Place::Resampled(_) => [0, 0],
         }
     }
 
-    /// Level 0, whatever the tile budget (export).
-    fn full_resolution(image: &'a RasterImage, visible: [f64; 4]) -> Self {
-        Self::new(image, visible, 1.0)
+    /// The resampling from the planned level, when resampled.
+    fn resampling(&self) -> Option<Resampling> {
+        match self.place {
+            Place::Offset(_) => None,
+            Place::Resampled(r) => Some(r.at_level(self.level)),
+        }
     }
 
     /// Document pixels per pixel of the planned level.
@@ -955,7 +1029,12 @@ impl<'a> RasterPlan<'a> {
     /// Visible tiles of the planned level.
     fn range(&self) -> Rect {
         let grid = self.image.levels()[self.level].grid();
-        tile_range(self.visible, self.factor(), grid.columns(), grid.rows())
+        // The image's area (level-0 pixels) that the document area reads.
+        let visible = match self.resampling() {
+            Some(r) => r.source_area(self.area),
+            None => shifted(self.area, self.offset()),
+        };
+        tile_range(visible, self.factor(), grid.columns(), grid.rows())
     }
 
     fn keys(&self) -> impl Iterator<Item = TileKey> + '_ {
@@ -1087,6 +1166,21 @@ fn shader_source() -> String {
     constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
     constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
     constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");
+    constants += &format!("const RESAMPLE_NEAREST: u32 = {RESAMPLE_NEAREST}u;\n");
+    constants += &format!("const RESAMPLE_EWA: u32 = {RESAMPLE_EWA}u;\n");
+    constants += &format!(
+        "const EWA_RADIUS2: f32 = {:?};\n",
+        (resample::RADIUS * resample::RADIUS) as f32
+    );
+    constants += &format!("const EWA_TABLE_SIZE: u32 = {}u;\n", resample::TABLE_SIZE);
+    constants += &format!(
+        "const EWA_TABLE_VEC4S: u32 = {}u;\n",
+        resample::TABLE_SIZE / 4
+    );
+    constants += &format!(
+        "const ANTIRING_R2: f32 = {:?};\n",
+        resample::ANTIRING_R2 as f32
+    );
     constants += &format!(
         "const DIVISION_EPSILON: f32 = {:?};\n",
         slopshop_core::blend::DIVISION_EPSILON as f32
@@ -1142,6 +1236,9 @@ struct LayerFields {
     // Whole-pixel offsets in the document of the raster and of the mask (ADR 0017).
     offset: [i32; 2],
     mask_offset: [i32; 2],
+    // Resampling of the raster and of the mask (ADR 0018, `resample_fields`).
+    resample: [[f32; 4]; 3],
+    mask_resample: [[f32; 4]; 3],
 }
 
 impl LayerFields {
@@ -1188,8 +1285,11 @@ impl LayerFields {
         for v in self.offset.iter().chain(&self.mask_offset) {
             out.extend(v.to_le_bytes());
         }
-        // Padding to the struct's 16-byte alignment.
-        out.resize(start + LAYER_BYTES, 0);
+        // `resample_u` is a vec4<f32>: 16-byte aligned.
+        out.resize(start + 208, 0);
+        for v in self.resample.iter().chain(&self.mask_resample).flatten() {
+            out.extend(v.to_le_bytes());
+        }
         debug_assert_eq!(out.len() - start, LAYER_BYTES);
     }
 }
