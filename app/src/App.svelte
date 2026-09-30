@@ -747,6 +747,42 @@
         label: t("menu.layer"),
         items: [
           cmd(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
+          {
+            kind: "submenu",
+            label: t("menu.layer.mask"),
+            disabled: !layer,
+            items: [
+              cmd(
+                t("menu.layer.maskFromTransparency"),
+                () => doc && layer && void sync(engine.addMaskFromTransparency(doc.id, layer.id)),
+                undefined,
+                !layer || !layer.hasAlpha || layer.mask !== null,
+              ),
+              cmd(
+                t(
+                  layer?.mask?.enabled === false
+                    ? "menu.layer.maskEnable"
+                    : "menu.layer.maskDisable",
+                ),
+                () =>
+                  doc &&
+                  layer?.mask &&
+                  void edit(doc.id, {
+                    kind: "setLayerMaskEnabled",
+                    id: layer.id,
+                    enabled: !layer.mask.enabled,
+                  }),
+                undefined,
+                !layer?.mask,
+              ),
+              cmd(
+                t("menu.layer.maskDelete"),
+                () => doc && layer && void edit(doc.id, { kind: "removeLayerMask", id: layer.id }),
+                undefined,
+                !layer?.mask,
+              ),
+            ],
+          },
           separator,
           cmd(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
           cmd(t("layers.delete"), () => layersPanel?.deleteSelected(), undefined, !layer),

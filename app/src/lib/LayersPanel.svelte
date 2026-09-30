@@ -354,6 +354,29 @@
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
         <span class="thumb"><LayerThumbnail {documentId} {layer} size={36} /></span>
+        {#if layer.mask}
+          <!-- Shift+click toggles the mask, as in Photoshop. -->
+          <button
+            class="mask-thumb"
+            class:disabled={!layer.mask.enabled}
+            title={t("layers.mask.hint")}
+            aria-label={t("layers.mask.hint")}
+            onpointerdown={(e) => {
+              if (e.shiftKey) e.stopPropagation();
+            }}
+            onclick={(e) => {
+              if (e.shiftKey && layer.mask) {
+                void edit({
+                  kind: "setLayerMaskEnabled",
+                  id: layer.id,
+                  enabled: !layer.mask.enabled,
+                });
+              }
+            }}
+          >
+            <LayerThumbnail {documentId} {layer} size={36} mask />
+          </button>
+        {/if}
         {#if renaming === layer.id}
           <input
             class="rename"
@@ -547,6 +570,26 @@
     display: flex;
     margin: 0 8px;
     flex: none;
+  }
+
+  .mask-thumb {
+    position: relative;
+    display: flex;
+    margin: 0 8px 0 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    flex: none;
+  }
+
+  /* A disabled mask is crossed out in red, as in Photoshop. */
+  .mask-thumb.disabled::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(to top right, transparent 47%, #e5322d 47% 53%, transparent 53%),
+      linear-gradient(to top left, transparent 47%, #e5322d 47% 53%, transparent 53%);
   }
 
   .name {

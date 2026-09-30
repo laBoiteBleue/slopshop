@@ -19,6 +19,10 @@ export type LayerView = {
   blendMode: BlendModeId;
   /** Changes when the layer's pixels change (0 for fills): time for a new thumbnail. */
   contentKey: number;
+  /** A raster with transparency: a mask can be made from it. */
+  hasAlpha: boolean;
+  /** The layer's mask (ADR 0014); `contentKey` changes with its pixels. */
+  mask: { enabled: boolean; contentKey: number } | null;
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
@@ -95,7 +99,9 @@ export type EditRequest =
   /** `index` is the final position in the stack, 0 = bottom. */
   | { kind: "moveLayer"; id: number; index: number }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
-  | { kind: "setBlendSpace"; space: BlendSpaceId };
+  | { kind: "setBlendSpace"; space: BlendSpaceId }
+  | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
+  | { kind: "removeLayerMask"; id: number };
 
 /** View changes; positions and deltas are in viewport device pixels. */
 export type ViewRequest =
@@ -486,14 +492,22 @@ export const engine = {
    * Thumbnail of a raster layer, at most `maxSide` pixels on its longer side: RGBA8 sRGB with
    * straight alpha, ready for a canvas (raw binary: width, height, then the pixels).
    */
-  layerThumbnail: async (documentId: number, layerId: number, maxSide: number) => {
-    const buffer = await invoke<ArrayBuffer>("layer_thumbnail", { documentId, layerId, maxSide });
+  layerThumbnail: async (documentId: number, layerId: number, maxSide: number, mask = false) => {
+    const buffer = await invoke<ArrayBuffer>("layer_thumbnail", {
+      documentId,
+      layerId,
+      maxSide,
+      mask,
+    });
     const view = new DataView(buffer);
     const width = view.getUint32(0, true);
     const height = view.getUint32(4, true);
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /** Add a mask made from the transparency of a raster layer (one undo entry). */
+  addMaskFromTransparency: (documentId: number, layerId: number) =>
+    serial(() => invoke<DocumentView>("add_mask_from_transparency", { documentId, layerId })),
   /**
    * Paste the clipboard: copied files open like dropped ones (layers of `documentId`, or new
    * tabs; outcomes arrive as `open-*` events), a copied image becomes a layer named `name` of
