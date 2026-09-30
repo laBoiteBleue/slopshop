@@ -186,6 +186,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                     visible: true,
                     opacity,
                     blend_mode: BlendMode::Normal,
+                    mask: None,
                     content: LayerContent::Fill { color },
                 },
             })

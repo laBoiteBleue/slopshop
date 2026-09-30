@@ -485,6 +485,7 @@ mod tests {
                 visible: true,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
+                mask: None,
                 content: LayerContent::Raster {
                     image: Arc::new(image),
                 },

@@ -67,6 +67,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
         visible: true,
         opacity,
         blend_mode: BlendMode::Normal,
+        mask: None,
         content,
     };
     Edit::InsertLayer { index, layer }.apply(doc).unwrap();
@@ -186,6 +187,24 @@ fn assert_same(a: &Document, b: &Document) {
         assert_eq!((x.id, &x.name, x.visible), (y.id, &y.name, y.visible));
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
+        match (&x.mask, &y.mask) {
+            (None, None) => {}
+            (Some(m), Some(n)) => {
+                assert_eq!(
+                    (m.enabled, m.replaces_alpha),
+                    (n.enabled, n.replaces_alpha),
+                    "{}",
+                    x.name
+                );
+                assert_eq!(m.image.format(), n.image.format(), "{}", x.name);
+                for (l, k) in m.image.levels().iter().zip(n.image.levels()) {
+                    for (s, t) in l.tiles().iter().zip(k.tiles()) {
+                        assert!(s[..] == t[..], "{}: mask tile differs", x.name);
+                    }
+                }
+            }
+            _ => panic!("{}: mask presence differs", x.name),
+        }
         match (&x.content, &y.content) {
             (LayerContent::Fill { color: c }, LayerContent::Fill { color: d }) => {
                 let bits = |c: &LinearRgba| [c.r, c.g, c.b, c.a].map(f32::to_bits);
@@ -558,6 +577,18 @@ fn golden_document() -> Document {
     let color = LinearRgba::new(0.25, 0.5, 1.0, 0.5);
     push(&mut doc, "Tint", LayerContent::Fill { color }, 0.5);
     let hidden = push(&mut doc, "Gradient again", raster(&gradient), 1.0);
+    // A mask from transparency (schema 0.3) on the half-float gray + alpha layer, disabled.
+    let ramp_layer = doc.layers()[1].clone();
+    if let LayerContent::Raster { image } = &ramp_layer.content {
+        let mut mask = slopshop_core::LayerMask::from_transparency(image).unwrap();
+        mask.enabled = false;
+        Edit::SetLayerMask {
+            id: ramp_layer.id,
+            mask: Some(mask),
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
     // Blend modes (schema 0.2): by id, in stack order.
     let ids: Vec<_> = doc.layers().iter().map(|l| l.id).collect();
     for (id, mode) in ids.into_iter().zip([
@@ -582,9 +613,23 @@ fn golden_document() -> Document {
     doc
 }
 
-/// What the schema 0.1 fixture holds: no blend modes then, and linear compositing.
-fn golden_document_v0_1() -> Document {
+/// What the schema 0.2 fixture holds: no masks then.
+fn golden_document_v0_2() -> Document {
     let mut doc = golden_document();
+    for layer in doc.layers().to_vec() {
+        Edit::SetLayerMask {
+            id: layer.id,
+            mask: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    doc
+}
+
+/// What the schema 0.1 fixture holds: no blend modes either, and linear compositing.
+fn golden_document_v0_1() -> Document {
+    let mut doc = golden_document_v0_2();
     for layer in doc.layers().to_vec() {
         Edit::SetLayerBlendMode {
             id: layer.id,
@@ -613,6 +658,8 @@ fn golden_fixtures_still_open_identically() {
     assert_same(&golden_document_v0_1(), &loaded);
     assert_eq!(file.generation(), 1);
     let (loaded, _) = SlopFile::open(&golden_path("0.2")).unwrap();
+    assert_same(&golden_document_v0_2(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.3")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 
@@ -674,5 +721,28 @@ fn blend_modes_and_space_round_trip_and_unknown_ones_are_refused() {
         Ok(BlendSpace::Perceptual)
     );
     assert_eq!(space(r#","blend_space":"cmyk""#), Err("newerVersion"));
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn masks_round_trip_and_share_their_tiles() {
+    let path = temp_path("masks.slop");
+    let mut doc = sample_document();
+    for layer in doc.layers().to_vec() {
+        if let LayerContent::Raster { image } = &layer.content
+            && let Some(mask) = slopshop_core::LayerMask::from_transparency(image)
+        {
+            Edit::SetLayerMask {
+                id: layer.id,
+                mask: Some(mask),
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+    }
+    assert!(doc.layers().iter().any(|l| l.mask.is_some()));
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
     fs::remove_file(&path).ok();
 }

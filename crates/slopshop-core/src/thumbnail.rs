@@ -22,6 +22,20 @@ pub struct Thumbnail {
 /// `image` fitted in `max_side`×`max_side` pixels, keeping its aspect ratio; never enlarged.
 /// `max_side` 0 is treated as 1.
 pub fn raster_thumbnail(image: &RasterImage, max_side: u32) -> Thumbnail {
+    thumbnail_as(image, max_side, PixelFormat::RGBA8_SRGB)
+}
+
+/// A mask's thumbnail (ADR 0014): its coverage values shown as they are (50% coverage is code
+/// 128, mid gray, as in Photoshop), not as light encoded for display.
+pub fn mask_thumbnail(mask: &RasterImage, max_side: u32) -> Thumbnail {
+    let raw = PixelFormat {
+        color_space: crate::color::ColorSpace::LINEAR_SRGB,
+        ..PixelFormat::RGBA8_SRGB
+    };
+    thumbnail_as(mask, max_side, raw)
+}
+
+fn thumbnail_as(image: &RasterImage, max_side: u32, target: PixelFormat) -> Thumbnail {
     let max_side = max_side.max(1);
     let full = image.size();
     let longest = full.width.max(full.height);
@@ -85,7 +99,7 @@ pub fn raster_thumbnail(image: &RasterImage, max_side: u32) -> Thumbnail {
     }
 
     let converter = Converter::new(
-        PixelFormat::RGBA8_SRGB,
+        target,
         ConvertOptions {
             dither: false,
             big_endian: false,
@@ -199,5 +213,18 @@ mod tests {
             "{:?}",
             t.pixels
         );
+    }
+
+    #[test]
+    fn mask_thumbnails_show_coverage_values_as_they_are() {
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let mask = RasterImage::from_pixels(Size::new(2, 1), gray, &[128, 255]).unwrap();
+        let t = mask_thumbnail(&mask, 16);
+        assert_eq!(t.pixels, [128, 128, 128, 255, 255, 255, 255, 255]);
     }
 }

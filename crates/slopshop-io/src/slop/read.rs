@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use slopshop_core::color::LinearRgba;
-use slopshop_core::document::{Document, Layer, LayerContent, LayerId};
+use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
 use slopshop_core::{BlendMode, BlendSpace};
@@ -312,6 +312,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             _ => return Err(FileError::UnknownNodeType(versioned())),
         };
         let blend_mode = node_blend_mode(node)?;
+        let mask = node_mask(node, &rasters)?;
         if !node.extra.is_empty() {
             residue.nodes.insert(*id, node.extra.clone());
         }
@@ -321,6 +322,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             visible: node.visible,
             opacity: node.opacity,
             blend_mode,
+            mask,
             content,
         });
     }
@@ -352,6 +354,34 @@ pub(super) fn node_blend_mode(node: &NodeDto) -> Result<BlendMode, FileError> {
             .ok_or_else(|| FileError::UnknownNodeType(format!("blend mode {id}"))),
         _ => Err(corrupt("node without a blend mode")),
     }
+}
+
+/// A node's mask (version 3; none before): `{ image, enabled, replaces_alpha }`.
+fn node_mask(
+    node: &NodeDto,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
+) -> Result<Option<LayerMask>, FileError> {
+    let mask = match node.params.get("mask") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Object(mask)) if node.version >= 3 => mask,
+        Some(_) => return Err(corrupt("invalid mask")),
+    };
+    let image = mask
+        .get("image")
+        .and_then(Value::as_str)
+        .and_then(Hash::from_key)
+        .and_then(|key| rasters.get(&key))
+        .ok_or_else(|| corrupt("mask with a missing image"))?;
+    let flag = |name: &str| {
+        mask.get(name)
+            .and_then(Value::as_bool)
+            .ok_or_else(|| corrupt("mask without its flags"))
+    };
+    Ok(Some(LayerMask {
+        image: image.clone(),
+        enabled: flag("enabled")?,
+        replaces_alpha: flag("replaces_alpha")?,
+    }))
 }
 
 /// The document's blend space. Schema 0.1 documents composited in linear light.

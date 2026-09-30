@@ -616,7 +616,8 @@ fn common_8_bit_space(source: Option<ColorSpace>) -> ColorSpace {
 }
 
 /// Whether every pixel of the document is opaque by construction: its bottom contributing layer
-/// is an opaque fill, or a raster without alpha covering the canvas, at opacity 1.
+/// is an opaque fill, or a raster without alpha covering the canvas, at opacity 1, without a
+/// mask.
 fn is_structurally_opaque(document: &Document) -> bool {
     let Some(bottom) = document
         .layers()
@@ -625,7 +626,8 @@ fn is_structurally_opaque(document: &Document) -> bool {
     else {
         return false;
     };
-    if bottom.opacity < 1.0 {
+    // A mask hides parts of the layer (conservatively, even a disabled one).
+    if bottom.opacity < 1.0 || bottom.mask.is_some() {
         return false;
     }
     match &bottom.content {

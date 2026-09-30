@@ -36,6 +36,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
                 visible: true,
                 opacity,
                 blend_mode: BlendMode::Normal,
+                mask: None,
                 content,
             },
         })
@@ -674,6 +675,91 @@ fn every_blend_mode_matches_the_cpu_reference_in_both_spaces() {
                 gpu.len()
             );
             assert!(gpu.iter().all(|v| v.is_finite()), "{mode} {space:?}");
+        }
+    }
+}
+
+#[test]
+fn masks_match_the_cpu_reference() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    let background = image(size, PixelFormat::RGBA8_SRGB, pattern);
+    // Translucent pixels of every alpha, and a gray float mask with extreme values.
+    let top = image(Size::new(270, 260), PixelFormat::RGBA8_SRGB, |x, y| {
+        vec![
+            (x % 256) as u8,
+            (y % 256) as u8,
+            200,
+            ((x * 7 + y * 13) % 256) as u8,
+        ]
+    });
+    let gray = PixelFormat {
+        layout: ChannelLayout::Gray,
+        sample: SampleType::F32,
+        color_space: ColorSpace::LINEAR_SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let custom = image(Size::new(200, 290), gray, |x, y| {
+        let v = match (x + y) % 7 {
+            0 => f32::NAN,
+            1 => f32::INFINITY,
+            2 => -3.0,
+            3 => 1.5,
+            _ => (x * y % 100) as f32 / 99.0,
+        };
+        v.to_ne_bytes().to_vec()
+    });
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        for (enabled, from_transparency) in [(true, true), (false, true), (true, false)] {
+            let mut doc = Document::new(size);
+            Edit::SetBlendSpace { space }.apply(&mut doc).unwrap();
+            let mut s = Session::new(doc);
+            push_layer(&mut s, raster(&background), 1.0);
+            let id = push_layer(&mut s, raster(&top), 0.9);
+            let fill = push_layer(
+                &mut s,
+                LayerContent::Fill {
+                    color: LinearRgba::new(0.1, 0.6, 0.3, 0.8),
+                },
+                0.7,
+            );
+            let mask = if from_transparency {
+                let mut mask = slopshop_core::LayerMask::from_transparency(&top).unwrap();
+                mask.enabled = enabled;
+                mask
+            } else {
+                slopshop_core::LayerMask {
+                    image: custom.clone(),
+                    enabled,
+                    replaces_alpha: false,
+                }
+            };
+            s.perform(Edit::SetLayerMask {
+                id,
+                mask: Some(mask.clone()),
+            })
+            .unwrap();
+            s.perform(Edit::SetLayerMask {
+                id: fill,
+                mask: Some(slopshop_core::LayerMask {
+                    image: custom.clone(),
+                    enabled: true,
+                    replaces_alpha: false,
+                }),
+            })
+            .unwrap();
+            let region = size.bounds();
+            let mut cpu = vec![0.0; region.size().pixel_count() as usize * 4];
+            let mut gpu = cpu.clone();
+            slopshop_render::export_source(None, s.document())(region, &mut cpu).unwrap();
+            slopshop_render::export_source(Some(&r), s.document())(region, &mut gpu).unwrap();
+            let case = format!("{space:?} enabled {enabled} from transparency {from_transparency}");
+            for (i, (g, c)) in gpu.iter().zip(&cpu).enumerate() {
+                assert!(
+                    (g - c).abs() <= 1e-4 * c.abs().max(1.0),
+                    "{case}: sample {i}: GPU {g} vs CPU {c}"
+                );
+            }
         }
     }
 }

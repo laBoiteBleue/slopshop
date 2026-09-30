@@ -12,7 +12,9 @@ use slopshop_core::raster::{ImageId, TILE_SIZE};
 use slopshop_core::{BlendSpace, Document, Layer, LayerContent, RasterImage, Rect};
 
 use crate::tiles::{GpuTileFormat, TileCache};
-use crate::{NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers};
+use crate::{
+    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, enabled_mask, encode_layers,
+};
 
 /// One RGBA f32 pixel.
 const PIXEL_BYTES: u64 = 16;
@@ -289,13 +291,20 @@ impl Renderer {
             chunk.right() as f64,
             chunk.bottom() as f64,
         ];
+        // Two plans per layer: its raster, then its enabled mask (ADR 0014).
         let plans: Vec<Option<RasterPlan<'_>>> = layers
             .iter()
-            .map(|layer| match &layer.content {
-                LayerContent::Raster { image } if covers(image, chunk) => {
-                    Some(RasterPlan::full_resolution(image, area))
-                }
-                _ => None,
+            .flat_map(|layer| {
+                let content = match &layer.content {
+                    LayerContent::Raster { image } if covers(image, chunk) => {
+                        Some(RasterPlan::full_resolution(image, area))
+                    }
+                    _ => None,
+                };
+                let mask = enabled_mask(layer)
+                    .filter(|image| covers(image, chunk))
+                    .map(|image| RasterPlan::full_resolution(image, area));
+                [content, mask]
             })
             .collect();
         for cache in caches.iter_mut().flatten() {
@@ -440,15 +449,18 @@ fn max_chunk_pixels(max_output_bytes: u64) -> u64 {
 fn raster_images(layers: &[&Layer], region: Rect, format: GpuTileFormat) -> HashSet<ImageId> {
     layers
         .iter()
-        .filter_map(|layer| match &layer.content {
-            LayerContent::Raster { image }
-                if GpuTileFormat::for_sample(image.stored_format().sample) == format
-                    && covers(image, region) =>
-            {
-                Some(image.id())
-            }
-            _ => None,
+        .flat_map(|layer| {
+            let content = match &layer.content {
+                LayerContent::Raster { image } => Some(image.as_ref()),
+                LayerContent::Fill { .. } => None,
+            };
+            content.into_iter().chain(enabled_mask(layer))
         })
+        .filter(|image| {
+            GpuTileFormat::for_sample(image.stored_format().sample) == format
+                && covers(image, region)
+        })
+        .map(|image| image.id())
         .collect()
 }
 

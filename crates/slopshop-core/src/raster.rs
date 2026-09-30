@@ -315,6 +315,38 @@ impl RasterImage {
         stored_format(self.format)
     }
 
+    /// The alpha channel as a mask image (ADR 0014): gray, same size and sample type, samples
+    /// copied unchanged tile by tile, with a linear transfer so that a sample reads as its
+    /// coverage. `None` for an image without alpha.
+    pub fn alpha_mask(&self) -> Option<RasterImage> {
+        // RGB is stored as RGBA with an opaque alpha: that is no transparency to take.
+        if !self.format.layout.has_alpha() {
+            return None;
+        }
+        let stored = self.stored_format();
+        let sample = stored.sample.bytes() as usize;
+        let pixel = stored.bytes_per_pixel() as usize;
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: stored.sample,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let tiles = self.levels[0]
+            .tiles()
+            .iter()
+            .map(|tile| {
+                let alpha: Vec<u8> = tile
+                    .chunks_exact(pixel)
+                    .flat_map(|px| px[pixel - sample..].iter().copied())
+                    .collect();
+                Arc::<[u8]>::from(alpha)
+            })
+            .collect();
+        // Invariant: tiles of the right count and length for this size and format.
+        RasterImage::from_level0_tiles(self.size(), format, tiles).ok()
+    }
+
     /// Pyramid levels, finest first. Never empty.
     pub fn levels(&self) -> &[RasterLevel] {
         &self.levels

@@ -831,6 +831,7 @@ fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, Str
             visible: true,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
+            mask: None,
             content: LayerContent::Raster {
                 image: Arc::new(image),
             },

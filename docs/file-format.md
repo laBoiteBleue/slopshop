@@ -1,4 +1,4 @@
-# The `.slop` document format, version 0.2
+# The `.slop` document format, version 0.3
 
 The byte-level specification of SlopShop documents. The design and its reasons are in
 [ADR 0009](adr/0009-document-file-format.md). The reference implementation is
@@ -176,7 +176,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
 
 ```json
 {
-  "schema": { "major": 0, "minor": 2 },
+  "schema": { "major": 0, "minor": 3 },
   "writer": { "app": "slopshop", "version": "0.1.0" },
   "document": {
     "size": [21600, 10800],
@@ -190,10 +190,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     "blend_space": "perceptual"
   },
   "nodes": {
-    "3": { "type": "slopshop.raster", "version": 2, "name": "Background", "visible": true,
-           "opacity": 1.0, "params": { "image": "b3:9f2c…", "blend_mode": "normal" },
+    "3": { "type": "slopshop.raster", "version": 3, "name": "Background", "visible": true,
+           "opacity": 1.0, "params": { "image": "b3:9f2c…", "blend_mode": "normal",
+           "mask": { "image": "b3:41d7…", "enabled": true, "replaces_alpha": true } },
            "inputs": [] },
-    "5": { "type": "slopshop.fill", "version": 2, "name": "Tint", "visible": true,
+    "5": { "type": "slopshop.fill", "version": 3, "name": "Tint", "visible": true,
            "opacity": 0.5, "params": { "color": [0.2, 0.1, 0.0, 1.0], "blend_mode": "multiply" },
            "inputs": [] }
   },
@@ -231,6 +232,10 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `linearLight`, `pinLight`, `hardMix`, `difference`, `exclusion`, `subtract`, `divide`,
     `hue`, `saturation`, `color`, `luminosity`. v1 nodes are in normal mode. An unknown mode
     or blend space is refused like an unknown node type.
+  - v3 (schema 0.3) adds the optional `params.mask` ([ADR 0014](adr/0014-layer-masks.md)):
+    `image`, the key of a gray entry of `images` whose samples are coverage (read linearly);
+    `enabled`; `replaces_alpha` (the layer's own alpha is ignored while the mask exists). Nodes
+    below v3 have no mask.
   - `opacity` is in [0, 1]. `inputs` is empty (reserved for the node graph).
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`

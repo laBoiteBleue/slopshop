@@ -63,6 +63,10 @@ pub struct LayerView {
     /// Changes when the layer's pixels change (the raster image's id; 0 for fills): the UI
     /// fetches a new thumbnail then.
     pub content_key: u64,
+    /// A raster whose image has transparency (a mask can be made from it).
+    pub has_alpha: bool,
+    /// The layer's mask, if any (ADR 0014).
+    pub mask: Option<MaskView>,
     /// Display swatch, sRGB-encoded RGBA in `[0, 1]` (explicitly converted, see `color`).
     pub swatch: [f32; 4],
 }
@@ -103,14 +107,15 @@ pub struct SaveFailed {
 
 impl LayerView {
     fn new(layer: &Layer) -> Self {
-        let (kind, swatch, content_key) = match &layer.content {
-            LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0),
+        let (kind, swatch, content_key, has_alpha) = match &layer.content {
+            LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
             LayerContent::Raster { image } => (
                 "raster",
                 image
                     .average_color(&WORKING_SPACE)
                     .working_to_srgb_encoded(),
                 image.id().get(),
+                image.format().layout.has_alpha(),
             ),
         };
         Self {
@@ -121,9 +126,23 @@ impl LayerView {
             blend_mode: layer.blend_mode.id(),
             kind,
             content_key,
+            has_alpha,
+            mask: layer.mask.as_ref().map(|mask| MaskView {
+                enabled: mask.enabled,
+                content_key: mask.image.id().get(),
+            }),
             swatch,
         }
     }
+}
+
+/// A layer's mask, as the layers panel shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskView {
+    pub enabled: bool,
+    /// Changes when the mask's pixels change: time for a new mask thumbnail.
+    pub content_key: u64,
 }
 
 /// Identifier of a color space without a name (e.g. read from an ICC profile).
@@ -197,6 +216,13 @@ pub enum EditRequest {
     SetBlendSpace {
         space: String,
     },
+    SetLayerMaskEnabled {
+        id: u64,
+        enabled: bool,
+    },
+    RemoveLayerMask {
+        id: u64,
+    },
 }
 
 impl EditRequest {
@@ -214,6 +240,7 @@ impl EditRequest {
                         visible: true,
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
+                        mask: None,
                         content: LayerContent::Fill {
                             color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                         },
@@ -246,6 +273,14 @@ impl EditRequest {
             EditRequest::SetBlendSpace { space } => Edit::SetBlendSpace {
                 space: BlendSpace::from_id(&space)
                     .ok_or(format!("unknown blend space {space:?}"))?,
+            },
+            EditRequest::SetLayerMaskEnabled { id, enabled } => Edit::SetLayerMaskEnabled {
+                id: LayerId::from_raw(id),
+                enabled,
+            },
+            EditRequest::RemoveLayerMask { id } => Edit::SetLayerMask {
+                id: LayerId::from_raw(id),
+                mask: None,
             },
         })
     }

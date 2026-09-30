@@ -161,6 +161,7 @@ mod tests {
                     visible: true,
                     opacity: 1.0,
                     blend_mode: BlendMode::Normal,
+                    mask: None,
                     content: LayerContent::Fill {
                         color: LinearRgba::new(0.0, 0.0, 1.0, 1.0),
                     },
@@ -306,6 +307,7 @@ mod tests {
                     visible: false,
                     opacity: 0.5,
                     blend_mode: BlendMode::Normal,
+                    mask: None,
                     content: LayerContent::Raster {
                         image: image.clone(),
                     },

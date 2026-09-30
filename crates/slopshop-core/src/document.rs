@@ -66,6 +66,48 @@ pub struct Layer {
     /// How the layer combines with the layers below (ADR 0012).
     pub blend_mode: BlendMode,
     pub content: LayerContent,
+    /// Hides parts of the layer (ADR 0014).
+    pub mask: Option<LayerMask>,
+}
+
+/// A layer mask (ADR 0014): a gray raster at the document origin whose samples are the layer's
+/// coverage, read linearly and clamped to `[0, 1]` (0 hides, 1 shows; outside the image the
+/// layer is hidden).
+#[derive(Debug, Clone)]
+pub struct LayerMask {
+    /// Gray, immutable and shared like any raster.
+    pub image: Arc<RasterImage>,
+    /// Applied; a disabled mask is kept but ignored.
+    pub enabled: bool,
+    /// Made from the layer's transparency: while the mask exists (enabled or not), the layer's
+    /// own alpha is ignored, as Photoshop moves transparency into the mask.
+    pub replaces_alpha: bool,
+}
+
+impl PartialEq for LayerMask {
+    fn eq(&self, other: &Self) -> bool {
+        // Immutable images: same allocation, same content.
+        Arc::ptr_eq(&self.image, &other.image)
+            && self.enabled == other.enabled
+            && self.replaces_alpha == other.replaces_alpha
+    }
+}
+
+impl LayerMask {
+    /// A mask from the transparency of `image` (its alpha channel), enabled, replacing the
+    /// layer's own alpha. `None` when the image has no alpha.
+    pub fn from_transparency(image: &RasterImage) -> Option<Self> {
+        Some(Self {
+            image: Arc::new(image.alpha_mask()?),
+            enabled: true,
+            replaces_alpha: true,
+        })
+    }
+
+    /// Whether `image` can be a mask: gray, without alpha.
+    pub fn is_valid_image(image: &RasterImage) -> bool {
+        image.format().layout == crate::color::ChannelLayout::Gray
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +167,11 @@ impl Document {
                 && !color.is_finite()
             {
                 return Err(RestoreError::InvalidColor(id));
+            }
+            if let Some(mask) = &layer.mask
+                && !LayerMask::is_valid_image(&mask.image)
+            {
+                return Err(RestoreError::InvalidMask(id));
             }
         }
         Ok(Self {
@@ -222,6 +269,8 @@ pub enum RestoreError {
     InvalidOpacity(LayerId),
     /// A fill color with a non-finite component.
     InvalidColor(LayerId),
+    /// A mask that is not a gray image.
+    InvalidMask(LayerId),
 }
 
 impl fmt::Display for RestoreError {
@@ -236,6 +285,7 @@ impl fmt::Display for RestoreError {
             RestoreError::DuplicateId(id) => write!(f, "{id} appears twice"),
             RestoreError::InvalidOpacity(id) => write!(f, "{id} has an invalid opacity"),
             RestoreError::InvalidColor(id) => write!(f, "{id} has a non-finite color"),
+            RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
         }
     }
 }
@@ -254,6 +304,7 @@ mod tests {
             visible: true,
             opacity,
             blend_mode: BlendMode::Normal,
+            mask: None,
             content: LayerContent::Fill {
                 color: LinearRgba::new(0.1, 0.2, 0.3, 1.0),
             },

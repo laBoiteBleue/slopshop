@@ -10,7 +10,7 @@
 use std::fmt;
 
 use crate::blend::{BlendMode, BlendSpace};
-use crate::document::{Document, Layer, LayerContent, LayerId};
+use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edit {
@@ -43,6 +43,16 @@ pub enum Edit {
     SetBlendSpace {
         space: BlendSpace,
     },
+    /// Add, replace (`Some`) or delete (`None`) a layer's mask (ADR 0014).
+    SetLayerMask {
+        id: LayerId,
+        mask: Option<LayerMask>,
+    },
+    /// Apply or ignore a layer's mask, which is kept either way.
+    SetLayerMaskEnabled {
+        id: LayerId,
+        enabled: bool,
+    },
     /// Move a layer so that it ends up at `index` in the stack (0 = bottom).
     MoveLayer {
         id: LayerId,
@@ -66,6 +76,10 @@ pub enum EditError {
     InvalidOpacity(f32),
     /// Colors must be finite (out-of-gamut and HDR values are allowed).
     InvalidColor,
+    /// Masks are gray images.
+    InvalidMask,
+    /// The layer has no mask.
+    NoMask(LayerId),
 }
 
 impl fmt::Display for EditError {
@@ -84,6 +98,8 @@ impl fmt::Display for EditError {
             }
             EditError::InvalidOpacity(o) => write!(f, "invalid opacity {o} (expected 0..=1)"),
             EditError::InvalidColor => write!(f, "color components must be finite"),
+            EditError::InvalidMask => write!(f, "a mask must be a gray image"),
+            EditError::NoMask(id) => write!(f, "{id} has no mask"),
         }
     }
 }
@@ -135,6 +151,26 @@ impl Edit {
             Edit::SetBlendSpace { space } => Edit::SetBlendSpace {
                 space: doc.set_blend_space(space),
             },
+            Edit::SetLayerMask { id, mask } => {
+                if mask
+                    .as_ref()
+                    .is_some_and(|m| !LayerMask::is_valid_image(&m.image))
+                {
+                    return Err(EditError::InvalidMask);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.mask, mask);
+                Edit::SetLayerMask { id, mask: previous }
+            }
+            Edit::SetLayerMaskEnabled { id, enabled } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let mask = layer.mask.as_mut().ok_or(EditError::NoMask(id))?;
+                let previous = std::mem::replace(&mut mask.enabled, enabled);
+                Edit::SetLayerMaskEnabled {
+                    id,
+                    enabled: previous,
+                }
+            }
             Edit::MoveLayer { id, index } => {
                 let from = doc.layer_index(id).ok_or(EditError::UnknownLayer(id))?;
                 let len = doc.layers().len();
@@ -181,6 +217,13 @@ fn validate_new_layer(doc: &Document, index: usize, layer: &Layer) -> Result<(),
         return Err(EditError::LayerIdInUse(layer.id));
     }
     validate_opacity(layer.opacity)?;
+    if layer
+        .mask
+        .as_ref()
+        .is_some_and(|m| !LayerMask::is_valid_image(&m.image))
+    {
+        return Err(EditError::InvalidMask);
+    }
     match &layer.content {
         LayerContent::Fill { color } if !color.is_finite() => Err(EditError::InvalidColor),
         LayerContent::Fill { .. } | LayerContent::Raster { .. } => Ok(()),
@@ -208,6 +251,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
+            mask: None,
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
