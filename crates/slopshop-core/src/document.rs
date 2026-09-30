@@ -433,7 +433,7 @@ fn validate_restored(
             return Err(RestoreError::InvalidOpacity(id));
         }
         if crate::edit::validate_transform(layer.transform).is_err() {
-            return Err(RestoreError::UnsupportedTransform(id));
+            return Err(RestoreError::InvalidTransform(id));
         }
         if let LayerContent::Fill { color } = &layer.content
             && !color.is_finite()
@@ -474,8 +474,8 @@ pub enum RestoreError {
     InvalidMask(LayerId),
     /// A group nested deeper than [`MAX_GROUP_DEPTH`].
     TooDeep(LayerId),
-    /// A transform the compositors cannot apply yet (ADR 0017).
-    UnsupportedTransform(LayerId),
+    /// A transform that is not finite and invertible (ADR 0018).
+    InvalidTransform(LayerId),
 }
 
 impl fmt::Display for RestoreError {
@@ -491,8 +491,8 @@ impl fmt::Display for RestoreError {
             RestoreError::InvalidOpacity(id) => write!(f, "{id} has an invalid opacity"),
             RestoreError::InvalidColor(id) => write!(f, "{id} has a non-finite color"),
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
-            RestoreError::UnsupportedTransform(id) => {
-                write!(f, "{id} has a transform that is not supported yet")
+            RestoreError::InvalidTransform(id) => {
+                write!(f, "{id} has a transform that is not finite and invertible")
             }
             RestoreError::TooDeep(id) => {
                 write!(f, "{id} is nested deeper than {MAX_GROUP_DEPTH} groups")

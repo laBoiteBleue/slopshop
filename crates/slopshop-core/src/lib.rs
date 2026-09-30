@@ -9,6 +9,7 @@
 //! - [`edit`]: the only way to mutate a document; every edit yields its inverse.
 //! - [`session`]: a document plus its undo/redo history.
 //! - [`view`]: mapping between output (screen) pixels and document pixels.
+//! - [`transform`] and [`resample`]: layer transforms and how transformed layers are sampled.
 //! - [`composite`]: CPU reference compositor, at full resolution (export oracle and fallback).
 //! - [`convert`]: working-space pixels to a target pixel format, counting every lossy event.
 //! - [`job`]: cancellation and progress of background jobs.
@@ -24,6 +25,7 @@ pub mod geom;
 pub mod job;
 pub mod pick;
 pub mod raster;
+pub mod resample;
 pub mod session;
 pub mod thumbnail;
 pub mod tile;

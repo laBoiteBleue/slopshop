@@ -5,6 +5,7 @@
 //! premultiplied RGBA `f32` in the working space: visible layers from bottom to top, each
 //! combined with what is below by its blend mode, in the document's blend space (ADR 0012),
 //! after its mask (ADR 0014), groups through a stack of accumulators ([`steps`], ADR 0015).
+//! Transformed layers are resampled (ADR 0018, [`crate::resample`]); whole-pixel moves are not.
 //! Raster texels are decoded exactly like the raster codec does on
 //! import, except for the display clamp: finite values are kept as they are, however large.
 //! Only non-finite values are replaced, and counted: NaN reads as 0, and ±inf as
@@ -25,7 +26,8 @@ use crate::color::WORKING_SPACE;
 use crate::color::{IDENTITY, Mat3, mat_vec};
 use crate::document::{Document, Layer, LayerContent, LayerMask};
 use crate::geom::{Rect, Size};
-use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterLevel, TILE_SIZE};
+use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterImage, RasterLevel, TILE_SIZE};
+use crate::resample::{Resampling, TABLE_SIZE, weight_table};
 use crate::tile::TileCoord;
 use crate::transform::Affine;
 
@@ -230,7 +232,8 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, parent: Affine, steps: &mut Vec<
 
 /// What a row pass does at each step.
 enum Op<'a> {
-    Layer(Source<'a>),
+    /// Boxed: much larger than the other steps.
+    Layer(Box<Source<'a>>),
     Begin {
         isolated: bool,
     },
@@ -243,19 +246,62 @@ enum Op<'a> {
     },
 }
 
-/// Level 0 of a mask image, read as coverage, placed by `transform`.
+/// A mask image, read as coverage, placed by `transform`.
 fn mask_source(mask: &LayerMask, transform: Affine) -> Option<MaskSource<'_>> {
+    let (level, placement) = placement(&mask.image, transform)?;
     Some(MaskSource {
-        level: mask.image.levels().first()?,
+        level,
         codec: Codec::new(mask.image.stored_format()),
-        offset: offset(transform),
+        placement,
     })
 }
 
-/// The whole-pixel offset of a composed transform. Documents hold whole-pixel translations
-/// only (edits and restore refuse other transforms), and their compositions stay so.
-fn offset(transform: Affine) -> (i64, i64) {
-    transform.integer_translation().unwrap_or((0, 0))
+/// Where a raster is in the document (ADR 0017, 0018).
+#[derive(Debug, Clone)]
+enum Placement {
+    /// A whole-pixel offset: level-0 texels are document pixels.
+    Offset(i64, i64),
+    /// Any other transform: resampled (boxed: much larger than an offset).
+    Resampled(Box<Resampling>),
+}
+
+/// How `image`, placed by `transform`, is sampled: the level read and the placement. `None`
+/// for a transform that is not invertible (edits refuse them).
+fn placement(image: &RasterImage, transform: Affine) -> Option<(&RasterLevel, Placement)> {
+    let levels = image.levels();
+    match transform.integer_translation() {
+        Some((x, y)) => Some((levels.first()?, Placement::Offset(x, y))),
+        None => {
+            let r = Resampling::new(transform, 1.0, levels.len())?;
+            Some((levels.get(r.level)?, Placement::Resampled(Box::new(r))))
+        }
+    }
+}
+
+/// The stored bytes of texel (`i`, `j`) of `level`: `None` outside the level, `Some(None)` in a
+/// tile that is not stored (transparent).
+fn stored_texel(
+    level: &RasterLevel,
+    bytes_per_pixel: usize,
+    i: i64,
+    j: i64,
+) -> Option<Option<&[u8]>> {
+    let size = level.size();
+    if i < 0 || j < 0 || i >= i64::from(size.width) || j >= i64::from(size.height) {
+        return None;
+    }
+    // In range just above.
+    let (x, y) = (i as u32, j as u32);
+    let coord = TileCoord {
+        col: x / TILE_SIZE,
+        row: y / TILE_SIZE,
+    };
+    let start = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * bytes_per_pixel;
+    Some(
+        level
+            .tile(coord)
+            .and_then(|tile| tile.get(start..start + bytes_per_pixel)),
+    )
 }
 
 /// A fill or raster layer, placed by `transform`, ready to be sampled with `mode` and
@@ -285,12 +331,13 @@ fn source(
         }
         LayerContent::Raster { image } => {
             let matrix = image.matrix_to(&WORKING_SPACE);
+            let (level, placement) = placement(image, transform)?;
             SourceContent::Raster {
-                level: image.levels().first()?,
+                level,
                 codec: Codec::new(image.stored_format()),
                 matrix: (matrix != IDENTITY).then_some(matrix),
                 opacity: f64::from(opacity),
-                offset: offset(transform),
+                placement,
             }
         }
         // Groups are steps of their own.
@@ -317,37 +364,45 @@ struct Source<'a> {
     mask: Option<MaskSource<'a>>,
 }
 
-/// Level 0 of a mask image, read as coverage, at a whole-pixel offset in the document.
+/// A mask image, read as coverage, placed in the document.
 struct MaskSource<'a> {
+    /// The level sampled: level 0 unless resampled.
     level: &'a RasterLevel,
     codec: Codec,
-    offset: (i64, i64),
+    placement: Placement,
 }
 
 impl MaskSource<'_> {
-    /// Coverage at document pixel (`x`, `y`): the mask sample, linear, clamped to `[0, 1]`;
-    /// 0 outside the mask image. Non-finite samples are not counted (the GPU does the same):
-    /// NaN reads as 0, ±inf as ±[`MAX_FINITE_SAMPLE`], so 1 or 0 once clamped.
-    fn coverage(&self, x: u32, y: u32) -> f64 {
-        let size = self.level.size();
-        let (x, y) = (i64::from(x) - self.offset.0, i64::from(y) - self.offset.1);
-        if x < 0 || y < 0 || x >= i64::from(size.width) || y >= i64::from(size.height) {
-            return 0.0;
-        }
-        // In range just above.
-        let (x, y) = (x as u32, y as u32);
-        let coord = TileCoord {
-            col: x / TILE_SIZE,
-            row: y / TILE_SIZE,
+    /// Coverage at document pixel (`x`, `y`): the mask sample (resampled if the mask is
+    /// transformed), linear, clamped to `[0, 1]`; 0 outside the mask image. Non-finite samples
+    /// are not counted (the GPU does the same): NaN reads as 0, ±inf as ±[`MAX_FINITE_SAMPLE`].
+    fn coverage(&self, x: u32, y: u32, table: &[f32; TABLE_SIZE]) -> f64 {
+        let bytes = self.codec.bytes_per_pixel;
+        let value = match &self.placement {
+            &Placement::Offset(ox, oy) => {
+                match stored_texel(self.level, bytes, i64::from(x) - ox, i64::from(y) - oy) {
+                    Some(Some(px)) => self.value(px),
+                    _ => 0.0,
+                }
+            }
+            Placement::Resampled(r) => {
+                let size = self.level.size();
+                let p = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                if !r.reaches(p, size.width, size.height) {
+                    return 0.0;
+                }
+                let (color, _) = r.sample(table, p, |i, j| {
+                    stored_texel(self.level, bytes, i, j)
+                        .map(|px| [px.map_or(0.0, |px| self.value(px)); 4])
+                });
+                color[0]
+            }
         };
-        let Some(tile) = self.level.tile(coord) else {
-            return 0.0;
-        };
-        let start =
-            ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * self.codec.bytes_per_pixel;
-        let Some(px) = tile.get(start..start + self.codec.bytes_per_pixel) else {
-            return 0.0;
-        };
+        value.clamp(0.0, 1.0)
+    }
+
+    /// A stored mask sample, non-finite values mapped.
+    fn value(&self, px: &[u8]) -> f64 {
         let (color, _) = self.codec.read_mapped(px, &mut |v| {
             if v.is_nan() {
                 0.0
@@ -357,7 +412,7 @@ impl MaskSource<'_> {
                 v
             }
         });
-        f64::from(color[0]).clamp(0.0, 1.0)
+        f64::from(color[0])
     }
 }
 
@@ -382,8 +437,8 @@ enum SourceContent<'a> {
         /// Image space → working space; `None` for the identity (keeps huge values exact).
         matrix: Option<Mat3>,
         opacity: f64,
-        /// Where the image's origin is in the document (whole pixels, ADR 0017).
-        offset: (i64, i64),
+        /// Where the image is in the document; `level` is level 0 unless resampled.
+        placement: Placement,
     },
 }
 
@@ -418,7 +473,7 @@ pub fn composite_region(
                 opacity,
                 atop,
                 transform,
-            } => source(layer, mode, opacity, atop, transform).map(Op::Layer),
+            } => source(layer, mode, opacity, atop, transform).map(|s| Op::Layer(Box::new(s))),
             Step::Begin { isolated } => Some(Op::Begin { isolated }),
             Step::End {
                 mask,
@@ -478,6 +533,7 @@ fn composite_row(
     stack: &mut Vec<Vec<[f64; 4]>>,
     report: &mut CompositeReport,
 ) {
+    let table = weight_table();
     acc.fill([0.0; 4]);
     let mut depth = 0;
     for op in ops {
@@ -508,7 +564,7 @@ fn composite_row(
                 for (i, (dst, below)) in acc.iter_mut().zip(&stack[below]).enumerate() {
                     // Fits: the pixel is inside the region.
                     let x = x0 + i as u32;
-                    let coverage = opacity * mask.as_ref().map_or(1.0, |m| m.coverage(x, y));
+                    let coverage = opacity * mask.as_ref().map_or(1.0, |m| m.coverage(x, y, table));
                     if *isolated {
                         let mut src = dst.map(|c| c * coverage);
                         if *mode == BlendMode::Dissolve {
@@ -533,7 +589,7 @@ fn composite_row(
         let masked = |src: [f64; 4], x: u32| {
             let src = match &source.mask {
                 Some(mask) => {
-                    let coverage = mask.coverage(x, y);
+                    let coverage = mask.coverage(x, y, table);
                     src.map(|c| c * coverage)
                 }
                 None => src,
@@ -561,7 +617,43 @@ fn composite_row(
                 codec,
                 matrix,
                 opacity,
-                offset: (ox, oy),
+                placement: Placement::Resampled(r),
+            } => {
+                let size = level.size();
+                let bytes = codec.bytes_per_pixel;
+                for (i, dst) in acc.iter_mut().enumerate() {
+                    // Fits: the pixel is inside the region.
+                    let x = x0 + i as u32;
+                    let p = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    if !r.reaches(p, size.width, size.height) {
+                        continue;
+                    }
+                    let (color, inside) = r.sample(table, p, |i, j| {
+                        stored_texel(level, bytes, i, j).map(|px| {
+                            px.map_or([0.0; 4], |px| {
+                                texel(codec, px, matrix.as_ref(), 1.0, report)
+                            })
+                        })
+                    });
+                    let src = if source.replaces_alpha {
+                        opaque(color, *opacity).map(|c| c * inside)
+                    } else {
+                        color.map(|c| c * opacity)
+                    };
+                    let src = masked(src, x);
+                    if source.atop {
+                        blender.blend_atop(mode, &src, dst);
+                    } else {
+                        blender.blend(mode, &src, dst);
+                    }
+                }
+            }
+            SourceContent::Raster {
+                level,
+                codec,
+                matrix,
+                opacity,
+                placement: Placement::Offset(ox, oy),
             } => {
                 let size = level.size();
                 // The raster sits at its offset and may be smaller: transparent outside. Pixel
@@ -1655,5 +1747,75 @@ mod tests {
         moved.transform = Affine::translation(2.0, 1.0);
         push(&mut flat, moved);
         assert_close(&all(&doc), &all(&flat));
+    }
+
+    #[test]
+    fn a_quarter_turned_layer_is_its_image_turned_exactly() {
+        let pixels: Vec<[f32; 4]> = (0..6)
+            .map(|i| {
+                [
+                    i as f32 / 6.0,
+                    0.25,
+                    1.0 - i as f32 / 7.0,
+                    0.3 + i as f32 / 9.0,
+                ]
+            })
+            .collect();
+        // (x, y) ↦ (2 − y, x): the 3 × 2 image covers x ∈ [0, 2), y ∈ [0, 3).
+        let turn = Affine {
+            a: 0.0,
+            b: 1.0,
+            c: -1.0,
+            d: 0.0,
+            e: 2.0,
+            f: 0.0,
+        };
+        let mut turned = Document::new(Size::new(4, 4));
+        let mut layer = new_layer(
+            &mut turned,
+            float_raster(Size::new(3, 2), &pixels),
+            BlendMode::Normal,
+            1.0,
+        );
+        layer.transform = turn;
+        push(&mut turned, layer);
+        // Document pixel (x, y) shows image pixel (y, 1 − x): a 2 × 3 image, not resampled.
+        let rotated: Vec<[f32; 4]> = (0..3)
+            .flat_map(|y| (0..2).map(move |x| (y, x)))
+            .map(|(y, x)| pixels[(1 - x) * 3 + y])
+            .collect();
+        let mut reference = Document::new(Size::new(4, 4));
+        let layer = new_layer(
+            &mut reference,
+            float_raster(Size::new(2, 3), &rotated),
+            BlendMode::Normal,
+            1.0,
+        );
+        push(&mut reference, layer);
+        assert_eq!(all(&turned), all(&reference));
+    }
+
+    #[test]
+    fn a_scaled_layer_keeps_its_flat_areas_and_fades_at_its_edges() {
+        let color = [0.2, 0.5, 0.7, 1.0];
+        let mut doc = Document::new(Size::new(24, 20));
+        let mut layer = new_layer(
+            &mut doc,
+            float_raster(Size::new(4, 4), &[color; 16]),
+            BlendMode::Normal,
+            1.0,
+        );
+        // 12 × 12 pixels from (2.5, 1).
+        layer.transform = Affine::scale(3.0, 3.0).then(Affine::translation(2.5, 1.0));
+        push(&mut doc, layer);
+        let out = all(&doc);
+        let at = |x: usize, y: usize| &out[(y * 24 + x) * 4..][..4];
+        for (a, e) in at(8, 7).iter().zip(color) {
+            assert!((a - e).abs() < 1e-6, "{:?}", at(8, 7));
+        }
+        assert_eq!(at(20, 18), [0.0; 4]);
+        // The left edge runs through pixel 2: half covered.
+        let edge = at(2, 7)[3];
+        assert!(edge > 0.2 && edge < 0.8, "{edge}");
     }
 }
