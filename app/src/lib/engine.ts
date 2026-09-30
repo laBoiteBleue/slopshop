@@ -33,6 +33,10 @@ export type LayerView = {
   transform: [number, number, number, number, number, number];
 };
 
+/** Turns and flips of Image > Image Rotation. */
+export type ImageTurn =
+  "clockwise" | "counterClockwise" | "halfTurn" | "flipHorizontal" | "flipVertical";
+
 /** A 2D affine map `[a, b, c, d, e, f]`: (x, y) ↦ (a·x + c·y + e, b·x + d·y + f). */
 export type Matrix = [number, number, number, number, number, number];
 
@@ -130,6 +134,12 @@ export type EditRequest =
   | { kind: "translateLayers"; ids: number[]; dx: number; dy: number }
   /** Apply `matrix` ([a, b, c, d, e, f], in document pixels) to layers (Free Transform). */
   | { kind: "transformLayers"; ids: number[]; matrix: Matrix }
+  /** Image > Image Size: the whole image resampled to this size. */
+  | { kind: "resizeImage"; width: number; height: number }
+  /** Image > Canvas Size: `anchor` [x, y] in [0, 1] keeps the image there (0.5: centered). */
+  | { kind: "canvasSize"; width: number; height: number; anchor: [number, number] }
+  /** Image > Image Rotation: exact turns and flips of the whole image. */
+  | { kind: "rotateImage"; turn: ImageTurn }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }

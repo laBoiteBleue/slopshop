@@ -2466,6 +2466,33 @@ mod tests {
     }
 
     #[test]
+    fn image_requests_resize_rotate_and_reframe_the_canvas() {
+        let mut s = blank_session();
+        let size = s.document().size();
+        let mut perform = |json: &str| {
+            let edit = serde_json::from_str::<EditRequest>(json)
+                .unwrap()
+                .into_edit(&mut s)
+                .unwrap();
+            s.perform(edit).unwrap();
+            s.document().size()
+        };
+        let turned = perform(r#"{"kind":"rotateImage","turn":"clockwise"}"#);
+        assert_eq!(turned, Size::new(size.height, size.width));
+        let resized = perform(r#"{"kind":"resizeImage","width":40,"height":30}"#);
+        assert_eq!(resized, Size::new(40, 30));
+        let canvas = perform(r#"{"kind":"canvasSize","width":50,"height":30,"anchor":[0.5,0.5]}"#);
+        assert_eq!(canvas, Size::new(50, 30));
+        let unknown =
+            serde_json::from_str::<EditRequest>(r#"{"kind":"rotateImage","turn":"sideways"}"#)
+                .unwrap()
+                .into_edit(&mut blank_session());
+        assert!(unknown.is_err());
+        while s.undo().unwrap() {}
+        assert_eq!(s.document().size(), size);
+    }
+
+    #[test]
     fn transform_requests_replace_the_gesture_so_far() {
         let mut s = blank_session();
         let id = s.document().layers()[0].id;

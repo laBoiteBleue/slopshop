@@ -66,6 +66,11 @@ built. Contributors: propose here first.
   never resampled into the layer: the transform stays editable.
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
   Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
+- Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and
+  height in pixels or percent; Image Size keeps the proportions by default, Canvas Size has
+  Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All
+  undoable, and nothing is cut: pixels outside the canvas are kept, resizing resamples when
+  shown.
 
 ## Proposed
 

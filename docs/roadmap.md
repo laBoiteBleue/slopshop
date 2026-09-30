@@ -100,8 +100,10 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       CPU and the GPU; quarter turns and flips stay exact)
 - [x] Transforms, step 2b: Free Transform (Ctrl+T: move, scale, rotate), Edit > Transform
       (quarter turns and flips, exact)
-- [ ] Transforms, step 2c: Image Size, Canvas Size, Crop and Rotate Image as transforms of the
-      layers
+- [x] Transforms, step 2c: Image Size, Canvas Size and Image Rotation as transforms of the
+      layers (nothing cut, nothing rewritten)
+- [ ] Crop tool (C): a frame on the image, Enter applies (the engine's `Edit::crop` is ready);
+      a detail option for enlargements (Photoshop's Preserve Details crispness)
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,

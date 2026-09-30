@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
-    BlendMode, BlendSpace, Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Session, Size,
+    BlendMode, BlendSpace, Document, Edit, ImageTurn, Layer, LayerContent, LayerId, LinearRgba,
+    Session, Size,
 };
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
@@ -284,6 +285,23 @@ pub enum EditRequest {
         ids: Vec<u64>,
         matrix: [f64; 6],
     },
+    /// Image > Image Size: the whole image resampled to `width` × `height` (ADR 0018).
+    ResizeImage {
+        width: u32,
+        height: u32,
+    },
+    /// Image > Canvas Size: the canvas resized, the image kept at `anchor` (each in [0, 1]:
+    /// 0 left/top, 0.5 center, 1 right/bottom).
+    CanvasSize {
+        width: u32,
+        height: u32,
+        anchor: [f64; 2],
+    },
+    /// Image > Image Rotation: `turn` is `clockwise`, `counterClockwise`, `halfTurn`,
+    /// `flipHorizontal` or `flipVertical`.
+    RotateImage {
+        turn: String,
+    },
     /// `mode`: a blend mode identifier (`BlendMode::id`).
     SetLayerBlendMode {
         id: u64,
@@ -393,6 +411,27 @@ impl EditRequest {
                     slopshop_core::Affine::from_array(matrix),
                 )
                 .map_err(|e| e.to_string())?
+            }
+            EditRequest::ResizeImage { width, height } => {
+                Edit::resize_image(session.document(), Size::new(width, height))
+                    .map_err(|e| e.to_string())?
+            }
+            EditRequest::CanvasSize {
+                width,
+                height,
+                anchor: [x, y],
+            } => Edit::canvas_size(session.document(), Size::new(width, height), (x, y))
+                .map_err(|e| e.to_string())?,
+            EditRequest::RotateImage { turn } => {
+                let turn = match turn.as_str() {
+                    "clockwise" => ImageTurn::Clockwise,
+                    "counterClockwise" => ImageTurn::CounterClockwise,
+                    "halfTurn" => ImageTurn::HalfTurn,
+                    "flipHorizontal" => ImageTurn::FlipHorizontal,
+                    "flipVertical" => ImageTurn::FlipVertical,
+                    other => return Err(format!("unknown image turn {other}")),
+                };
+                Edit::rotate_image(session.document(), turn).map_err(|e| e.to_string())?
             }
             EditRequest::SetLayerClipped { id, clipped } => Edit::SetLayerClipped {
                 id: LayerId::from_raw(id),
