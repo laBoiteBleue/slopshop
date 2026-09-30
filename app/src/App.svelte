@@ -669,7 +669,12 @@
 
   /** A shortcut as shown in menus: `mod` (Ctrl or ⌘), `shift` and a key. */
   function keys(...parts: string[]): string {
-    const names: Record<string, string> = { mod: modifierLabel, shift: t("key.shift") };
+    const names: Record<string, string> = {
+      mod: modifierLabel,
+      shift: t("key.shift"),
+      alt: t("key.alt"),
+      delete: t("key.delete"),
+    };
     return parts.map((p) => names[p] ?? p).join("+");
   }
 
@@ -689,6 +694,7 @@
     const doc = active;
     const busy = doc !== null && saving.includes(doc.id);
     const layer = layersPanel?.selectedLayer() ?? null;
+    const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const cmd = (label: string, run: () => void, shortcut?: string, disabled = false) => ({
       kind: "command" as const,
       label,
@@ -809,7 +815,29 @@
           },
           separator,
           cmd(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
-          cmd(t("layers.delete"), () => layersPanel?.deleteSelected(), undefined, !layer),
+          cmd(
+            t(selectedCount > 1 ? "layers.deleteSelected" : "layers.delete"),
+            () => layersPanel?.deleteSelected(),
+            keys("delete"),
+            selectedCount === 0,
+          ),
+        ],
+      },
+      {
+        label: t("menu.select"),
+        items: [
+          cmd(
+            t("menu.select.allLayers"),
+            () => layersPanel?.selectAllLayers(),
+            keys("alt", "mod", "A"),
+            !doc,
+          ),
+          cmd(
+            t("menu.select.deselectLayers"),
+            () => layersPanel?.deselectLayers(),
+            undefined,
+            selectedCount === 0,
+          ),
         ],
       },
       {
@@ -844,7 +872,6 @@
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
     const key = e.key.toLowerCase();
-    // Also the physical key, like the zoom digits: layouts differ.
     // Also the physical key, like the zoom digits: layouts differ.
     if (e.shiftKey && (key === "e" || e.code === "KeyE")) {
       e.preventDefault();

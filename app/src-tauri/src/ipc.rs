@@ -223,6 +223,11 @@ pub enum EditRequest {
     RemoveLayerMask {
         id: u64,
     },
+    /// Several edits as one: applied in order, all or none, undone together (e.g. an action on
+    /// every selected layer).
+    Batch {
+        edits: Vec<EditRequest>,
+    },
 }
 
 impl EditRequest {
@@ -282,6 +287,12 @@ impl EditRequest {
                 id: LayerId::from_raw(id),
                 mask: None,
             },
+            EditRequest::Batch { edits } => Edit::Batch(
+                edits
+                    .into_iter()
+                    .map(|edit| edit.into_edit(session))
+                    .collect::<Result<_, _>>()?,
+            ),
         })
     }
 }

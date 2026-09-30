@@ -2039,6 +2039,42 @@ mod tests {
     }
 
     #[test]
+    fn batches_apply_together_and_undo_together() {
+        let mut s = blank_session();
+        let id = s.document().layers()[0].id.get();
+        let json = format!(
+            r#"{{"kind":"batch","edits":[
+                {{"kind":"setLayerOpacity","id":{id},"opacity":0.5}},
+                {{"kind":"renameLayer","id":{id},"name":"both"}}]}}"#
+        );
+        let edit = serde_json::from_str::<EditRequest>(&json)
+            .unwrap()
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        let layer = &s.document().layers()[0];
+        assert_eq!((layer.opacity, layer.name.as_str()), (0.5, "both"));
+        assert!(s.undo().unwrap());
+        let layer = &s.document().layers()[0];
+        assert_eq!(layer.opacity, 1.0);
+        assert_ne!(layer.name, "both");
+        assert!(!s.can_undo(), "one undo entry for the whole batch");
+
+        // One invalid edit refuses the whole batch.
+        let json = format!(
+            r#"{{"kind":"batch","edits":[
+                {{"kind":"setLayerOpacity","id":{id},"opacity":0.5}},
+                {{"kind":"setLayerBlendMode","id":{id},"mode":"pinkify"}}]}}"#
+        );
+        assert!(
+            serde_json::from_str::<EditRequest>(&json)
+                .unwrap()
+                .into_edit(&mut s)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn blend_requests_become_edits_and_unknown_ids_are_errors() {
         let mut s = blank_session();
         let id = s.document().layers()[0].id.get();
