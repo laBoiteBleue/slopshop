@@ -14,8 +14,9 @@ use slopshop_core::{
 };
 use slopshop_io::export::{
     ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
-    default_spec, export_image, has_gray, supports_alpha, supports_gray, supports_space,
+    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TiffCompression, TiffSample,
+    WebpCompression, default_spec, export_image, export_psd, has_gray, supports_alpha,
+    supports_gray, supports_space,
 };
 use slopshop_render::Renderer;
 
@@ -32,12 +33,13 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 5] = [
+const FORMATS: [ExportFormatKind; 6] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
     ExportFormatKind::Jpeg,
     ExportFormatKind::Webp,
+    ExportFormatKind::Psd,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -93,12 +95,21 @@ impl Depth {
         }
     }
 
+    fn psd(self) -> Option<PsdDepth> {
+        match self {
+            Depth::U8 => Some(PsdDepth::U8),
+            Depth::U16 => Some(PsdDepth::U16),
+            Depth::F16 | Depth::F32 => None,
+        }
+    }
+
     fn supported_by(self, kind: ExportFormatKind) -> bool {
         match kind {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
             ExportFormatKind::Jpeg | ExportFormatKind::Webp => self == Depth::U8,
+            ExportFormatKind::Psd => self.psd().is_some(),
         }
     }
 }
@@ -165,7 +176,7 @@ impl Compression {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Webp => self.is_webp(),
-            ExportFormatKind::Exr | ExportFormatKind::Jpeg => false,
+            ExportFormatKind::Exr | ExportFormatKind::Jpeg | ExportFormatKind::Psd => false,
         }
     }
 }
@@ -368,6 +379,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 ExportFormatKind::Jpeg => {
                     format!("{name} has no --compression option (use --quality and --subsampling)")
                 }
+                ExportFormatKind::Psd => {
+                    format!("{name} has no --compression option (it always uses RLE)")
+                }
                 _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
             }
         } else {
@@ -399,6 +413,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if format != ExportFormatKind::Jpeg && subsampling.is_some() {
         return Err(format!(
             "--subsampling is not available for {name} (JPEG only)"
+        ));
+    }
+    if format == ExportFormatKind::Psd && no_alpha {
+        return Err(format!(
+            "--no-alpha is not available for {name} (layers keep their transparency)"
         ));
     }
     if gray == Some(true) && !has_gray(format) {
@@ -580,6 +599,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "exr" => Some(ExportFormatKind::Exr),
         "jpg" | "jpeg" => Some(ExportFormatKind::Jpeg),
         "webp" => Some(ExportFormatKind::Webp),
+        "psd" => Some(ExportFormatKind::Psd),
         _ => None,
     }
 }
@@ -592,6 +612,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Exr => "exr",
         ExportFormatKind::Jpeg => "jpeg",
         ExportFormatKind::Webp => "webp",
+        ExportFormatKind::Psd => "psd",
     }
 }
 
@@ -602,6 +623,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Exr => "OpenEXR",
         ExportFormatKind::Jpeg => "JPEG",
         ExportFormatKind::Webp => "WebP",
+        ExportFormatKind::Psd => "Photoshop (layered PSD)",
     }
 }
 
@@ -662,6 +684,9 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
                 },
             }
         }
+        ExportFormat::Psd { depth } => ExportFormat::Psd {
+            depth: args.depth.and_then(Depth::psd).unwrap_or(depth),
+        },
     };
     if let Some(space) = args.space {
         spec.space = space;
@@ -723,6 +748,13 @@ fn describe(spec: &ExportSpec) -> String {
                 WebpCompression::Lossy { .. } => Compression::Lossy,
                 WebpCompression::Lossless => Compression::Lossless,
             }),
+        ),
+        ExportFormat::Psd { depth } => (
+            match depth {
+                PsdDepth::U8 => Depth::U8,
+                PsdDepth::U16 => Depth::U16,
+            },
+            None,
         ),
     };
     let mut text = format!(
@@ -813,23 +845,34 @@ fn export(args: &Args) -> Result<Outcome, String> {
     let gpu_init = started.elapsed();
 
     let mut source_time = Duration::ZERO;
-    let mut render = slopshop_render::export_source(renderer.as_ref(), &document);
-    let timed = |region: Rect, out: &mut [f32]| {
+    let mut render = slopshop_render::export_renderer(renderer.as_ref());
+    let mut timed = |d: &Document, region: Rect, out: &mut [f32]| {
         let started = Instant::now();
-        let result = render(region, out);
+        let result = render(d, region, out);
         source_time += started.elapsed();
         result
     };
     let mut bands = 0;
     let started = Instant::now();
-    let report = export_image(
-        &args.output,
-        document.size(),
-        &spec,
-        timed,
-        &CancelToken::new(),
-        &mut |_| bands += 1,
-    )
+    let report = match spec.psd_options() {
+        // A layered file: each layer rendered on its own.
+        Some(options) => export_psd(
+            &args.output,
+            &document,
+            &options,
+            &mut timed,
+            &CancelToken::new(),
+            &mut |_| bands += 1,
+        ),
+        None => export_image(
+            &args.output,
+            document.size(),
+            &spec,
+            |region, out| timed(&document, region, out),
+            &CancelToken::new(),
+            &mut |_| bands += 1,
+        ),
+    }
     .map_err(|e| {
         format!(
             "cannot export to {} ({}): {e}",
