@@ -174,14 +174,13 @@
   }
 
   // Mutations name the document they were made for, taken when the user acts.
-  // Any other edit applies a Free Transform in progress first: it is its own gesture.
-  const edit = (id: number, request: EditRequest) => {
-    commitTransform();
-    return sync(engine.perform(id, request));
+  // Any other edit settles a Free Transform in progress first (it is its own gesture): the user
+  // applies it, drops it, or keeps it and the edit is not made.
+  const edit = async (id: number, request: EditRequest) => {
+    if (await settleTransform()) await sync(engine.perform(id, request));
   };
-  const live = (id: number, request: EditRequest) => {
-    commitTransform();
-    return sync(engine.performLive(id, request));
+  const live = async (id: number, request: EditRequest) => {
+    if (await settleTransform()) await sync(engine.performLive(id, request));
   };
   const endGesture = (id: number) => sync(engine.endGesture(id));
   const cancelGesture = (id: number) => sync(engine.cancelGesture(id));
@@ -190,8 +189,8 @@
     if (transforming) cancelTransform();
     else if (active) void sync(engine.undo(active.id));
   };
-  const redo = () => {
-    commitTransform();
+  const redo = async () => {
+    if (!(await settleTransform())) return;
     if (active) void sync(engine.redo(active.id));
   };
 
@@ -472,8 +471,9 @@
   }
 
   // Free Transform (Ctrl+T, ADR 0018): a box on the image scales, rotates and moves the selected
-  // layers live, as one gesture replaced at each step; Enter applies it (one undo entry), Esc or
-  // undo cancels it. Another edit, another tab or Ctrl+T again applies it first.
+  // layers live, as one gesture replaced at each step; Enter, ✓ or Ctrl+T again applies it (one
+  // undo entry), Esc, ✕ or undo cancels it. Another edit or another tab asks first, as
+  // Photoshop does (`settleTransform`).
   type Transforming = { document: number; ids: number[]; box: Bounds; matrix: Matrix };
   let transforming = $state<Transforming | null>(null);
 
@@ -511,8 +511,61 @@
     void cancelGesture(current.document);
   }
 
+  /** The answer being awaited: interruptions meanwhile wait for the same one. */
+  let settling: Promise<boolean> | null = null;
+
+  /**
+   * Before another action: a Free Transform in progress is applied, dropped, or kept (the action
+   * is then not done), as the user answers Photoshop's "Apply the transformation?". Resolves to
+   * whether the action may go on. A transform that changed nothing yet just ends.
+   */
+  function settleTransform(): Promise<boolean> {
+    const current = transforming;
+    if (!current) return Promise.resolve(true);
+    if (affine.isIdentity(current.matrix)) {
+      cancelTransform();
+      return Promise.resolve(true);
+    }
+    settling ??= (async () => {
+      const buttons = {
+        yes: t("transform.apply"),
+        no: t("transform.dontApply"),
+        cancel: t("close.cancel"),
+      };
+      try {
+        const answer = await message(t("transform.applyQuestion"), {
+          title: t("menu.edit.freeTransform"),
+          kind: "info",
+          buttons,
+        });
+        if (answer === buttons.yes || answer === "Yes") {
+          commitTransform();
+          return true;
+        }
+        if (answer === buttons.no || answer === "No") {
+          cancelTransform();
+          return true;
+        }
+        return false;
+      } catch (e) {
+        showError(String(e));
+        return false;
+      } finally {
+        settling = null;
+      }
+    })();
+    return settling;
+  }
+
+  // Another tab while transforming: ask; kept, the transform's tab comes back.
   $effect(() => {
-    if (transforming && transforming.document !== activeId) commitTransform();
+    const current = transforming;
+    if (!current || current.document === activeId) return;
+    void settleTransform().then((goOn) => {
+      if (goOn || !transforming) return;
+      if (tabs.some((d) => d.id === transforming?.document)) activeId = transforming.document;
+      else cancelTransform();
+    });
   });
 
   /**
@@ -520,7 +573,7 @@
    * bounds, placed on whole pixels so that their pixels are copied, not resampled.
    */
   async function quickTransform(by: Matrix) {
-    commitTransform();
+    if (!(await settleTransform())) return;
     const doc = active;
     const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
     if (!doc || ids.length === 0) return;
