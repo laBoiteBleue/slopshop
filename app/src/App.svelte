@@ -623,6 +623,25 @@
     return job.total > 0 ? Math.floor((job.done * 100) / job.total) : 0;
   }
 
+  // --- Paste ------------------------------------------------------------------------------------
+
+  /** Paste the clipboard into the active document (as layers), or into a new tab. */
+  async function paste(intoNewTab: boolean) {
+    const target = intoNewTab ? null : activeId;
+    try {
+      const pasted = await engine.paste(target, t("paste.layerName"));
+      if (pasted.kind === "image") {
+        upsert(pasted.document);
+        if (pasted.newTab) activate(pasted.document.id);
+      } else if (pasted.kind === "nothing") {
+        showError(t("paste.nothing"));
+      }
+    } catch (e) {
+      if (e === DOCUMENT_CLOSED) await refreshTabs();
+      else showError(t("paste.failed", { error: String(e) }));
+    }
+  }
+
   // --- Menu bar (ADR 0013) ------------------------------------------------------------------------
 
   /** A shortcut as shown in menus: `mod` (Ctrl or ⌘), `shift` and a key. */
@@ -692,6 +711,9 @@
         items: [
           cmd(t("menu.edit.undo"), () => void undo(), keys("mod", "Z"), !doc?.canUndo),
           cmd(t("menu.edit.redo"), () => void redo(), keys("mod", "shift", "Z"), !doc?.canRedo),
+          separator,
+          cmd(t("menu.edit.paste"), () => void paste(false), keys("mod", "V")),
+          cmd(t("menu.edit.pasteNewDocument"), () => void paste(true)),
           separator,
           {
             kind: "submenu",
@@ -796,8 +818,13 @@
       if (!e.repeat && activeId !== null) void closeTab(activeId);
       return;
     }
-    // Text fields keep their own undo.
+    // Text fields keep their own undo and paste.
     if (e.target instanceof HTMLInputElement && ["text", "number"].includes(e.target.type)) return;
+    if ((key === "v" || e.code === "KeyV") && !e.shiftKey) {
+      e.preventDefault();
+      if (!e.repeat) void paste(false);
+      return;
+    }
     if (key === "z" && !e.shiftKey) {
       e.preventDefault();
       void undo();
