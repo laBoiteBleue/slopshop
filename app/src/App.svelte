@@ -28,7 +28,7 @@
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
-  import MenuBar, { type Menu } from "./lib/MenuBar.svelte";
+  import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
   import { formatZoom } from "./lib/format";
   import LayersPanel from "./lib/LayersPanel.svelte";
@@ -690,6 +690,105 @@
     await message(t("about.text", { version }), { title: t("about.title"), kind: "info" });
   }
 
+  function command(label: string, run: () => void, shortcut?: string, disabled = false): MenuItem {
+    return { kind: "command", label, run, shortcut, disabled };
+  }
+
+  /** Commands on the selected layers: the Layer menu's, also the layers' context menu. */
+  let layerCommands = $derived.by(() => {
+    const doc = active;
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const selectedCount = layersPanel?.selectedLayers().length ?? 0;
+    const several = selectedCount > 1;
+    return {
+      duplicate: command(
+        t(several ? "menu.layer.duplicateLayers" : "menu.layer.duplicate"),
+        () => layersPanel?.duplicateSelected(),
+        keys("mod", "J"),
+        selectedCount === 0,
+      ),
+      rename: command(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
+      visibility: command(
+        t(
+          layer?.visible === false
+            ? several
+              ? "menu.layer.showLayers"
+              : "menu.layer.showLayer"
+            : several
+              ? "menu.layer.hideLayers"
+              : "menu.layer.hideLayer",
+        ),
+        () => layersPanel?.toggleSelectedVisibility(),
+        undefined,
+        selectedCount === 0,
+      ),
+      delete: command(
+        t(several ? "layers.deleteSelected" : "layers.delete"),
+        () => layersPanel?.deleteSelected(),
+        keys("delete"),
+        selectedCount === 0,
+      ),
+      newGroup: command(t("menu.layer.newGroup"), () => layersPanel?.newGroup(), undefined, !doc),
+      group: command(
+        t("menu.layer.group"),
+        () => layersPanel?.groupSelected(),
+        keys("mod", "G"),
+        selectedCount === 0,
+      ),
+      ungroup: command(
+        t("menu.layer.ungroup"),
+        () => layersPanel?.ungroupSelected(),
+        keys("shift", "mod", "G"),
+        layer?.kind !== "group",
+      ),
+      maskFromTransparency: command(
+        t("menu.layer.maskFromTransparency"),
+        () => doc && layer && void sync(engine.addMaskFromTransparency(doc.id, layer.id)),
+        undefined,
+        !layer || !layer.hasAlpha || layer.mask !== null,
+      ),
+      maskToggle: command(
+        t(layer?.mask?.enabled === false ? "menu.layer.maskEnable" : "menu.layer.maskDisable"),
+        () =>
+          doc &&
+          layer?.mask &&
+          void edit(doc.id, {
+            kind: "setLayerMaskEnabled",
+            id: layer.id,
+            enabled: !layer.mask.enabled,
+          }),
+        undefined,
+        !layer?.mask,
+      ),
+      maskDelete: command(
+        t("menu.layer.maskDelete"),
+        () => doc && layer && void edit(doc.id, { kind: "removeLayerMask", id: layer.id }),
+        undefined,
+        !layer?.mask,
+      ),
+    };
+  });
+
+  /** The layers' right-click menu (Photoshop shows the commands on the layers there). */
+  let layerContextMenu = $derived.by((): MenuItem[] => {
+    const c = layerCommands;
+    const separator = { kind: "separator" as const };
+    return [
+      c.duplicate,
+      c.rename,
+      c.visibility,
+      c.delete,
+      separator,
+      c.newGroup,
+      c.group,
+      c.ungroup,
+      separator,
+      c.maskFromTransparency,
+      c.maskToggle,
+      c.maskDelete,
+    ];
+  });
+
   let menus = $derived.by((): Menu[] => {
     const doc = active;
     const busy = doc !== null && saving.includes(doc.id);
@@ -782,59 +881,20 @@
             label: t("menu.layer.mask"),
             disabled: !layer,
             items: [
-              cmd(
-                t("menu.layer.maskFromTransparency"),
-                () => doc && layer && void sync(engine.addMaskFromTransparency(doc.id, layer.id)),
-                undefined,
-                !layer || !layer.hasAlpha || layer.mask !== null,
-              ),
-              cmd(
-                t(
-                  layer?.mask?.enabled === false
-                    ? "menu.layer.maskEnable"
-                    : "menu.layer.maskDisable",
-                ),
-                () =>
-                  doc &&
-                  layer?.mask &&
-                  void edit(doc.id, {
-                    kind: "setLayerMaskEnabled",
-                    id: layer.id,
-                    enabled: !layer.mask.enabled,
-                  }),
-                undefined,
-                !layer?.mask,
-              ),
-              cmd(
-                t("menu.layer.maskDelete"),
-                () => doc && layer && void edit(doc.id, { kind: "removeLayerMask", id: layer.id }),
-                undefined,
-                !layer?.mask,
-              ),
+              layerCommands.maskFromTransparency,
+              layerCommands.maskToggle,
+              layerCommands.maskDelete,
             ],
           },
           separator,
-          cmd(t("menu.layer.newGroup"), () => layersPanel?.newGroup(), undefined, !doc),
-          cmd(
-            t("menu.layer.group"),
-            () => layersPanel?.groupSelected(),
-            keys("mod", "G"),
-            selectedCount === 0,
-          ),
-          cmd(
-            t("menu.layer.ungroup"),
-            () => layersPanel?.ungroupSelected(),
-            keys("shift", "mod", "G"),
-            layer?.kind !== "group",
-          ),
+          layerCommands.newGroup,
+          layerCommands.group,
+          layerCommands.ungroup,
           separator,
-          cmd(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
-          cmd(
-            t(selectedCount > 1 ? "layers.deleteSelected" : "layers.delete"),
-            () => layersPanel?.deleteSelected(),
-            keys("delete"),
-            selectedCount === 0,
-          ),
+          layerCommands.duplicate,
+          layerCommands.rename,
+          layerCommands.visibility,
+          layerCommands.delete,
         ],
       },
       {
@@ -1141,6 +1201,7 @@
           onedit={edit}
           onlive={live}
           ongestureend={endGesture}
+          contextMenu={layerContextMenu}
         />
       {/key}
     {/if}

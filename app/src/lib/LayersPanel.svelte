@@ -9,7 +9,9 @@
     type EditRequest,
     type LayerView,
   } from "./engine";
+  import ContextMenu from "./ContextMenu.svelte";
   import Icon from "./Icon.svelte";
+  import type { MenuItem } from "./MenuBar.svelte";
   import LayerThumbnail from "./LayerThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
 
@@ -18,8 +20,11 @@
     onedit,
     onlive,
     ongestureend,
+    contextMenu = [],
   }: {
     doc: DocumentView;
+    /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
+    contextMenu?: MenuItem[];
     /** A discrete edit (one undo entry) of document `documentId`; settles once applied. */
     onedit: (documentId: number, edit: EditRequest) => Promise<void>;
     /** A live edit within a gesture (applied immediately). */
@@ -234,6 +239,34 @@
     void edit(batchOf(ids.map((id) => ({ kind: "removeLayer", id }))));
   }
 
+  /** Copies of the selected layers, each above its original (Layer > Duplicate Layer, Ctrl+J). */
+  export function duplicateSelected() {
+    if (selection.length === 0) return;
+    const nameFormat = t("layers.copyName", { name: "{name}" });
+    void edit({ kind: "duplicateLayers", ids: selectedIds, nameFormat });
+  }
+
+  /** Hide the selected layers, or show them all when the active one is hidden. */
+  export function toggleSelectedVisibility() {
+    if (selection.length === 0) return;
+    const visible = selected?.visible === false;
+    const edits = selection
+      .filter((l) => l.visible !== visible)
+      .map((l): EditRequest => ({ kind: "setLayerVisible", id: l.id, visible }));
+    if (edits.length > 0) void edit(batchOf(edits));
+  }
+
+  // The right-click menu: where it is open, if it is.
+  let menuAt = $state<{ x: number; y: number } | null>(null);
+
+  function onRowContextMenu(e: MouseEvent, layer: LayerView) {
+    e.preventDefault();
+    if (renaming !== null) return;
+    // As in Photoshop: a layer outside the selection becomes the selection.
+    if (!selectedSet.has(layer.id)) select([layer.id], layer.id);
+    menuAt = { x: e.clientX, y: e.clientY };
+  }
+
   /** A new empty group above the active layer, or at the top. */
   export function newGroup() {
     const n = allLayers.filter((l) => l.kind === "group").length + 1;
@@ -313,6 +346,13 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag?.active) {
       drag = null;
+      return;
+    }
+    // Ctrl+J duplicates the selected layers, as in Photoshop.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === "KeyJ" && !e.repeat) {
+      if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      duplicateSelected();
       return;
     }
     // Ctrl+G groups the selected layers, Shift+Ctrl+G ungroups, as in Photoshop.
@@ -682,6 +722,7 @@
           drag.slot === rows.length}
         onpointerdown={(e) => onRowPointerDown(e, row, layer)}
         onpointermove={onRowPointerMove}
+        oncontextmenu={(e) => onRowContextMenu(e, layer)}
       >
         <button
           class="eye"
@@ -759,6 +800,10 @@
       <li class="empty">{t("layers.empty")}</li>
     {/each}
   </ul>
+
+  {#if menuAt && contextMenu.length > 0}
+    <ContextMenu x={menuAt.x} y={menuAt.y} items={contextMenu} onclose={() => (menuAt = null)} />
+  {/if}
 
   <div class="footer">
     <input type="color" bind:value={newColor} title={t("layers.fillColor")} />

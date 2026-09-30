@@ -132,6 +132,46 @@ impl Session {
         Ok(Copies { group, ids })
     }
 
+    /// The edit that duplicates `ids` (Layer > Duplicate Layer): each copy, with fresh ids (a
+    /// group with everything inside it), goes right above its original, named by `name` from
+    /// the original's name. A layer inside another of `ids` is copied with it. Not performed:
+    /// the caller performs it (one undo entry).
+    pub fn duplicate_layers_edit(
+        &mut self,
+        ids: &[LayerId],
+        name: impl Fn(&str) -> String,
+    ) -> Result<Edit, EditError> {
+        let originals = crate::edit::outermost_in_order(&self.document, ids)?;
+        if originals.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        let mut copies = Vec::with_capacity(originals.len());
+        for &id in &originals {
+            let original = self
+                .document
+                .layer(id)
+                .ok_or(EditError::UnknownLayer(id))?
+                .clone();
+            let mut copy = self.fresh_copy(&original, &mut Vec::new());
+            copy.name = name(&original.name);
+            copies.push((id, copy));
+        }
+        // Positions are worked out on a copy of the document as the copies go in.
+        let mut plan = self.document.clone();
+        let mut edits = Vec::with_capacity(copies.len());
+        for (id, layer) in copies {
+            let (parent, index) = plan.locate(id).ok_or(EditError::UnknownLayer(id))?;
+            let edit = Edit::InsertLayer {
+                parent,
+                index: index + 1,
+                layer,
+            };
+            edit.clone().apply(&mut plan)?;
+            edits.push(edit);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// A copy of `layer`, and for a group of everything inside it, with fresh ids, pushed to
     /// `ids` depth first.
     fn fresh_copy(&mut self, layer: &Layer, ids: &mut Vec<LayerId>) -> Layer {
@@ -487,5 +527,28 @@ mod tests {
         // One undo entry removes the copy with everything inside it.
         target.undo().unwrap();
         assert_eq!(target.document().all_layers().count(), 2);
+    }
+
+    #[test]
+    fn duplicates_go_above_their_originals_with_fresh_ids() {
+        let mut s = Session::new(Document::new(Size::new(4, 4)));
+        let a = add_layer(&mut s, "a");
+        add_layer(&mut s, "b");
+        let c = add_layer(&mut s, "c");
+        let edit = s
+            .duplicate_layers_edit(&[c, a], |name| format!("{name} copy"))
+            .unwrap();
+        s.perform(edit).unwrap();
+        assert_eq!(names(&s), ["a", "a copy", "b", "c", "c copy"]);
+        let all: Vec<LayerId> = s.document().all_layers().map(|l| l.id).collect();
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len());
+        // One undo entry removes both copies.
+        s.undo().unwrap();
+        assert_eq!(names(&s), ["a", "b", "c"]);
+        assert_eq!(
+            s.duplicate_layers_edit(&[], |n| n.to_owned()),
+            Err(EditError::NoLayers)
+        );
     }
 }
