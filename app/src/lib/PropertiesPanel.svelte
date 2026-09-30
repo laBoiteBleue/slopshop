@@ -72,12 +72,47 @@
       { index: 3, label: "adjustment.levels.outputBlack", min: 0, max: 255, step: 1, scale: 255 },
       { index: 4, label: "adjustment.levels.outputWhite", min: 0, max: 255, step: 1, scale: 255 },
     ],
+    brightnessContrast: [
+      {
+        index: 0,
+        label: "adjustment.brightnessContrast.brightness",
+        min: -150,
+        max: 150,
+        step: 1,
+        scale: 1,
+      },
+      {
+        index: 1,
+        label: "adjustment.brightnessContrast.contrast",
+        min: -50,
+        max: 100,
+        step: 1,
+        scale: 1,
+      },
+    ],
+    vibrance: [
+      { index: 0, label: "adjustment.vibrance.vibrance", min: -100, max: 100, step: 1, scale: 1 },
+      { index: 1, label: "adjustment.vibrance.saturation", min: -100, max: 100, step: 1, scale: 1 },
+    ],
+    invert: [],
+    posterize: [
+      { index: 0, label: "adjustment.posterize.levels", min: 2, max: 255, step: 1, scale: 1 },
+    ],
+    threshold: [
+      { index: 0, label: "adjustment.threshold.level", min: 1, max: 255, step: 1, scale: 255 },
+    ],
   };
 
-  const NEUTRAL: Record<AdjustmentId, Values> = {
+  /** What Reset puts back: the parameters of a new layer (Adjustment::DEFAULTS in core). */
+  const DEFAULTS: Record<AdjustmentId, Values> = {
     exposure: [0, 0, 1, 0, 0],
     hueSaturation: [0, 0, 0, 0, 0],
     levels: [0, 1, 1, 0, 1],
+    brightnessContrast: [0, 0, 0, 0, 0],
+    vibrance: [0, 0, 0, 0, 0],
+    invert: [0, 0, 0, 0, 0],
+    posterize: [4, 0, 0, 0, 0],
+    threshold: [128 / 255, 0, 0, 0, 0],
   };
 
   const adjustment = $derived(layer.adjustment);
@@ -127,7 +162,7 @@
 
   function reset() {
     if (!adjustment) return;
-    const edit = request([...NEUTRAL[adjustment.id]]);
+    const edit = request([...DEFAULTS[adjustment.id]]);
     if (edit) onedit(documentId, edit);
   }
 
@@ -143,8 +178,13 @@
     <div class="tabs"><span class="tab active">{t("properties.title")}</span></div>
     <div class="title">
       <span>{t(`adjustment.${adjustment.id}`)}</span>
-      <button type="button" class="reset" onclick={reset}>{t("properties.reset")}</button>
+      {#if fields.length > 0}
+        <button type="button" class="reset" onclick={reset}>{t("properties.reset")}</button>
+      {/if}
     </div>
+    {#if fields.length === 0}
+      <p class="empty">{t("properties.noSettings")}</p>
+    {/if}
     <div class="fields">
       {#each fields as f (f.index)}
         <label class="label" for="property-{f.index}">{t(f.label)}</label>
@@ -214,6 +254,12 @@
 
   .reset {
     font-weight: normal;
+  }
+
+  .empty {
+    margin: 0;
+    padding: 4px 8px 10px;
+    color: var(--text-muted);
   }
 
   .fields {
