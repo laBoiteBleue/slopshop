@@ -38,7 +38,8 @@
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
-  import Viewport, { type FrameStats, type Guide } from "./lib/Viewport.svelte";
+  import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
+  import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import * as affine from "./lib/affine";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
@@ -311,8 +312,6 @@
   // document pixels, one undo entry per drag. As in Photoshop: Auto-Select takes the layer under
   // the pointer (not with Ctrl), and the moving layers snap to the canvas and to the other layers
   // (edges and centers, not with Ctrl), with magenta smart guides.
-  /** Snapping distance, in screen (CSS) pixels. */
-  const SNAP_CSS_PX = 6;
   /** View > Snap. */
   let snapping = $state(true);
   type MoveDrag = {
@@ -374,13 +373,13 @@
     if (!drag.ids || drag.ids.length === 0) return;
     let { x, y } = drag.raw;
     let shown: Guide[] = [];
-    if (drag.targets && snapping && !drag.free) {
-      const doc = tabs.find((d) => d.id === drag.document);
-      if (doc) {
-        const snapped = snapMove(drag.targets, doc, x, y, SNAP_CSS_PX * drag.docPerCss);
-        ({ x, y } = snapped);
-        shown = snapped.guides;
-      }
+    const doc = tabs.find((d) => d.id === drag.document);
+    if (drag.targets?.moving && doc && snapping && !drag.free) {
+      const targets = [canvasBounds(doc), ...drag.targets.others];
+      const threshold = SNAP_CSS_PX * drag.docPerCss;
+      const snapped = snapMove(drag.targets.moving, x, y, targets, threshold);
+      ({ x, y } = snapped);
+      shown = snapped.guides;
     }
     guides = shown;
     const tx = Math.round(x);
@@ -391,74 +390,8 @@
     void sync(engine.performLive(drag.document, move, true));
   }
 
-  /**
-   * The move (`x`, `y`) adjusted so that an edge or the center of what moves meets an edge or the
-   * center of the canvas or of another layer within `threshold` document pixels, per axis, with
-   * a guide for each alignment.
-   */
-  function snapMove(
-    targets: SnapTargets,
-    doc: DocumentView,
-    x: number,
-    y: number,
-    threshold: number,
-  ): { x: number; y: number; guides: Guide[] } {
-    const m = targets.moving;
-    if (!m) return { x, y, guides: [] };
-    const canvas = { left: 0, top: 0, right: doc.width, bottom: doc.height };
-    const all = [canvas, ...targets.others];
-    const moved = { left: m.left + x, top: m.top + y, right: m.right + x, bottom: m.bottom + y };
-    type Match = { shift: number; at: number; span: [number, number] };
-    const best = (edges: number[], lines: { at: number; span: [number, number] }[]) => {
-      let found: Match | null = null;
-      for (const edge of edges) {
-        for (const line of lines) {
-          const shift = line.at - edge;
-          if (Math.abs(shift) <= threshold && (!found || Math.abs(shift) < Math.abs(found.shift))) {
-            found = { shift, ...line };
-          }
-        }
-      }
-      return found;
-    };
-    const vertical = all.flatMap((b) =>
-      [b.left, (b.left + b.right) / 2, b.right].map((at) => ({
-        at,
-        span: [b.top, b.bottom] as [number, number],
-      })),
-    );
-    const horizontal = all.flatMap((b) =>
-      [b.top, (b.top + b.bottom) / 2, b.bottom].map((at) => ({
-        at,
-        span: [b.left, b.right] as [number, number],
-      })),
-    );
-    const snapX = best([moved.left, (moved.left + moved.right) / 2, moved.right], vertical);
-    const snapY = best([moved.top, (moved.top + moved.bottom) / 2, moved.bottom], horizontal);
-    const nx = x + (snapX?.shift ?? 0);
-    const ny = y + (snapY?.shift ?? 0);
-    const top = m.top + ny;
-    const bottom = m.bottom + ny;
-    const left = m.left + nx;
-    const right = m.right + nx;
-    const shown: Guide[] = [];
-    if (snapX) {
-      shown.push({
-        x1: snapX.at,
-        x2: snapX.at,
-        y1: Math.min(top, snapX.span[0]),
-        y2: Math.max(bottom, snapX.span[1]),
-      });
-    }
-    if (snapY) {
-      shown.push({
-        y1: snapY.at,
-        y2: snapY.at,
-        x1: Math.min(left, snapY.span[0]),
-        x2: Math.max(right, snapY.span[1]),
-      });
-    }
-    return { x: nx, y: ny, guides: shown };
+  function canvasBounds(doc: DocumentView): Bounds {
+    return { left: 0, top: 0, right: doc.width, bottom: doc.height };
   }
 
   function onMoveEnd() {
@@ -474,7 +407,14 @@
   // Free Transform (Ctrl+T, ADR 0018): a box on the image scales, rotates and moves the selected
   // layers live, as one gesture replaced at each step; Enter applies it (one undo entry), Esc or
   // undo cancels it. Another edit, another tab or Ctrl+T again applies it first.
-  type Transforming = { document: number; ids: number[]; box: Bounds; matrix: Matrix };
+  type Transforming = {
+    document: number;
+    ids: number[];
+    box: Bounds;
+    /** What the box snaps to: the canvas and the other visible layers. */
+    targets: Bounds[];
+    matrix: Matrix;
+  };
   let transforming = $state<Transforming | null>(null);
 
   async function startFreeTransform() {
@@ -485,7 +425,13 @@
     const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
     // Nothing to transform (empty layers), or the user moved on meanwhile.
     if (!targets?.moving || active?.id !== doc.id || transforming) return;
-    transforming = { document: doc.id, ids, box: targets.moving, matrix: affine.IDENTITY };
+    transforming = {
+      document: doc.id,
+      ids,
+      box: targets.moving,
+      targets: [canvasBounds(doc), ...targets.others],
+      matrix: affine.IDENTITY,
+    };
   }
 
   function onTransformChange(matrix: Matrix) {
@@ -1594,6 +1540,7 @@
               onmovestart={onMoveStart}
               onmove={transforming ? undefined : onMoveDrag}
               onmoveend={onMoveEnd}
+              ondoubleclick={() => void startFreeTransform()}
               {guides}
             >
               {#snippet overlay(mapping)}
@@ -1601,6 +1548,7 @@
                   <FreeTransform
                     {mapping}
                     box={transforming.box}
+                    targets={snapping ? transforming.targets : []}
                     onchange={onTransformChange}
                     oncommit={commitTransform}
                     oncancel={cancelTransform}

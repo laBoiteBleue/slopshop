@@ -1,6 +1,5 @@
 <script lang="ts" module>
-  /** A smart guide: a line in document pixels. */
-  export type Guide = { x1: number; y1: number; x2: number; y2: number };
+  import type { Guide } from "./snap";
 
   /** How an overlay (e.g. Free Transform's box) maps between the document and the viewport. */
   export type ViewMapping = {
@@ -39,6 +38,7 @@
     onmovestart,
     onmove,
     onmoveend,
+    ondoubleclick,
     guides = [],
     overlay,
   }: {
@@ -61,6 +61,8 @@
     onmovestart?: (x: number, y: number, ctrl: boolean) => void;
     onmove?: (dx: number, dy: number, docPerCss: number, free: boolean) => void;
     onmoveend?: () => void;
+    /** A double-click on the image with the Move tool (Free Transform, as in Photoshop). */
+    ondoubleclick?: () => void;
     /** Smart guides to draw over the image, in document pixels. */
     guides?: Guide[];
     /** Drawn over the image, following the view (it handles its own pointer events). */
@@ -572,6 +574,9 @@
   onpointerup={endPan}
   onpointercancel={endPan}
   onauxclick={(e) => e.preventDefault()}
+  ondblclick={(e) => {
+    if (e.button === 0 && onmove && !spaceHeld) ondoubleclick?.();
+  }}
 >
   <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
   {#each guides as guide, i (i)}
