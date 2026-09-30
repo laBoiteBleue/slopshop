@@ -82,6 +82,7 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 | `--no-dither` | | No dither for 8-bit samples (dither reduces banding; it is on by default) |
 | `--gray` | | Gray samples (PNG, TIFF and JPEG): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
 | `--color` | | Color samples, even for a gray document |
+| `--scale` | a factor, e.g. `4` or `0.25` | Resample the whole image by this factor first, like Image Size: sides are rounded, and layers are resampled with the quality filter of transformed layers ([ADR 0018](adr/0018-resampling.md)) |
 | `--cpu` | | Composite on the CPU instead of the GPU |
 | `--bench` | | Also print timings (open, GPU init, export, throughput, time in the pixel source) and the number of bands |
 

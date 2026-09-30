@@ -191,6 +191,8 @@ struct Args {
     gray: Option<bool>,
     cpu: bool,
     bench: bool,
+    /// `--scale`: resample the whole image by this factor first (Image Size, ADR 0018).
+    scale: Option<f64>,
 }
 
 /// Where the pixels came from.
@@ -297,6 +299,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut matte = None;
     let (mut no_alpha, mut no_dither, mut cpu, mut bench) = (false, false, false, false);
     let mut gray = None;
+    let mut scale = None;
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -320,6 +323,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--cpu" => cpu = true,
             "--bench" => bench = true,
+            "--scale" => scale = Some(parse_scale(value()?)?),
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -441,7 +445,33 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         gray,
         cpu,
         bench,
+        scale,
     })
+}
+
+fn parse_scale(s: &str) -> Result<f64, String> {
+    match s.trim_end_matches('x').parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 && v <= 1000.0 => Ok(v),
+        _ => Err(format!(
+            "invalid --scale `{s}` (a factor above 0, e.g. 4 or 0.25)"
+        )),
+    }
+}
+
+/// `document` resampled by `factor` (Image Size): each side rounded, at least one pixel.
+fn scaled(document: Document, factor: f64) -> Result<Document, String> {
+    let size = document.size();
+    let side = |v: u32| ((f64::from(v) * factor).round() as u32).max(1);
+    let mut session = slopshop_core::Session::new(document);
+    let edit = slopshop_core::Edit::resize_image(
+        session.document(),
+        Size::new(side(size.width), side(size.height)),
+    )
+    .map_err(|e| format!("cannot scale: {e}"))?;
+    session
+        .perform(edit)
+        .map_err(|e| format!("cannot scale: {e}"))?;
+    Ok(session.document().clone())
 }
 
 fn parse_format(s: &str) -> Result<ExportFormatKind, String> {
@@ -756,6 +786,10 @@ fn export(args: &Args) -> Result<Outcome, String> {
             warnings,
         )
     };
+    let document = match args.scale {
+        Some(factor) => scaled(document, factor)?,
+        None => document,
+    };
     let open = started.elapsed();
     let spec = export_spec(args, &document);
 
@@ -901,6 +935,8 @@ mod tests {
             "--gray",
             "--cpu",
             "--bench",
+            "--scale",
+            "0.5x",
         ])
         .unwrap();
         assert_eq!(
@@ -920,8 +956,10 @@ mod tests {
                 gray: Some(true),
                 cpu: true,
                 bench: true,
+                scale: Some(0.5),
             }
         );
+        assert!(parse(&["in.png", "out.png", "--scale", "0"]).is_err());
         let args = parse(&["in.png", "out.tif"]).unwrap();
         assert_eq!(args.format, ExportFormatKind::Tiff);
         assert_eq!(
@@ -1377,6 +1415,28 @@ mod tests {
             describe(&spec),
             "--format jpeg --depth u8 --space srgb --quality 90 --subsampling 444 --matte ffffff"
         );
+    }
+
+    #[test]
+    fn scale_resamples_the_whole_image() {
+        let dir = temp_dir("scale");
+        let input = dir.join("in.png");
+        write_test_png(&input, Size::new(30, 20));
+        for (factor, expected) in [("4", Size::new(120, 80)), ("0.25", Size::new(8, 5))] {
+            let output = dir.join(format!("out-{factor}.png"));
+            let args = [
+                input.to_str().unwrap(),
+                output.to_str().unwrap(),
+                "--scale",
+                factor,
+                "--cpu",
+            ];
+            let outcome = export(&parse(&args).unwrap()).unwrap();
+            assert_eq!(outcome.size, expected);
+            let reimported = slopshop_io::open_image(&output).unwrap();
+            assert_eq!(reimported.image.size(), expected);
+        }
+        fs::remove_dir_all(&dir).ok();
     }
 
     /// The GPU is the default source; the CPU compositor replaces it without an adapter
