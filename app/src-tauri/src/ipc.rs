@@ -7,7 +7,7 @@
 //! Layer ids travel as JSON numbers: exact up to 2^53, far beyond what a session allocates.
 
 use serde::{Deserialize, Serialize};
-use slopshop_core::adjust::Adjustment;
+use slopshop_core::adjust::{Adjustment, PARAM_COUNT};
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
@@ -170,13 +170,13 @@ impl LayerView {
     }
 }
 
-/// An adjustment layer's adjustment: its identifier and its five parameters
-/// (`Adjustment::params` order).
+/// An adjustment layer's adjustment: its identifier and its parameters (all
+/// `PARAM_COUNT` of them, in `Adjustment::params` order).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdjustmentView {
     pub id: &'static str,
-    pub values: [f32; 5],
+    pub values: [f32; PARAM_COUNT],
 }
 
 /// A layer's mask, as the layers panel shows it.
@@ -277,11 +277,12 @@ pub enum EditRequest {
         parent: Option<u64>,
         index: usize,
     },
-    /// An adjustment layer's parameters (`values`, in `Adjustment::params` order).
+    /// An adjustment layer's parameters (`values`, in `Adjustment::params` order, at most
+    /// `PARAM_COUNT`; missing ones are 0).
     SetAdjustment {
         id: u64,
         adjustment: String,
-        values: [f32; 5],
+        values: Vec<f32>,
     },
     /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
     GroupLayers {
@@ -458,8 +459,9 @@ impl EditRequest {
                 values,
             } => Edit::SetAdjustment {
                 id: LayerId::from_raw(id),
-                adjustment: Adjustment::from_params(&adjustment, values)
-                    .ok_or(format!("unknown adjustment {adjustment}"))?,
+                adjustment: Adjustment::from_params(&adjustment, &values).ok_or(format!(
+                    "unknown adjustment {adjustment} or too many values"
+                ))?,
             },
             EditRequest::GroupLayers { ids, name } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
