@@ -55,7 +55,9 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 
 ## Phase 2 — Non-destructive core
 
-- [ ] Layer masks and blend modes
+- [x] Blend modes (Photoshop's, except Dissolve) and a blend space per document: perceptual or
+      linear ([ADR 0012](adr/0012-blend-modes.md))
+- [ ] Layer masks; Dissolve
 - [ ] Non-destructive transforms (move, scale, rotate) with quality resampling
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
 - [ ] Groups; 🔶 stack-to-DAG evolution of the model
