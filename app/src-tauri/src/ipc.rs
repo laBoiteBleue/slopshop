@@ -16,8 +16,8 @@ use slopshop_core::{
 };
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
-    has_gray, supports_gray, supports_space,
+    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TiffCompression, TiffSample,
+    WebpCompression, has_gray, supports_gray, supports_space,
 };
 
 /// Identity of an open document (one per tab). Ids are never reused, so the UI can tell
@@ -699,6 +699,7 @@ pub enum ExportFormatId {
     Exr,
     Jpeg,
     Webp,
+    Psd,
 }
 
 impl ExportFormatId {
@@ -709,6 +710,7 @@ impl ExportFormatId {
             ExportFormatId::Exr => ExportFormatKind::Exr,
             ExportFormatId::Jpeg => ExportFormatKind::Jpeg,
             ExportFormatId::Webp => ExportFormatKind::Webp,
+            ExportFormatId::Psd => ExportFormatKind::Psd,
         }
     }
 }
@@ -838,6 +840,14 @@ impl ExportSpecDto {
                 };
                 (ExportFormatId::Webp, S::U8, Some(compression))
             }
+            ExportFormat::Psd { depth } => (
+                ExportFormatId::Psd,
+                match depth {
+                    PsdDepth::U8 => S::U8,
+                    PsdDepth::U16 => S::U16,
+                },
+                None,
+            ),
         };
         Self {
             format,
@@ -947,6 +957,22 @@ impl ExportSpecDto {
                             quality: self.quality.filter(|q| *q <= 100).ok_or_else(quality)?,
                         },
                         _ => return Err(compression()),
+                    },
+                }
+            }
+            ExportFormatId::Psd => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                // The layers keep their transparency.
+                if !self.keep_alpha {
+                    return Err(invalid("dropping alpha".to_owned()));
+                }
+                ExportFormat::Psd {
+                    depth: match self.sample {
+                        S::U8 => PsdDepth::U8,
+                        S::U16 => PsdDepth::U16,
+                        S::F16 | S::F32 => return Err(sample()),
                     },
                 }
             }
@@ -1147,6 +1173,7 @@ mod tests {
             ExportFormatId::Exr,
             ExportFormatId::Jpeg,
             ExportFormatId::Webp,
+            ExportFormatId::Psd,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
@@ -1344,6 +1371,19 @@ mod tests {
             invalid
         );
         assert_eq!(webp(&|d| d.sample = S::U16), invalid, "16-bit WebP");
+        let psd = |change: &dyn Fn(&mut ExportSpecDto)| {
+            with(&|d| {
+                d.format = ExportFormatId::Psd;
+                d.compression = None;
+                change(d);
+            })
+        };
+        assert_eq!(psd(&|_| {}), Ok(()), "8-bit PSD");
+        assert_eq!(psd(&|d| d.sample = S::U16), Ok(()), "16-bit PSD");
+        assert_eq!(psd(&|d| d.sample = S::F32), invalid, "float PSD");
+        assert_eq!(psd(&|d| d.compression = Some(C::Fast)), invalid);
+        assert_eq!(psd(&|d| d.keep_alpha = false), invalid, "PSD without alpha");
+        assert_eq!(psd(&|d| d.gray = true), invalid, "gray PSD");
         assert_eq!(
             with(&|d| d.compression = Some(C::Lossless)),
             invalid,

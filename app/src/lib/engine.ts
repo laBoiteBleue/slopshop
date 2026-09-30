@@ -369,7 +369,8 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
 }
 
 /** Export file formats. */
-export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp";
+/** `psd` keeps the layers (export_psd in crates/slopshop-io/src/export/psd.rs). */
+export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp" | "psd";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
@@ -400,7 +401,8 @@ export type ExportSpec = {
 /**
  * What the engine accepts for each format (ExportSpecDto::to_spec): file extensions (the first
  * one is the default), sample types, compressions and JPEG subsamplings, in the order the UI
- * lists them, whether the format can keep alpha and whether it can write gray samples
+ * lists them, whether alpha can be kept or dropped (JPEG never keeps it, a layered PSD always
+ * does) and whether the format can write gray samples
  * (`has_gray` in crates/slopshop-io/src/export/mod.rs).
  */
 export const EXPORT_FORMATS: Record<
@@ -454,6 +456,14 @@ export const EXPORT_FORMATS: Record<
     alpha: true,
     gray: false,
   },
+  psd: {
+    extensions: ["psd"],
+    samples: ["u8", "u16"],
+    compressions: [],
+    subsamplings: [],
+    alpha: false,
+    gray: false,
+  },
 };
 
 /** The quality a lossy compression starts at, when it is chosen in the dialog. */
@@ -471,6 +481,7 @@ export type ExportNoticeId =
   | "halfOverflow"
   | "precisionReduced"
   | "bigTiff"
+  | "pixelsOutsideCanvas"
   | "alphaFlattened"
   | "colorDiscarded";
 
