@@ -42,8 +42,8 @@ do not depend on each other: export receives its pixel source as a closure (see
 - `raster`: immutable tiled images (256 px tiles in the source format, shared via `Arc`) with a
   display pyramid ([ADR 0005](adr/0005-pixel-storage-v0.md)).
 - `document`: a layer stack, bottom to top, addressed by stable `LayerId`s that are never
-  reused. Layers are procedural *fills* or *rasters*, each with an opacity and a blend mode; the
-  document has a blend space. `revision` increases on every change.
+  reused. Layers are procedural *fills* or *rasters*, each with an opacity, a blend mode and an
+  optional mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision` increases on every change.
 - `thumbnail`: small previews of rasters for the UI, read from the coarsest pyramid level
   that is large enough and converted like an 8-bit sRGB export.
 - `blend`: blend modes and blend spaces ([ADR 0012](adr/0012-blend-modes.md)), the reference
