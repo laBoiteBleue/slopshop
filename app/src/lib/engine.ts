@@ -138,6 +138,8 @@ export type EditRequest =
   | { kind: "resizeImage"; width: number; height: number }
   /** Image > Canvas Size: `anchor` [x, y] in [0, 1] keeps the image there (0.5: centered). */
   | { kind: "canvasSize"; width: number; height: number; anchor: [number, number] }
+  /** The Crop tool: keep this area of the canvas (it may extend past it). */
+  | { kind: "crop"; x: number; y: number; width: number; height: number }
   /** Image > Image Rotation: exact turns and flips of the whole image. */
   | { kind: "rotateImage"; turn: ImageTurn }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
