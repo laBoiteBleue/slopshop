@@ -286,18 +286,7 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
     let color_channels = header.color_channels();
 
     // Layer and mask information: only the layer count, then skip to the composite.
-    let section = input.length()?;
-    let mut layer_count: i16 = 0;
-    if section > 0 {
-        let layer_info = input.length()?;
-        let header = if input.big { 8 } else { 4 };
-        if layer_info >= 2 {
-            layer_count = i16::from_be_bytes(input.bytes()?);
-            input.skip(section - header - 2)?;
-        } else {
-            input.skip(section - header)?;
-        }
-    }
+    let layer_count = layers::layer_count(&mut input)?;
     // Bitmap documents have no transparency (their extra channels would be 1-bit selections).
     let transparency = layer_count < 0 && channels > color_channels && depth >= 8;
     let mut warnings = Vec::new();
