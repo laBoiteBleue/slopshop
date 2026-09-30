@@ -27,6 +27,8 @@ export type LayerView = {
   children: LayerView[];
   /** A group whose layers blend through it. */
   passThrough: boolean;
+  /** Clipped to the layer below it (ADR 0016). */
+  clipped: boolean;
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
@@ -112,6 +114,7 @@ export type EditRequest =
   /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */
   | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
   | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
+  | { kind: "setLayerClipped"; id: number; clipped: boolean }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }

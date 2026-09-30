@@ -73,6 +73,8 @@ pub struct LayerView {
     pub children: Vec<LayerView>,
     /// A group whose layers blend through it.
     pub pass_through: bool,
+    /// Clipped to the layer below it (ADR 0016).
+    pub clipped: bool,
 }
 
 impl DocumentView {
@@ -147,6 +149,7 @@ impl LayerView {
                     ..
                 }
             ),
+            clipped: layer.clipped,
         }
     }
 }
@@ -260,6 +263,11 @@ pub enum EditRequest {
         id: u64,
         pass_through: bool,
     },
+    /// Clip a layer to the one below it, or release it (ADR 0016).
+    SetLayerClipped {
+        id: u64,
+        clipped: bool,
+    },
     /// `mode`: a blend mode identifier (`BlendMode::id`).
     SetLayerBlendMode {
         id: u64,
@@ -355,6 +363,10 @@ impl EditRequest {
                     .duplicate_layers_edit(&ids, |name| name_format.replace("{name}", name))
                     .map_err(|e| e.to_string())?
             }
+            EditRequest::SetLayerClipped { id, clipped } => Edit::SetLayerClipped {
+                id: LayerId::from_raw(id),
+                clipped,
+            },
             EditRequest::SetGroupPassThrough { id, pass_through } => Edit::SetGroupPassThrough {
                 id: LayerId::from_raw(id),
                 pass_through,

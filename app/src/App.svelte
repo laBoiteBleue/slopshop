@@ -21,6 +21,7 @@
     type ExportSpec,
     type ExportStarted,
     type GpuInfo,
+    type LayerView,
     type OpenFailed,
     type OpenFinished,
     type Opening,
@@ -31,6 +32,8 @@
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
   import { formatZoom } from "./lib/format";
+  import Icon from "./lib/Icon.svelte";
+  import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
@@ -284,14 +287,31 @@
   let tabHover = $state<{ id: number; timer: number } | null>(null);
   let mainElement: HTMLElement;
 
+  /** A thumbnail of the dragged layers following the pointer. */
+  let dragGhost = $state<{ document: number; ids: number[]; x: number; y: number } | null>(null);
+
   function onLayerDrag(drag: { ids: number[]; pointerId: number; x: number; y: number } | null) {
     if (!drag || activeId === null) {
       panelDrag = null;
-      if (!layerTransfer) clearTabHover();
+      if (!layerTransfer) {
+        clearTabHover();
+        dragGhost = null;
+      }
       return;
     }
     panelDrag = { source: activeId, ids: drag.ids, pointerId: drag.pointerId };
+    dragGhost = { document: activeId, ids: drag.ids, x: drag.x, y: drag.y };
     hoverTabAt(drag.x, drag.y);
+  }
+
+  /** A layer of a layer tree. */
+  function findLayer(layers: LayerView[], id: number): LayerView | null {
+    for (const layer of layers) {
+      if (layer.id === id) return layer;
+      const inside = findLayer(layer.children, id);
+      if (inside) return inside;
+    }
+    return null;
   }
 
   function hoverTabAt(x: number, y: number) {
@@ -328,6 +348,10 @@
   function onTransferMove(e: PointerEvent) {
     const transfer = layerTransfer;
     if (!transfer || e.pointerId !== transfer.pointerId) return;
+    if (dragGhost) {
+      dragGhost.x = e.clientX;
+      dragGhost.y = e.clientY;
+    }
     hoverTabAt(e.clientX, e.clientY);
     const under = document.elementFromPoint(e.clientX, e.clientY);
     transfer.overTarget =
@@ -351,6 +375,7 @@
       mainElement.releasePointerCapture(transfer.pointerId);
     }
     layerTransfer = null;
+    dragGhost = null;
     clearTabHover();
   }
 
@@ -819,6 +844,12 @@
         keys("mod", "G"),
         selectedCount === 0,
       ),
+      clipping: command(
+        t(layer?.clipped ? "menu.layer.releaseClipping" : "menu.layer.createClipping"),
+        () => layersPanel?.toggleClippingSelected(),
+        keys("alt", "mod", "G"),
+        selectedCount === 0,
+      ),
       ungroup: command(
         t("menu.layer.ungroup"),
         () => layersPanel?.ungroupSelected(),
@@ -867,6 +898,7 @@
       c.group,
       c.ungroup,
       separator,
+      c.clipping,
       c.maskFromTransparency,
       c.maskToggle,
       c.maskDelete,
@@ -974,6 +1006,8 @@
           layerCommands.newGroup,
           layerCommands.group,
           layerCommands.ungroup,
+          separator,
+          layerCommands.clipping,
           separator,
           layerCommands.duplicate,
           layerCommands.rename,
@@ -1306,6 +1340,21 @@
           onlayerdrag={onLayerDrag}
         />
       {/key}
+    {/if}
+    {#if dragGhost}
+      {@const ghostDoc = tabs.find((d) => d.id === dragGhost?.document)}
+      {@const ghostLayer = ghostDoc ? findLayer(ghostDoc.layers, dragGhost.ids.at(-1) ?? -1) : null}
+      {#if ghostDoc && ghostLayer}
+        <div class="drag-ghost" style:left="{dragGhost.x + 14}px" style:top="{dragGhost.y + 10}px">
+          {#if ghostLayer.kind === "group"}
+            <span class="ghost-folder"><Icon name="folder" size={26} /></span>
+          {:else}
+            <LayerThumbnail documentId={ghostDoc.id} layer={ghostLayer} size={36} />
+          {/if}
+          <span class="ghost-name">{ghostLayer.name}</span>
+          {#if dragGhost.ids.length > 1}<span class="ghost-count">{dragGhost.ids.length}</span>{/if}
+        </div>
+      {/if}
     {/if}
   </main>
 
@@ -1761,6 +1810,45 @@
     color: var(--text);
     font-size: 14px;
     pointer-events: none;
+  }
+
+  .drag-ghost {
+    position: fixed;
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 260px;
+    padding: 4px 8px 4px 4px;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.45);
+    opacity: 0.9;
+    pointer-events: none;
+  }
+
+  .ghost-folder {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    color: var(--text-muted);
+  }
+
+  .ghost-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ghost-count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: var(--accent-text, #fff);
+    font-size: 11px;
+    text-align: center;
   }
 
   main.transferring {

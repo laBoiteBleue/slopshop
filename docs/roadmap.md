@@ -97,7 +97,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       `.slop` 0.4
 - [x] Clipping masks in the engine ([ADR 0016](adr/0016-clipping-masks.md)): clipped layers blend
       atop their base, whose mode and opacity apply to the clipping group; `.slop` 0.5
-- [ ] Clipping masks in the layers panel (Alt+Ctrl+G, Alt+click between layers)
+- [x] Clipping masks in the layers panel (Alt+Ctrl+G, Alt+click between layers, indented
+      arrow, underlined base)
 - [x] Groups in the layers panel: folders that fold, New Group, Group Layers (Ctrl+G), Ungroup
       Layers (Shift+Ctrl+G), drag into and out of groups, Pass Through in the blend modes
 - [x] PSD groups; a document of several layers (`.slop`, PSD, a tab) imported into another
