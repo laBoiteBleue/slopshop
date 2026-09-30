@@ -10,8 +10,8 @@
 //! with an opaque alpha channel (GPUs have no 3-channel texture formats).
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use crate::color::{
     AlphaMode, ChannelLayout, ColorSpace, IDENTITY, LinearRgba, PixelFormat, SampleType,
@@ -90,6 +90,8 @@ pub struct RasterImage {
     levels: Vec<RasterLevel>,
     /// Average of the coarsest level: source linear RGB, straight alpha.
     average: LinearRgba,
+    /// The bounds of the pixels that are not transparent, computed once when first asked.
+    content_bounds: OnceLock<Option<Rect>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +208,7 @@ impl RasterImage {
             format,
             levels,
             average,
+            content_bounds: OnceLock::new(),
         })
     }
 
@@ -239,6 +242,7 @@ impl RasterImage {
             format,
             levels,
             average,
+            content_bounds: OnceLock::new(),
         })
     }
 
@@ -264,6 +268,7 @@ impl RasterImage {
             format,
             levels,
             average,
+            content_bounds: OnceLock::new(),
         })
     }
 
@@ -391,6 +396,132 @@ impl RasterImage {
             .collect();
         // Invariant: tiles of the right count and length for this size and format.
         RasterImage::from_level0_tiles(self.size(), format, tiles).ok()
+    }
+
+    /// Alpha (coverage, clamped to `[0, 1]`) of pixel (`x`, `y`) of level 0: 1 for an image
+    /// without alpha, 0 outside the image.
+    pub fn alpha_at(&self, x: u32, y: u32) -> f32 {
+        let size = self.size();
+        if x >= size.width || y >= size.height {
+            return 0.0;
+        }
+        if !self.format.layout.has_alpha() {
+            return 1.0;
+        }
+        let stored = Codec::new(self.stored_format());
+        let coord = TileCoord {
+            col: x / TILE_SIZE,
+            row: y / TILE_SIZE,
+        };
+        let Some(tile) = self.levels[0].tile(coord) else {
+            return 0.0;
+        };
+        let at = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * stored.bytes_per_pixel;
+        tile.get(at..at + stored.bytes_per_pixel)
+            .map_or(0.0, |px| stored.read(px).1)
+    }
+
+    /// Linear value of the first channel of pixel (`x`, `y`) of level 0, clamped to `[0, 1]`: a
+    /// mask's coverage there (ADR 0014); 0 outside the image.
+    pub fn gray_at(&self, x: u32, y: u32) -> f32 {
+        let size = self.size();
+        if x >= size.width || y >= size.height {
+            return 0.0;
+        }
+        let stored = Codec::new(self.stored_format());
+        let coord = TileCoord {
+            col: x / TILE_SIZE,
+            row: y / TILE_SIZE,
+        };
+        let Some(tile) = self.levels[0].tile(coord) else {
+            return 0.0;
+        };
+        let at = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * stored.bytes_per_pixel;
+        tile.get(at..at + stored.bytes_per_pixel)
+            .map_or(0.0, |px| stored.read(px).0[0].clamp(0.0, 1.0))
+    }
+
+    /// The smallest rectangle holding every pixel that is not fully transparent (the whole image
+    /// without alpha; `None` when all are transparent). Computed once, tile by tile in parallel;
+    /// a tile shared by several places (the background of [`Self::from_placed`]) is read once.
+    pub fn content_bounds(&self) -> Option<Rect> {
+        *self.content_bounds.get_or_init(|| {
+            if !self.format.layout.has_alpha() {
+                return Some(self.size().bounds());
+            }
+            self.scan_content_bounds()
+        })
+    }
+
+    fn scan_content_bounds(&self) -> Option<Rect> {
+        let level = &self.levels[0];
+        let stored = Codec::new(self.stored_format());
+        let t = TILE_SIZE as usize;
+        let (width, height) = (level.size.width as usize, level.size.height as usize);
+        let columns = level.grid.columns() as usize;
+        // Local bounds of the opaque pixels of each distinct tile, by allocation.
+        let mut distinct: Vec<&Arc<[u8]>> = Vec::new();
+        let mut index_of = std::collections::HashMap::new();
+        for tile in &level.tiles {
+            index_of.entry(tile.as_ptr()).or_insert_with(|| {
+                distinct.push(tile);
+                distinct.len() - 1
+            });
+        }
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let per_thread = distinct.len().div_ceil(threads).max(1);
+        let mut local: Vec<Option<[usize; 4]>> = vec![None; distinct.len()];
+        std::thread::scope(|scope| {
+            for (chunk, out) in distinct
+                .chunks(per_thread)
+                .zip(local.chunks_mut(per_thread))
+            {
+                let stored = &stored;
+                scope.spawn(move || {
+                    for (tile, bounds) in chunk.iter().zip(out) {
+                        let mut b: Option<[usize; 4]> = None;
+                        for (i, px) in tile.chunks_exact(stored.bytes_per_pixel).enumerate() {
+                            if stored.read(px).1 > 0.0 {
+                                let (x, y) = (i % t, i / t);
+                                b = Some(match b {
+                                    None => [x, y, x, y],
+                                    Some([x0, y0, x1, y1]) => {
+                                        [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]
+                                    }
+                                });
+                            }
+                        }
+                        *bounds = b;
+                    }
+                });
+            }
+        });
+        // Place each tile's bounds, clipped to the image (padding repeats edge pixels).
+        let mut total: Option<[usize; 4]> = None;
+        for (index, tile) in level.tiles.iter().enumerate() {
+            let Some([x0, y0, x1, y1]) = local[index_of[&tile.as_ptr()]] else {
+                continue;
+            };
+            let (ox, oy) = ((index % columns) * t, (index / columns) * t);
+            let (x0, y0) = (ox + x0, oy + y0);
+            let (x1, y1) = ((ox + x1).min(width - 1), (oy + y1).min(height - 1));
+            if x0 > x1 || y0 > y1 {
+                continue;
+            }
+            total = Some(match total {
+                None => [x0, y0, x1, y1],
+                Some([a, b, c, d]) => [a.min(x0), b.min(y0), c.max(x1), d.max(y1)],
+            });
+        }
+        // Within the image: the sizes fit in u32.
+        total.map(|[x0, y0, x1, y1]| {
+            Rect::new(
+                x0 as u32,
+                y0 as u32,
+                (x1 - x0 + 1) as u32,
+                (y1 - y0 + 1) as u32,
+            )
+        })
     }
 
     /// Pyramid levels, finest first. Never empty.
