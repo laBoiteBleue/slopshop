@@ -359,6 +359,20 @@ impl Document {
     }
 
     /// Number of groups around a layer: 0 at the top level.
+    /// The map from the space of layer `id`'s parent to the document: the transforms of its
+    /// groups, composed (ADR 0017); the identity at the top level or for an unknown layer.
+    pub fn parent_transform(&self, id: LayerId) -> crate::transform::Affine {
+        let mut transform = crate::transform::Affine::IDENTITY;
+        let mut parent = self.locate(id).and_then(|(parent, _)| parent);
+        while let Some(group) = parent {
+            if let Some(layer) = self.layer(group) {
+                transform = transform.then(layer.transform);
+            }
+            parent = self.locate(group).and_then(|(parent, _)| parent);
+        }
+        transform
+    }
+
     pub fn depth(&self, id: LayerId) -> Option<usize> {
         let mut depth = 0;
         let (mut parent, _) = self.locate(id)?;

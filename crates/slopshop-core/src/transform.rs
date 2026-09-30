@@ -134,6 +134,16 @@ impl Affine {
         out
     }
 
+    /// The same map with every number within 1e-9 of a whole number made whole: transforms
+    /// built by floating-point steps (a rotation by 90°, a scale back to 1, a move by whole
+    /// pixels) stay exact.
+    pub fn snapped(self) -> Affine {
+        Affine::from_array(self.to_array().map(|v| {
+            let whole = v.round();
+            if (v - whole).abs() < 1e-9 { whole } else { v }
+        }))
+    }
+
     /// Whether a layer may have this transform (ADR 0018): finite, with magnitudes below 1e9,
     /// and invertible without collapsing (|determinant| ≥ 1e-9).
     pub fn is_valid_layer_transform(self) -> bool {
@@ -198,6 +208,16 @@ mod tests {
             Affine::rotation(std::f64::consts::FRAC_PI_4).map_rect([0.0, 0.0, 2.0, 2.0])[2],
             2f64.sqrt()
         );
+    }
+
+    #[test]
+    fn snapping_makes_near_whole_numbers_whole() {
+        let quarter = Affine::rotation(std::f64::consts::FRAC_PI_2)
+            .then(Affine::translation(3.000_000_000_01, 0.5));
+        assert!(!quarter.is_pixel_exact());
+        let snapped = quarter.snapped();
+        assert_eq!(snapped.to_array(), [0.0, 1.0, -1.0, 0.0, 3.0, 0.5]);
+        assert_eq!(Affine::rotation(0.3).snapped(), Affine::rotation(0.3));
     }
 
     #[test]

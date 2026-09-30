@@ -408,6 +408,31 @@ impl Edit {
         ))
     }
 
+    /// The edit that applies `by`, a map of the document's space, to `ids` on top of their
+    /// transforms (Free Transform); a layer inside another of `ids` goes with it. Results are
+    /// [snapped](Affine::snapped), so that a quarter turn built by steps stays exact.
+    pub fn transform_layers(
+        doc: &Document,
+        ids: &[LayerId],
+        by: Affine,
+    ) -> Result<Edit, EditError> {
+        let moving = outermost_in_order(doc, ids)?;
+        if moving.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        let mut edits = Vec::with_capacity(moving.len());
+        for id in moving {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            // Into the document, `by`, and back into the parent's space.
+            let parent = doc.parent_transform(id);
+            let back = parent.inverse().ok_or(EditError::InvalidTransform)?;
+            let transform = layer.transform.then(parent).then(by).then(back).snapped();
+            validate_transform(transform)?;
+            edits.push(Edit::SetLayerTransform { id, transform });
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that replaces group `id` by its layers, in its place and order: Layer > Ungroup
     /// Layers. The group's opacity, blend mode and mask go with it.
     pub fn ungroup(doc: &Document, id: LayerId) -> Result<Edit, EditError> {
@@ -1283,5 +1308,61 @@ mod tests {
         undo.apply(&mut doc).unwrap();
         assert!(doc.layer(g_id).unwrap().transform.is_identity());
         assert_eq!(doc.layer(ids[0]).unwrap().transform, Affine::IDENTITY);
+    }
+
+    #[test]
+    fn transforming_layers_applies_in_the_document_space() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        let g = group_layer(&mut doc, "g", Vec::new());
+        let g_id = g.id;
+        Edit::group_layers(&doc, g, &[ids[1]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // The group is scaled 2×: its layer's own transform is in the group's space.
+        Edit::SetLayerTransform {
+            id: g_id,
+            transform: Affine::scale(2.0, 2.0),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let by = Affine::translation(6.0, 0.0);
+        let undo = Edit::transform_layers(&doc, &[ids[1], ids[0]], by)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // 6 document pixels are 3 of the group's.
+        assert_eq!(
+            doc.layer(ids[1]).unwrap().transform,
+            Affine::translation(3.0, 0.0)
+        );
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            Affine::translation(6.0, 0.0)
+        );
+        // Four quarter turns by floating-point steps come back to exactly where they were.
+        for _ in 0..4 {
+            Edit::transform_layers(
+                &doc,
+                &[ids[0]],
+                Affine::rotation(std::f64::consts::FRAC_PI_2),
+            )
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        }
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            Affine::translation(6.0, 0.0)
+        );
+        assert_eq!(
+            Edit::transform_layers(&doc, &[ids[0]], Affine::scale(0.0, 1.0))
+                .and_then(|e| e.apply(&mut doc)),
+            Err(EditError::InvalidTransform)
+        );
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
+        assert!(doc.layer(ids[1]).unwrap().transform.is_identity());
     }
 }

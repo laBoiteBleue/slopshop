@@ -171,20 +171,12 @@ pub fn bounds_of(document: &Document, ids: &[LayerId]) -> Option<Bounds> {
         let Some(layer) = document.layer(id) else {
             continue;
         };
-        let mut parent = Affine::IDENTITY;
-        let mut ancestor = document.locate(id).and_then(|(parent, _)| parent);
-        let mut chain = Vec::new();
-        while let Some(group) = ancestor {
-            chain.push(group);
-            ancestor = document.locate(group).and_then(|(parent, _)| parent);
-        }
-        for group in chain.into_iter().rev() {
-            if let Some(g) = document.layer(group) {
-                parent = g.transform.then(parent);
-            }
-        }
         let mut found = Vec::new();
-        collect_bounds(std::slice::from_ref(layer), parent, &mut found);
+        collect_bounds(
+            std::slice::from_ref(layer),
+            document.parent_transform(id),
+            &mut found,
+        );
         for (_, b) in found {
             total = Some(total.map_or(b, |t| t.union(b)));
         }

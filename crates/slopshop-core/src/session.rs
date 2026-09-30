@@ -202,6 +202,19 @@ impl Session {
         self.push_undo(entry);
     }
 
+    /// Revert the gesture in progress, leaving no history entry (a transform cancelled with
+    /// Esc). Returns `Ok(false)` if there was none.
+    pub fn cancel_gesture(&mut self) -> Result<bool, EditError> {
+        let inverses = std::mem::take(&mut self.gesture);
+        if inverses.is_empty() {
+            return Ok(false);
+        }
+        for inverse in inverses.into_iter().rev() {
+            inverse.apply(&mut self.document)?;
+        }
+        Ok(true)
+    }
+
     /// Undo the last edit (ending any gesture first). Returns `Ok(false)` if there was nothing
     /// to undo.
     pub fn undo(&mut self) -> Result<bool, EditError> {
@@ -333,6 +346,21 @@ mod tests {
         assert_eq!(s.document().layer(a).unwrap().opacity, 1.0);
         assert!(s.redo().unwrap());
         assert_eq!(s.document().layer(a).unwrap().opacity, 0.3);
+    }
+
+    #[test]
+    fn a_cancelled_gesture_leaves_no_trace() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        let entries_before = s.undo.len();
+        for opacity in [0.9, 0.6, 0.3] {
+            s.perform_in_gesture(Edit::SetLayerOpacity { id: a, opacity })
+                .unwrap();
+        }
+        assert!(s.cancel_gesture().unwrap());
+        assert_eq!(s.document().layer(a).unwrap().opacity, 1.0);
+        assert_eq!(s.undo.len(), entries_before);
+        assert!(!s.cancel_gesture().unwrap());
     }
 
     #[test]
