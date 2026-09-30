@@ -178,8 +178,9 @@
   .panel {
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
     background: var(--panel);
-    border-bottom: 1px solid var(--border-dark);
+    border-top: 1px solid var(--border-dark);
   }
 
   .tabs {
