@@ -1165,3 +1165,141 @@ fn adjustment_layers_are_imported_with_their_settings() {
     );
     assert!(warnings_of("Levels 1").is_empty());
 }
+
+#[test]
+fn adjustments_of_many_settings_are_imported() {
+    use slopshop_core::adjust::Adjustment;
+    let adjustment = |name: &'static str, key: &[u8; 4], block: Vec<u8>| {
+        let mut layer = TestLayer::new(name, [0; 4], Vec::new());
+        layer.channels = (-1..3).map(|c| (c, Vec::new())).collect();
+        layer.blocks.push((*key, block));
+        layer
+    };
+    let be16 = |values: &[i16]| {
+        values
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect::<Vec<u8>>()
+    };
+    // Black & White, as Photoshop writes it (fill_adjustments.psd of psd-tools), tinted.
+    let item = |out: &mut Vec<u8>, key: &[u8], ty: &[u8; 4]| {
+        let length = if key.len() == 4 {
+            0u32
+        } else {
+            key.len() as u32
+        };
+        out.extend(length.to_be_bytes());
+        out.extend(key);
+        out.extend(ty);
+    };
+    let mut blwh = vec![0, 0, 0, 16];
+    for (key, value) in [
+        (&b"Rd  "[..], 40i32),
+        (b"Yllw", 60),
+        (b"Grn ", 40),
+        (b"Cyn ", -60),
+        (b"Bl  ", 20),
+        (b"Mgnt", 280),
+    ] {
+        item(&mut blwh, key, b"long");
+        blwh.extend(value.to_be_bytes());
+    }
+    item(&mut blwh, b"useTint", b"bool");
+    blwh.push(1);
+    item(&mut blwh, b"tintColor", b"Objc");
+    for (key, value) in [(b"Rd  ", 225.0f64), (b"Grn ", 211.0), (b"Bl  ", 179.0)] {
+        item(&mut blwh, key, b"doub");
+        blwh.extend(value.to_be_bytes());
+    }
+    // Color Balance: psd-tools' sample values.
+    let mut blnc = be16(&[-4, 2, -5, 10, 4, -9, 1, -9, -3]);
+    blnc.extend([1, 0, 0, 0]);
+    // Photo Filter, version 2 in Lab (Photoshop's Warming Filter 85: out of sRGB, clipped).
+    let mut phfl = be16(&[2, 7, 6706, 3200, 12000, 0]);
+    phfl.extend(25u32.to_be_bytes());
+    phfl.push(1);
+    // Channel Mixer: four records (red, green, blue, unused).
+    let mut mixr = be16(&[1, 0]);
+    mixr.extend(be16(&[80, 30, -10, 0, 5]));
+    mixr.extend(be16(&[0, 100, 0, 0, 0]));
+    mixr.extend(be16(&[0, 0, 100, 0, -20]));
+    mixr.extend(be16(&[0, 0, 0, 100, 0]));
+
+    let mut doc = Doc::new(3, 8, 16, 16, rgb8_planes(16, 16).0);
+    let background = TestLayer::new(
+        "Background",
+        [0, 0, 16, 16],
+        (0..3)
+            .map(|c| (c, plane8(16, 16, |x, _| x as u8 * 10)))
+            .collect(),
+    );
+    doc.layers = vec![
+        background,
+        adjustment("Black & White 1", b"blwh", blwh),
+        adjustment("Color Balance 1", b"blnc", blnc),
+        adjustment("Photo Filter 1", b"phfl", phfl),
+        adjustment("Channel Mixer 1", b"mixr", mixr),
+    ];
+    let opened = open_layers("more-adjustments.psd", &doc);
+    let found: Vec<Adjustment> = opened
+        .document
+        .layers()
+        .iter()
+        .filter_map(|l| match l.content {
+            slopshop_core::LayerContent::Adjustment { adjustment } => Some(adjustment),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(found.len(), 4);
+    assert_eq!(
+        found[0],
+        Adjustment::BlackWhite {
+            weights: [40.0, 60.0, 40.0, -60.0, 20.0, 280.0],
+            tint: true,
+            tint_hue: 42.0,
+            tint_saturation: 20.0,
+        }
+    );
+    assert_eq!(
+        found[1],
+        Adjustment::ColorBalance {
+            shadows: [-4.0, 2.0, -5.0],
+            midtones: [10.0, 4.0, -9.0],
+            highlights: [1.0, -9.0, -3.0],
+            preserve_luminosity: true,
+        }
+    );
+    let Adjustment::PhotoFilter {
+        color,
+        density,
+        preserve_luminosity,
+    } = found[2]
+    else {
+        panic!("{:?}", found[2]);
+    };
+    // Photoshop shows this filter as (236, 138, 0).
+    let expected = [236.0 / 255.0, 138.0 / 255.0, 0.0];
+    assert!(
+        color
+            .iter()
+            .zip(expected)
+            .all(|(c, e)| (c - e).abs() < 3.0 / 255.0),
+        "{color:?}"
+    );
+    assert_eq!((density, preserve_luminosity), (25.0, true));
+    assert_eq!(
+        found[3],
+        Adjustment::ChannelMixer {
+            red: [80.0, 30.0, -10.0, 5.0],
+            green: [0.0, 100.0, 0.0, 0.0],
+            blue: [0.0, 0.0, 100.0, -20.0],
+            monochrome: false,
+        }
+    );
+    // Only the tint is approximated.
+    let approximated: Vec<bool> = opened.layer_warnings[1..]
+        .iter()
+        .map(|w| w.contains(&ImportWarning::AdjustmentsApproximated))
+        .collect();
+    assert_eq!(approximated, [true, false, false, false]);
+}

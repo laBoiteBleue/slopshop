@@ -15,6 +15,7 @@ mod atomic;
 pub mod collection;
 pub mod export;
 mod icc;
+mod lab;
 mod orient;
 mod psd;
 pub mod slop;
