@@ -297,6 +297,14 @@ pub enum EditRequest {
         height: u32,
         anchor: [f64; 2],
     },
+    /// The Crop tool: keep `width` × `height` pixels from (`x`, `y`) (it may extend past the
+    /// canvas); nothing is deleted.
+    Crop {
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+    },
     /// Image > Image Rotation: `turn` is `clockwise`, `counterClockwise`, `halfTurn`,
     /// `flipHorizontal` or `flipVertical`.
     RotateImage {
@@ -422,6 +430,14 @@ impl EditRequest {
                 anchor: [x, y],
             } => Edit::canvas_size(session.document(), Size::new(width, height), (x, y))
                 .map_err(|e| e.to_string())?,
+            EditRequest::Crop {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                Edit::crop(session.document(), [x, y, width, height]).map_err(|e| e.to_string())?
+            }
             EditRequest::RotateImage { turn } => {
                 let turn = match turn.as_str() {
                     "clockwise" => ImageTurn::Clockwise,

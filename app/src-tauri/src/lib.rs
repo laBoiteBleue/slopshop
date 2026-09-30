@@ -2483,6 +2483,8 @@ mod tests {
         assert_eq!(resized, Size::new(40, 30));
         let canvas = perform(r#"{"kind":"canvasSize","width":50,"height":30,"anchor":[0.5,0.5]}"#);
         assert_eq!(canvas, Size::new(50, 30));
+        let cropped = perform(r#"{"kind":"crop","x":-5,"y":2,"width":20,"height":10}"#);
+        assert_eq!(cropped, Size::new(20, 10));
         let unknown =
             serde_json::from_str::<EditRequest>(r#"{"kind":"rotateImage","turn":"sideways"}"#)
                 .unwrap()
