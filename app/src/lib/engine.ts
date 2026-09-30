@@ -169,7 +169,8 @@ export type ImportWarning =
   | "firstPageOnly"
   | "precisionReduced"
   | "nonFiniteSamples"
-  | "colorInfoUnsupported";
+  | "colorInfoUnsupported"
+  | "blendSpaceDiffers";
 
 export type OpenErrorCode =
   | "io"

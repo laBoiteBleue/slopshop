@@ -199,23 +199,46 @@ impl Documents {
             return Err("a document cannot be copied into itself".to_owned());
         }
         let from = self.get_mut(source)?;
-        let layers = from.session.document().layers().to_vec();
-        let warnings: Vec<Option<Vec<&'static str>>> = layers
+        let document = from.session.document().clone();
+        let warnings: Vec<Vec<&'static str>> = document
+            .layers()
             .iter()
-            .map(|layer| from.layer_warnings.get(&layer.id).cloned())
+            .map(|layer| {
+                from.layer_warnings
+                    .get(&layer.id)
+                    .cloned()
+                    .unwrap_or_default()
+            })
             .collect();
-        let to = self.get_mut(target)?;
-        let ids = to
-            .session
-            .insert_layer_copies(&layers)
-            .map_err(|e| e.to_string())?;
-        for (id, warnings) in ids.into_iter().zip(warnings) {
-            if let Some(warnings) = warnings {
-                to.layer_warnings.insert(id, warnings);
-            }
-        }
-        Ok(to.view())
+        insert_document_layers(self.get_mut(target)?, &document, warnings)
     }
+}
+
+/// Warning of layers that come from a document blending in another space: they now blend in
+/// the space of the document they joined (ADR 0012).
+const WARNING_BLEND_SPACE: &str = "blendSpaceDiffers";
+
+/// Add copies of every layer of `source` on top of `target` (one undo entry), with the import
+/// warnings of each (`warnings`, in stack order).
+fn insert_document_layers(
+    target: &mut OpenDocument,
+    source: &Document,
+    warnings: Vec<Vec<&'static str>>,
+) -> Result<DocumentView, String> {
+    let other_space = source.blend_space() != target.session.document().blend_space();
+    let ids = target
+        .session
+        .insert_layer_copies(source.layers())
+        .map_err(|e| e.to_string())?;
+    for (id, mut warnings) in ids.into_iter().zip(warnings) {
+        if other_space {
+            warnings.push(WARNING_BLEND_SPACE);
+        }
+        if !warnings.is_empty() {
+            target.layer_warnings.insert(id, warnings);
+        }
+    }
+    Ok(target.view())
 }
 
 /// An open in progress (decoding a large file takes seconds).
@@ -492,13 +515,9 @@ fn open_path(
     let state = app.state::<AppState>();
     let id = state.next_open_id.fetch_add(1, Ordering::Relaxed);
     let name = file_name(path);
-    // SlopShop documents are recognized by their content and always open in a new tab.
+    // SlopShop documents are recognized by their content: in a new tab, or their layers added
+    // on top of the target document.
     let is_document = slopshop_io::slop::is_slop_file(path).unwrap_or(false);
-    let target = if is_document {
-        OpenTarget::NewTab
-    } else {
-        target
-    };
     let opening = Opening {
         id,
         name: name.clone(),
@@ -519,18 +538,36 @@ fn open_path(
     // event (the UI shows a pending tab until then), and must not stop other opens.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if is_document {
+            if target_gone {
+                return Err((CODE_DOCUMENT_CLOSED, DOCUMENT_CLOSED.to_owned()));
+            }
             let (document, file) = SlopFile::open(path).map_err(|e| (e.code(), e.to_string()))?;
             if let Some(turn) = turn {
                 turn.wait();
             }
-            return state
-                .add_document_from(
+            let added = match target {
+                OpenTarget::NewTab => state.add_document_from(
                     Session::new(document),
                     Some(name.clone()),
                     Vec::new(),
                     Some(file),
-                )
-                .map_err(|e| ("internal", e));
+                ),
+                OpenTarget::Layer { document_id } => {
+                    let warnings = vec![Vec::new(); document.layers().len()];
+                    state.documents().and_then(|mut documents| {
+                        let target = documents.get_mut(document_id)?;
+                        insert_document_layers(target, &document, warnings)
+                    })
+                }
+            };
+            return added.map_err(|e| {
+                let code = if e == DOCUMENT_CLOSED {
+                    CODE_DOCUMENT_CLOSED
+                } else {
+                    "internal"
+                };
+                (code, e)
+            });
         }
         let decoded = if target_gone {
             Err((CODE_DOCUMENT_CLOSED, DOCUMENT_CLOSED.to_owned()))
@@ -1286,6 +1323,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slopshop_core::BlendSpace;
 
     #[test]
     fn opens_insert_in_the_order_asked_whatever_order_they_end_in() {
@@ -1343,6 +1381,35 @@ mod tests {
 
     fn tab_ids(documents: &Documents) -> Vec<u64> {
         documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn imported_layers_are_one_undo_step_and_warn_about_another_blend_space() {
+        let mut documents = documents_with(2);
+        let source = documents.get_mut(1).unwrap().session.document().clone();
+        let target = documents.get_mut(2).unwrap();
+        let before = target.session.document().layers().len();
+        let view = insert_document_layers(target, &source, vec![Vec::new(); 1]).unwrap();
+        assert_eq!(view.layers.len(), before + source.layers().len());
+        assert!(
+            view.warnings.is_empty(),
+            "same blend space: {:?}",
+            view.warnings
+        );
+        target.session.undo().unwrap();
+        assert_eq!(target.session.document().layers().len(), before);
+
+        let mut linear = source.clone();
+        Edit::SetBlendSpace {
+            space: BlendSpace::Linear,
+        }
+        .apply(&mut linear)
+        .unwrap();
+        let view = insert_document_layers(target, &linear, vec![Vec::new(); 1]).unwrap();
+        assert_eq!(view.warnings, [WARNING_BLEND_SPACE]);
+        // The warning follows the imported layers.
+        target.session.undo().unwrap();
+        assert!(target.view().warnings.is_empty());
     }
 
     #[test]
