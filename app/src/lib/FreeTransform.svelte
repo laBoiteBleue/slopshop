@@ -59,6 +59,8 @@
   /** A press moving less than this (CSS pixels) is a click, not a drag. */
   const CLICK_SLOP = 3;
   let drag = $state<Drag | null>(null);
+  /** Half the length of a measure's end ticks, in CSS pixels. */
+  const SERIF_PX = 4;
   /** Smart guides of the current snap, in document pixels. */
   let guides = $state<Guide[]>([]);
   /** What the drag does, shown next to the pointer. */
@@ -329,6 +331,14 @@
     {@const [x1, y1] = mapping.toViewport(guide.x1, guide.y1)}
     {@const [x2, y2] = mapping.toViewport(guide.x2, guide.y2)}
     <line class="guide" {x1} {y1} {x2} {y2} />
+    {#if guide.measure}
+      <!-- End ticks (serifs), a fixed size on screen, across the measure. -->
+      {@const length = Math.hypot(x2 - x1, y2 - y1) || 1}
+      {@const nx = ((y1 - y2) / length) * SERIF_PX}
+      {@const ny = ((x2 - x1) / length) * SERIF_PX}
+      <line class="guide" x1={x1 - nx} y1={y1 - ny} x2={x1 + nx} y2={y1 + ny} />
+      <line class="guide" x1={x2 - nx} y1={y2 - ny} x2={x2 + nx} y2={y2 + ny} />
+    {/if}
   {/each}
 </svg>
 {#if readout}
