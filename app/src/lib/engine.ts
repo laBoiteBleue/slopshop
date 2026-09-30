@@ -12,7 +12,7 @@ export type LayerView = {
   name: string;
   visible: boolean;
   opacity: number;
-  kind: "fill" | "raster" | "group";
+  kind: "fill" | "raster" | "group" | "adjustment";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
@@ -31,7 +31,12 @@ export type LayerView = {
   clipped: boolean;
   /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
   transform: [number, number, number, number, number, number];
+  /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
+  adjustment: { id: AdjustmentId; values: [number, number, number, number, number] } | null;
 };
+
+/** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
+export type AdjustmentId = "exposure" | "hueSaturation" | "levels";
 
 /** Turns and flips of Image > Image Rotation. */
 export type ImageTurn =

@@ -156,6 +156,9 @@ fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
                     space_name(&format.color_space)
                 )
             }
+            LayerContent::Adjustment { adjustment } => {
+                format!("adjustment {} {:?}", adjustment.id(), adjustment.params())
+            }
             LayerContent::Fill { color } => {
                 format!("fill ({}, {}, {}, {})", color.r, color.g, color.b, color.a)
             }
