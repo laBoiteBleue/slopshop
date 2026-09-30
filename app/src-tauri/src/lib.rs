@@ -730,6 +730,36 @@ fn startup_files() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Another launch of the app while it runs (a file opened from the file manager, the app
+/// started again): show and focus this window, and open the files it was given in new tabs.
+fn second_launch(app: &AppHandle, argv: Vec<String>, cwd: String) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        // Best effort: the files still open if the window cannot be raised.
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let paths = launch_files(&argv, Path::new(&cwd));
+    if !paths.is_empty() {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = open_images(app, paths, None).await {
+                eprintln!("cannot open the files of a second launch: {e}");
+            }
+        });
+    }
+}
+
+/// The existing files among the arguments of a launch (the first one is the program),
+/// relative paths resolved from the launch's working directory.
+fn launch_files(argv: &[String], cwd: &Path) -> Vec<PathBuf> {
+    argv.iter()
+        .skip(1)
+        .map(|arg| cwd.join(arg))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
 /// All open documents, in tab order.
 #[tauri::command]
 async fn documents(state: State<'_, AppState>) -> Result<Vec<DocumentView>, String> {
@@ -1422,6 +1452,9 @@ fn close_after_exports(window: &tauri::Window, api: &tauri::CloseRequestApi) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so that a second launch hands over before anything else starts.
+        .plugin(tauri_plugin_single_instance::init(second_launch))
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
@@ -1575,6 +1608,24 @@ mod tests {
 
     fn tab_ids(documents: &Documents) -> Vec<u64> {
         documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn second_launches_open_their_existing_files() {
+        let dir = std::env::temp_dir().join(format!("slopshop-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("photo.png");
+        std::fs::write(&file, b"not really a png").unwrap();
+        let argv = [
+            "slopshop.exe".to_owned(),
+            "photo.png".to_owned(),
+            "missing.png".to_owned(),
+            file.display().to_string(),
+            "--flag".to_owned(),
+        ];
+        // Relative from the launch's directory, absolute as is; missing files and options skipped.
+        assert_eq!(launch_files(&argv, &dir), [file.clone(), file]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

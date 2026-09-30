@@ -33,6 +33,12 @@ tauri-plugin-opener = "2"
 # by 1Password); std has no clipboard, and Tauri's clipboard plugin wraps it for JavaScript
 # only, where images would cross the IPC.
 arboard = "3.6.1"
+# Official Tauri plugins (MIT OR Apache-2.0) for desktop window behavior; small, Rust only,
+# their JavaScript commands are not granted:
+# - a second launch focuses the running window and hands it its files;
+tauri-plugin-single-instance = "2.5.1"
+# - the window's size, position and maximized state are remembered between launches.
+tauri-plugin-window-state = "2.5.0"
 
 [dev-dependencies]
 # Tests deserialize IPC requests the way Tauri does.
