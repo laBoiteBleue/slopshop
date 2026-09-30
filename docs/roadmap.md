@@ -46,8 +46,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       solid color fills; what the engine lacks is reported layer by layer
 - [x] PSD/PSB import: groups as groups (pass-through or isolated, with their masks)
 - [x] PSD/PSB import: clipping masks
-- [ ] PSD/PSB export (layered)
-      ([formats plan](formats.md#psd-and-psb-p0))
+- [x] PSD export (layered, 8/16-bit): layers, groups, clipping, masks, blend modes and
+      adjustment layers, with a merged composite ([formats plan](formats.md#psd-and-psb-p0))
+- [ ] PSB export (above 30,000 px per side)
 - [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)
