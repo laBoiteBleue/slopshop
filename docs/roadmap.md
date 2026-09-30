@@ -51,8 +51,9 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [x] Gray export: PNG, TIFF, JPEG, the default for gray documents
       ([ADR 0011](adr/0011-gray-export.md))
 - [ ] Export: an "encoding" progress phase for WebP; gray EXR (needs a luminance-only reader)
-- [ ] Open a folder or a zip archive like a multi-file open: its compatible images become tabs,
-      or layers when dropped on the canvas
+- [x] Open a folder (File > Open Folder, or dropped) or a zip archive like a multi-file open:
+      its images and documents, in natural order, become tabs, or layers when dropped on the
+      canvas or the layers panel
 - [x] Document file format v0 (`.slop`: layers/nodes and tiles, incremental crash-safe saves,
       [ADR 0009](adr/0009-document-file-format.md), [specification](file-format.md)); Save /
       Save As in the app, `slopshop save` / `inspect` in the CLI
