@@ -22,6 +22,7 @@ pub mod document;
 pub mod edit;
 pub mod geom;
 pub mod job;
+pub mod pick;
 pub mod raster;
 pub mod session;
 pub mod thumbnail;
