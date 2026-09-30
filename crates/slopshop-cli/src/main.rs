@@ -27,7 +27,7 @@ USAGE:
         output of --size, to a PNG file.
         Defaults: --size 1024x768 --doc 12000x8000 --out slopshop.png
 
-    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg|webp]
+    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg|webp|psd]
                     [--depth u8|u16|f16|f32] [--space ID]
                     [--compression fast|small|none|deflate|lzw|lossy|lossless]
                     [--quality 0-100] [--subsampling 444|422|420]
@@ -38,9 +38,10 @@ USAGE:
         (ADR 0008, 0010); each option overrides one of them. Prints the settings used
         and the export report.
         --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
-                       .jpg, .jpeg, .webp).
+                       .jpg, .jpeg, .webp, .psd). PSD keeps the layers (groups,
+                       masks, blend modes, adjustment layers).
         --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG and
-                       WebP: u8.
+                       WebP: u8. PSD: u8, u16.
                        The color space stays the default one unless --space is given.
         --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
                        linear-rec2020, rec2100-pq, rec2100-hlg. TIFF, JPEG and WebP:
