@@ -254,7 +254,13 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     are not at the identity are written at v5. The transform must be finite and invertible
     (magnitudes below 1e9, |a·d − b·c| ≥ 1e-9, [ADR 0018](adr/0018-resampling.md)); earlier
     versions of SlopShop read only whole-pixel translations and refuse the others.
-  - `opacity` is in [0, 1]. `inputs` is empty for rasters and fills.
+  - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
+    layer. `params.adjustment` is `exposure`, `hueSaturation` or `levels`; `params.values` holds
+    five numbers in this order: exposure, offset, gamma (then two zeros); hue, saturation,
+    lightness (then two zeros); input black, input white, gamma, output black, output white.
+    Parameters out of range make the file invalid; an unknown adjustment comes from a newer
+    SlopShop. No `inputs`.
+  - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills and adjustments.
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`
   is `u8`, `u16`, `f16` or `f32`; `alpha` is `straight` or `premultiplied`. `levels` lists the

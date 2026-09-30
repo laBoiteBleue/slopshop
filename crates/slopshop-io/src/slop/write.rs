@@ -16,9 +16,10 @@ use super::format::{
     RecordHeader, RecordRef, SLOT_LEN, SLOT_OFFSETS, Slot, encode_blob, encode_index, record_span,
 };
 use super::manifest::{
-    ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_FILL, NODE_GROUP,
-    NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_TRANSFORMED, NodeDto,
-    PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema, Writer,
+    ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
+    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
+    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema,
+    Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -435,6 +436,10 @@ fn build_manifest(
                 inputs = children.iter().map(|child| child.id.get()).collect();
                 (NODE_GROUP, json!({ "pass_through": pass_through }))
             }
+            LayerContent::Adjustment { adjustment } => (
+                NODE_ADJUSTMENT,
+                json!({ "adjustment": adjustment.id(), "values": adjustment.params() }),
+            ),
         };
         let mut params = match params {
             Value::Object(map) => map,

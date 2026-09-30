@@ -247,6 +247,14 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
                 assert_eq!(p, q, "{}", x.name);
                 assert_same_layers(c, d);
             }
+            (
+                LayerContent::Adjustment { adjustment: a },
+                LayerContent::Adjustment { adjustment: b },
+            ) => {
+                assert_eq!(a.id(), b.id(), "{}", x.name);
+                let bits = |a: &slopshop_core::adjust::Adjustment| a.params().map(f32::to_bits);
+                assert_eq!(bits(a), bits(b), "{}", x.name);
+            }
             _ => panic!("{}: content kind differs", x.name),
         }
     }
@@ -579,9 +587,41 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
+/// The document of the golden fixture of schema 0.7: the schema 0.6 one with a Hue/Saturation
+/// adjustment layer at 70 % on top (ADR 0020).
+fn golden_document() -> Document {
+    let mut doc = golden_document_v0_6();
+    let id = doc.allocate_layer_id();
+    let index = doc.layers().len();
+    Edit::InsertLayer {
+        parent: None,
+        index,
+        layer: Layer {
+            id,
+            name: "Hue/Saturation".into(),
+            visible: true,
+            opacity: 0.7,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: slopshop_core::Affine::IDENTITY,
+            content: LayerContent::Adjustment {
+                adjustment: slopshop_core::adjust::Adjustment::HueSaturation {
+                    hue: 30.0,
+                    saturation: -25.5,
+                    lightness: 10.0,
+                },
+            },
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
 /// The document of the golden fixture of schema 0.6: the schema 0.5 one, its gradient layer
 /// moved by (-7, 3) and its folder by (5, 0) (ADR 0017).
-fn golden_document() -> Document {
+fn golden_document_v0_6() -> Document {
     let mut doc = golden_document_v0_5();
     let gradient = doc.layers()[0].id;
     let folder = doc.layers()[2].id;
@@ -772,6 +812,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.5")).unwrap();
     assert_same(&golden_document_v0_5(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.6")).unwrap();
+    assert_same(&golden_document_v0_6(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.7")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 
@@ -969,4 +1011,41 @@ fn damaged_layer_trees_are_refused() {
     );
     assert_eq!(read(&moved("[1,0,2,0,0,0]"), "[1]"), Err("corrupt"));
     assert_eq!(read(&moved("[1,0,0,1,0]"), "[1]"), Err("corrupt"));
+
+    // Adjustment layers (ADR 0020): a known adjustment with five values; others are refused.
+    let adjustment = |params: &str| {
+        format!(
+            r#""1":{{"type":"slopshop.adjustment","version":3,"name":"a","visible":true,"opacity":1.0,"params":{{"blend_mode":"normal",{params}}},"inputs":[]}}"#
+        )
+    };
+    let exposure = read(
+        &adjustment(r#""adjustment":"exposure","values":[1.5,0,1,0,0]"#),
+        "[1]",
+    )
+    .unwrap();
+    assert_eq!(
+        exposure[0].content,
+        LayerContent::Adjustment {
+            adjustment: slopshop_core::adjust::Adjustment::Exposure {
+                exposure: 1.5,
+                offset: 0.0,
+                gamma: 1.0
+            }
+        }
+    );
+    assert_eq!(
+        read(
+            &adjustment(r#""adjustment":"curves","values":[0,0,0,0,0]"#),
+            "[1]"
+        ),
+        Err("newerVersion"),
+        "an adjustment from a newer SlopShop"
+    );
+    assert_eq!(
+        read(
+            &adjustment(r#""adjustment":"exposure","values":[1,0,1]"#),
+            "[1]"
+        ),
+        Err("corrupt")
+    );
 }

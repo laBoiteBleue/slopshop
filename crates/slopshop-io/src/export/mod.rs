@@ -594,7 +594,8 @@ fn is_structurally_gray(document: &Document) -> bool {
             image.format().layout.is_gray()
         }
         LayerContent::Fill { color } => color.r == color.g && color.g == color.b,
-        LayerContent::Group { .. } => true,
+        // Adjustments keep gray gray (equal channels stay equal).
+        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => true,
     });
     neutral && raster
 }
@@ -654,7 +655,7 @@ fn is_structurally_opaque(document: &Document) -> bool {
                 && x + i64::from(size.width) >= i64::from(canvas.width)
                 && y + i64::from(size.height) >= i64::from(canvas.height)
         }
-        LayerContent::Group { .. } => false,
+        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => false,
     }
 }
 
