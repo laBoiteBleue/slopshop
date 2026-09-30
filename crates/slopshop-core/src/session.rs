@@ -99,6 +99,7 @@ impl Session {
                     parent: None,
                     index: base,
                     layer: Layer {
+                        clipped: false,
                         id,
                         name,
                         visible: true,
@@ -257,6 +258,7 @@ mod tests {
                 parent: None,
                 index,
                 layer: Layer {
+                    clipped: false,
                     id,
                     name: name.into(),
                     visible: true,
@@ -404,6 +406,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    clipped: false,
                     id,
                     name: "photo".into(),
                     visible: false,
@@ -486,6 +489,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    clipped: false,
                     id: group,
                     name: "group".into(),
                     visible: true,

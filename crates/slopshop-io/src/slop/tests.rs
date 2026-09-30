@@ -62,6 +62,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        clipped: false,
         id,
         name: name.to_owned(),
         visible: true,
@@ -195,6 +196,7 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b) {
         assert_eq!((x.id, &x.name, x.visible), (y.id, &y.name, y.visible));
+        assert_eq!(x.clipped, y.clipped, "{}", x.name);
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
         match (&x.mask, &y.mask) {
@@ -575,9 +577,23 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
+/// The document of the golden fixture of schema 0.5: the schema 0.4 one, its hidden top layer
+/// clipped to the group below it.
+fn golden_document() -> Document {
+    let mut doc = golden_document_v0_4();
+    let top = doc.layers().last().unwrap().id;
+    Edit::SetLayerClipped {
+        id: top,
+        clipped: true,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
 /// The document of the golden fixture of schema 0.4: the schema 0.3 one, with its "Tint" layer
 /// inside an isolated screen group at 80 %, itself inside a masked pass-through group.
-fn golden_document() -> Document {
+fn golden_document_v0_4() -> Document {
     let mut doc = golden_document_v0_3();
     let tint = doc.layers()[2].id;
     let masked_by = match &doc.layers()[1].content {
@@ -587,6 +603,7 @@ fn golden_document() -> Document {
     let folder = doc.allocate_layer_id();
     let inner = doc.allocate_layer_id();
     let group = |id, name: &str, pass_through, mode, opacity, mask| Layer {
+        clipped: false,
         id,
         name: name.to_owned(),
         visible: true,
@@ -731,6 +748,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.3")).unwrap();
     assert_same(&golden_document_v0_3(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.4")).unwrap();
+    assert_same(&golden_document_v0_4(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.5")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 

@@ -32,6 +32,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
             parent: None,
             index,
             layer: Layer {
+                clipped: false,
                 id,
                 name: "layer".into(),
                 visible: true,
@@ -780,6 +781,7 @@ fn push_into(
             parent,
             index,
             layer: Layer {
+                clipped: false,
                 id,
                 name: "layer".into(),
                 visible: true,
@@ -876,6 +878,82 @@ fn gpu_groups_match_the_cpu_reference_compositor() {
             BlendMode::Difference,
             0.5,
         );
+
+        for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
+            let gpu = render(&r, s.document(), region);
+            let mut cpu = vec![0.0; gpu.len()];
+            slopshop_core::composite::composite_region(s.document(), region, &mut cpu).unwrap();
+            for (i, (g, c)) in gpu.iter().zip(&cpu).enumerate() {
+                let tolerance = 1e-4 * c.abs().max(1.0);
+                assert!(
+                    (g - c).abs() <= tolerance,
+                    "{space:?} {region:?} sample {i}: GPU {g} vs CPU {c}"
+                );
+            }
+        }
+    }
+}
+
+/// Mark layer `id` clipped.
+fn clip(session: &mut Session, id: LayerId) {
+    session
+        .perform(Edit::SetLayerClipped { id, clipped: true })
+        .unwrap();
+}
+
+#[test]
+fn gpu_clipping_masks_match_the_cpu_reference_compositor() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        let mut s = Session::new(Document::new(size));
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        let background = image(size, PixelFormat::RGBA8_SRGB, pattern);
+        push_into(&mut s, None, raster(&background), BlendMode::Normal, 1.0);
+
+        // A semi-transparent base in multiply at 70 %, two clipped layers.
+        let base = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![
+                200,
+                (x % 256) as u8,
+                (y % 256) as u8,
+                ((x + 2 * y) % 256) as u8,
+            ]
+        });
+        push_into(&mut s, None, raster(&base), BlendMode::Multiply, 0.7);
+        let wide = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![
+                (x * 7) as u8,
+                (y * 3) as u8,
+                ((x + y) * 5) as u8,
+                (x ^ y) as u8,
+            ]
+        });
+        let a = push_into(&mut s, None, raster(&wide), BlendMode::Screen, 0.8);
+        clip(&mut s, a);
+        let b = push_into(
+            &mut s,
+            None,
+            LayerContent::Fill {
+                color: LinearRgba::new(0.9, 0.2, 0.1, 0.6),
+            },
+            BlendMode::Normal,
+            1.0,
+        );
+        clip(&mut s, b);
+
+        // A group as a base, with a clipped isolated group on it.
+        let folder = push_into(&mut s, None, group(true), BlendMode::Normal, 0.9);
+        push_into(&mut s, Some(folder), raster(&base), BlendMode::Normal, 1.0);
+        let clipped_group = push_into(&mut s, None, group(false), BlendMode::Overlay, 0.8);
+        push_into(
+            &mut s,
+            Some(clipped_group),
+            raster(&wide),
+            BlendMode::Normal,
+            1.0,
+        );
+        clip(&mut s, clipped_group);
 
         for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
             let gpu = render(&r, s.document(), region);

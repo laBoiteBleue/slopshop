@@ -235,6 +235,44 @@ impl Blender {
         *dst = [r * alpha_o, g * alpha_o, b * alpha_o, alpha_o];
     }
 
+    /// Combine `src` atop `dst` (a clipped layer on its clipping group, ADR 0016): blended like
+    /// [`Self::blend`], but the result keeps `dst`'s coverage (W3C source-atop with blending):
+    /// `co = αs·(1 − αb)·cs + αs·αb·B(cb, cs) + (1 − αs)·cb`, alpha `αb`.
+    pub fn blend_atop(&self, mode: BlendMode, src: &[f64; 4], dst: &mut [f64; 4]) {
+        let (alpha_s, alpha_b) = (src[3], dst[3]);
+        if alpha_b <= 0.0 {
+            return;
+        }
+        let mode = if mode == BlendMode::Dissolve {
+            BlendMode::Normal
+        } else {
+            mode
+        };
+        // Exact paths: normal mode is `src · αb + dst · (1 − αs)` in linear light, and in either
+        // space for an opaque layer (perceptual mixes encoded values otherwise).
+        if mode == BlendMode::Normal && (self.space == BlendSpace::Linear || alpha_s >= 1.0) {
+            let keep = 1.0 - alpha_s;
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d = s * alpha_b + *d * keep;
+            }
+            return;
+        }
+        if alpha_s <= 0.0 {
+            return;
+        }
+        let (alpha_s, alpha_b) = (alpha_s.min(1.0), alpha_b.clamp(0.0, 1.0));
+        let cs = self.encode(unpremultiply(src));
+        let cb = self.encode(unpremultiply(dst));
+        let mixed = blend_color(mode, self.space, cb, cs);
+        let co: [f64; 3] = std::array::from_fn(|i| {
+            alpha_s * (1.0 - alpha_b) * cs[i]
+                + alpha_s * alpha_b * mixed[i]
+                + (1.0 - alpha_s) * cb[i]
+        });
+        let [r, g, b] = self.decode(co);
+        *dst = [r * alpha_b, g * alpha_b, b * alpha_b, alpha_b];
+    }
+
     /// Fade from `below` to `above` by `t` (clamped to `[0, 1]`), both premultiplied
     /// working-space colors: a pass-through group's opacity and mask (ADR 0015). The mix is
     /// premultiplied in the blend space, so that a perceptual document fades encoded values as

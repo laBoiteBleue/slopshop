@@ -93,6 +93,9 @@ pub struct Layer {
     pub content: LayerContent,
     /// Hides parts of the layer (ADR 0014).
     pub mask: Option<LayerMask>,
+    /// Shown only where the nearest layer below it that is not clipped (its base) has pixels:
+    /// a clipping mask (ADR 0016).
+    pub clipped: bool,
 }
 
 /// A layer mask (ADR 0014): a gray raster at the document origin whose samples are the layer's
@@ -497,6 +500,7 @@ mod tests {
 
     fn fill(id: u64, opacity: f32) -> Layer {
         Layer {
+            clipped: false,
             id: LayerId(id),
             name: format!("fill {id}"),
             visible: true,

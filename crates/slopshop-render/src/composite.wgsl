@@ -585,6 +585,37 @@ fn blend_layer(src: vec4<f32>, dst: vec4<f32>, flags: u32) -> vec4<f32> {
     return vec4<f32>(from_blend(co, perceptual) * alpha_o, alpha_o);
 }
 
+// Combine a clipped layer atop its clipping group (ADR 0016): blended like `blend_layer`, the
+// result keeping `dst`'s coverage (Blender::blend_atop in core).
+fn blend_atop(src: vec4<f32>, dst: vec4<f32>, flags: u32) -> vec4<f32> {
+    if dst.a <= 0.0 {
+        return dst;
+    }
+    let mode = (flags >> BLEND_SHIFT) & 0xffu;
+    let perceptual = (flags & FLAG_PERCEPTUAL) != 0u;
+    if (mode == MODE_NORMAL || mode == MODE_DISSOLVE) && (!perceptual || src.a >= 1.0) {
+        return src * dst.a + dst * (1.0 - src.a);
+    }
+    if src.a <= 0.0 {
+        return dst;
+    }
+    let alpha_s = min(src.a, 1.0);
+    let alpha_b = clamp(dst.a, 0.0, 1.0);
+    let cs = to_blend(unpremultiply(src), perceptual);
+    let cb = to_blend(unpremultiply(dst), perceptual);
+    let mixed = blend_color(mode, cb, cs, perceptual);
+    let co = alpha_s * (1.0 - alpha_b) * cs + alpha_s * alpha_b * mixed + (1.0 - alpha_s) * cb;
+    return vec4<f32>(from_blend(co, perceptual) * alpha_b, alpha_b);
+}
+
+// Blend `src` onto `dst` as its flags say: atop for a clipped layer.
+fn combine(src: vec4<f32>, dst: vec4<f32>, flags: u32) -> vec4<f32> {
+    if (flags & FLAG_ATOP) != 0u {
+        return blend_atop(src, dst, flags);
+    }
+    return blend_layer(src, dst, flags);
+}
+
 // Fade from `below` to `above` by `t` (a pass-through group's opacity and mask, ADR 0015): a
 // premultiplied mix in the blend space, exact at 0 and 1 (Blender::fade in core).
 fn fade(below: vec4<f32>, above: vec4<f32>, t: f32, perceptual: bool) -> vec4<f32> {
@@ -684,7 +715,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
                 if ((layer.flags >> BLEND_SHIFT) & 0xffu) == MODE_DISSOLVE {
                     src = dissolve(src, footprint);
                 }
-                acc = blend_layer(src, below, layer.flags);
+                acc = combine(src, below, layer.flags);
             } else {
                 acc = fade(below, acc, coverage, (layer.flags & FLAG_PERCEPTUAL) != 0u);
             }
@@ -713,7 +744,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
         if ((layer.flags >> BLEND_SHIFT) & 0xffu) == MODE_DISSOLVE {
             src = dissolve(src, footprint);
         }
-        acc = blend_layer(src, acc, layer.flags);
+        acc = combine(src, acc, layer.flags);
         if footprint.exact {
             // Unbounded values can overflow here (color above alpha, premultiplied): keep them
             // finite, or an opaque layer above would compute inf × 0 = NaN.

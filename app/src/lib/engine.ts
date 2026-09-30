@@ -209,7 +209,6 @@ export type ImportWarning =
   | "nonFiniteSamples"
   | "colorInfoUnsupported"
   | "layersFlattened"
-  | "clippingIgnored"
   | "adjustmentLayersSkipped"
   | "layerStylesIgnored"
   | "layersRasterized"

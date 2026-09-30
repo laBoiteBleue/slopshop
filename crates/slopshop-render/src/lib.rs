@@ -170,6 +170,8 @@ const FLAG_MASK: u32 = 8;
 const FLAG_IGNORE_ALPHA: u32 = 16;
 /// A group step of an isolated group (else it passes through).
 const FLAG_ISOLATED: u32 = 32;
+/// Blended atop the accumulator, keeping its coverage: a clipped layer (ADR 0016).
+const FLAG_ATOP: u32 = 64;
 /// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
 const BLEND_SHIFT: u32 = 8;
 
@@ -679,7 +681,7 @@ impl Renderer {
 /// The rasters a step samples: a raster layer's image, then its (or a group's) enabled mask.
 fn step_rasters<'a>(step: &Step<'a>) -> [Option<&'a RasterImage>; 2] {
     match step {
-        Step::Layer(layer) => {
+        Step::Layer { layer, .. } => {
             let content = match &layer.content {
                 LayerContent::Raster { image } => Some(image.as_ref()),
                 _ => None,
@@ -687,7 +689,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<&'a RasterImage>; 2] {
             [content, enabled_mask(layer)]
         }
         Step::Begin { .. } => [None, None],
-        Step::End(group) => [None, enabled_mask(group)],
+        Step::End { mask, .. } => [None, mask.map(|m| m.image.as_ref())],
     }
 }
 
@@ -725,8 +727,13 @@ fn encode_layers(
         let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
         let table = tables.next().unwrap_or_default();
         let mask_table = tables.next().unwrap_or_default();
-        let layer = match step {
-            Step::Layer(layer) => *layer,
+        let (layer, mode, opacity, atop) = match step {
+            Step::Layer {
+                layer,
+                mode,
+                opacity,
+                atop,
+            } => (*layer, *mode, *opacity, *atop),
             Step::Begin { isolated } => {
                 let fields = LayerFields {
                     kind: KIND_GROUP_BEGIN,
@@ -737,21 +744,21 @@ fn encode_layers(
                 prepared.count += 1;
                 continue;
             }
-            Step::End(group) => {
-                let isolated = !matches!(
-                    group.content,
-                    LayerContent::Group {
-                        pass_through: true,
-                        ..
-                    }
-                );
-                let hidden = enabled_mask(group).is_some() && mask_plan.is_none();
+            Step::End {
+                mask,
+                mode,
+                opacity,
+                isolated,
+                atop,
+            } => {
+                let hidden = mask.is_some() && mask_plan.is_none();
                 let mut fields = LayerFields {
                     kind: KIND_GROUP_END,
-                    flags: group.blend_mode.index() << BLEND_SHIFT
+                    flags: mode.index() << BLEND_SHIFT
                         | perceptual
-                        | if isolated { FLAG_ISOLATED } else { 0 },
-                    opacity: if hidden { 0.0 } else { group.opacity },
+                        | if *isolated { FLAG_ISOLATED } else { 0 }
+                        | if *atop { FLAG_ATOP } else { 0 },
+                    opacity: if hidden { 0.0 } else { *opacity },
                     ..LayerFields::default()
                 };
                 if let Some(mask) = mask_plan {
@@ -766,7 +773,7 @@ fn encode_layers(
             continue;
         }
         let mut fields = LayerFields {
-            flags: layer.blend_mode.index() << BLEND_SHIFT | perceptual,
+            flags: mode.index() << BLEND_SHIFT | perceptual | if atop { FLAG_ATOP } else { 0 },
             ..LayerFields::default()
         };
         let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
@@ -774,14 +781,14 @@ fn encode_layers(
             LayerContent::Fill { color } => {
                 fields.kind = KIND_FILL;
                 let alpha = if replaces_alpha { 1.0 } else { color.a };
-                let a = alpha * layer.opacity;
+                let a = alpha * opacity;
                 fields.color = [color.r * a, color.g * a, color.b * a, a];
             }
             LayerContent::Raster { .. } => {
                 // Not visible in this view or region: nothing to sample.
                 let Some(plan) = plan else { continue };
                 fields.kind = KIND_RASTER;
-                fields.opacity = layer.opacity;
+                fields.opacity = opacity;
                 let range = plan.range();
                 let size = plan.image.levels()[plan.level].size();
                 fields.level_scale = plan.factor() as f32;
@@ -1041,6 +1048,7 @@ fn shader_source() -> String {
     constants += &format!("const FLAG_MASK: u32 = {FLAG_MASK}u;\n");
     constants += &format!("const FLAG_IGNORE_ALPHA: u32 = {FLAG_IGNORE_ALPHA}u;\n");
     constants += &format!("const FLAG_ISOLATED: u32 = {FLAG_ISOLATED}u;\n");
+    constants += &format!("const FLAG_ATOP: u32 = {FLAG_ATOP}u;\n");
     constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
     constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
     constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");

@@ -1,4 +1,4 @@
-# The `.slop` document format, version 0.4
+# The `.slop` document format, version 0.5
 
 The byte-level specification of SlopShop documents. The design and its reasons are in
 [ADR 0009](adr/0009-document-file-format.md). The reference implementation is
@@ -176,7 +176,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
 
 ```json
 {
-  "schema": { "major": 0, "minor": 4 },
+  "schema": { "major": 0, "minor": 5 },
   "writer": { "app": "slopshop", "version": "0.1.0" },
   "document": {
     "size": [21600, 10800],
@@ -245,6 +245,9 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     faded by its opacity and mask; else they are composited on their own and blended as one
     layer with `blend_mode`), `params.blend_mode` and the optional `params.mask`. Groups nest at
     most 16 deep.
+  - v4 (schema 0.5, [ADR 0016](adr/0016-clipping-masks.md)) adds `params.clipped`: the node is
+    clipped to the nearest sibling below it that is not clipped. Only clipped nodes are written
+    at v4 (others stay at v3), so that readers without clipping refuse them.
   - `opacity` is in [0, 1]. `inputs` is empty for rasters and fills.
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`

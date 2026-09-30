@@ -294,6 +294,7 @@ impl EditRequest {
                     parent: None,
                     index: session.document().layers().len(),
                     layer: Layer {
+                        clipped: false,
                         id: session.allocate_layer_id(),
                         name,
                         visible: true,
@@ -387,6 +388,7 @@ impl EditRequest {
 /// A new empty group, passing through as in Photoshop, with a fresh id.
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
+        clipped: false,
         id: session.allocate_layer_id(),
         name,
         visible: true,

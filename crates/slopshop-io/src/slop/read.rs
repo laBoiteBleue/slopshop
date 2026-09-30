@@ -19,7 +19,7 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NodeDto,
+    DocumentDto, Manifest, NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION_CLIPPED, NodeDto,
     PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
@@ -319,7 +319,7 @@ pub(super) fn read_node(
         return Err(corrupt("a node is used twice"));
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
-    let known_version = (1..=NODE_VERSION).contains(&node.version);
+    let known_version = (1..=NODE_VERSION_CLIPPED).contains(&node.version);
     let content = match node.kind.as_str() {
         NODE_RASTER if known_version => {
             let key = node
@@ -351,7 +351,7 @@ pub(super) fn read_node(
                 color: LinearRgba::new(color[0], color[1], color[2], color[3]),
             }
         }
-        NODE_GROUP if (3..=NODE_VERSION).contains(&node.version) => {
+        NODE_GROUP if (3..=NODE_VERSION_CLIPPED).contains(&node.version) => {
             // Checked before going deeper: the file is untrusted.
             if depth >= MAX_GROUP_DEPTH {
                 return Err(corrupt("groups nested too deep"));
@@ -375,10 +375,18 @@ pub(super) fn read_node(
     };
     let blend_mode = node_blend_mode(node)?;
     let mask = node_mask(node, rasters)?;
+    // Version 4 may be clipped (ADR 0016).
+    let clipped = node.version >= NODE_VERSION_CLIPPED
+        && node
+            .params
+            .get("clipped")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     if !node.extra.is_empty() {
         residue.nodes.insert(id, node.extra.clone());
     }
     Ok(Layer {
+        clipped,
         id: LayerId::from_raw(id),
         name: node.name.clone(),
         visible: node.visible,

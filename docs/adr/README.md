@@ -20,5 +20,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0013 | [A layout familiar to Photoshop users](0013-familiar-layout.md) | accepted |
 | 0014 | [Layer masks](0014-layer-masks.md)                              | accepted |
 | 0015 | [Layer groups](0015-layer-groups.md)                            | accepted |
+| 0016 | [Clipping masks](0016-clipping-masks.md)                        | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

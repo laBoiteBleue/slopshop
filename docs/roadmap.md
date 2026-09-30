@@ -45,7 +45,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] PSD/PSB import, stage 2: layers with their blend modes, opacity, visibility and masks,
       solid color fills; what the engine lacks is reported layer by layer
 - [x] PSD/PSB import: groups as groups (pass-through or isolated, with their masks)
-- [ ] PSD/PSB import, next stages: clipping masks (with Phase 2), then export
+- [x] PSD/PSB import: clipping masks
+- [ ] PSD/PSB export (layered)
       ([formats plan](formats.md#psd-and-psb-p0))
 - [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
@@ -94,6 +95,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
       `.slop` 0.4
+- [x] Clipping masks in the engine ([ADR 0016](adr/0016-clipping-masks.md)): clipped layers blend
+      atop their base, whose mode and opacity apply to the clipping group; `.slop` 0.5
+- [ ] Clipping masks in the layers panel (Alt+Ctrl+G, Alt+click between layers)
 - [x] Groups in the layers panel: folders that fold, New Group, Group Layers (Ctrl+G), Ungroup
       Layers (Shift+Ctrl+G), drag into and out of groups, Pass Through in the blend modes
 - [x] PSD groups; a document of several layers (`.slop`, PSD, a tab) imported into another
