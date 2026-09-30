@@ -21,6 +21,7 @@
 
 use std::fmt;
 
+use crate::adjust::Adjustment;
 use crate::blend::{BlendMode, Blender, dissolve};
 use crate::color::WORKING_SPACE;
 use crate::color::{IDENTITY, Mat3, mat_vec};
@@ -80,6 +81,14 @@ pub enum Step<'a> {
         atop: bool,
         /// From the layer's content (and mask) to the document: its transform composed with its
         /// groups' (ADR 0017).
+        transform: Affine,
+    },
+    /// Apply an adjustment layer to the accumulator (ADR 0020), mixed with it by `opacity` × its
+    /// mask (placed by `transform`).
+    Adjust {
+        layer: &'a Layer,
+        adjustment: Adjustment,
+        opacity: f32,
         transform: Affine,
     },
     /// Push the accumulator. An isolated group starts over from transparency; a pass-through
@@ -187,6 +196,15 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, parent: Affine, steps: &mut Vec<
         Role::Plain | Role::Clipped => (layer.blend_mode, layer.opacity),
     };
     let atop = role == Role::Clipped;
+    if let LayerContent::Adjustment { adjustment } = &layer.content {
+        steps.push(Step::Adjust {
+            layer,
+            adjustment: *adjustment,
+            opacity,
+            transform,
+        });
+        return;
+    }
     let LayerContent::Group {
         children,
         pass_through,
@@ -234,6 +252,11 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, parent: Affine, steps: &mut Vec<
 enum Op<'a> {
     /// Boxed: much larger than the other steps.
     Layer(Box<Source<'a>>),
+    Adjust {
+        adjustment: Adjustment,
+        opacity: f64,
+        mask: Option<MaskSource<'a>>,
+    },
     Begin {
         isolated: bool,
     },
@@ -340,8 +363,8 @@ fn source(
                 placement,
             }
         }
-        // Groups are steps of their own.
-        LayerContent::Group { .. } => return None,
+        // Groups and adjustments are steps of their own.
+        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => return None,
     };
     Some(Source {
         mode,
@@ -474,6 +497,16 @@ pub fn composite_region(
                 atop,
                 transform,
             } => source(layer, mode, opacity, atop, transform).map(|s| Op::Layer(Box::new(s))),
+            Step::Adjust {
+                layer,
+                adjustment,
+                opacity,
+                transform,
+            } => Some(Op::Adjust {
+                adjustment,
+                opacity: f64::from(opacity),
+                mask: enabled(layer).and_then(|m| mask_source(m, transform)),
+            }),
             Step::Begin { isolated } => Some(Op::Begin { isolated }),
             Step::End {
                 mask,
@@ -580,6 +613,19 @@ fn composite_row(
                     } else {
                         *dst = blender.fade(below, dst, coverage);
                     }
+                }
+                continue;
+            }
+            Op::Adjust {
+                adjustment,
+                opacity,
+                mask,
+            } => {
+                for (i, dst) in acc.iter_mut().enumerate() {
+                    // Fits: the pixel is inside the region.
+                    let x = x0 + i as u32;
+                    let coverage = opacity * mask.as_ref().map_or(1.0, |m| m.coverage(x, y, table));
+                    *dst = blender.adjust(adjustment, dst, coverage);
                 }
                 continue;
             }
@@ -756,6 +802,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::adjust::Adjustment;
     use crate::blend::BlendSpace;
     use crate::color::{
         AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType,
@@ -1817,5 +1864,119 @@ mod tests {
         // The left edge runs through pixel 2: half covered.
         let edge = at(2, 7)[3];
         assert!(edge > 0.2 && edge < 0.8, "{edge}");
+    }
+
+    fn adjustment(adjustment: Adjustment) -> LayerContent {
+        LayerContent::Adjustment { adjustment }
+    }
+
+    const WARM: Adjustment = Adjustment::HueSaturation {
+        hue: 40.0,
+        saturation: 30.0,
+        lightness: -10.0,
+    };
+
+    #[test]
+    fn an_adjustment_changes_what_is_below_mixed_by_its_opacity() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            for (adjust, opacity) in [
+                (WARM, 1.0),
+                (
+                    Adjustment::Exposure {
+                        exposure: 1.0,
+                        offset: 0.02,
+                        gamma: 1.3,
+                    },
+                    0.6,
+                ),
+                (
+                    Adjustment::Levels {
+                        input_black: 0.1,
+                        input_white: 0.8,
+                        gamma: 0.7,
+                        output_black: 0.05,
+                        output_white: 0.95,
+                    },
+                    0.3,
+                ),
+            ] {
+                let mut doc = document(space);
+                let layer = new_layer(&mut doc, varied(0.2), BlendMode::Normal, 1.0);
+                push(&mut doc, layer);
+                let below = all(&doc);
+                let layer = new_layer(&mut doc, adjustment(adjust), BlendMode::Normal, opacity);
+                push(&mut doc, layer);
+                let blender = Blender::new(space);
+                let expected: Vec<f32> = below
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|px| {
+                        let px = px.map(f64::from);
+                        blender
+                            .adjust(&adjust, &px, f64::from(opacity))
+                            .map(|v| v as f32)
+                    })
+                    .collect();
+                assert_close(&all(&doc), &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn an_adjustment_in_an_isolated_group_or_clipped_changes_only_its_own() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            // Below everything, an opaque background; above, a shape with transparent pixels.
+            let mut base_only = document(space);
+            opaque_base(&mut base_only);
+            let shape_layer = new_layer(&mut base_only, shape(0.5), BlendMode::Normal, 1.0);
+            push(&mut base_only, shape_layer.clone());
+            let without = all(&base_only);
+
+            // In an isolated group with the shape, or clipped to it: where the shape is fully
+            // transparent, the background is untouched.
+            let mut grouped = document(space);
+            opaque_base(&mut grouped);
+            let s = new_layer(&mut grouped, shape(0.5), BlendMode::Normal, 1.0);
+            let a = new_layer(&mut grouped, adjustment(WARM), BlendMode::Normal, 1.0);
+            let g = group(&mut grouped, vec![s, a], false);
+            push(&mut grouped, g);
+
+            let mut clipped = document(space);
+            opaque_base(&mut clipped);
+            let s = new_layer(&mut clipped, shape(0.5), BlendMode::Normal, 1.0);
+            push(&mut clipped, s);
+            let mut a = new_layer(&mut clipped, adjustment(WARM), BlendMode::Normal, 1.0);
+            a.clipped = true;
+            push(&mut clipped, a);
+
+            // In a pass-through group, the background changes too.
+            let mut passing = document(space);
+            opaque_base(&mut passing);
+            let s = new_layer(&mut passing, shape(0.5), BlendMode::Normal, 1.0);
+            let a = new_layer(&mut passing, adjustment(WARM), BlendMode::Normal, 1.0);
+            let g = group(&mut passing, vec![s, a], true);
+            push(&mut passing, g);
+
+            let alphas = match &shape_layer.content {
+                LayerContent::Raster { image } => (0..8)
+                    .map(|i| image.alpha_at(i % 4, i / 4))
+                    .collect::<Vec<_>>(),
+                _ => unreachable!("a raster"),
+            };
+            let (grouped, clipped, passing) = (all(&grouped), all(&clipped), all(&passing));
+            let mut seen_transparent = false;
+            for (i, alpha) in alphas.iter().enumerate() {
+                let px = |v: &[f32]| v[i * 4..i * 4 + 4].to_vec();
+                if *alpha == 0.0 {
+                    seen_transparent = true;
+                    assert_close(&px(&grouped), &px(&without));
+                    assert_close(&px(&clipped), &px(&without));
+                    assert_ne!(px(&passing), px(&without));
+                }
+            }
+            assert!(seen_transparent, "the shape has transparent pixels");
+            assert_close(&grouped, &clipped);
+        }
     }
 }

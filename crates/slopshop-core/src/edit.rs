@@ -77,6 +77,11 @@ pub enum Edit {
         id: LayerId,
         transform: Affine,
     },
+    /// Replace an adjustment layer's adjustment (its kind or its parameters, ADR 0020).
+    SetAdjustment {
+        id: LayerId,
+        adjustment: crate::adjust::Adjustment,
+    },
     /// Clip a layer to the layer below it, or release it (ADR 0016).
     SetLayerClipped {
         id: LayerId,
@@ -105,6 +110,8 @@ pub enum EditError {
     InvalidOpacity(f32),
     /// Colors must be finite (out-of-gamut and HDR values are allowed).
     InvalidColor,
+    /// Adjustment parameters out of range, or not an adjustment layer (ADR 0020).
+    InvalidAdjustment,
     /// Masks are gray images.
     InvalidMask,
     /// The layer has no mask.
@@ -141,6 +148,12 @@ impl fmt::Display for EditError {
             }
             EditError::InvalidOpacity(o) => write!(f, "invalid opacity {o} (expected 0..=1)"),
             EditError::InvalidColor => write!(f, "color components must be finite"),
+            EditError::InvalidAdjustment => {
+                write!(
+                    f,
+                    "adjustment parameters out of range, or not an adjustment layer"
+                )
+            }
             EditError::InvalidMask => write!(f, "a mask must be a gray image"),
             EditError::NoMask(id) => write!(f, "{id} has no mask"),
             EditError::NotAGroup(id) => write!(f, "{id} is not a group"),
@@ -279,6 +292,23 @@ impl Edit {
                 Edit::SetLayerTransform {
                     id,
                     transform: previous,
+                }
+            }
+            Edit::SetAdjustment { id, adjustment } => {
+                if !adjustment.is_valid() {
+                    return Err(EditError::InvalidAdjustment);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Adjustment {
+                    adjustment: current,
+                } = &mut layer.content
+                else {
+                    return Err(EditError::InvalidAdjustment);
+                };
+                let previous = std::mem::replace(current, adjustment);
+                Edit::SetAdjustment {
+                    id,
+                    adjustment: previous,
                 }
             }
             Edit::SetLayerClipped { id, clipped } => {
@@ -666,6 +696,11 @@ fn validate_new_layer(
         {
             return Err(EditError::InvalidColor);
         }
+        if let LayerContent::Adjustment { adjustment } = &layer.content
+            && !adjustment.is_valid()
+        {
+            return Err(EditError::InvalidAdjustment);
+        }
     }
     Ok(())
 }
@@ -814,6 +849,62 @@ mod tests {
             .apply(&mut doc),
             Err(EditError::EmptyCanvas)
         );
+    }
+
+    #[test]
+    fn adjustments_are_edited_and_validated() {
+        use crate::adjust::Adjustment;
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a"]);
+        let id = doc.allocate_layer_id();
+        let layer = Layer {
+            id,
+            name: "adjust".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: Affine::IDENTITY,
+            content: LayerContent::Adjustment {
+                adjustment: Adjustment::NEUTRAL[0],
+            },
+        };
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_round_trip(
+            &mut doc,
+            Edit::SetAdjustment {
+                id,
+                adjustment: Adjustment::Levels {
+                    input_black: 0.1,
+                    input_white: 0.9,
+                    gamma: 1.2,
+                    output_black: 0.0,
+                    output_white: 1.0,
+                },
+            },
+        );
+        let out_of_range = Adjustment::Exposure {
+            exposure: 50.0,
+            offset: 0.0,
+            gamma: 1.0,
+        };
+        for (target, adjustment) in [(id, out_of_range), (ids[0], Adjustment::NEUTRAL[1])] {
+            assert_eq!(
+                Edit::SetAdjustment {
+                    id: target,
+                    adjustment
+                }
+                .apply(&mut doc),
+                Err(EditError::InvalidAdjustment)
+            );
+        }
     }
 
     #[test]

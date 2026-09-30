@@ -58,6 +58,10 @@ pub enum LayerContent {
         children: Vec<Layer>,
         pass_through: bool,
     },
+    /// Changes what is composited below it (ADR 0020): no pixels, no bounds.
+    Adjustment {
+        adjustment: crate::adjust::Adjustment,
+    },
 }
 
 impl PartialEq for LayerContent {
@@ -76,6 +80,7 @@ impl PartialEq for LayerContent {
                     pass_through: q,
                 },
             ) => p == q && a == b,
+            (Self::Adjustment { adjustment: a }, Self::Adjustment { adjustment: b }) => a == b,
             _ => false,
         }
     }
@@ -458,6 +463,11 @@ fn validate_restored(
         {
             return Err(RestoreError::InvalidColor(id));
         }
+        if let LayerContent::Adjustment { adjustment } = &layer.content
+            && !adjustment.is_valid()
+        {
+            return Err(RestoreError::InvalidAdjustment(id));
+        }
         if let Some(mask) = &layer.mask
             && !LayerMask::is_valid_image(&mask.image)
         {
@@ -488,6 +498,8 @@ pub enum RestoreError {
     InvalidOpacity(LayerId),
     /// A fill color with a non-finite component.
     InvalidColor(LayerId),
+    /// An adjustment with parameters out of range (ADR 0020).
+    InvalidAdjustment(LayerId),
     /// A mask that is not a gray image.
     InvalidMask(LayerId),
     /// A group nested deeper than [`MAX_GROUP_DEPTH`].
@@ -508,6 +520,9 @@ impl fmt::Display for RestoreError {
             RestoreError::DuplicateId(id) => write!(f, "{id} appears twice"),
             RestoreError::InvalidOpacity(id) => write!(f, "{id} has an invalid opacity"),
             RestoreError::InvalidColor(id) => write!(f, "{id} has a non-finite color"),
+            RestoreError::InvalidAdjustment(id) => {
+                write!(f, "{id} has adjustment parameters out of range")
+            }
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
             RestoreError::InvalidTransform(id) => {
                 write!(f, "{id} has a transform that is not finite and invertible")
