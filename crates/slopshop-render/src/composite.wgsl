@@ -355,6 +355,9 @@ struct Resampled {
     color: vec4<f32>,
     // Share of the filter's weight inside the image.
     inside: f32,
+    // Non-finite values replaced (export). Returned rather than added through a pointer: FXC
+    // (Direct3D) miscompiles the whole shader when a pointer goes down through these loops.
+    count: u32,
 }
 
 // A transformed raster at document point `p` (ADR 0018): the same loop as
@@ -362,53 +365,57 @@ struct Resampled {
 // the ellipse, weighted by the kernel, clamped to the range of the texels nearest to `p`
 // (anti-ringing); or the texel under `p` (RESAMPLE_NEAREST). Texels outside the image are
 // transparent.
-fn resample(layer: Layer, p: vec2<f32>, unbounded: bool, count: ptr<function, u32>) -> Resampled {
+fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
+    var count = 0u;
+    var result = Resampled(vec4<f32>(0.0), 0.0, 0u);
     let point = vec3<f32>(p, 1.0);
     let uv = vec2<f32>(dot(layer.resample_u.xyz, point), dot(layer.resample_v.xyz, point));
     let extent = vec2<f32>(layer.resample_u.w, layer.resample_v.w);
     let size = vec2<f32>(layer.level_size);
-    if any(uv + extent <= vec2<f32>(0.0)) || any(uv - extent >= size) {
-        return Resampled(vec4<f32>(0.0), 0.0);
-    }
-    if u32(layer.resample_q.w) == RESAMPLE_NEAREST {
+    let reaches = all(uv + extent > vec2<f32>(0.0)) && all(uv - extent < size);
+    if reaches && u32(layer.resample_q.w) == RESAMPLE_NEAREST {
         let at = vec2<i32>(floor(uv));
         let inside = all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size));
-        return Resampled(texel_color(layer, at, unbounded, count), select(0.0, 1.0, inside));
-    }
-    let q = layer.resample_q.xyz;
-    let first = vec2<i32>(ceil(uv - 0.5 - extent));
-    let last = vec2<i32>(floor(uv - 0.5 + extent));
-    var sum = vec4<f32>(0.0);
-    var total = 0.0;
-    var inside = 0.0;
-    var lo = vec4<f32>(F32_MAX);
-    var hi = vec4<f32>(-F32_MAX);
-    for (var j = first.y; j <= last.y; j++) {
-        let dv = f32(j) + 0.5 - uv.y;
-        for (var i = first.x; i <= last.x; i++) {
-            let du = f32(i) + 0.5 - uv.x;
-            let r2 = q.x * du * du + q.y * du * dv + q.z * dv * dv;
-            if r2 < EWA_RADIUS2 {
-                let w = ewa_weight(r2);
-                let at = vec2<i32>(i, j);
-                let color = texel_color(layer, at, unbounded, count);
-                if all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size)) {
-                    inside += w;
-                }
-                sum += color * w;
-                total += w;
-                if r2 <= ANTIRING_R2 {
-                    lo = min(lo, color);
-                    hi = max(hi, color);
+        result.color = texel_color(layer, at, unbounded, &count);
+        result.inside = select(0.0, 1.0, inside);
+    } else if reaches {
+        let q = layer.resample_q.xyz;
+        let first = vec2<i32>(ceil(uv - 0.5 - extent));
+        let last = vec2<i32>(floor(uv - 0.5 + extent));
+        var sum = vec4<f32>(0.0);
+        var total = 0.0;
+        var inside = 0.0;
+        var lo = vec4<f32>(F32_MAX);
+        var hi = vec4<f32>(-F32_MAX);
+        for (var j = first.y; j <= last.y; j++) {
+            let dv = f32(j) + 0.5 - uv.y;
+            for (var i = first.x; i <= last.x; i++) {
+                let du = f32(i) + 0.5 - uv.x;
+                let r2 = q.x * du * du + q.y * du * dv + q.z * dv * dv;
+                if r2 < EWA_RADIUS2 {
+                    let w = ewa_weight(r2);
+                    let at = vec2<i32>(i, j);
+                    let color = texel_color(layer, at, unbounded, &count);
+                    if all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size)) {
+                        inside += w;
+                    }
+                    sum += color * w;
+                    total += w;
+                    if r2 <= ANTIRING_R2 {
+                        lo = min(lo, color);
+                        hi = max(hi, color);
+                    }
                 }
             }
         }
+        // The nearest texel center is within r² ≤ ½: `lo` and `hi` are set.
+        if total > 1e-12 {
+            result.color = clamp(sum / total, lo, hi);
+            result.inside = clamp(inside / total, 0.0, 1.0);
+        }
     }
-    if !(total > 1e-12) {
-        return Resampled(vec4<f32>(0.0), 0.0);
-    }
-    // The nearest texel center is within r² ≤ ½: `lo` and `hi` are set.
-    return Resampled(clamp(sum / total, lo, hi), clamp(inside / total, 0.0, 1.0));
+    result.count = count;
+    return result;
 }
 
 // Share of the output pixel that falls inside a raster layer's image (at its offset): 0 or 1
@@ -451,14 +458,15 @@ fn mask_view(layer: Layer) -> Layer {
     return m;
 }
 
-// The mask's coverage over the footprint, in [0, 1]; 0 outside the mask image. Non-finite mask
+// The mask's coverage over the footprint, in [0, 1]; 0 outside the mask image; `resampled`: the
+// mask resampled at the footprint, when it is transformed (see `resampled_rasters`). Non-finite mask
 // samples are not counted (like the CPU reference).
-fn mask_coverage(layer: Layer, footprint: Footprint) -> f32 {
+fn mask_coverage(layer: Layer, footprint: Footprint, resampled: Resampled) -> f32 {
     let mask = mask_view(layer);
     var uncounted = 0u;
     var value = 0.0;
     if mask.resample_q.w != 0.0 {
-        value = resample(mask, footprint.center, footprint.exact, &uncounted).color.r;
+        value = resampled.color.r;
     } else if footprint.exact {
         value = texel_color(mask, footprint.texel - mask.offset, true, &uncounted).r;
     } else {
@@ -785,6 +793,26 @@ struct Footprint {
 // Premultiplied working-space color of the first `layer_count` layers ("over", bottom to top).
 // Groups (ADR 0015) push the accumulator and pop it back, combined with what they made.
 // Export adds the non-finite values it replaces to `count`.
+// A step's transformed raster and mask resampled at the footprint (ADR 0018): [raster, mask],
+// zero where not resampled. Through a single call of `resample`: FXC (Direct3D's default
+// compiler) inlines every call, and a shader with several copies of its loop runs wrong on
+// WARP, the software adapter (garbage values, even where the copies are not executed).
+fn resampled_rasters(layer: Layer, footprint: Footprint) -> array<Resampled, 2> {
+    var out: array<Resampled, 2>;
+    for (var part = 0u; part < 2u; part++) {
+        var raster = layer;
+        var wanted = layer.kind == KIND_RASTER;
+        if part == 1u {
+            raster = mask_view(layer);
+            wanted = (layer.flags & FLAG_MASK) != 0u;
+        }
+        if wanted && raster.resample_q.w != 0.0 {
+            out[part] = resample(raster, footprint.center, footprint.exact);
+        }
+    }
+    return out;
+}
+
 fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) -> vec4<f32> {
     var acc = vec4<f32>(0.0);
     var stack: array<vec4<f32>, MAX_GROUP_DEPTH>;
@@ -800,6 +828,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             }
             continue;
         }
+        let resampled = resampled_rasters(layer, footprint);
         if layer.kind == KIND_GROUP_END {
             if depth == 0u {
                 continue;
@@ -808,7 +837,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             let below = stack[min(depth, MAX_GROUP_DEPTH - 1u)];
             var coverage = layer.opacity;
             if (layer.flags & FLAG_MASK) != 0u {
-                coverage *= mask_coverage(layer, footprint);
+                coverage *= mask_coverage(layer, footprint, resampled[1]);
             }
             if (layer.flags & FLAG_ISOLATED) != 0u {
                 var src = acc * coverage;
@@ -828,12 +857,9 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
         if layer.kind == KIND_RASTER {
             var inside = 0.0;
             if layer.resample_q.w != 0.0 {
-                var uncounted = 0u;
-                var sample: Resampled;
+                let sample = resampled[0];
                 if footprint.exact {
-                    sample = resample(layer, footprint.center, true, count);
-                } else {
-                    sample = resample(layer, footprint.center, false, &uncounted);
+                    *count += sample.count;
                 }
                 src = sample.color;
                 inside = sample.inside;
@@ -855,7 +881,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             src = src * layer.opacity;
         }
         if (layer.flags & FLAG_MASK) != 0u {
-            src = src * mask_coverage(layer, footprint);
+            src = src * mask_coverage(layer, footprint, resampled[1]);
         }
         if ((layer.flags >> BLEND_SHIFT) & 0xffu) == MODE_DISSOLVE {
             src = dissolve(src, footprint);
