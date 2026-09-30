@@ -6,6 +6,7 @@ const en = {
   "menu.file": "File",
   "menu.file.new": "New…",
   "menu.file.open": "Open…",
+  "menu.file.openFolder": "Open Folder…",
   "menu.file.importLayers": "Import as Layers…",
   "menu.file.close": "Close",
   "menu.file.save": "Save",
@@ -83,6 +84,8 @@ const en = {
   "open.error.newerVersion": "made by a newer version of SlopShop ({detail})",
   "open.error.unsupportedFeatures": "uses features this version does not support ({detail})",
   "open.error.corrupt": "damaged document ({detail})",
+  "open.skipped": "{count} files skipped: not images SlopShop opens",
+  "open.error.archive": "cannot read this folder or zip archive ({detail})",
   "open.error.internal": "internal error ({detail})",
 
   "save.title": "Save As",

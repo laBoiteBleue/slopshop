@@ -6,6 +6,7 @@ const fr: Messages = {
   "menu.file": "Fichier",
   "menu.file.new": "Nouveau…",
   "menu.file.open": "Ouvrir…",
+  "menu.file.openFolder": "Ouvrir un dossier…",
   "menu.file.importLayers": "Importer comme calques…",
   "menu.file.close": "Fermer",
   "menu.file.save": "Enregistrer",
@@ -84,6 +85,8 @@ const fr: Messages = {
   "open.error.unsupportedFeatures":
     "utilise des fonctions que cette version ne gère pas ({detail})",
   "open.error.corrupt": "document endommagé ({detail})",
+  "open.skipped": "{count} fichiers ignorés : pas des images que SlopShop sait ouvrir",
+  "open.error.archive": "impossible de lire ce dossier ou cette archive zip ({detail})",
   "open.error.internal": "erreur interne ({detail})",
 
   "save.title": "Enregistrer sous",

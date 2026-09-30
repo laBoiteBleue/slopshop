@@ -846,15 +846,73 @@ async fn open_failures(state: State<'_, AppState>) -> Result<Vec<OpenFailed>, St
         .map_err(|_| "open state is poisoned".to_owned())
 }
 
+/// What `open_images` found in the folders and archives it was given.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenSummary {
+    /// Files of folders and archives that SlopShop does not open.
+    skipped: usize,
+    /// Archives that could not be read: name and technical detail.
+    failed_archives: Vec<(String, String)>,
+}
+
+/// Replace folders by their openable files and zip archives by their extracted ones (kept in
+/// `archives`, whose temporary folders live until the opens are done). Blocking.
+fn expand_paths(
+    paths: Vec<PathBuf>,
+    summary: &mut OpenSummary,
+    archives: &mut Vec<slopshop_io::collection::ExtractedArchive>,
+) -> Vec<PathBuf> {
+    use slopshop_io::collection;
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            match collection::folder_files(&path) {
+                Ok((found, skipped)) => {
+                    files.extend(found);
+                    summary.skipped += skipped;
+                }
+                Err(e) => summary
+                    .failed_archives
+                    .push((file_name(&path), e.to_string())),
+            }
+        } else if collection::is_archive(&path) {
+            match collection::extract_archive(&path) {
+                Ok(archive) => {
+                    files.extend(archive.files.iter().cloned());
+                    summary.skipped += archive.skipped;
+                    archives.push(archive);
+                }
+                Err(e) => summary
+                    .failed_archives
+                    .push((file_name(&path), e.to_string())),
+            }
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
 /// Open images, decoded in parallel: each in a new tab, or each as a new top layer of
-/// `document_id` (undoable, one edit per image). Tabs and layers come in the order of `paths`.
-/// Every outcome arrives as an `open-*` event; this resolves once all are done.
+/// `document_id` (undoable, one edit per image). Folders and zip archives open their files
+/// like several files (not their subfolders). Tabs and layers come in the order of `paths`.
+/// Every outcome arrives as an `open-*` event; this resolves once all are done, with what was
+/// skipped in folders and archives.
 #[tauri::command]
 async fn open_images(
     app: AppHandle,
     paths: Vec<PathBuf>,
     document_id: Option<u64>,
-) -> Result<(), String> {
+) -> Result<OpenSummary, String> {
+    let (paths, summary, archives) = tauri::async_runtime::spawn_blocking(move || {
+        let mut summary = OpenSummary::default();
+        let mut archives = Vec::new();
+        let paths = expand_paths(paths, &mut summary, &mut archives);
+        (paths, summary, archives)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let target = match document_id {
         Some(document_id) => OpenTarget::Layer { document_id },
         None => OpenTarget::NewTab,
@@ -878,7 +936,9 @@ async fn open_images(
     for open in opens {
         open.await.map_err(|e| e.to_string())?;
     }
-    Ok(())
+    // Every file is decoded (into memory): the extracted copies can go.
+    drop(archives);
+    Ok(summary)
 }
 
 /// Save a document to its `.slop` file (incrementally), or to `path` (a compact new file, which
@@ -1608,6 +1668,32 @@ mod tests {
 
     fn tab_ids(documents: &Documents) -> Vec<u64> {
         documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn folders_expand_to_their_openable_files() {
+        let dir = std::env::temp_dir().join(format!("slopshop-expand-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["b10.png", "b9.png", "notes.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let single = dir.join("single.jpg");
+        let broken = dir.join("broken.zip");
+        std::fs::write(&broken, b"not a zip").unwrap();
+        let mut summary = OpenSummary::default();
+        let mut archives = Vec::new();
+        let files = expand_paths(
+            vec![single.clone(), dir.clone(), broken],
+            &mut summary,
+            &mut archives,
+        );
+        // Plain files pass through (the importer reports what it cannot open).
+        assert_eq!(files, [single, dir.join("b9.png"), dir.join("b10.png")]);
+        // notes.txt, and the broken archive listed inside the folder is not an image.
+        assert_eq!(summary.skipped, 2);
+        assert_eq!(summary.failed_archives.len(), 1);
+        assert_eq!(summary.failed_archives[0].0, "broken.zip");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
