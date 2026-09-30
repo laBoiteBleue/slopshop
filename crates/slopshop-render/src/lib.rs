@@ -196,7 +196,8 @@ impl Renderer {
         let instance = wgpu::Instance::new(descriptor.with_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
+            // `SLOPSHOP_SOFTWARE_GPU=1`: the software adapter (WARP on Windows), as in CI.
+            force_fallback_adapter: std::env::var("SLOPSHOP_SOFTWARE_GPU").as_deref() == Ok("1"),
             compatible_surface: None,
             // Anti-fingerprinting for untrusted content; irrelevant for a native app.
             apply_limit_buckets: false,
