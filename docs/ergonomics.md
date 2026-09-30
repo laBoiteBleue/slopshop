@@ -50,7 +50,8 @@ built. Contributors: propose here first.
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
   turns it off.
-- Free Transform (Ctrl+T, Edit > Free Transform): a box around the selected layers with eight
+- Free Transform (Ctrl+T, Edit > Free Transform, or a double-click on a layer in the image): a
+  box around the selected layers with eight
   handles. Drag inside to move (Shift: along one axis); a corner scales keeping the proportions
   (Shift: freely), a side scales one way (Shift: proportionally), Alt scales about the center;
   drag outside to rotate about the center (Shift: steps of 15°). A readout next to the pointer
@@ -58,7 +59,11 @@ built. Contributors: propose here first.
   (without dragging) applies it as one undo entry; Esc or Ctrl+Z cancels it; Ctrl+T again,
   another edit or another tab applies it, without a question or buttons (undo is there for
   that).
-  Pixels are never resampled into the layer: the transform stays editable.
+  Moving the box and dragging a handle snap to the canvas and the other layers with magenta
+  smart guides, like the Move tool; a handle also snaps where the box gets the same width or
+  height as another layer (a magenta measure along both). Ctrl held: freely; View > Snap turns
+  it off. Pixels are
+  never resampled into the layer: the transform stays editable.
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
   Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
 
@@ -93,7 +98,7 @@ built. Contributors: propose here first.
 ### Canvas and view
 
 - [ ] Free Transform: an options bar with X, Y, W, H and angle fields and a link to keep the
-      proportions (Photoshop's), and snapping of the box to the canvas and the other layers.
+      proportions (Photoshop's).
 - [ ] Free Transform: Ctrl+drag a handle skews (Photoshop's distort needs perspective, which
       affine transforms cannot do), a movable pivot point, and the right-click menu of the box
       (flip, rotate 90°).
