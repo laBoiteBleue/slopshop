@@ -49,6 +49,15 @@ built. Contributors: propose here first.
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
   turns it off.
+- Free Transform (Ctrl+T, Edit > Free Transform): a box around the selected layers with eight
+  handles. Drag inside to move (Shift: along one axis); a corner scales keeping the proportions
+  (Shift: freely), a side scales one way (Shift: proportionally), Alt scales about the center;
+  drag outside to rotate about the center (Shift: steps of 15°). A readout next to the pointer
+  shows the move, the size in % or the angle. Enter or a double-click inside applies it as one
+  undo entry; Esc or Ctrl+Z cancels it; Ctrl+T again, another edit or another tab applies it.
+  Pixels are never resampled into the layer: the transform stays editable.
+- Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
+  Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
 
 ## Proposed
 
@@ -80,6 +89,12 @@ built. Contributors: propose here first.
 
 ### Canvas and view
 
+- [ ] Free Transform: an options bar with X, Y, W, H and angle fields and a link to keep the
+      proportions (Photoshop's), and snapping of the box to the canvas and the other layers.
+- [ ] Free Transform: Ctrl+drag a handle skews (Photoshop's distort needs perspective, which
+      affine transforms cannot do), a movable pivot point, and the right-click menu of the box
+      (flip, rotate 90°).
+- [ ] Arrow keys move the Free Transform box, as in Photoshop.
 - [ ] Smart guides also show equal spacing between three layers or more (Photoshop's distance
       marks), and the distance to the nearest layer while Alt-dragging.
 - [ ] An option to make Auto-Select pick the top group rather than the layer (Photoshop's

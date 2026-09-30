@@ -98,8 +98,10 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Transforms, step 2a ([ADR 0018](adr/0018-resampling.md)): any invertible transform
       rendered with quality resampling (EWA Lanczos sharp with anti-ringing, identical on the
       CPU and the GPU; quarter turns and flips stay exact)
-- [ ] Transforms, step 2b: Free Transform (Ctrl+T: scale, rotate, flip); Image Size, Canvas
-      Size, Crop and Rotate Image as transforms of the layers
+- [x] Transforms, step 2b: Free Transform (Ctrl+T: move, scale, rotate), Edit > Transform
+      (quarter turns and flips, exact)
+- [ ] Transforms, step 2c: Image Size, Canvas Size, Crop and Rotate Image as transforms of the
+      layers
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
