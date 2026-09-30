@@ -2,10 +2,9 @@
   // Free Transform (Ctrl+T, as in Photoshop): a box around the selected layers with eight
   // handles. Drag inside to move, a handle to scale (corners keep the proportions, Shift frees
   // them; sides scale one way, Shift keeps the proportions; Alt scales about the center), and
-  // outside to rotate about the center (Shift: steps of 15°). Enter, the ✓ button, a
-  // double-click inside or a click outside (without dragging) applies; Esc or ✕ cancels. The owner applies `onchange`'s matrix live (ADR 0018).
+  // outside to rotate about the center (Shift: steps of 15°). Enter, a double-click inside or a
+  // click outside (without dragging) applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
   import * as affine from "./affine";
-  import Icon from "./Icon.svelte";
   import type { Bounds, Matrix } from "./engine";
   import { getLocale, t } from "./i18n/index.svelte";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -78,18 +77,6 @@
     handles.map(([x, y]) => mapping.toViewport(...affine.apply(matrix, x, y))),
   );
   const screenCenter = $derived(mapping.toViewport(...affine.apply(matrix, ...center)));
-  /** Size of the overlay, CSS pixels. */
-  let width = $state(0);
-  let height = $state(0);
-  /** The ✓ / ✕ buttons: at the top right of the box as shown, kept inside the viewport. */
-  const BUTTONS_WIDTH = 60;
-  const buttonsAt = $derived.by((): [number, number] => {
-    const xs = screen.map(([x]) => x);
-    const ys = screen.map(([, y]) => y);
-    const x = Math.min(Math.max(Math.max(...xs) + 10, 4), width - BUTTONS_WIDTH - 4);
-    const y = Math.min(Math.max(Math.min(...ys) - 34, 4), height - 30);
-    return [x, y];
-  });
   const outline = $derived([0, 2, 4, 6].map((i) => `${screen[i][0]},${screen[i][1]}`).join(" "));
 
   const RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"];
@@ -230,7 +217,6 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="overlay" bind:clientWidth={width} bind:clientHeight={height}></div>
 <svg
   class="free-transform"
   role="presentation"
@@ -266,58 +252,11 @@
   {/each}
   <circle class="pivot" cx={screenCenter[0]} cy={screenCenter[1]} r="3" />
 </svg>
-<div
-  class="buttons"
-  role="toolbar"
-  tabindex="-1"
-  style:left="{buttonsAt[0]}px"
-  style:top="{buttonsAt[1]}px"
-  onpointerdown={(e) => e.stopPropagation()}
->
-  <button type="button" title={t("transform.apply")} onclick={() => oncommit()}>
-    <Icon name="check" />
-  </button>
-  <button type="button" title={t("transform.cancel")} onclick={() => oncancel()}>
-    <Icon name="close" />
-  </button>
-</div>
 {#if readout}
   <div class="readout" style:left="{readout.x}px" style:top="{readout.y}px">{readout.text}</div>
 {/if}
 
 <style>
-  .overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-  }
-
-  .buttons {
-    position: absolute;
-    display: flex;
-    gap: 4px;
-    padding: 3px;
-    border-radius: 6px;
-    background: rgba(20, 20, 20, 0.85);
-  }
-
-  .buttons button {
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 22px;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: #fff;
-    cursor: default;
-  }
-
-  .buttons button:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
   .free-transform {
     position: absolute;
     inset: 0;
