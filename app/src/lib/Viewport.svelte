@@ -1,4 +1,7 @@
 <script lang="ts" module>
+  /** A smart guide: a line in document pixels. */
+  export type Guide = { x1: number; y1: number; x2: number; y2: number };
+
   export type FrameStats = {
     /** 1 = 100%. */
     zoom: number;
@@ -21,8 +24,10 @@
     revision,
     native = false,
     onframe,
+    onmovestart,
     onmove,
     onmoveend,
+    guides = [],
   }: {
     /** Open document. Read once: the viewport is recreated for another document. */
     documentId: number;
@@ -35,11 +40,16 @@
     native?: boolean;
     onframe?: (stats: FrameStats) => void;
     /**
-     * The Move tool (ADR 0017): a left drag on the image moves by (`dx`, `dy`) document pixels
-     * (fractions: the owner rounds), then ends.
+     * The Move tool (ADR 0017): a left drag on the image starts at document point (`x`, `y`)
+     * (`ctrl`: Ctrl or Cmd held), moves by (`dx`, `dy`) document pixels (fractions: the owner
+     * rounds; `docPerCss`: document pixels per CSS pixel, for snapping distances; `free`: Ctrl
+     * held, no snapping), then ends.
      */
-    onmove?: (dx: number, dy: number) => void;
+    onmovestart?: (x: number, y: number, ctrl: boolean) => void;
+    onmove?: (dx: number, dy: number, docPerCss: number, free: boolean) => void;
     onmoveend?: () => void;
+    /** Smart guides to draw over the image, in document pixels. */
+    guides?: Guide[];
   } = $props();
 
   // One viewport per document (it is keyed by document): capture the id, since props are
@@ -410,6 +420,8 @@
       if (e.button === 0 && onmove) {
         container.setPointerCapture(e.pointerId);
         moving = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+        const [x, y] = toDocument(e.clientX, e.clientY);
+        onmovestart?.(x, y, hasShortcutModifier(e));
       }
       return;
     }
@@ -425,7 +437,7 @@
       const dx = (e.clientX - moving.x) * scale;
       const dy = (e.clientY - moving.y) * scale;
       moving = { ...moving, x: e.clientX, y: e.clientY };
-      if (dx !== 0 || dy !== 0) onmove?.(dx, dy);
+      if (dx !== 0 || dy !== 0) onmove?.(dx, dy, scale, hasShortcutModifier(e));
       return;
     }
     if (!panning || e.pointerId !== panning.pointerId) return;
@@ -434,6 +446,24 @@
     const dy = (e.clientY - panning.y) * dpr;
     panning = { ...panning, x: e.clientX, y: e.clientY };
     if (dx !== 0 || dy !== 0) void changeView({ kind: "pan", dx, dy });
+  }
+
+  /** Document coordinates of a point of the window (CSS pixels). */
+  function toDocument(clientX: number, clientY: number): [number, number] {
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio;
+    const view = target ?? { zoom: 1, origin: [0, 0] };
+    return [
+      view.origin[0] + ((clientX - rect.left) * dpr) / view.zoom,
+      view.origin[1] + ((clientY - rect.top) * dpr) / view.zoom,
+    ];
+  }
+
+  /** Where a document point is in the viewport, in CSS pixels. */
+  function toViewport(x: number, y: number): [number, number] {
+    const dpr = window.devicePixelRatio;
+    const view = target ?? { zoom: 1, origin: [0, 0] };
+    return [((x - view.origin[0]) * view.zoom) / dpr, ((y - view.origin[1]) * view.zoom) / dpr];
   }
 
   function endPan(e: PointerEvent) {
@@ -505,6 +535,17 @@
   onauxclick={(e) => e.preventDefault()}
 >
   <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
+  {#each guides as guide, i (i)}
+    {@const [x1, y1] = toViewport(guide.x1, guide.y1)}
+    {@const [x2, y2] = toViewport(guide.x2, guide.y2)}
+    <div
+      class="guide"
+      style:left="{Math.round(Math.min(x1, x2))}px"
+      style:top="{Math.round(Math.min(y1, y2))}px"
+      style:width="{Math.max(1, Math.round(Math.abs(x2 - x1)))}px"
+      style:height="{Math.max(1, Math.round(Math.abs(y2 - y1)))}px"
+    ></div>
+  {/each}
   {#if error}
     <p class="error" role="alert">{t("viewport.renderFailed", { error })}</p>
   {/if}
@@ -548,6 +589,13 @@
     height: 100%;
     transform-origin: 0 0;
     will-change: transform;
+    pointer-events: none;
+  }
+
+  /* Smart guides, magenta as in Photoshop. */
+  .guide {
+    position: absolute;
+    background: #ff2bd6;
     pointer-events: none;
   }
 

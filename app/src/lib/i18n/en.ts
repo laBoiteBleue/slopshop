@@ -49,6 +49,7 @@ const en = {
   "menu.view.zoomIn": "Zoom In",
   "menu.view.zoomOut": "Zoom Out",
   "menu.view.fit": "Fit on Screen",
+  "menu.view.snap": "Snap",
   "menu.view.actualSize": "100%",
   "menu.help": "Help",
   "menu.help.about": "About SlopShop",

@@ -1227,6 +1227,91 @@ async fn paste(app: AppHandle, document_id: Option<u64>, name: String) -> Result
     }
 }
 
+/// The layer showing a pixel at document pixel (`x`, `y`): the Move tool's Auto-Select.
+#[tauri::command]
+async fn layer_at(
+    state: State<'_, AppState>,
+    document_id: u64,
+    x: i64,
+    y: i64,
+) -> Result<Option<u64>, String> {
+    let document = state
+        .documents()?
+        .get_mut(document_id)?
+        .session
+        .document()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        slopshop_core::pick::layer_at(&document, x, y).map(LayerId::get)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// A rectangle in document pixels (right and bottom exclusive).
+#[derive(Debug, Clone, Copy, Serialize)]
+struct BoundsDto {
+    left: i64,
+    top: i64,
+    right: i64,
+    bottom: i64,
+}
+
+impl From<slopshop_core::pick::Bounds> for BoundsDto {
+    fn from(b: slopshop_core::pick::Bounds) -> Self {
+        Self {
+            left: b.left,
+            top: b.top,
+            right: b.right,
+            bottom: b.bottom,
+        }
+    }
+}
+
+/// What moving layers can snap to (ADR 0017): the bounds of what moves, and of the other
+/// visible layers' pixels (the canvas is known to the UI).
+#[derive(Debug, Clone, Serialize)]
+struct SnapTargets {
+    moving: Option<BoundsDto>,
+    others: Vec<BoundsDto>,
+}
+
+/// Snap targets for moving `ids`. Layer bounds are computed once per image (a scan of its
+/// pixels the first time): on a worker.
+#[tauri::command]
+async fn move_snap_targets(
+    state: State<'_, AppState>,
+    document_id: u64,
+    ids: Vec<u64>,
+) -> Result<SnapTargets, String> {
+    let document = state
+        .documents()?
+        .get_mut(document_id)?
+        .session
+        .document()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+        // Everything that moves: the layers and what is inside those that are groups.
+        let moving: std::collections::HashSet<LayerId> = document
+            .outermost(&ids)
+            .into_iter()
+            .filter_map(|id| document.layer(id))
+            .flat_map(|layer| layer.subtree().map(|l| l.id))
+            .collect();
+        SnapTargets {
+            moving: slopshop_core::pick::bounds_of(&document, &ids).map(BoundsDto::from),
+            others: slopshop_core::pick::visible_layer_bounds(&document)
+                .into_iter()
+                .filter(|(id, _)| !moving.contains(id))
+                .map(|(_, b)| b.into())
+                .collect(),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Add a mask made from the transparency of a raster layer (ADR 0014), undoable. Copying the
 /// alpha channel of a large image takes a while: done on a worker, outside the document lock.
 #[tauri::command]
@@ -1721,6 +1806,8 @@ pub fn run() {
             reveal_in_folder,
             layer_thumbnail,
             add_mask_from_transparency,
+            layer_at,
+            move_snap_targets,
             paste,
             save_document,
             quit,

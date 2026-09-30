@@ -93,6 +93,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Non-destructive transforms, step 1 ([ADR 0017](adr/0017-non-destructive-transforms.md)): a
       transform per layer (a group's applies inside it), whole-pixel moves rendered exactly,
       the Move tool (drag on the image, arrows, Shift+arrows), `.slop` 0.6
+- [x] Move tool: Auto-Select (the layer under the pointer), snapping to the canvas and to the
+      other layers (edges and centers) with smart guides, View > Snap
 - [ ] Transforms, step 2: Free Transform (Ctrl+T: scale, rotate, flip) with quality resampling;
       Image Size, Canvas Size, Crop and Rotate Image as transforms of the layers
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)

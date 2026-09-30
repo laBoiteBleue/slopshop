@@ -344,6 +344,14 @@
     select([], null);
   }
 
+  /** Select one layer (e.g. picked on the image), unfolding the groups around it. */
+  export function selectOnly(id: number) {
+    const next = new Set(collapsed);
+    for (let at = parents.get(id); at !== undefined; at = parents.get(at)) next.delete(at);
+    if (next.size !== collapsed.size) collapsed = next;
+    select([id], id);
+  }
+
   // Rename: double-click on the name, or F2 on the selected layer.
   let renaming = $state<number | null>(null);
 
