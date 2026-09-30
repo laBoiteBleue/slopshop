@@ -75,6 +75,81 @@ impl Affine {
         )
     }
 
+    /// A scale by (`sx`, `sy`) about the origin.
+    pub const fn scale(sx: f64, sy: f64) -> Self {
+        Affine {
+            a: sx,
+            d: sy,
+            ..Self::IDENTITY
+        }
+    }
+
+    /// A rotation by `radians` about the origin (clockwise on screen: y points down).
+    pub fn rotation(radians: f64) -> Self {
+        let (sin, cos) = radians.sin_cos();
+        Affine {
+            a: cos,
+            b: sin,
+            c: -sin,
+            d: cos,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    pub fn determinant(self) -> f64 {
+        self.a * self.d - self.b * self.c
+    }
+
+    /// The inverse map; `None` when the map is not invertible (or not finite).
+    pub fn inverse(self) -> Option<Affine> {
+        let det = self.determinant();
+        if !det.is_finite() || det == 0.0 {
+            return None;
+        }
+        let (a, b, c, d) = (self.d / det, -self.b / det, -self.c / det, self.a / det);
+        let inverse = Affine {
+            a,
+            b,
+            c,
+            d,
+            e: -(a * self.e + c * self.f),
+            f: -(b * self.e + d * self.f),
+        };
+        inverse.is_finite().then_some(inverse)
+    }
+
+    /// The bounding box `[x0, y0, x1, y1]` of the image of the rectangle `[x0, y0, x1, y1]`.
+    pub fn map_rect(self, [x0, y0, x1, y1]: [f64; 4]) -> [f64; 4] {
+        let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| self.apply(x, y));
+        let mut out = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for (x, y) in corners {
+            out = [out[0].min(x), out[1].min(y), out[2].max(x), out[3].max(y)];
+        }
+        out
+    }
+
+    /// Whether a layer may have this transform (ADR 0018): finite, with magnitudes below 1e9,
+    /// and invertible without collapsing (|determinant| ≥ 1e-9).
+    pub fn is_valid_layer_transform(self) -> bool {
+        self.to_array().iter().all(|v| v.abs() < 1e9) && self.determinant().abs() >= 1e-9
+    }
+
+    /// Whether the map sends pixel centers to pixel centers without resampling: a whole-pixel
+    /// translation after a rotation by a multiple of 90° or a flip.
+    pub fn is_pixel_exact(self) -> bool {
+        let unit = |v: f64| v == 1.0 || v == -1.0;
+        let permutes = (unit(self.a) && self.b == 0.0 && self.c == 0.0 && unit(self.d))
+            || (self.a == 0.0 && unit(self.b) && unit(self.c) && self.d == 0.0);
+        let whole = |v: f64| v.fract() == 0.0 && v.abs() <= f64::from(i32::MAX);
+        permutes && whole(self.e) && whole(self.f)
+    }
+
     /// The whole-pixel offset of a pure translation by whole pixels: the transforms that
     /// compositors apply without resampling. `None` for any other transform.
     pub fn integer_translation(self) -> Option<(i64, i64)> {
@@ -102,6 +177,48 @@ mod tests {
         // Move then scale: (1, 1) → (11, -3) → (22, -9).
         assert_eq!(move_by.then(scale).apply(1.0, 1.0), (22.0, -9.0));
         assert!(Affine::IDENTITY.then(move_by) == move_by);
+    }
+
+    #[test]
+    fn inverses_undo_and_invalid_transforms_are_refused() {
+        let t = Affine::rotation(0.3)
+            .then(Affine::scale(2.0, -0.5))
+            .then(Affine::translation(7.0, -3.0));
+        let back = t.then(t.inverse().unwrap());
+        for (x, y) in [(0.0, 0.0), (10.0, -4.0)] {
+            let (bx, by) = back.apply(x, y);
+            assert!((bx - x).abs() < 1e-12 && (by - y).abs() < 1e-12);
+        }
+        assert!(t.is_valid_layer_transform());
+        assert_eq!(Affine::scale(0.0, 1.0).inverse(), None);
+        assert!(!Affine::scale(1e-5, 1e-5).is_valid_layer_transform());
+        assert!(!Affine::translation(1e10, 0.0).is_valid_layer_transform());
+        assert!(!Affine::translation(f64::NAN, 0.0).is_valid_layer_transform());
+        assert_eq!(
+            Affine::rotation(std::f64::consts::FRAC_PI_4).map_rect([0.0, 0.0, 2.0, 2.0])[2],
+            2f64.sqrt()
+        );
+    }
+
+    #[test]
+    fn quarter_turns_and_flips_are_pixel_exact() {
+        let quarter = Affine {
+            a: 0.0,
+            b: 1.0,
+            c: -1.0,
+            d: 0.0,
+            e: 5.0,
+            f: 0.0,
+        };
+        assert!(quarter.is_pixel_exact());
+        assert!(Affine::scale(-1.0, 1.0).is_pixel_exact());
+        assert!(
+            !Affine::scale(-1.0, 1.0)
+                .then(Affine::translation(0.5, 0.0))
+                .is_pixel_exact()
+        );
+        assert!(!Affine::rotation(0.1).is_pixel_exact());
+        assert!(!Affine::scale(2.0, 2.0).is_pixel_exact());
     }
 
     #[test]

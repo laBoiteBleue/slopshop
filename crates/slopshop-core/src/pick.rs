@@ -41,12 +41,6 @@ fn shown(layer: &Layer) -> bool {
     layer.visible && layer.opacity > 0.0
 }
 
-/// The whole-pixel offset of a composed transform (documents hold whole-pixel translations
-/// only, ADR 0017).
-fn offset(transform: Affine) -> (i64, i64) {
-    transform.integer_translation().unwrap_or((0, 0))
-}
-
 fn hit(layers: &[Layer], parent: Affine, x: i64, y: i64) -> Option<LayerId> {
     for (i, layer) in layers.iter().enumerate().rev() {
         if !shown(layer) {
@@ -107,12 +101,12 @@ fn mask_shows(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
     }
 }
 
-/// The image's pixel under document pixel (`x`, `y`), in its own coordinates.
+/// The image's pixel under the center of document pixel (`x`, `y`), in its own coordinates.
 fn local(image: &RasterImage, transform: Affine, x: i64, y: i64) -> Option<(u32, u32)> {
-    let (ox, oy) = offset(transform);
-    let (lx, ly) = (x - ox, y - oy);
+    let (u, v) = transform.inverse()?.apply(x as f64 + 0.5, y as f64 + 0.5);
+    let (lx, ly) = (u.floor(), v.floor());
     let size = image.size();
-    (lx >= 0 && ly >= 0 && lx < i64::from(size.width) && ly < i64::from(size.height))
+    (lx >= 0.0 && ly >= 0.0 && lx < f64::from(size.width) && ly < f64::from(size.height))
         .then_some((lx as u32, ly as u32))
 }
 
@@ -145,14 +139,20 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
             LayerContent::Group { children, .. } => collect_bounds(children, transform, out),
             LayerContent::Raster { image } => {
                 if let Some(rect) = image.content_bounds() {
-                    let (ox, oy) = offset(transform);
+                    // The box around the transformed content, in whole pixels.
+                    let [x0, y0, x1, y1] = transform.map_rect([
+                        f64::from(rect.x),
+                        f64::from(rect.y),
+                        rect.right() as f64,
+                        rect.bottom() as f64,
+                    ]);
                     out.push((
                         layer.id,
                         Bounds {
-                            left: i64::from(rect.x) + ox,
-                            top: i64::from(rect.y) + oy,
-                            right: rect.right() as i64 + ox,
-                            bottom: rect.bottom() as i64 + oy,
+                            left: x0.floor() as i64,
+                            top: y0.floor() as i64,
+                            right: x1.ceil() as i64,
+                            bottom: y1.ceil() as i64,
                         },
                     ));
                 }
@@ -392,6 +392,42 @@ mod tests {
                 top: 4,
                 right: 8,
                 bottom: 13
+            })
+        );
+    }
+
+    #[test]
+    fn scaled_and_rotated_layers_are_picked_and_bounded_where_they_show() {
+        let mut doc = Document::new(Size::new(20, 20));
+        let a = layer(&mut doc, square(Rect::new(0, 0, 4, 2)));
+        let a = push(&mut doc, a);
+        // A quarter turn then × 2, moved right: the 4 × 2 square covers x ∈ [6, 10), y ∈ [0, 8).
+        let turn = Affine {
+            a: 0.0,
+            b: 1.0,
+            c: -1.0,
+            d: 0.0,
+            e: 0.0,
+            f: 0.0,
+        };
+        Edit::SetLayerTransform {
+            id: a,
+            transform: turn
+                .then(Affine::scale(2.0, 2.0))
+                .then(Affine::translation(10.0, 0.0)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(layer_at(&doc, 7, 7), Some(a));
+        assert_eq!(layer_at(&doc, 5, 3), None);
+        assert_eq!(layer_at(&doc, 7, 8), None);
+        assert_eq!(
+            bounds_of(&doc, &[a]),
+            Some(Bounds {
+                left: 6,
+                top: 0,
+                right: 10,
+                bottom: 8
             })
         );
     }

@@ -113,8 +113,8 @@ pub enum EditError {
     },
     /// An operation on several layers was given none.
     NoLayers,
-    /// A transform the compositors cannot apply yet (not a whole-pixel translation).
-    UnsupportedTransform,
+    /// A transform that is not finite and invertible (ADR 0018).
+    InvalidTransform,
 }
 
 impl fmt::Display for EditError {
@@ -141,8 +141,8 @@ impl fmt::Display for EditError {
                 write!(f, "{depth} nested groups (at most {MAX_GROUP_DEPTH})")
             }
             EditError::NoLayers => write!(f, "no layers given"),
-            EditError::UnsupportedTransform => {
-                write!(f, "only whole-pixel translations are supported yet")
+            EditError::InvalidTransform => {
+                write!(f, "a transform must be finite and invertible")
             }
         }
     }
@@ -535,11 +535,12 @@ fn validate_new_layer(
     Ok(())
 }
 
-/// Transforms the compositors apply: whole-pixel translations (ADR 0017).
+/// Transforms layers may have: finite and invertible (ADR 0018).
 pub(crate) fn validate_transform(transform: Affine) -> Result<(), EditError> {
-    match transform.integer_translation() {
-        Some(_) => Ok(()),
-        None => Err(EditError::UnsupportedTransform),
+    if transform.is_valid_layer_transform() {
+        Ok(())
+    } else {
+        Err(EditError::InvalidTransform)
     }
 }
 
@@ -1201,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn transforms_round_trip_and_only_whole_pixel_moves_are_accepted() {
+    fn transforms_round_trip_and_must_be_invertible() {
         let mut doc = Document::new(Size::new(8, 8));
         let ids = stack(&mut doc, &["a", "b"]);
         assert_round_trip(
@@ -1211,13 +1212,20 @@ mod tests {
                 transform: Affine::translation(-3.0, 5.0),
             },
         );
+        assert_round_trip(
+            &mut doc,
+            Edit::SetLayerTransform {
+                id: ids[1],
+                transform: Affine::rotation(0.3).then(Affine::translation(0.5, 2.25)),
+            },
+        );
         for transform in [
-            Affine::translation(0.5, 0.0),
             Affine {
-                a: 2.0,
+                a: 0.0,
                 ..Affine::IDENTITY
             },
             Affine::translation(f64::NAN, 0.0),
+            Affine::translation(1e12, 0.0),
         ] {
             assert_eq!(
                 Edit::SetLayerTransform {
@@ -1225,7 +1233,7 @@ mod tests {
                     transform
                 }
                 .apply(&mut doc),
-                Err(EditError::UnsupportedTransform)
+                Err(EditError::InvalidTransform)
             );
         }
     }
