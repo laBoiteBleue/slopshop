@@ -707,7 +707,7 @@ fn blend_modes_and_space_round_trip_and_unknown_ones_are_refused() {
     };
     assert_eq!(node(1, "{}"), Ok(BlendMode::Normal));
     assert_eq!(node(2, r#"{"blend_mode":"screen"}"#), Ok(BlendMode::Screen));
-    assert_eq!(node(2, r#"{"blend_mode":"dissolve"}"#), Err("newerVersion"));
+    assert_eq!(node(2, r#"{"blend_mode":"pinkify"}"#), Err("newerVersion"));
     assert_eq!(node(2, "{}"), Err("corrupt"));
     let space = |extra: &str| {
         let json = format!(

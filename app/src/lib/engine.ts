@@ -28,6 +28,7 @@ export type LayerView = {
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
 export type BlendModeId =
   | "normal"
+  | "dissolve"
   | "darken"
   | "multiply"
   | "colorBurn"
@@ -56,7 +57,7 @@ export type BlendModeId =
 
 /** The modes in Photoshop's menu order, by group (the menu separates the groups). */
 export const BLEND_MODE_GROUPS: BlendModeId[][] = [
-  ["normal"],
+  ["normal", "dissolve"],
   ["darken", "multiply", "colorBurn", "linearBurn", "darkerColor"],
   ["lighten", "screen", "colorDodge", "linearDodge", "lighterColor"],
   ["overlay", "softLight", "hardLight", "vividLight", "linearLight", "pinLight", "hardMix"],

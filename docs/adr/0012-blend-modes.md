@@ -14,8 +14,7 @@ modes that assume values in `[0, 1]`.
 
 ## Decision
 
-1. **Every layer has a blend mode**, one of Photoshop's modes except Dissolve (it needs a
-   dither pattern; later): normal; darken, multiply, color burn, linear burn, darker color;
+1. **Every layer has a blend mode**, one of Photoshop's modes: normal, dissolve; darken, multiply, color burn, linear burn, darker color;
    lighten, screen, color dodge, linear dodge (add), lighter color; overlay, soft light, hard
    light, vivid light, linear light, pin light, hard mix; difference, exclusion, subtract,
    divide; hue, saturation, color, luminosity. Identified by stable camelCase ids (`colorBurn`,

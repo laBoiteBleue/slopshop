@@ -1922,7 +1922,7 @@ mod tests {
         assert_eq!(view.blend_space, "linear");
         assert!(
             request(format!(
-                r#"{{"kind":"setLayerBlendMode","id":{id},"mode":"dissolve"}}"#
+                r#"{{"kind":"setLayerBlendMode","id":{id},"mode":"pinkify"}}"#
             ))
             .is_err()
         );

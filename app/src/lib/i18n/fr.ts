@@ -230,6 +230,7 @@ const fr: Messages = {
   "status.revision": "rév. {revision}",
 
   "blendMode.normal": "Normal",
+  "blendMode.dissolve": "Fondu",
   "blendMode.darken": "Obscurcir",
   "blendMode.multiply": "Produit",
   "blendMode.colorBurn": "Densité couleur +",
