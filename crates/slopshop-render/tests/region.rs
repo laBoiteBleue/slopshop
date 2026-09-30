@@ -1372,3 +1372,65 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
         }
     }
 }
+
+#[test]
+fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
+    use slopshop_core::adjust::Adjustment;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(200, 160);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        for adjustment in [
+            Adjustment::defaults("blackWhite").unwrap(),
+            Adjustment::BlackWhite {
+                weights: [-50.0, 120.0, 250.0, 10.0, -180.0, 300.0],
+                tint: true,
+                tint_hue: 200.0,
+                tint_saturation: 60.0,
+            },
+            Adjustment::ColorBalance {
+                shadows: [40.0, -20.0, 10.0],
+                midtones: [-30.0, 60.0, -80.0],
+                highlights: [100.0, 0.0, -45.0],
+                preserve_luminosity: false,
+            },
+            Adjustment::ColorBalance {
+                shadows: [-70.0, 20.0, 0.0],
+                midtones: [30.0, 30.0, 90.0],
+                highlights: [-10.0, -60.0, 45.0],
+                preserve_luminosity: true,
+            },
+            Adjustment::defaults("photoFilter").unwrap(),
+            Adjustment::PhotoFilter {
+                color: [0.1, 0.4, 0.9],
+                density: 80.0,
+                preserve_luminosity: false,
+            },
+            Adjustment::ChannelMixer {
+                red: [60.0, 50.0, -20.0, 5.0],
+                green: [-30.0, 150.0, 0.0, -10.0],
+                blue: [10.0, 20.0, 70.0, 0.0],
+                monochrome: false,
+            },
+            Adjustment::ChannelMixer {
+                red: [40.0, 40.0, 20.0, 0.0],
+                green: [0.0, 100.0, 0.0, 0.0],
+                blue: [0.0, 0.0, 100.0, 0.0],
+                monochrome: true,
+            },
+        ] {
+            let mut s = Session::new(Document::new(size));
+            s.perform(Edit::SetBlendSpace { space }).unwrap();
+            let base = image(size, PixelFormat::RGBA8_SRGB, pattern);
+            push_into(&mut s, None, raster(&base), BlendMode::Normal, 1.0);
+            push_into(
+                &mut s,
+                None,
+                LayerContent::Adjustment { adjustment },
+                BlendMode::Normal,
+                0.85,
+            );
+            let what = format!("{space:?} {adjustment:?}");
+            assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        }
+    }
+}

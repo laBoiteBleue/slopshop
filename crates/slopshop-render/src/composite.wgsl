@@ -778,7 +778,8 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 }
 
 // Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
-// `format` is the adjustment (Adjustment::index), `color` and `transfer.x` its parameters.
+// `format` is the adjustment (Adjustment::index); its 16 parameters are `color`, `transfer`,
+// `transfer2` and `m0` (p0 to p3), Photo Filter's color already in the working space.
 const ADJUST_EXPOSURE: u32 = 0u;
 const ADJUST_HUE_SATURATION: u32 = 1u;
 const ADJUST_LEVELS: u32 = 2u;
@@ -787,6 +788,10 @@ const ADJUST_VIBRANCE: u32 = 4u;
 const ADJUST_INVERT: u32 = 5u;
 const ADJUST_POSTERIZE: u32 = 6u;
 const ADJUST_THRESHOLD: u32 = 7u;
+const ADJUST_BLACK_WHITE: u32 = 8u;
+const ADJUST_COLOR_BALANCE: u32 = 9u;
+const ADJUST_PHOTO_FILTER: u32 = 10u;
+const ADJUST_CHANNEL_MIXER: u32 = 11u;
 
 // Rotate the hue by `degrees`, keeping each color's smallest and largest component.
 fn shift_hue(c: vec3<f32>, degrees: f32) -> vec3<f32> {
@@ -835,7 +840,62 @@ fn saturate_hsl(c: vec3<f32>, amount: f32) -> vec3<f32> {
     return l + (c - l) * (target_s / s);
 }
 
-fn adjust_color(kind: u32, p: vec4<f32>, p4: f32, c: vec3<f32>) -> vec3<f32> {
+fn hsl_lightness(c: vec3<f32>) -> f32 {
+    return (max(c.r, max(c.g, c.b)) + min(c.r, min(c.g, c.b))) * 0.5;
+}
+
+// The color of hue `degrees`, HSL saturation `s` and lightness `l`.
+fn from_hsl(degrees: f32, s: f32, l: f32) -> vec3<f32> {
+    let chroma = (1.0 - abs(2.0 * l - 1.0)) * s;
+    if chroma <= 0.0 {
+        return vec3<f32>(l);
+    }
+    return (l - chroma * 0.5) + shift_hue(vec3<f32>(1.0, 0.0, 0.0), degrees) * chroma;
+}
+
+// `c` with HSL lightness `l`, keeping its hue and HSL saturation.
+fn set_hsl_lightness(c: vec3<f32>, l: f32) -> vec3<f32> {
+    let hi = max(c.r, max(c.g, c.b));
+    let lo = min(c.r, min(c.g, c.b));
+    let chroma = hi - lo;
+    let room = 1.0 - abs(2.0 * hsl_lightness(c) - 1.0);
+    if chroma <= 0.0 || room <= 0.0 {
+        return vec3<f32>(l);
+    }
+    let target_chroma = (1.0 - abs(2.0 * l - 1.0)) * min(chroma / room, 1.0);
+    return (l - target_chroma * 0.5) + (c - lo) / chroma * target_chroma;
+}
+
+// Black & White's gray: the smallest component, plus the part up to the middle one weighted by
+// the secondary of the two largest, plus the rest by the primary of the largest. `w`: reds,
+// yellows, greens, cyans, blues, magentas, as fractions.
+fn black_and_white(c: vec3<f32>, w: array<f32, 6>) -> f32 {
+    var hi = 0u;
+    var lo = 0u;
+    for (var i = 1u; i < 3u; i++) {
+        if c[i] > c[hi] {
+            hi = i;
+        }
+        if c[i] < c[lo] {
+            lo = i;
+        }
+    }
+    if hi == lo {
+        return c[0];
+    }
+    let mid = 3u - hi - lo;
+    var weights = w;
+    // Red and green make yellow (1), green and blue cyan (3), blue and red magenta (5).
+    var secondary = 5u;
+    if hi + mid == 1u {
+        secondary = 1u;
+    } else if hi + mid == 3u {
+        secondary = 3u;
+    }
+    return c[lo] + (c[mid] - c[lo]) * weights[secondary] + (c[hi] - c[mid]) * weights[2u * hi];
+}
+
+fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, c: vec3<f32>) -> vec3<f32> {
     switch kind {
         case ADJUST_EXPOSURE: {
             let v = c * exp2(p.x) + p.y;
@@ -848,7 +908,7 @@ fn adjust_color(kind: u32, p: vec4<f32>, p4: f32, c: vec3<f32>) -> vec3<f32> {
         }
         case ADJUST_LEVELS: {
             let t = pow(clamp((c - p.x) / (p.y - p.x), vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / p.z));
-            return p.w + t * (p4 - p.w);
+            return p.w + t * (p1.x - p.w);
         }
         case ADJUST_BRIGHTNESS_CONTRAST: {
             let v = sign(c) * pow(abs(c), vec3<f32>(exp2(-p.x / 100.0)));
@@ -870,9 +930,56 @@ fn adjust_color(kind: u32, p: vec4<f32>, p4: f32, c: vec3<f32>) -> vec3<f32> {
             let n = round(p.x);
             return min(floor(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * n), vec3<f32>(n - 1.0)) / (n - 1.0);
         }
-        default: {
+        case ADJUST_THRESHOLD: {
             let luminance = dot(vec3<f32>(0.299, 0.587, 0.114), c);
             return vec3<f32>(select(0.0, 1.0, luminance >= p.x));
+        }
+        case ADJUST_BLACK_WHITE: {
+            // p: reds, yellows, greens, cyans; p1: blues, magentas, tint, tint hue; p2.x: tint
+            // saturation.
+            let w = array<f32, 6>(p.x / 100.0, p.y / 100.0, p.z / 100.0, p.w / 100.0, p1.x / 100.0, p1.y / 100.0);
+            let gray = black_and_white(c, w);
+            if p1.z != 0.0 {
+                return from_hsl(p1.w, p2.x / 100.0, gray);
+            }
+            return vec3<f32>(gray);
+        }
+        case ADJUST_COLOR_BALANCE: {
+            // Shadows, midtones and highlights (3 values each), then the preserve flag.
+            let l = hsl_lightness(c);
+            let shadows = clamp((l - 0.333) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
+            let midtones = clamp((l - 0.333) / 0.25 + 0.5, 0.0, 1.0)
+                * clamp((l + 0.333 - 1.0) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
+            let highlights = clamp((l + 0.333 - 1.0) / 0.25 + 0.5, 0.0, 1.0) * 0.7;
+            let shift = p.xyz * shadows + vec3<f32>(p.w, p1.x, p1.y) * midtones
+                + vec3<f32>(p1.z, p1.w, p2.x) * highlights;
+            let out = c + shift / 100.0;
+            if p2.y != 0.0 {
+                return set_hsl_lightness(out, l);
+            }
+            return out;
+        }
+        case ADJUST_PHOTO_FILTER: {
+            // The working-space color, the density, the preserve flag. In linear light.
+            var out = c + (c * p.xyz - c) * (p.w / 100.0);
+            let before = dot(WORKING_LUMA, c);
+            let after = dot(WORKING_LUMA, out);
+            if p1.x != 0.0 && after > 0.0 {
+                out = out * (before / after);
+            }
+            return out;
+        }
+        case ADJUST_CHANNEL_MIXER: {
+            // Rows of red, green and blue (weights and constant, in %), the monochrome flag.
+            let v = vec4<f32>(c, 1.0);
+            let red = dot(p, v) / 100.0;
+            if p3.x != 0.0 {
+                return vec3<f32>(red);
+            }
+            return vec3<f32>(red, dot(p1, v) / 100.0, dot(p2, v) / 100.0);
+        }
+        default: {
+            return c;
         }
     }
 }
@@ -886,11 +993,16 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     let straight = below.rgb / alpha;
     let perceptual = (layer.flags & FLAG_PERCEPTUAL) != 0u;
     var adjusted: vec3<f32>;
-    if layer.format == ADJUST_EXPOSURE {
-        adjusted = adjust_color(layer.format, layer.color, layer.transfer.x, straight);
+    let kind = layer.format;
+    let p0 = layer.color;
+    let p1 = layer.transfer;
+    let p2 = layer.transfer2;
+    let p3 = layer.m0;
+    if kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER {
+        adjusted = adjust_color(kind, p0, p1, p2, p3, straight);
     } else {
         let encoded = to_blend(straight, perceptual);
-        adjusted = from_blend(adjust_color(layer.format, layer.color, layer.transfer.x, encoded), perceptual);
+        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, encoded), perceptual);
     }
     return fade(below, vec4<f32>(adjusted * alpha, alpha), coverage, perceptual);
 }
