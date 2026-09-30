@@ -24,12 +24,19 @@
     documentId,
     layer,
     size,
+    mask = false,
   }: {
     documentId: number;
     layer: LayerView;
     /** Side of the square box, in CSS pixels. */
     size: number;
+    /** The layer's mask instead of the layer. */
+    mask?: boolean;
   } = $props();
+
+  /** What is shown: a raster (the layer's, or its mask), or a fill's color. */
+  let key = $derived(mask ? (layer.mask?.contentKey ?? null) : layer.contentKey);
+  let isImage = $derived(mask || layer.kind === "raster");
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   /** The thumbnail's pixel size, for its aspect ratio in the box. */
@@ -44,20 +51,21 @@
   }
 
   $effect(() => {
-    if (layer.kind !== "raster" || !canvas) return;
+    if (!isImage || key === null || !canvas) return;
     // Device pixels, so that the thumbnail stays sharp on high-density screens.
     const maxSide = Math.round(size * window.devicePixelRatio);
-    const key = `${layer.contentKey}:${maxSide}`;
-    const known = cache.get(key);
+    // Masks are shown raw, layers as light: never the same thumbnail for one image.
+    const cacheKey = `${mask ? "mask" : "layer"}:${key}:${maxSide}`;
+    const known = cache.get(cacheKey);
     if (known) {
       draw(known);
       return;
     }
     let cancelled = false;
     engine
-      .layerThumbnail(documentId, layer.id, maxSide)
+      .layerThumbnail(documentId, layer.id, maxSide, mask)
       .then((image) => {
-        remember(key, image);
+        remember(cacheKey, image);
         if (!cancelled) draw(image);
       })
       .catch(() => {
@@ -82,7 +90,7 @@
 </script>
 
 <span class="box" style:width="{size}px" style:height="{size}px">
-  {#if layer.kind === "raster"}
+  {#if isImage}
     <canvas
       bind:this={canvas}
       class="checker"
