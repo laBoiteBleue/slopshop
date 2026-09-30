@@ -16,8 +16,9 @@ use super::format::{
     RecordHeader, RecordRef, SLOT_LEN, SLOT_OFFSETS, Slot, encode_blob, encode_index, record_span,
 };
 use super::manifest::{
-    ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_FILL, NODE_RASTER,
-    NODE_VERSION, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema, Writer,
+    ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_FILL, NODE_GROUP,
+    NODE_RASTER, NODE_VERSION, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema,
+    Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -139,12 +140,12 @@ fn kept_images(
     images
 }
 
-/// Every image of the document: layer rasters and masks.
+/// Every image of the document: layer rasters and masks, groups included.
 fn rasters(document: &Document) -> impl Iterator<Item = &Arc<RasterImage>> {
-    document.layers().iter().flat_map(|layer| {
+    document.all_layers().flat_map(|layer| {
         let content = match &layer.content {
             LayerContent::Raster { image } => Some(image),
-            LayerContent::Fill { .. } => None,
+            _ => None,
         };
         content
             .into_iter()
@@ -415,8 +416,9 @@ fn build_manifest(
             .map(|(_, record)| record.key)
     };
     let mut nodes = std::collections::BTreeMap::new();
-    for layer in document.layers() {
+    for layer in document.all_layers() {
         let id = layer.id.get();
+        let mut inputs = Vec::new();
         let (kind, params) = match &layer.content {
             LayerContent::Raster { image } => {
                 let key = key_of(image).map(Hash::to_key).unwrap_or_default();
@@ -426,23 +428,19 @@ fn build_manifest(
                 NODE_FILL,
                 json!({ "color": [color.r, color.g, color.b, color.a] }),
             ),
+            LayerContent::Group {
+                children,
+                pass_through,
+            } => {
+                inputs = children.iter().map(|child| child.id.get()).collect();
+                (NODE_GROUP, json!({ "pass_through": pass_through }))
+            }
         };
         let mut params = match params {
             Value::Object(map) => map,
             _ => Map::new(),
         };
         params.insert("blend_mode".to_owned(), Value::from(layer.blend_mode.id()));
-        if let Some(mask) = &layer.mask {
-            let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
-            params.insert(
-                "mask".to_owned(),
-                json!({
-                    "image": key,
-                    "enabled": mask.enabled,
-                    "replaces_alpha": mask.replaces_alpha,
-                }),
-            );
-        }
         if let Some(mask) = &layer.mask {
             let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
             params.insert(
@@ -463,7 +461,7 @@ fn build_manifest(
                 visible: layer.visible,
                 opacity: layer.opacity,
                 params,
-                inputs: Vec::new(),
+                inputs,
                 extra: residue.nodes.get(&id).cloned().unwrap_or_default(),
             },
         );

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use slopshop_core::color::LinearRgba;
-use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask};
+use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
 use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
 use slopshop_core::{BlendMode, BlendSpace};
@@ -19,8 +19,8 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_FILL, NODE_RASTER, NODE_VERSION, NodeDto, PYRAMID_ALGORITHM,
-    SCHEMA_MAJOR,
+    DocumentDto, Manifest, NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NodeDto,
+    PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -267,64 +267,20 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
         document: doc.extra.clone(),
         ..Residue::default()
     };
-    if manifest.nodes.len() != doc.stack.len() {
-        return Err(corrupt("nodes outside the layer stack"));
-    }
+    let mut used = HashSet::new();
     let mut layers = Vec::with_capacity(doc.stack.len());
     for id in &doc.stack {
-        let node = manifest
-            .nodes
-            .get(&id.to_string())
-            .ok_or_else(|| corrupt("the stack refers to a missing node"))?;
-        let versioned = || format!("{}@{}", node.kind, node.version);
-        let known_version = (1..=NODE_VERSION).contains(&node.version);
-        let content = match node.kind.as_str() {
-            NODE_RASTER if known_version => {
-                let key = node
-                    .params
-                    .get("image")
-                    .and_then(Value::as_str)
-                    .and_then(Hash::from_key)
-                    .ok_or_else(|| corrupt("raster node without an image"))?;
-                let image = rasters
-                    .get(&key)
-                    .ok_or_else(|| corrupt("raster node with a missing image"))?;
-                LayerContent::Raster {
-                    image: image.clone(),
-                }
-            }
-            NODE_FILL if known_version => {
-                let color = node
-                    .params
-                    .get("color")
-                    .and_then(Value::as_array)
-                    .filter(|c| c.len() == 4)
-                    .and_then(|c| {
-                        c.iter()
-                            .map(|v| v.as_f64().map(|v| v as f32))
-                            .collect::<Option<Vec<f32>>>()
-                    })
-                    .ok_or_else(|| corrupt("fill node without a color"))?;
-                LayerContent::Fill {
-                    color: LinearRgba::new(color[0], color[1], color[2], color[3]),
-                }
-            }
-            _ => return Err(FileError::UnknownNodeType(versioned())),
-        };
-        let blend_mode = node_blend_mode(node)?;
-        let mask = node_mask(node, &rasters)?;
-        if !node.extra.is_empty() {
-            residue.nodes.insert(*id, node.extra.clone());
-        }
-        layers.push(Layer {
-            id: LayerId::from_raw(*id),
-            name: node.name.clone(),
-            visible: node.visible,
-            opacity: node.opacity,
-            blend_mode,
-            mask,
-            content,
-        });
+        layers.push(read_node(
+            *id,
+            0,
+            &manifest,
+            &rasters,
+            &mut residue,
+            &mut used,
+        )?);
+    }
+    if used.len() != manifest.nodes.len() {
+        return Err(corrupt("nodes outside the layer stack"));
     }
     for (key, dto) in &manifest.images {
         if !dto.extra.is_empty()
@@ -343,6 +299,94 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     )
     .map_err(FileError::Document)?;
     Ok((document, index, records, residue))
+}
+
+/// The layer of node `id` (`depth`: groups around it), a group with its children. Each node may
+/// be used once: the stack and the groups form a tree.
+pub(super) fn read_node(
+    id: u64,
+    depth: usize,
+    manifest: &Manifest,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
+    residue: &mut Residue,
+    used: &mut HashSet<u64>,
+) -> Result<Layer, FileError> {
+    let node = manifest
+        .nodes
+        .get(&id.to_string())
+        .ok_or_else(|| corrupt("the stack refers to a missing node"))?;
+    if !used.insert(id) {
+        return Err(corrupt("a node is used twice"));
+    }
+    let versioned = || format!("{}@{}", node.kind, node.version);
+    let known_version = (1..=NODE_VERSION).contains(&node.version);
+    let content = match node.kind.as_str() {
+        NODE_RASTER if known_version => {
+            let key = node
+                .params
+                .get("image")
+                .and_then(Value::as_str)
+                .and_then(Hash::from_key)
+                .ok_or_else(|| corrupt("raster node without an image"))?;
+            let image = rasters
+                .get(&key)
+                .ok_or_else(|| corrupt("raster node with a missing image"))?;
+            LayerContent::Raster {
+                image: image.clone(),
+            }
+        }
+        NODE_FILL if known_version => {
+            let color = node
+                .params
+                .get("color")
+                .and_then(Value::as_array)
+                .filter(|c| c.len() == 4)
+                .and_then(|c| {
+                    c.iter()
+                        .map(|v| v.as_f64().map(|v| v as f32))
+                        .collect::<Option<Vec<f32>>>()
+                })
+                .ok_or_else(|| corrupt("fill node without a color"))?;
+            LayerContent::Fill {
+                color: LinearRgba::new(color[0], color[1], color[2], color[3]),
+            }
+        }
+        NODE_GROUP if (3..=NODE_VERSION).contains(&node.version) => {
+            // Checked before going deeper: the file is untrusted.
+            if depth >= MAX_GROUP_DEPTH {
+                return Err(corrupt("groups nested too deep"));
+            }
+            let pass_through = node
+                .params
+                .get("pass_through")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| corrupt("group node without pass_through"))?;
+            let children = node
+                .inputs
+                .iter()
+                .map(|&child| read_node(child, depth + 1, manifest, rasters, residue, used))
+                .collect::<Result<_, _>>()?;
+            LayerContent::Group {
+                children,
+                pass_through,
+            }
+        }
+        _ => return Err(FileError::UnknownNodeType(versioned())),
+    };
+    let blend_mode = node_blend_mode(node)?;
+    let mask = node_mask(node, rasters)?;
+    if !node.extra.is_empty() {
+        residue.nodes.insert(id, node.extra.clone());
+    }
+    Ok(Layer {
+        id: LayerId::from_raw(id),
+        name: node.name.clone(),
+        visible: node.visible,
+        opacity: node.opacity,
+        blend_mode,
+        mask,
+        content,
+    })
 }
 
 /// A node's blend mode. Version 1 had none: normal. A mode this version does not know comes

@@ -1,4 +1,4 @@
-# The `.slop` document format, version 0.3
+# The `.slop` document format, version 0.4
 
 The byte-level specification of SlopShop documents. The design and its reasons are in
 [ADR 0009](adr/0009-document-file-format.md). The reference implementation is
@@ -176,7 +176,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
 
 ```json
 {
-  "schema": { "major": 0, "minor": 3 },
+  "schema": { "major": 0, "minor": 4 },
   "writer": { "app": "slopshop", "version": "0.1.0" },
   "document": {
     "size": [21600, 10800],
@@ -185,8 +185,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
       "transfer": { "kind": "linear" },
       "id_hint": "linear-rec2020"
     },
-    "next_node_id": 6,
-    "stack": [3, 5],
+    "next_node_id": 8,
+    "stack": [3, 7],
     "blend_space": "perceptual"
   },
   "nodes": {
@@ -196,7 +196,10 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
            "inputs": [] },
     "5": { "type": "slopshop.fill", "version": 3, "name": "Tint", "visible": true,
            "opacity": 0.5, "params": { "color": [0.2, 0.1, 0.0, 1.0], "blend_mode": "multiply" },
-           "inputs": [] }
+           "inputs": [] },
+    "7": { "type": "slopshop.group", "version": 3, "name": "Folder", "visible": true,
+           "opacity": 1.0, "params": { "blend_mode": "normal", "pass_through": true },
+           "inputs": [5] }
   },
   "images": {
     "b3:9f2c…": {
@@ -216,7 +219,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
 - `schema`: a reader accepts any version with its own major and upgrades it in memory.
 - `document.size`: canvas width and height in pixels. `working_space`: the compositing color
   space (linear transfer only so far). `next_node_id`: the next id to allocate, greater
-  than every node id. `stack`: node ids, bottom to top; each must be a key of `nodes`, once.
+  than every node id. `stack`: the top-level node ids, bottom to top. Every node of `nodes` is
+  used exactly once, in the stack or as the input of a group: they form a tree.
   `blend_space` (0.2): where layers blend, `perceptual` or `linear` ([ADR
   0012](adr/0012-blend-modes.md)); absent in 0.1 files, which read as `linear`.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
@@ -236,7 +240,12 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `image`, the key of a gray entry of `images` whose samples are coverage (read linearly);
     `enabled`; `replaces_alpha` (the layer's own alpha is ignored while the mask exists). Nodes
     below v3 have no mask.
-  - `opacity` is in [0, 1]. `inputs` is empty (reserved for the node graph).
+  - `slopshop.group` v3 (schema 0.4, [ADR 0015](adr/0015-layer-groups.md)): `inputs` are the
+    group's layers, bottom to top; `params.pass_through` (the layers blend through the group,
+    faded by its opacity and mask; else they are composited on their own and blended as one
+    layer with `blend_mode`), `params.blend_mode` and the optional `params.mask`. Groups nest at
+    most 16 deep.
+  - `opacity` is in [0, 1]. `inputs` is empty for rasters and fills.
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`
   is `u8`, `u16`, `f16` or `f32`; `alpha` is `straight` or `premultiplied`. `levels` lists the

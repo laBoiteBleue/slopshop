@@ -824,6 +824,7 @@ fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, Str
     let mut document = Document::new(image.size());
     let id = document.allocate_layer_id();
     let edit = Edit::InsertLayer {
+        parent: None,
         index: 0,
         layer: Layer {
             id,

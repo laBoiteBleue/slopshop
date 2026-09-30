@@ -29,6 +29,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
     let index = session.document().layers().len();
     session
         .perform(Edit::InsertLayer {
+            parent: None,
             index,
             layer: Layer {
                 id,
@@ -758,6 +759,133 @@ fn masks_match_the_cpu_reference() {
                 assert!(
                     (g - c).abs() <= 1e-4 * c.abs().max(1.0),
                     "{case}: sample {i}: GPU {g} vs CPU {c}"
+                );
+            }
+        }
+    }
+}
+
+/// Insert `content` into `parent` (on top of its layers) with a blend mode and opacity.
+fn push_into(
+    session: &mut Session,
+    parent: Option<LayerId>,
+    content: LayerContent,
+    mode: BlendMode,
+    opacity: f32,
+) -> LayerId {
+    let id = session.allocate_layer_id();
+    let index = session.document().children_of(parent).unwrap().len();
+    session
+        .perform(Edit::InsertLayer {
+            parent,
+            index,
+            layer: Layer {
+                id,
+                name: "layer".into(),
+                visible: true,
+                opacity,
+                blend_mode: mode,
+                mask: None,
+                content,
+            },
+        })
+        .unwrap();
+    id
+}
+
+fn group(pass_through: bool) -> LayerContent {
+    LayerContent::Group {
+        children: Vec::new(),
+        pass_through,
+    }
+}
+
+#[test]
+fn gpu_groups_match_the_cpu_reference_compositor() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        let mut s = Session::new(Document::new(size));
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        let background = image(size, PixelFormat::RGBA8_SRGB, pattern);
+        push_into(&mut s, None, raster(&background), BlendMode::Normal, 1.0);
+
+        // A pass-through group at 60 % with a gradient mask, holding a multiplied layer and an
+        // isolated screen group of a fill and a float raster.
+        let faded = push_into(&mut s, None, group(true), BlendMode::Normal, 0.6);
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let mask = image(Size::new(260, 280), gray, |x, _| vec![(x % 256) as u8]);
+        s.perform(Edit::SetLayerMask {
+            id: faded,
+            mask: Some(slopshop_core::LayerMask {
+                image: mask,
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        })
+        .unwrap();
+        let wide = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![
+                (x * 7) as u8,
+                (y * 3) as u8,
+                ((x + y) * 5) as u8,
+                (x ^ y) as u8,
+            ]
+        });
+        push_into(&mut s, Some(faded), raster(&wide), BlendMode::Multiply, 0.8);
+        let isolated = push_into(&mut s, Some(faded), group(false), BlendMode::Screen, 0.7);
+        push_into(
+            &mut s,
+            Some(isolated),
+            LayerContent::Fill {
+                color: LinearRgba::new(0.1, 0.4, 0.8, 0.5),
+            },
+            BlendMode::Normal,
+            1.0,
+        );
+        let hdr = image(
+            Size::new(200, 150),
+            float_format(ColorSpace::LINEAR_SRGB, AlphaMode::Straight),
+            |x, y| {
+                floats([
+                    x as f32 / 100.0,
+                    0.3,
+                    y as f32 / 150.0,
+                    ((x + y) % 7) as f32 / 6.0,
+                ])
+            },
+        );
+        push_into(
+            &mut s,
+            Some(isolated),
+            raster(&hdr),
+            BlendMode::Overlay,
+            0.9,
+        );
+        // A neutral pass-through group (inlined) holding a difference layer.
+        let neutral = push_into(&mut s, None, group(true), BlendMode::Normal, 1.0);
+        push_into(
+            &mut s,
+            Some(neutral),
+            raster(&wide),
+            BlendMode::Difference,
+            0.5,
+        );
+
+        for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
+            let gpu = render(&r, s.document(), region);
+            let mut cpu = vec![0.0; gpu.len()];
+            slopshop_core::composite::composite_region(s.document(), region, &mut cpu).unwrap();
+            for (i, (g, c)) in gpu.iter().zip(&cpu).enumerate() {
+                let tolerance = 1e-4 * c.abs().max(1.0);
+                assert!(
+                    (g - c).abs() <= tolerance,
+                    "{space:?} {region:?} sample {i}: GPU {g} vs CPU {c}"
                 );
             }
         }

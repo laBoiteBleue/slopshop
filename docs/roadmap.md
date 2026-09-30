@@ -84,8 +84,12 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [ ] Painting in masks (with the brushes of Phase 3)
 - [ ] Non-destructive transforms (move, scale, rotate) with quality resampling
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
-- [ ] Groups (a `.slop` or PSD imported into a document arrives as a group); 🔶 stack-to-DAG
-      evolution of the model
+- [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
+      and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
+      `.slop` 0.4
+- [ ] Groups in the layers panel (folders, Ctrl+G), PSD groups, a `.slop` or PSD imported into
+      a document arriving as a group
+- [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation
 - [ ] History: memory limits, named entries, history panel

@@ -23,6 +23,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
     let index = session.document().layers().len();
     session
         .perform(Edit::InsertLayer {
+            parent: None,
             index,
             layer: Layer {
                 id,
@@ -202,6 +203,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
     let mut s = Session::new(Document::new(size));
     let id = s.allocate_layer_id();
     s.perform(Edit::InsertLayer {
+        parent: None,
         index: 0,
         layer: Layer {
             id,
@@ -327,6 +329,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
         let id = s.allocate_layer_id();
         let index = s.document().layers().len();
         s.perform(Edit::InsertLayer {
+            parent: None,
             index,
             layer: Layer {
                 id,

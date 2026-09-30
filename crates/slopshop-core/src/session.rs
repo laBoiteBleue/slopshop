@@ -1,6 +1,6 @@
 //! A document together with its undo/redo history.
 
-use crate::document::{Document, Layer, LayerId};
+use crate::document::{Document, Layer, LayerContent, LayerId};
 use crate::edit::{Edit, EditError};
 
 /// An editing session: the document and the inverse edits needed to undo/redo.
@@ -63,27 +63,38 @@ impl Session {
     }
 
     /// Insert copies of `layers` (bottom to top, e.g. another document's stack) above the
-    /// current stack, with fresh ids, as one undoable entry. Raster pixels are shared, never
-    /// copied. Returns the new ids, bottom to top; on error nothing changes.
+    /// current stack, with fresh ids (groups with everything inside them), as one undoable
+    /// entry. Raster pixels are shared, never copied. Returns the new ids of the copies of
+    /// `layers`, bottom to top; on error nothing changes.
     pub fn insert_layer_copies(&mut self, layers: &[Layer]) -> Result<Vec<LayerId>, EditError> {
         let base = self.document.layers().len();
         let mut ids = Vec::with_capacity(layers.len());
         let mut edits = Vec::with_capacity(layers.len());
         for (offset, layer) in layers.iter().enumerate() {
-            let id = self.document.allocate_layer_id();
-            ids.push(id);
+            let copy = self.fresh_copy(layer);
+            ids.push(copy.id);
             edits.push(Edit::InsertLayer {
+                parent: None,
                 index: base + offset,
-                layer: Layer {
-                    id,
-                    ..layer.clone()
-                },
+                layer: copy,
             });
         }
         if !edits.is_empty() {
             self.perform(Edit::Batch(edits))?;
         }
         Ok(ids)
+    }
+
+    /// A copy of `layer`, and for a group of everything inside it, with fresh ids.
+    fn fresh_copy(&mut self, layer: &Layer) -> Layer {
+        let mut copy = layer.clone();
+        copy.id = self.document.allocate_layer_id();
+        if let LayerContent::Group { children, .. } = &mut copy.content {
+            for child in children.iter_mut() {
+                *child = self.fresh_copy(child);
+            }
+        }
+        copy
     }
 
     /// Record the gesture in progress as one undoable entry. No-op if there is none.
@@ -154,6 +165,7 @@ mod tests {
         let index = session.document().layers().len();
         session
             .perform(Edit::InsertLayer {
+                parent: None,
                 index,
                 layer: Layer {
                     id,
@@ -300,6 +312,7 @@ mod tests {
         let id = source.allocate_layer_id();
         source
             .perform(Edit::InsertLayer {
+                parent: None,
                 index: 1,
                 layer: Layer {
                     id,
@@ -346,5 +359,57 @@ mod tests {
         });
         assert!(err.is_err());
         assert!(s.can_redo(), "a failed edit must not clear redo");
+    }
+
+    #[test]
+    fn copied_groups_get_fresh_ids_for_their_whole_subtree() {
+        let mut source = Session::new(Document::new(Size::new(4, 4)));
+        let child = add_layer(&mut source, "child");
+        let group = source.allocate_layer_id();
+        source
+            .perform(Edit::InsertLayer {
+                parent: None,
+                index: 1,
+                layer: Layer {
+                    id: group,
+                    name: "group".into(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
+                    mask: None,
+                    content: LayerContent::Group {
+                        children: Vec::new(),
+                        pass_through: true,
+                    },
+                },
+            })
+            .unwrap();
+        source
+            .perform(Edit::MoveLayer {
+                id: child,
+                parent: Some(group),
+                index: 0,
+            })
+            .unwrap();
+
+        // The target already uses the source's ids.
+        let mut target = Session::new(Document::new(Size::new(4, 4)));
+        add_layer(&mut target, "a");
+        add_layer(&mut target, "b");
+        let ids = target
+            .insert_layer_copies(source.document().layers())
+            .unwrap();
+        let copy = target.document().layer(ids[0]).unwrap();
+        let copied_child = copy.children().unwrap()[0].id;
+        let all: Vec<LayerId> = target.document().all_layers().map(|l| l.id).collect();
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len(), "every id is unique");
+        assert_eq!(
+            target.document().locate(copied_child),
+            Some((Some(ids[0]), 0))
+        );
+        // One undo entry removes the copy with everything inside it.
+        target.undo().unwrap();
+        assert_eq!(target.document().all_layers().count(), 2);
     }
 }

@@ -24,6 +24,8 @@ use std::sync::{Mutex, mpsc};
 use slopshop_core::color::{
     AlphaMode, ColorSpace, Mat3, PixelFormat, TransferFunction, WORKING_SPACE,
 };
+use slopshop_core::composite::{Step, steps};
+use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
@@ -153,6 +155,9 @@ const TILE_BUDGET_BYTES: u64 = 384 * 1024 * 1024;
 const NO_TILE: u32 = u32::MAX;
 const KIND_FILL: u32 = 0;
 const KIND_RASTER: u32 = 1;
+/// Group steps (ADR 0015, `composite::Step`): push the accumulator, then pop and combine.
+const KIND_GROUP_BEGIN: u32 = 2;
+const KIND_GROUP_END: u32 = 3;
 /// Layer flags (see composite.wgsl).
 const FLAG_PREMULTIPLIED: u32 = 1;
 /// Gray source: green and blue of its GPU texels are copies of red ([`gpu_texels`]).
@@ -163,6 +168,8 @@ const FLAG_PERCEPTUAL: u32 = 4;
 const FLAG_MASK: u32 = 8;
 /// The layer's own alpha is ignored (a mask made from its transparency, ADR 0014).
 const FLAG_IGNORE_ALPHA: u32 = 16;
+/// A group step of an isolated group (else it passes through).
+const FLAG_ISOLATED: u32 = 32;
 /// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
 const BLEND_SHIFT: u32 = 8;
 
@@ -558,26 +565,16 @@ impl Renderer {
         caches: &mut [Option<TileCache>; 4],
     ) -> PreparedLayers {
         let visible_doc = visible_document_rect(document.size(), view, output);
-        let layers: Vec<&Layer> = document.layers().iter().filter(|l| l.visible).collect();
+        let steps = steps(document);
 
         // Plan the pyramid level of every raster layer together, so that all visible tiles
         // fit in the cache: coarser levels rather than missing layers.
-        // Two plans per layer: its raster, then its enabled mask (ADR 0014), planned together.
-        let mut plans: Vec<Option<RasterPlan<'_>>> = layers
+        // Two plans per step: its raster, then its enabled mask (ADR 0014), planned together.
+        let mut plans: Vec<Option<RasterPlan<'_>>> = steps
             .iter()
-            .flat_map(|layer| {
-                let Some(visible) = visible_doc else {
-                    return [None, None];
-                };
-                let content = match &layer.content {
-                    LayerContent::Raster { image } => {
-                        Some(RasterPlan::new(image, visible, view.scale))
-                    }
-                    LayerContent::Fill { .. } => None,
-                };
-                let mask =
-                    enabled_mask(layer).map(|image| RasterPlan::new(image, visible, view.scale));
-                [content, mask]
+            .flat_map(|step| {
+                step_rasters(step)
+                    .map(|image| Some(RasterPlan::new(image?, visible_doc?, view.scale)))
             })
             .collect();
         let mut tables: Vec<Vec<u32>> = vec![Vec::new(); plans.len()];
@@ -601,7 +598,7 @@ impl Renderer {
                 }
             }
         }
-        encode_layers(&layers, &plans, tables, document.blend_space())
+        encode_layers(&steps, &plans, tables, document.blend_space())
     }
 
     /// Layer and tile table buffers of prepared layers.
@@ -679,6 +676,21 @@ impl Renderer {
     }
 }
 
+/// The rasters a step samples: a raster layer's image, then its (or a group's) enabled mask.
+fn step_rasters<'a>(step: &Step<'a>) -> [Option<&'a RasterImage>; 2] {
+    match step {
+        Step::Layer(layer) => {
+            let content = match &layer.content {
+                LayerContent::Raster { image } => Some(image.as_ref()),
+                _ => None,
+            };
+            [content, enabled_mask(layer)]
+        }
+        Step::Begin { .. } => [None, None],
+        Step::End(group) => [None, enabled_mask(group)],
+    }
+}
+
 /// The image of a layer's mask, when it has an enabled one.
 fn enabled_mask(layer: &Layer) -> Option<&RasterImage> {
     layer
@@ -688,11 +700,12 @@ fn enabled_mask(layer: &Layer) -> Option<&RasterImage> {
         .map(|mask| mask.image.as_ref())
 }
 
-/// Encode visible `layers` (bottom to top) with their plans and tile slots: two per layer, its
-/// raster then its enabled mask. Raster layers without a plan (nothing of them to sample) are
-/// left out, and so are layers whose enabled mask has none (the mask hides them there).
+/// Encode `steps` (bottom to top) with their plans and tile slots: two per step, its raster
+/// then its enabled mask. Raster layers without a plan (nothing of them to sample) are left out,
+/// and so are layers whose enabled mask has none (the mask hides them there); a group whose mask
+/// has none keeps its steps, at opacity 0 (what is below stays).
 fn encode_layers(
-    layers: &[&Layer],
+    steps: &[Step<'_>],
     plans: &[Option<RasterPlan<'_>>],
     tables: Vec<Vec<u32>>,
     blend_space: BlendSpace,
@@ -702,21 +715,60 @@ fn encode_layers(
         bytes: Vec::new(),
         tile_table: Vec::new(),
     };
+    let perceptual = if blend_space == BlendSpace::Perceptual {
+        FLAG_PERCEPTUAL
+    } else {
+        0
+    };
     let mut tables = tables.into_iter();
-    for (i, layer) in layers.iter().enumerate() {
+    for (i, step) in steps.iter().enumerate() {
         let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
         let table = tables.next().unwrap_or_default();
         let mask_table = tables.next().unwrap_or_default();
+        let layer = match step {
+            Step::Layer(layer) => *layer,
+            Step::Begin { isolated } => {
+                let fields = LayerFields {
+                    kind: KIND_GROUP_BEGIN,
+                    flags: perceptual | if *isolated { FLAG_ISOLATED } else { 0 },
+                    ..LayerFields::default()
+                };
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
+            Step::End(group) => {
+                let isolated = !matches!(
+                    group.content,
+                    LayerContent::Group {
+                        pass_through: true,
+                        ..
+                    }
+                );
+                let hidden = enabled_mask(group).is_some() && mask_plan.is_none();
+                let mut fields = LayerFields {
+                    kind: KIND_GROUP_END,
+                    flags: group.blend_mode.index() << BLEND_SHIFT
+                        | perceptual
+                        | if isolated { FLAG_ISOLATED } else { 0 },
+                    opacity: if hidden { 0.0 } else { group.opacity },
+                    ..LayerFields::default()
+                };
+                if let Some(mask) = mask_plan {
+                    set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
+                }
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
+        };
         if enabled_mask(layer).is_some() && mask_plan.is_none() {
             continue;
         }
         let mut fields = LayerFields {
-            flags: layer.blend_mode.index() << BLEND_SHIFT,
+            flags: layer.blend_mode.index() << BLEND_SHIFT | perceptual,
             ..LayerFields::default()
         };
-        if blend_space == BlendSpace::Perceptual {
-            fields.flags |= FLAG_PERCEPTUAL;
-        }
         let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
         match &layer.content {
             LayerContent::Fill { color } => {
@@ -752,23 +804,35 @@ fn encode_layers(
                 }
                 prepared.tile_table.extend(table);
             }
+            // Groups are steps of their own.
+            LayerContent::Group { .. } => continue,
         }
         if let Some(mask) = mask_plan {
-            fields.flags |= FLAG_MASK;
-            let range = mask.range();
-            let size = mask.image.levels()[mask.level].size();
-            fields.mask_level_scale = mask.factor() as f32;
-            fields.mask_table_offset = prepared.tile_table.len() as u32;
-            fields.mask_tile_origin = [range.x, range.y];
-            fields.mask_tile_count = [range.width, range.height];
-            fields.mask_level_size = [size.width, size.height];
-            fields.mask_format = mask.format.index() as u32;
-            prepared.tile_table.extend(mask_table);
+            set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
         }
         fields.write(&mut prepared.bytes);
         prepared.count += 1;
     }
     prepared
+}
+
+/// Describe an enabled mask's plan in `fields`, its tile slots appended to `tile_table`.
+fn set_mask_fields(
+    fields: &mut LayerFields,
+    mask: &RasterPlan<'_>,
+    tile_table: &mut Vec<u32>,
+    slots: Vec<u32>,
+) {
+    fields.flags |= FLAG_MASK;
+    let range = mask.range();
+    let size = mask.image.levels()[mask.level].size();
+    fields.mask_level_scale = mask.factor() as f32;
+    fields.mask_table_offset = tile_table.len() as u32;
+    fields.mask_tile_origin = [range.x, range.y];
+    fields.mask_tile_count = [range.width, range.height];
+    fields.mask_level_size = [size.width, size.height];
+    fields.mask_format = mask.format.index() as u32;
+    tile_table.extend(slots);
 }
 
 /// Layer and tile table buffers bound for one dispatch.
@@ -976,6 +1040,10 @@ fn shader_source() -> String {
     constants += &format!("const BLEND_SHIFT: u32 = {BLEND_SHIFT}u;\n");
     constants += &format!("const FLAG_MASK: u32 = {FLAG_MASK}u;\n");
     constants += &format!("const FLAG_IGNORE_ALPHA: u32 = {FLAG_IGNORE_ALPHA}u;\n");
+    constants += &format!("const FLAG_ISOLATED: u32 = {FLAG_ISOLATED}u;\n");
+    constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
+    constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
+    constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");
     constants += &format!(
         "const DIVISION_EPSILON: f32 = {:?};\n",
         slopshop_core::blend::DIVISION_EPSILON as f32

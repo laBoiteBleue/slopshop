@@ -585,6 +585,30 @@ fn blend_layer(src: vec4<f32>, dst: vec4<f32>, flags: u32) -> vec4<f32> {
     return vec4<f32>(from_blend(co, perceptual) * alpha_o, alpha_o);
 }
 
+// Fade from `below` to `above` by `t` (a pass-through group's opacity and mask, ADR 0015): a
+// premultiplied mix in the blend space, exact at 0 and 1 (Blender::fade in core).
+fn fade(below: vec4<f32>, above: vec4<f32>, t: f32, perceptual: bool) -> vec4<f32> {
+    if t >= 1.0 {
+        return above;
+    }
+    if !(t > 0.0) {
+        return below;
+    }
+    if !perceptual {
+        return below + (above - below) * t;
+    }
+    let alpha_b = clamp(below.a, 0.0, 1.0);
+    let alpha_a = clamp(above.a, 0.0, 1.0);
+    let alpha = alpha_b + (alpha_a - alpha_b) * t;
+    if alpha <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let cb = to_blend(unpremultiply(below), true);
+    let ca = to_blend(unpremultiply(above), true);
+    let co = (cb * alpha_b * (1.0 - t) + ca * alpha_a * t) / alpha;
+    return vec4<f32>(from_blend(co, true) * alpha, alpha);
+}
+
 // Dissolve's noise at a document pixel, in [0, 1): the same hash as
 // slopshop_core::blend::dissolve_noise (lowbias32), 24 bits so that it is exact in f32.
 fn dissolve_noise(p: vec2<u32>) -> f32 {
@@ -628,11 +652,47 @@ struct Footprint {
 }
 
 // Premultiplied working-space color of the first `layer_count` layers ("over", bottom to top).
+// Groups (ADR 0015) push the accumulator and pop it back, combined with what they made.
 // Export adds the non-finite values it replaces to `count`.
 fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) -> vec4<f32> {
     var acc = vec4<f32>(0.0);
+    var stack: array<vec4<f32>, MAX_GROUP_DEPTH>;
+    var depth = 0u;
     for (var i = 0u; i < layer_count; i++) {
         let layer = layers[i];
+        if layer.kind == KIND_GROUP_BEGIN {
+            // The engine never nests deeper than MAX_GROUP_DEPTH.
+            stack[min(depth, MAX_GROUP_DEPTH - 1u)] = acc;
+            depth++;
+            if (layer.flags & FLAG_ISOLATED) != 0u {
+                acc = vec4<f32>(0.0);
+            }
+            continue;
+        }
+        if layer.kind == KIND_GROUP_END {
+            if depth == 0u {
+                continue;
+            }
+            depth--;
+            let below = stack[min(depth, MAX_GROUP_DEPTH - 1u)];
+            var coverage = layer.opacity;
+            if (layer.flags & FLAG_MASK) != 0u {
+                coverage *= mask_coverage(layer, footprint);
+            }
+            if (layer.flags & FLAG_ISOLATED) != 0u {
+                var src = acc * coverage;
+                if ((layer.flags >> BLEND_SHIFT) & 0xffu) == MODE_DISSOLVE {
+                    src = dissolve(src, footprint);
+                }
+                acc = blend_layer(src, below, layer.flags);
+            } else {
+                acc = fade(below, acc, coverage, (layer.flags & FLAG_PERCEPTUAL) != 0u);
+            }
+            if footprint.exact {
+                acc = saturated(acc, count);
+            }
+            continue;
+        }
         var src = layer.color;
         if layer.kind == KIND_RASTER {
             if footprint.exact {
