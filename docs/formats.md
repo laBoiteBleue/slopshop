@@ -32,16 +32,20 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
 1. **Flattened import** ✅ (`slopshop_io::psd`): the merged composite image stored in the
    file, at its native depth (8/16/32-bit), in bitmap, gray, indexed, RGB or duotone (read as
    gray, with a warning), with its ICC profile and transparency (Photoshop's white matte
-   removed); raw, RLE and zip compression; PSD and PSB. A layered document opens with a warning
-   that its layers are flattened. A file saved without "Maximize Compatibility" has no
-   composite and is refused with that explanation. CMYK, Lab and multichannel are refused until
-   the engine has them (ADR 0006).
-2. **Layers** (can start now): pixel layers with name, opacity, visibility, position, blend
-   mode (Photoshop's modes are in the engine, ADR 0012; the document blends in perceptual space,
-   as Photoshop's 8/16-bit documents do) and layer mask (ADR 0014). What the engine cannot
-   represent yet (Dissolve, groups, clipping, adjustment layers, layer styles, text, smart
-   objects, layers offset from the origin) is reported as a warning, and the composite of step
-   1 stays available.
+   removed); raw, RLE and zip compression; PSD and PSB. CMYK, Lab and multichannel are refused
+   until the engine has them (ADR 0006). The composite is used when the layers cannot be read
+   (with a warning), and for the CLI.
+2. **Layers** ✅ (`slopshop_io::psd::layers`, gray, RGB and duotone documents): pixel layers
+   with name, visibility, opacity (times the fill opacity), position, blend mode (ADR 0012; the
+   document blends in perceptual space, as Photoshop's 8/16-bit documents do, and 32-bit ones in
+   linear light) and layer mask (ADR 0014, the real pixel mask when there is also a vector
+   mask); solid color fill layers as native fill layers. A layer smaller than the canvas shares
+   one tile for its empty area, so it costs what its pixels cost. What the engine cannot
+   represent yet is approximated and reported layer by layer: groups (their layers imported
+   without them, with the group's visibility and opacity), clipping masks, layer styles and
+   advanced blending, mask density and feather, adjustment layers and gradient or pattern fills
+   (left out), text, shapes, smart objects and vector masks (their pixels), pixels outside the
+   canvas (cropped). A file saved without "Maximize Compatibility" opens from its layers.
 3. **Groups and clipping**: when the engine has them (roadmap Phase 2).
 4. **Export** (PSD, and PSB above the PSD limits), layered, with a merged composite for other
    readers.
@@ -69,7 +73,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| **Photoshop** | `.psd`, `.pdd` | ✅ flattened | — | **P0** | in-house reader (see above) | layers next; CMYK, Lab refused |
+| **Photoshop** | `.psd`, `.pdd` | ✅ layers | — | **P0** | in-house reader (see above) | groups, adjustments and styles reported; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | 🔎 | — | **P0** | same reader (64-bit lengths) | |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
 | PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export |

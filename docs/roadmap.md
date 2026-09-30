@@ -40,8 +40,10 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       DDS; matrix/TRC ICC profiles; EXIF orientation; license policy enforced by `cargo-deny`
 - [x] PSD/PSB import, stage 1: the flattened composite (8/16/32-bit, bitmap, gray, indexed,
       RGB, duotone; transparency, ICC; raw, RLE, zip)
-- [ ] PSD/PSB import, next stages: layers with blend modes and masks, then groups (with
-      Phase 2), then export ([formats plan](formats.md#psd-and-psb-p0))
+- [x] PSD/PSB import, stage 2: layers with their blend modes, opacity, visibility and masks,
+      solid color fills; what the engine lacks is reported layer by layer
+- [ ] PSD/PSB import, next stages: groups and clipping (with Phase 2), then export
+      ([formats plan](formats.md#psd-and-psb-p0))
 - [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)

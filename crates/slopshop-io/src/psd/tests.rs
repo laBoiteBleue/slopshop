@@ -23,6 +23,49 @@ struct Doc {
     merged: bool,
     palette: Option<Vec<u8>>,
     transparent_index: Option<u16>,
+    layers: Vec<TestLayer>,
+    /// Layers in an `Lr16`/`Lr32` tagged block, as 16/32-bit documents store them.
+    layers_in_block: bool,
+    layer_compression: u16,
+}
+
+/// A layer to write. Channels are stored planes (big-endian rows) over the layer's bounds, or
+/// over the mask's bounds for a mask channel.
+struct TestLayer {
+    name: &'static str,
+    /// Top, left, bottom, right.
+    bounds: [i32; 4],
+    channels: Vec<(i16, Vec<u8>)>,
+    blend: [u8; 4],
+    opacity: u8,
+    hidden: bool,
+    clipping: bool,
+    /// Bounds, default color, flags.
+    mask: Option<([i32; 4], u8, u8)>,
+    blocks: Vec<([u8; 4], Vec<u8>)>,
+}
+
+impl TestLayer {
+    fn new(name: &'static str, bounds: [i32; 4], channels: Vec<(i16, Vec<u8>)>) -> Self {
+        Self {
+            name,
+            bounds,
+            channels,
+            blend: *b"norm",
+            opacity: 255,
+            hidden: false,
+            clipping: false,
+            mask: None,
+            blocks: Vec::new(),
+        }
+    }
+
+    /// A group's record (`kind` 1) or divider (`kind` 3), without pixels.
+    fn section(name: &'static str, kind: u32) -> Self {
+        let mut layer = Self::new(name, [0; 4], Vec::new());
+        layer.blocks.push((*b"lsct", kind.to_be_bytes().to_vec()));
+        layer
+    }
 }
 
 impl Doc {
@@ -40,6 +83,9 @@ impl Doc {
             merged: true,
             palette: None,
             transparent_index: None,
+            layers: Vec::new(),
+            layers_in_block: false,
+            layer_compression: 0,
         }
     }
 
@@ -94,7 +140,24 @@ impl Doc {
                 out.extend((n as u32).to_be_bytes());
             }
         };
-        if self.layer_count == 0 {
+        if !self.layers.is_empty() {
+            let info = self.layer_info();
+            let mut section = Vec::new();
+            if self.layers_in_block {
+                length(&mut section, 0);
+                section.extend(0u32.to_be_bytes()); // global layer mask info
+                section.extend(b"8BIM");
+                section.extend(if self.depth == 32 { b"Lr32" } else { b"Lr16" });
+                length(&mut section, info.len() as u64);
+                section.extend(&info);
+            } else {
+                length(&mut section, info.len() as u64);
+                section.extend(&info);
+                section.extend(0u32.to_be_bytes()); // global layer mask info
+            }
+            length(&mut out, section.len() as u64);
+            out.extend(section);
+        } else if self.layer_count == 0 {
             length(&mut out, 0);
         } else {
             let field = if self.big { 8 } else { 4 };
@@ -135,6 +198,107 @@ impl Doc {
             _ => unreachable!(),
         }
         out
+    }
+}
+
+impl Doc {
+    /// The layer info body: count, records, channels (padded to an even length).
+    fn layer_info(&self) -> Vec<u8> {
+        let sample_bytes = usize::from(self.depth / 8);
+        let mut records = Vec::new();
+        let mut channel_data = Vec::new();
+        for layer in &self.layers {
+            let [top, left, bottom, right] = layer.bounds;
+            let mut stored = Vec::new();
+            for (id, plane) in &layer.channels {
+                let width = match (*id, layer.mask) {
+                    (-2 | -3, Some(([_, l, _, r], _, _))) => (r - l) as usize,
+                    _ => (right - left) as usize,
+                };
+                let row_bytes = width * sample_bytes;
+                let mut data = self.layer_compression.to_be_bytes().to_vec();
+                if !plane.is_empty() {
+                    match self.layer_compression {
+                        1 => {
+                            let rows: Vec<Vec<u8>> =
+                                plane.chunks(row_bytes).map(pack_bits).collect();
+                            for row in &rows {
+                                if self.big {
+                                    data.extend((row.len() as u32).to_be_bytes());
+                                } else {
+                                    data.extend((row.len() as u16).to_be_bytes());
+                                }
+                            }
+                            rows.iter().for_each(|r| data.extend(r));
+                        }
+                        3 => {
+                            let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
+                            for row in plane.chunks(row_bytes) {
+                                z.write_all(&predict(row, self.depth, width)).unwrap();
+                            }
+                            data.extend(z.finish().unwrap());
+                        }
+                        _ => data.extend(plane),
+                    }
+                }
+                stored.push((*id, data));
+            }
+
+            for v in [top, left, bottom, right] {
+                records.extend(v.to_be_bytes());
+            }
+            records.extend((stored.len() as u16).to_be_bytes());
+            for (id, data) in &stored {
+                records.extend(id.to_be_bytes());
+                if self.big {
+                    records.extend((data.len() as u64).to_be_bytes());
+                } else {
+                    records.extend((data.len() as u32).to_be_bytes());
+                }
+            }
+            records.extend(b"8BIM");
+            records.extend(layer.blend);
+            records.extend([
+                layer.opacity,
+                u8::from(layer.clipping),
+                if layer.hidden { 2 } else { 0 },
+                0,
+            ]);
+            let mut extra = Vec::new();
+            match layer.mask {
+                Some((bounds, default, flags)) => {
+                    extra.extend(20u32.to_be_bytes());
+                    bounds.iter().for_each(|v| extra.extend(v.to_be_bytes()));
+                    extra.extend([default, flags, 0, 0]);
+                }
+                None => extra.extend(0u32.to_be_bytes()),
+            }
+            extra.extend(0u32.to_be_bytes()); // blending ranges: default
+            extra.push(layer.name.len() as u8);
+            extra.extend(layer.name.as_bytes());
+            while extra.len() % 4 != 0 {
+                extra.push(0);
+            }
+            for (key, data) in &layer.blocks {
+                extra.extend(b"8BIM");
+                extra.extend(key);
+                extra.extend((data.len().next_multiple_of(2) as u32).to_be_bytes());
+                extra.extend(data);
+                if data.len() % 2 == 1 {
+                    extra.push(0);
+                }
+            }
+            records.extend((extra.len() as u32).to_be_bytes());
+            records.extend(extra);
+            channel_data.extend(stored.into_iter().flat_map(|(_, d)| d));
+        }
+        let mut info = (self.layers.len() as i16).to_be_bytes().to_vec();
+        info.extend(records);
+        info.extend(channel_data);
+        if info.len() % 2 == 1 {
+            info.push(0);
+        }
+        info
     }
 }
 
@@ -445,4 +609,358 @@ fn packbits_round_trips_and_rejects_overflows() {
         unpack_bits(&[1, 5], &mut small).is_err(),
         "a truncated literal"
     );
+}
+
+fn open_file_of(name: &str, doc: &Doc) -> Result<crate::Opened, ImportError> {
+    let path = temp_file(name, &doc.write());
+    let result = crate::open_file(&path);
+    std::fs::remove_file(&path).ok();
+    result
+}
+
+fn open_layers(name: &str, doc: &Doc) -> crate::ImportedLayers {
+    match open_file_of(name, doc).unwrap() {
+        crate::Opened::Layers(layers) => layers,
+        crate::Opened::Image(_) => panic!("{name}: opened as an image"),
+    }
+}
+
+fn raster(layer: &slopshop_core::Layer) -> &slopshop_core::RasterImage {
+    match &layer.content {
+        slopshop_core::LayerContent::Raster { image } => image,
+        other => panic!("not a raster: {other:?}"),
+    }
+}
+
+/// An 8-bit plane of `width` × `height`.
+fn plane8(width: u32, height: u32, value: impl Fn(u32, u32) -> u8) -> Vec<u8> {
+    (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .map(|(x, y)| value(x, y))
+        .collect()
+}
+
+fn luni(name: &str) -> Vec<u8> {
+    let units: Vec<u16> = name.encode_utf16().collect();
+    let mut data = (units.len() as u32).to_be_bytes().to_vec();
+    units.iter().for_each(|u| data.extend(u.to_be_bytes()));
+    data
+}
+
+#[test]
+fn layers_open_with_their_bounds_modes_masks_and_names() {
+    let (width, height) = (300, 200);
+    for big in [false, true] {
+        for compression in [0, 1, 3] {
+            let mut doc = Doc::new(3, 8, width, height, rgb8_planes(width, height).0);
+            doc.big = big;
+            doc.layer_compression = compression;
+            let background = TestLayer::new(
+                "Background",
+                [0, 0, 200, 300],
+                vec![
+                    (0, plane8(300, 200, |x, _| x as u8)),
+                    (1, plane8(300, 200, |_, y| y as u8)),
+                    (2, plane8(300, 200, |_, _| 9)),
+                ],
+            );
+            // 100 × 100 at (40, 50), with a 40 × 40 mask at (50, 60).
+            let mut square = TestLayer::new(
+                "square",
+                [50, 40, 150, 140],
+                vec![
+                    (-1, plane8(100, 100, |_, _| 200)),
+                    (0, plane8(100, 100, |_, _| 255)),
+                    (1, plane8(100, 100, |x, _| x as u8)),
+                    (2, plane8(100, 100, |_, _| 0)),
+                    (-2, plane8(40, 40, |_, _| 30)),
+                ],
+            );
+            square.blend = *b"mul ";
+            square.opacity = 128;
+            square.mask = Some(([60, 50, 100, 90], 255, 0));
+            square.blocks.push((*b"luni", luni("Carré rouge")));
+            // 60 × 40 at (-30, -20): only its bottom-right quarter is on the canvas.
+            let off = TestLayer::new(
+                "off",
+                [-20, -30, 20, 30],
+                (-1..3)
+                    .map(|c| (c, plane8(60, 40, move |_, _| if c < 0 { 255 } else { 77 })))
+                    .collect(),
+            );
+            let mut hidden = TestLayer::new(
+                "hidden",
+                [0, 0, 10, 10],
+                (-1..3).map(|c| (c, plane8(10, 10, |_, _| 1))).collect(),
+            );
+            hidden.hidden = true;
+            doc.layers = vec![background, square, off, hidden];
+
+            let opened = open_layers(&format!("layers-{big}-{compression}.psd"), &doc);
+            let document = &opened.document;
+            assert_eq!(document.size(), Size::new(width, height));
+            assert_eq!(
+                document.blend_space(),
+                slopshop_core::BlendSpace::Perceptual
+            );
+            let layers = document.layers();
+            let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+            assert_eq!(names, ["Background", "Carré rouge", "off", "hidden"]);
+            assert!(opened.warnings.is_empty());
+
+            let background = raster(&layers[0]);
+            assert_eq!(background.format().layout, ChannelLayout::Rgb);
+            assert_eq!(pixel(background, 123, 45)[..3], [123, 45, 9]);
+
+            let square = &layers[1];
+            assert_eq!(square.blend_mode, slopshop_core::BlendMode::Multiply);
+            assert!((square.opacity - 128.0 / 255.0).abs() < 1e-6);
+            let image = raster(square);
+            assert_eq!(image.format().layout, ChannelLayout::Rgba);
+            assert_eq!(pixel(image, 50, 70), [255, 10, 0, 200]);
+            assert_eq!(pixel(image, 10, 10), [0, 0, 0, 0], "outside its bounds");
+            let mask = square.mask.as_ref().unwrap();
+            assert!(mask.enabled && !mask.replaces_alpha);
+            assert_eq!(pixel(&mask.image, 55, 65), [30]);
+            assert_eq!(
+                pixel(&mask.image, 10, 10),
+                [255],
+                "the default color outside"
+            );
+
+            let off = raster(&layers[2]);
+            assert_eq!(pixel(off, 0, 0), [77, 77, 77, 255]);
+            assert_eq!(pixel(off, 29, 19), [77, 77, 77, 255]);
+            assert_eq!(pixel(off, 30, 0)[3], 0);
+            assert!(!layers[3].visible && layers[2].visible);
+            assert_eq!(
+                opened.layer_warnings,
+                [
+                    vec![],
+                    vec![],
+                    vec![ImportWarning::PixelsOutsideCanvas],
+                    vec![]
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn deep_layers_are_read_from_their_tagged_block() {
+    // 16-bit gray: a 10 × 4 layer at (3, 2).
+    let value = |x: u32, y: u32| (x * 1000 + y) as u16;
+    let plane16 = |f: &dyn Fn(u32, u32) -> u16| -> Vec<u8> {
+        (0..4)
+            .flat_map(|y| (0..10).map(move |x| (x, y)))
+            .flat_map(|(x, y)| f(x, y).to_be_bytes())
+            .collect()
+    };
+    for compression in [1, 3] {
+        let mut doc = Doc::new(1, 16, 20, 10, vec![vec![0; 400]]);
+        doc.layers_in_block = true;
+        doc.layer_compression = compression;
+        doc.layers = vec![TestLayer::new(
+            "gray",
+            [2, 3, 6, 13],
+            vec![(-1, plane16(&|_, _| 65535)), (0, plane16(&value))],
+        )];
+        let opened = open_layers(&format!("gray16-layers-{compression}.psd"), &doc);
+        let image = raster(&opened.document.layers()[0]);
+        assert_eq!(image.format().sample, SampleType::U16);
+        assert_eq!(image.format().layout, ChannelLayout::GrayAlpha);
+        let px = pixel(image, 7, 3);
+        assert_eq!(u16::from_ne_bytes([px[0], px[1]]), value(4, 1));
+        assert_eq!(u16::from_ne_bytes([px[2], px[3]]), 65535);
+    }
+
+    // 32-bit RGB covering the canvas: linear light, blended linearly.
+    let value = |x: u32, c: i16| x as f32 * 0.25 - 0.5 + f32::from(c);
+    let channels = (-1..3)
+        .map(|c| {
+            let plane = (0..4)
+                .flat_map(|_| (0..8).map(move |x| if c < 0 { 1.0 } else { value(x, c) }))
+                .flat_map(f32::to_be_bytes)
+                .collect();
+            (c, plane)
+        })
+        .collect();
+    let mut doc = Doc::new(3, 32, 8, 4, vec![vec![0; 128]; 3]);
+    doc.layers_in_block = true;
+    doc.layer_compression = 3;
+    doc.layers = vec![TestLayer::new("hdr", [0, 0, 4, 8], channels)];
+    let opened = open_layers("rgb32-layers.psd", &doc);
+    assert_eq!(
+        opened.document.blend_space(),
+        slopshop_core::BlendSpace::Linear
+    );
+    let image = raster(&opened.document.layers()[0]);
+    assert_eq!(
+        image.format().color_space.transfer,
+        TransferFunction::Linear
+    );
+    let px = pixel(image, 5, 2);
+    for c in 0..3 {
+        let at = c * 4;
+        let v = f32::from_ne_bytes([px[at], px[at + 1], px[at + 2], px[at + 3]]);
+        assert_eq!(v, value(5, c as i16));
+    }
+}
+
+#[test]
+fn groups_adjustments_clipping_and_styles_are_reported() {
+    let full = |name: &'static str| {
+        TestLayer::new(
+            name,
+            [0, 0, 16, 16],
+            (-1..3).map(|c| (c, plane8(16, 16, |_, _| 100))).collect(),
+        )
+    };
+    let mut divider = TestLayer::section("</Layer group>", 3);
+    divider.channels = (-1..3).map(|c| (c, Vec::new())).collect();
+    let mut group = TestLayer::section("Group", 1);
+    group.opacity = 128;
+    group.hidden = true;
+    let mut levels = TestLayer::new("Levels", [0; 4], Vec::new());
+    levels.blocks.push((*b"levl", vec![0; 4]));
+    let mut clipped = full("clipped");
+    clipped.clipping = true;
+    let mut text = full("text");
+    text.blocks.push((*b"TySh", vec![0; 4]));
+    let mut styled = full("styled");
+    styled.blend = *b"fsub";
+    styled.blocks.push((*b"lfx2", vec![0; 4]));
+    styled.blocks.push((*b"iOpa", vec![128]));
+    let mut vivid = full("vivid");
+    vivid.blend = *b"vLit";
+    vivid.blocks.push((*b"iOpa", vec![128]));
+
+    let mut doc = Doc::new(3, 8, 16, 16, rgb8_planes(16, 16).0);
+    doc.layers = vec![
+        divider,
+        full("child"),
+        group,
+        levels,
+        clipped,
+        text,
+        styled,
+        vivid,
+    ];
+    let opened = open_layers("groups.psd", &doc);
+    let layers = opened.document.layers();
+    let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["child", "clipped", "text", "styled", "vivid"]);
+    // The hidden group at 50 % hides its layer and halves its opacity.
+    assert!(!layers[0].visible);
+    assert!((layers[0].opacity - 128.0 / 255.0).abs() < 1e-6);
+    assert!(
+        (layers[3].opacity - 128.0 / 255.0).abs() < 1e-6,
+        "fill opacity"
+    );
+    assert_eq!(layers[3].blend_mode, slopshop_core::BlendMode::Subtract);
+    assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
+    use ImportWarning::*;
+    assert_eq!(
+        opened.layer_warnings,
+        [
+            vec![GroupsFlattened],
+            vec![ClippingIgnored],
+            vec![LayersRasterized],
+            vec![LayerStylesIgnored],
+            // Vivid light is one of the modes where fill is not opacity.
+            vec![LayerStylesIgnored],
+        ]
+    );
+}
+
+#[test]
+fn unreadable_layers_fall_back_to_the_composite() {
+    let (planes, color) = rgb8_planes(20, 10);
+    let layer = || {
+        TestLayer::new(
+            "layer",
+            [0, 0, 10, 20],
+            (-1..3).map(|c| (c, plane8(20, 10, |_, _| 50))).collect(),
+        )
+    };
+    // An unknown channel compression: the layers cannot be read, the composite can.
+    let mut doc = Doc::new(3, 8, 20, 10, planes);
+    doc.layers = vec![layer()];
+    doc.layer_compression = 9;
+    match open_file_of("bad-layers.psd", &doc).unwrap() {
+        crate::Opened::Image(imported) => {
+            assert_eq!(imported.warnings, [ImportWarning::LayersFlattened]);
+            assert_eq!(pixel(&imported.image, 4, 7)[..3], color(4, 7));
+        }
+        crate::Opened::Layers(_) => panic!("the layers are damaged"),
+    }
+    // Without a composite, the layers are all there is.
+    doc.merged = false;
+    assert!(matches!(
+        open_file_of("bad-layers-no-composite.psd", &doc),
+        Err(ImportError::PsdWithoutComposite)
+    ));
+    doc.layer_compression = 1;
+    assert!(matches!(
+        open_file_of("layers-no-composite.psd", &doc),
+        Ok(crate::Opened::Layers(_))
+    ));
+    // Asked for an image, a layered document gives its composite.
+    doc.merged = true;
+    let imported = open("layers-as-image.psd", &doc).unwrap();
+    assert_eq!(imported.warnings, [ImportWarning::LayersFlattened]);
+
+    // Every truncation is an error or a fallback, never a panic.
+    let bytes = doc.write();
+    for cut in (0..bytes.len()).step_by(7) {
+        let path = temp_file("layers-cut.psd", &bytes[..cut]);
+        let _ = crate::open_file(&path);
+        std::fs::remove_file(&path).ok();
+    }
+}
+
+#[test]
+fn solid_color_fill_layers_become_fill_layers() {
+    // A descriptor holding the color as Photoshop writes it (the values found by key).
+    let mut soco = vec![0, 0, 0, 16];
+    soco.extend(b"...Clr Objc...RGBC");
+    for (key, value) in [
+        (b"Rd  doub", 255.0f64),
+        (b"Grn doub", 0.0),
+        (b"Bl  doub", 0.0),
+    ] {
+        soco.extend([0, 0, 0, 0]);
+        soco.extend(key);
+        soco.extend(value.to_be_bytes());
+    }
+    // No pixels (empty bounds), a 4 × 2 mask at (5, 6).
+    let mut fill = TestLayer::new("Color Fill 1", [0; 4], Vec::new());
+    fill.channels = (-1..3).map(|c| (c, Vec::new())).collect();
+    fill.channels.push((-2, plane8(4, 2, |x, _| x as u8 * 60)));
+    fill.mask = Some(([6, 5, 8, 9], 0, 0));
+    fill.blocks.push((*b"SoCo", soco.clone()));
+    // A vector-only shape: nothing to import without rendering its outline.
+    let mut shape = TestLayer::new("Shape 1", [0; 4], Vec::new());
+    shape.blocks.push((*b"SoCo", soco));
+    shape.blocks.push((*b"vmsk", vec![0; 8]));
+
+    let mut doc = Doc::new(3, 8, 16, 16, rgb8_planes(16, 16).0);
+    doc.layers = vec![fill, shape];
+    let opened = open_layers("solid.psd", &doc);
+    assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
+    let [layer] = opened.document.layers() else {
+        panic!("one layer expected");
+    };
+    let slopshop_core::LayerContent::Fill { color } = &layer.content else {
+        panic!("a fill layer expected");
+    };
+    // Back from the working space to linear sRGB: pure red.
+    let to_srgb = slopshop_core::color::WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB);
+    let srgb = color.transform(&to_srgb);
+    let (r, g, b) = (srgb.r, srgb.g, srgb.b);
+    assert!((r - 1.0).abs() < 1e-3 && g.abs() < 1e-3 && b.abs() < 1e-3);
+    let mask = layer.mask.as_ref().unwrap();
+    assert_eq!(pixel(&mask.image, 7, 7), [120]);
+    assert_eq!(pixel(&mask.image, 0, 0), [0]);
+    assert_eq!(opened.layer_warnings, [Vec::<ImportWarning>::new()]);
 }

@@ -71,7 +71,20 @@ const en = {
   "open.warning.blendSpaceDiffers":
     "Some layers come from a document that blends differently: they now blend in this document's blend space",
   "open.warning.layersFlattened":
-    "Photoshop layers are not imported yet: the flattened image was opened",
+    "Photoshop layers could not be imported: the flattened image was opened",
+  "open.warning.groupsFlattened":
+    "Layer groups are not supported yet: their layers were imported without them",
+  "open.warning.clippingIgnored":
+    "Clipping masks are not supported yet: clipped layers show unclipped",
+  "open.warning.adjustmentLayersSkipped":
+    "Adjustment and fill layers are not supported yet: they were left out",
+  "open.warning.layerStylesIgnored":
+    "Layer styles and advanced blending options are not supported yet: they were left out",
+  "open.warning.layersRasterized":
+    "Text, shapes, smart objects and vector masks were imported as pixels",
+  "open.warning.pixelsOutsideCanvas": "Parts of layers outside the canvas were cropped",
+  "open.warning.masksSimplified":
+    "Mask density and feather, and vector masks combined with a pixel mask, are not supported yet: they were left out",
   "open.warning.colorInfoUnsupported":
     "The file's color information is not supported yet: colors read as sRGB",
 
@@ -89,7 +102,7 @@ const en = {
   "open.skipped": "{count} files skipped: not images SlopShop opens",
   "open.error.archive": "cannot read this folder or zip archive ({detail})",
   "open.error.psdWithoutComposite":
-    'this Photoshop document was saved without its flattened image ("Maximize Compatibility" off): SlopShop cannot open its layers yet',
+    'this Photoshop document was saved without its flattened image ("Maximize Compatibility" off) and its layers could not be read',
   "open.error.internal": "internal error ({detail})",
 
   "save.title": "Save As",

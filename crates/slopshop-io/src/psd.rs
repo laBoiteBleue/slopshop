@@ -29,7 +29,11 @@ use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, SampleType, Tra
 use slopshop_core::geom::Size;
 
 use crate::orient::Orientation;
-use crate::{Decoded, ImportError, ImportWarning, check_budget, icc};
+use crate::{
+    Decoded, ImportError, ImportWarning, Opened, check_budget, finish, icc, resolve_color_space,
+};
+
+mod layers;
 
 const SIGNATURE: &[u8; 4] = b"8BPS";
 const RESOURCE_SIGNATURE: &[u8; 4] = b"8BIM";
@@ -107,13 +111,73 @@ impl<R: Read + Seek> Input<R> {
     }
 }
 
-pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
+/// What the header, the color mode data and the image resources say.
+struct Header {
+    channels: u16,
+    width: u32,
+    height: u32,
+    depth: u16,
+    mode: Mode,
+    /// The palette of indexed images (256 reds, then greens, then blues).
+    color_data: Vec<u8>,
+    icc_profile: Option<Vec<u8>>,
+    transparent_index: Option<u16>,
+    /// The composite is real (else Photoshop wrote a blank one: "Maximize Compatibility" off).
+    real_merged_data: bool,
+}
+
+impl Header {
+    /// Channels holding colors: 3 for RGB, 1 for the others.
+    fn color_channels(&self) -> u16 {
+        if self.mode == Mode::Rgb { 3 } else { 1 }
+    }
+
+    /// The largest side Photoshop allows, which layers cannot exceed either.
+    fn max_side(big: bool) -> u32 {
+        if big { MAX_SIDE_PSB } else { MAX_SIDE_PSD }
+    }
+
+    /// The color space of the samples: 32-bit documents hold linear light in the profile's
+    /// primaries; others are what their profile says (sRGB without one).
+    fn color_space(&self, warnings: &mut Vec<ImportWarning>) -> ColorSpace {
+        let space = (self.depth == 32).then(|| {
+            let primaries = self
+                .icc_profile
+                .as_deref()
+                .and_then(|bytes| icc::parse(bytes).ok())
+                .map_or(ColorSpace::LINEAR_SRGB.primaries, |c| c.space.primaries);
+            ColorSpace {
+                primaries,
+                transfer: TransferFunction::Linear,
+            }
+        });
+        resolve_color_space(
+            self.depth == 32,
+            space,
+            self.icc_profile.as_deref(),
+            warnings,
+        )
+    }
+}
+
+/// Open a Photoshop document: its layers as a document when it has layers the engine can hold,
+/// else its flattened image (with a warning when layers were there but could not be read).
+pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
     let mut input = Input {
         r: BufReader::new(File::open(path)?),
         big: false,
     };
+    let header = read_header(&mut input)?;
+    let layered = matches!(header.mode, Mode::Grayscale | Mode::Rgb | Mode::Duotone);
+    if layered && let Ok(Some(layers)) = layers::read(&mut input, &header) {
+        return Ok(Opened::Layers(layers));
+    }
+    // No layers, or unreadable ones: the composite, which says whether layers were there.
+    drop(input);
+    finish(decode(path)?).map(Opened::Image)
+}
 
-    // Header.
+fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportError> {
     if &input.bytes::<4>()? != SIGNATURE {
         return Err(ImportError::Unrecognized);
     }
@@ -143,14 +207,10 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
         9 => return Err(ImportError::NotYetSupported("Lab Photoshop document")),
         _ => return Err(corrupt("unknown color mode")),
     };
-    let max_side = if input.big {
-        MAX_SIDE_PSB
-    } else {
-        MAX_SIDE_PSD
-    };
     if channels == 0 || channels > MAX_CHANNELS || width == 0 || height == 0 {
         return Err(corrupt("invalid header"));
     }
+    let max_side = Header::max_side(input.big);
     if width > max_side || height > max_side {
         return Err(ImportError::TooLarge { width, height });
     }
@@ -162,12 +222,8 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
     if !valid_depth {
         return Err(corrupt("depth not valid for its color mode"));
     }
-    let color_channels: u16 = if mode == Mode::Rgb { 3 } else { 1 };
-    if channels < color_channels {
-        return Err(corrupt("too few channels"));
-    }
 
-    // Color mode data: the palette of indexed images (256 reds, then greens, then blues).
+    // Color mode data: the palette of indexed images.
     let color_data = {
         let len = u64::from(input.u32()?);
         input.vec(len)?
@@ -181,23 +237,53 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
         let len = u64::from(input.u32()?);
         input.vec(len)?
     };
-    let mut icc_profile = None;
-    let mut transparent_index = None;
-    let mut real_merged_data = true;
+    let mut header = Header {
+        channels,
+        width,
+        height,
+        depth,
+        mode,
+        color_data,
+        icc_profile: None,
+        transparent_index: None,
+        real_merged_data: true,
+    };
+    if channels < header.color_channels() {
+        return Err(corrupt("too few channels"));
+    }
     for (id, data) in resource_blocks(&resources)? {
         match id {
-            RESOURCE_ICC => icc_profile = Some(data.to_vec()),
+            RESOURCE_ICC => header.icc_profile = Some(data.to_vec()),
             RESOURCE_TRANSPARENCY_INDEX if data.len() >= 2 => {
-                transparent_index = Some(u16::from_be_bytes([data[0], data[1]]));
+                header.transparent_index = Some(u16::from_be_bytes([data[0], data[1]]));
             }
             // Version info: a 4-byte version, then "has real merged data".
-            RESOURCE_VERSION_INFO if data.len() >= 5 => real_merged_data = data[4] != 0,
+            RESOURCE_VERSION_INFO if data.len() >= 5 => header.real_merged_data = data[4] != 0,
             _ => {}
         }
     }
-    if !real_merged_data {
+    Ok(header)
+}
+
+/// The flattened composite image.
+pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
+    let mut input = Input {
+        r: BufReader::new(File::open(path)?),
+        big: false,
+    };
+    let header = read_header(&mut input)?;
+    if !header.real_merged_data {
         return Err(ImportError::PsdWithoutComposite);
     }
+    let Header {
+        channels,
+        width,
+        height,
+        depth,
+        mode,
+        ..
+    } = header;
+    let color_channels = header.color_channels();
 
     // Layer and mask information: only the layer count, then skip to the composite.
     let section = input.length()?;
@@ -232,7 +318,7 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
         (_, 32, t) => (gray(t), SampleType::F32),
         (_, _, t) => (gray(t), SampleType::U8),
     };
-    let indexed_alpha = mode == Mode::Indexed && transparent_index.is_some();
+    let indexed_alpha = mode == Mode::Indexed && header.transparent_index.is_some();
     let layout = if indexed_alpha {
         ChannelLayout::Rgba
     } else {
@@ -261,32 +347,20 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
         &planes,
         &samples,
         mode,
-        &color_data,
-        transparent_index,
+        &header.color_data,
+        header.transparent_index,
         transparency,
         out_channels,
     );
 
-    // 32-bit documents are linear light in the profile's primaries.
-    let space = if depth == 32 {
-        let primaries = icc_profile
-            .as_deref()
-            .and_then(|bytes| icc::parse(bytes).ok())
-            .map_or(ColorSpace::LINEAR_SRGB.primaries, |c| c.space.primaries);
-        Some(ColorSpace {
-            primaries,
-            transfer: TransferFunction::Linear,
-        })
-    } else {
-        None
-    };
+    let space = header.color_space(&mut warnings);
     Ok(Decoded {
         size: Size::new(width, height),
         layout,
         sample,
         alpha: AlphaMode::Straight,
-        icc: if space.is_some() { None } else { icc_profile },
-        space,
+        icc: None,
+        space: Some(space),
         orientation: Orientation::Normal,
         pixels,
         warnings,

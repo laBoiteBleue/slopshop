@@ -30,7 +30,7 @@ use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, PixelFormat, RgbPrimaries, SampleType, TransferFunction,
 };
 use slopshop_core::raster::RasterError;
-use slopshop_core::{RasterImage, Size};
+use slopshop_core::{Document, RasterImage, Size};
 
 use crate::orient::Orientation;
 
@@ -60,9 +60,26 @@ pub enum ImportWarning {
     /// The file declares color information that cannot be represented yet: colors are read as
     /// sRGB (linear for float data).
     ColorInfoUnsupported,
-    /// A layered document (Photoshop) was opened as its flattened image: its layers are not
-    /// imported yet.
+    /// A layered document (Photoshop) was opened as its flattened image: its layers were not
+    /// imported (they could not be read, or the caller asked for the image).
     LayersFlattened,
+    /// Layer groups are not supported yet: their layers were imported without the group (its
+    /// visibility and opacity carried over to them).
+    GroupsFlattened,
+    /// Clipping masks are not supported yet: clipped layers show unclipped.
+    ClippingIgnored,
+    /// Adjustment and fill layers are not supported yet: they were left out.
+    AdjustmentLayersSkipped,
+    /// Layer styles (effects) and advanced blending options are not supported yet: they were
+    /// left out.
+    LayerStylesIgnored,
+    /// Text, shapes, smart objects and vector masks were imported as their pixels.
+    LayersRasterized,
+    /// Parts of layers lay outside the canvas: they were cropped.
+    PixelsOutsideCanvas,
+    /// Mask density and feather, and vector masks beside a pixel mask, are not supported yet:
+    /// they were left out.
+    MasksSimplified,
 }
 
 impl ImportWarning {
@@ -77,6 +94,13 @@ impl ImportWarning {
             ImportWarning::NonFiniteSamples => "nonFiniteSamples",
             ImportWarning::ColorInfoUnsupported => "colorInfoUnsupported",
             ImportWarning::LayersFlattened => "layersFlattened",
+            ImportWarning::GroupsFlattened => "groupsFlattened",
+            ImportWarning::ClippingIgnored => "clippingIgnored",
+            ImportWarning::AdjustmentLayersSkipped => "adjustmentLayersSkipped",
+            ImportWarning::LayerStylesIgnored => "layerStylesIgnored",
+            ImportWarning::LayersRasterized => "layersRasterized",
+            ImportWarning::PixelsOutsideCanvas => "pixelsOutsideCanvas",
+            ImportWarning::MasksSimplified => "masksSimplified",
         }
     }
 }
@@ -87,6 +111,23 @@ pub struct Imported {
     pub warnings: Vec<ImportWarning>,
 }
 
+/// A layered file (Photoshop) opened as a document.
+#[derive(Debug)]
+pub struct ImportedLayers {
+    pub document: Document,
+    /// About the whole file.
+    pub warnings: Vec<ImportWarning>,
+    /// About each layer, in the order of the document's layers (bottom to top).
+    pub layer_warnings: Vec<Vec<ImportWarning>>,
+}
+
+/// What [`open_file`] made of a file.
+#[derive(Debug)]
+pub enum Opened {
+    Image(Imported),
+    Layers(ImportedLayers),
+}
+
 #[derive(Debug)]
 pub enum ImportError {
     Io(std::io::Error),
@@ -95,8 +136,8 @@ pub enum ImportError {
     NotYetSupported(&'static str),
     /// HEIC/HEIF, deliberately not supported for now (HEVC patents, ADR 0006).
     HeicUnsupported,
-    /// A Photoshop document saved without its flattened image ("Maximize Compatibility" off):
-    /// nothing to open until layers are imported.
+    /// A Photoshop document saved without its flattened image ("Maximize Compatibility" off),
+    /// asked for as an image, or whose layers could not be read either.
     PsdWithoutComposite,
     /// Pixel data the engine cannot store faithfully yet (e.g. CMYK, signed integers).
     UnsupportedPixels(String),
@@ -194,7 +235,19 @@ pub(crate) struct Decoded {
     warnings: Vec<ImportWarning>,
 }
 
-/// Decode an image file. Blocking and CPU-heavy: call it off the UI thread.
+/// Decode a file: a layered document (Photoshop) as its layers when the engine can hold them,
+/// anything else as [`open_image`] does. Blocking and CPU-heavy: call it off the UI thread.
+pub fn open_file(path: &Path) -> Result<Opened, ImportError> {
+    let mut head = Vec::with_capacity(4);
+    File::open(path)?.take(4).read_to_end(&mut head)?;
+    if psd::is_psd(&head) {
+        return psd::open(path);
+    }
+    open_image(path).map(Opened::Image)
+}
+
+/// Decode an image file; a layered document gives its flattened image. Blocking and
+/// CPU-heavy: call it off the UI thread.
 pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     let mut file = File::open(path)?;
     let mut head = Vec::with_capacity(4096);
@@ -220,29 +273,8 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
 fn finish(decoded: Decoded) -> Result<Imported, ImportError> {
     let mut warnings = decoded.warnings;
     let float = decoded.sample.is_float();
-    // Files without color information: sRGB for integer data, linear (sRGB primaries) for
-    // float data (EXR, HDR, PFM, float TIFF).
-    let assumed = if float {
-        ColorSpace::LINEAR_SRGB
-    } else {
-        ColorSpace::SRGB
-    };
-    let color_space = match (decoded.space, decoded.icc.as_deref()) {
-        (Some(space), _) => space,
-        (None, None) => assumed,
-        (None, Some(bytes)) => match icc::parse(bytes) {
-            Ok(color) => {
-                if color.approximated {
-                    warnings.push(ImportWarning::IccCurveApproximated);
-                }
-                color.space
-            }
-            Err(_) => {
-                warnings.push(ImportWarning::IccProfileUnsupported);
-                assumed
-            }
-        },
-    };
+    let color_space =
+        resolve_color_space(float, decoded.space, decoded.icc.as_deref(), &mut warnings);
     let format = PixelFormat {
         layout: decoded.layout,
         sample: decoded.sample,
@@ -264,6 +296,38 @@ fn finish(decoded: Decoded) -> Result<Imported, ImportError> {
     let (pixels, size) = orient::apply(decoded.pixels, decoded.size, bpp, decoded.orientation);
     let image = RasterImage::from_pixels(size, format, &pixels)?;
     Ok(Imported { image, warnings })
+}
+
+/// The color space of decoded samples: `space` if the decoder knows it, else the ICC profile's,
+/// else sRGB for integer data and linear sRGB primaries for float data (EXR, HDR, PFM, float
+/// TIFF), which is also the fallback for unsupported profiles (with a warning).
+fn resolve_color_space(
+    float: bool,
+    space: Option<ColorSpace>,
+    icc: Option<&[u8]>,
+    warnings: &mut Vec<ImportWarning>,
+) -> ColorSpace {
+    let assumed = if float {
+        ColorSpace::LINEAR_SRGB
+    } else {
+        ColorSpace::SRGB
+    };
+    match (space, icc) {
+        (Some(space), _) => space,
+        (None, None) => assumed,
+        (None, Some(bytes)) => match icc::parse(bytes) {
+            Ok(color) => {
+                if color.approximated {
+                    warnings.push(ImportWarning::IccCurveApproximated);
+                }
+                color.space
+            }
+            Err(_) => {
+                warnings.push(ImportWarning::IccProfileUnsupported);
+                assumed
+            }
+        },
+    }
 }
 
 /// Whether float pixels contain infinities or NaNs.
