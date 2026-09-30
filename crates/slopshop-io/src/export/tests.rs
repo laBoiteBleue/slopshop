@@ -21,6 +21,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        clipped: false,
         id,
         name: "layer".into(),
         visible: true,

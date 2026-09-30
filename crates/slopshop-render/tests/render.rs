@@ -26,6 +26,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
             parent: None,
             index,
             layer: Layer {
+                clipped: false,
                 id,
                 name: "fill".into(),
                 visible: true,
@@ -206,6 +207,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
         parent: None,
         index: 0,
         layer: Layer {
+            clipped: false,
             id,
             name: "image".into(),
             visible: true,
@@ -332,6 +334,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
             parent: None,
             index,
             layer: Layer {
+                clipped: false,
                 id,
                 name: "image".into(),
                 visible: true,

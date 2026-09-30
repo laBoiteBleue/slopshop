@@ -63,8 +63,6 @@ pub enum ImportWarning {
     /// A layered document (Photoshop) was opened as its flattened image: its layers were not
     /// imported (they could not be read, or the caller asked for the image).
     LayersFlattened,
-    /// Clipping masks are not supported yet: clipped layers show unclipped.
-    ClippingIgnored,
     /// Adjustment and fill layers are not supported yet: they were left out.
     AdjustmentLayersSkipped,
     /// Layer styles (effects) and advanced blending options are not supported yet: they were
@@ -91,7 +89,6 @@ impl ImportWarning {
             ImportWarning::NonFiniteSamples => "nonFiniteSamples",
             ImportWarning::ColorInfoUnsupported => "colorInfoUnsupported",
             ImportWarning::LayersFlattened => "layersFlattened",
-            ImportWarning::ClippingIgnored => "clippingIgnored",
             ImportWarning::AdjustmentLayersSkipped => "adjustmentLayersSkipped",
             ImportWarning::LayerStylesIgnored => "layerStylesIgnored",
             ImportWarning::LayersRasterized => "layersRasterized",

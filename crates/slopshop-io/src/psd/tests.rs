@@ -872,6 +872,8 @@ fn groups_adjustments_clipping_and_styles_are_reported() {
         "fill opacity"
     );
     assert_eq!(layers[3].blend_mode, slopshop_core::BlendMode::Subtract);
+    // Clipped to the group below it (ADR 0016).
+    assert!(layers[1].clipped && !layers[2].clipped);
     assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
     use ImportWarning::*;
     // In the order of `all_layers`: the group, its layer, then the others.
@@ -880,7 +882,7 @@ fn groups_adjustments_clipping_and_styles_are_reported() {
         [
             vec![],
             vec![],
-            vec![ClippingIgnored],
+            vec![],
             vec![LayersRasterized],
             vec![LayerStylesIgnored],
             // Vivid light is one of the modes where fill is not opacity.

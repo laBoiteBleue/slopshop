@@ -481,6 +481,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                clipped: false,
                 id,
                 name: "image".to_owned(),
                 visible: true,

@@ -89,8 +89,8 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   [ADR 0011](docs/adr/0011-gray-export.md)).
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS,
-  and Photoshop PSD/PSB with their layers and groups (blend modes, masks, solid color fills;
-  clipping masks, adjustment layers and layer styles are not supported yet and are reported).
+  and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
+  color fills; adjustment layers and layer styles are not supported yet and are reported).
   A layered file imported into a document arrives as a group.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
   JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW and more are planned

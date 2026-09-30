@@ -8,12 +8,12 @@
 //! channels, blend mode, opacity, flags, mask, name, tagged blocks), then every layer's channels,
 //! each compressed on its own like the composite. Layers come bottom to top, as in a document.
 //!
-//! What the engine holds: pixel layers, solid color fill layers and groups (ADR 0015:
-//! pass-through or isolated, nested) with their name, visibility, opacity (times their fill
+//! What the engine holds: pixel layers, solid color fill layers, groups (ADR 0015: pass-through
+//! or isolated, nested) and clipping masks (ADR 0016) with their name, visibility, opacity (times their fill
 //! opacity), blend mode and layer mask, at the document's depth and in its color space; 8/16-bit
 //! documents blend in perceptual space and 32-bit ones in linear light, as in Photoshop. What it
 //! does not hold yet is approximated and reported, layer by layer:
-//! - clipping masks, layer styles and advanced blending ("Blend If", the fill opacity of the
+//! - layer styles and advanced blending ("Blend If", the fill opacity of the
 //!   modes where it differs from opacity): ignored;
 //! - adjustment layers, and gradient, pattern or vector-only fill layers without pixels: left
 //!   out;
@@ -356,9 +356,6 @@ fn read_layer_info<R: Read + Seek>(
             None => (BlendMode::Normal, pass_through),
         };
         let mut notes = Vec::new();
-        if record.clipping {
-            notes.push(ImportWarning::ClippingIgnored);
-        }
         let fill_differs = record.fill < 255 && fill_is_not_opacity(blend_mode);
         if record.styles || !known_mode || fill_differs {
             notes.push(ImportWarning::LayerStylesIgnored);
@@ -391,6 +388,7 @@ fn read_layer_info<R: Read + Seek>(
             notes_of.insert(id, notes);
         }
         let layer = Layer {
+            clipped: record.clipping,
             id,
             name: record.name.clone(),
             visible: !record.hidden,

@@ -603,7 +603,7 @@ fn is_structurally_gray(document: &Document) -> bool {
 /// visible groups), bottom to top.
 fn contributing(document: &Document) -> impl Iterator<Item = &slopshop_core::Layer> {
     steps(document).into_iter().filter_map(|step| match step {
-        Step::Layer(layer) => Some(layer),
+        Step::Layer { layer, .. } => Some(layer),
         _ => None,
     })
 }
@@ -628,7 +628,7 @@ fn common_8_bit_space(source: Option<ColorSpace>) -> ColorSpace {
 /// mask.
 fn is_structurally_opaque(document: &Document) -> bool {
     // The first step: a group begins with nothing below it (conservatively, not opaque).
-    let Some(Step::Layer(bottom)) = steps(document).first().copied() else {
+    let Some(Step::Layer { layer: bottom, .. }) = steps(document).first().copied() else {
         return false;
     };
     // A mask hides parts of the layer (conservatively, even a disabled one).

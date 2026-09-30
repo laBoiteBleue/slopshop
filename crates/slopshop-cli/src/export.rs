@@ -827,6 +827,7 @@ fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, Str
         parent: None,
         index: 0,
         layer: Layer {
+            clipped: false,
             id,
             name: name.to_owned(),
             visible: true,

@@ -468,6 +468,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
         parent: None,
         index: 0,
         layer: Layer {
+            clipped: false,
             id,
             name: name.to_owned(),
             visible: true,
@@ -789,6 +790,7 @@ fn insert_image(
                 parent: None,
                 index: session.document().layers().len(),
                 layer: Layer {
+                    clipped: false,
                     id: layer_id,
                     name: layer_name.to_owned(),
                     visible: true,
@@ -1849,6 +1851,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                clipped: false,
                 id,
                 name: "masked".to_owned(),
                 visible: true,
@@ -1966,6 +1969,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    clipped: false,
                     id: second,
                     name: "second".into(),
                     visible: true,
@@ -2027,6 +2031,7 @@ mod tests {
         );
         let id = document.session.allocate_layer_id();
         let layer = Layer {
+            clipped: false,
             id,
             name: "fill".to_owned(),
             visible: true,

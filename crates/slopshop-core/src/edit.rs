@@ -64,6 +64,11 @@ pub enum Edit {
         parent: Option<LayerId>,
         index: usize,
     },
+    /// Clip a layer to the layer below it, or release it (ADR 0016).
+    SetLayerClipped {
+        id: LayerId,
+        clipped: bool,
+    },
     /// Let a group's children blend through it, or isolate them (ADR 0015).
     SetGroupPassThrough {
         id: LayerId,
@@ -236,6 +241,14 @@ impl Edit {
                     id,
                     parent: from_parent,
                     index: from,
+                }
+            }
+            Edit::SetLayerClipped { id, clipped } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.clipped, clipped);
+                Edit::SetLayerClipped {
+                    id,
+                    clipped: previous,
                 }
             }
             Edit::SetGroupPassThrough { id, pass_through } => {
@@ -491,6 +504,7 @@ mod tests {
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
+            clipped: false,
             id: doc.allocate_layer_id(),
             name: name.to_owned(),
             visible: true,

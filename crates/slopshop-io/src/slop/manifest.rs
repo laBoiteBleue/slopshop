@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 4;
+pub(crate) const SCHEMA_MINOR: u32 = 5;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -30,6 +30,10 @@ pub(crate) const NODE_GROUP: &str = "slopshop.group";
 /// 3 adds `mask` (schema 0.3). Version 1 (schema 0.1) is read as normal mode, versions below 3
 /// as unmasked. Groups (schema 0.4) start at version 3, with `pass_through`.
 pub(crate) const NODE_VERSION: u32 = 3;
+/// Version of the nodes with `clipped` (schema 0.5, ADR 0016): only clipped nodes are written at
+/// this version, so that versions without clipping refuse them instead of drawing them
+/// unclipped. The newest node version this code reads.
+pub(crate) const NODE_VERSION_CLIPPED: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

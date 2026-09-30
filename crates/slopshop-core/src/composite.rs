@@ -23,7 +23,7 @@ use std::fmt;
 use crate::blend::{BlendMode, Blender, dissolve};
 use crate::color::WORKING_SPACE;
 use crate::color::{IDENTITY, Mat3, mat_vec};
-use crate::document::{Document, Layer, LayerContent};
+use crate::document::{Document, Layer, LayerContent, LayerMask};
 use crate::geom::{Rect, Size};
 use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterLevel, TILE_SIZE};
 use crate::tile::TileCoord;
@@ -62,18 +62,33 @@ impl fmt::Display for CompositeError {
 
 impl std::error::Error for CompositeError {}
 
-/// One step of compositing (ADR 0015): the visible layer tree flattened into a single pass over
-/// a stack of accumulators, shared by this compositor and the GPU renderer.
+/// One step of compositing (ADR 0015, 0016): the visible layer tree flattened into a single pass
+/// over a stack of accumulators, shared by this compositor and the GPU renderer. Steps carry the
+/// mode and opacity to apply, resolved from the layers (a clipping base is drawn in normal mode
+/// at full opacity, its own applying to its clipping group).
 #[derive(Debug, Clone, Copy)]
 pub enum Step<'a> {
-    /// Blend a fill or raster layer onto the accumulator.
-    Layer(&'a Layer),
+    /// Blend a fill or raster layer (its content and mask) onto the accumulator with `mode` and
+    /// `opacity`; `atop` (a clipped layer) keeps the accumulator's coverage.
+    Layer {
+        layer: &'a Layer,
+        mode: BlendMode,
+        opacity: f32,
+        atop: bool,
+    },
     /// Push the accumulator. An isolated group starts over from transparency; a pass-through
     /// one keeps compositing onto what is below it.
     Begin { isolated: bool },
-    /// Pop what was pushed and combine the group's result with it: faded by the group's opacity
-    /// and mask (pass-through), or blended as one layer with its blend mode (isolated).
-    End(&'a Layer),
+    /// Pop what was pushed and combine the result with it: faded by `opacity` × `mask`
+    /// (pass-through), or blended as one layer with `mode`, `opacity` and `mask` (isolated),
+    /// atop what was pushed when `atop`.
+    End {
+        mask: Option<&'a LayerMask>,
+        mode: BlendMode,
+        opacity: f32,
+        isolated: bool,
+        atop: bool,
+    },
 }
 
 /// The steps that composite `document`, bottom to top. Hidden layers, layers at opacity 0 and
@@ -85,33 +100,121 @@ pub fn steps(document: &Document) -> Vec<Step<'_>> {
     steps
 }
 
+/// How a layer takes part in compositing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Plain,
+    /// The base of a clipping group: normal mode, full opacity (they apply to the group).
+    Base,
+    /// Clipped: atop its clipping group.
+    Clipped,
+}
+
+fn shown(layer: &Layer) -> bool {
+    layer.visible && layer.opacity > 0.0
+}
+
+fn enabled(layer: &Layer) -> Option<&LayerMask> {
+    layer.mask.as_ref().filter(|m| m.enabled)
+}
+
+/// Steps of sibling `layers`: each base with the clipped layers above it (ADR 0016).
 fn push_steps<'a>(layers: &'a [Layer], steps: &mut Vec<Step<'a>>) {
-    for layer in layers.iter().filter(|l| l.visible && l.opacity > 0.0) {
-        let LayerContent::Group {
-            children,
-            pass_through,
-        } = &layer.content
-        else {
-            steps.push(Step::Layer(layer));
+    let mut i = 0;
+    while i < layers.len() {
+        // A layer and the clipped layers above it (a clipped layer without a base is drawn as
+        // usual: it is the first of its level).
+        let base = &layers[i];
+        let mut end = i + 1;
+        while end < layers.len() && layers[end].clipped {
+            end += 1;
+        }
+        let clipped: Vec<&Layer> = layers[i + 1..end].iter().filter(|l| shown(l)).collect();
+        i = end;
+        // A hidden base hides its clipping group.
+        if !shown(base) {
             continue;
-        };
-        let masked = layer.mask.as_ref().is_some_and(|m| m.enabled);
-        if *pass_through && layer.opacity >= 1.0 && !masked {
-            push_steps(children, steps);
+        }
+        if clipped.is_empty() {
+            push_layer(base, Role::Plain, steps);
             continue;
         }
         let start = steps.len();
-        steps.push(Step::Begin {
-            isolated: !pass_through,
-        });
-        push_steps(children, steps);
+        steps.push(Step::Begin { isolated: true });
+        push_layer(base, Role::Base, steps);
         if steps.len() == start + 1 {
-            // Nothing visible inside: the group changes nothing.
+            // The base draws nothing: nothing shows through it.
             steps.truncate(start);
-        } else {
-            steps.push(Step::End(layer));
+            continue;
         }
+        for layer in clipped {
+            push_layer(layer, Role::Clipped, steps);
+        }
+        steps.push(Step::End {
+            mask: None,
+            mode: group_mode(base),
+            opacity: base.opacity,
+            isolated: true,
+            atop: false,
+        });
     }
+}
+
+/// The mode a layer blends its result with: normal for a pass-through group.
+fn group_mode(layer: &Layer) -> BlendMode {
+    match layer.content {
+        LayerContent::Group {
+            pass_through: true, ..
+        } => BlendMode::Normal,
+        _ => layer.blend_mode,
+    }
+}
+
+fn push_layer<'a>(layer: &'a Layer, role: Role, steps: &mut Vec<Step<'a>>) {
+    let (mode, opacity) = match role {
+        Role::Base => (BlendMode::Normal, 1.0),
+        Role::Plain | Role::Clipped => (layer.blend_mode, layer.opacity),
+    };
+    let atop = role == Role::Clipped;
+    let LayerContent::Group {
+        children,
+        pass_through,
+    } = &layer.content
+    else {
+        steps.push(Step::Layer {
+            layer,
+            mode,
+            opacity,
+            atop,
+        });
+        return;
+    };
+    // A base or a clipped group is composited as a unit: isolated.
+    let passes = *pass_through && role == Role::Plain;
+    let mask = enabled(layer);
+    if passes && opacity >= 1.0 && mask.is_none() {
+        push_steps(children, steps);
+        return;
+    }
+    let start = steps.len();
+    steps.push(Step::Begin { isolated: !passes });
+    push_steps(children, steps);
+    if steps.len() == start + 1 {
+        // Nothing visible inside: the group changes nothing.
+        steps.truncate(start);
+        return;
+    }
+    steps.push(Step::End {
+        mask,
+        mode: if *pass_through {
+            BlendMode::Normal
+        } else {
+            mode
+        },
+        opacity,
+        isolated: !passes,
+        atop,
+    });
 }
 
 /// What a row pass does at each step.
@@ -125,21 +228,20 @@ enum Op<'a> {
         opacity: f64,
         mask: Option<MaskSource<'a>>,
         isolated: bool,
+        atop: bool,
     },
 }
 
-/// Level 0 of a layer's mask, when it has an enabled one.
-fn enabled_mask(layer: &Layer) -> Option<MaskSource<'_>> {
-    layer.mask.as_ref().filter(|m| m.enabled).and_then(|m| {
-        Some(MaskSource {
-            level: m.image.levels().first()?,
-            codec: Codec::new(m.image.stored_format()),
-        })
+/// Level 0 of a mask image, read as coverage.
+fn mask_source(mask: &LayerMask) -> Option<MaskSource<'_>> {
+    Some(MaskSource {
+        level: mask.image.levels().first()?,
+        codec: Codec::new(mask.image.stored_format()),
     })
 }
 
-/// A fill or raster layer, ready to be sampled.
-fn source(layer: &Layer) -> Option<Source<'_>> {
+/// A fill or raster layer, ready to be sampled with `mode` and `opacity` (atop when `atop`).
+fn source(layer: &Layer, mode: BlendMode, opacity: f32, atop: bool) -> Option<Source<'_>> {
     let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
     let content = match &layer.content {
         LayerContent::Fill { color } => {
@@ -148,7 +250,7 @@ fn source(layer: &Layer) -> Option<Source<'_>> {
             } else {
                 f64::from(color.a)
             };
-            let a = alpha * f64::from(layer.opacity);
+            let a = alpha * f64::from(opacity);
             SourceContent::Fill([
                 f64::from(color.r) * a,
                 f64::from(color.g) * a,
@@ -162,23 +264,26 @@ fn source(layer: &Layer) -> Option<Source<'_>> {
                 level: image.levels().first()?,
                 codec: Codec::new(image.stored_format()),
                 matrix: (matrix != IDENTITY).then_some(matrix),
-                opacity: f64::from(layer.opacity),
+                opacity: f64::from(opacity),
             }
         }
         // Groups are steps of their own.
         LayerContent::Group { .. } => return None,
     };
     Some(Source {
-        mode: layer.blend_mode,
+        mode,
+        atop,
         content,
         replaces_alpha,
-        mask: enabled_mask(layer),
+        mask: enabled(layer).and_then(mask_source),
     })
 }
 
 /// A visible layer, ready to be sampled, with its blend mode and mask.
 struct Source<'a> {
     mode: BlendMode,
+    /// Clipped: blended atop its clipping group (ADR 0016).
+    atop: bool,
     content: SourceContent<'a>,
     /// The layer's own alpha is ignored (a mask made from its transparency, ADR 0014).
     replaces_alpha: bool,
@@ -275,19 +380,25 @@ pub fn composite_region(
     let ops: Vec<Op> = steps(document)
         .into_iter()
         .filter_map(|step| match step {
-            Step::Layer(layer) => source(layer).map(Op::Layer),
+            Step::Layer {
+                layer,
+                mode,
+                opacity,
+                atop,
+            } => source(layer, mode, opacity, atop).map(Op::Layer),
             Step::Begin { isolated } => Some(Op::Begin { isolated }),
-            Step::End(group) => Some(Op::End {
-                mode: group.blend_mode,
-                opacity: f64::from(group.opacity),
-                mask: enabled_mask(group),
-                isolated: !matches!(
-                    group.content,
-                    LayerContent::Group {
-                        pass_through: true,
-                        ..
-                    }
-                ),
+            Step::End {
+                mask,
+                mode,
+                opacity,
+                isolated,
+                atop,
+            } => Some(Op::End {
+                mode,
+                opacity: f64::from(opacity),
+                mask: mask.and_then(mask_source),
+                isolated,
+                atop,
             }),
         })
         .collect();
@@ -353,6 +464,7 @@ fn composite_row(
                 opacity,
                 mask,
                 isolated,
+                atop,
             } => {
                 // Steps are balanced: every end has its begin.
                 let Some(below) = depth.checked_sub(1) else {
@@ -369,7 +481,11 @@ fn composite_row(
                             src = dissolve(src, x, y);
                         }
                         let mut out = *below;
-                        blender.blend(*mode, &src, &mut out);
+                        if *atop {
+                            blender.blend_atop(*mode, &src, &mut out);
+                        } else {
+                            blender.blend(*mode, &src, &mut out);
+                        }
                         *dst = out;
                     } else {
                         *dst = blender.fade(below, dst, coverage);
@@ -399,7 +515,11 @@ fn composite_row(
                 for (i, dst) in acc.iter_mut().enumerate() {
                     // Fits: the pixel is inside the region.
                     let src = masked(*color, x0 + i as u32);
-                    blender.blend(mode, &src, dst);
+                    if source.atop {
+                        blender.blend_atop(mode, &src, dst);
+                    } else {
+                        blender.blend(mode, &src, dst);
+                    }
                 }
             }
             SourceContent::Raster {
@@ -434,7 +554,12 @@ fn composite_row(
                                 texel(codec, px, matrix.as_ref(), *opacity, report)
                             };
                             let src = masked(src, px_x);
-                            blender.blend(mode, &src, &mut acc[(px_x - x0) as usize]);
+                            let dst = &mut acc[(px_x - x0) as usize];
+                            if source.atop {
+                                blender.blend_atop(mode, &src, dst);
+                            } else {
+                                blender.blend(mode, &src, dst);
+                            }
                         }
                     }
                     x = run_end;
@@ -529,6 +654,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                clipped: false,
                 id,
                 name: format!("layer {}", id.get()),
                 visible,
@@ -1061,6 +1187,7 @@ mod tests {
     ) -> Layer {
         let id = doc.allocate_layer_id();
         Layer {
+            clipped: false,
             id,
             name: format!("layer {}", id.get()),
             visible: true,
@@ -1145,7 +1272,9 @@ mod tests {
             let g = group(&mut grouped, vec![a, b], true);
             push(&mut grouped, g);
             assert!(
-                steps(&grouped).iter().all(|s| matches!(s, Step::Layer(_))),
+                steps(&grouped)
+                    .iter()
+                    .all(|s| matches!(s, Step::Layer { .. })),
                 "a neutral pass-through group is inlined"
             );
             assert_close(&all(&grouped), &all(&flat));
@@ -1245,5 +1374,126 @@ mod tests {
         push(&mut doc, isolated);
         assert_eq!(steps(&doc).len(), 1, "only the base layer");
         assert_close(&all(&doc), &reference);
+    }
+
+    /// A raster whose alpha is 0 or 1 (a shape), with varied colors.
+    fn shape(seed: f32) -> LayerContent {
+        let pixels: Vec<[f32; 4]> = (0..8)
+            .map(|i| {
+                let t = i as f32 / 8.0;
+                let inside = (i * 3 + seed as usize) % 5 < 3;
+                [
+                    (t + seed).fract(),
+                    (0.2 + t).fract(),
+                    (0.9 - t * seed).fract(),
+                    if inside { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect();
+        float_raster(Size::new(4, 2), &pixels)
+    }
+
+    /// The alpha of a raster content as a mask.
+    fn alpha_mask_of(content: &LayerContent) -> crate::document::LayerMask {
+        let LayerContent::Raster { image } = content else {
+            panic!("a raster expected");
+        };
+        let mut mask = crate::document::LayerMask::from_transparency(image).unwrap();
+        mask.replaces_alpha = false;
+        mask
+    }
+
+    #[test]
+    fn clipped_layers_show_only_where_their_base_is() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+                // With a base of full or no coverage, clipping is the base's alpha as a mask.
+                let base = shape(0.3);
+                let mut clipped_doc = document(space);
+                let b = new_layer(&mut clipped_doc, base.clone(), BlendMode::Normal, 1.0);
+                push(&mut clipped_doc, b);
+                let mut c = new_layer(&mut clipped_doc, varied(0.6), mode, 0.8);
+                c.clipped = true;
+                push(&mut clipped_doc, c);
+
+                let mut masked_doc = document(space);
+                let b = new_layer(&mut masked_doc, base.clone(), BlendMode::Normal, 1.0);
+                push(&mut masked_doc, b);
+                let mut c = new_layer(&mut masked_doc, varied(0.6), mode, 0.8);
+                c.mask = Some(alpha_mask_of(&base));
+                push(&mut masked_doc, c);
+                assert_close(&all(&clipped_doc), &all(&masked_doc));
+            }
+        }
+    }
+
+    #[test]
+    fn the_base_mode_and_opacity_apply_to_its_clipping_group() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            let base = shape(0.7);
+            // A base in multiply at 50 % with a clipped layer, over a background...
+            let mut clipped_doc = document(space);
+            opaque_base(&mut clipped_doc);
+            let b = new_layer(&mut clipped_doc, base.clone(), BlendMode::Multiply, 0.5);
+            push(&mut clipped_doc, b);
+            let mut c = new_layer(&mut clipped_doc, varied(0.1), BlendMode::Overlay, 0.9);
+            c.clipped = true;
+            push(&mut clipped_doc, c);
+
+            // ... is an isolated group in multiply at 50 % of the base (normal, full opacity)
+            // and the layer limited to the base's shape.
+            let mut grouped = document(space);
+            opaque_base(&mut grouped);
+            let b = new_layer(&mut grouped, base.clone(), BlendMode::Normal, 1.0);
+            let mut c = new_layer(&mut grouped, varied(0.1), BlendMode::Overlay, 0.9);
+            c.mask = Some(alpha_mask_of(&base));
+            let mut g = group(&mut grouped, vec![b, c], false);
+            g.blend_mode = BlendMode::Multiply;
+            g.opacity = 0.5;
+            push(&mut grouped, g);
+            assert_close(&all(&clipped_doc), &all(&grouped));
+        }
+    }
+
+    #[test]
+    fn a_hidden_base_hides_its_clipping_group_and_a_lone_clipped_layer_draws() {
+        let mut doc = document(BlendSpace::Perceptual);
+        // Clipped with nothing below it among its siblings: drawn as usual.
+        let mut lone = new_layer(&mut doc, varied(0.2), BlendMode::Normal, 1.0);
+        lone.clipped = true;
+        push(&mut doc, lone);
+        let reference = all(&doc);
+        let mut base = new_layer(&mut doc, shape(0.4), BlendMode::Normal, 1.0);
+        base.visible = false;
+        push(&mut doc, base);
+        let mut clipped = new_layer(&mut doc, varied(0.5), BlendMode::Normal, 1.0);
+        clipped.clipped = true;
+        push(&mut doc, clipped);
+        assert_eq!(steps(&doc).len(), 1);
+        assert_close(&all(&doc), &reference);
+    }
+
+    #[test]
+    fn atop_keeps_the_coverage_below() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            let blender = Blender::new(space);
+            let src = [0.3, 0.1, 0.05, 0.6];
+            for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Hue] {
+                let mut dst = [0.2, 0.2, 0.1, 0.4];
+                blender.blend_atop(mode, &src, &mut dst);
+                assert!((dst[3] - 0.4).abs() < 1e-12, "{mode:?}: {dst:?}");
+                // Over nothing: nothing.
+                let mut empty = [0.0; 4];
+                blender.blend_atop(mode, &src, &mut empty);
+                assert_eq!(empty, [0.0; 4]);
+                // Over an opaque backdrop: the usual blend.
+                let (mut a, mut b) = ([0.2, 0.3, 0.4, 1.0], [0.2, 0.3, 0.4, 1.0]);
+                blender.blend_atop(mode, &src, &mut a);
+                blender.blend(mode, &src, &mut b);
+                for k in 0..4 {
+                    assert!((a[k] - b[k]).abs() < 1e-12, "{mode:?} {space:?}");
+                }
+            }
+        }
     }
 }
