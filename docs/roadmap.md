@@ -3,6 +3,8 @@
 A living plan, ordered by dependency rather than by date. Priorities are validated by the
 maintainer; each phase ends with a usable, tested state. Items marked 🔶 require a decision
 (ADR) before implementation — see the open questions in [architecture.md](architecture.md).
+Ergonomics (principles, ideas waiting for validation) have their own page:
+[ergonomics.md](ergonomics.md).
 
 ## Phase 0 — Foundations *(in progress)*
 
