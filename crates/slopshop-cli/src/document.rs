@@ -61,9 +61,13 @@ pub fn save(args: &[String]) -> Result<(), String> {
                 image: Arc::new(image),
             },
         };
-        Edit::InsertLayer { index, layer }
-            .apply(&mut document)
-            .map_err(|e| e.to_string())?;
+        Edit::InsertLayer {
+            parent: None,
+            index,
+            layer,
+        }
+        .apply(&mut document)
+        .map_err(|e| e.to_string())?;
     }
 
     let started = Instant::now();
@@ -123,8 +127,21 @@ pub fn inspect(args: &[String]) -> Result<(), String> {
         document.blend_space().id(),
         document.next_layer_id()
     );
-    println!("layers, bottom to top:");
-    for layer in document.layers() {
+    println!("layers, bottom to top (groups before their layers):");
+    print_layers(document.layers(), 1);
+    if bench {
+        println!(
+            "bench: open {:.3} s ({:.0} MB/s of pixels)",
+            opened.as_secs_f64(),
+            pixel_bytes(&document) as f64 / 1e6 / opened.as_secs_f64().max(f64::MIN_POSITIVE)
+        );
+    }
+    Ok(())
+}
+
+/// One line per layer, the layers of a group indented under it.
+fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
+    for layer in layers {
         let content = match &layer.content {
             LayerContent::Raster { image } => {
                 let format = image.format();
@@ -140,31 +157,39 @@ pub fn inspect(args: &[String]) -> Result<(), String> {
             LayerContent::Fill { color } => {
                 format!("fill ({}, {}, {}, {})", color.r, color.g, color.b, color.a)
             }
+            LayerContent::Group {
+                children,
+                pass_through,
+            } => format!(
+                "group of {} ({})",
+                children.len(),
+                if *pass_through {
+                    "pass-through"
+                } else {
+                    "isolated"
+                }
+            ),
         };
         println!(
-            "  #{} {:?}: {content}, {} at opacity {}{}",
+            "{}#{} {:?}: {content}, {} at opacity {}{}",
+            "  ".repeat(depth),
             layer.id.get(),
             layer.name,
             layer.blend_mode.id(),
             layer.opacity,
             if layer.visible { "" } else { ", hidden" }
         );
+        if let Some(children) = layer.children() {
+            print_layers(children, depth + 1);
+        }
     }
-    if bench {
-        println!(
-            "bench: open {:.3} s ({:.0} MB/s of pixels)",
-            opened.as_secs_f64(),
-            pixel_bytes(&document) as f64 / 1e6 / opened.as_secs_f64().max(f64::MIN_POSITIVE)
-        );
-    }
-    Ok(())
 }
 
 /// Bytes of the tiles of every image (each once), all levels.
 fn pixel_bytes(document: &Document) -> u64 {
     let mut seen = Vec::new();
     let mut total = 0;
-    for layer in document.layers() {
+    for layer in document.all_layers() {
         if let LayerContent::Raster { image } = &layer.content
             && !seen.contains(&image.id())
         {

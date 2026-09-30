@@ -7,19 +7,23 @@
 //! On error the document content is unchanged. (A failing [`Edit::Batch`] rolls back what it
 //! applied; its revision still advances, since revisions must never be reused.)
 
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::blend::{BlendMode, BlendSpace};
-use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
+use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edit {
-    /// Insert `layer` at `index` in the stack (0 = bottom, `len` = top). Its id must come from
+    /// Insert `layer` (a group with its children) at `index` among the layers of `parent`
+    /// (`None`: the top level; 0 = bottom, `len` = top). Its ids must come from
     /// [`Document::allocate_layer_id`] and not be in use.
     InsertLayer {
+        parent: Option<LayerId>,
         index: usize,
         layer: Layer,
     },
+    /// Remove a layer, a group with everything inside it.
     RemoveLayer {
         id: LayerId,
     },
@@ -53,10 +57,17 @@ pub enum Edit {
         id: LayerId,
         enabled: bool,
     },
-    /// Move a layer so that it ends up at `index` in the stack (0 = bottom).
+    /// Move a layer (a group with everything inside it) so that it ends up at `index` among the
+    /// layers of `parent` (`None`: the top level; 0 = bottom).
     MoveLayer {
         id: LayerId,
+        parent: Option<LayerId>,
         index: usize,
+    },
+    /// Let a group's children blend through it, or isolate them (ADR 0015).
+    SetGroupPassThrough {
+        id: LayerId,
+        pass_through: bool,
     },
     /// Several edits applied in order as a single unit: all of them or none.
     Batch(Vec<Edit>),
@@ -80,6 +91,14 @@ pub enum EditError {
     InvalidMask,
     /// The layer has no mask.
     NoMask(LayerId),
+    /// The layer is not a group (as a parent, or for a group edit).
+    NotAGroup(LayerId),
+    /// A group cannot go inside itself or one of its descendants.
+    MoveIntoItself(LayerId),
+    /// Groups would nest deeper than [`MAX_GROUP_DEPTH`].
+    TooDeep {
+        depth: usize,
+    },
 }
 
 impl fmt::Display for EditError {
@@ -100,6 +119,11 @@ impl fmt::Display for EditError {
             EditError::InvalidColor => write!(f, "color components must be finite"),
             EditError::InvalidMask => write!(f, "a mask must be a gray image"),
             EditError::NoMask(id) => write!(f, "{id} has no mask"),
+            EditError::NotAGroup(id) => write!(f, "{id} is not a group"),
+            EditError::MoveIntoItself(id) => write!(f, "{id} cannot go inside itself"),
+            EditError::TooDeep { depth } => {
+                write!(f, "{depth} nested groups (at most {MAX_GROUP_DEPTH})")
+            }
         }
     }
 }
@@ -110,16 +134,24 @@ impl Edit {
     /// Apply the edit and return its inverse. On error the document content is unchanged.
     pub fn apply(self, doc: &mut Document) -> Result<Edit, EditError> {
         let inverse = match self {
-            Edit::InsertLayer { index, layer } => {
-                validate_new_layer(doc, index, &layer)?;
+            Edit::InsertLayer {
+                parent,
+                index,
+                layer,
+            } => {
+                validate_new_layer(doc, parent, index, &layer)?;
                 let id = layer.id;
-                doc.layers_mut().insert(index, layer);
+                siblings_mut(doc, parent)?.insert(index, layer);
                 Edit::RemoveLayer { id }
             }
             Edit::RemoveLayer { id } => {
-                let index = doc.layer_index(id).ok_or(EditError::UnknownLayer(id))?;
-                let layer = doc.layers_mut().remove(index);
-                Edit::InsertLayer { index, layer }
+                let (parent, index) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = siblings_mut(doc, parent)?.remove(index);
+                Edit::InsertLayer {
+                    parent,
+                    index,
+                    layer,
+                }
             }
             Edit::SetLayerVisible { id, visible } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
@@ -171,15 +203,52 @@ impl Edit {
                     enabled: previous,
                 }
             }
-            Edit::MoveLayer { id, index } => {
-                let from = doc.layer_index(id).ok_or(EditError::UnknownLayer(id))?;
-                let len = doc.layers().len();
-                if index >= len {
-                    return Err(EditError::IndexOutOfRange { index, len });
+            Edit::MoveLayer { id, parent, index } => {
+                let (from_parent, from) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+                if let Some(target) = parent
+                    && layer.subtree().any(|l| l.id == target)
+                {
+                    return Err(EditError::MoveIntoItself(id));
                 }
-                let layer = doc.layers_mut().remove(from);
-                doc.layers_mut().insert(index, layer);
-                Edit::MoveLayer { id, index: from }
+                let height = layer.group_height();
+                let siblings = siblings(doc, parent)?.len();
+                // The layer leaves its current place first: among its own siblings, the last
+                // index is theirs minus one.
+                let last = if parent == from_parent {
+                    siblings - 1
+                } else {
+                    siblings
+                };
+                if index > last {
+                    return Err(EditError::IndexOutOfRange {
+                        index,
+                        len: siblings,
+                    });
+                }
+                check_depth(doc, parent, height)?;
+                let layer = siblings_mut(doc, from_parent)?.remove(from);
+                siblings_mut(doc, parent)?.insert(index, layer);
+                Edit::MoveLayer {
+                    id,
+                    parent: from_parent,
+                    index: from,
+                }
+            }
+            Edit::SetGroupPassThrough { id, pass_through } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Group {
+                    pass_through: current,
+                    ..
+                } = &mut layer.content
+                else {
+                    return Err(EditError::NotAGroup(id));
+                };
+                let previous = std::mem::replace(current, pass_through);
+                Edit::SetGroupPassThrough {
+                    id,
+                    pass_through: previous,
+                }
             }
             Edit::Batch(edits) => {
                 let mut inverses = Vec::with_capacity(edits.len());
@@ -205,29 +274,79 @@ impl Edit {
     }
 }
 
-fn validate_new_layer(doc: &Document, index: usize, layer: &Layer) -> Result<(), EditError> {
-    let len = doc.layers().len();
+/// The layers directly inside `parent` (`None`: the top level).
+fn siblings(doc: &Document, parent: Option<LayerId>) -> Result<&[Layer], EditError> {
+    doc.children_of(parent)
+        .ok_or_else(|| parent_error(doc, parent))
+}
+
+fn siblings_mut(doc: &mut Document, parent: Option<LayerId>) -> Result<&mut Vec<Layer>, EditError> {
+    if doc.children_of(parent).is_none() {
+        return Err(parent_error(doc, parent));
+    }
+    // Checked just above.
+    doc.children_mut(parent)
+        .ok_or_else(|| EditError::UnknownLayer(LayerId::from_raw(0)))
+}
+
+/// Why `parent` holds no layers: unknown, or not a group.
+fn parent_error(doc: &Document, parent: Option<LayerId>) -> EditError {
+    match parent {
+        Some(id) if doc.layer(id).is_some() => EditError::NotAGroup(id),
+        Some(id) => EditError::UnknownLayer(id),
+        // The top level always exists.
+        None => EditError::UnknownLayer(LayerId::from_raw(0)),
+    }
+}
+
+/// Refuse placing, inside `parent`, a subtree of `height` nested groups deeper than allowed.
+fn check_depth(doc: &Document, parent: Option<LayerId>, height: usize) -> Result<(), EditError> {
+    let level = match parent {
+        None => 0,
+        Some(id) => doc.depth(id).ok_or(EditError::UnknownLayer(id))? + 1,
+    };
+    if level + height > MAX_GROUP_DEPTH {
+        return Err(EditError::TooDeep {
+            depth: level + height,
+        });
+    }
+    Ok(())
+}
+
+fn validate_new_layer(
+    doc: &Document,
+    parent: Option<LayerId>,
+    index: usize,
+    layer: &Layer,
+) -> Result<(), EditError> {
+    let len = siblings(doc, parent)?.len();
     if index > len {
         return Err(EditError::IndexOutOfRange { index, len });
     }
-    if !doc.is_allocated(layer.id) {
-        return Err(EditError::LayerIdNotAllocated(layer.id));
+    check_depth(doc, parent, layer.group_height())?;
+    let mut ids = HashSet::new();
+    for layer in layer.subtree() {
+        if !doc.is_allocated(layer.id) {
+            return Err(EditError::LayerIdNotAllocated(layer.id));
+        }
+        if doc.layer(layer.id).is_some() || !ids.insert(layer.id) {
+            return Err(EditError::LayerIdInUse(layer.id));
+        }
+        validate_opacity(layer.opacity)?;
+        if layer
+            .mask
+            .as_ref()
+            .is_some_and(|m| !LayerMask::is_valid_image(&m.image))
+        {
+            return Err(EditError::InvalidMask);
+        }
+        if let LayerContent::Fill { color } = &layer.content
+            && !color.is_finite()
+        {
+            return Err(EditError::InvalidColor);
+        }
     }
-    if doc.layer(layer.id).is_some() {
-        return Err(EditError::LayerIdInUse(layer.id));
-    }
-    validate_opacity(layer.opacity)?;
-    if layer
-        .mask
-        .as_ref()
-        .is_some_and(|m| !LayerMask::is_valid_image(&m.image))
-    {
-        return Err(EditError::InvalidMask);
-    }
-    match &layer.content {
-        LayerContent::Fill { color } if !color.is_finite() => Err(EditError::InvalidColor),
-        LayerContent::Fill { .. } | LayerContent::Raster { .. } => Ok(()),
-    }
+    Ok(())
 }
 
 pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
@@ -278,12 +397,20 @@ mod tests {
         let a = fill_layer(&mut doc, "a");
         let b = fill_layer(&mut doc, "b");
         let b_id = b.id;
-        Edit::InsertLayer { index: 0, layer: a }
-            .apply(&mut doc)
-            .unwrap();
-        let inverse = Edit::InsertLayer { index: 0, layer: b }
-            .apply(&mut doc)
-            .unwrap();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: a,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let inverse = Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: b,
+        }
+        .apply(&mut doc)
+        .unwrap();
         assert_eq!(names(&doc), ["b", "a"]);
         assert_eq!(inverse, Edit::RemoveLayer { id: b_id });
 
@@ -298,9 +425,13 @@ mod tests {
         let mut doc = Document::new(Size::new(64, 64));
         let layer = fill_layer(&mut doc, "a");
         let id = layer.id;
-        Edit::InsertLayer { index: 0, layer }
-            .apply(&mut doc)
-            .unwrap();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
 
         for edit in [
             Edit::SetLayerVisible { id, visible: false },
@@ -354,7 +485,13 @@ mod tests {
                 let layer = fill_layer(doc, name);
                 let id = layer.id;
                 let index = doc.layers().len();
-                Edit::InsertLayer { index, layer }.apply(doc).unwrap();
+                Edit::InsertLayer {
+                    parent: None,
+                    index,
+                    layer,
+                }
+                .apply(doc)
+                .unwrap();
                 id
             })
             .collect()
@@ -366,6 +503,7 @@ mod tests {
         let ids = stack(&mut doc, &["a", "b", "c", "d"]);
 
         let inverse = Edit::MoveLayer {
+            parent: None,
             id: ids[0],
             index: 3,
         }
@@ -376,6 +514,7 @@ mod tests {
         assert_eq!(names(&doc), ["a", "b", "c", "d"]);
 
         Edit::MoveLayer {
+            parent: None,
             id: ids[3],
             index: 1,
         }
@@ -385,6 +524,7 @@ mod tests {
         assert_round_trip(
             &mut doc,
             Edit::MoveLayer {
+                parent: None,
                 id: ids[1],
                 index: 0,
             },
@@ -397,6 +537,7 @@ mod tests {
         let ids = stack(&mut doc, &["a", "b"]);
         assert_eq!(
             Edit::MoveLayer {
+                parent: None,
                 id: ids[0],
                 index: 2
             }
@@ -416,6 +557,7 @@ mod tests {
                 opacity: 0.5,
             },
             Edit::MoveLayer {
+                parent: None,
                 id: ids[0],
                 index: 1,
             },
@@ -433,6 +575,7 @@ mod tests {
                 opacity: 0.5,
             },
             Edit::MoveLayer {
+                parent: None,
                 id: ids[0],
                 index: 1,
             },
@@ -446,6 +589,7 @@ mod tests {
         let layer = fill_layer(&mut doc, "a");
         let id = layer.id;
         Edit::InsertLayer {
+            parent: None,
             index: 0,
             layer: layer.clone(),
         }
@@ -473,11 +617,16 @@ mod tests {
                 EditError::InvalidOpacity(1.5),
             ),
             (
-                Edit::InsertLayer { index: 0, layer },
+                Edit::InsertLayer {
+                    parent: None,
+                    index: 0,
+                    layer,
+                },
                 EditError::LayerIdInUse(id),
             ),
             (
                 Edit::InsertLayer {
+                    parent: None,
                     index: 0,
                     layer: unallocated,
                 },
@@ -485,6 +634,7 @@ mod tests {
             ),
             (
                 Edit::InsertLayer {
+                    parent: None,
                     index: 5,
                     layer: nan_color.clone(),
                 },
@@ -492,6 +642,7 @@ mod tests {
             ),
             (
                 Edit::InsertLayer {
+                    parent: None,
                     index: 0,
                     layer: nan_color,
                 },
@@ -506,7 +657,7 @@ mod tests {
         }
         // NaN never compares equal, so check this one by pattern.
         assert!(matches!(
-            Edit::InsertLayer {
+            Edit::InsertLayer { parent: None,
                 index: 0,
                 layer: nan_opacity
             }
@@ -521,9 +672,13 @@ mod tests {
         let layer = fill_layer(&mut doc, "a");
         let id = layer.id;
         assert_eq!(doc.revision(), 0);
-        let inverse = Edit::InsertLayer { index: 0, layer }
-            .apply(&mut doc)
-            .unwrap();
+        let inverse = Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
         assert_eq!(doc.revision(), 1);
         inverse.apply(&mut doc).unwrap();
         assert_eq!(doc.revision(), 2);
@@ -535,10 +690,225 @@ mod tests {
         let mut doc = Document::new(Size::new(8, 8));
         let layer = fill_layer(&mut doc, "a");
         let first = layer.id;
-        let undo = Edit::InsertLayer { index: 0, layer }
-            .apply(&mut doc)
-            .unwrap();
+        let undo = Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
         undo.apply(&mut doc).unwrap();
         assert_ne!(doc.allocate_layer_id(), first);
+    }
+
+    fn group_layer(doc: &mut Document, name: &str, children: Vec<Layer>) -> Layer {
+        Layer {
+            content: LayerContent::Group {
+                children,
+                pass_through: true,
+            },
+            ..fill_layer(doc, name)
+        }
+    }
+
+    /// Names of the tree, depth first, children indented.
+    fn tree(doc: &Document) -> Vec<String> {
+        fn walk(layers: &[Layer], depth: usize, out: &mut Vec<String>) {
+            for layer in layers {
+                out.push(format!("{}{}", " ".repeat(depth), layer.name));
+                if let Some(children) = layer.children() {
+                    walk(children, depth + 1, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(doc.layers(), 0, &mut out);
+        out
+    }
+
+    #[test]
+    fn groups_insert_move_and_remove_with_their_subtree() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        let c = fill_layer(&mut doc, "c");
+        let c_id = c.id;
+        let g = group_layer(&mut doc, "g", vec![c]);
+        let g_id = g.id;
+        assert_round_trip(
+            &mut doc,
+            Edit::InsertLayer {
+                parent: None,
+                index: 1,
+                layer: g.clone(),
+            },
+        );
+        assert_eq!(tree(&doc), ["a", "g", " c", "b"]);
+        assert_eq!(doc.locate(c_id), Some((Some(g_id), 0)));
+        assert_eq!(doc.depth(c_id), Some(1));
+        let all: Vec<&str> = doc.all_layers().map(|l| l.name.as_str()).collect();
+        assert_eq!(all, ["a", "g", "c", "b"]);
+
+        // Into the group, above c; then back out to the top.
+        let into = Edit::MoveLayer {
+            id: ids[1],
+            parent: Some(g_id),
+            index: 1,
+        };
+        assert_round_trip(&mut doc, into.clone());
+        assert_eq!(tree(&doc), ["a", "g", " c", " b"]);
+        assert_round_trip(
+            &mut doc,
+            Edit::MoveLayer {
+                id: c_id,
+                parent: None,
+                index: 0,
+            },
+        );
+        assert_eq!(tree(&doc), ["c", "a", "g", " b"]);
+
+        // Removing a group removes its subtree; undo brings it back whole.
+        let inverse = Edit::RemoveLayer { id: g_id }.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["c", "a"]);
+        assert!(doc.layer(ids[1]).is_none());
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["c", "a", "g", " b"]);
+
+        assert_round_trip(
+            &mut doc,
+            Edit::SetGroupPassThrough {
+                id: g_id,
+                pass_through: false,
+            },
+        );
+        assert_eq!(
+            Edit::SetGroupPassThrough {
+                id: c_id,
+                pass_through: false
+            }
+            .apply(&mut doc),
+            Err(EditError::NotAGroup(c_id))
+        );
+    }
+
+    #[test]
+    fn invalid_group_edits_are_refused() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let inner = group_layer(&mut doc, "inner", Vec::new());
+        let inner_id = inner.id;
+        let outer = group_layer(&mut doc, "outer", vec![inner]);
+        let outer_id = outer.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: outer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let ids = stack(&mut doc, &["a"]);
+        let revision = doc.revision();
+        let before = doc.layers().to_vec();
+
+        let cases = [
+            (
+                Edit::MoveLayer {
+                    id: outer_id,
+                    parent: Some(inner_id),
+                    index: 0,
+                },
+                EditError::MoveIntoItself(outer_id),
+            ),
+            (
+                Edit::MoveLayer {
+                    id: outer_id,
+                    parent: Some(outer_id),
+                    index: 0,
+                },
+                EditError::MoveIntoItself(outer_id),
+            ),
+            (
+                Edit::MoveLayer {
+                    id: inner_id,
+                    parent: Some(ids[0]),
+                    index: 0,
+                },
+                EditError::NotAGroup(ids[0]),
+            ),
+            (
+                Edit::MoveLayer {
+                    id: ids[0],
+                    parent: Some(LayerId::from_raw(999)),
+                    index: 0,
+                },
+                EditError::UnknownLayer(LayerId::from_raw(999)),
+            ),
+            (
+                Edit::MoveLayer {
+                    id: ids[0],
+                    parent: Some(inner_id),
+                    index: 1,
+                },
+                EditError::IndexOutOfRange { index: 1, len: 0 },
+            ),
+        ];
+        for (edit, expected) in cases {
+            assert_eq!(edit.apply(&mut doc), Err(expected));
+            assert_eq!(doc.layers(), before.as_slice());
+            assert_eq!(doc.revision(), revision);
+        }
+
+        // A subtree reusing an id, or one already in the document.
+        let mut dup = fill_layer(&mut doc, "dup");
+        dup.id = ids[0];
+        let bad = group_layer(&mut doc, "bad", vec![dup]);
+        let bad_id = bad.id;
+        assert_eq!(
+            Edit::InsertLayer {
+                parent: None,
+                index: 0,
+                layer: bad,
+            }
+            .apply(&mut doc),
+            Err(EditError::LayerIdInUse(ids[0]))
+        );
+        assert!(doc.layer(bad_id).is_none());
+    }
+
+    #[test]
+    fn groups_nest_up_to_the_limit() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let mut parent = None;
+        for depth in 0..MAX_GROUP_DEPTH {
+            let g = group_layer(&mut doc, &format!("g{depth}"), Vec::new());
+            let id = g.id;
+            Edit::InsertLayer {
+                parent,
+                index: 0,
+                layer: g,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            parent = Some(id);
+        }
+        // A layer in the deepest group is fine; one more group is not.
+        let leaf = fill_layer(&mut doc, "leaf");
+        Edit::InsertLayer {
+            parent,
+            index: 0,
+            layer: leaf,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let extra = group_layer(&mut doc, "extra", Vec::new());
+        assert_eq!(
+            Edit::InsertLayer {
+                parent,
+                index: 0,
+                layer: extra,
+            }
+            .apply(&mut doc),
+            Err(EditError::TooDeep {
+                depth: MAX_GROUP_DEPTH + 1
+            })
+        );
     }
 }

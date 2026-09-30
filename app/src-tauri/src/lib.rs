@@ -412,6 +412,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
     let mut doc = Document::new(size);
     let id = doc.allocate_layer_id();
     let layer = Edit::InsertLayer {
+        parent: None,
         index: 0,
         layer: Layer {
             id,
@@ -727,6 +728,7 @@ fn insert_image(
             let session = &mut document.session;
             let layer_id = session.allocate_layer_id();
             let edit = Edit::InsertLayer {
+                parent: None,
                 index: session.document().layers().len(),
                 layer: Layer {
                     id: layer_id,
@@ -1180,6 +1182,7 @@ async fn add_mask_from_transparency(
         match &layer.content {
             LayerContent::Raster { image } => image.clone(),
             LayerContent::Fill { .. } => return Err("a fill layer has no transparency".to_owned()),
+            LayerContent::Group { .. } => return Err("a group has no transparency".to_owned()),
         }
     };
     let mask = tauri::async_runtime::spawn_blocking(move || LayerMask::from_transparency(&image))
@@ -1227,6 +1230,9 @@ async fn layer_thumbnail(
             (LayerContent::Raster { image }, _, false) => image.clone(),
             (LayerContent::Fill { .. }, _, false) => {
                 return Err("fill layers have no thumbnail".to_owned());
+            }
+            (LayerContent::Group { .. }, _, false) => {
+                return Err("groups have no thumbnail".to_owned());
             }
         }
     };
@@ -1780,6 +1786,7 @@ mod tests {
         let id = s.allocate_layer_id();
         let index = s.document().layers().len();
         s.perform(Edit::InsertLayer {
+            parent: None,
             index,
             layer: Layer {
                 id,
@@ -1910,7 +1917,11 @@ mod tests {
         let index = document.session.document().layers().len();
         document
             .session
-            .perform(Edit::InsertLayer { index, layer })
+            .perform(Edit::InsertLayer {
+                parent: None,
+                index,
+                layer,
+            })
             .unwrap();
         assert!(document.dirty() && document.view().dirty);
         // What a save records.

@@ -12,7 +12,7 @@ export type LayerView = {
   name: string;
   visible: boolean;
   opacity: number;
-  kind: "fill" | "raster";
+  kind: "fill" | "raster" | "group";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
@@ -23,6 +23,10 @@ export type LayerView = {
   hasAlpha: boolean;
   /** The layer's mask (ADR 0014); `contentKey` changes with its pixels. */
   mask: { enabled: boolean; contentKey: number } | null;
+  /** A group's layers, bottom to top (ADR 0015); empty for other layers. */
+  children: LayerView[];
+  /** A group whose layers blend through it. */
+  passThrough: boolean;
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */

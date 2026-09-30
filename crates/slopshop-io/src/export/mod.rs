@@ -67,6 +67,7 @@ use std::thread;
 use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType, TransferFunction,
 };
+use slopshop_core::composite::{Step, steps};
 pub use slopshop_core::convert::WHITE_MATTE;
 use slopshop_core::convert::{ConversionReport, ConvertError, ConvertOptions, Converter};
 use slopshop_core::document::{Document, LayerContent};
@@ -491,13 +492,10 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
 ///   sources keep their channels, losslessly);
 /// - dither on for PNG and TIFF (it only applies to 8-bit samples).
 pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
-    let rasters: Vec<PixelFormat> = document
-        .layers()
-        .iter()
-        .filter(|layer| layer.visible)
+    let rasters: Vec<PixelFormat> = contributing(document)
         .filter_map(|layer| match &layer.content {
             LayerContent::Raster { image } => Some(image.format()),
-            LayerContent::Fill { .. } => None,
+            _ => None,
         })
         .collect();
     let unique_space = rasters
@@ -588,16 +586,26 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
 /// a neutral fill (equal working-space channels: neutral in every space), and one at least is a
 /// raster.
 fn is_structurally_gray(document: &Document) -> bool {
-    let mut visible = document.layers().iter().filter(|layer| layer.visible);
     let mut raster = false;
-    let neutral = visible.all(|layer| match &layer.content {
+    // Groups blend gray into gray: only the layers inside them matter.
+    let neutral = contributing(document).all(|layer| match &layer.content {
         LayerContent::Raster { image } => {
             raster = true;
             image.format().layout.is_gray()
         }
         LayerContent::Fill { color } => color.r == color.g && color.g == color.b,
+        LayerContent::Group { .. } => true,
     });
     neutral && raster
+}
+
+/// The fill and raster layers that contribute to the composite (visible, not at opacity 0, in
+/// visible groups), bottom to top.
+fn contributing(document: &Document) -> impl Iterator<Item = &slopshop_core::Layer> {
+    steps(document).into_iter().filter_map(|step| match step {
+        Step::Layer(layer) => Some(layer),
+        _ => None,
+    })
 }
 
 /// Spaces an 8-bit export keeps from its source (ADR 0010): common enough to be read correctly
@@ -619,11 +627,8 @@ fn common_8_bit_space(source: Option<ColorSpace>) -> ColorSpace {
 /// is an opaque fill, or a raster without alpha covering the canvas, at opacity 1, without a
 /// mask.
 fn is_structurally_opaque(document: &Document) -> bool {
-    let Some(bottom) = document
-        .layers()
-        .iter()
-        .find(|layer| layer.visible && layer.opacity > 0.0)
-    else {
+    // The first step: a group begins with nothing below it (conservatively, not opaque).
+    let Some(Step::Layer(bottom)) = steps(document).first().copied() else {
         return false;
     };
     // A mask hides parts of the layer (conservatively, even a disabled one).
@@ -638,6 +643,7 @@ fn is_structurally_opaque(document: &Document) -> bool {
                 && image_size.width >= canvas.width
                 && image_size.height >= canvas.height
         }
+        LayerContent::Group { .. } => false,
     }
 }
 

@@ -235,6 +235,35 @@ impl Blender {
         *dst = [r * alpha_o, g * alpha_o, b * alpha_o, alpha_o];
     }
 
+    /// Fade from `below` to `above` by `t` (clamped to `[0, 1]`), both premultiplied
+    /// working-space colors: a pass-through group's opacity and mask (ADR 0015). The mix is
+    /// premultiplied in the blend space, so that a perceptual document fades encoded values as
+    /// Photoshop does; it is exact at 0 and 1.
+    pub fn fade(&self, below: &[f64; 4], above: &[f64; 4], t: f64) -> [f64; 4] {
+        if t >= 1.0 {
+            return *above;
+        }
+        if t.is_nan() || t <= 0.0 {
+            return *below;
+        }
+        if self.space == BlendSpace::Linear {
+            return std::array::from_fn(|k| below[k] + (above[k] - below[k]) * t);
+        }
+        let (alpha_b, alpha_a) = (below[3].clamp(0.0, 1.0), above[3].clamp(0.0, 1.0));
+        let alpha = alpha_b + (alpha_a - alpha_b) * t;
+        if alpha <= 0.0 {
+            return [0.0; 4];
+        }
+        let (cb, ca) = (
+            self.encode(unpremultiply(below)),
+            self.encode(unpremultiply(above)),
+        );
+        let co: [f64; 3] =
+            std::array::from_fn(|i| (cb[i] * alpha_b * (1.0 - t) + ca[i] * alpha_a * t) / alpha);
+        let [r, g, b] = self.decode(co);
+        [r * alpha, g * alpha, b * alpha, alpha]
+    }
+
     /// Straight working-space color → blend-space values.
     fn encode(&self, color: [f64; 3]) -> [f64; 3] {
         let color = match &self.to_blend {

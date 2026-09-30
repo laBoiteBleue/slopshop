@@ -4,7 +4,8 @@
 //! It produces a region of the document at full resolution (pyramid level 0, never coarser), as
 //! premultiplied RGBA `f32` in the working space: visible layers from bottom to top, each
 //! combined with what is below by its blend mode, in the document's blend space (ADR 0012),
-//! after its mask (ADR 0014). Raster texels are decoded exactly like the raster codec does on
+//! after its mask (ADR 0014), groups through a stack of accumulators ([`steps`], ADR 0015).
+//! Raster texels are decoded exactly like the raster codec does on
 //! import, except for the display clamp: finite values are kept as they are, however large.
 //! Only non-finite values are replaced, and counted: NaN reads as 0, and ±inf as
 //! ±[`MAX_FINITE_SAMPLE`] (the display bound, also the largest half float). Not ±`f32::MAX`:
@@ -20,8 +21,9 @@
 use std::fmt;
 
 use crate::blend::{BlendMode, Blender, dissolve};
+use crate::color::WORKING_SPACE;
 use crate::color::{IDENTITY, Mat3, mat_vec};
-use crate::document::{Document, LayerContent};
+use crate::document::{Document, Layer, LayerContent};
 use crate::geom::{Rect, Size};
 use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterLevel, TILE_SIZE};
 use crate::tile::TileCoord;
@@ -59,6 +61,120 @@ impl fmt::Display for CompositeError {
 }
 
 impl std::error::Error for CompositeError {}
+
+/// One step of compositing (ADR 0015): the visible layer tree flattened into a single pass over
+/// a stack of accumulators, shared by this compositor and the GPU renderer.
+#[derive(Debug, Clone, Copy)]
+pub enum Step<'a> {
+    /// Blend a fill or raster layer onto the accumulator.
+    Layer(&'a Layer),
+    /// Push the accumulator. An isolated group starts over from transparency; a pass-through
+    /// one keeps compositing onto what is below it.
+    Begin { isolated: bool },
+    /// Pop what was pushed and combine the group's result with it: faded by the group's opacity
+    /// and mask (pass-through), or blended as one layer with its blend mode (isolated).
+    End(&'a Layer),
+}
+
+/// The steps that composite `document`, bottom to top. Hidden layers, layers at opacity 0 and
+/// groups without visible content are left out; a pass-through group at full opacity without an
+/// enabled mask changes nothing to its children's result, so they are inlined.
+pub fn steps(document: &Document) -> Vec<Step<'_>> {
+    let mut steps = Vec::new();
+    push_steps(document.layers(), &mut steps);
+    steps
+}
+
+fn push_steps<'a>(layers: &'a [Layer], steps: &mut Vec<Step<'a>>) {
+    for layer in layers.iter().filter(|l| l.visible && l.opacity > 0.0) {
+        let LayerContent::Group {
+            children,
+            pass_through,
+        } = &layer.content
+        else {
+            steps.push(Step::Layer(layer));
+            continue;
+        };
+        let masked = layer.mask.as_ref().is_some_and(|m| m.enabled);
+        if *pass_through && layer.opacity >= 1.0 && !masked {
+            push_steps(children, steps);
+            continue;
+        }
+        let start = steps.len();
+        steps.push(Step::Begin {
+            isolated: !pass_through,
+        });
+        push_steps(children, steps);
+        if steps.len() == start + 1 {
+            // Nothing visible inside: the group changes nothing.
+            steps.truncate(start);
+        } else {
+            steps.push(Step::End(layer));
+        }
+    }
+}
+
+/// What a row pass does at each step.
+enum Op<'a> {
+    Layer(Source<'a>),
+    Begin {
+        isolated: bool,
+    },
+    End {
+        mode: BlendMode,
+        opacity: f64,
+        mask: Option<MaskSource<'a>>,
+        isolated: bool,
+    },
+}
+
+/// Level 0 of a layer's mask, when it has an enabled one.
+fn enabled_mask(layer: &Layer) -> Option<MaskSource<'_>> {
+    layer.mask.as_ref().filter(|m| m.enabled).and_then(|m| {
+        Some(MaskSource {
+            level: m.image.levels().first()?,
+            codec: Codec::new(m.image.stored_format()),
+        })
+    })
+}
+
+/// A fill or raster layer, ready to be sampled.
+fn source(layer: &Layer) -> Option<Source<'_>> {
+    let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
+    let content = match &layer.content {
+        LayerContent::Fill { color } => {
+            let alpha = if replaces_alpha {
+                1.0
+            } else {
+                f64::from(color.a)
+            };
+            let a = alpha * f64::from(layer.opacity);
+            SourceContent::Fill([
+                f64::from(color.r) * a,
+                f64::from(color.g) * a,
+                f64::from(color.b) * a,
+                a,
+            ])
+        }
+        LayerContent::Raster { image } => {
+            let matrix = image.matrix_to(&WORKING_SPACE);
+            SourceContent::Raster {
+                level: image.levels().first()?,
+                codec: Codec::new(image.stored_format()),
+                matrix: (matrix != IDENTITY).then_some(matrix),
+                opacity: f64::from(layer.opacity),
+            }
+        }
+        // Groups are steps of their own.
+        LayerContent::Group { .. } => return None,
+    };
+    Some(Source {
+        mode: layer.blend_mode,
+        content,
+        replaces_alpha,
+        mask: enabled_mask(layer),
+    })
+}
 
 /// A visible layer, ready to be sampled, with its blend mode and mask.
 struct Source<'a> {
@@ -156,50 +272,23 @@ pub fn composite_region(
         return Ok(CompositeReport::default());
     }
 
-    let working = document.working_space();
-    let sources: Vec<Source> = document
-        .layers()
-        .iter()
-        .filter(|layer| layer.visible && layer.opacity > 0.0)
-        .filter_map(|layer| {
-            let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
-            let content = match &layer.content {
-                LayerContent::Fill { color } => {
-                    let alpha = if replaces_alpha {
-                        1.0
-                    } else {
-                        f64::from(color.a)
-                    };
-                    let a = alpha * f64::from(layer.opacity);
-                    SourceContent::Fill([
-                        f64::from(color.r) * a,
-                        f64::from(color.g) * a,
-                        f64::from(color.b) * a,
-                        a,
-                    ])
-                }
-                LayerContent::Raster { image } => {
-                    let matrix = image.matrix_to(&working);
-                    SourceContent::Raster {
-                        level: image.levels().first()?,
-                        codec: Codec::new(image.stored_format()),
-                        matrix: (matrix != IDENTITY).then_some(matrix),
-                        opacity: f64::from(layer.opacity),
+    let ops: Vec<Op> = steps(document)
+        .into_iter()
+        .filter_map(|step| match step {
+            Step::Layer(layer) => source(layer).map(Op::Layer),
+            Step::Begin { isolated } => Some(Op::Begin { isolated }),
+            Step::End(group) => Some(Op::End {
+                mode: group.blend_mode,
+                opacity: f64::from(group.opacity),
+                mask: enabled_mask(group),
+                isolated: !matches!(
+                    group.content,
+                    LayerContent::Group {
+                        pass_through: true,
+                        ..
                     }
-                }
-            };
-            let mask = layer.mask.as_ref().filter(|m| m.enabled).and_then(|m| {
-                Some(MaskSource {
-                    level: m.image.levels().first()?,
-                    codec: Codec::new(m.image.stored_format()),
-                })
-            });
-            Some(Source {
-                mode: layer.blend_mode,
-                content,
-                replaces_alpha,
-                mask,
-            })
+                ),
+            }),
         })
         .collect();
     let blender = Blender::new(document.blend_space());
@@ -212,13 +301,15 @@ pub fn composite_region(
     let mut reports = vec![CompositeReport::default(); chunks.len()];
     std::thread::scope(|scope| {
         for (chunk_index, (chunk, report)) in chunks.into_iter().zip(&mut reports).enumerate() {
-            let (sources, blender) = (&sources, &blender);
+            let (ops, blender) = (&ops, &blender);
             scope.spawn(move || {
                 let mut acc = vec![[0.0f64; 4]; width];
+                // One accumulator per open group, reused from row to row.
+                let mut stack = Vec::new();
                 for (i, row) in chunk.chunks_exact_mut(row_len).enumerate() {
                     // Fits: the row is inside the region, whose bottom fits the document.
                     let y = region.y + (chunk_index * rows_per_chunk + i) as u32;
-                    composite_row(sources, blender, region.x, y, &mut acc, report);
+                    composite_row(ops, blender, region.x, y, &mut acc, &mut stack, report);
                     for (value, &v) in row.iter_mut().zip(acc.iter().flatten()) {
                         *value = saturate(v, report);
                     }
@@ -231,17 +322,63 @@ pub fn composite_region(
     })
 }
 
-/// Composite the pixels `x0..x0 + acc.len()` of row `y` into `acc`.
+/// Composite the pixels `x0..x0 + acc.len()` of row `y` into `acc`, with `stack` holding what
+/// open groups pushed (grown as needed).
 fn composite_row(
-    sources: &[Source],
+    ops: &[Op],
     blender: &Blender,
     x0: u32,
     y: u32,
     acc: &mut [[f64; 4]],
+    stack: &mut Vec<Vec<[f64; 4]>>,
     report: &mut CompositeReport,
 ) {
     acc.fill([0.0; 4]);
-    for source in sources {
+    let mut depth = 0;
+    for op in ops {
+        let source = match op {
+            Op::Begin { isolated } => {
+                if stack.len() == depth {
+                    stack.push(vec![[0.0; 4]; acc.len()]);
+                }
+                stack[depth].copy_from_slice(acc);
+                depth += 1;
+                if *isolated {
+                    acc.fill([0.0; 4]);
+                }
+                continue;
+            }
+            Op::End {
+                mode,
+                opacity,
+                mask,
+                isolated,
+            } => {
+                // Steps are balanced: every end has its begin.
+                let Some(below) = depth.checked_sub(1) else {
+                    continue;
+                };
+                depth = below;
+                for (i, (dst, below)) in acc.iter_mut().zip(&stack[below]).enumerate() {
+                    // Fits: the pixel is inside the region.
+                    let x = x0 + i as u32;
+                    let coverage = opacity * mask.as_ref().map_or(1.0, |m| m.coverage(x, y));
+                    if *isolated {
+                        let mut src = dst.map(|c| c * coverage);
+                        if *mode == BlendMode::Dissolve {
+                            src = dissolve(src, x, y);
+                        }
+                        let mut out = *below;
+                        blender.blend(*mode, &src, &mut out);
+                        *dst = out;
+                    } else {
+                        *dst = blender.fade(below, dst, coverage);
+                    }
+                }
+                continue;
+            }
+            Op::Layer(source) => source,
+        };
         let mode = source.mode;
         let masked = |src: [f64; 4], x: u32| {
             let src = match &source.mask {
@@ -389,6 +526,7 @@ mod tests {
         let id = doc.allocate_layer_id();
         let index = doc.layers().len();
         Edit::InsertLayer {
+            parent: None,
             index,
             layer: Layer {
                 id,
@@ -912,5 +1050,200 @@ mod tests {
             let at = (((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) * 2) as usize;
             assert_eq!(u16::from_ne_bytes([tile[at], tile[at + 1]]), alpha(x, y));
         }
+    }
+
+    /// A layer not yet in a document (its id allocated from `doc`).
+    fn new_layer(
+        doc: &mut Document,
+        content: LayerContent,
+        mode: BlendMode,
+        opacity: f32,
+    ) -> Layer {
+        let id = doc.allocate_layer_id();
+        Layer {
+            id,
+            name: format!("layer {}", id.get()),
+            visible: true,
+            opacity,
+            blend_mode: mode,
+            mask: None,
+            content,
+        }
+    }
+
+    /// Insert `layer` at the top of `doc`.
+    fn push(doc: &mut Document, layer: Layer) {
+        let index = doc.layers().len();
+        Edit::InsertLayer {
+            parent: None,
+            index,
+            layer,
+        }
+        .apply(doc)
+        .unwrap();
+    }
+
+    fn group(doc: &mut Document, children: Vec<Layer>, pass_through: bool) -> Layer {
+        new_layer(
+            doc,
+            LayerContent::Group {
+                children,
+                pass_through,
+            },
+            BlendMode::Normal,
+            1.0,
+        )
+    }
+
+    fn document(space: BlendSpace) -> Document {
+        let mut doc = Document::new(Size::new(4, 2));
+        Edit::SetBlendSpace { space }.apply(&mut doc).unwrap();
+        doc
+    }
+
+    /// Varied straight colors and coverages.
+    fn varied(seed: f32) -> LayerContent {
+        let pixels: Vec<[f32; 4]> = (0..8)
+            .map(|i| {
+                let t = i as f32 / 8.0;
+                [
+                    (t + seed).fract(),
+                    (0.3 + t * seed).fract(),
+                    (0.7 - t * 0.5 + seed * 0.1).fract(),
+                    0.25 + 0.75 * ((t * 3.0 + seed).fract()),
+                ]
+            })
+            .collect();
+        float_raster(Size::new(4, 2), &pixels)
+    }
+
+    fn opaque_base(doc: &mut Document) {
+        let base = new_layer(doc, fill(0.3, 0.5, 0.2, 1.0), BlendMode::Normal, 1.0);
+        push(doc, base);
+    }
+
+    fn all(doc: &Document) -> Vec<f32> {
+        composite(doc, doc.size().bounds()).0
+    }
+
+    #[test]
+    fn pass_through_groups_at_full_opacity_are_their_children() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            let mut flat = document(space);
+            opaque_base(&mut flat);
+            let a = new_layer(&mut flat, varied(0.1), BlendMode::Multiply, 0.7);
+            let b = new_layer(&mut flat, fill(0.9, 0.2, 0.4, 0.8), BlendMode::Screen, 0.5);
+            push(&mut flat, a.clone());
+            push(&mut flat, b.clone());
+
+            let mut grouped = document(space);
+            opaque_base(&mut grouped);
+            // The children keep their ids: allocate them in this document too.
+            while grouped.next_layer_id() <= flat.next_layer_id() {
+                grouped.allocate_layer_id();
+            }
+            let g = group(&mut grouped, vec![a, b], true);
+            push(&mut grouped, g);
+            assert!(
+                steps(&grouped).iter().all(|s| matches!(s, Step::Layer(_))),
+                "a neutral pass-through group is inlined"
+            );
+            assert_close(&all(&grouped), &all(&flat));
+        }
+    }
+
+    #[test]
+    fn pass_through_opacity_and_mask_fade_against_what_is_below() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            let mut below = document(space);
+            opaque_base(&mut below);
+            let mut with = below.clone();
+            let child = new_layer(&mut with, varied(0.4), BlendMode::Overlay, 0.9);
+            push(&mut with, child.clone());
+
+            let mut grouped = below.clone();
+            while grouped.next_layer_id() <= with.next_layer_id() {
+                grouped.allocate_layer_id();
+            }
+            let mut g = group(&mut grouped, vec![child], true);
+            g.opacity = 0.6;
+            // A mask: coverage x / 4 along each row.
+            let mask: Vec<u8> = (0..8)
+                .flat_map(|i| ((i % 4) as f32 / 4.0).to_ne_bytes())
+                .collect();
+            let format = PixelFormat {
+                layout: ChannelLayout::Gray,
+                sample: SampleType::F32,
+                color_space: ColorSpace::LINEAR_SRGB,
+                alpha: AlphaMode::Straight,
+            };
+            g.mask = Some(crate::document::LayerMask {
+                image: Arc::new(RasterImage::from_pixels(Size::new(4, 2), format, &mask).unwrap()),
+                enabled: true,
+                replaces_alpha: false,
+            });
+            push(&mut grouped, g);
+
+            let blender = Blender::new(space);
+            let (b, w) = (all(&below), all(&with));
+            let expected: Vec<f32> = b
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(w.as_chunks::<4>().0)
+                .enumerate()
+                .flat_map(|(i, (b, w))| {
+                    let t = 0.6 * (i % 4) as f64 / 4.0;
+                    let b: [f64; 4] = std::array::from_fn(|k| f64::from(b[k]));
+                    let w: [f64; 4] = std::array::from_fn(|k| f64::from(w[k]));
+                    blender.fade(&b, &w, t).map(|v| v as f32)
+                })
+                .collect();
+            assert_close(&all(&grouped), &expected);
+        }
+    }
+
+    #[test]
+    fn isolated_groups_blend_their_result_as_one_layer() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            // One normal child: the group's result is the child itself.
+            let mut flat = document(space);
+            opaque_base(&mut flat);
+            let child = new_layer(&mut flat, varied(0.7), BlendMode::Normal, 0.8);
+            let mut alone = child.clone();
+            alone.blend_mode = BlendMode::Multiply;
+            alone.opacity = 0.8 * 0.5;
+            push(&mut flat, alone);
+
+            let mut grouped = document(space);
+            opaque_base(&mut grouped);
+            while grouped.next_layer_id() <= flat.next_layer_id() {
+                grouped.allocate_layer_id();
+            }
+            let mut g = group(&mut grouped, vec![child], false);
+            g.blend_mode = BlendMode::Multiply;
+            g.opacity = 0.5;
+            push(&mut grouped, g);
+            assert!(matches!(steps(&grouped)[1], Step::Begin { isolated: true }));
+            assert_close(&all(&grouped), &all(&flat));
+        }
+    }
+
+    #[test]
+    fn hidden_and_empty_groups_change_nothing() {
+        let mut doc = document(BlendSpace::Perceptual);
+        opaque_base(&mut doc);
+        let reference = all(&doc);
+        let child = new_layer(&mut doc, varied(0.2), BlendMode::Difference, 1.0);
+        let mut hidden = group(&mut doc, vec![child], false);
+        hidden.visible = false;
+        push(&mut doc, hidden);
+        let mut hidden_child = new_layer(&mut doc, varied(0.3), BlendMode::Normal, 1.0);
+        hidden_child.visible = false;
+        let mut isolated = group(&mut doc, vec![hidden_child], false);
+        isolated.opacity = 0.5;
+        push(&mut doc, isolated);
+        assert_eq!(steps(&doc).len(), 1, "only the base layer");
+        assert_close(&all(&doc), &reference);
     }
 }

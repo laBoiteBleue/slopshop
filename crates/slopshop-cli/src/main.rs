@@ -179,6 +179,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
         let index = session.document().layers().len();
         session
             .perform(Edit::InsertLayer {
+                parent: None,
                 index,
                 layer: Layer {
                     id,

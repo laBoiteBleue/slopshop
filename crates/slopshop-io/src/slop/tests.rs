@@ -70,7 +70,13 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
         mask: None,
         content,
     };
-    Edit::InsertLayer { index, layer }.apply(doc).unwrap();
+    Edit::InsertLayer {
+        parent: None,
+        index,
+        layer,
+    }
+    .apply(doc)
+    .unwrap();
     id.get()
 }
 
@@ -182,8 +188,12 @@ fn assert_same(a: &Document, b: &Document) {
     assert_eq!(a.working_space(), b.working_space());
     assert_eq!(a.blend_space(), b.blend_space());
     assert_eq!(a.next_layer_id(), b.next_layer_id());
-    assert_eq!(a.layers().len(), b.layers().len());
-    for (x, y) in a.layers().iter().zip(b.layers()) {
+    assert_same_layers(a.layers(), b.layers());
+}
+
+fn assert_same_layers(a: &[Layer], b: &[Layer]) {
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b) {
         assert_eq!((x.id, &x.name, x.visible), (y.id, &y.name, y.visible));
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
@@ -219,6 +229,19 @@ fn assert_same(a: &Document, b: &Document) {
                         assert!(s[..] == t[..], "{}: tile differs", x.name);
                     }
                 }
+            }
+            (
+                LayerContent::Group {
+                    children: c,
+                    pass_through: p,
+                },
+                LayerContent::Group {
+                    children: d,
+                    pass_through: q,
+                },
+            ) => {
+                assert_eq!(p, q, "{}", x.name);
+                assert_same_layers(c, d);
             }
             _ => panic!("{}: content kind differs", x.name),
         }
@@ -552,9 +575,55 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
-/// The document of the golden fixture of schema 0.1: every node type, an 8-bit and a half-float
-/// image, one of them shared by two layers, a hidden layer and partial opacity.
+/// The document of the golden fixture of schema 0.4: the schema 0.3 one, with its "Tint" layer
+/// inside an isolated screen group at 80 %, itself inside a masked pass-through group.
 fn golden_document() -> Document {
+    let mut doc = golden_document_v0_3();
+    let tint = doc.layers()[2].id;
+    let masked_by = match &doc.layers()[1].content {
+        LayerContent::Raster { image } => slopshop_core::LayerMask::from_transparency(image),
+        _ => None,
+    };
+    let folder = doc.allocate_layer_id();
+    let inner = doc.allocate_layer_id();
+    let group = |id, name: &str, pass_through, mode, opacity, mask| Layer {
+        id,
+        name: name.to_owned(),
+        visible: true,
+        opacity,
+        blend_mode: mode,
+        mask,
+        content: LayerContent::Group {
+            children: Vec::new(),
+            pass_through,
+        },
+    };
+    Edit::Batch(vec![
+        Edit::InsertLayer {
+            parent: None,
+            index: 3,
+            layer: group(folder, "Folder", true, BlendMode::Normal, 1.0, masked_by),
+        },
+        Edit::InsertLayer {
+            parent: Some(folder),
+            index: 0,
+            layer: group(inner, "Inner", false, BlendMode::Screen, 0.8, None),
+        },
+        Edit::MoveLayer {
+            id: tint,
+            parent: Some(inner),
+            index: 0,
+        },
+    ])
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
+/// The document of the golden fixture of schema 0.3 (0.1 and 0.2 without what came later):
+/// every node type, an 8-bit and a half-float image, one of them shared by two layers, a hidden
+/// layer, partial opacity, blend modes and a mask.
+fn golden_document_v0_3() -> Document {
     let size = Size::new(40, 20);
     let mut doc = Document::new(size);
     let gradient: Vec<u8> = (0..size.pixel_count())
@@ -615,7 +684,7 @@ fn golden_document() -> Document {
 
 /// What the schema 0.2 fixture holds: no masks then.
 fn golden_document_v0_2() -> Document {
-    let mut doc = golden_document();
+    let mut doc = golden_document_v0_3();
     for layer in doc.layers().to_vec() {
         Edit::SetLayerMask {
             id: layer.id,
@@ -660,6 +729,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.2")).unwrap();
     assert_same(&golden_document_v0_2(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.3")).unwrap();
+    assert_same(&golden_document_v0_3(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.4")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 
@@ -745,4 +816,102 @@ fn masks_round_trip_and_share_their_tiles() {
     let (loaded, _) = SlopFile::open(&path).unwrap();
     assert_same(&doc, &loaded);
     fs::remove_file(&path).ok();
+}
+
+#[test]
+fn groups_round_trip_through_saves() {
+    let path = temp_path("groups.slop");
+    let doc = golden_document();
+    let mut file = SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    // Moving the grouped layer out and saving again (an incremental save) keeps the tree.
+    let mut session = slopshop_core::Session::new(loaded);
+    let tint = session
+        .document()
+        .all_layers()
+        .find(|l| l.name == "Tint")
+        .unwrap()
+        .id;
+    session
+        .perform(Edit::MoveLayer {
+            id: tint,
+            parent: None,
+            index: 0,
+        })
+        .unwrap();
+    file.save(session.document()).unwrap();
+    let (again, _) = SlopFile::open(&path).unwrap();
+    assert_same(session.document(), &again);
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn damaged_layer_trees_are_refused() {
+    // A manifest with these nodes and this stack.
+    let read = |nodes: &str, stack: &str| {
+        let json = format!(
+            r#"{{"schema":{{"major":0,"minor":4}},"writer":{{"app":"test","version":"0"}},
+            "document":{{"size":[1,1],"working_space":{{"primaries":{{"r":[0.708,0.292],"g":[0.17,0.797],"b":[0.131,0.046],"w":[0.3127,0.329]}},"transfer":{{"kind":"linear"}}}},"next_node_id":100,"stack":{stack}}},
+            "nodes":{{{nodes}}},"images":{{}}}}"#
+        );
+        let manifest: manifest::Manifest = serde_json::from_str(&json).unwrap();
+        let mut used = std::collections::HashSet::new();
+        let mut residue = Residue::default();
+        let stack: Vec<u64> = serde_json::from_str(stack).unwrap();
+        stack
+            .iter()
+            .map(|&id| {
+                read::read_node(
+                    id,
+                    0,
+                    &manifest,
+                    &std::collections::HashMap::new(),
+                    &mut residue,
+                    &mut used,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.code())
+    };
+    let group = |id: u64, inputs: &str| {
+        format!(
+            r#""{id}":{{"type":"slopshop.group","version":3,"name":"g","visible":true,"opacity":1.0,"params":{{"blend_mode":"normal","pass_through":true}},"inputs":{inputs}}}"#
+        )
+    };
+    let fill = |id: u64| {
+        format!(
+            r#""{id}":{{"type":"slopshop.fill","version":3,"name":"f","visible":true,"opacity":1.0,"params":{{"blend_mode":"normal","color":[0,0,0,1]}},"inputs":[]}}"#
+        )
+    };
+    let valid = read(&[group(1, "[2]"), fill(2)].join(","), "[1]").unwrap();
+    assert_eq!(valid[0].children().unwrap()[0].id.get(), 2);
+    assert_eq!(read(&group(1, "[1]"), "[1]"), Err("corrupt"), "a cycle");
+    assert_eq!(
+        read(
+            &[group(1, "[3]"), group(2, "[3]"), fill(3)].join(","),
+            "[1,2]"
+        ),
+        Err("corrupt"),
+        "a shared child"
+    );
+    assert_eq!(
+        read(&group(1, "[9]"), "[1]"),
+        Err("corrupt"),
+        "a missing child"
+    );
+    let no_flag = r#""1":{"type":"slopshop.group","version":3,"name":"g","visible":true,"opacity":1.0,"params":{"blend_mode":"normal"},"inputs":[]}"#;
+    assert_eq!(read(no_flag, "[1]"), Err("corrupt"));
+    // Deeper than the engine allows: refused before recursing further.
+    let depth = slopshop_core::document::MAX_GROUP_DEPTH as u64 + 1;
+    let chain: Vec<String> = (1..=depth)
+        .map(|id| {
+            if id == depth {
+                group(id, "[]")
+            } else {
+                group(id, &format!("[{}]", id + 1))
+            }
+        })
+        .collect();
+    assert_eq!(read(&chain.join(","), "[1]"), Err("corrupt"));
 }

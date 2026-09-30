@@ -69,6 +69,10 @@ pub struct LayerView {
     pub mask: Option<MaskView>,
     /// Display swatch, sRGB-encoded RGBA in `[0, 1]` (explicitly converted, see `color`).
     pub swatch: [f32; 4],
+    /// A group's layers, bottom to top (ADR 0015); empty for other layers.
+    pub children: Vec<LayerView>,
+    /// A group whose layers blend through it.
+    pub pass_through: bool,
 }
 
 impl DocumentView {
@@ -109,6 +113,7 @@ impl LayerView {
     fn new(layer: &Layer) -> Self {
         let (kind, swatch, content_key, has_alpha) = match &layer.content {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
+            LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
             LayerContent::Raster { image } => (
                 "raster",
                 image
@@ -132,6 +137,16 @@ impl LayerView {
                 content_key: mask.image.id().get(),
             }),
             swatch,
+            children: layer
+                .children()
+                .map_or_else(Vec::new, |c| c.iter().map(LayerView::new).collect()),
+            pass_through: matches!(
+                layer.content,
+                LayerContent::Group {
+                    pass_through: true,
+                    ..
+                }
+            ),
         }
     }
 }
@@ -238,6 +253,7 @@ impl EditRequest {
             EditRequest::AddFillLayer { name, color } => {
                 let [r, g, b, a] = color;
                 Edit::InsertLayer {
+                    parent: None,
                     index: session.document().layers().len(),
                     layer: Layer {
                         id: session.allocate_layer_id(),
@@ -268,6 +284,7 @@ impl EditRequest {
                 name,
             },
             EditRequest::MoveLayer { id, index } => Edit::MoveLayer {
+                parent: None,
                 id: LayerId::from_raw(id),
                 index,
             },

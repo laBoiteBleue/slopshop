@@ -3,6 +3,9 @@
 //! The document is readable by anyone but only mutable through [`crate::edit::Edit`], so that
 //! every change is undoable. Users see a layer stack; code refers to layers by [`LayerId`]
 //! (stable, never reused) so that the model can later evolve into a DAG of nodes.
+//!
+//! Layers form a tree: a group's content is its children (ADR 0015). [`Document::layers`] is the
+//! top level; [`Document::all_layers`] walks the whole tree.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -35,6 +38,10 @@ impl fmt::Display for LayerId {
     }
 }
 
+/// Deepest nesting of groups (ADR 0015): no layer is inside more groups than this. Photoshop
+/// allows 10; the GPU compositor keeps one accumulator per level.
+pub const MAX_GROUP_DEPTH: usize = 16;
+
 /// What a layer produces. Adjustment and AI nodes come later.
 #[derive(Debug, Clone)]
 pub enum LayerContent {
@@ -43,6 +50,14 @@ pub enum LayerContent {
     /// Source pixels, placed at the document origin. The image is immutable and shared:
     /// cloning the layer (snapshots, undo) never copies pixels.
     Raster { image: Arc<RasterImage> },
+    /// Other layers, bottom to top (ADR 0015). A pass-through group lets its children blend
+    /// directly onto what is below it, then fades that result by its opacity and mask; an
+    /// isolated one composites them on their own and blends the result like one layer, with its
+    /// blend mode.
+    Group {
+        children: Vec<Layer>,
+        pass_through: bool,
+    },
 }
 
 impl PartialEq for LayerContent {
@@ -51,6 +66,16 @@ impl PartialEq for LayerContent {
             (Self::Fill { color: a }, Self::Fill { color: b }) => a == b,
             // Immutable images: same allocation, same content.
             (Self::Raster { image: a }, Self::Raster { image: b }) => Arc::ptr_eq(a, b),
+            (
+                Self::Group {
+                    children: a,
+                    pass_through: p,
+                },
+                Self::Group {
+                    children: b,
+                    pass_through: q,
+                },
+            ) => p == q && a == b,
             _ => false,
         }
     }
@@ -91,6 +116,101 @@ impl PartialEq for LayerMask {
             && self.enabled == other.enabled
             && self.replaces_alpha == other.replaces_alpha
     }
+}
+
+impl Layer {
+    /// A group's children, bottom to top; `None` for other layers.
+    pub fn children(&self) -> Option<&[Layer]> {
+        match &self.content {
+            LayerContent::Group { children, .. } => Some(children),
+            _ => None,
+        }
+    }
+
+    pub fn is_group(&self) -> bool {
+        matches!(self.content, LayerContent::Group { .. })
+    }
+
+    /// Groups on the deepest path through this layer, itself included: 0 for a layer that is
+    /// not a group, 1 for a group of such layers.
+    pub fn group_height(&self) -> usize {
+        self.children().map_or(0, |children| {
+            1 + children.iter().map(Layer::group_height).max().unwrap_or(0)
+        })
+    }
+
+    /// This layer then, for a group, every layer inside it (depth first).
+    pub fn subtree(&self) -> AllLayers<'_> {
+        AllLayers {
+            stack: vec![std::slice::from_ref(self).iter()],
+        }
+    }
+}
+
+/// Every layer of a tree, depth first: each group before its children, children bottom to top.
+#[derive(Debug)]
+pub struct AllLayers<'a> {
+    stack: Vec<std::slice::Iter<'a, Layer>>,
+}
+
+impl<'a> Iterator for AllLayers<'a> {
+    type Item = &'a Layer;
+
+    fn next(&mut self) -> Option<&'a Layer> {
+        while let Some(level) = self.stack.last_mut() {
+            if let Some(layer) = level.next() {
+                if let Some(children) = layer.children() {
+                    self.stack.push(children.iter());
+                }
+                return Some(layer);
+            }
+            self.stack.pop();
+        }
+        None
+    }
+}
+
+fn find(layers: &[Layer], id: LayerId) -> Option<&Layer> {
+    for layer in layers {
+        if layer.id == id {
+            return Some(layer);
+        }
+        if let Some(found) = layer.children().and_then(|c| find(c, id)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_mut(layers: &mut [Layer], id: LayerId) -> Option<&mut Layer> {
+    for layer in layers.iter_mut() {
+        if layer.id == id {
+            return Some(layer);
+        }
+        if let LayerContent::Group { children, .. } = &mut layer.content
+            && let Some(found) = find_mut(children, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The parent (`None`: `layers` itself) and index of `id` among `layers` and their subtrees.
+fn locate(
+    layers: &[Layer],
+    parent: Option<LayerId>,
+    id: LayerId,
+) -> Option<(Option<LayerId>, usize)> {
+    for (index, layer) in layers.iter().enumerate() {
+        if layer.id == id {
+            return Some((parent, index));
+        }
+        if let Some(found) = layer.children().and_then(|c| locate(c, Some(layer.id), id)) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 impl LayerMask {
@@ -152,28 +272,7 @@ impl Document {
             return Err(RestoreError::UnsupportedWorkingSpace(working_space));
         }
         let mut seen = HashSet::with_capacity(layers.len());
-        for layer in &layers {
-            let id = layer.id;
-            if id.0 == 0 || id.0 >= next_layer_id {
-                return Err(RestoreError::IdOutOfRange { id, next_layer_id });
-            }
-            if !seen.insert(id) {
-                return Err(RestoreError::DuplicateId(id));
-            }
-            if crate::edit::validate_opacity(layer.opacity).is_err() {
-                return Err(RestoreError::InvalidOpacity(id));
-            }
-            if let LayerContent::Fill { color } = &layer.content
-                && !color.is_finite()
-            {
-                return Err(RestoreError::InvalidColor(id));
-            }
-            if let Some(mask) = &layer.mask
-                && !LayerMask::is_valid_image(&mask.image)
-            {
-                return Err(RestoreError::InvalidMask(id));
-            }
-        }
+        validate_restored(&layers, 0, next_layer_id, &mut seen)?;
         Ok(Self {
             size,
             working_space,
@@ -202,18 +301,47 @@ impl Document {
         self.blend_space
     }
 
-    /// Layers from bottom to top.
+    /// The top-level layers, bottom to top (groups hold the others).
     pub fn layers(&self) -> &[Layer] {
         &self.layers
     }
 
-    pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        self.layers.iter().find(|l| l.id == id)
+    /// Every layer of the tree, depth first: each group before its children.
+    pub fn all_layers(&self) -> AllLayers<'_> {
+        AllLayers {
+            stack: vec![self.layers.iter()],
+        }
     }
 
-    /// Position of a layer in the stack (0 = bottom).
-    pub fn layer_index(&self, id: LayerId) -> Option<usize> {
-        self.layers.iter().position(|l| l.id == id)
+    /// A layer anywhere in the tree.
+    pub fn layer(&self, id: LayerId) -> Option<&Layer> {
+        find(&self.layers, id)
+    }
+
+    /// Where a layer is: its group (`None` at the top level) and its index among its siblings
+    /// (0 = bottom).
+    pub fn locate(&self, id: LayerId) -> Option<(Option<LayerId>, usize)> {
+        locate(&self.layers, None, id)
+    }
+
+    /// The layers directly inside `parent` (`None`: the top level), bottom to top. `None` when
+    /// `parent` is not a group of this document.
+    pub fn children_of(&self, parent: Option<LayerId>) -> Option<&[Layer]> {
+        match parent {
+            None => Some(&self.layers),
+            Some(id) => self.layer(id)?.children(),
+        }
+    }
+
+    /// Number of groups around a layer: 0 at the top level.
+    pub fn depth(&self, id: LayerId) -> Option<usize> {
+        let mut depth = 0;
+        let (mut parent, _) = self.locate(id)?;
+        while let Some(group) = parent {
+            depth += 1;
+            parent = self.locate(group)?.0;
+        }
+        Some(depth)
     }
 
     /// Incremented by every successful edit (including undo/redo). Lets caches and views know
@@ -232,8 +360,15 @@ impl Document {
 
     // Mutation primitives, only reachable through `edit`.
 
-    pub(crate) fn layers_mut(&mut self) -> &mut Vec<Layer> {
-        &mut self.layers
+    /// The layers directly inside `parent` (`None`: the top level), if it is a group.
+    pub(crate) fn children_mut(&mut self, parent: Option<LayerId>) -> Option<&mut Vec<Layer>> {
+        match parent {
+            None => Some(&mut self.layers),
+            Some(id) => match &mut find_mut(&mut self.layers, id)?.content {
+                LayerContent::Group { children, .. } => Some(children),
+                _ => None,
+            },
+        }
     }
 
     pub(crate) fn set_blend_space(&mut self, space: BlendSpace) -> BlendSpace {
@@ -241,7 +376,7 @@ impl Document {
     }
 
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        self.layers.iter_mut().find(|l| l.id == id)
+        find_mut(&mut self.layers, id)
     }
 
     pub(crate) fn bump_revision(&mut self) {
@@ -252,6 +387,44 @@ impl Document {
     pub(crate) fn is_allocated(&self, id: LayerId) -> bool {
         id.0 != 0 && id.0 < self.next_layer_id
     }
+}
+
+/// Check restored layers and their subtrees (`depth`: groups around `layers`).
+fn validate_restored(
+    layers: &[Layer],
+    depth: usize,
+    next_layer_id: u64,
+    seen: &mut HashSet<LayerId>,
+) -> Result<(), RestoreError> {
+    for layer in layers {
+        let id = layer.id;
+        if id.0 == 0 || id.0 >= next_layer_id {
+            return Err(RestoreError::IdOutOfRange { id, next_layer_id });
+        }
+        if !seen.insert(id) {
+            return Err(RestoreError::DuplicateId(id));
+        }
+        if crate::edit::validate_opacity(layer.opacity).is_err() {
+            return Err(RestoreError::InvalidOpacity(id));
+        }
+        if let LayerContent::Fill { color } = &layer.content
+            && !color.is_finite()
+        {
+            return Err(RestoreError::InvalidColor(id));
+        }
+        if let Some(mask) = &layer.mask
+            && !LayerMask::is_valid_image(&mask.image)
+        {
+            return Err(RestoreError::InvalidMask(id));
+        }
+        if let Some(children) = layer.children() {
+            if depth + 1 > MAX_GROUP_DEPTH {
+                return Err(RestoreError::TooDeep(id));
+            }
+            validate_restored(children, depth + 1, next_layer_id, seen)?;
+        }
+    }
+    Ok(())
 }
 
 /// Why [`Document::restore`] refused its input.
@@ -271,6 +444,8 @@ pub enum RestoreError {
     InvalidColor(LayerId),
     /// A mask that is not a gray image.
     InvalidMask(LayerId),
+    /// A group nested deeper than [`MAX_GROUP_DEPTH`].
+    TooDeep(LayerId),
 }
 
 impl fmt::Display for RestoreError {
@@ -286,6 +461,9 @@ impl fmt::Display for RestoreError {
             RestoreError::InvalidOpacity(id) => write!(f, "{id} has an invalid opacity"),
             RestoreError::InvalidColor(id) => write!(f, "{id} has a non-finite color"),
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
+            RestoreError::TooDeep(id) => {
+                write!(f, "{id} is nested deeper than {MAX_GROUP_DEPTH} groups")
+            }
         }
     }
 }
@@ -321,7 +499,13 @@ mod tests {
                 id,
                 ..fill(id.get(), 0.5)
             };
-            Edit::InsertLayer { index, layer }.apply(&mut doc).unwrap();
+            Edit::InsertLayer {
+                parent: None,
+                index,
+                layer,
+            }
+            .apply(&mut doc)
+            .unwrap();
         }
         // A removed layer: its id is never given out again.
         let removed = doc.layers()[1].id;

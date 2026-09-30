@@ -42,9 +42,11 @@ do not depend on each other: export receives its pixel source as a closure (see
 - `raster`: immutable tiled images (256 px tiles in the source format, shared via `Arc`) with a
   display pyramid ([ADR 0005](adr/0005-pixel-storage-v0.md)). An image smaller than its canvas
   (`from_placed`) shares one tile, and its pyramid tiles, for the uniform area around it.
-- `document`: a layer stack, bottom to top, addressed by stable `LayerId`s that are never
-  reused. Layers are procedural *fills* or *rasters*, each with an opacity, a blend mode and an
-  optional mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision` increases on every change.
+- `document`: a layer tree, bottom to top, addressed by stable `LayerId`s that are never
+  reused. Layers are procedural *fills*, *rasters* or *groups* of other layers
+  ([ADR 0015](adr/0015-layer-groups.md)), each with an opacity, a blend mode and an optional
+  mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision`
+  increases on every change.
 - `thumbnail`: small previews of rasters for the UI, read from the coarsest pyramid level
   that is large enough and converted like an 8-bit sRGB export.
 - `blend`: blend modes and blend spaces ([ADR 0012](adr/0012-blend-modes.md)), the reference
@@ -57,7 +59,9 @@ do not depend on each other: export receives its pixel source as a closure (see
   zoom around a point, preset zoom steps, pan, and a clamp that keeps part of the document
   visible. View state is never part of the undo history.
 - Export support ([ADR 0008](adr/0008-export.md)): `composite`, the CPU reference compositor
-  (full resolution, unclipped; the GPU's test oracle and fallback); `convert`, the only
+  (full resolution, unclipped; the GPU's test oracle and fallback), whose `steps` flatten the
+  visible layer tree into one pass with a stack of accumulators, shared with the GPU shader
+  ([ADR 0015](adr/0015-layer-groups.md)); `convert`, the only
   conversion from the working space to a file's pixel format (matrix, luminance for gray
   targets, alpha, range, transfer, exact quantization, blue-noise dither from `blue_noise`),
   counting every lossy event; `job`,

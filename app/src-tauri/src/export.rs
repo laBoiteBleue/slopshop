@@ -478,6 +478,7 @@ mod tests {
         let mut document = Document::new(size);
         let id = document.allocate_layer_id();
         Edit::InsertLayer {
+            parent: None,
             index: 0,
             layer: Layer {
                 id,

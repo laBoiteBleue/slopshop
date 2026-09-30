@@ -8,12 +8,13 @@
 use std::collections::HashSet;
 use std::sync::mpsc;
 
+use slopshop_core::composite::{Step, steps};
 use slopshop_core::raster::{ImageId, TILE_SIZE};
-use slopshop_core::{BlendSpace, Document, Layer, LayerContent, RasterImage, Rect};
+use slopshop_core::{BlendSpace, Document, RasterImage, Rect};
 
 use crate::tiles::{GpuTileFormat, TileCache};
 use crate::{
-    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, enabled_mask, encode_layers,
+    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers, step_rasters,
 };
 
 /// One RGBA f32 pixel.
@@ -191,13 +192,9 @@ impl Renderer {
             });
         }
 
-        // Layers at opacity 0 change nothing (and are skipped by the CPU compositor too, so
-        // that both count the same non-finite values).
-        let layers: Vec<&Layer> = document
-            .layers()
-            .iter()
-            .filter(|l| l.visible && l.opacity > 0.0)
-            .collect();
+        // The CPU compositor's steps (ADR 0015): layers at opacity 0 are left out by both, so
+        // that both count the same non-finite values.
+        let layers = steps(document);
         let tiles_per_chunk = self.tiles_per_chunk(&layers, region)?;
         let chunks = region_chunks(
             region,
@@ -258,7 +255,7 @@ impl Renderer {
 
     /// Most level-0 tiles per chunk such that every class's tiles of a chunk fit in its cache,
     /// counting each image of the region as if it covered the whole chunk.
-    fn tiles_per_chunk(&self, layers: &[&Layer], region: Rect) -> Result<u64, RenderError> {
+    fn tiles_per_chunk(&self, layers: &[Step<'_>], region: Rect) -> Result<u64, RenderError> {
         let mut tiles = u64::MAX;
         for format in GpuTileFormat::ALL {
             let images = raster_images(layers, region, format).len();
@@ -279,7 +276,7 @@ impl Renderer {
     /// counter right after them).
     fn render_chunk(
         &self,
-        layers: &[&Layer],
+        layers: &[Step<'_>],
         blend_space: BlendSpace,
         chunk: Rect,
         caches: &mut [Option<TileCache>; 4],
@@ -291,20 +288,15 @@ impl Renderer {
             chunk.right() as f64,
             chunk.bottom() as f64,
         ];
-        // Two plans per layer: its raster, then its enabled mask (ADR 0014).
+        // Two plans per step: its raster, then its enabled mask (ADR 0014).
         let plans: Vec<Option<RasterPlan<'_>>> = layers
             .iter()
-            .flat_map(|layer| {
-                let content = match &layer.content {
-                    LayerContent::Raster { image } if covers(image, chunk) => {
-                        Some(RasterPlan::full_resolution(image, area))
-                    }
-                    _ => None,
-                };
-                let mask = enabled_mask(layer)
-                    .filter(|image| covers(image, chunk))
-                    .map(|image| RasterPlan::full_resolution(image, area));
-                [content, mask]
+            .flat_map(|step| {
+                step_rasters(step).map(|image| {
+                    image
+                        .filter(|image| covers(image, chunk))
+                        .map(|image| RasterPlan::full_resolution(image, area))
+                })
             })
             .collect();
         for cache in caches.iter_mut().flatten() {
@@ -446,16 +438,10 @@ fn max_chunk_pixels(max_output_bytes: u64) -> u64 {
 }
 
 /// Distinct images of a storage class shown by `layers` within `region`.
-fn raster_images(layers: &[&Layer], region: Rect, format: GpuTileFormat) -> HashSet<ImageId> {
+fn raster_images(layers: &[Step<'_>], region: Rect, format: GpuTileFormat) -> HashSet<ImageId> {
     layers
         .iter()
-        .flat_map(|layer| {
-            let content = match &layer.content {
-                LayerContent::Raster { image } => Some(image.as_ref()),
-                LayerContent::Fill { .. } => None,
-            };
-            content.into_iter().chain(enabled_mask(layer))
-        })
+        .flat_map(|step| step_rasters(step).into_iter().flatten())
         .filter(|image| {
             GpuTileFormat::for_sample(image.stored_format().sample) == format
                 && covers(image, region)
