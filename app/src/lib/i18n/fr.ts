@@ -25,6 +25,8 @@ const fr: Messages = {
   "menu.image": "Image",
   "menu.layer": "Calque",
   "menu.layer.rename": "Renommer le calque",
+  "menu.layer.createClipping": "Créer un masque d'écrêtage",
+  "menu.layer.releaseClipping": "Annuler le masque d'écrêtage",
   "menu.layer.duplicate": "Dupliquer le calque",
   "menu.layer.duplicateLayers": "Dupliquer les calques",
   "menu.layer.hideLayer": "Masquer le calque",
@@ -248,6 +250,8 @@ const fr: Messages = {
   "layers.deleteSelected": "Supprimer les calques",
   "layers.fillColor": "Couleur de remplissage",
   "layers.addFill": "Ajouter un calque de remplissage",
+  "layers.clippedHint":
+    "Écrêté sur le calque inférieur (Alt+clic sur la ligne entre eux pour annuler)",
   "layers.copyName": "{name} copie",
   "layers.newGroup": "Nouveau groupe",
   "layers.defaultGroupName": "Groupe {n}",

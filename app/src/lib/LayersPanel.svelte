@@ -62,6 +62,8 @@
     index: number;
     /** Visible, and so are all its groups. */
     shown: boolean;
+    /** Clipped to the layer below it, or the base of the clipped layers above it (ADR 0016). */
+    clipping: "clipped" | "base" | null;
   };
   /** Groups folded in the panel (UI state, like the selection). */
   let collapsed = $state<Set<number>>(new Set());
@@ -77,7 +79,11 @@
     for (let index = layers.length - 1; index >= 0; index--) {
       const layer = layers[index];
       const visible = shown && layer.visible;
-      out.push({ layer, depth, parent, index, shown: visible });
+      // A clipped layer needs a layer below it; the base is the one the clipped layers rest on.
+      const clipped = layer.clipped && index > 0;
+      const base = !clipped && layers[index + 1]?.clipped === true;
+      const clipping = clipped ? "clipped" : base ? "base" : null;
+      out.push({ layer, depth, parent, index, shown: visible, clipping });
       if (layer.kind === "group" && !collapsed.has(layer.id)) {
         flatten(layer.children, depth + 1, layer.id, visible, out);
       }
@@ -245,6 +251,19 @@
     void edit(batchOf(ids.map((id) => ({ kind: "removeLayer", id }))));
   }
 
+  /**
+   * Clip the selected layers to the layers below them, or release them when all are clipped
+   * (Layer > Create/Release Clipping Mask, Alt+Ctrl+G).
+   */
+  export function toggleClippingSelected() {
+    if (selection.length === 0) return;
+    const release = selection.every((l) => l.clipped);
+    const edits = selection
+      .filter((l) => l.clipped === release)
+      .map((l): EditRequest => ({ kind: "setLayerClipped", id: l.id, clipped: !release }));
+    if (edits.length > 0) void edit(batchOf(edits));
+  }
+
   /** Copies of the selected layers, each above its original (Layer > Duplicate Layer, Ctrl+J). */
   export function duplicateSelected() {
     if (selection.length === 0) return;
@@ -352,6 +371,13 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag?.active) {
       endDrag();
+      return;
+    }
+    // Alt+Ctrl+G clips the selected layers to the layers below them, or releases them.
+    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && e.code === "KeyG" && !e.repeat) {
+      if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      toggleClippingSelected();
       return;
     }
     // Ctrl+J duplicates the selected layers, as in Photoshop.
@@ -531,6 +557,24 @@
     }
     if ((e.target as HTMLElement).closest("button.eye")) return;
     list.focus({ preventScroll: true });
+    // Alt+click on the line between two layers of a level clips the upper one to the lower
+    // one, or releases it (Photoshop).
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const edge = 7;
+      const upper = e.clientY - r.top < edge ? row - 1 : r.bottom - e.clientY < edge ? row : null;
+      const above = upper !== null ? rows[upper] : undefined;
+      const below = upper !== null ? rows[upper + 1] : undefined;
+      if (above && below && above.parent === below.parent && below.depth === above.depth) {
+        e.preventDefault();
+        void edit({
+          kind: "setLayerClipped",
+          id: above.layer.id,
+          clipped: !above.layer.clipped,
+        });
+        return;
+      }
+    }
     if (e.shiftKey) {
       selectRange(layer.id);
       return;
@@ -741,7 +785,7 @@
       if (e.button === 0 && e.target === e.currentTarget) deselectLayers();
     }}
   >
-    {#each rows as { layer, depth, shown }, row (layer.id)}
+    {#each rows as { layer, depth, shown, clipping }, row (layer.id)}
       <li
         data-row={row}
         class:selected={selectedSet.has(layer.id)}
@@ -765,6 +809,11 @@
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
         {#if depth > 0}<span class="indent" style:width="{depth * 16}px"></span>{/if}
+        {#if clipping === "clipped"}
+          <span class="clip-arrow" title={t("layers.clippedHint")}>
+            <Icon name="clip" size={14} />
+          </span>
+        {/if}
         {#if layer.kind === "group"}
           <button
             class="fold"
@@ -820,6 +869,7 @@
         {:else}
           <button
             class="name"
+            class:clip-base={clipping === "base"}
             tabindex="-1"
             title={t("layers.renameHint")}
             ondblclick={() => (renaming = layer.id)}
@@ -974,6 +1024,20 @@
 
   .indent {
     flex: none;
+  }
+
+  .clip-arrow {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    margin-left: 4px;
+    color: var(--text-muted);
+    flex: none;
+  }
+
+  .name.clip-base {
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .fold {

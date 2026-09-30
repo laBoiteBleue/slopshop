@@ -39,13 +39,14 @@ built. Contributors: propose here first.
   drag to reorder; several layers with Ctrl/Shift+click, Select > All Layers (Alt+Ctrl+A); a
   click in the empty area deselects; Delete deletes; groups as folders that fold, Ctrl+G,
   Shift+Ctrl+G, drag into folders, Pass Through; mask thumbnail, Shift+click disables the mask;
-  Duplicate (Ctrl+J); right-click menu; drag layers onto another tab to copy them there.
+  Duplicate (Ctrl+J); right-click menu; drag layers onto another tab to copy them there, with a
+  thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
+  layers; clipped layers indented with an arrow, the base underlined).
 
 ## Proposed
 
 ### Layers panel
 
-- [ ] Alt+click on the line between two layers creates or releases a clipping mask (Photoshop).
 - [ ] Alt+click on an eye shows only that layer (again: shows them all back).
 - [ ] Drag over several eyes to show or hide them in one stroke.
 - [ ] Ctrl+[ and Ctrl+] move the selected layers down and up; Shift+Ctrl+[ and ] to the bottom

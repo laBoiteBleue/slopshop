@@ -2271,6 +2271,19 @@ mod tests {
             &mut s,
             format!(r#"{{"kind":"setGroupPassThrough","id":{g},"passThrough":false}}"#),
         );
+        apply(
+            &mut s,
+            format!(
+                r#"{{"kind":"setLayerClipped","id":{},"clipped":true}}"#,
+                ids[2]
+            ),
+        );
+        assert!(
+            s.document()
+                .layer(LayerId::from_raw(ids[2]))
+                .unwrap()
+                .clipped
+        );
         let view = DocumentView::new(&s, &meta(), Vec::new());
         assert_eq!(view.layers.len(), 1);
         assert!(!view.layers[0].pass_through);
