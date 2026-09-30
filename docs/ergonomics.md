@@ -43,7 +43,8 @@ built. Contributors: propose here first.
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Move tool (the default action on the image, until the tools palette): drag moves the selected
-  layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag. Auto-Select:
+  layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag. The pointer stays
+  the normal arrow over the image (no move cross). Auto-Select:
   the drag takes the layer whose pixels are under the pointer (inside a group, the layer itself;
   a layer already selected keeps the whole selection moving; Ctrl held: no auto-select). Snap:
   the edges and centers of what moves stick to those of the canvas and of the other visible
