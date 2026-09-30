@@ -96,7 +96,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
   fill, thumbnails, visibility, live opacity, Photoshop's blend modes, rename, drag to reorder, delete) with
   perceptual or linear blending per document, images dropped on the canvas
-  become layers, export with progress and cancel, undo/redo, English and French interface.
+  become layers, paste (Ctrl+V) of copied images and files, export with progress and cancel, undo/redo, English and French interface.
 - Saving documents with their layers in SlopShop's own `.slop` format: lossless, in the
   images' native precision, incremental (a save only writes what changed) and crash-safe
   ([ADR 0009](docs/adr/0009-document-file-format.md)). Undo history is not saved yet.

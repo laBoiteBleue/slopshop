@@ -58,6 +58,9 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [ ] Window behavior: a second launch focuses the running window (and opens its files in
       tabs); window size and position remembered
 - [x] Layer thumbnails in the layers panel
+- [x] Paste (Ctrl+V): a copied image becomes a layer (or a new tab), copied files open like
+      dropped ones
+- [ ] Drop images from a web page (browsers drag URLs or virtual files, not file paths)
 
 ## Phase 2 — Non-destructive core
 
