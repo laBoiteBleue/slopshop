@@ -77,8 +77,9 @@ more raster images than the GPU tile cache holds.
 
 ### `slopshop-io` (implemented, minimal)
 
-Decodes files into `RasterImage` in their native precision (`image` codecs, `tiff` directly), with
-an in-house matrix/TRC ICC reader and EXIF orientation. Formats not supported yet are recognized
+Decodes files into `RasterImage` in their native precision (`image` codecs, `tiff` directly, an
+in-house PSD/PSB reader for the flattened composite in `psd`), with an in-house matrix/TRC ICC
+reader and EXIF orientation. Formats not supported yet are recognized
 and refused with an explicit reason; see [ADR 0006](adr/0006-universal-import-and-licensing.md).
 
 Export (`export`) writes PNG (8/16-bit), TIFF (8/16-bit, 32-bit float; BigTIFF when needed),

@@ -193,6 +193,7 @@ export type ImportWarning =
   | "precisionReduced"
   | "nonFiniteSamples"
   | "colorInfoUnsupported"
+  | "layersFlattened"
   | "blendSpaceDiffers";
 
 export type OpenErrorCode =
@@ -200,6 +201,7 @@ export type OpenErrorCode =
   | "decode"
   | "notYetSupported"
   | "heic"
+  | "psdWithoutComposite"
   | "unsupportedPixels"
   | "tooLarge"
   | "unrecognized"
