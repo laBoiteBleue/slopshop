@@ -16,6 +16,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Which parts a pull request touches: the Rust jobs (the long ones) are skipped when no Rust,
+  # shader, Cargo or CI file changes (e.g. a UI-only change). Pushes to main run everything.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # docs/cli.md is checked against the CLI's help by a test.
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD"             | grep -qE '^(crates/|app/src-tauri/|Cargo\.|rust-toolchain|deny\.toml|docs/cli\.md|\.github/)'; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
   frontend:
     name: Frontend (format, type-check, build)
     runs-on: ubuntu-latest
@@ -44,6 +68,8 @@ jobs:
 
   rust:
     name: Rust (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -73,5 +99,14 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # nextest runs every test of every binary in parallel (cargo test runs the binaries one
+      # after the other, so the slow GPU tests, on WARP on Windows, would queue up).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo nextest run --workspace --locked --no-fail-fast
+
+      - name: Doc tests
+        run: cargo test --workspace --locked --doc
