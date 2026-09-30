@@ -251,6 +251,12 @@
     return changeView({ kind: "setZoom", zoom });
   }
 
+  /** Show the whole document, and keep doing so on resize. */
+  export function fit(): Promise<void> {
+    remainingLogZoom = 0;
+    return changeView({ kind: "fit" });
+  }
+
   /** Step to the next zoom preset about the viewport center. */
   export function stepZoom(zoomIn: boolean): Promise<void> {
     remainingLogZoom = 0;

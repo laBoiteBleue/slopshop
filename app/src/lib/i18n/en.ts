@@ -2,16 +2,37 @@
 // (enforced by the `Messages` type). Placeholders use `{name}`.
 const en = {
   "app.preAlpha": "pre-alpha",
-  "app.language": "Language",
 
-  "toolbar.undoHint": "Undo ({mod}+Z)",
-  "toolbar.redoHint": "Redo ({mod}+Shift+Z)",
+  "menu.file": "File",
+  "menu.file.new": "New…",
+  "menu.file.open": "Open…",
+  "menu.file.importLayers": "Import as Layers…",
+  "menu.file.close": "Close",
+  "menu.file.save": "Save",
+  "menu.file.export": "Export…",
+  "menu.file.saveAs": "Save As…",
+  "menu.file.quit": "Exit",
+  "menu.edit": "Edit",
+  "menu.edit.undo": "Undo",
+  "menu.edit.redo": "Redo",
+  "menu.edit.language": "Language",
+  "menu.image": "Image",
+  "menu.layer": "Layer",
+  "menu.layer.rename": "Rename Layer",
+  "menu.view": "View",
+  "menu.view.zoomIn": "Zoom In",
+  "menu.view.zoomOut": "Zoom Out",
+  "menu.view.fit": "Fit on Screen",
+  "menu.view.actualSize": "100%",
+  "menu.help": "Help",
+  "menu.help.about": "About SlopShop",
+  "key.shift": "Shift",
+  "about.title": "About SlopShop",
+  "about.text":
+    "SlopShop {version}, pre-alpha.\nAn open-source, non-destructive image editor. MIT license.",
 
   "document.untitled": "Untitled",
 
-  "open.hint": "Open images or documents in new tabs ({mod}+O)",
-
-  "tabs.newHint": "New document ({mod}+N)",
   "tabs.closeHint": "Close ({mod}+W, or middle click)",
   "tabs.hint":
     "{name}: double-click to rename, drag to reorder or onto the image to copy its layers",
@@ -35,6 +56,8 @@ const en = {
   "open.warning.precisionReduced": "64-bit float samples stored as 32-bit floats",
   "open.warning.nonFiniteSamples":
     "Infinite or undefined (NaN) values: shown as the brightest value or as 0",
+  "open.warning.blendSpaceDiffers":
+    "Some layers come from a document that blends differently: they now blend in this document's blend space",
   "open.warning.colorInfoUnsupported":
     "The file's color information is not supported yet: colors read as sRGB",
 
@@ -51,9 +74,7 @@ const en = {
   "open.error.corrupt": "damaged document ({detail})",
   "open.error.internal": "internal error ({detail})",
 
-  "save.hint": "Save ({mod}+S)",
-  "save.asHint": "Save as… ({mod}+Shift+S)",
-  "save.title": "Save document",
+  "save.title": "Save As",
   "save.documentType": "SlopShop document",
   "save.saving": "Saving {name}…",
   "save.done": "Saved {name}",
@@ -78,9 +99,8 @@ const en = {
   "quit.unsaved": "Some documents have unsaved changes: {names}. Quit without saving them?",
   "quit.discard": "Quit without saving",
 
-  "export.hint": "Export ({mod}+Shift+E)",
   "export.title": "Export",
-  "export.titleFor": "Export as {format}",
+  "export.titleFor": "Save a copy as {format}",
   "export.unsupportedExtension": "{name}: choose a PNG, TIFF, OpenEXR, JPEG or WebP file",
   "export.format.png": "PNG",
   "export.format.tiff": "TIFF",
@@ -121,7 +141,7 @@ const en = {
     "{format} is limited to {max} px per side, and this image is {width} × {height} px: choose another format.",
   "export.progress": "Exporting {name}… {percent}%",
   "export.stop": "Cancel export",
-  "export.finished": "Exported {name}",
+  "export.finished": "Saved a flattened copy: {name}",
   "export.cancelled": "Export of {name} cancelled",
   "export.failed": "Cannot export {name}: {error}",
   "export.dismiss": "Dismiss",

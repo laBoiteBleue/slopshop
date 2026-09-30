@@ -2,16 +2,37 @@ import type { Messages } from "./en";
 
 const fr: Messages = {
   "app.preAlpha": "pré-alpha",
-  "app.language": "Langue",
 
-  "toolbar.undoHint": "Annuler ({mod}+Z)",
-  "toolbar.redoHint": "Rétablir ({mod}+Maj+Z)",
+  "menu.file": "Fichier",
+  "menu.file.new": "Nouveau…",
+  "menu.file.open": "Ouvrir…",
+  "menu.file.importLayers": "Importer comme calques…",
+  "menu.file.close": "Fermer",
+  "menu.file.save": "Enregistrer",
+  "menu.file.export": "Exporter…",
+  "menu.file.saveAs": "Enregistrer sous…",
+  "menu.file.quit": "Quitter",
+  "menu.edit": "Édition",
+  "menu.edit.undo": "Annuler",
+  "menu.edit.redo": "Rétablir",
+  "menu.edit.language": "Langue",
+  "menu.image": "Image",
+  "menu.layer": "Calque",
+  "menu.layer.rename": "Renommer le calque",
+  "menu.view": "Affichage",
+  "menu.view.zoomIn": "Zoom avant",
+  "menu.view.zoomOut": "Zoom arrière",
+  "menu.view.fit": "Taille écran",
+  "menu.view.actualSize": "100 %",
+  "menu.help": "Aide",
+  "menu.help.about": "À propos de SlopShop",
+  "key.shift": "Maj",
+  "about.title": "À propos de SlopShop",
+  "about.text":
+    "SlopShop {version}, pré-alpha.\nUn éditeur d'images open source et non destructif. Licence MIT.",
 
   "document.untitled": "Sans titre",
 
-  "open.hint": "Ouvrir des images ou des documents dans de nouveaux onglets ({mod}+O)",
-
-  "tabs.newHint": "Nouveau document ({mod}+N)",
   "tabs.closeHint": "Fermer ({mod}+W, ou clic du milieu)",
   "tabs.hint":
     "{name} : double-clic pour renommer, glisser pour réordonner ou sur l'image pour copier ses calques",
@@ -35,6 +56,8 @@ const fr: Messages = {
   "open.warning.precisionReduced": "Échantillons flottants 64 bits stockés en 32 bits",
   "open.warning.nonFiniteSamples":
     "Valeurs infinies ou indéfinies (NaN) : affichées comme la valeur la plus lumineuse ou 0",
+  "open.warning.blendSpaceDiffers":
+    "Des calques viennent d'un document qui fusionne différemment : ils suivent maintenant l'espace de fusion de ce document",
   "open.warning.colorInfoUnsupported":
     "Informations de couleur du fichier pas encore prises en charge : couleurs lues en sRGB",
 
@@ -52,9 +75,7 @@ const fr: Messages = {
   "open.error.corrupt": "document endommagé ({detail})",
   "open.error.internal": "erreur interne ({detail})",
 
-  "save.hint": "Enregistrer ({mod}+S)",
-  "save.asHint": "Enregistrer sous… ({mod}+Maj+S)",
-  "save.title": "Enregistrer le document",
+  "save.title": "Enregistrer sous",
   "save.documentType": "Document SlopShop",
   "save.saving": "Enregistrement de {name}…",
   "save.done": "{name} enregistré",
@@ -83,9 +104,8 @@ const fr: Messages = {
     "Des documents ont des modifications non enregistrées : {names}. Quitter sans les enregistrer ?",
   "quit.discard": "Quitter sans enregistrer",
 
-  "export.hint": "Exporter ({mod}+Maj+E)",
   "export.title": "Exporter",
-  "export.titleFor": "Exporter en {format}",
+  "export.titleFor": "Enregistrer une copie en {format}",
   "export.unsupportedExtension": "{name} : choisissez un fichier PNG, TIFF, OpenEXR, JPEG ou WebP",
   "export.format.png": "PNG",
   "export.format.tiff": "TIFF",
@@ -127,7 +147,7 @@ const fr: Messages = {
     "Le {format} est limité à {max} px de côté, et cette image fait {width} × {height} px : choisissez un autre format.",
   "export.progress": "Export de {name}… {percent} %",
   "export.stop": "Annuler l'export",
-  "export.finished": "Export terminé : {name}",
+  "export.finished": "Copie aplatie enregistrée : {name}",
   "export.cancelled": "Export de {name} annulé",
   "export.failed": "Impossible d'exporter {name} : {error}",
   "export.dismiss": "Masquer",

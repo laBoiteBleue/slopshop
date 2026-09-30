@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { message, open as openDialog, save } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
@@ -26,7 +28,7 @@
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
-  import Icon from "./lib/Icon.svelte";
+  import MenuBar, { type Menu } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
   import { formatZoom } from "./lib/format";
   import LayersPanel from "./lib/LayersPanel.svelte";
@@ -46,6 +48,8 @@
   let frame = $state<FrameStats | null>(null);
   /** Viewport of the active tab. */
   let viewport = $state<Viewport | null>(null);
+  /** Layers panel of the active tab (the Layer menu acts on its selection). */
+  let layersPanel = $state<LayersPanel | null>(null);
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
   /** Where a file being dragged over the window would go. */
@@ -58,8 +62,8 @@
     null,
   );
   let exportDoc = $derived(tabs.find((d) => d.id === exportTarget?.documentId) ?? null);
-  /** The save dialog is open. */
-  let choosingExportFile = false;
+  /** The Save As dialog is open. */
+  let choosingFile = false;
   /** The dialog opens on the last format used. */
   let lastExportFormat = $state<ExportFormat>("png");
   /** Exports running (rows done out of total). */
@@ -297,10 +301,15 @@
     }
   }
 
-  async function openWithDialog() {
-    const picked = await openDialog({ multiple: true, directory: false });
+  /** Open files in new tabs or, with `layerOf`, add them as top layers of that document. */
+  async function openWithDialog(layerOf: number | null = null) {
+    const picked = await openDialog({
+      title: layerOf === null ? undefined : t("menu.file.importLayers"),
+      multiple: true,
+      directory: false,
+    });
     const paths = picked === null ? [] : Array.isArray(picked) ? picked : [picked];
-    if (paths.length > 0) await openFiles(paths, "tab");
+    if (paths.length > 0) await openFiles(paths, layerOf === null ? "tab" : { layerOf });
   }
 
   /** Opens already finished or failed: a late snapshot must not bring them back. */
@@ -345,25 +354,70 @@
   let saving = $state<number[]>([]);
 
   /**
-   * Save a document: to its file (incrementally), or, for Save As and a document that has no
-   * file yet, to a file chosen in the save dialog. False when it was not saved (dialog
-   * cancelled, error shown).
+   * The Save As and Export dialogs (ADR 0013), which share their outcome: a `.slop` file
+   * becomes the document's file; an image format is written as a flattened copy (after its
+   * options), and the document keeps its own file, so Ctrl+S never flattens it by surprise.
+   * `formats`: `all` (Save As: `.slop` first, then every image format), `document` (saving
+   * before closing: the layers must be kept) or `images` (Export: image formats, the last one
+   * used first). The chosen document path, or null (cancelled, error shown, or an image copy
+   * started).
    */
-  async function saveDocument(id: number, saveAs: boolean): Promise<boolean> {
+  async function chooseSaveAs(
+    doc: DocumentView,
+    formats: "all" | "document" | "images",
+  ): Promise<string | null> {
+    if (choosingFile || exportTarget) return null;
+    choosingFile = true;
+    try {
+      const images = formats === "document" ? [] : exportFormatOrder();
+      const documentFilter = { name: t("save.documentType"), extensions: [DOCUMENT_EXTENSION] };
+      const imageFilters = images.map((format) => ({
+        name: t(`export.format.${format}`),
+        extensions: EXPORT_FORMATS[format].extensions,
+      }));
+      const path = await save(
+        formats === "images"
+          ? {
+              title: t("export.title"),
+              defaultPath: exportFileName(tabTitle(doc), EXPORT_FORMATS[images[0]].extensions[0]),
+              filters: imageFilters,
+            }
+          : {
+              title: t("save.title"),
+              defaultPath: doc.path ?? exportFileName(tabTitle(doc), DOCUMENT_EXTENSION),
+              filters: [documentFilter, ...imageFilters],
+            },
+      );
+      if (path === null) return null;
+      if (formats !== "images" && path.toLowerCase().endsWith(`.${DOCUMENT_EXTENSION}`)) {
+        return path;
+      }
+      const format = formats === "document" ? null : formatOfPath(path);
+      if (format === null) {
+        showError(t("export.unsupportedExtension", { name: fileNameOf(path) }));
+        return null;
+      }
+      exportTarget = { documentId: doc.id, path, format };
+      return null;
+    } catch (e) {
+      showError(String(e));
+      return null;
+    } finally {
+      choosingFile = false;
+    }
+  }
+
+  /**
+   * Save a document: to its file (incrementally), or, for Save As and a document that has no
+   * file yet, through the Save As dialog. False when the document was not saved (dialog
+   * cancelled, error shown, or an image copy chosen instead).
+   */
+  async function saveDocument(id: number, saveAs: boolean, documentOnly = false): Promise<boolean> {
     const doc = tabs.find((d) => d.id === id);
     if (!doc || saving.includes(id)) return false;
     let path: string | null = null;
     if (saveAs || doc.path === null) {
-      try {
-        path = await save({
-          title: t("save.title"),
-          defaultPath: doc.path ?? exportFileName(tabTitle(doc), DOCUMENT_EXTENSION),
-          filters: [{ name: t("save.documentType"), extensions: [DOCUMENT_EXTENSION] }],
-        });
-      } catch (e) {
-        showError(String(e));
-        return false;
-      }
+      path = await chooseSaveAs(doc, documentOnly ? "document" : "all");
       if (path === null) return false;
     }
     const name = path ? fileNameOf(path) : tabTitle(doc);
@@ -411,7 +465,7 @@
       buttons,
     });
     // The clicked label, or the standard name on platforms that report it.
-    if (answer === buttons.yes || answer === "Yes") return saveDocument(id, false);
+    if (answer === buttons.yes || answer === "Yes") return saveDocument(id, false, true);
     return answer === buttons.no || answer === "No";
   }
 
@@ -439,7 +493,7 @@
 
   // --- Export ---------------------------------------------------------------------------------
 
-  /** Formats in the order of the save dialog's file types: the last one used first. */
+  /** Image formats in the order of the Save As file types: the last one used first. */
   function exportFormatOrder(): ExportFormat[] {
     const all = Object.keys(EXPORT_FORMATS) as ExportFormat[];
     return [lastExportFormat, ...all.filter((f) => f !== lastExportFormat)];
@@ -456,43 +510,6 @@
     const safe = name.replace(/[\\/:*?"<>|]/g, "_");
     const stem = safe.replace(/\.[^.]+$/, "") || safe;
     return `${stem}.${extension}`;
-  }
-
-  /**
-   * Export, like "Save As": the save dialog first (its file types are the formats; the system
-   * adds the extension of the chosen type and asks before overwriting), then the options of
-   * the format of the chosen file.
-   */
-  async function chooseExportFile() {
-    const doc = active;
-    if (!doc || choosingExportFile || exportTarget) return;
-    choosingExportFile = true;
-    try {
-      const order = exportFormatOrder();
-      const path = await save({
-        title: t("export.title"),
-        defaultPath: exportFileName(tabTitle(doc), EXPORT_FORMATS[order[0]].extensions[0]),
-        filters: order.map((format) => ({
-          name: t(`export.format.${format}`),
-          extensions: EXPORT_FORMATS[format].extensions,
-        })),
-      });
-      if (path === null) return;
-      const format = formatOfPath(path);
-      if (format === null) {
-        showToast(null, {
-          title: t("export.unsupportedExtension", { name: fileNameOf(path) }),
-          lines: [],
-          kind: "error",
-        });
-        return;
-      }
-      exportTarget = { documentId: doc.id, path, format };
-    } catch (e) {
-      showToast(null, { title: String(e), lines: [], kind: "error" });
-    } finally {
-      choosingExportFile = false;
-    }
   }
 
   function fileNameOf(path: string): string {
@@ -606,6 +623,130 @@
     return job.total > 0 ? Math.floor((job.done * 100) / job.total) : 0;
   }
 
+  // --- Menu bar (ADR 0013) ------------------------------------------------------------------------
+
+  /** A shortcut as shown in menus: `mod` (Ctrl or ⌘), `shift` and a key. */
+  function keys(...parts: string[]): string {
+    const names: Record<string, string> = { mod: modifierLabel, shift: t("key.shift") };
+    return parts.map((p) => names[p] ?? p).join("+");
+  }
+
+  /** Close the window: unsaved documents are asked about first (close-requested). */
+  function quitApp() {
+    getCurrentWindow()
+      .close()
+      .catch((e) => showError(String(e)));
+  }
+
+  async function showAbout() {
+    const version = await getVersion().catch(() => "?");
+    await message(t("about.text", { version }), { title: t("about.title"), kind: "info" });
+  }
+
+  let menus = $derived.by((): Menu[] => {
+    const doc = active;
+    const busy = doc !== null && saving.includes(doc.id);
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const cmd = (label: string, run: () => void, shortcut?: string, disabled = false) => ({
+      kind: "command" as const,
+      label,
+      run,
+      shortcut,
+      disabled,
+    });
+    const separator = { kind: "separator" as const };
+    return [
+      {
+        label: t("menu.file"),
+        items: [
+          cmd(t("menu.file.new"), () => void newDocument(), keys("mod", "N")),
+          cmd(t("menu.file.open"), () => void openWithDialog(), keys("mod", "O")),
+          cmd(
+            t("menu.file.importLayers"),
+            () => doc && void openWithDialog(doc.id),
+            keys("mod", "shift", "O"),
+            !doc,
+          ),
+          separator,
+          cmd(t("menu.file.close"), () => doc && void closeTab(doc.id), keys("mod", "W"), !doc),
+          separator,
+          cmd(t("menu.file.save"), () => saveActive(false), keys("mod", "S"), !doc || busy),
+          cmd(
+            t("menu.file.saveAs"),
+            () => saveActive(true),
+            keys("mod", "shift", "S"),
+            !doc || busy,
+          ),
+          cmd(
+            t("menu.file.export"),
+            () => doc && void chooseSaveAs(doc, "images"),
+            keys("mod", "shift", "E"),
+            !doc,
+          ),
+          separator,
+          cmd(t("menu.file.quit"), quitApp, keys("mod", "Q")),
+        ],
+      },
+      {
+        label: t("menu.edit"),
+        items: [
+          cmd(t("menu.edit.undo"), () => void undo(), keys("mod", "Z"), !doc?.canUndo),
+          cmd(t("menu.edit.redo"), () => void redo(), keys("mod", "shift", "Z"), !doc?.canRedo),
+          separator,
+          {
+            kind: "submenu",
+            label: t("menu.edit.language"),
+            items: Object.entries(locales).map(([code, { name }]) => ({
+              kind: "command" as const,
+              label: name,
+              checked: getLocale() === code,
+              run: () => setLocale(code as Locale),
+            })),
+          },
+        ],
+      },
+      {
+        label: t("menu.image"),
+        items: [
+          {
+            kind: "submenu",
+            label: t("layers.blendSpace"),
+            disabled: !doc,
+            items: (["perceptual", "linear"] as const).map((space) => ({
+              kind: "command" as const,
+              label: t(`layers.blendSpace.${space}`),
+              checked: doc?.blendSpace === space,
+              run: () => doc && void edit(doc.id, { kind: "setBlendSpace", space }),
+            })),
+          },
+        ],
+      },
+      {
+        label: t("menu.layer"),
+        items: [
+          cmd(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
+          separator,
+          cmd(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
+          cmd(t("layers.delete"), () => layersPanel?.deleteSelected(), undefined, !layer),
+        ],
+      },
+      {
+        label: t("menu.view"),
+        items: [
+          cmd(t("menu.view.zoomIn"), () => void viewport?.stepZoom(true), keys("mod", "+"), !doc),
+          cmd(t("menu.view.zoomOut"), () => void viewport?.stepZoom(false), keys("mod", "-"), !doc),
+          separator,
+          cmd(t("menu.view.fit"), () => void viewport?.fit(), keys("mod", "0"), !doc),
+          cmd(t("menu.view.actualSize"), () => void viewport?.zoomTo(1), keys("mod", "1"), !doc),
+        ],
+      },
+      {
+        label: t("menu.help"),
+        items: [cmd(t("menu.help.about"), () => void showAbout())],
+      },
+    ];
+  });
+
   // --- Keyboard --------------------------------------------------------------------------------
 
   function onkeydown(e: KeyboardEvent) {
@@ -622,9 +763,10 @@
     if (!hasShortcutModifier(e) || e.altKey) return;
     const key = e.key.toLowerCase();
     // Also the physical key, like the zoom digits: layouts differ.
+    // Also the physical key, like the zoom digits: layouts differ.
     if (e.shiftKey && (key === "e" || e.code === "KeyE")) {
       e.preventDefault();
-      if (!e.repeat) void chooseExportFile();
+      if (!e.repeat && active) void chooseSaveAs(active, "images");
       return;
     }
     if (key === "s" || e.code === "KeyS") {
@@ -632,9 +774,15 @@
       if (!e.repeat) saveActive(e.shiftKey);
       return;
     }
-    if (key === "o" && !e.shiftKey) {
+    if (key === "q" && !e.shiftKey) {
       e.preventDefault();
-      void openWithDialog();
+      if (!e.repeat) quitApp();
+      return;
+    }
+    if (key === "o" || e.code === "KeyO") {
+      e.preventDefault();
+      if (!e.shiftKey) void openWithDialog();
+      else if (active && !e.repeat) void openWithDialog(active.id);
       return;
     }
     if (key === "n" && !e.shiftKey) {
@@ -731,66 +879,9 @@
 <div class="app">
   <header class="menubar">
     <img class="logo" src="/favicon.svg" alt="" draggable="false" />
+    <MenuBar {menus} />
     <span class="brand">SlopShop</span>
     <span class="tag">{t("app.preAlpha")}</span>
-    <div class="sep"></div>
-    <button class="icon" onclick={newDocument} title={t("tabs.newHint", { mod: modifierLabel })}>
-      <Icon name="plus" />
-    </button>
-    <button class="icon" onclick={openWithDialog} title={t("open.hint", { mod: modifierLabel })}>
-      <Icon name="open" />
-    </button>
-    <button
-      class="icon"
-      onclick={() => saveActive(false)}
-      disabled={!active || saving.includes(active.id)}
-      title={t("save.hint", { mod: modifierLabel })}
-    >
-      <Icon name="save" />
-    </button>
-    <button
-      class="icon"
-      onclick={() => saveActive(true)}
-      disabled={!active || saving.includes(active.id)}
-      title={t("save.asHint", { mod: modifierLabel })}
-    >
-      <Icon name="saveAs" />
-    </button>
-    <button
-      class="icon"
-      onclick={chooseExportFile}
-      disabled={!active}
-      title={t("export.hint", { mod: modifierLabel })}
-    >
-      <Icon name="export" />
-    </button>
-    <div class="sep"></div>
-    <button
-      class="icon"
-      onclick={undo}
-      disabled={!active?.canUndo}
-      title={t("toolbar.undoHint", { mod: modifierLabel })}
-    >
-      <Icon name="undo" />
-    </button>
-    <button
-      class="icon"
-      onclick={redo}
-      disabled={!active?.canRedo}
-      title={t("toolbar.redoHint", { mod: modifierLabel })}
-    >
-      <Icon name="redo" />
-    </button>
-    <select
-      class="locale"
-      aria-label={t("app.language")}
-      value={getLocale()}
-      onchange={(e) => setLocale(e.currentTarget.value as Locale)}
-    >
-      {#each Object.entries(locales) as [code, { name }] (code)}
-        <option value={code}>{name}</option>
-      {/each}
-    </select>
   </header>
 
   <main class:has-panel={active !== null}>
@@ -898,7 +989,7 @@
             <img src="/favicon.svg" alt="" draggable="false" />
             <p>{t("welcome.title")}</p>
             <div class="welcome-actions">
-              <button onclick={openWithDialog}>{t("welcome.open")}</button>
+              <button onclick={() => openWithDialog()}>{t("welcome.open")}</button>
               <button onclick={newDocument}>{t("welcome.new")}</button>
             </div>
             <p class="muted">{t("welcome.drop")}</p>
@@ -916,7 +1007,13 @@
 
     {#if active}
       {#key active.id}
-        <LayersPanel doc={active} onedit={edit} onlive={live} ongestureend={endGesture} />
+        <LayersPanel
+          bind:this={layersPanel}
+          doc={active}
+          onedit={edit}
+          onlive={live}
+          ongestureend={endGesture}
+        />
       {/key}
     {/if}
   </main>
@@ -1133,7 +1230,7 @@
 
   .menubar {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 6px;
     padding: 0 8px;
     background: var(--chrome);
@@ -1143,45 +1240,23 @@
   .logo {
     width: 16px;
     height: 16px;
+    align-self: center;
   }
 
   .brand {
+    align-self: center;
+    margin-left: auto;
     font-weight: 600;
   }
 
   .tag {
+    align-self: center;
     padding: 0 5px;
     border-radius: 2px;
     background: var(--brand-muted);
     color: var(--brand);
     font-size: 10px;
     line-height: 15px;
-  }
-
-  .sep {
-    width: 1px;
-    height: 16px;
-    margin: 0 4px;
-    background: var(--border-strong);
-  }
-
-  .icon {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 22px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--text);
-  }
-
-  .icon:hover:not(:disabled) {
-    background: var(--hover);
-  }
-
-  .locale {
-    margin-left: auto;
   }
 
   main {

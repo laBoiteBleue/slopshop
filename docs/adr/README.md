@@ -17,5 +17,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0010 | [JPEG and WebP export](0010-jpeg-webp-export.md)                | accepted |
 | 0011 | [Gray export](0011-gray-export.md)                              | accepted |
 | 0012 | [Blend modes and blend space](0012-blend-modes.md)              | accepted |
+| 0013 | [A layout familiar to Photoshop users](0013-familiar-layout.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
