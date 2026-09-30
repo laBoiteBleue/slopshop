@@ -19,7 +19,8 @@ repository = "https://github.com/laBoiteBleue/slopshop"
 slopshop-core = { path = "crates/slopshop-core", version = "0.1.0" }
 slopshop-render = { path = "crates/slopshop-render", version = "0.1.0" }
 slopshop-io = { path = "crates/slopshop-io", version = "0.1.0" }
-wgpu = "30.0.1"
+# static-dxc: DXC built in (ADR 0019), used by default on Windows x64 instead of FXC.
+wgpu = { version = "30.0.1", features = ["static-dxc"] }
 pollster = "1.0.1"
 png = "0.18.1"
 image = { version = "0.25.10", default-features = false, features = [
