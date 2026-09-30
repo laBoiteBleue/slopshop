@@ -53,7 +53,7 @@ const TF_PARAMETRIC: u32 = 4u;
 const TF_PQ: u32 = 5u;
 const TF_HLG: u32 = 6u;
 
-// 192 bytes; keep in sync with `LayerFields` in lib.rs.
+// 304 bytes; keep in sync with `LayerFields` in lib.rs.
 struct Layer {
     // Fill: working-space linear RGBA, premultiplied, opacity applied. Raster: unused.
     color: vec4<f32>,
@@ -86,6 +86,17 @@ struct Layer {
     // Where the raster's origin, and the mask's, are in the document: whole pixels (ADR 0017).
     offset: vec2<i32>,
     mask_offset: vec2<i32>,
+    // Resampling (ADR 0018) when `resample_q.w` is not 0 (RESAMPLE_NEAREST or RESAMPLE_EWA);
+    // `offset` is then unused. Document point p → texel of the planned level:
+    // (dot(resample_u.xyz, (p, 1)), dot(resample_v.xyz, (p, 1))); the `.w` of both: half-size
+    // of the texel box read; `resample_q.xyz`: the ellipse's quadratic form (see `resample`).
+    resample_u: vec4<f32>,
+    resample_v: vec4<f32>,
+    resample_q: vec4<f32>,
+    // The same for the mask.
+    mask_resample_u: vec4<f32>,
+    mask_resample_v: vec4<f32>,
+    mask_resample_q: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -100,6 +111,8 @@ struct Layer {
 @group(0) @binding(5) var tiles_uint16: texture_2d_array<u32>;
 @group(0) @binding(6) var tiles_float16: texture_2d_array<f32>;
 @group(0) @binding(7) var tiles_float32: texture_2d_array<f32>;
+// The resampling kernel over r² (slopshop_core::resample::weight_table), four entries per vec4.
+@group(0) @binding(11) var<uniform> ewa_table: array<vec4<f32>, EWA_TABLE_VEC4S>;
 
 // Export: a region of the document at full resolution (32 bytes; keep in sync with
 // `export_params_bytes` in region.rs).
@@ -325,6 +338,79 @@ fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
     return sum / max(weight, 1e-12);
 }
 
+// The resampling kernel at r², linearly interpolated in its table (`table_weight` in core).
+fn ewa_weight(r2: f32) -> f32 {
+    let f = r2 / EWA_RADIUS2 * f32(EWA_TABLE_SIZE - 1u);
+    if !(f < f32(EWA_TABLE_SIZE - 1u)) {
+        return 0.0;
+    }
+    let i = u32(max(f, 0.0));
+    let w0 = ewa_table[i / 4u][i % 4u];
+    let w1 = ewa_table[(i + 1u) / 4u][(i + 1u) % 4u];
+    return mix(w0, w1, f - f32(i));
+}
+
+struct Resampled {
+    // Premultiplied working-space color.
+    color: vec4<f32>,
+    // Share of the filter's weight inside the image.
+    inside: f32,
+}
+
+// A transformed raster at document point `p` (ADR 0018): the same loop as
+// slopshop_core::resample::Resampling::sample. EWA over the texels of the planned level within
+// the ellipse, weighted by the kernel, clamped to the range of the texels nearest to `p`
+// (anti-ringing); or the texel under `p` (RESAMPLE_NEAREST). Texels outside the image are
+// transparent.
+fn resample(layer: Layer, p: vec2<f32>, unbounded: bool, count: ptr<function, u32>) -> Resampled {
+    let point = vec3<f32>(p, 1.0);
+    let uv = vec2<f32>(dot(layer.resample_u.xyz, point), dot(layer.resample_v.xyz, point));
+    let extent = vec2<f32>(layer.resample_u.w, layer.resample_v.w);
+    let size = vec2<f32>(layer.level_size);
+    if any(uv + extent <= vec2<f32>(0.0)) || any(uv - extent >= size) {
+        return Resampled(vec4<f32>(0.0), 0.0);
+    }
+    if u32(layer.resample_q.w) == RESAMPLE_NEAREST {
+        let at = vec2<i32>(floor(uv));
+        let inside = all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size));
+        return Resampled(texel_color(layer, at, unbounded, count), select(0.0, 1.0, inside));
+    }
+    let q = layer.resample_q.xyz;
+    let first = vec2<i32>(ceil(uv - 0.5 - extent));
+    let last = vec2<i32>(floor(uv - 0.5 + extent));
+    var sum = vec4<f32>(0.0);
+    var total = 0.0;
+    var inside = 0.0;
+    var lo = vec4<f32>(F32_MAX);
+    var hi = vec4<f32>(-F32_MAX);
+    for (var j = first.y; j <= last.y; j++) {
+        let dv = f32(j) + 0.5 - uv.y;
+        for (var i = first.x; i <= last.x; i++) {
+            let du = f32(i) + 0.5 - uv.x;
+            let r2 = q.x * du * du + q.y * du * dv + q.z * dv * dv;
+            if r2 < EWA_RADIUS2 {
+                let w = ewa_weight(r2);
+                let at = vec2<i32>(i, j);
+                let color = texel_color(layer, at, unbounded, count);
+                if all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size)) {
+                    inside += w;
+                }
+                sum += color * w;
+                total += w;
+                if r2 <= ANTIRING_R2 {
+                    lo = min(lo, color);
+                    hi = max(hi, color);
+                }
+            }
+        }
+    }
+    if !(total > 1e-12) {
+        return Resampled(vec4<f32>(0.0), 0.0);
+    }
+    // The nearest texel center is within r² ≤ ½: `lo` and `hi` are set.
+    return Resampled(clamp(sum / total, lo, hi), clamp(inside / total, 0.0, 1.0));
+}
+
 // Share of the output pixel that falls inside a raster layer's image (at its offset): 0 or 1
 // for an exact texel, the covered area otherwise.
 fn inside_raster(layer: Layer, footprint: Footprint) -> f32 {
@@ -353,6 +439,9 @@ fn mask_view(layer: Layer) -> Layer {
     m.level_size = layer.mask_level_size;
     m.format = layer.mask_format;
     m.offset = layer.mask_offset;
+    m.resample_u = layer.mask_resample_u;
+    m.resample_v = layer.mask_resample_v;
+    m.resample_q = layer.mask_resample_q;
     m.flags = FLAG_GRAY;
     m.transfer = vec4<f32>(f32(TF_LINEAR), 0.0, 0.0, 0.0);
     m.transfer2 = vec4<f32>(0.0);
@@ -368,7 +457,9 @@ fn mask_coverage(layer: Layer, footprint: Footprint) -> f32 {
     let mask = mask_view(layer);
     var uncounted = 0u;
     var value = 0.0;
-    if footprint.exact {
+    if mask.resample_q.w != 0.0 {
+        value = resample(mask, footprint.center, footprint.exact, &uncounted).color.r;
+    } else if footprint.exact {
         value = texel_color(mask, footprint.texel - mask.offset, true, &uncounted).r;
     } else {
         value = sample_raster(mask, footprint.lo, footprint.hi).r;
@@ -686,6 +777,9 @@ struct Footprint {
     // Export (`exact`): exactly this level-0 texel, with the unbounded `finite` rule.
     texel: vec2<i32>,
     exact: bool,
+    // Where resampled layers are sampled (ADR 0018): the output pixel's center, or the center
+    // of the document pixel under it when zoomed in and for export.
+    center: vec2<f32>,
 }
 
 // Premultiplied working-space color of the first `layer_count` layers ("over", bottom to top).
@@ -732,15 +826,31 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
         }
         var src = layer.color;
         if layer.kind == KIND_RASTER {
-            if footprint.exact {
-                src = texel_color(layer, footprint.texel - layer.offset, true, count);
+            var inside = 0.0;
+            if layer.resample_q.w != 0.0 {
+                var uncounted = 0u;
+                var sample: Resampled;
+                if footprint.exact {
+                    sample = resample(layer, footprint.center, true, count);
+                } else {
+                    sample = resample(layer, footprint.center, false, &uncounted);
+                }
+                src = sample.color;
+                inside = sample.inside;
             } else {
-                src = sample_raster(layer, footprint.lo, footprint.hi);
+                if footprint.exact {
+                    src = texel_color(layer, footprint.texel - layer.offset, true, count);
+                } else {
+                    src = sample_raster(layer, footprint.lo, footprint.hi);
+                }
+                if (layer.flags & FLAG_IGNORE_ALPHA) != 0u {
+                    inside = inside_raster(layer, footprint);
+                }
             }
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).
             // Only where the image is: outside it the layer stays transparent.
             if (layer.flags & FLAG_IGNORE_ALPHA) != 0u {
-                src = vec4<f32>(unpremultiply(src), 1.0) * inside_raster(layer, footprint);
+                src = vec4<f32>(unpremultiply(src), 1.0) * inside;
             }
             src = src * layer.opacity;
         }
@@ -777,10 +887,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let inside = max(hi - lo, vec2<f32>(0.0));
     let coverage = (inside.x * inside.y) / (params.scale * params.scale);
 
+    // Zoomed in, resampled layers show document pixels, like export (ADR 0018).
+    let pixel_center = params.origin + (vec2<f32>(id.xy) + 0.5) * params.scale;
+    let center = select(pixel_center, floor(pixel_center) + 0.5, params.scale <= 1.0);
+
     var color = PASTEBOARD;
     if coverage > 0.0 {
         var uncounted = 0u;
-        let acc = composite(Footprint(lo, hi, vec2<i32>(0), false), params.layer_count, &uncounted);
+        let footprint = Footprint(lo, hi, vec2<i32>(0), false, center);
+        let acc = composite(footprint, params.layer_count, &uncounted);
         // Working space → display (a linear map, so it commutes with premultiplied "over").
         let display = vec3<f32>(
             dot(params.display0.xyz, acc.rgb),
@@ -798,15 +913,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // Export: premultiplied working-space RGBA of a document region at full resolution. Every raster
-// layer is planned at level 0, so one output pixel is exactly one texel (no filtering). No
-// display matrix, background or clipping.
+// layer that is not resampled is planned at level 0, so one output pixel is exactly one texel (no
+// filtering); resampled layers are filtered as in the CPU reference. No display matrix,
+// background or clipping.
 @compute @workgroup_size(8, 8)
 fn export_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= export_params.size.x || id.y >= export_params.size.y {
         return;
     }
     let texel = vec2<i32>(export_params.origin + id.xy);
-    let footprint = Footprint(vec2<f32>(0.0), vec2<f32>(0.0), texel, true);
+    let center = vec2<f32>(texel) + 0.5;
+    let footprint = Footprint(vec2<f32>(0.0), vec2<f32>(0.0), texel, true, center);
     var count = 0u;
     export_output[id.y * export_params.size.x + id.x] =
         composite(footprint, export_params.layer_count, &count);

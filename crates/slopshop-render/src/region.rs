@@ -10,12 +10,12 @@ use std::sync::mpsc;
 
 use slopshop_core::composite::{Step, steps};
 use slopshop_core::raster::{ImageId, TILE_SIZE};
-use slopshop_core::{BlendSpace, Document, RasterImage, Rect};
+use slopshop_core::resample::Resampling;
+use slopshop_core::{Affine, BlendSpace, Document, RasterImage, Rect};
 
-use crate::tiles::{GpuTileFormat, TileCache};
+use crate::tiles::{GpuTileFormat, TileCache, TileKey};
 use crate::{
-    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers, shifted,
-    step_rasters,
+    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers, step_rasters,
 };
 
 /// One RGBA f32 pixel.
@@ -197,16 +197,25 @@ impl Renderer {
         // that both count the same non-finite values.
         let layers = steps(document);
         let tiles_per_chunk = self.tiles_per_chunk(&layers, region)?;
-        let chunks = region_chunks(
-            region,
-            tiles_per_chunk,
-            max_chunk_pixels(self.max_output_bytes),
-            self.max_dispatch_pixels,
-        );
+        let chunks = self.fitted_chunks(
+            &layers,
+            region_chunks(
+                region,
+                tiles_per_chunk,
+                max_chunk_pixels(self.max_output_bytes),
+                self.max_dispatch_pixels,
+            ),
+        )?;
 
-        // Per-call tile arrays, sized for the chunk that needs the most tiles (tiles of one
-        // chunk are never evicted by that chunk: every class holds all its tiles).
-        let most_tiles = chunks.iter().map(|c| tile_span(*c)).max().unwrap_or(1);
+        // Per-call tile arrays, sized for the chunk that needs the most tiles of each class
+        // (tiles of one chunk are never evicted by that chunk: every class holds all its tiles).
+        let mut most_tiles = [0usize; 4];
+        for (_, needed) in &chunks {
+            for (most, &n) in most_tiles.iter_mut().zip(needed) {
+                *most = (*most).max(n);
+            }
+        }
+        let chunks: Vec<Rect> = chunks.into_iter().map(|(chunk, _)| chunk).collect();
         let largest = chunks
             .iter()
             .map(|c| c.size().pixel_count())
@@ -216,10 +225,10 @@ impl Renderer {
         let result = self.capture_errors(|| {
             let mut caches: [Option<TileCache>; 4] = [None, None, None, None];
             for format in GpuTileFormat::ALL {
-                let images = raster_images(&layers, region, format).len() as u64;
-                if images > 0 {
+                let needed = most_tiles[format.index()];
+                if needed > 0 {
                     let capacity = self.tile_capacity[format.index()];
-                    let needed = u32::try_from(images * most_tiles).unwrap_or(u32::MAX);
+                    let needed = u32::try_from(needed).unwrap_or(u32::MAX);
                     caches[format.index()] = Some(TileCache::new(
                         &self.device,
                         format,
@@ -272,6 +281,51 @@ impl Renderer {
         Ok(tiles)
     }
 
+    /// `chunks`, each with the tiles it needs per class, split until those fit in the caches:
+    /// transformed layers (ADR 0018) can read more tiles than their chunk covers (rotations,
+    /// the filter's margin), which `tiles_per_chunk` does not account for.
+    fn fitted_chunks(
+        &self,
+        layers: &[Step<'_>],
+        chunks: Vec<Rect>,
+    ) -> Result<Vec<(Rect, [usize; 4])>, RenderError> {
+        let mut pending = chunks;
+        pending.reverse();
+        let mut fitted = Vec::new();
+        while let Some(chunk) = pending.pop() {
+            let needed = chunk_tiles(&chunk_plans(layers, chunk));
+            let over = GpuTileFormat::ALL
+                .into_iter()
+                .find(|f| needed[f.index()] > self.tile_capacity[f.index()] as usize);
+            let Some(format) = over else {
+                fitted.push((chunk, needed));
+                continue;
+            };
+            // Halve along the longer side; a single pixel that does not fit never will.
+            let (a, b) = if chunk.width >= chunk.height && chunk.width > 1 {
+                let w = chunk.width / 2;
+                (
+                    Rect::new(chunk.x, chunk.y, w, chunk.height),
+                    Rect::new(chunk.x + w, chunk.y, chunk.width - w, chunk.height),
+                )
+            } else if chunk.height > 1 {
+                let h = chunk.height / 2;
+                (
+                    Rect::new(chunk.x, chunk.y, chunk.width, h),
+                    Rect::new(chunk.x, chunk.y + h, chunk.width, chunk.height - h),
+                )
+            } else {
+                return Err(RenderError::TooManyLayers {
+                    images: raster_images(layers, chunk, format).len(),
+                    capacity: self.tile_capacity[format.index()],
+                });
+            };
+            pending.push(b);
+            pending.push(a);
+        }
+        Ok(fitted)
+    }
+
     /// Composite one chunk into `buffers.output`, count its non-finite values in
     /// `buffers.counter`, and copy both to `buffers.readback` (pixels from offset 0, the
     /// counter right after them).
@@ -283,23 +337,7 @@ impl Renderer {
         caches: &mut [Option<TileCache>; 4],
         buffers: &ChunkBuffers,
     ) -> Result<(), RenderError> {
-        let area = [
-            f64::from(chunk.x),
-            f64::from(chunk.y),
-            chunk.right() as f64,
-            chunk.bottom() as f64,
-        ];
-        // Two plans per step: its raster, then its enabled mask (ADR 0014).
-        let plans: Vec<Option<RasterPlan<'_>>> = layers
-            .iter()
-            .flat_map(|step| {
-                step_rasters(step).map(|raster| {
-                    raster
-                        .filter(|&(image, at)| covers(image, at, chunk))
-                        .map(|(image, at)| RasterPlan::full_resolution(image, shifted(area, at)))
-                })
-            })
-            .collect();
+        let plans = chunk_plans(layers, chunk);
         for cache in caches.iter_mut().flatten() {
             cache.begin_frame();
         }
@@ -438,30 +476,74 @@ fn max_chunk_pixels(max_output_bytes: u64) -> u64 {
     (max_output_bytes.min(CHUNK_BUDGET_BYTES) / PIXEL_BYTES).max(1)
 }
 
+/// Two plans per step, at full resolution, for `chunk`: its raster, then its enabled mask
+/// (ADR 0014); `None` where they have nothing in the chunk.
+fn chunk_plans<'a>(layers: &[Step<'a>], chunk: Rect) -> Vec<Option<RasterPlan<'a>>> {
+    let area = document_area(chunk);
+    layers
+        .iter()
+        .flat_map(|step| {
+            step_rasters(step).map(|raster| {
+                raster
+                    .filter(|&(image, transform)| covers(image, transform, chunk))
+                    .and_then(|(image, transform)| {
+                        RasterPlan::full_resolution(image, area, transform)
+                    })
+            })
+        })
+        .collect()
+}
+
+/// Distinct tiles that `plans` read, per storage class.
+fn chunk_tiles(plans: &[Option<RasterPlan<'_>>]) -> [usize; 4] {
+    let mut keys: [HashSet<TileKey>; 4] = Default::default();
+    for plan in plans.iter().flatten() {
+        keys[plan.format.index()].extend(plan.keys());
+    }
+    keys.map(|k| k.len())
+}
+
+fn document_area(area: Rect) -> [f64; 4] {
+    [
+        f64::from(area.x),
+        f64::from(area.y),
+        area.right() as f64,
+        area.bottom() as f64,
+    ]
+}
+
 /// Distinct images of a storage class shown by `layers` within `region`.
 fn raster_images(layers: &[Step<'_>], region: Rect, format: GpuTileFormat) -> HashSet<ImageId> {
     layers
         .iter()
         .flat_map(|step| step_rasters(step).into_iter().flatten())
-        .filter(|&(image, at)| {
+        .filter(|&(image, transform)| {
             GpuTileFormat::for_sample(image.stored_format().sample) == format
-                && covers(image, at, region)
+                && covers(image, transform, region)
         })
         .map(|(image, _)| image.id())
         .collect()
 }
 
-/// Whether a raster at `offset` in the document has pixels within `area`.
-fn covers(image: &RasterImage, offset: [i32; 2], area: Rect) -> bool {
-    let (x, y) = (i64::from(offset[0]), i64::from(offset[1]));
+/// Whether a raster placed by `transform` has pixels read within `area` (for a resampled one,
+/// within the filter's reach).
+fn covers(image: &RasterImage, transform: Affine, area: Rect) -> bool {
     let size = image.size();
-    x < area.right() as i64
-        && y < area.bottom() as i64
-        && x + i64::from(size.width) > i64::from(area.x)
-        && y + i64::from(size.height) > i64::from(area.y)
+    if let Some((x, y)) = transform.integer_translation() {
+        return x < area.right() as i64
+            && y < area.bottom() as i64
+            && x + i64::from(size.width) > i64::from(area.x)
+            && y + i64::from(size.height) > i64::from(area.y);
+    }
+    let Some(r) = Resampling::new(transform, 1.0, image.levels().len()) else {
+        return false;
+    };
+    let [x0, y0, x1, y1] = r.source_area(document_area(area));
+    x1 > 0.0 && y1 > 0.0 && x0 < f64::from(size.width) && y0 < f64::from(size.height)
 }
 
 /// Level-0 tiles an area touches.
+#[cfg(test)]
 fn tile_span(area: Rect) -> u64 {
     let tile = u64::from(TILE_SIZE);
     let columns = area.right().div_ceil(tile) - u64::from(area.x) / tile;

@@ -771,3 +771,60 @@ fn a_moved_raster_is_displayed_moved() {
         assert_close(pixel(&frame, x, y), pattern(x - 40, y + 30));
     }
 }
+
+#[test]
+fn zoomed_in_a_transformed_raster_shows_its_document_pixels() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(200, 180);
+    let mut s = raster_session(size, pattern);
+    let id = s.document().layers()[0].id;
+    s.perform(Edit::SetLayerTransform {
+        id,
+        transform: slopshop_core::Affine::rotation(0.4)
+            .then(slopshop_core::Affine::translation(60.0, -30.0)),
+    })
+    .unwrap();
+    let full = r.render_view(s.document(), identity(), size).unwrap();
+    // At 400 %, each document pixel is a 4 × 4 block showing what 100 % shows (inside the
+    // rotated image: no checkerboard, which is laid out in output pixels).
+    let view = ViewTransform {
+        origin: [50.0, 60.0],
+        scale: 0.25,
+    };
+    let zoomed = r
+        .render_view(s.document(), view, Size::new(64, 64))
+        .unwrap();
+    for oy in 0..64 {
+        for ox in 0..64 {
+            assert_eq!(
+                pixel(&zoomed, ox, oy),
+                pixel(&full, 50 + ox / 4, 60 + oy / 4),
+                "output ({ox}, {oy})"
+            );
+        }
+    }
+}
+
+#[test]
+fn zoomed_out_a_reduced_raster_keeps_its_color() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(400, 400);
+    let mut s = raster_session(size, |_, _| [200, 100, 50, 255]);
+    let id = s.document().layers()[0].id;
+    s.perform(Edit::SetLayerTransform {
+        id,
+        transform: slopshop_core::Affine::scale(0.5, 0.5)
+            .then(slopshop_core::Affine::rotation(0.3))
+            .then(slopshop_core::Affine::translation(100.0, 100.0)),
+    })
+    .unwrap();
+    // Zoomed out 3×: the image's center, (200, 200), is at document (166, 225).
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 3.0,
+    };
+    let frame = r
+        .render_view(s.document(), view, Size::new(134, 134))
+        .unwrap();
+    assert_close(pixel(&frame, 55, 75), [200, 100, 50, 255]);
+}
