@@ -48,8 +48,12 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    gradient or pattern fills (left out), text, shapes, smart objects and vector masks (their pixels), pixels outside the
    canvas (cropped). A file saved without "Maximize Compatibility" opens from its layers.
 3. **Groups and clipping** ✅ (ADR 0015, ADR 0016).
-4. **Export** (PSD, and PSB above the PSD limits), layered, with a merged composite for other
-   readers.
+4. **Export** ✅ for PSD (`slopshop_io::export::export_psd`, 8/16-bit RGB, RLE): pixel layers
+   rendered one by one at their pixel size (transformed layers resampled, parts outside the
+   canvas cut and reported), fill layers as pixels, groups, clipping, layer masks, blend modes
+   and the adjustment layers the importer reads, as native ones; a merged composite stored over
+   white as Photoshop does, and the ICC profile. Checked by re-importing and with psd-tools.
+   PSB (above 30,000 px per side) is still to do.
 5. **Adjustment layers** ✅ in part (ADR 0020): Brightness/Contrast (from its descriptor, as
    current Photoshop versions write it), Levels, Exposure, Vibrance, Hue/Saturation, Invert,
    Posterize and Threshold become native adjustment layers with their mask; Levels per
@@ -79,7 +83,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| **Photoshop** | `.psd`, `.pdd` | ✅ layers | — | **P0** | in-house reader (see above) | groups, clipping and eight kinds of adjustment layers kept; other adjustments and styles reported; CMYK, Lab refused |
+| **Photoshop** | `.psd`, `.pdd` | ✅ layers | ✅ layers | **P0** | in-house reader (see above) | groups, clipping and eight kinds of adjustment layers kept; other adjustments and styles reported; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | 🔎 | — | **P0** | same reader (64-bit lengths) | |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
 | PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export |
