@@ -1430,18 +1430,43 @@ async fn perform(
 
 /// Apply an edit live, as part of a continuous gesture (slider drag, …). The gesture becomes a
 /// single undo entry when `end_gesture` is called (or when any other edit/undo happens).
+/// `replace`: the edit is the whole gesture so far (a move or transform since the drag began),
+/// so what the gesture applied before is reverted first: nothing drifts, and live edits merged
+/// while the engine was busy lose nothing.
 #[tauri::command]
 async fn perform_live(
     state: State<'_, AppState>,
     document_id: u64,
     edit: EditRequest,
+    replace: Option<bool>,
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
+    if replace == Some(true) {
+        document
+            .session
+            .cancel_gesture()
+            .map_err(|e| e.to_string())?;
+    }
     let edit = edit.into_edit(&mut document.session)?;
     document
         .session
         .perform_in_gesture(edit)
+        .map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
+/// Revert the gesture in progress without a history entry (a transform cancelled with Esc).
+#[tauri::command]
+async fn cancel_gesture(
+    state: State<'_, AppState>,
+    document_id: u64,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    document
+        .session
+        .cancel_gesture()
         .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
@@ -1796,6 +1821,7 @@ pub fn run() {
             perform,
             perform_live,
             end_gesture,
+            cancel_gesture,
             undo,
             redo,
             gpu_info,
@@ -2437,6 +2463,32 @@ mod tests {
             .is_err()
         );
         assert!(request(r#"{"kind":"setBlendSpace","space":"cmyk"}"#.to_owned()).is_err());
+    }
+
+    #[test]
+    fn transform_requests_replace_the_gesture_so_far() {
+        let mut s = blank_session();
+        let id = s.document().layers()[0].id;
+        // Live steps of one Free Transform, each the whole transform so far (`replace`).
+        for matrix in ["[2,0,0,2,0,0]", "[0,1,-1,0,10,0]"] {
+            let json = format!(
+                r#"{{"kind":"transformLayers","ids":[{}],"matrix":{matrix}}}"#,
+                id.get()
+            );
+            // As `perform_live` does: revert the gesture, then build the edit.
+            s.cancel_gesture().unwrap();
+            let edit = serde_json::from_str::<EditRequest>(&json)
+                .unwrap()
+                .into_edit(&mut s)
+                .unwrap();
+            s.perform_in_gesture(edit).unwrap();
+        }
+        // Only the last step applies: a quarter turn, exact.
+        let transform = s.document().layer(id).unwrap().transform;
+        assert_eq!(transform.to_array(), [0.0, 1.0, -1.0, 0.0, 10.0, 0.0]);
+        s.end_gesture();
+        assert!(s.undo().unwrap());
+        assert!(s.document().layer(id).unwrap().transform.is_identity());
     }
 
     #[test]

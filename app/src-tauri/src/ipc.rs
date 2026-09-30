@@ -278,6 +278,12 @@ pub enum EditRequest {
         dx: i64,
         dy: i64,
     },
+    /// Apply `matrix` (`[a, b, c, d, e, f]`, a map of the document's space) to layers on top
+    /// of their transforms (Free Transform, ADR 0018); a group transforms whole.
+    TransformLayers {
+        ids: Vec<u64>,
+        matrix: [f64; 6],
+    },
     /// `mode`: a blend mode identifier (`BlendMode::id`).
     SetLayerBlendMode {
         id: u64,
@@ -378,6 +384,15 @@ impl EditRequest {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::translate_layers(session.document(), &ids, dx, dy)
                     .map_err(|e| e.to_string())?
+            }
+            EditRequest::TransformLayers { ids, matrix } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::transform_layers(
+                    session.document(),
+                    &ids,
+                    slopshop_core::Affine::from_array(matrix),
+                )
+                .map_err(|e| e.to_string())?
             }
             EditRequest::SetLayerClipped { id, clipped } => Edit::SetLayerClipped {
                 id: LayerId::from_raw(id),
