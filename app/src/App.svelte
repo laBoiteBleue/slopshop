@@ -294,7 +294,17 @@
   async function openFiles(paths: string[], target: "tab" | { layerOf: number }) {
     const failuresBefore = openFailureCount;
     try {
-      await engine.openImages(paths, target === "tab" ? null : target.layerOf);
+      const summary = await engine.openImages(paths, target === "tab" ? null : target.layerOf);
+      for (const [name, detail] of summary.failedArchives) {
+        showError(t("open.failed", { name, error: t("open.error.archive", { detail }) }));
+      }
+      if (summary.skipped > 0) {
+        showToast(null, {
+          title: t("open.skipped", { count: summary.skipped }),
+          lines: [],
+          kind: "done",
+        });
+      }
     } catch (e) {
       // Failures normally come as events, with a localized message.
       if (openFailureCount === failuresBefore) showError(String(e));
@@ -302,6 +312,16 @@
   }
 
   /** Open files in new tabs or, with `layerOf`, add them as top layers of that document. */
+  /** Open a folder: its images like several files, in new tabs. */
+  async function openFolderWithDialog() {
+    const picked = await openDialog({
+      title: t("menu.file.openFolder"),
+      directory: true,
+      multiple: false,
+    });
+    if (typeof picked === "string") await openFiles([picked], "tab");
+  }
+
   async function openWithDialog(layerOf: number | null = null) {
     const picked = await openDialog({
       title: layerOf === null ? undefined : t("menu.file.importLayers"),
@@ -683,6 +703,7 @@
         items: [
           cmd(t("menu.file.new"), () => void newDocument(), keys("mod", "N")),
           cmd(t("menu.file.open"), () => void openWithDialog(), keys("mod", "O")),
+          cmd(t("menu.file.openFolder"), () => void openFolderWithDialog()),
           cmd(
             t("menu.file.importLayers"),
             () => doc && void openWithDialog(doc.id),

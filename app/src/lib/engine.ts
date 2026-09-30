@@ -148,6 +148,14 @@ export type Pasted =
   | { kind: "image"; document: DocumentView; newTab: boolean }
   | { kind: "nothing" };
 
+/** What an open found in folders and zip archives (OpenSummary in lib.rs). */
+export type OpenSummary = {
+  /** Files SlopShop does not open. */
+  skipped: number;
+  /** Archives or folders that could not be read: name and technical detail. */
+  failedArchives: [string, string][];
+};
+
 /** Where an opened image goes. */
 export type OpenTarget = { kind: "newTab" } | { kind: "layer"; documentId: number };
 
@@ -478,7 +486,7 @@ export const engine = {
    * of `paths`. Outcomes arrive as `open-*` events; resolves once every image is done.
    */
   openImages: (paths: string[], documentId: number | null) =>
-    invoke<void>("open_images", { paths, documentId }),
+    invoke<OpenSummary>("open_images", { paths, documentId }),
   /**
    * Save a document to its `.slop` file (incremental), or to `path` (Save As: a new compact
    * file the document continues with). Rejects with a `SaveFailed`. Queued after the edits
