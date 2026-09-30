@@ -33,6 +33,9 @@ export type LayerView = {
   transform: [number, number, number, number, number, number];
 };
 
+/** A 2D affine map `[a, b, c, d, e, f]`: (x, y) ↦ (a·x + c·y + e, b·x + d·y + f). */
+export type Matrix = [number, number, number, number, number, number];
+
 /** A rectangle in document pixels (right and bottom exclusive). */
 export type Bounds = { left: number; top: number; right: number; bottom: number };
 
@@ -125,6 +128,8 @@ export type EditRequest =
   | { kind: "setLayerClipped"; id: number; clipped: boolean }
   /** Move layers by whole document pixels (a group moves whole). */
   | { kind: "translateLayers"; ids: number[]; dx: number; dy: number }
+  /** Apply `matrix` ([a, b, c, d, e, f], in document pixels) to layers (Free Transform). */
+  | { kind: "transformLayers"; ids: number[]; matrix: Matrix }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
@@ -469,7 +474,7 @@ const serialView = makeQueue();
 
 // Live edits (slider drags) are coalesced: only the latest value still waiting is sent, and
 // only within the same document.
-let waitingLive: { documentId: number; edit: EditRequest } | null = null;
+let waitingLive: { documentId: number; edit: EditRequest; replace: boolean } | null = null;
 
 // Pans and zooms are coalesced into the last request still waiting in the queue (same
 // document): deltas add up, zoom factors multiply (around the latest anchor), absolute zooms
@@ -571,22 +576,36 @@ export const engine = {
     serial(() => invoke<DocumentView>("perform", { documentId, edit })),
   /**
    * Apply an edit immediately as part of a gesture (one undo entry for the whole gesture).
-   * Resolves to `null` when merged into a live edit that was already waiting.
+   * `replace`: the edit is the whole gesture so far (e.g. a move since the drag began), which
+   * replaces what the gesture applied before. Resolves to `null` when merged into a live edit
+   * that was already waiting (which is then replaced: only use with absolute edits).
    */
-  performLive: (documentId: number, edit: EditRequest): Promise<DocumentView | null> => {
+  performLive: (
+    documentId: number,
+    edit: EditRequest,
+    replace = false,
+  ): Promise<DocumentView | null> => {
     if (waitingLive && waitingLive.documentId === documentId) {
       waitingLive.edit = edit;
+      waitingLive.replace = replace;
       return Promise.resolve(null);
     }
-    const slot = { documentId, edit };
+    const slot = { documentId, edit, replace };
     waitingLive = slot;
     return serial(() => {
       if (waitingLive === slot) waitingLive = null;
-      return invoke<DocumentView>("perform_live", { documentId, edit: slot.edit });
+      return invoke<DocumentView>("perform_live", {
+        documentId,
+        edit: slot.edit,
+        replace: slot.replace,
+      });
     });
   },
   endGesture: (documentId: number) =>
     serial(() => invoke<DocumentView>("end_gesture", { documentId })),
+  /** Revert the gesture in progress, leaving no undo entry (Esc during a transform). */
+  cancelGesture: (documentId: number) =>
+    serial(() => invoke<DocumentView>("cancel_gesture", { documentId })),
   undo: (documentId: number) => serial(() => invoke<DocumentView>("undo", { documentId })),
   redo: (documentId: number) => serial(() => invoke<DocumentView>("redo", { documentId })),
   gpuInfo: () => invoke<GpuInfo>("gpu_info"),
