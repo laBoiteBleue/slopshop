@@ -26,6 +26,7 @@ pub mod raster;
 pub mod session;
 pub mod thumbnail;
 pub mod tile;
+pub mod transform;
 pub mod view;
 
 pub use blend::{BlendMode, BlendSpace};
@@ -36,3 +37,4 @@ pub use geom::{Rect, Size};
 pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;
 pub use session::{Copies, Session};
+pub use transform::Affine;

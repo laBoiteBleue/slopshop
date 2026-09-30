@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 5;
+pub(crate) const SCHEMA_MINOR: u32 = 6;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -34,6 +34,10 @@ pub(crate) const NODE_VERSION: u32 = 3;
 /// this version, so that versions without clipping refuse them instead of drawing them
 /// unclipped. The newest node version this code reads.
 pub(crate) const NODE_VERSION_CLIPPED: u32 = 4;
+/// Version of the nodes with a `transform` (schema 0.6, ADR 0017), written only for nodes that
+/// are not at the identity: readers without transforms refuse them instead of misplacing them.
+/// The newest node version this code reads.
+pub(crate) const NODE_VERSION_TRANSFORMED: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

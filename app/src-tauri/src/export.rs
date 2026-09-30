@@ -481,6 +481,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: "image".to_owned(),

@@ -30,7 +30,7 @@ use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{
-    BlendMode, BlendSpace, Document, Layer, LayerContent, RasterImage, Rect, Size,
+    Affine, BlendMode, BlendSpace, Document, Layer, LayerContent, RasterImage, Rect, Size,
 };
 
 use crate::tiles::{GpuTileFormat, TileCache, TileKey, gpu_texels};
@@ -546,7 +546,7 @@ impl Renderer {
 }
 
 /// Size of one `Layer` in composite.wgsl.
-const LAYER_BYTES: usize = 192;
+const LAYER_BYTES: usize = 208;
 
 /// GPU-ready description of the visible layers of one frame.
 struct PreparedLayers {
@@ -575,8 +575,14 @@ impl Renderer {
         let mut plans: Vec<Option<RasterPlan<'_>>> = steps
             .iter()
             .flat_map(|step| {
-                step_rasters(step)
-                    .map(|image| Some(RasterPlan::new(image?, visible_doc?, view.scale)))
+                step_rasters(step).map(|raster| {
+                    let (image, at) = raster?;
+                    Some(RasterPlan::new(
+                        image,
+                        shifted(visible_doc?, at),
+                        view.scale,
+                    ))
+                })
             })
             .collect();
         let mut tables: Vec<Vec<u32>> = vec![Vec::new(); plans.len()];
@@ -679,18 +685,42 @@ impl Renderer {
 }
 
 /// The rasters a step samples: a raster layer's image, then its (or a group's) enabled mask.
-fn step_rasters<'a>(step: &Step<'a>) -> [Option<&'a RasterImage>; 2] {
+fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, [i32; 2])>; 2] {
     match step {
-        Step::Layer { layer, .. } => {
+        Step::Layer {
+            layer, transform, ..
+        } => {
+            let at = offset(*transform);
             let content = match &layer.content {
-                LayerContent::Raster { image } => Some(image.as_ref()),
+                LayerContent::Raster { image } => Some((image.as_ref(), at)),
                 _ => None,
             };
-            [content, enabled_mask(layer)]
+            [content, enabled_mask(layer).map(|image| (image, at))]
         }
         Step::Begin { .. } => [None, None],
-        Step::End { mask, .. } => [None, mask.map(|m| m.image.as_ref())],
+        Step::End {
+            mask,
+            mask_transform,
+            ..
+        } => [
+            None,
+            mask.map(|m| (m.image.as_ref(), offset(*mask_transform))),
+        ],
     }
+}
+
+/// The whole-pixel offset of a composed transform (documents hold whole-pixel translations
+/// only, ADR 0017), clamped to the shader's `i32`.
+fn offset(transform: Affine) -> [i32; 2] {
+    let (x, y) = transform.integer_translation().unwrap_or((0, 0));
+    let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    [clamp(x), clamp(y)]
+}
+
+/// A document rectangle `[x0, y0, x1, y1]` seen from an image at `offset`.
+fn shifted(area: [f64; 4], offset: [i32; 2]) -> [f64; 4] {
+    let (x, y) = (f64::from(offset[0]), f64::from(offset[1]));
+    [area[0] - x, area[1] - y, area[2] - x, area[3] - y]
 }
 
 /// The image of a layer's mask, when it has an enabled one.
@@ -727,13 +757,14 @@ fn encode_layers(
         let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
         let table = tables.next().unwrap_or_default();
         let mask_table = tables.next().unwrap_or_default();
-        let (layer, mode, opacity, atop) = match step {
+        let (layer, mode, opacity, atop, at) = match step {
             Step::Layer {
                 layer,
                 mode,
                 opacity,
                 atop,
-            } => (*layer, *mode, *opacity, *atop),
+                transform,
+            } => (*layer, *mode, *opacity, *atop, offset(*transform)),
             Step::Begin { isolated } => {
                 let fields = LayerFields {
                     kind: KIND_GROUP_BEGIN,
@@ -746,6 +777,7 @@ fn encode_layers(
             }
             Step::End {
                 mask,
+                mask_transform,
                 mode,
                 opacity,
                 isolated,
@@ -759,6 +791,7 @@ fn encode_layers(
                         | if *isolated { FLAG_ISOLATED } else { 0 }
                         | if *atop { FLAG_ATOP } else { 0 },
                     opacity: if hidden { 0.0 } else { *opacity },
+                    mask_offset: offset(*mask_transform),
                     ..LayerFields::default()
                 };
                 if let Some(mask) = mask_plan {
@@ -774,6 +807,8 @@ fn encode_layers(
         }
         let mut fields = LayerFields {
             flags: mode.index() << BLEND_SHIFT | perceptual | if atop { FLAG_ATOP } else { 0 },
+            offset: at,
+            mask_offset: at,
             ..LayerFields::default()
         };
         let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
@@ -1104,6 +1139,9 @@ struct LayerFields {
     mask_table_offset: u32,
     mask_level_scale: f32,
     mask_format: u32,
+    // Whole-pixel offsets in the document of the raster and of the mask (ADR 0017).
+    offset: [i32; 2],
+    mask_offset: [i32; 2],
 }
 
 impl LayerFields {
@@ -1145,6 +1183,11 @@ impl LayerFields {
         out.extend(self.mask_table_offset.to_le_bytes());
         out.extend(self.mask_level_scale.to_le_bytes());
         out.extend(self.mask_format.to_le_bytes());
+        // `offset` is a vec2<i32>: 8-byte aligned.
+        out.resize(start + 184, 0);
+        for v in self.offset.iter().chain(&self.mask_offset) {
+            out.extend(v.to_le_bytes());
+        }
         // Padding to the struct's 16-byte alignment.
         out.resize(start + LAYER_BYTES, 0);
         debug_assert_eq!(out.len() - start, LAYER_BYTES);

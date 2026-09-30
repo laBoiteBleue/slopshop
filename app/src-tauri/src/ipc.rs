@@ -75,6 +75,9 @@ pub struct LayerView {
     pub pass_through: bool,
     /// Clipped to the layer below it (ADR 0016).
     pub clipped: bool,
+    /// From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`, a point
+    /// `(x, y)` going to `(a·x + c·y + e, b·x + d·y + f)`.
+    pub transform: [f64; 6],
 }
 
 impl DocumentView {
@@ -150,6 +153,7 @@ impl LayerView {
                 }
             ),
             clipped: layer.clipped,
+            transform: layer.transform.to_array(),
         }
     }
 }
@@ -268,6 +272,12 @@ pub enum EditRequest {
         id: u64,
         clipped: bool,
     },
+    /// Move layers by whole document pixels (the Move tool, ADR 0017); a group moves whole.
+    TranslateLayers {
+        ids: Vec<u64>,
+        dx: i64,
+        dy: i64,
+    },
     /// `mode`: a blend mode identifier (`BlendMode::id`).
     SetLayerBlendMode {
         id: u64,
@@ -302,6 +312,7 @@ impl EditRequest {
                     parent: None,
                     index: session.document().layers().len(),
                     layer: Layer {
+                        transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
                         name,
@@ -363,6 +374,11 @@ impl EditRequest {
                     .duplicate_layers_edit(&ids, |name| name_format.replace("{name}", name))
                     .map_err(|e| e.to_string())?
             }
+            EditRequest::TranslateLayers { ids, dx, dy } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::translate_layers(session.document(), &ids, dx, dy)
+                    .map_err(|e| e.to_string())?
+            }
             EditRequest::SetLayerClipped { id, clipped } => Edit::SetLayerClipped {
                 id: LayerId::from_raw(id),
                 clipped,
@@ -400,6 +416,7 @@ impl EditRequest {
 /// A new empty group, passing through as in Photoshop, with a fresh id.
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
+        transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id: session.allocate_layer_id(),
         name,

@@ -42,6 +42,8 @@ built. Contributors: propose here first.
   Duplicate (Ctrl+J); right-click menu; drag layers onto another tab to copy them there, with a
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
+- Move tool (the default action on the image, until the tools palette): drag moves the selected
+  layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag.
 
 ## Proposed
 

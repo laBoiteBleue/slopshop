@@ -287,6 +287,32 @@
   let tabHover = $state<{ id: number; timer: number } | null>(null);
   let mainElement: HTMLElement;
 
+  // The Move tool (ADR 0017): a left drag on the image moves the selected layers live, in whole
+  // document pixels (the fractions carry over), one undo entry per drag.
+  let moveIds: number[] = [];
+  let moveCarry = { x: 0, y: 0 };
+
+  function onMoveDrag(dx: number, dy: number) {
+    const doc = active;
+    if (!doc) return;
+    if (moveIds.length === 0) {
+      moveIds = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+      moveCarry = { x: 0, y: 0 };
+      if (moveIds.length === 0) return;
+    }
+    moveCarry = { x: moveCarry.x + dx, y: moveCarry.y + dy };
+    const x = Math.trunc(moveCarry.x);
+    const y = Math.trunc(moveCarry.y);
+    if (x === 0 && y === 0) return;
+    moveCarry = { x: moveCarry.x - x, y: moveCarry.y - y };
+    live(doc.id, { kind: "translateLayers", ids: moveIds, dx: x, dy: y });
+  }
+
+  function onMoveEnd() {
+    if (moveIds.length > 0 && active) void endGesture(active.id);
+    moveIds = [];
+  }
+
   /** A thumbnail of the dragged layers following the pointer. */
   let dragGhost = $state<{ document: number; ids: number[]; x: number; y: number } | null>(null);
 
@@ -1300,6 +1326,8 @@
               documentId={active.id}
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
+              onmove={onMoveDrag}
+              onmoveend={onMoveEnd}
             />
           {/key}
         {:else if ready}

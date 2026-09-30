@@ -14,7 +14,8 @@ use slopshop_core::{BlendSpace, Document, RasterImage, Rect};
 
 use crate::tiles::{GpuTileFormat, TileCache};
 use crate::{
-    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers, step_rasters,
+    NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers, shifted,
+    step_rasters,
 };
 
 /// One RGBA f32 pixel.
@@ -292,10 +293,10 @@ impl Renderer {
         let plans: Vec<Option<RasterPlan<'_>>> = layers
             .iter()
             .flat_map(|step| {
-                step_rasters(step).map(|image| {
-                    image
-                        .filter(|image| covers(image, chunk))
-                        .map(|image| RasterPlan::full_resolution(image, area))
+                step_rasters(step).map(|raster| {
+                    raster
+                        .filter(|&(image, at)| covers(image, at, chunk))
+                        .map(|(image, at)| RasterPlan::full_resolution(image, shifted(area, at)))
                 })
             })
             .collect();
@@ -442,17 +443,22 @@ fn raster_images(layers: &[Step<'_>], region: Rect, format: GpuTileFormat) -> Ha
     layers
         .iter()
         .flat_map(|step| step_rasters(step).into_iter().flatten())
-        .filter(|image| {
+        .filter(|&(image, at)| {
             GpuTileFormat::for_sample(image.stored_format().sample) == format
-                && covers(image, region)
+                && covers(image, at, region)
         })
-        .map(|image| image.id())
+        .map(|(image, _)| image.id())
         .collect()
 }
 
-/// Whether a raster (at the document origin) has pixels within `area`.
-fn covers(image: &RasterImage, area: Rect) -> bool {
-    image.size().bounds().intersection(area).is_some()
+/// Whether a raster at `offset` in the document has pixels within `area`.
+fn covers(image: &RasterImage, offset: [i32; 2], area: Rect) -> bool {
+    let (x, y) = (i64::from(offset[0]), i64::from(offset[1]));
+    let size = image.size();
+    x < area.right() as i64
+        && y < area.bottom() as i64
+        && x + i64::from(size.width) > i64::from(area.x)
+        && y + i64::from(size.height) > i64::from(area.y)
 }
 
 /// Level-0 tiles an area touches.

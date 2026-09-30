@@ -628,7 +628,12 @@ fn common_8_bit_space(source: Option<ColorSpace>) -> ColorSpace {
 /// mask.
 fn is_structurally_opaque(document: &Document) -> bool {
     // The first step: a group begins with nothing below it (conservatively, not opaque).
-    let Some(Step::Layer { layer: bottom, .. }) = steps(document).first().copied() else {
+    let Some(Step::Layer {
+        layer: bottom,
+        transform,
+        ..
+    }) = steps(document).first().copied()
+    else {
         return false;
     };
     // A mask hides parts of the layer (conservatively, even a disabled one).
@@ -638,10 +643,16 @@ fn is_structurally_opaque(document: &Document) -> bool {
     match &bottom.content {
         LayerContent::Fill { color } => color.a >= 1.0,
         LayerContent::Raster { image } => {
-            let (image_size, canvas) = (image.size(), document.size());
+            // Placed by a whole-pixel translation (ADR 0017): it must cover the canvas.
+            let Some((x, y)) = transform.integer_translation() else {
+                return false;
+            };
+            let (size, canvas) = (image.size(), document.size());
             !image.format().layout.has_alpha()
-                && image_size.width >= canvas.width
-                && image_size.height >= canvas.height
+                && x <= 0
+                && y <= 0
+                && x + i64::from(size.width) >= i64::from(canvas.width)
+                && y + i64::from(size.height) >= i64::from(canvas.height)
         }
         LayerContent::Group { .. } => false,
     }

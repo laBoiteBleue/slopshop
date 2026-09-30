@@ -99,6 +99,7 @@ impl Session {
                     parent: None,
                     index: base,
                     layer: Layer {
+                        transform: crate::transform::Affine::IDENTITY,
                         clipped: false,
                         id,
                         name,
@@ -258,6 +259,7 @@ mod tests {
                 parent: None,
                 index,
                 layer: Layer {
+                    transform: crate::transform::Affine::IDENTITY,
                     clipped: false,
                     id,
                     name: name.into(),
@@ -406,6 +408,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    transform: crate::transform::Affine::IDENTITY,
                     clipped: false,
                     id,
                     name: "photo".into(),
@@ -489,6 +492,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    transform: crate::transform::Affine::IDENTITY,
                     clipped: false,
                     id: group,
                     name: "group".into(),

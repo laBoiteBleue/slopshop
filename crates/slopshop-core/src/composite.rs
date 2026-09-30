@@ -27,6 +27,7 @@ use crate::document::{Document, Layer, LayerContent, LayerMask};
 use crate::geom::{Rect, Size};
 use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterLevel, TILE_SIZE};
 use crate::tile::TileCoord;
+use crate::transform::Affine;
 
 /// Lossy events of a composite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -75,6 +76,9 @@ pub enum Step<'a> {
         mode: BlendMode,
         opacity: f32,
         atop: bool,
+        /// From the layer's content (and mask) to the document: its transform composed with its
+        /// groups' (ADR 0017).
+        transform: Affine,
     },
     /// Push the accumulator. An isolated group starts over from transparency; a pass-through
     /// one keeps compositing onto what is below it.
@@ -84,6 +88,8 @@ pub enum Step<'a> {
     /// atop what was pushed when `atop`.
     End {
         mask: Option<&'a LayerMask>,
+        /// From the mask to the document: the group's composed transform.
+        mask_transform: Affine,
         mode: BlendMode,
         opacity: f32,
         isolated: bool,
@@ -96,7 +102,7 @@ pub enum Step<'a> {
 /// enabled mask changes nothing to its children's result, so they are inlined.
 pub fn steps(document: &Document) -> Vec<Step<'_>> {
     let mut steps = Vec::new();
-    push_steps(document.layers(), &mut steps);
+    push_steps(document.layers(), Affine::IDENTITY, &mut steps);
     steps
 }
 
@@ -118,8 +124,9 @@ fn enabled(layer: &Layer) -> Option<&LayerMask> {
     layer.mask.as_ref().filter(|m| m.enabled)
 }
 
-/// Steps of sibling `layers`: each base with the clipped layers above it (ADR 0016).
-fn push_steps<'a>(layers: &'a [Layer], steps: &mut Vec<Step<'a>>) {
+/// Steps of sibling `layers` (in a space mapped to the document by `parent`): each base with the
+/// clipped layers above it (ADR 0016).
+fn push_steps<'a>(layers: &'a [Layer], parent: Affine, steps: &mut Vec<Step<'a>>) {
     let mut i = 0;
     while i < layers.len() {
         // A layer and the clipped layers above it (a clipped layer without a base is drawn as
@@ -136,22 +143,23 @@ fn push_steps<'a>(layers: &'a [Layer], steps: &mut Vec<Step<'a>>) {
             continue;
         }
         if clipped.is_empty() {
-            push_layer(base, Role::Plain, steps);
+            push_layer(base, Role::Plain, parent, steps);
             continue;
         }
         let start = steps.len();
         steps.push(Step::Begin { isolated: true });
-        push_layer(base, Role::Base, steps);
+        push_layer(base, Role::Base, parent, steps);
         if steps.len() == start + 1 {
             // The base draws nothing: nothing shows through it.
             steps.truncate(start);
             continue;
         }
         for layer in clipped {
-            push_layer(layer, Role::Clipped, steps);
+            push_layer(layer, Role::Clipped, parent, steps);
         }
         steps.push(Step::End {
             mask: None,
+            mask_transform: Affine::IDENTITY,
             mode: group_mode(base),
             opacity: base.opacity,
             isolated: true,
@@ -170,7 +178,8 @@ fn group_mode(layer: &Layer) -> BlendMode {
     }
 }
 
-fn push_layer<'a>(layer: &'a Layer, role: Role, steps: &mut Vec<Step<'a>>) {
+fn push_layer<'a>(layer: &'a Layer, role: Role, parent: Affine, steps: &mut Vec<Step<'a>>) {
+    let transform = layer.transform.then(parent);
     let (mode, opacity) = match role {
         Role::Base => (BlendMode::Normal, 1.0),
         Role::Plain | Role::Clipped => (layer.blend_mode, layer.opacity),
@@ -186,6 +195,7 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, steps: &mut Vec<Step<'a>>) {
             mode,
             opacity,
             atop,
+            transform,
         });
         return;
     };
@@ -193,12 +203,12 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, steps: &mut Vec<Step<'a>>) {
     let passes = *pass_through && role == Role::Plain;
     let mask = enabled(layer);
     if passes && opacity >= 1.0 && mask.is_none() {
-        push_steps(children, steps);
+        push_steps(children, transform, steps);
         return;
     }
     let start = steps.len();
     steps.push(Step::Begin { isolated: !passes });
-    push_steps(children, steps);
+    push_steps(children, transform, steps);
     if steps.len() == start + 1 {
         // Nothing visible inside: the group changes nothing.
         steps.truncate(start);
@@ -206,6 +216,7 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, steps: &mut Vec<Step<'a>>) {
     }
     steps.push(Step::End {
         mask,
+        mask_transform: transform,
         mode: if *pass_through {
             BlendMode::Normal
         } else {
@@ -232,16 +243,30 @@ enum Op<'a> {
     },
 }
 
-/// Level 0 of a mask image, read as coverage.
-fn mask_source(mask: &LayerMask) -> Option<MaskSource<'_>> {
+/// Level 0 of a mask image, read as coverage, placed by `transform`.
+fn mask_source(mask: &LayerMask, transform: Affine) -> Option<MaskSource<'_>> {
     Some(MaskSource {
         level: mask.image.levels().first()?,
         codec: Codec::new(mask.image.stored_format()),
+        offset: offset(transform),
     })
 }
 
-/// A fill or raster layer, ready to be sampled with `mode` and `opacity` (atop when `atop`).
-fn source(layer: &Layer, mode: BlendMode, opacity: f32, atop: bool) -> Option<Source<'_>> {
+/// The whole-pixel offset of a composed transform. Documents hold whole-pixel translations
+/// only (edits and restore refuse other transforms), and their compositions stay so.
+fn offset(transform: Affine) -> (i64, i64) {
+    transform.integer_translation().unwrap_or((0, 0))
+}
+
+/// A fill or raster layer, placed by `transform`, ready to be sampled with `mode` and
+/// `opacity` (atop when `atop`).
+fn source(
+    layer: &Layer,
+    mode: BlendMode,
+    opacity: f32,
+    atop: bool,
+    transform: Affine,
+) -> Option<Source<'_>> {
     let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
     let content = match &layer.content {
         LayerContent::Fill { color } => {
@@ -265,6 +290,7 @@ fn source(layer: &Layer, mode: BlendMode, opacity: f32, atop: bool) -> Option<So
                 codec: Codec::new(image.stored_format()),
                 matrix: (matrix != IDENTITY).then_some(matrix),
                 opacity: f64::from(opacity),
+                offset: offset(transform),
             }
         }
         // Groups are steps of their own.
@@ -275,7 +301,7 @@ fn source(layer: &Layer, mode: BlendMode, opacity: f32, atop: bool) -> Option<So
         atop,
         content,
         replaces_alpha,
-        mask: enabled(layer).and_then(mask_source),
+        mask: enabled(layer).and_then(|m| mask_source(m, transform)),
     })
 }
 
@@ -291,10 +317,11 @@ struct Source<'a> {
     mask: Option<MaskSource<'a>>,
 }
 
-/// Level 0 of a mask image, read as coverage.
+/// Level 0 of a mask image, read as coverage, at a whole-pixel offset in the document.
 struct MaskSource<'a> {
     level: &'a RasterLevel,
     codec: Codec,
+    offset: (i64, i64),
 }
 
 impl MaskSource<'_> {
@@ -303,9 +330,12 @@ impl MaskSource<'_> {
     /// NaN reads as 0, ±inf as ±[`MAX_FINITE_SAMPLE`], so 1 or 0 once clamped.
     fn coverage(&self, x: u32, y: u32) -> f64 {
         let size = self.level.size();
-        if x >= size.width || y >= size.height {
+        let (x, y) = (i64::from(x) - self.offset.0, i64::from(y) - self.offset.1);
+        if x < 0 || y < 0 || x >= i64::from(size.width) || y >= i64::from(size.height) {
             return 0.0;
         }
+        // In range just above.
+        let (x, y) = (x as u32, y as u32);
         let coord = TileCoord {
             col: x / TILE_SIZE,
             row: y / TILE_SIZE,
@@ -352,6 +382,8 @@ enum SourceContent<'a> {
         /// Image space → working space; `None` for the identity (keeps huge values exact).
         matrix: Option<Mat3>,
         opacity: f64,
+        /// Where the image's origin is in the document (whole pixels, ADR 0017).
+        offset: (i64, i64),
     },
 }
 
@@ -385,10 +417,12 @@ pub fn composite_region(
                 mode,
                 opacity,
                 atop,
-            } => source(layer, mode, opacity, atop).map(Op::Layer),
+                transform,
+            } => source(layer, mode, opacity, atop, transform).map(Op::Layer),
             Step::Begin { isolated } => Some(Op::Begin { isolated }),
             Step::End {
                 mask,
+                mask_transform,
                 mode,
                 opacity,
                 isolated,
@@ -396,7 +430,7 @@ pub fn composite_region(
             } => Some(Op::End {
                 mode,
                 opacity: f64::from(opacity),
-                mask: mask.and_then(mask_source),
+                mask: mask.and_then(|m| mask_source(m, mask_transform)),
                 isolated,
                 atop,
             }),
@@ -527,15 +561,25 @@ fn composite_row(
                 codec,
                 matrix,
                 opacity,
+                offset: (ox, oy),
             } => {
                 let size = level.size();
-                // The raster sits at the origin and may be smaller: transparent outside.
-                if y >= size.height || x0 >= size.width {
+                // The raster sits at its offset and may be smaller: transparent outside. Pixel
+                // coordinates below are the image's (the document's minus the offset).
+                let ly = i64::from(y) - oy;
+                let lx0 = i64::from(x0) - ox;
+                if ly < 0 || ly >= i64::from(size.height) {
                     continue;
                 }
-                let end = (u64::from(x0) + acc.len() as u64).min(u64::from(size.width)) as u32;
-                let (row, local_y) = (y / TILE_SIZE, (y % TILE_SIZE) as usize);
-                let mut x = x0;
+                let first = lx0.max(0);
+                let last = (lx0 + acc.len() as i64).min(i64::from(size.width));
+                if first >= last {
+                    continue;
+                }
+                // In range just above.
+                let (ly, first, end) = (ly as u32, first as u32, last as u32);
+                let (row, local_y) = (ly / TILE_SIZE, (ly % TILE_SIZE) as usize);
+                let mut x = first;
                 // One tile-wide run at a time.
                 while x < end {
                     let col = x / TILE_SIZE;
@@ -543,6 +587,8 @@ fn composite_row(
                     if let Some(tile) = level.tile(TileCoord { col, row }) {
                         for px_x in x..run_end {
                             let local_x = (px_x % TILE_SIZE) as usize;
+                            // The document pixel of this texel: inside the region's row.
+                            let doc_x = (i64::from(px_x) + ox) as u32;
                             let start =
                                 (local_y * TILE_SIZE as usize + local_x) * codec.bytes_per_pixel;
                             let Some(px) = tile.get(start..start + codec.bytes_per_pixel) else {
@@ -553,8 +599,8 @@ fn composite_row(
                             } else {
                                 texel(codec, px, matrix.as_ref(), *opacity, report)
                             };
-                            let src = masked(src, px_x);
-                            let dst = &mut acc[(px_x - x0) as usize];
+                            let src = masked(src, doc_x);
+                            let dst = &mut acc[(doc_x - x0) as usize];
                             if source.atop {
                                 blender.blend_atop(mode, &src, dst);
                             } else {
@@ -654,6 +700,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                transform: crate::transform::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: format!("layer {}", id.get()),
@@ -1187,6 +1234,7 @@ mod tests {
     ) -> Layer {
         let id = doc.allocate_layer_id();
         Layer {
+            transform: crate::transform::Affine::IDENTITY,
             clipped: false,
             id,
             name: format!("layer {}", id.get()),
@@ -1495,5 +1543,117 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_moved_layer_is_its_image_placed_there() {
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            for (dx, dy) in [(1i64, 1i64), (-2, 1), (3, -1), (5, 0)] {
+                // A 3 × 2 raster with a mask, moved in a 4 × 2 document...
+                let pixels: Vec<[f32; 4]> = (0..6)
+                    .map(|i| {
+                        [
+                            i as f32 / 6.0,
+                            0.5,
+                            1.0 - i as f32 / 6.0,
+                            0.4 + i as f32 / 10.0,
+                        ]
+                    })
+                    .collect();
+                let small = float_raster(Size::new(3, 2), &pixels);
+                let mask_values: Vec<u8> = (0..6)
+                    .flat_map(|i| (i as f32 / 5.0).to_ne_bytes())
+                    .collect();
+                let gray = PixelFormat {
+                    layout: ChannelLayout::Gray,
+                    sample: SampleType::F32,
+                    color_space: ColorSpace::LINEAR_SRGB,
+                    alpha: AlphaMode::Straight,
+                };
+                let mask = crate::document::LayerMask {
+                    image: Arc::new(
+                        RasterImage::from_pixels(Size::new(3, 2), gray, &mask_values).unwrap(),
+                    ),
+                    enabled: true,
+                    replaces_alpha: false,
+                };
+                let mut moved = document(space);
+                opaque_base(&mut moved);
+                let mut layer = new_layer(&mut moved, small, BlendMode::Screen, 0.9);
+                layer.mask = Some(mask.clone());
+                layer.transform = Affine::translation(dx as f64, dy as f64);
+                push(&mut moved, layer);
+
+                // ... is the same image and mask placed there on a document-sized raster.
+                let canvas = Size::new(4, 2);
+                let place = |bytes: &[u8], bpp: usize, background: &[u8], format| {
+                    // The part of the 3 × 2 image inside the canvas, and where it lands.
+                    let x0 = dx.max(0);
+                    let x1 = (dx + 3).min(4);
+                    let y0 = dy.max(0);
+                    let y1 = (dy + 2).min(2);
+                    let (w, h) = ((x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32);
+                    let mut part = Vec::new();
+                    for y in y0..y0 + i64::from(h) {
+                        for x in x0..x0 + i64::from(w) {
+                            let (sx, sy) = ((x - dx) as usize, (y - dy) as usize);
+                            part.extend(&bytes[(sy * 3 + sx) * bpp..][..bpp]);
+                        }
+                    }
+                    let rect = if w == 0 || h == 0 {
+                        Rect::new(0, 0, 0, 0)
+                    } else {
+                        Rect::new(x0 as u32, y0 as u32, w, h)
+                    };
+                    RasterImage::from_placed(canvas, format, rect, &part, background).unwrap()
+                };
+                let rgba: Vec<u8> = pixels
+                    .iter()
+                    .flatten()
+                    .flat_map(|v| v.to_ne_bytes())
+                    .collect();
+                let rgba_format = PixelFormat {
+                    layout: ChannelLayout::Rgba,
+                    sample: SampleType::F32,
+                    color_space: WORKING_SPACE,
+                    alpha: AlphaMode::Straight,
+                };
+                let placed_image = place(&rgba, 16, &[0; 16], rgba_format);
+                let placed_mask = place(&mask_values, 4, &[0; 4], gray);
+                let mut reference = document(space);
+                opaque_base(&mut reference);
+                let mut layer = new_layer(
+                    &mut reference,
+                    LayerContent::Raster {
+                        image: Arc::new(placed_image),
+                    },
+                    BlendMode::Screen,
+                    0.9,
+                );
+                layer.mask = Some(crate::document::LayerMask {
+                    image: Arc::new(placed_mask),
+                    ..mask
+                });
+                push(&mut reference, layer);
+                assert_close(&all(&moved), &all(&reference));
+            }
+        }
+    }
+
+    #[test]
+    fn a_group_moves_its_layers() {
+        let mut doc = document(BlendSpace::Linear);
+        let inner = new_layer(&mut doc, varied(0.3), BlendMode::Normal, 1.0);
+        let mut g = group(&mut doc, vec![inner.clone()], false);
+        g.transform = Affine::translation(2.0, 1.0);
+        push(&mut doc, g);
+        let mut flat = document(BlendSpace::Linear);
+        while flat.next_layer_id() <= doc.next_layer_id() {
+            flat.allocate_layer_id();
+        }
+        let mut moved = inner;
+        moved.transform = Affine::translation(2.0, 1.0);
+        push(&mut flat, moved);
+        assert_close(&all(&doc), &all(&flat));
     }
 }

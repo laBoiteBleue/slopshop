@@ -26,6 +26,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
             parent: None,
             index,
             layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: "fill".into(),
@@ -207,6 +208,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
         parent: None,
         index: 0,
         layer: Layer {
+            transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,
             name: "image".into(),
@@ -334,6 +336,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
             parent: None,
             index,
             layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: "image".into(),
@@ -750,4 +753,21 @@ fn document_edges_blend_with_the_pasteboard_not_the_checkerboard() {
     assert_close(pixel(&frame, 0, 0), to_display(pasteboard.map(|v| v * 0.5)));
     // Fully inside: the image.
     assert_close(pixel(&frame, 2, 0), [0, 0, 0, 255]);
+}
+
+#[test]
+fn a_moved_raster_is_displayed_moved() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 270);
+    let mut s = raster_session(size, pattern);
+    let id = s.document().layers()[0].id;
+    s.perform(Edit::SetLayerTransform {
+        id,
+        transform: slopshop_core::Affine::translation(40.0, -30.0),
+    })
+    .unwrap();
+    let frame = r.render_view(s.document(), identity(), size).unwrap();
+    for (x, y) in [(40, 0), (299, 239), (296, 10), (100, 226), (256, 100)] {
+        assert_close(pixel(&frame, x, y), pattern(x - 40, y + 30));
+    }
 }

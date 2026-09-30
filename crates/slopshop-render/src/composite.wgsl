@@ -83,6 +83,9 @@ struct Layer {
     mask_table_offset: u32,
     mask_level_scale: f32,
     mask_format: u32,
+    // Where the raster's origin, and the mask's, are in the document: whole pixels (ADR 0017).
+    offset: vec2<i32>,
+    mask_offset: vec2<i32>,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -304,8 +307,9 @@ const MAX_FOOTPRINT_TEXELS = 4;
 // when zoomed out, and pixels keep sharp, even edges when zoomed in.
 fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
     var uncounted = 0u;
-    let a = lo / layer.level_scale;
-    let b = hi / layer.level_scale;
+    let origin = vec2<f32>(layer.offset);
+    let a = (lo - origin) / layer.level_scale;
+    let b = (hi - origin) / layer.level_scale;
     let first = vec2<i32>(floor(a));
     let last = min(vec2<i32>(ceil(b)) - 1, first + (MAX_FOOTPRINT_TEXELS - 1));
     var sum = vec4<f32>(0.0);
@@ -321,16 +325,17 @@ fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
     return sum / max(weight, 1e-12);
 }
 
-// Share of the output pixel that falls inside a raster layer's image (it sits at the document
-// origin): 0 or 1 for an exact texel, the covered area otherwise.
+// Share of the output pixel that falls inside a raster layer's image (at its offset): 0 or 1
+// for an exact texel, the covered area otherwise.
 fn inside_raster(layer: Layer, footprint: Footprint) -> f32 {
     if footprint.exact {
-        let t = footprint.texel;
+        let t = footprint.texel - layer.offset;
         let inside = all(t >= vec2<i32>(0)) && all(t < vec2<i32>(layer.level_size));
         return select(0.0, 1.0, inside);
     }
-    let extent = vec2<f32>(layer.level_size) * layer.level_scale;
-    let covered = max(min(footprint.hi, extent) - max(footprint.lo, vec2<f32>(0.0)), vec2<f32>(0.0));
+    let origin = vec2<f32>(layer.offset);
+    let extent = origin + vec2<f32>(layer.level_size) * layer.level_scale;
+    let covered = max(min(footprint.hi, extent) - max(footprint.lo, origin), vec2<f32>(0.0));
     let area = max(footprint.hi - footprint.lo, vec2<f32>(1e-12));
     return (covered.x * covered.y) / (area.x * area.y);
 }
@@ -347,6 +352,7 @@ fn mask_view(layer: Layer) -> Layer {
     m.tile_count = layer.mask_tile_count;
     m.level_size = layer.mask_level_size;
     m.format = layer.mask_format;
+    m.offset = layer.mask_offset;
     m.flags = FLAG_GRAY;
     m.transfer = vec4<f32>(f32(TF_LINEAR), 0.0, 0.0, 0.0);
     m.transfer2 = vec4<f32>(0.0);
@@ -363,7 +369,7 @@ fn mask_coverage(layer: Layer, footprint: Footprint) -> f32 {
     var uncounted = 0u;
     var value = 0.0;
     if footprint.exact {
-        value = texel_color(mask, footprint.texel, true, &uncounted).r;
+        value = texel_color(mask, footprint.texel - mask.offset, true, &uncounted).r;
     } else {
         value = sample_raster(mask, footprint.lo, footprint.hi).r;
     }
@@ -727,7 +733,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
         var src = layer.color;
         if layer.kind == KIND_RASTER {
             if footprint.exact {
-                src = texel_color(layer, footprint.texel, true, count);
+                src = texel_color(layer, footprint.texel - layer.offset, true, count);
             } else {
                 src = sample_raster(layer, footprint.lo, footprint.hi);
             }

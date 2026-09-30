@@ -12,6 +12,7 @@ use std::fmt;
 
 use crate::blend::{BlendMode, BlendSpace};
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
+use crate::transform::Affine;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edit {
@@ -64,6 +65,12 @@ pub enum Edit {
         parent: Option<LayerId>,
         index: usize,
     },
+    /// Place a layer (a group with everything inside it) in its parent's space (ADR 0017).
+    /// Whole-pixel translations only, until resampled transforms are supported.
+    SetLayerTransform {
+        id: LayerId,
+        transform: Affine,
+    },
     /// Clip a layer to the layer below it, or release it (ADR 0016).
     SetLayerClipped {
         id: LayerId,
@@ -106,6 +113,8 @@ pub enum EditError {
     },
     /// An operation on several layers was given none.
     NoLayers,
+    /// A transform the compositors cannot apply yet (not a whole-pixel translation).
+    UnsupportedTransform,
 }
 
 impl fmt::Display for EditError {
@@ -132,6 +141,9 @@ impl fmt::Display for EditError {
                 write!(f, "{depth} nested groups (at most {MAX_GROUP_DEPTH})")
             }
             EditError::NoLayers => write!(f, "no layers given"),
+            EditError::UnsupportedTransform => {
+                write!(f, "only whole-pixel translations are supported yet")
+            }
         }
     }
 }
@@ -241,6 +253,15 @@ impl Edit {
                     id,
                     parent: from_parent,
                     index: from,
+                }
+            }
+            Edit::SetLayerTransform { id, transform } => {
+                validate_transform(transform)?;
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.transform, transform);
+                Edit::SetLayerTransform {
+                    id,
+                    transform: previous,
                 }
             }
             Edit::SetLayerClipped { id, clipped } => {
@@ -362,6 +383,31 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The edit that moves `ids` by `(dx, dy)` whole pixels in their parents' space (the Move
+    /// tool); a layer inside another of `ids` moves with it.
+    pub fn translate_layers(
+        doc: &Document,
+        ids: &[LayerId],
+        dx: i64,
+        dy: i64,
+    ) -> Result<Edit, EditError> {
+        let moving = outermost_in_order(doc, ids)?;
+        if moving.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        let by = Affine::translation(dx as f64, dy as f64);
+        Ok(Edit::Batch(
+            moving
+                .into_iter()
+                .filter_map(|id| doc.layer(id).map(|l| (id, l.transform)))
+                .map(|(id, transform)| Edit::SetLayerTransform {
+                    id,
+                    transform: transform.then(by),
+                })
+                .collect(),
+        ))
+    }
+
     /// The edit that replaces group `id` by its layers, in its place and order: Layer > Ungroup
     /// Layers. The group's opacity, blend mode and mask go with it.
     pub fn ungroup(doc: &Document, id: LayerId) -> Result<Edit, EditError> {
@@ -472,6 +518,7 @@ fn validate_new_layer(
             return Err(EditError::LayerIdInUse(layer.id));
         }
         validate_opacity(layer.opacity)?;
+        validate_transform(layer.transform)?;
         if layer
             .mask
             .as_ref()
@@ -486,6 +533,14 @@ fn validate_new_layer(
         }
     }
     Ok(())
+}
+
+/// Transforms the compositors apply: whole-pixel translations (ADR 0017).
+pub(crate) fn validate_transform(transform: Affine) -> Result<(), EditError> {
+    match transform.integer_translation() {
+        Some(_) => Ok(()),
+        None => Err(EditError::UnsupportedTransform),
+    }
 }
 
 pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
@@ -504,6 +559,7 @@ mod tests {
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
+            transform: crate::transform::Affine::IDENTITY,
             clipped: false,
             id: doc.allocate_layer_id(),
             name: name.to_owned(),
@@ -1142,5 +1198,82 @@ mod tests {
             Edit::move_layers(&doc, &[g_id], Some(g_id), 0).and_then(|edit| edit.apply(&mut doc)),
             Err(EditError::MoveIntoItself(_))
         ));
+    }
+
+    #[test]
+    fn transforms_round_trip_and_only_whole_pixel_moves_are_accepted() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        assert_round_trip(
+            &mut doc,
+            Edit::SetLayerTransform {
+                id: ids[0],
+                transform: Affine::translation(-3.0, 5.0),
+            },
+        );
+        for transform in [
+            Affine::translation(0.5, 0.0),
+            Affine {
+                a: 2.0,
+                ..Affine::IDENTITY
+            },
+            Affine::translation(f64::NAN, 0.0),
+        ] {
+            assert_eq!(
+                Edit::SetLayerTransform {
+                    id: ids[0],
+                    transform
+                }
+                .apply(&mut doc),
+                Err(EditError::UnsupportedTransform)
+            );
+        }
+    }
+
+    #[test]
+    fn moving_layers_moves_a_group_whole() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        let g = group_layer(&mut doc, "g", Vec::new());
+        let g_id = g.id;
+        Edit::group_layers(&doc, g, &[ids[1]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // The group and a layer inside it: only the group moves (its layer with it).
+        let undo = Edit::translate_layers(&doc, &[ids[1], g_id, ids[0]], 4, -2)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(
+            doc.layer(g_id).unwrap().transform,
+            Affine::translation(4.0, -2.0)
+        );
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            Affine::translation(4.0, -2.0)
+        );
+        assert!(doc.layer(ids[1]).unwrap().transform.is_identity());
+        Edit::translate_layers(&doc, &[ids[0]], 1, 1)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            Affine::translation(5.0, -1.0)
+        );
+        let undo_second = Edit::translate_layers(&doc, &[ids[0]], -1, -1)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        undo_second.apply(&mut doc).unwrap();
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            Affine::translation(5.0, -1.0)
+        );
+        // Undoing the first move puts every layer back where it was.
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(g_id).unwrap().transform.is_identity());
+        assert_eq!(doc.layer(ids[0]).unwrap().transform, Affine::IDENTITY);
     }
 }
