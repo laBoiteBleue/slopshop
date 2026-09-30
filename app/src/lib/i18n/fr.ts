@@ -80,8 +80,6 @@ const fr: Messages = {
     "Des calques viennent d'un document qui fusionne différemment : ils suivent maintenant l'espace de fusion de ce document",
   "open.warning.layersFlattened":
     "Les calques Photoshop n'ont pas pu être importés : l'image aplatie a été ouverte",
-  "open.warning.groupsFlattened":
-    "Les groupes de calques ne sont pas encore pris en charge : leurs calques ont été importés sans eux",
   "open.warning.clippingIgnored":
     "Les masques d'écrêtage ne sont pas encore pris en charge : les calques écrêtés s'affichent sans écrêtage",
   "open.warning.adjustmentLayersSkipped":

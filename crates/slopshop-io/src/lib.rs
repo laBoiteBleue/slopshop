@@ -63,9 +63,6 @@ pub enum ImportWarning {
     /// A layered document (Photoshop) was opened as its flattened image: its layers were not
     /// imported (they could not be read, or the caller asked for the image).
     LayersFlattened,
-    /// Layer groups are not supported yet: their layers were imported without the group (its
-    /// visibility and opacity carried over to them).
-    GroupsFlattened,
     /// Clipping masks are not supported yet: clipped layers show unclipped.
     ClippingIgnored,
     /// Adjustment and fill layers are not supported yet: they were left out.
@@ -94,7 +91,6 @@ impl ImportWarning {
             ImportWarning::NonFiniteSamples => "nonFiniteSamples",
             ImportWarning::ColorInfoUnsupported => "colorInfoUnsupported",
             ImportWarning::LayersFlattened => "layersFlattened",
-            ImportWarning::GroupsFlattened => "groupsFlattened",
             ImportWarning::ClippingIgnored => "clippingIgnored",
             ImportWarning::AdjustmentLayersSkipped => "adjustmentLayersSkipped",
             ImportWarning::LayerStylesIgnored => "layerStylesIgnored",
@@ -117,7 +113,7 @@ pub struct ImportedLayers {
     pub document: Document,
     /// About the whole file.
     pub warnings: Vec<ImportWarning>,
-    /// About each layer, in the order of the document's layers (bottom to top).
+    /// About each layer, in the order of [`Document::all_layers`].
     pub layer_warnings: Vec<Vec<ImportWarning>>,
 }
 

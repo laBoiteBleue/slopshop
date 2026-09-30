@@ -39,14 +39,14 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    with name, visibility, opacity (times the fill opacity), position, blend mode (ADR 0012; the
    document blends in perceptual space, as Photoshop's 8/16-bit documents do, and 32-bit ones in
    linear light) and layer mask (ADR 0014, the real pixel mask when there is also a vector
-   mask); solid color fill layers as native fill layers. A layer smaller than the canvas shares
-   one tile for its empty area, so it costs what its pixels cost. What the engine cannot
-   represent yet is approximated and reported layer by layer: groups (their layers imported
-   without them, with the group's visibility and opacity), clipping masks, layer styles and
+   mask); solid color fill layers as native fill layers; groups as groups (ADR 0015: pass-through
+   or isolated, nested, with their opacity, blend mode and mask). A layer smaller than the canvas
+   shares one tile for its empty area, so it costs what its pixels cost. What the engine cannot
+   represent yet is approximated and reported layer by layer: clipping masks, layer styles and
    advanced blending, mask density and feather, adjustment layers and gradient or pattern fills
    (left out), text, shapes, smart objects and vector masks (their pixels), pixels outside the
    canvas (cropped). A file saved without "Maximize Compatibility" opens from its layers.
-3. **Groups and clipping**: when the engine has them (roadmap Phase 2).
+3. **Clipping** ✅ groups (ADR 0015); clipping masks when the engine has them (roadmap Phase 2).
 4. **Export** (PSD, and PSB above the PSD limits), layered, with a merged composite for other
    readers.
 5. **Adjustment layers and layer styles** as native nodes (they are parameters in the file, not
@@ -73,7 +73,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| **Photoshop** | `.psd`, `.pdd` | ✅ layers | — | **P0** | in-house reader (see above) | groups, adjustments and styles reported; CMYK, Lab refused |
+| **Photoshop** | `.psd`, `.pdd` | ✅ layers | — | **P0** | in-house reader (see above) | groups kept; clipping, adjustments and styles reported; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | 🔎 | — | **P0** | same reader (64-bit lengths) | |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
 | PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export |

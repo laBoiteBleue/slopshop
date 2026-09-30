@@ -80,8 +80,6 @@ const en = {
     "Some layers come from a document that blends differently: they now blend in this document's blend space",
   "open.warning.layersFlattened":
     "Photoshop layers could not be imported: the flattened image was opened",
-  "open.warning.groupsFlattened":
-    "Layer groups are not supported yet: their layers were imported without them",
   "open.warning.clippingIgnored":
     "Clipping masks are not supported yet: clipped layers show unclipped",
   "open.warning.adjustmentLayersSkipped":
