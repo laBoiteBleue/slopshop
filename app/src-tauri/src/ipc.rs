@@ -60,6 +60,9 @@ pub struct LayerView {
     /// Identifier of the blend mode (`normal`, `multiply`, `colorBurn`…), translated by the UI.
     pub blend_mode: &'static str,
     pub kind: &'static str,
+    /// Changes when the layer's pixels change (the raster image's id; 0 for fills): the UI
+    /// fetches a new thumbnail then.
+    pub content_key: u64,
     /// Display swatch, sRGB-encoded RGBA in `[0, 1]` (explicitly converted, see `color`).
     pub swatch: [f32; 4],
 }
@@ -100,13 +103,14 @@ pub struct SaveFailed {
 
 impl LayerView {
     fn new(layer: &Layer) -> Self {
-        let (kind, swatch) = match &layer.content {
-            LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded()),
+        let (kind, swatch, content_key) = match &layer.content {
+            LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0),
             LayerContent::Raster { image } => (
                 "raster",
                 image
                     .average_color(&WORKING_SPACE)
                     .working_to_srgb_encoded(),
+                image.id().get(),
             ),
         };
         Self {
@@ -116,6 +120,7 @@ impl LayerView {
             opacity: layer.opacity,
             blend_mode: layer.blend_mode.id(),
             kind,
+            content_key,
             swatch,
         }
     }
