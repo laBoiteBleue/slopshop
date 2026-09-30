@@ -12,6 +12,7 @@ use std::fmt;
 
 use crate::blend::{BlendMode, BlendSpace};
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
+use crate::geom::Size;
 use crate::transform::Affine;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +48,11 @@ pub enum Edit {
     /// Where the document's layers blend (ADR 0012).
     SetBlendSpace {
         space: BlendSpace,
+    },
+    /// The canvas size (Canvas Size, Image Size, Crop, ADR 0017): layers keep their pixels and
+    /// transforms; what falls outside the canvas is kept, not cut.
+    SetCanvasSize {
+        size: Size,
     },
     /// Add, replace (`Some`) or delete (`None`) a layer's mask (ADR 0014).
     SetLayerMask {
@@ -115,6 +121,8 @@ pub enum EditError {
     NoLayers,
     /// A transform that is not finite and invertible (ADR 0018).
     InvalidTransform,
+    /// A canvas without pixels.
+    EmptyCanvas,
 }
 
 impl fmt::Display for EditError {
@@ -144,6 +152,7 @@ impl fmt::Display for EditError {
             EditError::InvalidTransform => {
                 write!(f, "a transform must be finite and invertible")
             }
+            EditError::EmptyCanvas => write!(f, "a canvas must have pixels"),
         }
     }
 }
@@ -203,6 +212,14 @@ impl Edit {
             Edit::SetBlendSpace { space } => Edit::SetBlendSpace {
                 space: doc.set_blend_space(space),
             },
+            Edit::SetCanvasSize { size } => {
+                if size.is_empty() {
+                    return Err(EditError::EmptyCanvas);
+                }
+                Edit::SetCanvasSize {
+                    size: doc.set_size(size),
+                }
+            }
             Edit::SetLayerMask { id, mask } => {
                 if mask
                     .as_ref()
@@ -433,6 +450,30 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The edit that resamples the whole image to `size` (Image > Image Size, ADR 0018): the
+    /// canvas takes that size and every top-level layer is scaled by the same factors (a
+    /// group's layers with it). Pixels are not rewritten: they are resampled when shown.
+    pub fn resize_image(doc: &Document, size: Size) -> Result<Edit, EditError> {
+        if size.is_empty() {
+            return Err(EditError::EmptyCanvas);
+        }
+        let old = doc.size();
+        let by = Affine::scale(
+            f64::from(size.width) / f64::from(old.width.max(1)),
+            f64::from(size.height) / f64::from(old.height.max(1)),
+        );
+        let mut edits = vec![Edit::SetCanvasSize { size }];
+        for layer in doc.layers() {
+            let transform = layer.transform.then(by).snapped();
+            validate_transform(transform)?;
+            edits.push(Edit::SetLayerTransform {
+                id: layer.id,
+                transform,
+            });
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that replaces group `id` by its layers, in its place and order: Layer > Ungroup
     /// Layers. The group's opacity, blend mode and mask go with it.
     pub fn ungroup(doc: &Document, id: LayerId) -> Result<Edit, EditError> {
@@ -581,7 +622,6 @@ pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
 mod tests {
     use super::*;
     use crate::color::LinearRgba;
-    use crate::geom::Size;
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
@@ -670,6 +710,41 @@ mod tests {
         ] {
             assert_round_trip(&mut doc, edit);
         }
+    }
+
+    #[test]
+    fn resizing_the_image_scales_the_canvas_and_its_layers() {
+        let mut doc = Document::new(Size::new(8, 6));
+        let ids = stack(&mut doc, &["a", "b"]);
+        Edit::SetLayerTransform {
+            id: ids[1],
+            transform: Affine::translation(2.0, 3.0),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let undo = Edit::resize_image(&doc, Size::new(16, 3))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(16, 3));
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            Affine::scale(2.0, 0.5)
+        );
+        assert_eq!(
+            doc.layer(ids[1]).unwrap().transform.to_array(),
+            [2.0, 0.0, 0.0, 0.5, 4.0, 1.5]
+        );
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.size(), Size::new(8, 6));
+        assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
+        assert_eq!(
+            Edit::SetCanvasSize {
+                size: Size::new(0, 4)
+            }
+            .apply(&mut doc),
+            Err(EditError::EmptyCanvas)
+        );
     }
 
     #[test]
