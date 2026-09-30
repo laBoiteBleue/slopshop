@@ -27,7 +27,9 @@ use slopshop_core::color::{
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
-use slopshop_core::{Document, Layer, LayerContent, RasterImage, Rect, Size};
+use slopshop_core::{
+    BlendMode, BlendSpace, Document, Layer, LayerContent, RasterImage, Rect, Size,
+};
 
 use crate::tiles::{GpuTileFormat, TileCache, TileKey, gpu_texels};
 
@@ -155,6 +157,10 @@ const KIND_RASTER: u32 = 1;
 const FLAG_PREMULTIPLIED: u32 = 1;
 /// Gray source: green and blue of its GPU texels are copies of red ([`gpu_texels`]).
 const FLAG_GRAY: u32 = 2;
+/// The document blends in perceptual space (ADR 0012).
+const FLAG_PERCEPTUAL: u32 = 4;
+/// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
+const BLEND_SHIFT: u32 = 8;
 
 const WORKGROUP_SIZE: u32 = 8;
 const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
@@ -209,7 +215,10 @@ impl Renderer {
         }))
         .map_err(|e| RenderError::Device(e.to_string()))?;
 
-        let module = device.create_shader_module(wgpu::include_wgsl!("composite.wgsl"));
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("composite.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(shader_source().into()),
+        });
         let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -579,7 +588,7 @@ impl Renderer {
                 }
             }
         }
-        encode_layers(&layers, &plans, tables)
+        encode_layers(&layers, &plans, tables, document.blend_space())
     }
 
     /// Layer and tile table buffers of prepared layers.
@@ -663,6 +672,7 @@ fn encode_layers(
     layers: &[&Layer],
     plans: &[Option<RasterPlan<'_>>],
     tables: Vec<Vec<u32>>,
+    blend_space: BlendSpace,
 ) -> PreparedLayers {
     let mut prepared = PreparedLayers {
         count: 0,
@@ -670,7 +680,13 @@ fn encode_layers(
         tile_table: Vec::new(),
     };
     for ((layer, plan), table) in layers.iter().zip(plans).zip(tables) {
-        let mut fields = LayerFields::default();
+        let mut fields = LayerFields {
+            flags: layer.blend_mode.index() << BLEND_SHIFT,
+            ..LayerFields::default()
+        };
+        if blend_space == BlendSpace::Perceptual {
+            fields.flags |= FLAG_PERCEPTUAL;
+        }
         match &layer.content {
             LayerContent::Fill { color } => {
                 fields.kind = KIND_FILL;
@@ -895,6 +911,47 @@ fn transfer_fields(transfer: TransferFunction) -> ([f32; 4], [f32; 4]) {
 }
 
 /// Rows of a 3×3 matrix as three padded vec4.
+/// The compositing shader, preceded by the constants it shares with this crate and with
+/// `slopshop_core::blend`: blend mode numbers, flags and the blend-space matrices.
+fn shader_source() -> String {
+    let mut constants = String::new();
+    for mode in BlendMode::ALL {
+        let mut name = String::new();
+        for c in mode.id().chars() {
+            if c.is_ascii_uppercase() {
+                name.push('_');
+            }
+            name.push(c.to_ascii_uppercase());
+        }
+        constants += &format!("const MODE_{name}: u32 = {}u;\n", mode.index());
+    }
+    constants += &format!("const FLAG_PERCEPTUAL: u32 = {FLAG_PERCEPTUAL}u;\n");
+    constants += &format!("const BLEND_SHIFT: u32 = {BLEND_SHIFT}u;\n");
+    constants += &format!(
+        "const DIVISION_EPSILON: f32 = {:?};\n",
+        slopshop_core::blend::DIVISION_EPSILON as f32
+    );
+    // The perceptual blend space's primaries are sRGB's (slopshop_core::blend).
+    for (prefix, m) in [
+        (
+            "TO_BLEND",
+            WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB),
+        ),
+        (
+            "FROM_BLEND",
+            ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE),
+        ),
+    ] {
+        for (i, row) in m.iter().enumerate() {
+            constants += &format!(
+                "const {prefix}{i} = vec3<f32>({:?}, {:?}, {:?});\n",
+                row[0] as f32, row[1] as f32, row[2] as f32
+            );
+        }
+    }
+    constants + include_str!("composite.wgsl")
+}
+
 fn matrix_rows(m: &Mat3) -> [[f32; 4]; 3] {
     m.map(|row| [row[0] as f32, row[1] as f32, row[2] as f32, 0.0])
 }

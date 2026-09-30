@@ -19,7 +19,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use slopshop_core::view::Viewport;
 use slopshop_core::{
-    Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Rect, Session, Size,
+    BlendMode, Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Rect,
+    Session, Size,
 };
 use slopshop_io::slop::SlopFile;
 use slopshop_render::Renderer;
@@ -381,6 +382,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
             name: name.to_owned(),
             visible: true,
             opacity: 1.0,
+            blend_mode: BlendMode::Normal,
             content,
         },
     };
@@ -618,6 +620,7 @@ fn insert_imported(
                     name: layer_name(path),
                     visible: true,
                     opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
                     content: LayerContent::Raster {
                         image: Arc::new(imported.image),
                     },
@@ -890,7 +893,7 @@ async fn perform(
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    let edit = edit.into_edit(&mut document.session);
+    let edit = edit.into_edit(&mut document.session)?;
     document.session.perform(edit).map_err(|e| e.to_string())?;
     Ok(document.view())
 }
@@ -905,7 +908,7 @@ async fn perform_live(
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    let edit = edit.into_edit(&mut document.session);
+    let edit = edit.into_edit(&mut document.session)?;
     document
         .session
         .perform_in_gesture(edit)
@@ -1356,6 +1359,7 @@ mod tests {
             name: "fill".to_owned(),
             visible: true,
             opacity: 1.0,
+            blend_mode: BlendMode::Normal,
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
@@ -1492,11 +1496,44 @@ mod tests {
     }
 
     #[test]
+    fn blend_requests_become_edits_and_unknown_ids_are_errors() {
+        let mut s = blank_session();
+        let id = s.document().layers()[0].id.get();
+        let request = |json: String| {
+            serde_json::from_str::<EditRequest>(&json)
+                .unwrap()
+                .into_edit(&mut blank_session())
+        };
+        let json = format!(r#"{{"kind":"setLayerBlendMode","id":{id},"mode":"softLight"}}"#);
+        let edit = serde_json::from_str::<EditRequest>(&json)
+            .unwrap()
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        let space = r#"{"kind":"setBlendSpace","space":"linear"}"#;
+        let edit = serde_json::from_str::<EditRequest>(space)
+            .unwrap()
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[0].blend_mode, "softLight");
+        assert_eq!(view.blend_space, "linear");
+        assert!(
+            request(format!(
+                r#"{{"kind":"setLayerBlendMode","id":{id},"mode":"dissolve"}}"#
+            ))
+            .is_err()
+        );
+        assert!(request(r#"{"kind":"setBlendSpace","space":"cmyk"}"#.to_owned()).is_err());
+    }
+
+    #[test]
     fn edit_requests_round_trip_through_undo() {
         let mut s = blank_session();
         let json = r#"{"kind":"addFillLayer","name":"Pink","color":[1.0,0.5,0.8,1.0]}"#;
         let request: EditRequest = serde_json::from_str(json).unwrap();
-        let edit = request.into_edit(&mut s);
+        let edit = request.into_edit(&mut s).unwrap();
         s.perform(edit).unwrap();
         let view = DocumentView::new(&s, &meta(), Vec::new());
         assert_eq!(view.layers.len(), 2);

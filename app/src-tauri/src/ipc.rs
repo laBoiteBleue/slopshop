@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::view::{Viewport, ZoomStep};
-use slopshop_core::{Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Session, Size};
+use slopshop_core::{
+    BlendMode, BlendSpace, Document, Edit, Layer, LayerContent, LayerId, LinearRgba, Session, Size,
+};
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
     JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
@@ -34,6 +36,8 @@ pub struct DocumentView {
     pub height: u32,
     /// Identifier (e.g. `linear-srgb`), translated by the UI.
     pub working_space: &'static str,
+    /// Where layers blend: `perceptual` or `linear` (ADR 0012).
+    pub blend_space: &'static str,
     pub revision: u64,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -53,6 +57,8 @@ pub struct LayerView {
     pub name: String,
     pub visible: bool,
     pub opacity: f32,
+    /// Identifier of the blend mode (`normal`, `multiply`, `colorBurn`…), translated by the UI.
+    pub blend_mode: &'static str,
     pub kind: &'static str,
     /// Display swatch, sRGB-encoded RGBA in `[0, 1]` (explicitly converted, see `color`).
     pub swatch: [f32; 4],
@@ -69,6 +75,7 @@ impl DocumentView {
             width: doc.size().width,
             height: doc.size().height,
             working_space: color_space_id(doc.working_space()),
+            blend_space: doc.blend_space().id(),
             revision: doc.revision(),
             can_undo: session.can_undo(),
             can_redo: session.can_redo(),
@@ -107,6 +114,7 @@ impl LayerView {
             name: layer.name.clone(),
             visible: layer.visible,
             opacity: layer.opacity,
+            blend_mode: layer.blend_mode.id(),
             kind,
             swatch,
         }
@@ -175,12 +183,22 @@ pub enum EditRequest {
         id: u64,
         index: usize,
     },
+    /// `mode`: a blend mode identifier (`BlendMode::id`).
+    SetLayerBlendMode {
+        id: u64,
+        mode: String,
+    },
+    /// `space`: `perceptual` or `linear`.
+    SetBlendSpace {
+        space: String,
+    },
 }
 
 impl EditRequest {
-    /// Build the core edit. Needs the session to allocate ids for new layers.
-    pub fn into_edit(self, session: &mut Session) -> Edit {
-        match self {
+    /// Build the core edit. Needs the session to allocate ids for new layers. Fails on an
+    /// unknown blend mode or blend space identifier.
+    pub fn into_edit(self, session: &mut Session) -> Result<Edit, String> {
+        Ok(match self {
             EditRequest::AddFillLayer { name, color } => {
                 let [r, g, b, a] = color;
                 Edit::InsertLayer {
@@ -190,6 +208,7 @@ impl EditRequest {
                         name,
                         visible: true,
                         opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
                         content: LayerContent::Fill {
                             color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                         },
@@ -215,7 +234,15 @@ impl EditRequest {
                 id: LayerId::from_raw(id),
                 index,
             },
-        }
+            EditRequest::SetLayerBlendMode { id, mode } => Edit::SetLayerBlendMode {
+                id: LayerId::from_raw(id),
+                mode: BlendMode::from_id(&mode).ok_or(format!("unknown blend mode {mode:?}"))?,
+            },
+            EditRequest::SetBlendSpace { space } => Edit::SetBlendSpace {
+                space: BlendSpace::from_id(&space)
+                    .ok_or(format!("unknown blend space {space:?}"))?,
+            },
+        })
     }
 }
 
@@ -638,6 +665,8 @@ impl ExportSpecDto {
             matte: LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0),
             dither: self.dither,
             gray: self.gray,
+            // The document's, set by the caller: the UI does not choose it.
+            blend_space: BlendSpace::default(),
         })
     }
 }
@@ -767,6 +796,7 @@ mod tests {
                 matte: WHITE_MATTE,
                 dither: false,
                 gray: false,
+                blend_space: BlendSpace::default(),
             }
         );
         assert_eq!(
@@ -810,6 +840,7 @@ mod tests {
             matte: WHITE_MATTE,
             dither: true,
             gray: false,
+            blend_space: BlendSpace::default(),
         };
         assert_eq!(ExportSpecDto::new(&tiff).to_spec(None).unwrap(), tiff);
     }
@@ -1014,6 +1045,7 @@ mod tests {
             matte: WHITE_MATTE,
             dither: true,
             gray: false,
+            blend_space: BlendSpace::default(),
         };
         let dto = ExportSpecDto::new(&spec);
         assert_eq!(dto.space, CUSTOM_SPACE);

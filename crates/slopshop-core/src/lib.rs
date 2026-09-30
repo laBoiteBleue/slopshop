@@ -13,6 +13,7 @@
 //! - [`convert`]: working-space pixels to a target pixel format, counting every lossy event.
 //! - [`job`]: cancellation and progress of background jobs.
 
+pub mod blend;
 mod blue_noise;
 pub mod color;
 pub mod composite;
@@ -26,6 +27,7 @@ pub mod session;
 pub mod tile;
 pub mod view;
 
+pub use blend::{BlendMode, BlendSpace};
 pub use color::{ColorSpace, LinearRgba};
 pub use document::{Document, Layer, LayerContent, LayerId, RestoreError};
 pub use edit::{Edit, EditError};

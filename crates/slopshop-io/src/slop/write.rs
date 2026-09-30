@@ -17,7 +17,7 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_FILL, NODE_RASTER,
-    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema, Writer,
+    NODE_VERSION, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -424,15 +424,16 @@ fn build_manifest(
                 json!({ "color": [color.r, color.g, color.b, color.a] }),
             ),
         };
-        let params = match params {
+        let mut params = match params {
             Value::Object(map) => map,
             _ => Map::new(),
         };
+        params.insert("blend_mode".to_owned(), Value::from(layer.blend_mode.id()));
         nodes.insert(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: 1,
+                version: NODE_VERSION,
                 name: layer.name.clone(),
                 visible: layer.visible,
                 opacity: layer.opacity,
@@ -477,6 +478,7 @@ fn build_manifest(
             working_space: ColorSpaceDto::new(&document.working_space()),
             next_node_id: document.next_layer_id(),
             stack: document.layers().iter().map(|l| l.id.get()).collect(),
+            blend_space: Some(document.blend_space().id().to_owned()),
             extra: residue.document.clone(),
         },
         nodes,

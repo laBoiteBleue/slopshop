@@ -12,7 +12,7 @@ use std::process::ExitCode;
 
 use slopshop_core::color::PixelFormat;
 use slopshop_core::view::ViewTransform;
-use slopshop_core::{Document, Edit, Layer, LayerContent, LinearRgba, Session, Size};
+use slopshop_core::{BlendMode, Document, Edit, Layer, LayerContent, LinearRgba, Session, Size};
 use slopshop_render::{Frame, Renderer};
 
 const USAGE: &str = "\
@@ -185,6 +185,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                     name: name.into(),
                     visible: true,
                     opacity,
+                    blend_mode: BlendMode::Normal,
                     content: LayerContent::Fill { color },
                 },
             })

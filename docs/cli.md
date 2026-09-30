@@ -211,8 +211,8 @@ slopshop inspect <FILE.slop> [--bench]
 ```
 
 Opens a document and prints its generation (number of saves), its size and how much of it is
-unused (older data, reclaimed when a save compacts the file), the canvas size and every layer
-(id, name, image format or fill color, opacity, visibility). `--bench` also prints how long
+unused (older data, reclaimed when a save compacts the file), the canvas size and blend space,
+and every layer (id, name, image format or fill color, blend mode, opacity, visibility). `--bench` also prints how long
 opening took.
 
 ```sh

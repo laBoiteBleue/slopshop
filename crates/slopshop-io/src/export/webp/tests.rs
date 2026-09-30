@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use slopshop_core::BlendSpace;
 use slopshop_core::color::{ColorSpace, WORKING_SPACE, mat_vec};
 use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter, WHITE_MATTE};
 use slopshop_core::{CancelToken, Rect};
@@ -40,6 +41,9 @@ fn webp_spec(compression: WebpCompression, keep_alpha: bool) -> ExportSpec {
         matte: WHITE_MATTE,
         dither: false,
         gray: false,
+        // A synthetic source, not a document: flattened in linear light, as the expected
+        // samples are computed.
+        blend_space: BlendSpace::Linear,
     }
 }
 
@@ -49,6 +53,7 @@ fn expected(size: Size, spec: &ExportSpec) -> Vec<u8> {
         dither: spec.dither,
         big_endian: false,
         matte: spec.matte,
+        blend_space: spec.blend_space,
     };
     let converter = Converter::new(spec.target_format(), options).unwrap();
     let row_bytes = size.width as usize * converter.bytes_per_pixel();

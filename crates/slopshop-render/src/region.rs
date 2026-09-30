@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::sync::mpsc;
 
 use slopshop_core::raster::{ImageId, TILE_SIZE};
-use slopshop_core::{Document, Layer, LayerContent, RasterImage, Rect};
+use slopshop_core::{BlendSpace, Document, Layer, LayerContent, RasterImage, Rect};
 
 use crate::tiles::{GpuTileFormat, TileCache};
 use crate::{NO_TILE, RasterPlan, RenderError, Renderer, WORKGROUP_SIZE, encode_layers};
@@ -235,7 +235,13 @@ impl Renderer {
             for chunk in chunks {
                 non_finite += self.capture_errors(|| {
                     let buffers = buffers.reserve(&self.device, largest);
-                    self.render_chunk(&layers, chunk, &mut caches, buffers)?;
+                    self.render_chunk(
+                        &layers,
+                        document.blend_space(),
+                        chunk,
+                        &mut caches,
+                        buffers,
+                    )?;
                     self.read_chunk(buffers, chunk, region, out)
                 })?;
             }
@@ -272,6 +278,7 @@ impl Renderer {
     fn render_chunk(
         &self,
         layers: &[&Layer],
+        blend_space: BlendSpace,
         chunk: Rect,
         caches: &mut [Option<TileCache>; 4],
         buffers: &ChunkBuffers,
@@ -306,7 +313,7 @@ impl Renderer {
             .collect();
         // Invariant (`tiles_per_chunk` and the cache sizes): every tile is resident.
         debug_assert!(tables.iter().flatten().all(|&slot| slot != NO_TILE));
-        let prepared = encode_layers(layers, &plans, tables);
+        let prepared = encode_layers(layers, &plans, tables, blend_space);
 
         use wgpu::util::DeviceExt;
         let params = self

@@ -8,8 +8,9 @@
 //! Each pixel goes through, in this order:
 //! 1. non-finite inputs: NaN → 0; ±inf is kept for float targets and becomes ±`f32::MAX` (then
 //!    clipped) for integer targets; always counted;
-//! 2. for targets without alpha, flattening over the matte of [`ConvertOptions`]:
-//!    `color + (1 − alpha) × matte`, in the working space (linear light, before any matrix).
+//! 2. for targets without alpha, flattening over the matte of [`ConvertOptions`]: the pixel
+//!    composited over the opaque matte in normal mode, in the document's blend space (ADR
+//!    0012; in linear space `color + (1 − alpha) × matte`), before any matrix.
 //!    Pixels whose alpha is below 1 by more than the rounding noise are counted in
 //!    [`ConversionReport::alpha_flattened`] (ADR 0010);
 //! 3. the matrix from the working space to the target primaries (in f64);
@@ -48,6 +49,7 @@
 
 use std::fmt;
 
+use crate::blend::{BlendMode, BlendSpace, Blender};
 use crate::blue_noise;
 use crate::color::{
     AlphaMode, ColorSpace, IDENTITY, LinearRgba, Mat3, PixelFormat, SampleType, TransferFunction,
@@ -71,6 +73,8 @@ pub struct ConvertOptions {
     /// Color that targets without alpha are flattened over, in [`WORKING_SPACE`] (linear
     /// light). Its alpha is ignored: the matte is opaque. Ignored by targets with alpha.
     pub matte: LinearRgba,
+    /// Where transparency is flattened over the matte: the document's blend space.
+    pub blend_space: BlendSpace,
 }
 
 /// The default matte: white.
@@ -151,6 +155,8 @@ pub struct Converter {
     luminance: Option<[f64; 3]>,
     /// Integer targets only.
     quantizer: Option<Quantizer>,
+    /// Flattens over the matte.
+    blender: Blender,
 }
 
 impl Converter {
@@ -175,6 +181,7 @@ impl Converter {
             matrix: (matrix != IDENTITY).then_some(matrix),
             luminance: target.layout.is_gray().then(|| space.primaries.to_xyz()[1]),
             quantizer,
+            blender: Blender::new(options.blend_space),
         })
     }
 
@@ -252,10 +259,16 @@ impl Converter {
                 report.alpha_flattened += 1;
             }
             let matte = self.options.matte;
-            let cover = 1.0 - alpha;
-            for (c, m) in premultiplied.iter_mut().zip([matte.r, matte.g, matte.b]) {
-                *c += cover * f64::from(m);
-            }
+            let mut flat = [
+                f64::from(matte.r),
+                f64::from(matte.g),
+                f64::from(matte.b),
+                1.0,
+            ];
+            let [r, g, b] = premultiplied;
+            self.blender
+                .blend(BlendMode::Normal, &[r, g, b, alpha], &mut flat);
+            premultiplied = [flat[0], flat[1], flat[2]];
             alpha = 1.0;
         }
         let rgb = match &self.matrix {
@@ -585,6 +598,8 @@ mod tests {
             dither,
             big_endian: false,
             matte: BLACK,
+            // Linear: flattening is `color + (1 − alpha) × matte`, as the tests compute it.
+            blend_space: BlendSpace::Linear,
         }
     }
 

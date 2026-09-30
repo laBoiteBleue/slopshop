@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use crate::blend::{BlendMode, BlendSpace};
 use crate::document::{Document, Layer, LayerContent, LayerId};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,14 @@ pub enum Edit {
     RenameLayer {
         id: LayerId,
         name: String,
+    },
+    SetLayerBlendMode {
+        id: LayerId,
+        mode: BlendMode,
+    },
+    /// Where the document's layers blend (ADR 0012).
+    SetBlendSpace {
+        space: BlendSpace,
     },
     /// Move a layer so that it ends up at `index` in the stack (0 = bottom).
     MoveLayer {
@@ -118,6 +127,14 @@ impl Edit {
                 let previous = std::mem::replace(&mut layer.name, name);
                 Edit::RenameLayer { id, name: previous }
             }
+            Edit::SetLayerBlendMode { id, mode } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.blend_mode, mode);
+                Edit::SetLayerBlendMode { id, mode: previous }
+            }
+            Edit::SetBlendSpace { space } => Edit::SetBlendSpace {
+                space: doc.set_blend_space(space),
+            },
             Edit::MoveLayer { id, index } => {
                 let from = doc.layer_index(id).ok_or(EditError::UnknownLayer(id))?;
                 let len = doc.layers().len();
@@ -190,6 +207,7 @@ mod tests {
             name: name.to_owned(),
             visible: true,
             opacity: 1.0,
+            blend_mode: BlendMode::Normal,
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
@@ -247,10 +265,42 @@ mod tests {
                 id,
                 name: "renamed".into(),
             },
+            Edit::SetLayerBlendMode {
+                id,
+                mode: BlendMode::Multiply,
+            },
             Edit::RemoveLayer { id },
         ] {
             assert_round_trip(&mut doc, edit);
         }
+    }
+
+    #[test]
+    fn blend_space_edits_round_trip() {
+        let mut doc = Document::new(Size::new(8, 8));
+        assert_eq!(doc.blend_space(), BlendSpace::Perceptual);
+        let inverse = Edit::SetBlendSpace {
+            space: BlendSpace::Linear,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.blend_space(), BlendSpace::Linear);
+        assert_eq!(
+            inverse,
+            Edit::SetBlendSpace {
+                space: BlendSpace::Perceptual
+            }
+        );
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.blend_space(), BlendSpace::Perceptual);
+        assert!(matches!(
+            Edit::SetLayerBlendMode {
+                id: LayerId::from_raw(99),
+                mode: BlendMode::Screen
+            }
+            .apply(&mut doc),
+            Err(EditError::UnknownLayer(_))
+        ));
     }
 
     fn stack(doc: &mut Document, names: &[&str]) -> Vec<LayerId> {

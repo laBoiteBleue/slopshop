@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use ::exr::image::FlatSamples;
 use ::exr::meta::MetaData;
 use half::f16;
+use slopshop_core::BlendSpace;
 use slopshop_core::color::ColorSpace;
 use slopshop_core::convert::{ConvertOptions, Converter, WHITE_MATTE};
 use slopshop_core::raster::TILE_SIZE;
@@ -57,6 +58,9 @@ fn exr_spec(sample: ExrSample, space: ColorSpace, keep_alpha: bool) -> ExportSpe
         matte: WHITE_MATTE,
         dither: false,
         gray: false,
+        // A synthetic source, not a document: flattened in linear light, as the expected
+        // samples are computed.
+        blend_space: BlendSpace::Linear,
     }
 }
 
@@ -66,6 +70,7 @@ fn expected_f32(size: Size, spec: &ExportSpec) -> Vec<f32> {
         dither: false,
         big_endian: false,
         matte: WHITE_MATTE,
+        blend_space: spec.blend_space,
     };
     let converter = Converter::new(spec.target_format(), options).unwrap();
     let mut samples = Vec::new();

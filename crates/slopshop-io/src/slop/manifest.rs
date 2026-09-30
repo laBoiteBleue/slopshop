@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 1;
+pub(crate) const SCHEMA_MINOR: u32 = 2;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -24,6 +24,9 @@ pub(crate) const PYRAMID_ALGORITHM: &str = "slopshop.pyramid.box-linear-premul@1
 
 pub(crate) const NODE_RASTER: &str = "slopshop.raster";
 pub(crate) const NODE_FILL: &str = "slopshop.fill";
+/// Version of the raster and fill parameters written: 2 adds `blend_mode` (schema 0.2).
+/// Version 1 (schema 0.1) is read as normal mode.
+pub(crate) const NODE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {
@@ -69,6 +72,10 @@ pub(crate) struct DocumentDto {
     pub next_node_id: u64,
     /// Node ids, bottom to top.
     pub stack: Vec<u64>,
+    /// `perceptual` or `linear` (ADR 0012). Absent in schema 0.1, whose documents composited
+    /// in linear light.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_space: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use slopshop_core::color::{ColorSpace, LinearRgba, SampleType, WORKING_SPACE};
-use slopshop_core::{CancelToken, Document, Edit, Layer, LayerContent, RasterImage, Rect, Size};
+use slopshop_core::{
+    BlendMode, CancelToken, Document, Edit, Layer, LayerContent, RasterImage, Rect, Size,
+};
 use slopshop_io::export::{
     ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
     JpegSubsampling, PngCompression, PngDepth, TiffCompression, TiffSample, WebpCompression,
@@ -828,6 +830,7 @@ fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, Str
             name: name.to_owned(),
             visible: true,
             opacity: 1.0,
+            blend_mode: BlendMode::Normal,
             content: LayerContent::Raster {
                 image: Arc::new(image),
             },
