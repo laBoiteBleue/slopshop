@@ -4,8 +4,11 @@
 
 import type { Bounds } from "./engine";
 
-/** A smart guide: a line in document pixels. */
-export type Guide = { x1: number; y1: number; x2: number; y2: number };
+/**
+ * A smart guide: a line in document pixels. A `measure` (an equal size) ends with short
+ * perpendicular ticks, like the serifs of an I.
+ */
+export type Guide = { x1: number; y1: number; x2: number; y2: number; measure?: boolean };
 
 /** Snapping distance, in screen (CSS) pixels. */
 export const SNAP_CSS_PX = 6;
@@ -146,27 +149,14 @@ export function snapHandle(
     const shift = anchor + (direction * size) / span - handle;
     // The same size: a measure across the middle of the box and of the target.
     const middle = (lo: number, hi: number) => (lo + hi) / 2;
-    consider(shift, (box) =>
+    const across = (b: Bounds): Guide =>
       vertical
-        ? [
-            {
-              x1: box.left,
-              x2: box.right,
-              y1: middle(box.top, box.bottom),
-              y2: middle(box.top, box.bottom),
-            },
-            { x1: t.left, x2: t.right, y1: middle(t.top, t.bottom), y2: middle(t.top, t.bottom) },
-          ]
-        : [
-            {
-              x1: middle(box.left, box.right),
-              x2: middle(box.left, box.right),
-              y1: box.top,
-              y2: box.bottom,
-            },
-            { x1: middle(t.left, t.right), x2: middle(t.left, t.right), y1: t.top, y2: t.bottom },
-          ],
-    );
+        ? { x1: b.left, x2: b.right, y1: middle(b.top, b.bottom), y2: middle(b.top, b.bottom) }
+        : { x1: middle(b.left, b.right), x2: middle(b.left, b.right), y1: b.top, y2: b.bottom };
+    consider(shift, (box) => [
+      { ...across(box), measure: true },
+      { ...across(t), measure: true },
+    ]);
   }
   return found;
 }

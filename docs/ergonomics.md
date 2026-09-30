@@ -61,7 +61,7 @@ built. Contributors: propose here first.
   that).
   Moving the box and dragging a handle snap to the canvas and the other layers with magenta
   smart guides, like the Move tool; a handle also snaps where the box gets the same width or
-  height as another layer (a magenta measure across the middle of both). Ctrl held: freely; View > Snap turns
+  height as another layer (a magenta measure across the middle of both, with end ticks like the serifs of an I). Ctrl held: freely; View > Snap turns
   it off. Pixels are
   never resampled into the layer: the transform stays editable.
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
