@@ -186,35 +186,64 @@ pub(super) fn read<R: Read + Seek>(
     if section == 0 {
         return Ok(None);
     }
-    let start = input.r.stream_position()?;
-    let end = start
-        .checked_add(section)
-        .ok_or_else(|| corrupt("section too large"))?;
+    let end = section_end(input, section)?;
+    if seek_layer_info(input, end)? {
+        read_layer_info(input, header)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The signed layer count of the layer and mask section at `input` (0 when it has none or it is
+/// unreadable; negative: the composite's first extra channel is its transparency), the input
+/// then at the section's end.
+pub(super) fn layer_count<R: Read + Seek>(input: &mut Input<R>) -> Result<i16, ImportError> {
+    let section = input.length()?;
+    let end = section_end(input, section)?;
+    let count = if section > 0 && matches!(seek_layer_info(input, end), Ok(true)) {
+        input.bytes().map(i16::from_be_bytes).unwrap_or(0)
+    } else {
+        0
+    };
+    input.r.seek(SeekFrom::Start(end))?;
+    Ok(count)
+}
+
+/// Where the section of `length` bytes starting at `input` ends.
+fn section_end<R: Read + Seek>(input: &mut Input<R>, length: u64) -> Result<u64, ImportError> {
+    input
+        .r
+        .stream_position()?
+        .checked_add(length)
+        .ok_or_else(|| corrupt("section too large"))
+}
+
+/// Position `input` (inside the layer and mask section ending at `end`, at the layer info's
+/// length) at the layer count of its layer info: the section's own when it has layers, else a
+/// tagged block's after the global mask info (16/32-bit documents keep their layers there).
+/// `false` when there is none.
+fn seek_layer_info<R: Read + Seek>(input: &mut Input<R>, end: u64) -> Result<bool, ImportError> {
     let info = input.length()?;
     let info_start = input.r.stream_position()?;
-    let info_end = info_start
-        .checked_add(info)
-        .ok_or_else(|| corrupt("section too large"))?;
-    if info > 0
-        && let Some(layers) = read_layer_info(input, header)?
-    {
-        return Ok(Some(layers));
+    let info_end = section_end(input, info)?;
+    if info >= 2 && i16::from_be_bytes(input.bytes()?) != 0 {
+        input.r.seek(SeekFrom::Start(info_start))?;
+        return Ok(true);
     }
-    // 16/32-bit documents keep their layers in a tagged block after the global mask info.
     input.r.seek(SeekFrom::Start(info_end))?;
     let global_mask = u64::from(input.u32()?);
     input.skip(global_mask)?;
     while let Some((key, len)) = next_block(input, end)? {
         let data_start = input.r.stream_position()?;
         if LAYER_INFO_KEYS.contains(&&key) {
-            return read_layer_info(input, header);
+            return Ok(true);
         }
         let next = data_start
             .checked_add(len)
             .ok_or_else(|| corrupt("tagged block too large"))?;
         input.r.seek(SeekFrom::Start(next))?;
     }
-    Ok(None)
+    Ok(false)
 }
 
 /// The next tagged block of the section ending at `end`: its key and data length, the input
