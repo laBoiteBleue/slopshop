@@ -19,7 +19,7 @@
 
 use std::fmt;
 
-use crate::blend::{BlendMode, Blender};
+use crate::blend::{BlendMode, Blender, dissolve};
 use crate::color::{IDENTITY, Mat3, mat_vec};
 use crate::document::{Document, LayerContent};
 use crate::geom::{Rect, Size};
@@ -243,12 +243,19 @@ fn composite_row(
     acc.fill([0.0; 4]);
     for source in sources {
         let mode = source.mode;
-        let masked = |src: [f64; 4], x: u32| match &source.mask {
-            Some(mask) => {
-                let coverage = mask.coverage(x, y);
-                src.map(|c| c * coverage)
+        let masked = |src: [f64; 4], x: u32| {
+            let src = match &source.mask {
+                Some(mask) => {
+                    let coverage = mask.coverage(x, y);
+                    src.map(|c| c * coverage)
+                }
+                None => src,
+            };
+            if mode == BlendMode::Dissolve {
+                dissolve(src, x, y)
+            } else {
+                src
             }
-            None => src,
         };
         match &source.content {
             SourceContent::Fill(color) => {

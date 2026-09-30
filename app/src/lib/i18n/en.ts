@@ -222,6 +222,7 @@ const en = {
   "status.revision": "rev. {revision}",
 
   "blendMode.normal": "Normal",
+  "blendMode.dissolve": "Dissolve",
   "blendMode.darken": "Darken",
   "blendMode.multiply": "Multiply",
   "blendMode.colorBurn": "Color Burn",

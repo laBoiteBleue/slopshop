@@ -563,7 +563,9 @@ fn blend_layer(src: vec4<f32>, dst: vec4<f32>, flags: u32) -> vec4<f32> {
     let perceptual = (flags & FLAG_PERCEPTUAL) != 0u;
     // Exact paths: linear normal is "over"; an opaque normal layer, or one over nothing, is
     // its own color in either space.
-    if mode == MODE_NORMAL && (!perceptual || src.a >= 1.0 || dst.a <= 0.0) {
+    // Dissolve blends like normal: its pixels were already chosen (`dissolve`).
+    if (mode == MODE_NORMAL || mode == MODE_DISSOLVE)
+        && (!perceptual || src.a >= 1.0 || dst.a <= 0.0) {
         return src + dst * (1.0 - src.a);
     }
     if src.a <= 0.0 {
@@ -581,6 +583,38 @@ fn blend_layer(src: vec4<f32>, dst: vec4<f32>, flags: u32) -> vec4<f32> {
             + alpha_s * alpha_b * mixed) / alpha_o;
     }
     return vec4<f32>(from_blend(co, perceptual) * alpha_o, alpha_o);
+}
+
+// Dissolve's noise at a document pixel, in [0, 1): the same hash as
+// slopshop_core::blend::dissolve_noise (lowbias32), 24 bits so that it is exact in f32.
+fn dissolve_noise(p: vec2<u32>) -> f32 {
+    var h = (p.x * 0x8da6b343u) ^ (p.y * 0xd8163841u);
+    h ^= h >> 16u;
+    h *= 0x7feb352du;
+    h ^= h >> 15u;
+    h *= 0x846ca68bu;
+    h ^= h >> 16u;
+    return f32(h >> 8u) / 16777216.0;
+}
+
+// Dissolve: the layer's pixel kept whole (straight color, alpha 1) or dropped, by its coverage
+// against the noise of the document pixel. Views where an output pixel covers several document
+// pixels show the average instead, which is normal blending.
+fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
+    var pixel: vec2<i32>;
+    if footprint.exact {
+        pixel = footprint.texel;
+    } else {
+        let size = footprint.hi - footprint.lo;
+        if max(size.x, size.y) > 1.0 {
+            return src;
+        }
+        pixel = vec2<i32>(floor((footprint.lo + footprint.hi) * 0.5));
+    }
+    if any(pixel < vec2<i32>(0)) || !(dissolve_noise(vec2<u32>(pixel)) < min(src.a, 1.0)) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(unpremultiply(src), 1.0);
 }
 
 // Where an output pixel samples the document.
@@ -615,6 +649,9 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
         }
         if (layer.flags & FLAG_MASK) != 0u {
             src = src * mask_coverage(layer, footprint);
+        }
+        if ((layer.flags >> BLEND_SHIFT) & 0xffu) == MODE_DISSOLVE {
+            src = dissolve(src, footprint);
         }
         acc = blend_layer(src, acc, layer.flags);
         if footprint.exact {

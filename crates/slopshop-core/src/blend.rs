@@ -10,11 +10,14 @@ use std::fmt;
 
 use crate::color::{ColorSpace, IDENTITY, Mat3, TransferFunction, WORKING_SPACE, mat_vec};
 
-/// How a layer's color combines with the color below it (Photoshop's modes, except Dissolve).
+/// How a layer's color combines with the color below it (Photoshop's modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BlendMode {
     #[default]
     Normal,
+    /// Each pixel is either the layer's color or what is below, at random with the layer's
+    /// coverage as probability ([`dissolve`]); then like normal.
+    Dissolve,
     Darken,
     Multiply,
     ColorBurn,
@@ -45,8 +48,9 @@ pub enum BlendMode {
 impl BlendMode {
     /// Every mode, in Photoshop's menu order (groups: normal, darken, lighten, contrast,
     /// inversion, cancellation, component).
-    pub const ALL: [BlendMode; 26] = [
+    pub const ALL: [BlendMode; 27] = [
         BlendMode::Normal,
+        BlendMode::Dissolve,
         BlendMode::Darken,
         BlendMode::Multiply,
         BlendMode::ColorBurn,
@@ -78,6 +82,7 @@ impl BlendMode {
     pub fn id(self) -> &'static str {
         match self {
             BlendMode::Normal => "normal",
+            BlendMode::Dissolve => "dissolve",
             BlendMode::Darken => "darken",
             BlendMode::Multiply => "multiply",
             BlendMode::ColorBurn => "colorBurn",
@@ -191,6 +196,12 @@ impl Blender {
     pub fn blend(&self, mode: BlendMode, src: &[f64; 4], dst: &mut [f64; 4]) {
         let (alpha_s, alpha_b) = (src[3], dst[3]);
         // Exact paths: nothing to mix with, or an opaque normal layer that covers it all.
+        // Dissolve blends like normal (its pixels were already chosen, see `dissolve`).
+        let mode = if mode == BlendMode::Dissolve {
+            BlendMode::Normal
+        } else {
+            mode
+        };
         if mode == BlendMode::Normal
             && (self.space == BlendSpace::Linear || alpha_s >= 1.0 || alpha_b <= 0.0)
         {
@@ -290,6 +301,33 @@ fn unpremultiply(px: &[f64; 4]) -> [f64; 3] {
     }
 }
 
+/// Dissolve (Photoshop's): the layer's pixel at document position (`x`, `y`), premultiplied, is
+/// kept whole (its straight color at full alpha) when [`dissolve_noise`] is below its alpha, and
+/// dropped otherwise. The pattern depends only on the position, so it is the same in every view
+/// and export, and on the GPU.
+pub fn dissolve(src: [f64; 4], x: u32, y: u32) -> [f64; 4] {
+    let alpha = src[3];
+    let kept = dissolve_noise(x, y) < alpha.min(1.0);
+    if !kept {
+        return [0.0; 4];
+    }
+    let straight = |c: f64| if alpha > 0.0 { c / alpha } else { 0.0 };
+    [straight(src[0]), straight(src[1]), straight(src[2]), 1.0]
+}
+
+/// A uniform value in `[0, 1)` for each document pixel: a 32-bit integer hash of the position
+/// (lowbias32), reduced to 24 bits so that it is exact in `f32` too (the GPU shader computes the
+/// same one).
+pub fn dissolve_noise(x: u32, y: u32) -> f64 {
+    let mut h = x.wrapping_mul(0x8da6_b343) ^ y.wrapping_mul(0xd816_3841);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^= h >> 16;
+    f64::from(h >> 8) / 16_777_216.0
+}
+
 /// Values closer than this to 0 (or 1) count as 0 (or 1) where a formula divides by them
 /// (divide, the dodges and burns): conversions leave channels that should be 0 at about ±1e-9,
 /// and dividing that noise by noise would give arbitrary results. Below the resolution of
@@ -310,7 +348,7 @@ pub fn blend_color(mode: BlendMode, space: BlendSpace, cb: [f64; 3], cs: [f64; 3
     };
     let separable = |f: &dyn Fn(f64, f64) -> f64| [0, 1, 2].map(|i| f(cb[i], cs[i]));
     match mode {
-        BlendMode::Normal => cs,
+        BlendMode::Normal | BlendMode::Dissolve => cs,
         BlendMode::Darken => separable(&|b, s| b.min(s)),
         BlendMode::Multiply => separable(&|b, s| b * s),
         BlendMode::ColorBurn => separable(&color_burn),
@@ -475,7 +513,7 @@ mod tests {
         for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
             assert_eq!(BlendSpace::from_id(space.id()), Some(space));
         }
-        assert_eq!(BlendMode::from_id("dissolve"), None);
+        assert_eq!(BlendMode::from_id("pinkify"), None);
     }
 
     #[test]
@@ -650,5 +688,31 @@ mod tests {
                 (decode_mirrored(TransferFunction::Srgb, e) - v).abs() < 1e-12 * v.abs().max(1.0)
             );
         }
+    }
+
+    #[test]
+    fn dissolve_keeps_whole_pixels_with_the_layer_coverage_as_probability() {
+        let src = px(0.2, 0.4, 0.6, 0.3);
+        let mut kept = 0;
+        for y in 0..100 {
+            for x in 0..100 {
+                let out = dissolve(src, x, y);
+                if out[3] > 0.0 {
+                    kept += 1;
+                    assert!(close([out[0], out[1], out[2]], [0.2, 0.4, 0.6]));
+                    assert_eq!(out[3], 1.0);
+                } else {
+                    assert_eq!(out, [0.0; 4]);
+                }
+                // The same pixel always gives the same answer.
+                assert_eq!(dissolve(src, x, y), out);
+            }
+        }
+        assert!((2700..3300).contains(&kept), "{kept} of 10000 at 30%");
+        // Opaque layers are kept whole everywhere, transparent ones nowhere.
+        assert!((0..50).all(|i| dissolve(px(1.0, 0.0, 0.0, 1.0), i, 7 * i)[3] == 1.0));
+        assert!((0..50).all(|i| dissolve([0.0; 4], i, i)[3] == 0.0));
+        let noise = dissolve_noise(123, 456);
+        assert!((0.0..1.0).contains(&noise));
     }
 }
