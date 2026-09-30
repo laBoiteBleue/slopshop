@@ -499,8 +499,9 @@ export const engine = {
   moveDocument: (documentId: number, index: number) =>
     serial(() => invoke<void>("move_document", { documentId, index })),
   /** Copy every layer of `sourceId` on top of `targetId` (one undo entry in the target). */
-  copyLayers: (sourceId: number, targetId: number) =>
-    serial(() => invoke<DocumentView>("copy_layers", { sourceId, targetId })),
+  /** Every layer of the source (grouped if several), or only `layerIds`. */
+  copyLayers: (sourceId: number, targetId: number, layerIds: number[] | null = null) =>
+    serial(() => invoke<DocumentView>("copy_layers", { sourceId, targetId, layerIds })),
   /** Opens in progress, and recent failures (for when their events were missed). */
   openings: () => invoke<Opening[]>("openings"),
   openFailures: () => invoke<OpenFailed[]>("open_failures"),

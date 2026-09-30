@@ -72,6 +72,7 @@ const fr: Messages = {
   "drop.newTab": "Déposez pour ouvrir dans un nouvel onglet",
   "drop.layer": "Déposez pour ajouter comme calque",
   "drop.copyLayers": "Déposez pour copier {name} en calques",
+  "drop.copySelectedLayers": "Déposer pour copier {count} calque(s) ici",
   "open.opening": "Ouverture de {name}…",
   "open.failed": "Impossible d'ouvrir {name} : {error}",
   "open.warning.iccProfileUnsupported":

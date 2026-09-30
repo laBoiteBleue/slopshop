@@ -72,6 +72,7 @@ const en = {
   "drop.newTab": "Drop to open in a new tab",
   "drop.layer": "Drop to add as a layer",
   "drop.copyLayers": "Drop to copy {name} as layers",
+  "drop.copySelectedLayers": "Drop to copy {count} layer(s) here",
   "open.opening": "Opening {name}…",
   "open.failed": "Cannot open {name}: {error}",
   "open.warning.iccProfileUnsupported":

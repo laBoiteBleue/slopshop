@@ -270,6 +270,90 @@
     tabDrag = null;
   }
 
+  // Layers dragged from the layers panel to another tab, as in Photoshop: hovering a tab shows
+  // its document; dropping on its image or its layers panel copies the layers there. The panel
+  // drives the drag until the tab changes; then the app keeps the pointer (the panel of the
+  // first document goes away with it).
+  const TAB_HOVER_MS = 400;
+  type LayerDrag = { source: number; ids: number[]; pointerId: number };
+  /** The panel's drag, while it lasts. */
+  let panelDrag: LayerDrag | null = null;
+  /** The drag once it left its tab, and whether the pointer is over a place to drop. */
+  let layerTransfer = $state<(LayerDrag & { overTarget: boolean }) | null>(null);
+  /** A tab under the dragged layers, shown after a short hover. */
+  let tabHover = $state<{ id: number; timer: number } | null>(null);
+  let mainElement: HTMLElement;
+
+  function onLayerDrag(drag: { ids: number[]; pointerId: number; x: number; y: number } | null) {
+    if (!drag || activeId === null) {
+      panelDrag = null;
+      if (!layerTransfer) clearTabHover();
+      return;
+    }
+    panelDrag = { source: activeId, ids: drag.ids, pointerId: drag.pointerId };
+    hoverTabAt(drag.x, drag.y);
+  }
+
+  function hoverTabAt(x: number, y: number) {
+    const tab = document.elementFromPoint(x, y)?.closest<HTMLElement>(".tab[data-id]");
+    const id = tab ? Number(tab.dataset.id) : null;
+    if (id === null || id === activeId) return clearTabHover();
+    if (tabHover?.id === id) return;
+    clearTabHover();
+    tabHover = { id, timer: window.setTimeout(() => showTabDuringDrag(id), TAB_HOVER_MS) };
+  }
+
+  function clearTabHover() {
+    if (tabHover) window.clearTimeout(tabHover.timer);
+    tabHover = null;
+  }
+
+  function showTabDuringDrag(id: number) {
+    tabHover = null;
+    if (!layerTransfer) {
+      const drag = panelDrag;
+      if (!drag) return;
+      try {
+        mainElement.setPointerCapture(drag.pointerId);
+      } catch {
+        // The pointer is already up.
+        return;
+      }
+      layerTransfer = { ...drag, overTarget: false };
+      panelDrag = null;
+    }
+    activate(id);
+  }
+
+  function onTransferMove(e: PointerEvent) {
+    const transfer = layerTransfer;
+    if (!transfer || e.pointerId !== transfer.pointerId) return;
+    hoverTabAt(e.clientX, e.clientY);
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    transfer.overTarget =
+      activeId !== null &&
+      activeId !== transfer.source &&
+      !!under?.closest(".stage, [data-drop='layer']");
+  }
+
+  function onTransferUp(e: PointerEvent) {
+    const transfer = layerTransfer;
+    if (!transfer || e.pointerId !== transfer.pointerId) return;
+    endTransfer();
+    if (transfer.overTarget && activeId !== null) {
+      void sync(engine.copyLayers(transfer.source, activeId, transfer.ids));
+    }
+  }
+
+  function endTransfer() {
+    const transfer = layerTransfer;
+    if (transfer && mainElement.hasPointerCapture(transfer.pointerId)) {
+      mainElement.releasePointerCapture(transfer.pointerId);
+    }
+    layerTransfer = null;
+    clearTabHover();
+  }
+
   // Rename a tab: double-click its name. Enter or leaving the field commits, Escape cancels.
   let renamingTab = $state<number | null>(null);
 
@@ -934,6 +1018,10 @@
   // --- Keyboard --------------------------------------------------------------------------------
 
   function onkeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && layerTransfer) {
+      endTransfer();
+      return;
+    }
     if (e.key === "Escape" && tabDrag) {
       cancelTabDrag();
       return;
@@ -1072,7 +1160,14 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
-  <main class:has-panel={active !== null}>
+  <main
+    class:has-panel={active !== null}
+    class:transferring={layerTransfer !== null}
+    bind:this={mainElement}
+    onpointermove={onTransferMove}
+    onpointerup={onTransferUp}
+    onpointercancel={endTransfer}
+  >
     <section class="workspace">
       <div
         class="tabbar"
@@ -1085,6 +1180,7 @@
           <div
             class="tab"
             class:active={doc.id === activeId}
+            class:hovered={tabHover?.id === doc.id}
             class:dragging={tabDrag?.moved && tabDrag.id === doc.id}
             class:drop-before={tabDrag?.slot === index}
             class:drop-after={index === tabs.length - 1 && tabDrag?.slot === tabs.length}
@@ -1190,6 +1286,11 @@
         {:else if copyHint}
           <div class="drop-hint layer">{copyHint}</div>
         {/if}
+        {#if layerTransfer?.overTarget}
+          <div class="drop-hint layer">
+            {t("drop.copySelectedLayers", { count: layerTransfer.ids.length })}
+          </div>
+        {/if}
       </div>
     </section>
 
@@ -1202,6 +1303,7 @@
           onlive={live}
           ongestureend={endGesture}
           contextMenu={layerContextMenu}
+          onlayerdrag={onLayerDrag}
         />
       {/key}
     {/if}
@@ -1659,6 +1761,14 @@
     color: var(--text);
     font-size: 14px;
     pointer-events: none;
+  }
+
+  main.transferring {
+    cursor: copy;
+  }
+
+  .tab.hovered {
+    box-shadow: inset 0 -2px 0 var(--accent);
   }
 
   .drop-hint.layer {
