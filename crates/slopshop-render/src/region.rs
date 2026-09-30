@@ -44,9 +44,18 @@ pub fn export_source<'a>(
     renderer: Option<&'a Renderer>,
     document: &'a Document,
 ) -> impl FnMut(Rect, &mut [f32]) -> Result<u64, String> + Send + 'a {
+    let mut render = export_renderer(renderer);
+    move |region, out| render(document, region, out)
+}
+
+/// [`export_source`] for several documents (`slopshop_io::export::export_psd` renders each
+/// layer as its own document): the chunk buffers and the CPU fallback last across documents.
+pub fn export_renderer(
+    renderer: Option<&Renderer>,
+) -> impl FnMut(&Document, Rect, &mut [f32]) -> Result<u64, String> + Send + '_ {
     // The chunk buffers are kept across regions (bands): allocated once per export.
     let mut gpu = renderer.map(|renderer| (renderer, RegionBuffers::default()));
-    move |region, out| {
+    move |document, region, out| {
         if let Some((renderer, buffers)) = &mut gpu {
             match renderer.render_region_with(document, region, out, buffers) {
                 Ok(non_finite) => return Ok(non_finite),
