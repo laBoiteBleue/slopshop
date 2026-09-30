@@ -8,6 +8,7 @@
     type DocumentView,
     type EditRequest,
     type LayerView,
+    type AdjustmentId,
   } from "./engine";
   import ContextMenu from "./ContextMenu.svelte";
   import Icon from "./Icon.svelte";
@@ -314,6 +315,25 @@
       ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
       : doc.layers.length;
     void edit({ kind: "addGroup", name, parent, index });
+  }
+
+  /**
+   * A new adjustment layer above the active layer (in its group), or at the top, selected so
+   * that the Properties panel shows it (Layer > New Adjustment Layer, ADR 0020).
+   */
+  export function addAdjustment(adjustment: AdjustmentId) {
+    const label = t(`adjustment.${adjustment}`);
+    const n = allLayers.filter((l) => l.adjustment?.id === adjustment).length + 1;
+    const parent = selected ? (parents.get(selected.id) ?? null) : null;
+    const index = selected
+      ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
+      : doc.layers.length;
+    const before = new Set(allLayers.map((l) => l.id));
+    const name = t("layers.defaultAdjustmentName", { name: label, n });
+    void edit({ kind: "addAdjustmentLayer", name, adjustment, parent, index }).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
   }
 
   /** Put the selected layers into a new group (Layer > Group Layers, Ctrl+G). */
@@ -744,7 +764,7 @@
       value={selected?.kind === "group" && selected.passThrough
         ? "passThrough"
         : (selected?.blendMode ?? "normal")}
-      disabled={!selected}
+      disabled={!selected || selected.kind === "adjustment"}
       onchange={(e) => onBlendModeChange(e.currentTarget.value)}
     >
       {#if selected?.kind === "group"}
@@ -856,6 +876,13 @@
             <Icon name={collapsed.has(layer.id) ? "chevronRight" : "chevronDown"} size={12} />
           </button>
           <span class="thumb folder"><Icon name="folder" size={26} /></span>
+        {:else if layer.kind === "adjustment"}
+          <span
+            class="thumb folder"
+            title={layer.adjustment ? t(`adjustment.${layer.adjustment.id}`) : ""}
+          >
+            <Icon name="adjust" size={24} />
+          </span>
         {:else}
           <span class="thumb"><LayerThumbnail {documentId} {layer} size={36} /></span>
         {/if}

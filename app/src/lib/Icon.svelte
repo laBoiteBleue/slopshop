@@ -10,6 +10,7 @@
     chevronRight: "M9 6l6 6-6 6",
     chevronDown: "M6 9l6 6 6-6",
     clip: "M8 4v9a3 3 0 0 0 3 3h7 M15 13l3 3-3 3",
+    adjust: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18Z M12 3v18 M12 7h5 M12 11h7 M12 15h6",
   } as const;
 
   export type IconName = keyof typeof paths;

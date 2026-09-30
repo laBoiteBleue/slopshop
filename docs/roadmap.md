@@ -110,7 +110,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Adjustment layers, engine ([ADR 0020](adr/0020-adjustment-layers.md)): Exposure,
       Hue/Saturation and Levels, applied to what is below (opacity, mask, clipping, groups),
       CPU and GPU, `.slop` 0.7
-- [ ] Adjustment layers, UI: Layer > New Adjustment Layer, a Properties panel with live sliders
+- [x] Adjustment layers, UI: Layer > New Adjustment Layer, a Properties panel with live sliders
 - [ ] Curves (with a curve editor), then Brightness/Contrast, Vibrance, Color Balance…
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
