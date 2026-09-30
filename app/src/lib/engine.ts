@@ -17,6 +17,8 @@ export type LayerView = {
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
   blendMode: BlendModeId;
+  /** Changes when the layer's pixels change (0 for fills): time for a new thumbnail. */
+  contentKey: number;
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
@@ -474,6 +476,18 @@ export const engine = {
     serial(() => invoke<DocumentView>("save_document", { documentId, path })),
   /** Close the window even with unsaved changes (after asking the user). */
   quit: () => invoke<void>("quit"),
+  /**
+   * Thumbnail of a raster layer, at most `maxSide` pixels on its longer side: RGBA8 sRGB with
+   * straight alpha, ready for a canvas (raw binary: width, height, then the pixels).
+   */
+  layerThumbnail: async (documentId: number, layerId: number, maxSide: number) => {
+    const buffer = await invoke<ArrayBuffer>("layer_thumbnail", { documentId, layerId, maxSide });
+    const view = new DataView(buffer);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
+    return new ImageData(pixels, width, height);
+  },
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   perform: (documentId: number, edit: EditRequest) =>

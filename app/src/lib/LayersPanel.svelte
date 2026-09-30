@@ -10,6 +10,7 @@
     type LayerView,
   } from "./engine";
   import Icon from "./Icon.svelte";
+  import LayerThumbnail from "./LayerThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
 
   let {
@@ -58,11 +59,6 @@
 
   let newColor = $state("#e84ca3");
   let list: HTMLUListElement;
-
-  function swatch(layer: LayerView): string {
-    const [r, g, b] = layer.swatch.map((v) => Math.round(Math.min(Math.max(v, 0), 1) * 255));
-    return `rgb(${r} ${g} ${b} / ${layer.swatch[3]})`;
-  }
 
   /** `#rrggbb` → sRGB-encoded RGBA in [0, 1]. The engine converts it to its working space. */
   export function addFill() {
@@ -357,7 +353,7 @@
         >
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
-        <span class="thumb"><span style:background={swatch(layer)}></span></span>
+        <span class="thumb"><LayerThumbnail {documentId} {layer} size={36} /></span>
         {#if renaming === layer.id}
           <input
             class="rename"
@@ -491,7 +487,7 @@
     position: relative;
     display: flex;
     align-items: center;
-    height: 34px;
+    height: 46px;
     padding-right: 8px;
     border-bottom: 1px solid var(--border-dark);
   }
@@ -548,18 +544,9 @@
   }
 
   .thumb {
-    width: 26px;
-    height: 26px;
+    display: flex;
     margin: 0 8px;
     flex: none;
-    border: 1px solid var(--border-strong);
-    background: repeating-conic-gradient(#c8c8c8 0 25%, #ffffff 0 50%) 0 0 / 8px 8px;
-  }
-
-  .thumb span {
-    display: block;
-    width: 100%;
-    height: 100%;
   }
 
   .name {
