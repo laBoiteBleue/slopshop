@@ -15,7 +15,51 @@ export type LayerView = {
   kind: "fill" | "raster";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
+  /** Translated with the `blendMode.<id>` keys. */
+  blendMode: BlendModeId;
 };
+
+/** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
+export type BlendModeId =
+  | "normal"
+  | "darken"
+  | "multiply"
+  | "colorBurn"
+  | "linearBurn"
+  | "darkerColor"
+  | "lighten"
+  | "screen"
+  | "colorDodge"
+  | "linearDodge"
+  | "lighterColor"
+  | "overlay"
+  | "softLight"
+  | "hardLight"
+  | "vividLight"
+  | "linearLight"
+  | "pinLight"
+  | "hardMix"
+  | "difference"
+  | "exclusion"
+  | "subtract"
+  | "divide"
+  | "hue"
+  | "saturation"
+  | "color"
+  | "luminosity";
+
+/** The modes in Photoshop's menu order, by group (the menu separates the groups). */
+export const BLEND_MODE_GROUPS: BlendModeId[][] = [
+  ["normal"],
+  ["darken", "multiply", "colorBurn", "linearBurn", "darkerColor"],
+  ["lighten", "screen", "colorDodge", "linearDodge", "lighterColor"],
+  ["overlay", "softLight", "hardLight", "vividLight", "linearLight", "pinLight", "hardMix"],
+  ["difference", "exclusion", "subtract", "divide"],
+  ["hue", "saturation", "color", "luminosity"],
+];
+
+/** Where layers blend: perceptual (Photoshop's look, the default) or linear (physical, HDR). */
+export type BlendSpaceId = "perceptual" | "linear";
 
 export type DocumentView = {
   /** One document per tab; ids are never reused. */
@@ -26,6 +70,7 @@ export type DocumentView = {
   height: number;
   /** Identifier, translated with the `colorSpace.<id>` i18n keys. */
   workingSpace: ColorSpaceId;
+  blendSpace: BlendSpaceId;
   revision: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -46,7 +91,9 @@ export type EditRequest =
   | { kind: "setLayerOpacity"; id: number; opacity: number }
   | { kind: "renameLayer"; id: number; name: string }
   /** `index` is the final position in the stack, 0 = bottom. */
-  | { kind: "moveLayer"; id: number; index: number };
+  | { kind: "moveLayer"; id: number; index: number }
+  | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
+  | { kind: "setBlendSpace"; space: BlendSpaceId };
 
 /** View changes; positions and deltas are in viewport device pixels. */
 export type ViewRequest =

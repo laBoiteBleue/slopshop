@@ -1,7 +1,14 @@
 <script lang="ts">
   import { hexToSrgb } from "./color";
   import { tick, untrack } from "svelte";
-  import type { DocumentView, EditRequest, LayerView } from "./engine";
+  import {
+    BLEND_MODE_GROUPS,
+    type BlendModeId,
+    type BlendSpaceId,
+    type DocumentView,
+    type EditRequest,
+    type LayerView,
+  } from "./engine";
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
 
@@ -251,6 +258,26 @@
   </div>
 
   <div class="options">
+    <select
+      class="blend-mode"
+      aria-label={t("layers.blendMode")}
+      title={t("layers.blendMode")}
+      value={selected?.blendMode ?? "normal"}
+      disabled={!selected}
+      onchange={(e) => {
+        if (selected) {
+          const mode = e.currentTarget.value as BlendModeId;
+          void edit({ kind: "setLayerBlendMode", id: selected.id, mode });
+        }
+      }}
+    >
+      {#each BLEND_MODE_GROUPS as group, i (i)}
+        {#if i > 0}<hr />{/if}
+        {#each group as mode (mode)}
+          <option value={mode}>{t(`blendMode.${mode}`)}</option>
+        {/each}
+      {/each}
+    </select>
     <label for="layer-opacity">{t("layers.opacity")}</label>
     <input
       class="opacity-range"
@@ -279,6 +306,21 @@
       onchange={(e) => onOpacityFieldChange(e.currentTarget)}
     />
     <span class="unit">%</span>
+  </div>
+
+  <div class="options">
+    <label for="blend-space" title={t("layers.blendSpace.hint")}>{t("layers.blendSpace")}</label>
+    <select
+      id="blend-space"
+      class="blend-space"
+      title={t("layers.blendSpace.hint")}
+      value={doc.blendSpace}
+      onchange={(e) =>
+        void edit({ kind: "setBlendSpace", space: e.currentTarget.value as BlendSpaceId })}
+    >
+      <option value="perceptual">{t("layers.blendSpace.perceptual")}</option>
+      <option value="linear">{t("layers.blendSpace.linear")}</option>
+    </select>
   </div>
 
   <ul bind:this={list} tabindex="-1" class:dragging={drag?.active}>
@@ -387,6 +429,16 @@
 
   .options label {
     color: var(--text-muted);
+  }
+
+  .blend-mode {
+    width: 118px;
+    min-width: 0;
+  }
+
+  .blend-space {
+    flex: 1;
+    min-width: 0;
   }
 
   .opacity-range {
