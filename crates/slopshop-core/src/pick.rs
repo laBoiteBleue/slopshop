@@ -90,6 +90,8 @@ fn covers(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
             }
         }
         LayerContent::Group { children, .. } => hit(children, transform, x, y).is_some(),
+        // No pixels of its own: never what is under the pointer.
+        LayerContent::Adjustment { .. } => false,
     }
 }
 
@@ -157,7 +159,7 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
                     ));
                 }
             }
-            LayerContent::Fill { .. } => {}
+            LayerContent::Fill { .. } | LayerContent::Adjustment { .. } => {}
         }
     }
 }

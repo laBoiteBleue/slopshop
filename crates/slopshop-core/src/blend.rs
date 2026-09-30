@@ -302,6 +302,35 @@ impl Blender {
         [r * alpha, g * alpha, b * alpha, alpha]
     }
 
+    /// `below` (a premultiplied working-space color) with `adjustment` applied, mixed with it by
+    /// `coverage` (an adjustment layer's opacity × mask, ADR 0020): the adjustment runs on the
+    /// straight color in the blend space (in linear light for linear adjustments), the mix is
+    /// [`Self::fade`]'s; alpha is kept.
+    pub fn adjust(
+        &self,
+        adjustment: &crate::adjust::Adjustment,
+        below: &[f64; 4],
+        coverage: f64,
+    ) -> [f64; 4] {
+        let alpha = below[3];
+        if coverage.is_nan() || coverage <= 0.0 || alpha <= 0.0 {
+            return *below;
+        }
+        let straight = unpremultiply(below);
+        let adjusted = if adjustment.is_linear() {
+            adjustment.apply(straight)
+        } else {
+            self.decode(adjustment.apply(self.encode(straight)))
+        };
+        let above = [
+            adjusted[0] * alpha,
+            adjusted[1] * alpha,
+            adjusted[2] * alpha,
+            alpha,
+        ];
+        self.fade(below, &above, coverage)
+    }
+
     /// Straight working-space color → blend-space values.
     fn encode(&self, color: [f64; 3]) -> [f64; 3] {
         let color = match &self.to_blend {

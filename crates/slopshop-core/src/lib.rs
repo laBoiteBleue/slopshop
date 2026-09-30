@@ -14,6 +14,7 @@
 //! - [`convert`]: working-space pixels to a target pixel format, counting every lossy event.
 //! - [`job`]: cancellation and progress of background jobs.
 
+pub mod adjust;
 pub mod blend;
 mod blue_noise;
 pub mod color;
