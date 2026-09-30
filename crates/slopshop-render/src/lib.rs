@@ -161,6 +161,9 @@ const KIND_RASTER: u32 = 1;
 /// Group steps (ADR 0015, `composite::Step`): push the accumulator, then pop and combine.
 const KIND_GROUP_BEGIN: u32 = 2;
 const KIND_GROUP_END: u32 = 3;
+/// An adjustment layer (ADR 0020): `format` holds the adjustment's index, `color` and
+/// `transfer.x` its parameters.
+const KIND_ADJUST: u32 = 4;
 /// Layer flags (see composite.wgsl).
 const FLAG_PREMULTIPLIED: u32 = 1;
 /// Gray source: green and blue of its GPU texels are copies of red ([`gpu_texels`]).
@@ -723,6 +726,9 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
                 enabled_mask(layer).map(|image| (image, *transform)),
             ]
         }
+        Step::Adjust {
+            layer, transform, ..
+        } => [None, enabled_mask(layer).map(|image| (image, *transform))],
         Step::Begin { .. } => [None, None],
         Step::End {
             mask,
@@ -780,6 +786,33 @@ fn encode_layers(
                 atop,
                 ..
             } => (*layer, *mode, *opacity, *atop),
+            Step::Adjust {
+                layer,
+                adjustment,
+                opacity,
+                ..
+            } => {
+                // Hidden where its enabled mask has nothing to sample.
+                if enabled_mask(layer).is_some() && mask_plan.is_none() {
+                    continue;
+                }
+                let p = adjustment.params();
+                let mut fields = LayerFields {
+                    kind: KIND_ADJUST,
+                    flags: perceptual,
+                    opacity: *opacity,
+                    format: adjustment.index(),
+                    color: [p[0], p[1], p[2], p[3]],
+                    transfer: [p[4], 0.0, 0.0, 0.0],
+                    ..LayerFields::default()
+                };
+                if let Some(mask) = mask_plan {
+                    set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
+                }
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
             Step::Begin { isolated } => {
                 let fields = LayerFields {
                     kind: KIND_GROUP_BEGIN,
@@ -860,8 +893,8 @@ fn encode_layers(
                 }
                 prepared.tile_table.extend(table);
             }
-            // Groups are steps of their own.
-            LayerContent::Group { .. } => continue,
+            // Groups and adjustments are steps of their own.
+            LayerContent::Group { .. } | LayerContent::Adjustment { .. } => continue,
         }
         if let Some(mask) = mask_plan {
             set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
@@ -1166,6 +1199,7 @@ fn shader_source() -> String {
     constants += &format!("const FLAG_ATOP: u32 = {FLAG_ATOP}u;\n");
     constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
     constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
+    constants += &format!("const KIND_ADJUST: u32 = {KIND_ADJUST}u;\n");
     constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");
     constants += &format!("const RESAMPLE_NEAREST: u32 = {RESAMPLE_NEAREST}u;\n");
     constants += &format!("const RESAMPLE_EWA: u32 = {RESAMPLE_EWA}u;\n");

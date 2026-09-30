@@ -1216,3 +1216,93 @@ fn transformed_layers_needing_more_tiles_than_their_chunk_are_split_to_fit() {
     );
     assert_matches_cpu(&r, s.document(), size.bounds(), "small cache");
 }
+
+#[test]
+fn gpu_adjustment_layers_match_the_cpu_reference_compositor() {
+    use slopshop_core::adjust::Adjustment;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        let mut s = Session::new(Document::new(size));
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        let background = image(size, PixelFormat::RGBA8_SRGB, pattern);
+        push_into(&mut s, None, raster(&background), BlendMode::Normal, 1.0);
+        let adjust = |adjustment| LayerContent::Adjustment { adjustment };
+        // Exposure over everything, masked by a ramp.
+        let exposure = push_into(
+            &mut s,
+            None,
+            adjust(Adjustment::Exposure {
+                exposure: 0.8,
+                offset: -0.02,
+                gamma: 1.2,
+            }),
+            BlendMode::Normal,
+            0.9,
+        );
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let ramp = image(Size::new(260, 280), gray, |x, _| vec![(x % 256) as u8]);
+        s.perform(Edit::SetLayerMask {
+            id: exposure,
+            mask: Some(slopshop_core::LayerMask {
+                image: ramp,
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        })
+        .unwrap();
+        // A translucent shape with a Hue/Saturation clipped to it.
+        let shape = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![(x * 3) as u8, (y * 5) as u8, 90, ((x + y) % 256) as u8]
+        });
+        push_into(&mut s, None, raster(&shape), BlendMode::Normal, 1.0);
+        let hue = push_into(
+            &mut s,
+            None,
+            adjust(Adjustment::HueSaturation {
+                hue: -70.0,
+                saturation: 45.0,
+                lightness: 12.0,
+            }),
+            BlendMode::Normal,
+            1.0,
+        );
+        clip(&mut s, hue);
+        // Levels inside an isolated group, over a float layer.
+        let folder = push_into(&mut s, None, group(false), BlendMode::Normal, 0.8);
+        let hdr = image(
+            Size::new(200, 150),
+            float_format(ColorSpace::LINEAR_SRGB, AlphaMode::Straight),
+            |x, y| {
+                floats([
+                    x as f32 / 100.0,
+                    0.3,
+                    y as f32 / 150.0,
+                    ((x + y) % 7) as f32 / 6.0,
+                ])
+            },
+        );
+        push_into(&mut s, Some(folder), raster(&hdr), BlendMode::Normal, 1.0);
+        push_into(
+            &mut s,
+            Some(folder),
+            adjust(Adjustment::Levels {
+                input_black: 0.1,
+                input_white: 0.85,
+                gamma: 0.8,
+                output_black: 0.05,
+                output_white: 0.9,
+            }),
+            BlendMode::Normal,
+            0.7,
+        );
+        for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
+            assert_matches_cpu(&r, s.document(), region, &format!("{space:?}"));
+        }
+    }
+}
