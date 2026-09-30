@@ -70,6 +70,8 @@ const en = {
     "Infinite or undefined (NaN) values: shown as the brightest value or as 0",
   "open.warning.blendSpaceDiffers":
     "Some layers come from a document that blends differently: they now blend in this document's blend space",
+  "open.warning.layersFlattened":
+    "Photoshop layers are not imported yet: the flattened image was opened",
   "open.warning.colorInfoUnsupported":
     "The file's color information is not supported yet: colors read as sRGB",
 
@@ -86,6 +88,8 @@ const en = {
   "open.error.corrupt": "damaged document ({detail})",
   "open.skipped": "{count} files skipped: not images SlopShop opens",
   "open.error.archive": "cannot read this folder or zip archive ({detail})",
+  "open.error.psdWithoutComposite":
+    'this Photoshop document was saved without its flattened image ("Maximize Compatibility" off): SlopShop cannot open its layers yet',
   "open.error.internal": "internal error ({detail})",
 
   "save.title": "Save As",

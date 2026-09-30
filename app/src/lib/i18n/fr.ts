@@ -70,6 +70,8 @@ const fr: Messages = {
     "Valeurs infinies ou indéfinies (NaN) : affichées comme la valeur la plus lumineuse ou 0",
   "open.warning.blendSpaceDiffers":
     "Des calques viennent d'un document qui fusionne différemment : ils suivent maintenant l'espace de fusion de ce document",
+  "open.warning.layersFlattened":
+    "Les calques Photoshop ne sont pas encore importés : l'image aplatie a été ouverte",
   "open.warning.colorInfoUnsupported":
     "Informations de couleur du fichier pas encore prises en charge : couleurs lues en sRGB",
 
@@ -87,6 +89,8 @@ const fr: Messages = {
   "open.error.corrupt": "document endommagé ({detail})",
   "open.skipped": "{count} fichiers ignorés : pas des images que SlopShop sait ouvrir",
   "open.error.archive": "impossible de lire ce dossier ou cette archive zip ({detail})",
+  "open.error.psdWithoutComposite":
+    "ce document Photoshop a été enregistré sans son image aplatie (« Compatibilité maximale » désactivée) : SlopShop ne sait pas encore ouvrir ses calques",
   "open.error.internal": "erreur interne ({detail})",
 
   "save.title": "Enregistrer sous",

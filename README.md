@@ -88,9 +88,10 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   reported ([ADR 0008](docs/adr/0008-export.md), [ADR 0010](docs/adr/0010-jpeg-webp-export.md),
   [ADR 0011](docs/adr/0011-gray-export.md)).
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
-  float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS.
+  float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS,
+  and Photoshop PSD/PSB (their flattened image for now: layers come next).
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
-  JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW, PSD and more are planned
+  JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW and more are planned
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
 - A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts): document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add

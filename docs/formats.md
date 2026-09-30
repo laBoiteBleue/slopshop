@@ -29,11 +29,13 @@ format and the key to migrating from Photoshop. The reader is written in-house f
 specification (existing crates narrow 16/32-bit samples or lack PSB; see the research notes),
 with ag-psd and psd-tools as structure oracles. It comes in stages, each one useful on its own:
 
-1. **Flattened import** (can start now): the merged composite image stored in the file, at its
-   native depth (8/16/32-bit), gray or RGB, with its ICC profile. Only reliable when the file
-   was saved with "Maximize Compatibility" (the default): otherwise the composite is blank, and
-   the user must be told. CMYK and Lab are refused with an explanation until the engine has
-   them (ADR 0006).
+1. **Flattened import** ✅ (`slopshop_io::psd`): the merged composite image stored in the
+   file, at its native depth (8/16/32-bit), in bitmap, gray, indexed, RGB or duotone (read as
+   gray, with a warning), with its ICC profile and transparency (Photoshop's white matte
+   removed); raw, RLE and zip compression; PSD and PSB. A layered document opens with a warning
+   that its layers are flattened. A file saved without "Maximize Compatibility" has no
+   composite and is refused with that explanation. CMYK, Lab and multichannel are refused until
+   the engine has them (ADR 0006).
 2. **Layers** (can start now): pixel layers with name, opacity, visibility, position, blend
    mode (Photoshop's modes are in the engine, ADR 0012; the document blends in perceptual space,
    as Photoshop's 8/16-bit documents do) and layer mask (ADR 0014). What the engine cannot
@@ -67,7 +69,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| **Photoshop** | `.psd`, `.pdd` | 🔎 | — | **P0** | in-house reader (see above) | |
+| **Photoshop** | `.psd`, `.pdd` | ✅ flattened | — | **P0** | in-house reader (see above) | layers next; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | 🔎 | — | **P0** | same reader (64-bit lengths) | |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
 | PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export |

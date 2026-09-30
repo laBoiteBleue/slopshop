@@ -16,6 +16,7 @@ pub mod collection;
 pub mod export;
 mod icc;
 mod orient;
+mod psd;
 pub mod slop;
 mod tiff_import;
 
@@ -59,6 +60,9 @@ pub enum ImportWarning {
     /// The file declares color information that cannot be represented yet: colors are read as
     /// sRGB (linear for float data).
     ColorInfoUnsupported,
+    /// A layered document (Photoshop) was opened as its flattened image: its layers are not
+    /// imported yet.
+    LayersFlattened,
 }
 
 impl ImportWarning {
@@ -72,6 +76,7 @@ impl ImportWarning {
             ImportWarning::PrecisionReduced => "precisionReduced",
             ImportWarning::NonFiniteSamples => "nonFiniteSamples",
             ImportWarning::ColorInfoUnsupported => "colorInfoUnsupported",
+            ImportWarning::LayersFlattened => "layersFlattened",
         }
     }
 }
@@ -90,6 +95,9 @@ pub enum ImportError {
     NotYetSupported(&'static str),
     /// HEIC/HEIF, deliberately not supported for now (HEVC patents, ADR 0006).
     HeicUnsupported,
+    /// A Photoshop document saved without its flattened image ("Maximize Compatibility" off):
+    /// nothing to open until layers are imported.
+    PsdWithoutComposite,
     /// Pixel data the engine cannot store faithfully yet (e.g. CMYK, signed integers).
     UnsupportedPixels(String),
     /// The image would need more memory than an import is allowed to use.
@@ -110,6 +118,7 @@ impl ImportError {
             ImportError::Decode(_) => "decode",
             ImportError::NotYetSupported(_) => "notYetSupported",
             ImportError::HeicUnsupported => "heic",
+            ImportError::PsdWithoutComposite => "psdWithoutComposite",
             ImportError::UnsupportedPixels(_) => "unsupportedPixels",
             ImportError::TooLarge { .. } => "tooLarge",
             ImportError::Unrecognized => "unrecognized",
@@ -127,6 +136,7 @@ impl fmt::Display for ImportError {
             ImportError::Decode(e) => write!(f, "{e}"),
             ImportError::NotYetSupported(format) => write!(f, "{format}"),
             ImportError::HeicUnsupported => write!(f, "HEIC/HEIF"),
+            ImportError::PsdWithoutComposite => write!(f, "no flattened image"),
             ImportError::UnsupportedPixels(what) => write!(f, "{what}"),
             ImportError::TooLarge { width, height } => write!(f, "{width}×{height}"),
             ImportError::Unrecognized => write!(f, "unrecognized format"),
@@ -196,6 +206,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     }
     let decoded = if is_tiff(&head) {
         tiff_import::decode(file)?
+    } else if psd::is_psd(&head) {
+        drop(file);
+        psd::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -530,12 +543,11 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
     if let Some(error) = heif_brand(head) {
         return Some(error);
     }
-    let signatures: [(&[u8], &'static str); 7] = [
+    let signatures: [(&[u8], &'static str); 6] = [
         (&[0xFF, 0x0A], "JPEG XL"),
         (b"\0\0\0\x0cJXL \r\n\x87\n", "JPEG XL"),
         (b"\0\0\0\x0cjP  \r\n\x87\n", "JPEG 2000"),
         (&[0xFF, 0x4F, 0xFF, 0x51], "JPEG 2000"),
-        (b"8BPS", "PSD"),
         (b"%PDF", "PDF"),
         (b"SIMPLE  =", "FITS"),
     ];
@@ -944,7 +956,17 @@ mod tests {
                 "notYetSupported",
             ),
             ("scan.jxl", vec![0xFF, 0x0A, 0, 0], "notYetSupported"),
-            ("layers.psd", b"8BPS\0\x01".to_vec(), "notYetSupported"),
+            // A CMYK Photoshop document (header only): refused until the engine has CMYK.
+            (
+                "print.psd",
+                [
+                    &b"8BPS\0\x01"[..],
+                    &[0; 6],
+                    &[0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 8, 0, 4],
+                ]
+                .concat(),
+                "notYetSupported",
+            ),
             ("shot.cr2", b"II*\0\x10\0\0\0CR".to_vec(), "notYetSupported"),
             (
                 "scan.dcm",
