@@ -436,10 +436,15 @@ fn build_manifest(
                 inputs = children.iter().map(|child| child.id.get()).collect();
                 (NODE_GROUP, json!({ "pass_through": pass_through }))
             }
-            LayerContent::Adjustment { adjustment } => (
-                NODE_ADJUSTMENT,
-                json!({ "adjustment": adjustment.id(), "values": adjustment.params() }),
-            ),
+            LayerContent::Adjustment { adjustment } => {
+                // At least five values: what readers of schema 0.7 expect.
+                let used = adjustment.param_count().max(5);
+                let values = &adjustment.params()[..used];
+                (
+                    NODE_ADJUSTMENT,
+                    json!({ "adjustment": adjustment.id(), "values": values }),
+                )
+            }
         };
         let mut params = match params {
             Value::Object(map) => map,

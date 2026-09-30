@@ -587,9 +587,42 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
+/// The document of the golden fixture of schema 0.8: the schema 0.7 one with a Channel Mixer
+/// on top, an adjustment of more than five values.
+fn golden_document() -> Document {
+    let mut doc = golden_document_v0_7();
+    let id = doc.allocate_layer_id();
+    let index = doc.layers().len();
+    Edit::InsertLayer {
+        parent: None,
+        index,
+        layer: Layer {
+            id,
+            name: "Channel Mixer".into(),
+            visible: true,
+            opacity: 0.5,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: slopshop_core::Affine::IDENTITY,
+            content: LayerContent::Adjustment {
+                adjustment: slopshop_core::adjust::Adjustment::ChannelMixer {
+                    red: [80.0, 30.0, -10.0, 0.0],
+                    green: [0.0, 100.0, 0.0, 5.5],
+                    blue: [10.0, 0.0, 90.0, 0.0],
+                    monochrome: false,
+                },
+            },
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
 /// The document of the golden fixture of schema 0.7: the schema 0.6 one with a Hue/Saturation
 /// adjustment layer at 70 % on top (ADR 0020).
-fn golden_document() -> Document {
+fn golden_document_v0_7() -> Document {
     let mut doc = golden_document_v0_6();
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
@@ -814,6 +847,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.6")).unwrap();
     assert_same(&golden_document_v0_6(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.7")).unwrap();
+    assert_same(&golden_document_v0_7(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.8")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 
@@ -1041,9 +1076,17 @@ fn damaged_layer_trees_are_refused() {
         Err("newerVersion"),
         "an adjustment from a newer SlopShop"
     );
-    assert_eq!(
+    // Schema 0.8: missing values read as 0, more than 16 are refused.
+    assert!(
         read(
             &adjustment(r#""adjustment":"exposure","values":[1,0,1]"#),
+            "[1]"
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        read(
+            &adjustment(r#""adjustment":"exposure","values":[1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"#),
             "[1]"
         ),
         Err("corrupt")

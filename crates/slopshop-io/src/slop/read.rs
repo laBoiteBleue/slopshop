@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::Value;
+use slopshop_core::adjust::PARAM_COUNT;
 use slopshop_core::color::LinearRgba;
 use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
 use slopshop_core::geom::Size;
@@ -377,7 +378,7 @@ pub(super) fn read_node(
                 .get("adjustment")
                 .and_then(Value::as_str)
                 .ok_or_else(|| corrupt("adjustment node without an adjustment"))?;
-            let values: [f32; 5] = node
+            let values: Vec<f32> = node
                 .params
                 .get("values")
                 .and_then(Value::as_array)
@@ -386,10 +387,10 @@ pub(super) fn read_node(
                         .map(|v| v.as_f64().map(|v| v as f32))
                         .collect::<Option<Vec<f32>>>()
                 })
-                .and_then(|v| v.try_into().ok())
-                .ok_or_else(|| corrupt("adjustment node without its five values"))?;
+                .filter(|v| v.len() <= PARAM_COUNT)
+                .ok_or_else(|| corrupt("adjustment node without its values"))?;
             // An adjustment this version does not know comes from a newer SlopShop.
-            let adjustment = slopshop_core::adjust::Adjustment::from_params(id, values)
+            let adjustment = slopshop_core::adjust::Adjustment::from_params(id, &values)
                 .ok_or_else(|| FileError::UnknownNodeType(format!("adjustment {id}")))?;
             LayerContent::Adjustment { adjustment }
         }
