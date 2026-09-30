@@ -144,6 +144,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blend::BlendMode;
     use crate::color::LinearRgba;
     use crate::document::{Layer, LayerContent};
     use crate::geom::Size;
@@ -159,6 +160,7 @@ mod tests {
                     name: name.into(),
                     visible: true,
                     opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
                     content: LayerContent::Fill {
                         color: LinearRgba::new(0.0, 0.0, 1.0, 1.0),
                     },
@@ -303,6 +305,7 @@ mod tests {
                     name: "photo".into(),
                     visible: false,
                     opacity: 0.5,
+                    blend_mode: BlendMode::Normal,
                     content: LayerContent::Raster {
                         image: image.clone(),
                     },

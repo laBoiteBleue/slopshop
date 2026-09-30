@@ -1,4 +1,4 @@
-# The `.slop` document format, version 0.1
+# The `.slop` document format, version 0.2
 
 The byte-level specification of SlopShop documents. The design and its reasons are in
 [ADR 0009](adr/0009-document-file-format.md). The reference implementation is
@@ -49,7 +49,7 @@ A reader:
 - opens a file with an unknown `ro_compat` flag read-only (it may read, never save in place);
 - ignores unknown `compat` flags.
 
-No flag is defined in 0.1: writers write 0 in all three fields.
+No flag is defined yet: writers write 0 in all three fields.
 
 ## Commit slots
 
@@ -176,7 +176,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
 
 ```json
 {
-  "schema": { "major": 0, "minor": 1 },
+  "schema": { "major": 0, "minor": 2 },
   "writer": { "app": "slopshop", "version": "0.1.0" },
   "document": {
     "size": [21600, 10800],
@@ -186,13 +186,16 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
       "id_hint": "linear-rec2020"
     },
     "next_node_id": 6,
-    "stack": [3, 5]
+    "stack": [3, 5],
+    "blend_space": "perceptual"
   },
   "nodes": {
-    "3": { "type": "slopshop.raster", "version": 1, "name": "Background", "visible": true,
-           "opacity": 1.0, "params": { "image": "b3:9f2c…" }, "inputs": [] },
-    "5": { "type": "slopshop.fill", "version": 1, "name": "Tint", "visible": true,
-           "opacity": 0.5, "params": { "color": [0.2, 0.1, 0.0, 1.0] }, "inputs": [] }
+    "3": { "type": "slopshop.raster", "version": 2, "name": "Background", "visible": true,
+           "opacity": 1.0, "params": { "image": "b3:9f2c…", "blend_mode": "normal" },
+           "inputs": [] },
+    "5": { "type": "slopshop.fill", "version": 2, "name": "Tint", "visible": true,
+           "opacity": 0.5, "params": { "color": [0.2, 0.1, 0.0, 1.0], "blend_mode": "multiply" },
+           "inputs": [] }
   },
   "images": {
     "b3:9f2c…": {
@@ -211,16 +214,24 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
 
 - `schema`: a reader accepts any version with its own major and upgrades it in memory.
 - `document.size`: canvas width and height in pixels. `working_space`: the compositing color
-  space (0.1 supports linear transfer only). `next_node_id`: the next id to allocate, greater
+  space (linear transfer only so far). `next_node_id`: the next id to allocate, greater
   than every node id. `stack`: node ids, bottom to top; each must be a key of `nodes`, once.
+  `blend_space` (0.2): where layers blend, `perceptual` or `linear` ([ADR
+  0012](adr/0012-blend-modes.md)); absent in 0.1 files, which read as `linear`.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.
 - **Nodes** are keyed by id (decimal string). `type` and `version` select the parameters:
-  - `slopshop.raster` v1: `params.image` is the key of an entry of `images`.
-  - `slopshop.fill` v1: `params.color` is a linear, straight-alpha RGBA color in the working
-    space.
-  - `opacity` is in [0, 1]. `inputs` is empty in 0.1 (reserved for the node graph).
+  - `slopshop.raster` v1 and v2: `params.image` is the key of an entry of `images`.
+  - `slopshop.fill` v1 and v2: `params.color` is a linear, straight-alpha RGBA color in the
+    working space.
+  - v2 (schema 0.2) adds `params.blend_mode`, one of `normal`, `darken`, `multiply`,
+    `colorBurn`, `linearBurn`, `darkerColor`, `lighten`, `screen`, `colorDodge`,
+    `linearDodge`, `lighterColor`, `overlay`, `softLight`, `hardLight`, `vividLight`,
+    `linearLight`, `pinLight`, `hardMix`, `difference`, `exclusion`, `subtract`, `divide`,
+    `hue`, `saturation`, `color`, `luminosity`. v1 nodes are in normal mode. An unknown mode
+    or blend space is refused like an unknown node type.
+  - `opacity` is in [0, 1]. `inputs` is empty (reserved for the node graph).
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`
   is `u8`, `u16`, `f16` or `f32`; `alpha` is `straight` or `premultiplied`. `levels` lists the
@@ -231,4 +242,4 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   every entry of the optional top-level `sections` object, are written back unchanged by a
   save.
 
-Not stored in 0.1: undo history, view state, thumbnail, ICC/EXIF/XMP metadata.
+Not stored yet: undo history, view state, thumbnail, ICC/EXIF/XMP metadata.

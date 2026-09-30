@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use ::tiff::decoder::{Decoder, DecodingResult};
 use ::tiff::encoder::{Compression, colortype};
+use slopshop_core::BlendSpace;
 use slopshop_core::color::{ChannelLayout, ColorSpace};
 use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter, WHITE_MATTE};
 use slopshop_core::{CancelToken, Rect};
@@ -41,6 +42,7 @@ fn expected(size: Size, spec: &ExportSpec) -> Vec<u8> {
         dither: spec.dither,
         big_endian: false,
         matte: WHITE_MATTE,
+        blend_space: spec.blend_space,
     };
     let converter = Converter::new(spec.target_format(), options).unwrap();
     let row_bytes = size.width as usize * converter.bytes_per_pixel();
@@ -70,6 +72,9 @@ fn tiff_spec(sample: TiffSample, compression: TiffCompression, keep_alpha: bool)
         matte: WHITE_MATTE,
         dither: true,
         gray: false,
+        // A synthetic source, not a document: flattened in linear light, as the expected
+        // samples are computed.
+        blend_space: BlendSpace::Linear,
     }
 }
 

@@ -70,7 +70,7 @@ use slopshop_core::color::{
 pub use slopshop_core::convert::WHITE_MATTE;
 use slopshop_core::convert::{ConversionReport, ConvertError, ConvertOptions, Converter};
 use slopshop_core::document::{Document, LayerContent};
-use slopshop_core::{CancelToken, Progress, Rect, Size};
+use slopshop_core::{BlendSpace, CancelToken, Progress, Rect, Size};
 
 use self::exr::ExrWriter;
 use self::jpeg::JpegWriter;
@@ -227,6 +227,9 @@ pub struct ExportSpec {
     /// Write gray samples: the luminance of the image in `space` (colors are reported as
     /// [`ExportNotice::ColorDiscarded`]). Only for the formats of [`supports_gray`].
     pub gray: bool,
+    /// The document's blend space (ADR 0012): transparency is flattened over `matte` there, as
+    /// a background layer would be. [`default_spec`] copies it from the document.
+    pub blend_space: BlendSpace,
 }
 
 impl ExportSpec {
@@ -577,6 +580,7 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         // It only applies to 8-bit samples, which EXR never has.
         dither: kind != ExportFormatKind::Exr,
         gray,
+        blend_space: document.blend_space(),
     }
 }
 
@@ -690,6 +694,7 @@ pub fn export_image(
             dither: spec.dither,
             big_endian: spec.format.kind() == ExportFormatKind::Png,
             matte: spec.matte,
+            blend_space: spec.blend_space,
         },
     )
     .map_err(|e| match e {

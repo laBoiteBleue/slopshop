@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier};
 
+use slopshop_core::BlendMode;
 use slopshop_core::color::LinearRgba;
 use slopshop_core::composite::composite_region;
 use slopshop_core::document::{Layer, LayerId};
@@ -24,6 +25,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
         name: "layer".into(),
         visible: true,
         opacity,
+        blend_mode: BlendMode::Normal,
         content,
     };
     Edit::InsertLayer { index, layer }.apply(doc).unwrap();
@@ -54,6 +56,7 @@ fn png_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool) -> ExportSpec 
         matte: WHITE_MATTE,
         dither: true,
         gray: false,
+        blend_space: BlendSpace::default(),
     }
 }
 
@@ -547,6 +550,7 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         matte: WHITE_MATTE,
         dither: false,
         gray: false,
+        blend_space: BlendSpace::default(),
     };
     let report = export(&doc, &path, &spec).unwrap();
     std::fs::remove_file(&path).ok();
@@ -579,6 +583,7 @@ fn unsupported_spaces_are_rejected_before_writing() {
             matte: WHITE_MATTE,
             dither: false,
             gray: false,
+            blend_space: BlendSpace::default(),
         };
         let result = export_image(
             &path,
@@ -647,6 +652,7 @@ fn target_formats_follow_the_format_conventions() {
         matte: WHITE_MATTE,
         dither: false,
         gray: false,
+        blend_space: BlendSpace::default(),
     };
     let alpha = |format| spec(format).target_format().alpha;
     let tiff = |sample| ExportFormat::Tiff {
@@ -829,43 +835,64 @@ fn size_limits_per_format() {
 fn flattening_over_the_matte_equals_a_fill_below() {
     let size = Size::new(16, 16);
     let matte = LinearRgba::from_srgb_encoded_to_working(0.9, 0.5, 0.2, 1.0);
-    let spec = ExportSpec {
-        matte,
-        dither: false,
-        ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
-    };
+    for space in [BlendSpace::Linear, BlendSpace::Perceptual] {
+        let spec = ExportSpec {
+            matte,
+            dither: false,
+            blend_space: space,
+            ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
+        };
+        let document = || {
+            let mut doc = Document::new(size);
+            Edit::SetBlendSpace { space }.apply(&mut doc).unwrap();
+            doc
+        };
 
-    let mut flattened_doc = Document::new(size);
-    let image = translucent_raster(size);
-    push_layer(
-        &mut flattened_doc,
-        LayerContent::Raster {
-            image: image.clone(),
-        },
-        1.0,
-    );
-    let flattened_path = temp_path("matte-flattened.png");
-    let report = export(&flattened_doc, &flattened_path, &spec).unwrap();
-    // Every pixel but the one with alpha 255.
-    assert_eq!(report.notices, [ExportNotice::AlphaFlattened(255)]);
+        let mut flattened_doc = document();
+        let image = translucent_raster(size);
+        push_layer(
+            &mut flattened_doc,
+            LayerContent::Raster {
+                image: image.clone(),
+            },
+            1.0,
+        );
+        let flattened_path = temp_path("matte-flattened.png");
+        let report = export(&flattened_doc, &flattened_path, &spec).unwrap();
+        // Every pixel but the one with alpha 255.
+        assert_eq!(report.notices, [ExportNotice::AlphaFlattened(255)]);
 
-    let mut fill_doc = Document::new(size);
-    push_layer(&mut fill_doc, LayerContent::Fill { color: matte }, 1.0);
-    push_layer(&mut fill_doc, LayerContent::Raster { image }, 1.0);
-    let fill_path = temp_path("matte-fill.png");
-    assert_eq!(
-        export(&fill_doc, &fill_path, &spec).unwrap(),
-        ExportReport::default()
-    );
+        let mut fill_doc = document();
+        push_layer(&mut fill_doc, LayerContent::Fill { color: matte }, 1.0);
+        push_layer(&mut fill_doc, LayerContent::Raster { image }, 1.0);
+        let fill_path = temp_path("matte-fill.png");
+        assert_eq!(
+            export(&fill_doc, &fill_path, &spec).unwrap(),
+            ExportReport::default()
+        );
 
-    let flattened = image::open(&flattened_path).unwrap().to_rgb8();
-    let fill = image::open(&fill_path).unwrap().to_rgb8();
-    std::fs::remove_file(&flattened_path).ok();
-    std::fs::remove_file(&fill_path).ok();
-    assert!(
-        flattened == fill,
-        "flattening differs from a fill layer below"
-    );
+        let flattened = image::open(&flattened_path).unwrap().to_rgb8();
+        let fill = image::open(&fill_path).unwrap().to_rgb8();
+        std::fs::remove_file(&flattened_path).ok();
+        std::fs::remove_file(&fill_path).ok();
+        // Exact in linear space; in perceptual space the composite goes through f32 between
+        // the two blends, which may move a value by one code.
+        let tolerance = match space {
+            BlendSpace::Linear => 0,
+            BlendSpace::Perceptual => 1,
+        };
+        let worst = flattened
+            .as_raw()
+            .iter()
+            .zip(fill.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= tolerance,
+            "{space:?}: flattening differs from a fill layer below by {worst}"
+        );
+    }
 }
 
 #[test]
@@ -893,6 +920,7 @@ fn gray_spec(format: ExportFormat, space: ColorSpace, keep_alpha: bool) -> Expor
         matte: WHITE_MATTE,
         dither: true,
         gray: true,
+        blend_space: BlendSpace::default(),
     }
 }
 
@@ -902,6 +930,7 @@ fn gray_png_round_trips_bit_exact() {
     let luma = image::GrayImage::from_fn(w, h, |x, y| image::Luma([(x * 7 + y * 3) as u8]));
     let spec = ExportSpec {
         gray: true,
+        blend_space: BlendSpace::default(),
         ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
     };
     let (output, report) = round_trip("gray8", luma.clone().into(), &spec);
@@ -917,6 +946,7 @@ fn gray_png_round_trips_bit_exact() {
     });
     let spec = ExportSpec {
         gray: true,
+        blend_space: BlendSpace::default(),
         ..png_spec(PngDepth::U16, ColorSpace::SRGB, true)
     };
     let (output, report) = round_trip("gray16a", luma_alpha.clone().into(), &spec);
@@ -1004,6 +1034,7 @@ fn colors_exported_as_gray_become_their_luminance_and_are_reported() {
     let path = temp_path("red-as-gray.png");
     let spec = ExportSpec {
         gray: true,
+        blend_space: BlendSpace::default(),
         dither: false,
         ..png_spec(PngDepth::U8, ColorSpace::SRGB, false)
     };

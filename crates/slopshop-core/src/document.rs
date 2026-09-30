@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::blend::{BlendMode, BlendSpace};
 use crate::color::{ColorSpace, LinearRgba, WORKING_SPACE};
 use crate::geom::Size;
 use crate::raster::RasterImage;
@@ -62,6 +63,8 @@ pub struct Layer {
     pub visible: bool,
     /// In `[0, 1]`, validated by edits.
     pub opacity: f32,
+    /// How the layer combines with the layers below (ADR 0012).
+    pub blend_mode: BlendMode,
     pub content: LayerContent,
 }
 
@@ -69,6 +72,8 @@ pub struct Layer {
 pub struct Document {
     size: Size,
     working_space: ColorSpace,
+    /// Where layers are blended (ADR 0012).
+    blend_space: BlendSpace,
     /// Bottom to top.
     layers: Vec<Layer>,
     next_layer_id: u64,
@@ -76,11 +81,13 @@ pub struct Document {
 }
 
 impl Document {
-    /// An empty document. Compositing happens in linear light, so the working space is linear.
+    /// An empty document. Colors are stored in linear light (the working space is linear);
+    /// layers blend in the default [`BlendSpace`] (perceptual).
     pub fn new(size: Size) -> Self {
         Self {
             size,
             working_space: WORKING_SPACE,
+            blend_space: BlendSpace::default(),
             layers: Vec::new(),
             next_layer_id: 1,
             revision: 0,
@@ -95,6 +102,7 @@ impl Document {
     pub fn restore(
         size: Size,
         working_space: ColorSpace,
+        blend_space: BlendSpace,
         layers: Vec<Layer>,
         next_layer_id: u64,
     ) -> Result<Self, RestoreError> {
@@ -122,6 +130,7 @@ impl Document {
         Ok(Self {
             size,
             working_space,
+            blend_space,
             layers,
             next_layer_id,
             revision: 0,
@@ -139,6 +148,11 @@ impl Document {
 
     pub fn working_space(&self) -> ColorSpace {
         self.working_space
+    }
+
+    /// Where layers are blended.
+    pub fn blend_space(&self) -> BlendSpace {
+        self.blend_space
     }
 
     /// Layers from bottom to top.
@@ -173,6 +187,10 @@ impl Document {
 
     pub(crate) fn layers_mut(&mut self) -> &mut Vec<Layer> {
         &mut self.layers
+    }
+
+    pub(crate) fn set_blend_space(&mut self, space: BlendSpace) -> BlendSpace {
+        std::mem::replace(&mut self.blend_space, space)
     }
 
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
@@ -235,6 +253,7 @@ mod tests {
             name: format!("fill {id}"),
             visible: true,
             opacity,
+            blend_mode: BlendMode::Normal,
             content: LayerContent::Fill {
                 color: LinearRgba::new(0.1, 0.2, 0.3, 1.0),
             },
@@ -260,11 +279,13 @@ mod tests {
         let mut restored = Document::restore(
             doc.size(),
             doc.working_space(),
+            BlendSpace::Linear,
             doc.layers().to_vec(),
             doc.next_layer_id(),
         )
         .unwrap();
         assert_eq!(restored.layers(), doc.layers());
+        assert_eq!(restored.blend_space(), BlendSpace::Linear);
         assert_eq!(restored.size(), doc.size());
         assert_eq!(restored.revision(), 0);
         assert_eq!(restored.allocate_layer_id(), LayerId(4));
@@ -274,7 +295,7 @@ mod tests {
     fn restore_validates_like_edits() {
         let size = Size::new(2, 2);
         let restore = |layers: Vec<Layer>, next: u64| {
-            Document::restore(size, WORKING_SPACE, layers, next).map(|_| ())
+            Document::restore(size, WORKING_SPACE, BlendSpace::default(), layers, next).map(|_| ())
         };
         assert_eq!(restore(vec![fill(1, 1.0), fill(2, 0.0)], 3), Ok(()));
         assert_eq!(restore(vec![], 1), Ok(()));
@@ -308,7 +329,7 @@ mod tests {
             Err(RestoreError::InvalidColor(LayerId(1)))
         );
         assert!(matches!(
-            Document::restore(size, ColorSpace::SRGB, vec![], 1),
+            Document::restore(size, ColorSpace::SRGB, BlendSpace::default(), vec![], 1),
             Err(RestoreError::UnsupportedWorkingSpace(_))
         ));
     }

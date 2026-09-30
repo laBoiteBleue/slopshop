@@ -2,8 +2,8 @@
 //! path when no GPU is available.
 //!
 //! It produces a region of the document at full resolution (pyramid level 0, never coarser), as
-//! premultiplied RGBA `f32` in the working space: visible layers from bottom to top, combined
-//! with premultiplied "over". Raster texels are decoded exactly like the raster codec does on
+//! premultiplied RGBA `f32` in the working space: visible layers from bottom to top, each
+//! combined with what is below by its blend mode, in the document's blend space (ADR 0012). Raster texels are decoded exactly like the raster codec does on
 //! import, except for the display clamp: finite values are kept as they are, however large.
 //! Only non-finite values are replaced, and counted: NaN reads as 0, and ±inf as
 //! ±[`MAX_FINITE_SAMPLE`] (the display bound, also the largest half float). Not ±`f32::MAX`:
@@ -18,6 +18,7 @@
 
 use std::fmt;
 
+use crate::blend::{BlendMode, Blender};
 use crate::color::{IDENTITY, Mat3, mat_vec};
 use crate::document::{Document, LayerContent};
 use crate::geom::{Rect, Size};
@@ -58,8 +59,13 @@ impl fmt::Display for CompositeError {
 
 impl std::error::Error for CompositeError {}
 
-/// A visible layer, ready to be sampled.
-enum Source<'a> {
+/// A visible layer, ready to be sampled, with its blend mode.
+struct Source<'a> {
+    mode: BlendMode,
+    content: SourceContent<'a>,
+}
+
+enum SourceContent<'a> {
     /// Premultiplied working-space color, opacity applied.
     Fill([f64; 4]),
     Raster {
@@ -98,27 +104,34 @@ pub fn composite_region(
         .layers()
         .iter()
         .filter(|layer| layer.visible && layer.opacity > 0.0)
-        .filter_map(|layer| match &layer.content {
-            LayerContent::Fill { color } => {
-                let a = f64::from(color.a) * f64::from(layer.opacity);
-                Some(Source::Fill([
-                    f64::from(color.r) * a,
-                    f64::from(color.g) * a,
-                    f64::from(color.b) * a,
-                    a,
-                ]))
-            }
-            LayerContent::Raster { image } => {
-                let matrix = image.matrix_to(&working);
-                Some(Source::Raster {
-                    level: image.levels().first()?,
-                    codec: Codec::new(image.stored_format()),
-                    matrix: (matrix != IDENTITY).then_some(matrix),
-                    opacity: f64::from(layer.opacity),
-                })
-            }
+        .filter_map(|layer| {
+            let content = match &layer.content {
+                LayerContent::Fill { color } => {
+                    let a = f64::from(color.a) * f64::from(layer.opacity);
+                    SourceContent::Fill([
+                        f64::from(color.r) * a,
+                        f64::from(color.g) * a,
+                        f64::from(color.b) * a,
+                        a,
+                    ])
+                }
+                LayerContent::Raster { image } => {
+                    let matrix = image.matrix_to(&working);
+                    SourceContent::Raster {
+                        level: image.levels().first()?,
+                        codec: Codec::new(image.stored_format()),
+                        matrix: (matrix != IDENTITY).then_some(matrix),
+                        opacity: f64::from(layer.opacity),
+                    }
+                }
+            };
+            Some(Source {
+                mode: layer.blend_mode,
+                content,
+            })
         })
         .collect();
+    let blender = Blender::new(document.blend_space());
 
     let width = region.width as usize;
     let row_len = width * 4;
@@ -128,13 +141,13 @@ pub fn composite_region(
     let mut reports = vec![CompositeReport::default(); chunks.len()];
     std::thread::scope(|scope| {
         for (chunk_index, (chunk, report)) in chunks.into_iter().zip(&mut reports).enumerate() {
-            let sources = &sources;
+            let (sources, blender) = (&sources, &blender);
             scope.spawn(move || {
                 let mut acc = vec![[0.0f64; 4]; width];
                 for (i, row) in chunk.chunks_exact_mut(row_len).enumerate() {
                     // Fits: the row is inside the region, whose bottom fits the document.
                     let y = region.y + (chunk_index * rows_per_chunk + i) as u32;
-                    composite_row(sources, region.x, y, &mut acc, report);
+                    composite_row(sources, blender, region.x, y, &mut acc, report);
                     for (value, &v) in row.iter_mut().zip(acc.iter().flatten()) {
                         *value = saturate(v, report);
                     }
@@ -150,6 +163,7 @@ pub fn composite_region(
 /// Composite the pixels `x0..x0 + acc.len()` of row `y` into `acc`.
 fn composite_row(
     sources: &[Source],
+    blender: &Blender,
     x0: u32,
     y: u32,
     acc: &mut [[f64; 4]],
@@ -157,13 +171,14 @@ fn composite_row(
 ) {
     acc.fill([0.0; 4]);
     for source in sources {
-        match source {
-            Source::Fill(color) => {
+        let mode = source.mode;
+        match &source.content {
+            SourceContent::Fill(color) => {
                 for dst in acc.iter_mut() {
-                    over(color, dst);
+                    blender.blend(mode, color, dst);
                 }
             }
-            Source::Raster {
+            SourceContent::Raster {
                 level,
                 codec,
                 matrix,
@@ -190,7 +205,7 @@ fn composite_row(
                                 continue;
                             };
                             let src = texel(codec, px, matrix.as_ref(), *opacity, report);
-                            over(&src, &mut acc[(px_x - x0) as usize]);
+                            blender.blend(mode, &src, &mut acc[(px_x - x0) as usize]);
                         }
                     }
                     x = run_end;
@@ -229,14 +244,6 @@ fn texel(
     [r, g, b, f64::from(alpha)].map(|v| v * opacity)
 }
 
-/// Premultiplied "over": `dst = src + dst × (1 − src.a)`.
-fn over(src: &[f64; 4], dst: &mut [f64; 4]) {
-    let keep = 1.0 - src[3];
-    for (d, s) in dst.iter_mut().zip(src) {
-        *d = s + *d * keep;
-    }
-}
-
 /// A composited value as `f32`, saturating (and counting) beyond the `f32` range.
 fn saturate(v: f64, report: &mut CompositeReport) -> f32 {
     let x = v as f32;
@@ -257,6 +264,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::blend::BlendSpace;
     use crate::color::{
         AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType,
         TransferFunction, WORKING_SPACE, srgb_decode,
@@ -265,6 +273,25 @@ mod tests {
     use crate::document::{Layer, LayerId};
     use crate::edit::Edit;
     use crate::raster::RasterImage;
+
+    /// A document blending in linear space, where normal mode is premultiplied "over".
+    fn linear_document(size: Size) -> Document {
+        let mut doc = Document::new(size);
+        Edit::SetBlendSpace {
+            space: BlendSpace::Linear,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        doc
+    }
+
+    /// Premultiplied "over": `dst = src + dst × (1 − src.a)`.
+    fn over(src: &[f64; 4], dst: &mut [f64; 4]) {
+        let keep = 1.0 - src[3];
+        for (d, s) in dst.iter_mut().zip(src) {
+            *d = s + *d * keep;
+        }
+    }
 
     fn add(doc: &mut Document, content: LayerContent, opacity: f32, visible: bool) -> LayerId {
         let id = doc.allocate_layer_id();
@@ -276,6 +303,7 @@ mod tests {
                 name: format!("layer {}", id.get()),
                 visible,
                 opacity,
+                blend_mode: BlendMode::Normal,
                 content,
             },
         }
@@ -326,7 +354,7 @@ mod tests {
 
     #[test]
     fn layers_combine_with_opacity_and_visibility() {
-        let mut doc = Document::new(Size::new(3, 1));
+        let mut doc = linear_document(Size::new(3, 1));
         add(&mut doc, fill(0.2, 0.4, 0.6, 1.0), 1.0, true);
         // A 2 × 1 raster: straight (1, 0.5, 0, 0.5) then (0, 0, 0, 0), at 50 % opacity.
         let pixels = [[1.0, 0.5, 0.0, 0.5], [0.0; 4]];
@@ -346,7 +374,7 @@ mod tests {
         assert_eq!(report, CompositeReport::default());
 
         // An empty document is transparent.
-        let empty = Document::new(Size::new(2, 2));
+        let empty = linear_document(Size::new(2, 2));
         assert_eq!(composite(&empty, empty.size().bounds()).0, [0.0; 16]);
     }
 
@@ -366,7 +394,7 @@ mod tests {
                 ]
             })
             .collect();
-        let mut doc = Document::new(size);
+        let mut doc = linear_document(size);
         add(&mut doc, fill(0.1, 0.2, 0.3, 0.5), 1.0, true);
         add(
             &mut doc,
@@ -423,7 +451,7 @@ mod tests {
 
     #[test]
     fn large_float_values_are_not_clamped() {
-        let mut doc = Document::new(Size::new(2, 1));
+        let mut doc = linear_document(Size::new(2, 1));
         let pixels = [[1e5, -3.0, 0.5, 1.0], [3e38, 1.0, 1.0, 1.0]];
         add(&mut doc, float_raster(Size::new(2, 1), &pixels), 1.0, true);
         let (out, report) = composite(&doc, doc.size().bounds());
@@ -434,7 +462,7 @@ mod tests {
 
     #[test]
     fn non_finite_samples_are_mapped_and_counted() {
-        let mut doc = Document::new(Size::new(3, 1));
+        let mut doc = linear_document(Size::new(3, 1));
         add(&mut doc, fill(0.5, 0.5, 0.5, 1.0), 1.0, true);
         let pixels = [
             [f32::INFINITY, f32::NAN, 0.25, 1.0],
@@ -480,7 +508,7 @@ mod tests {
             .flatten()
             .flat_map(|v| v.to_ne_bytes())
             .collect();
-        let mut doc = Document::new(size);
+        let mut doc = linear_document(size);
         add(&mut doc, raster(size, format, &bytes), 1.0, true);
         let (out, report) = composite(&doc, size.bounds());
         assert_eq!(report.non_finite, 3);
@@ -537,6 +565,7 @@ mod tests {
             big_endian: false,
             // Irrelevant: the source is opaque or keeps its alpha.
             matte: WHITE_MATTE,
+            blend_space: doc.blend_space(),
         };
         let converter = Converter::new(format, options).unwrap();
         let bpp = converter.bytes_per_pixel();

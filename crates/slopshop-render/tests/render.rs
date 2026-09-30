@@ -2,7 +2,7 @@
 
 use slopshop_core::color::{PixelFormat, srgb_encode};
 use slopshop_core::view::ViewTransform;
-use slopshop_core::{Document, Edit, Layer, LayerContent, LinearRgba, Session, Size};
+use slopshop_core::{BlendMode, Document, Edit, Layer, LayerContent, LinearRgba, Session, Size};
 use slopshop_render::{Frame, RenderError, Renderer};
 
 fn renderer() -> Option<Renderer> {
@@ -29,6 +29,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
                 name: "fill".into(),
                 visible: true,
                 opacity,
+                blend_mode: BlendMode::Normal,
                 content: LayerContent::Fill { color },
             },
         })
@@ -206,6 +207,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
             name: "image".into(),
             visible: true,
             opacity: 1.0,
+            blend_mode: BlendMode::Normal,
             content: LayerContent::Raster {
                 image: Arc::new(image),
             },
@@ -329,6 +331,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
                 name: "image".into(),
                 visible: true,
                 opacity: 1.0,
+                blend_mode: BlendMode::Normal,
                 content: LayerContent::Raster {
                     image: image.clone(),
                 },

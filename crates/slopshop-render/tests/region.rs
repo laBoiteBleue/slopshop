@@ -7,8 +7,8 @@ use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, Mat3, PixelFormat, SampleType, WORKING_SPACE, mat_vec,
     srgb_decode,
 };
+use slopshop_core::{BlendMode, BlendSpace, LayerId, Size};
 use slopshop_core::{Document, Edit, Layer, LayerContent, LinearRgba, RasterImage, Rect, Session};
-use slopshop_core::{LayerId, Size};
 use slopshop_render::{RenderError, Renderer};
 
 fn renderer() -> Option<Renderer> {
@@ -35,6 +35,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
                 name: "layer".into(),
                 visible: true,
                 opacity,
+                blend_mode: BlendMode::Normal,
                 content,
             },
         })
@@ -74,6 +75,18 @@ fn floats(values: [f32; 4]) -> Vec<u8> {
 /// A pattern with distinct values per pixel, to catch any tile or coordinate mix-up.
 fn pattern(x: u32, y: u32) -> Vec<u8> {
     vec![(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 255]
+}
+
+/// A document blending in linear space, where normal mode is premultiplied "over" (and values
+/// near the f32 limit stay comparable between the GPU and the f64 CPU reference).
+fn linear_document(size: Size) -> Document {
+    let mut doc = Document::new(size);
+    Edit::SetBlendSpace {
+        space: BlendSpace::Linear,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
 }
 
 fn render(r: &Renderer, doc: &Document, region: Rect) -> Vec<f32> {
@@ -339,7 +352,7 @@ fn overflowing_composites_stay_finite() {
     let opaque = image(size, premultiplied, |_, _| floats([3e38, 3e38, 3e38, 1.0]));
     // Premultiplied color far above its alpha: "over" overflows f32.
     let glow = image(size, premultiplied, |_, _| floats([3e38, 3e38, 3e38, 0.01]));
-    let mut s = Session::new(Document::new(size));
+    let mut s = Session::new(linear_document(size));
     push_layer(&mut s, raster(&opaque), 1.0);
     push_layer(&mut s, raster(&glow), 1.0);
     let region = size.bounds();
@@ -360,7 +373,7 @@ fn overflowing_composites_stay_finite() {
 fn fill_layers_composite_with_opacity() {
     let Some(r) = renderer() else { return };
     let size = Size::new(20, 10);
-    let mut s = Session::new(Document::new(size));
+    let mut s = Session::new(linear_document(size));
     let color = LinearRgba::new(0.2, 0.4, 0.6, 1.0);
     push_layer(&mut s, LayerContent::Fill { color }, 0.25);
     let region = Rect::new(5, 3, 10, 4);
@@ -370,7 +383,7 @@ fn fill_layers_composite_with_opacity() {
     }
 
     // Red at 50 % over opaque blue.
-    let mut s = Session::new(Document::new(size));
+    let mut s = Session::new(linear_document(size));
     let blue = LinearRgba::new(0.0, 0.0, 1.0, 1.0);
     let red = LinearRgba::new(1.0, 0.0, 0.0, 1.0);
     push_layer(&mut s, LayerContent::Fill { color: blue }, 1.0);
@@ -600,4 +613,67 @@ fn export_source_uses_the_gpu_or_the_cpu_compositor_alike() {
     }
     let mut out = vec![0.0; cpu.len()];
     slopshop_render::export_source(Some(&tiny), stack.document())(region, &mut out).unwrap();
+}
+
+#[test]
+fn every_blend_mode_matches_the_cpu_reference_in_both_spaces() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(260, 130);
+    let background = image(size, PixelFormat::RGBA8_SRGB, pattern);
+    let p3 = PixelFormat {
+        layout: ChannelLayout::Rgba,
+        sample: SampleType::U16,
+        color_space: ColorSpace::DISPLAY_P3,
+        alpha: AlphaMode::Straight,
+    };
+    let top = image(size, p3, |x, y| {
+        [
+            x * 251 % 65536,
+            y * 499 % 65536,
+            (x * y) * 37 % 65536,
+            20_000 + (x + 3 * y) * 97 % 45_536,
+        ]
+        .iter()
+        .flat_map(|&v| (v as u16).to_ne_bytes())
+        .collect()
+    });
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        for mode in BlendMode::ALL {
+            let mut doc = Document::new(size);
+            Edit::SetBlendSpace { space }.apply(&mut doc).unwrap();
+            let mut s = Session::new(doc);
+            push_layer(&mut s, raster(&background), 1.0);
+            let id = push_layer(&mut s, raster(&top), 0.8);
+            let fill = push_layer(
+                &mut s,
+                LayerContent::Fill {
+                    color: LinearRgba::new(0.2, 0.5, 0.9, 0.7),
+                },
+                0.5,
+            );
+            for layer in [id, fill] {
+                s.perform(Edit::SetLayerBlendMode { id: layer, mode })
+                    .unwrap();
+            }
+            let region = size.bounds();
+            let mut cpu = vec![0.0; region.size().pixel_count() as usize * 4];
+            let mut gpu = cpu.clone();
+            slopshop_render::export_source(None, s.document())(region, &mut cpu).unwrap();
+            slopshop_render::export_source(Some(&r), s.document())(region, &mut gpu).unwrap();
+            // f32 on the GPU, f64 on the CPU: a value right at a mode's threshold (hard mix,
+            // darker color…) may fall on either side, and the dodges amplify f32 rounding near
+            // their pole (`b / (1 − s)`); everything else must agree.
+            let off = gpu
+                .iter()
+                .zip(&cpu)
+                .filter(|(g, c)| (*g - *c).abs() > 1e-3 * c.abs().max(1.0))
+                .count();
+            assert!(
+                off * 200 <= gpu.len(),
+                "{mode} {space:?}: {off} of {} samples differ",
+                gpu.len()
+            );
+            assert!(gpu.iter().all(|v| v.is_finite()), "{mode} {space:?}");
+        }
+    }
 }

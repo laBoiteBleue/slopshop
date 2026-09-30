@@ -8,7 +8,7 @@ use slopshop_core::color::{
 use slopshop_core::document::{Layer, LayerContent};
 use slopshop_core::geom::Size;
 use slopshop_core::raster::RasterImage;
-use slopshop_core::{Document, Edit};
+use slopshop_core::{BlendMode, BlendSpace, Document, Edit};
 
 use super::format::{HEADER_LEN, SLOT_LEN, SLOT_OFFSETS, Slot};
 use super::*;
@@ -66,6 +66,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
         name: name.to_owned(),
         visible: true,
         opacity,
+        blend_mode: BlendMode::Normal,
         content,
     };
     Edit::InsertLayer { index, layer }.apply(doc).unwrap();
@@ -178,11 +179,13 @@ fn sample_document() -> Document {
 fn assert_same(a: &Document, b: &Document) {
     assert_eq!(a.size(), b.size());
     assert_eq!(a.working_space(), b.working_space());
+    assert_eq!(a.blend_space(), b.blend_space());
     assert_eq!(a.next_layer_id(), b.next_layer_id());
     assert_eq!(a.layers().len(), b.layers().len());
     for (x, y) in a.layers().iter().zip(b.layers()) {
         assert_eq!((x.id, &x.name, x.visible), (y.id, &y.name, y.visible));
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
+        assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
         match (&x.content, &y.content) {
             (LayerContent::Fill { color: c }, LayerContent::Fill { color: d }) => {
                 let bits = |c: &LinearRgba| [c.r, c.g, c.b, c.a].map(f32::to_bits);
@@ -555,6 +558,18 @@ fn golden_document() -> Document {
     let color = LinearRgba::new(0.25, 0.5, 1.0, 0.5);
     push(&mut doc, "Tint", LayerContent::Fill { color }, 0.5);
     let hidden = push(&mut doc, "Gradient again", raster(&gradient), 1.0);
+    // Blend modes (schema 0.2): by id, in stack order.
+    let ids: Vec<_> = doc.layers().iter().map(|l| l.id).collect();
+    for (id, mode) in ids.into_iter().zip([
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::SoftLight,
+        BlendMode::Luminosity,
+    ]) {
+        Edit::SetLayerBlendMode { id, mode }
+            .apply(&mut doc)
+            .unwrap();
+    }
     let id = doc
         .layers()
         .iter()
@@ -567,6 +582,25 @@ fn golden_document() -> Document {
     doc
 }
 
+/// What the schema 0.1 fixture holds: no blend modes then, and linear compositing.
+fn golden_document_v0_1() -> Document {
+    let mut doc = golden_document();
+    for layer in doc.layers().to_vec() {
+        Edit::SetLayerBlendMode {
+            id: layer.id,
+            mode: BlendMode::Normal,
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    Edit::SetBlendSpace {
+        space: BlendSpace::Linear,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
 fn golden_path(version: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src/slop/fixtures")
@@ -576,8 +610,10 @@ fn golden_path(version: &str) -> PathBuf {
 #[test]
 fn golden_fixtures_still_open_identically() {
     let (loaded, file) = SlopFile::open(&golden_path("0.1")).unwrap();
-    assert_same(&golden_document(), &loaded);
+    assert_same(&golden_document_v0_1(), &loaded);
     assert_eq!(file.generation(), 1);
+    let (loaded, _) = SlopFile::open(&golden_path("0.2")).unwrap();
+    assert_same(&golden_document(), &loaded);
 }
 
 /// Writes the fixture of the current schema version. Run once when the schema changes, and
@@ -592,4 +628,51 @@ fn write_golden_fixture() {
     ));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     SlopFile::create(&path, &golden_document()).unwrap();
+}
+
+#[test]
+fn blend_modes_and_space_round_trip_and_unknown_ones_are_refused() {
+    let path = temp_path("blend.slop");
+    let mut doc = sample_document();
+    let ids: Vec<_> = doc.layers().iter().map(|l| l.id).collect();
+    for (id, mode) in ids.iter().zip(BlendMode::ALL.iter().cycle().skip(3)) {
+        Edit::SetLayerBlendMode {
+            id: *id,
+            mode: *mode,
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    for space in [BlendSpace::Linear, BlendSpace::Perceptual] {
+        Edit::SetBlendSpace { space }.apply(&mut doc).unwrap();
+        SlopFile::create(&path, &doc).unwrap();
+        let (loaded, _) = SlopFile::open(&path).unwrap();
+        assert_same(&doc, &loaded);
+    }
+
+    // Older nodes have no mode; a mode or a space from a newer SlopShop is "newer version",
+    // not corruption.
+    let node = |version: u32, params: &str| {
+        let json = format!(
+            r#"{{"type":"slopshop.fill","version":{version},"name":"n","visible":true,"opacity":1.0,"params":{params},"inputs":[]}}"#
+        );
+        read::node_blend_mode(&serde_json::from_str(&json).unwrap()).map_err(|e| e.code())
+    };
+    assert_eq!(node(1, "{}"), Ok(BlendMode::Normal));
+    assert_eq!(node(2, r#"{"blend_mode":"screen"}"#), Ok(BlendMode::Screen));
+    assert_eq!(node(2, r#"{"blend_mode":"dissolve"}"#), Err("newerVersion"));
+    assert_eq!(node(2, "{}"), Err("corrupt"));
+    let space = |extra: &str| {
+        let json = format!(
+            r#"{{"size":[1,1],"working_space":{{"primaries":{{"r":[0.708,0.292],"g":[0.17,0.797],"b":[0.131,0.046],"w":[0.3127,0.329]}},"transfer":{{"kind":"linear"}}}},"next_node_id":1,"stack":[]{extra}}}"#
+        );
+        read::document_blend_space(&serde_json::from_str(&json).unwrap()).map_err(|e| e.code())
+    };
+    assert_eq!(space(""), Ok(BlendSpace::Linear));
+    assert_eq!(
+        space(r#","blend_space":"perceptual""#),
+        Ok(BlendSpace::Perceptual)
+    );
+    assert_eq!(space(r#","blend_space":"cmyk""#), Err("newerVersion"));
+    fs::remove_file(&path).ok();
 }

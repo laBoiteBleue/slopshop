@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use slopshop_core::color::ColorSpace;
-use slopshop_core::{Document, Edit, Layer, LayerContent, Size};
+use slopshop_core::{BlendMode, Document, Edit, Layer, LayerContent, Size};
 use slopshop_io::slop::SlopFile;
 
 /// `slopshop save <IMAGE>... --out <FILE.slop> [--bench]`: one layer per image, bottom first.
@@ -55,6 +55,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
             name: layer_name(input),
             visible: true,
             opacity: 1.0,
+            blend_mode: BlendMode::Normal,
             content: LayerContent::Raster {
                 image: Arc::new(image),
             },
@@ -115,9 +116,10 @@ pub fn inspect(args: &[String]) -> Result<(), String> {
     );
     let size = document.size();
     println!(
-        "document: {}x{}, next layer id {}",
+        "document: {}x{}, {} blending, next layer id {}",
         size.width,
         size.height,
+        document.blend_space().id(),
         document.next_layer_id()
     );
     println!("layers, bottom to top:");
@@ -139,9 +141,10 @@ pub fn inspect(args: &[String]) -> Result<(), String> {
             }
         };
         println!(
-            "  #{} {:?}: {content}, opacity {}{}",
+            "  #{} {:?}: {content}, {} at opacity {}{}",
             layer.id.get(),
             layer.name,
+            layer.blend_mode.id(),
             layer.opacity,
             if layer.visible { "" } else { ", hidden" }
         );

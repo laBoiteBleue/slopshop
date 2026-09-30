@@ -12,12 +12,16 @@ use slopshop_core::color::LinearRgba;
 use slopshop_core::document::{Document, Layer, LayerContent, LayerId};
 use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
+use slopshop_core::{BlendMode, BlendSpace};
 
 use super::format::{
     HEADER_LEN, Hash, Header, IndexEntry, Kind, RECORD_HEADER_LEN, RecordHeader, RecordRef,
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
-use super::manifest::{Manifest, NODE_FILL, NODE_RASTER, PYRAMID_ALGORITHM, SCHEMA_MAJOR};
+use super::manifest::{
+    DocumentDto, Manifest, NODE_FILL, NODE_RASTER, NODE_VERSION, NodeDto, PYRAMID_ALGORITHM,
+    SCHEMA_MAJOR,
+};
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
 
@@ -273,8 +277,9 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             .get(&id.to_string())
             .ok_or_else(|| corrupt("the stack refers to a missing node"))?;
         let versioned = || format!("{}@{}", node.kind, node.version);
+        let known_version = (1..=NODE_VERSION).contains(&node.version);
         let content = match node.kind.as_str() {
-            NODE_RASTER if node.version == 1 => {
+            NODE_RASTER if known_version => {
                 let key = node
                     .params
                     .get("image")
@@ -288,7 +293,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
                     image: image.clone(),
                 }
             }
-            NODE_FILL if node.version == 1 => {
+            NODE_FILL if known_version => {
                 let color = node
                     .params
                     .get("color")
@@ -306,6 +311,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             }
             _ => return Err(FileError::UnknownNodeType(versioned())),
         };
+        let blend_mode = node_blend_mode(node)?;
         if !node.extra.is_empty() {
             residue.nodes.insert(*id, node.extra.clone());
         }
@@ -314,6 +320,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             name: node.name.clone(),
             visible: node.visible,
             opacity: node.opacity,
+            blend_mode,
             content,
         });
     }
@@ -324,14 +331,36 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             residue.images.insert(key, dto.extra.clone());
         }
     }
+    let blend_space = document_blend_space(doc)?;
     let document = Document::restore(
         Size::new(doc.size[0], doc.size[1]),
         doc.working_space.to_space(),
+        blend_space,
         layers,
         doc.next_node_id,
     )
     .map_err(FileError::Document)?;
     Ok((document, index, records, residue))
+}
+
+/// A node's blend mode. Version 1 had none: normal. A mode this version does not know comes
+/// from a newer SlopShop.
+pub(super) fn node_blend_mode(node: &NodeDto) -> Result<BlendMode, FileError> {
+    match node.params.get("blend_mode") {
+        None if node.version == 1 => Ok(BlendMode::Normal),
+        Some(Value::String(id)) => BlendMode::from_id(id)
+            .ok_or_else(|| FileError::UnknownNodeType(format!("blend mode {id}"))),
+        _ => Err(corrupt("node without a blend mode")),
+    }
+}
+
+/// The document's blend space. Schema 0.1 documents composited in linear light.
+pub(super) fn document_blend_space(doc: &DocumentDto) -> Result<BlendSpace, FileError> {
+    match &doc.blend_space {
+        None => Ok(BlendSpace::Linear),
+        Some(id) => BlendSpace::from_id(id)
+            .ok_or_else(|| FileError::UnknownNodeType(format!("blend space {id}"))),
+    }
 }
 
 /// The raw payload of the record a slot refers to, checked against its kind and hash.

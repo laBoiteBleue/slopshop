@@ -300,9 +300,11 @@ pub(crate) async fn export_document(
         },
         detail: e,
     })?;
-    let spec = spec
+    let mut spec = spec
         .to_spec(custom_space(spec.format, &document))
         .map_err(|e| ExportFailed::new(None, &e))?;
+    // Not an export setting: transparency is flattened where the document blends.
+    spec.blend_space = document.blend_space();
     let (id, cancel) = state.exports.start();
     let started = ExportStarted {
         id,
@@ -331,7 +333,7 @@ pub(crate) async fn cancel_export(state: State<'_, AppState>, job_id: u64) -> Re
 mod tests {
     use super::*;
     use slopshop_core::color::{AlphaMode, ChannelLayout, PixelFormat, SampleType};
-    use slopshop_core::{Edit, Layer, LayerContent, RasterImage, Size};
+    use slopshop_core::{BlendMode, Edit, Layer, LayerContent, RasterImage, Size};
     use std::sync::Arc;
 
     #[test]
@@ -482,6 +484,7 @@ mod tests {
                 name: "image".to_owned(),
                 visible: true,
                 opacity: 1.0,
+                blend_mode: BlendMode::Normal,
                 content: LayerContent::Raster {
                     image: Arc::new(image),
                 },
