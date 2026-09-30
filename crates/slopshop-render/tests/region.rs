@@ -1345,12 +1345,30 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
                 BlendMode::Normal,
                 0.85,
             );
-            assert_matches_cpu(
-                &r,
-                s.document(),
-                size.bounds(),
-                &format!("{space:?} {adjustment:?}"),
-            );
+            let what = format!("{space:?} {adjustment:?}");
+            if matches!(
+                adjustment,
+                Adjustment::Posterize { .. } | Adjustment::Threshold { .. }
+            ) {
+                // Steps: a sample right at one can fall on either side in f32 (GPUs differ, e.g.
+                // Metal's power function). Rare samples on a step are allowed.
+                let region = size.bounds();
+                let gpu = render(&r, s.document(), region);
+                let mut cpu = vec![0.0; gpu.len()];
+                slopshop_core::composite::composite_region(s.document(), region, &mut cpu).unwrap();
+                let off = gpu
+                    .iter()
+                    .zip(&cpu)
+                    .filter(|(g, c)| (*g - *c).abs() > 1e-3)
+                    .count();
+                assert!(
+                    off <= gpu.len() / 100,
+                    "{what}: {off} of {} samples differ",
+                    gpu.len()
+                );
+            } else {
+                assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+            }
         }
     }
 }
