@@ -56,8 +56,11 @@
 mod exr;
 mod jpeg;
 mod png;
+mod psd;
 mod tiff;
 mod webp;
+
+pub use self::psd::{MAX_SIDE as PSD_MAX_SIDE, PsdDepth, PsdOptions, Render, export_psd};
 
 use std::fmt;
 use std::path::Path;
@@ -96,6 +99,8 @@ pub enum ExportFormatKind {
     Exr,
     Jpeg,
     Webp,
+    /// Photoshop, layered ([`export_psd`]; [`export_image`] does not write it).
+    Psd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -177,6 +182,10 @@ pub enum ExportFormat {
     Webp {
         compression: WebpCompression,
     },
+    /// A layered Photoshop file, written by [`export_psd`].
+    Psd {
+        depth: PsdDepth,
+    },
 }
 
 impl ExportFormat {
@@ -187,6 +196,7 @@ impl ExportFormat {
             ExportFormat::Exr { .. } => ExportFormatKind::Exr,
             ExportFormat::Jpeg { .. } => ExportFormatKind::Jpeg,
             ExportFormat::Webp { .. } => ExportFormatKind::Webp,
+            ExportFormat::Psd { .. } => ExportFormatKind::Psd,
         }
     }
 
@@ -207,6 +217,24 @@ impl ExportFormat {
                 ExrSample::F16 => SampleType::F16,
             },
             ExportFormat::Jpeg { .. } | ExportFormat::Webp { .. } => SampleType::U8,
+            ExportFormat::Psd { depth } => match depth {
+                PsdDepth::U8 => SampleType::U8,
+                PsdDepth::U16 => SampleType::U16,
+            },
+        }
+    }
+}
+
+impl ExportSpec {
+    /// The options of a layered PSD export ([`export_psd`]), for a PSD spec.
+    pub fn psd_options(&self) -> Option<PsdOptions> {
+        match self.format {
+            ExportFormat::Psd { depth } => Some(PsdOptions {
+                depth,
+                space: self.space,
+                dither: self.dither,
+            }),
+            _ => None,
         }
     }
 }
@@ -284,6 +312,8 @@ pub enum ExportNotice {
     AlphaFlattened(u64),
     /// Pixels that had color were written as their luminance (gray export). Counted in pixels.
     ColorDiscarded(u64),
+    /// Parts of layers lay outside the canvas: the layered file keeps only what is inside.
+    PixelsOutsideCanvas,
 }
 
 impl ExportNotice {
@@ -298,6 +328,7 @@ impl ExportNotice {
             ExportNotice::BigTiff => "bigTiff",
             ExportNotice::AlphaFlattened(_) => "alphaFlattened",
             ExportNotice::ColorDiscarded(_) => "colorDiscarded",
+            ExportNotice::PixelsOutsideCanvas => "pixelsOutsideCanvas",
         }
     }
 
@@ -310,7 +341,9 @@ impl ExportNotice {
             | ExportNotice::HalfOverflow(n)
             | ExportNotice::AlphaFlattened(n)
             | ExportNotice::ColorDiscarded(n) => Some(n),
-            ExportNotice::PrecisionReduced | ExportNotice::BigTiff => None,
+            ExportNotice::PrecisionReduced
+            | ExportNotice::BigTiff
+            | ExportNotice::PixelsOutsideCanvas => None,
         }
     }
 }
@@ -323,6 +356,15 @@ pub struct ExportReport {
 
 impl ExportReport {
     fn new(format: &ExportFormat, conversion: &ConversionReport) -> Self {
+        let mut report = Self::from_conversion(conversion);
+        if format.sample_type() == SampleType::F16 {
+            report.notices.push(ExportNotice::PrecisionReduced);
+        }
+        report
+    }
+
+    /// The notices of a conversion's lossy events.
+    fn from_conversion(conversion: &ConversionReport) -> Self {
         let counted = [
             (
                 conversion.clipped_high,
@@ -334,15 +376,25 @@ impl ExportReport {
             (conversion.alpha_flattened, ExportNotice::AlphaFlattened),
             (conversion.color_discarded, ExportNotice::ColorDiscarded),
         ];
-        let mut notices: Vec<ExportNotice> = counted
+        let notices: Vec<ExportNotice> = counted
             .into_iter()
             .filter(|(count, _)| *count > 0)
             .map(|(count, notice)| notice(count))
             .collect();
-        if format.sample_type() == SampleType::F16 {
-            notices.push(ExportNotice::PrecisionReduced);
-        }
         Self { notices }
+    }
+
+    /// Add `count` non-finite samples replaced by the pixel source.
+    fn add_non_finite(&mut self, count: u64) {
+        if let Some(ExportNotice::NonFinite(n)) = self
+            .notices
+            .iter_mut()
+            .find(|n| matches!(n, ExportNotice::NonFinite(_)))
+        {
+            *n += count;
+        } else {
+            self.notices.push(ExportNotice::NonFinite(count));
+        }
     }
 }
 
@@ -421,6 +473,7 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Exr => Some(exr::MAX_SIDE),
         ExportFormatKind::Jpeg => Some(jpeg::MAX_SIDE),
         ExportFormatKind::Webp => Some(webp::MAX_SIDE),
+        ExportFormatKind::Psd => Some(psd::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
@@ -440,14 +493,18 @@ pub fn supports_alpha(kind: ExportFormatKind) -> bool {
 /// - EXR: linear spaces with valid primaries (`chromaticities` attribute), since EXR samples are
 ///   scene-linear;
 /// - JPEG: spaces an ICC profile can describe (APP2 segments; not PQ or HLG);
-/// - WebP: spaces an ICC profile can describe (ICCP chunk; not PQ or HLG).
+/// - WebP: spaces an ICC profile can describe (ICCP chunk; not PQ or HLG);
+/// - PSD: spaces an ICC profile can describe (image resource 1039).
 pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_matrix_trc(space).is_ok();
     match kind {
         ExportFormatKind::Png => {
             *space == ColorSpace::SRGB || png::cicp_code(space).is_some() || icc_writable()
         }
-        ExportFormatKind::Tiff | ExportFormatKind::Jpeg | ExportFormatKind::Webp => icc_writable(),
+        ExportFormatKind::Tiff
+        | ExportFormatKind::Jpeg
+        | ExportFormatKind::Webp
+        | ExportFormatKind::Psd => icc_writable(),
         ExportFormatKind::Exr => {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
@@ -460,13 +517,14 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
 ///   or HLG, which PNG only declares with cICP, for RGB);
 /// - TIFF and JPEG: curves an ICC gray profile can describe;
 /// - EXR: not yet (luminance-only files are not read back by our importer);
-/// - WebP: never (it has no gray samples).
+/// - WebP: never (it has no gray samples);
+/// - PSD: not yet (layered files are written in RGB).
 pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_gray_trc(space).is_ok();
     match kind {
         ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
         ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
-        ExportFormatKind::Exr | ExportFormatKind::Webp => false,
+        ExportFormatKind::Exr | ExportFormatKind::Webp | ExportFormatKind::Psd => false,
     }
 }
 
@@ -485,6 +543,8 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
 /// - TIFF: the deepest source sample type (8/16-bit, float → 32-bit float); the source space
 ///   when unique and taggable, else Rec.2020 (integers) or linear Rec.2020 (float); Deflate;
 /// - EXR: 32-bit float, linear Rec.709 (with chromaticities);
+/// - PSD (layered): 8-bit in sRGB if every visible raster is 8-bit, else 16-bit in the source
+///   space when unique and taggable, else sRGB; transparency always kept;
 /// - alpha kept unless the document is structurally opaque (its bottom visible layer is an
 ///   opaque fill, or an alpha-less raster covering the canvas, at opacity 1);
 /// - gray when the format has gray samples and the document is gray by construction: every
@@ -569,11 +629,30 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             },
             common_8_bit_space(unique_space),
         ),
+        ExportFormatKind::Psd => {
+            if rasters.iter().all(|format| format.sample == SampleType::U8) {
+                (
+                    ExportFormat::Psd {
+                        depth: PsdDepth::U8,
+                    },
+                    ColorSpace::SRGB,
+                )
+            } else {
+                (
+                    ExportFormat::Psd {
+                        depth: PsdDepth::U16,
+                    },
+                    unique_space.filter(taggable).unwrap_or(ColorSpace::SRGB),
+                )
+            }
+        }
     };
     ExportSpec {
         format,
         space,
-        keep_alpha: supports_alpha(kind) && !is_structurally_opaque(document),
+        // A layered file keeps its layers' transparency.
+        keep_alpha: kind == ExportFormatKind::Psd
+            || (supports_alpha(kind) && !is_structurally_opaque(document)),
         matte: WHITE_MATTE,
         // It only applies to 8-bit samples, which EXR never has.
         dither: kind != ExportFormatKind::Exr,
@@ -683,6 +762,11 @@ pub fn export_image(
         )));
     }
     let kind = spec.format.kind();
+    if kind == ExportFormatKind::Psd {
+        return Err(ExportError::InvalidSpec(
+            "a layered PSD is written by export_psd".to_owned(),
+        ));
+    }
     if spec.gray && !has_gray(kind) {
         return Err(ExportError::InvalidSpec(format!(
             "{kind:?} export has no gray samples"
@@ -765,6 +849,12 @@ pub fn export_image(
                 WebpLossyWriter::new(file, size, target, quality, cancel.clone())?,
             )),
         },
+        // Refused above.
+        ExportFormat::Psd { .. } => {
+            return Err(ExportError::InvalidSpec(
+                "a layered PSD is written by export_psd".to_owned(),
+            ));
+        }
     };
     let bands = Bands {
         size,

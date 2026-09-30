@@ -1150,3 +1150,346 @@ fn gray_documents_export_as_gray_by_default() {
     push_layer(&mut doc, LayerContent::Raster { image: rgb }, 1.0);
     assert!(!default_spec(Png, &doc).gray);
 }
+
+/// A document using what a layered PSD keeps: pixel layers (moved, translucent, in several
+/// blend modes), an isolated masked group with a clipped layer, a hidden layer, a fill layer and
+/// adjustment layers.
+fn layered_document() -> Document {
+    use slopshop_core::adjust::Adjustment;
+    use slopshop_core::color::{AlphaMode, ChannelLayout, PixelFormat};
+    use slopshop_core::document::LayerMask;
+    let size = Size::new(64, 48);
+    let mut doc = Document::new(size);
+    let rgba = |w: u32, h: u32, f: &dyn Fn(u32, u32) -> [u8; 4]| {
+        let pixels: Vec<u8> = (0..h)
+            .flat_map(|y| (0..w).flat_map(move |x| f(x, y)))
+            .collect();
+        Arc::new(
+            RasterImage::from_pixels(Size::new(w, h), PixelFormat::RGBA8_SRGB, &pixels).unwrap(),
+        )
+    };
+    let gray_mask = |w: u32, h: u32| {
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let pixels: Vec<u8> = (0..h)
+            .flat_map(|_| (0..w).map(|x| (x * 255 / (w - 1)) as u8))
+            .collect();
+        Arc::new(RasterImage::from_pixels(Size::new(w, h), format, &pixels).unwrap())
+    };
+    let add = |doc: &mut Document, parent: Option<LayerId>, name: &str, content: LayerContent| {
+        let id = doc.allocate_layer_id();
+        let index = doc.children_of(parent).unwrap().len();
+        Edit::InsertLayer {
+            parent,
+            index,
+            layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
+                clipped: false,
+                id,
+                name: name.into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                content,
+            },
+        }
+        .apply(doc)
+        .unwrap();
+        id
+    };
+    let set = |doc: &mut Document, edit: Edit| {
+        edit.apply(doc).unwrap();
+    };
+    add(
+        &mut doc,
+        None,
+        "Background",
+        LayerContent::Raster {
+            image: rgba(64, 48, &|x, y| [(x * 4) as u8, (y * 5) as u8, 120, 255]),
+        },
+    );
+    let moved = add(
+        &mut doc,
+        None,
+        "Moved \u{e9}toile",
+        LayerContent::Raster {
+            image: rgba(20, 16, &|x, y| {
+                [200, (x * 12) as u8, (y * 15) as u8, ((x + y) * 8) as u8]
+            }),
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerTransform {
+            id: moved,
+            transform: slopshop_core::Affine::translation(10.0, 7.0),
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerBlendMode {
+            id: moved,
+            mode: BlendMode::Multiply,
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerOpacity {
+            id: moved,
+            opacity: 0.7,
+        },
+    );
+    let group = add(
+        &mut doc,
+        None,
+        "Group",
+        LayerContent::Group {
+            children: Vec::new(),
+            pass_through: false,
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerBlendMode {
+            id: group,
+            mode: BlendMode::Screen,
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerMask {
+            id: group,
+            mask: Some(LayerMask {
+                image: gray_mask(64, 48),
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        },
+    );
+    add(
+        &mut doc,
+        Some(group),
+        "Inside",
+        LayerContent::Raster {
+            image: rgba(30, 20, &|x, _| {
+                [30, 90, (x * 8) as u8, if x < 20 { 255 } else { 0 }]
+            }),
+        },
+    );
+    let clipped = add(
+        &mut doc,
+        Some(group),
+        "Clipped",
+        // Within the sRGB gamut (the file's space): nothing is clipped.
+        LayerContent::Fill {
+            color: LinearRgba::from_srgb_encoded_to_working(0.8, 0.2, 0.2, 1.0),
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerClipped {
+            id: clipped,
+            clipped: true,
+        },
+    );
+    let hidden = add(
+        &mut doc,
+        None,
+        "Hidden",
+        LayerContent::Raster {
+            image: rgba(8, 8, &|_, _| [255, 255, 255, 255]),
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerVisible {
+            id: hidden,
+            visible: false,
+        },
+    );
+    add(
+        &mut doc,
+        None,
+        "Hue/Saturation 1",
+        LayerContent::Adjustment {
+            adjustment: Adjustment::HueSaturation {
+                hue: 30.0,
+                saturation: -20.0,
+                lightness: 5.0,
+            },
+        },
+    );
+    let levels = add(
+        &mut doc,
+        None,
+        "Levels 1",
+        LayerContent::Adjustment {
+            adjustment: Adjustment::Levels {
+                input_black: 10.0 / 255.0,
+                input_white: 240.0 / 255.0,
+                gamma: 1.2,
+                output_black: 0.0,
+                output_white: 1.0,
+            },
+        },
+    );
+    set(
+        &mut doc,
+        Edit::SetLayerOpacity {
+            id: levels,
+            opacity: 0.5,
+        },
+    );
+    doc
+}
+
+fn composite_all(doc: &Document) -> Vec<f32> {
+    let mut out = vec![0.0; doc.size().pixel_count() as usize * 4];
+    composite_region(doc, doc.size().bounds(), &mut out).unwrap();
+    out
+}
+
+fn cpu_render(d: &Document, region: Rect, out: &mut [f32]) -> Result<u64, String> {
+    composite_region(d, region, out)
+        .map(|r| r.non_finite)
+        .map_err(|e| e.to_string())
+}
+
+#[test]
+fn layered_psd_round_trips_through_the_importer() {
+    for (depth, tolerance, transparent) in [
+        (PsdDepth::U8, 0.03, false),
+        (PsdDepth::U8, 0.03, true),
+        (PsdDepth::U16, 0.004, false),
+        (PsdDepth::U16, 0.004, true),
+    ] {
+        let mut doc = layered_document();
+        if transparent {
+            // Without the opaque background, the merged composite (stored over white) has
+            // transparency.
+            let background = doc.layers()[0].id;
+            Edit::SetLayerVisible {
+                id: background,
+                visible: false,
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+        let path = temp_path(&format!("layered-{depth:?}-{transparent}.psd"));
+        let options = PsdOptions {
+            depth,
+            space: ColorSpace::SRGB,
+            dither: false,
+        };
+        let mut rows = 0;
+        let report = export_psd(
+            &path,
+            &doc,
+            &options,
+            &mut cpu_render,
+            &CancelToken::new(),
+            &mut |p| rows = p.done,
+        )
+        .unwrap();
+        assert!(rows > 0);
+        assert!(report.notices.is_empty(), "{depth:?}: {:?}", report.notices);
+        let crate::Opened::Layers(opened) = crate::open_file(&path).unwrap() else {
+            panic!("{depth:?}: layers expected");
+        };
+        let back = &opened.document;
+        // The same tree: names, visibility, opacity, modes, clipping, masks.
+        type Summary = (String, bool, u8, BlendMode, bool, bool, bool);
+        let summary = |d: &Document| -> Vec<Summary> {
+            d.all_layers()
+                .map(|l| {
+                    (
+                        l.name.clone(),
+                        l.visible,
+                        (l.opacity * 255.0).round() as u8,
+                        l.blend_mode,
+                        l.clipped,
+                        l.mask.is_some(),
+                        l.children().is_some(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(summary(back), summary(&doc), "{depth:?}");
+        let adjustments = |d: &Document| -> Vec<slopshop_core::adjust::Adjustment> {
+            d.all_layers()
+                .filter_map(|l| match l.content {
+                    LayerContent::Adjustment { adjustment } => Some(adjustment),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(adjustments(back), adjustments(&doc), "{depth:?}");
+        // The same picture, within the file's precision.
+        let (a, b) = (composite_all(&doc), composite_all(back));
+        let worst = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < tolerance, "{depth:?}: composites differ by {worst}");
+        // The merged composite, for readers without layers.
+        let flat = raster_document(open_image(&path).unwrap().image);
+        let c = composite_all(&flat);
+        let worst = a
+            .iter()
+            .zip(&c)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < tolerance,
+            "{depth:?}: merged composite differs by {worst}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+}
+
+#[test]
+fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
+    let mut doc = layered_document();
+    let moved = doc.layers()[1].id;
+    Edit::SetLayerTransform {
+        id: moved,
+        transform: slopshop_core::Affine::translation(-5.0, 40.0),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("outside.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U8,
+        space: ColorSpace::SRGB,
+        dither: true,
+    };
+    let report = export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(report.notices.contains(&ExportNotice::PixelsOutsideCanvas));
+    std::fs::remove_file(&path).ok();
+    let huge = Document::new(Size::new(PSD_MAX_SIDE + 1, 10));
+    assert!(matches!(
+        export_psd(
+            &path,
+            &huge,
+            &options,
+            &mut cpu_render,
+            &CancelToken::new(),
+            &mut |_| {}
+        ),
+        Err(ExportError::TooLarge { .. })
+    ));
+}
