@@ -52,6 +52,12 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       [ADR 0009](adr/0009-document-file-format.md), [specification](file-format.md)); Save /
       Save As in the app, `slopshop save` / `inspect` in the CLI
 - [ ] Document format: a fuzz target for the reader
+- [x] Menu bar in Photoshop's order and names, with its shortcuts
+      ([ADR 0013](adr/0013-familiar-layout.md)); tools, options bar and more panels come with
+      the features that need them
+- [ ] Window behavior: a second launch focuses the running window (and opens its files in
+      tabs); window size and position remembered
+- [ ] Layer thumbnails in the layers panel
 
 ## Phase 2 — Non-destructive core
 
@@ -60,7 +66,8 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 - [ ] Layer masks; Dissolve
 - [ ] Non-destructive transforms (move, scale, rotate) with quality resampling
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
-- [ ] Groups; 🔶 stack-to-DAG evolution of the model
+- [ ] Groups (a `.slop` or PSD imported into a document arrives as a group); 🔶 stack-to-DAG
+      evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation
 - [ ] History: memory limits, named entries, history panel
