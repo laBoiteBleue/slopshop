@@ -34,11 +34,13 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    was saved with "Maximize Compatibility" (the default): otherwise the composite is blank, and
    the user must be told. CMYK and Lab are refused with an explanation until the engine has
    them (ADR 0006).
-2. **Layers as raster layers** (can start now): pixel layers with name, opacity, visibility and
-   position; everything the engine cannot represent yet (blend modes, masks, groups, clipping,
-   adjustment layers, layer styles, text, smart objects) is reported as a warning, and the
-   composite of step 1 stays available.
-3. **Blend modes, layer masks, groups**: as soon as the engine has them (roadmap Phase 2).
+2. **Layers** (can start now): pixel layers with name, opacity, visibility, position, blend
+   mode (Photoshop's modes are in the engine, ADR 0012; the document blends in perceptual space,
+   as Photoshop's 8/16-bit documents do) and layer mask (ADR 0014). What the engine cannot
+   represent yet (Dissolve, groups, clipping, adjustment layers, layer styles, text, smart
+   objects, layers offset from the origin) is reported as a warning, and the composite of step
+   1 stays available.
+3. **Groups and clipping**: when the engine has them (roadmap Phase 2).
 4. **Export** (PSD, and PSB above the PSD limits), layered, with a merged composite for other
    readers.
 5. **Adjustment layers and layer styles** as native nodes (they are parameters in the file, not
