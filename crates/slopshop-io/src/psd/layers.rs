@@ -697,6 +697,11 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
             .get(at..at + 4)
             .map(|b| f32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     };
+    let u32_at = |at: usize| {
+        block
+            .get(at..at + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
     let adjustment = match key {
         // Version, then records of (input black, input white, output black, output white,
         // gamma × 100), 0–255: the composite first, then each channel.
@@ -786,9 +791,137 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
             },
             false,
         ),
+        // A descriptor: the six weights (longs), `useTint` and `tintColor` (RGB, 0–255). The
+        // tint becomes its hue and saturation (as Photoshop's dialog shows them); tinting
+        // itself is approximated.
+        b"blwh" => {
+            let weight =
+                |key: &[u8]| descriptor_long(block, key).map(|v| (v as f32).clamp(-200.0, 300.0));
+            let weights = [
+                weight(b"Rd  ")?,
+                weight(b"Yllw")?,
+                weight(b"Grn ")?,
+                weight(b"Cyn ")?,
+                weight(b"Bl  ")?,
+                weight(b"Mgnt")?,
+            ];
+            let tint = descriptor_bool(block, b"useTint").unwrap_or(false);
+            let channel = |key: &[u8]| {
+                descriptor_value(block, key, b"doub", 8)
+                    .and_then(|b| b.try_into().ok())
+                    .map(|b| f64::from_be_bytes(b) / 255.0)
+            };
+            let (tint_hue, tint_saturation) =
+                match (channel(b"Rd  "), channel(b"Grn "), channel(b"Bl  ")) {
+                    (Some(r), Some(g), Some(b)) => tint_of([r, g, b]),
+                    _ => (42.0, 20.0),
+                };
+            (
+                Adjustment::BlackWhite {
+                    weights,
+                    tint,
+                    tint_hue,
+                    tint_saturation,
+                },
+                tint,
+            )
+        }
+        // Shadows, midtones, highlights (cyan–red, magenta–green, yellow–blue as i16), then
+        // preserve luminosity (a byte).
+        b"blnc" => {
+            let range = |r: usize| -> Option<[f32; 3]> {
+                let v =
+                    |k: usize| i16_at((r * 3 + k) * 2).map(|v| f32::from(v).clamp(-100.0, 100.0));
+                Some([v(0)?, v(1)?, v(2)?])
+            };
+            (
+                Adjustment::ColorBalance {
+                    shadows: range(0)?,
+                    midtones: range(1)?,
+                    highlights: range(2)?,
+                    preserve_luminosity: block.get(18).copied()? != 0,
+                },
+                false,
+            )
+        }
+        // Version 2: a color space and four u16 components (RGB 0–65535, or Lab: L 0–10000, a
+        // and b in hundredths); version 3: an XYZ color. Then the density (u32, %) and
+        // preserve luminosity (a byte). The color is kept within sRGB.
+        b"phfl" => {
+            let default = [236.0 / 255.0, 138.0 / 255.0, 0.0];
+            let (color, approximated, rest) = match u16_at(0)? {
+                2 => {
+                    let c = [u16_at(4)?, u16_at(6)?, u16_at(8)?];
+                    match u16_at(2)? {
+                        0 => (c.map(|v| f64::from(v) / 65535.0), false, 12),
+                        7 => {
+                            let signed = |v: u16| f64::from(v as i16) / 100.0;
+                            let lab = [f64::from(c[0]) / 100.0, signed(c[1]), signed(c[2])];
+                            (crate::lab::lab_to_srgb(lab), false, 12)
+                        }
+                        // HSB, CMYK, gray…: not converted yet.
+                        _ => (default, true, 12),
+                    }
+                }
+                // HACK(no sample file): the scale of version 3's XYZ is not documented; the
+                // default color stands in, reported as approximated.
+                3 => (default, true, 14),
+                _ => return None,
+            };
+            let density = u32_at(rest)?.min(100) as f32;
+            (
+                Adjustment::PhotoFilter {
+                    color: color.map(|v| v.clamp(0.0, 1.0) as f32),
+                    density,
+                    preserve_luminosity: block.get(rest + 4).copied()? != 0,
+                },
+                approximated,
+            )
+        }
+        // Version, monochrome, then a record per output channel (red, green, blue, and one
+        // unused in RGB documents): five i16 weights in %, the inputs red, green, blue, an
+        // unused one, then the constant. Monochrome uses the first record.
+        b"mixr" => {
+            let row = |k: usize| -> Option<[f32; 4]> {
+                let v = |i: usize| {
+                    i16_at(4 + k * 10 + i * 2).map(|v| f32::from(v).clamp(-200.0, 200.0))
+                };
+                Some([v(0)?, v(1)?, v(2)?, v(4)?])
+            };
+            (
+                Adjustment::ChannelMixer {
+                    red: row(0)?,
+                    green: row(1)?,
+                    blue: row(2)?,
+                    monochrome: u16_at(2)? != 0,
+                },
+                false,
+            )
+        }
         _ => return None,
     };
     adjustment.0.is_valid().then_some(adjustment)
+}
+
+/// A Black & White tint color (RGB in [0, 1]) as the hue (degrees) and saturation (%, as in
+/// HSB) Photoshop's dialog shows.
+fn tint_of([r, g, b]: [f64; 3]) -> (f32, f32) {
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let chroma = max - min;
+    if chroma <= 0.0 || max <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let h = if max == r {
+        ((g - b) / chroma).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / chroma + 2.0
+    } else {
+        (r - g) / chroma + 4.0
+    };
+    (
+        (h * 60.0).round() as f32 % 360.0,
+        (chroma / max * 100.0).round() as f32,
+    )
 }
 
 /// A descriptor item `key` of type `ty`: its value's bytes (found by key, as for `SoCo`). A
