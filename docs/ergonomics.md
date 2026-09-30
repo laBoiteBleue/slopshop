@@ -43,7 +43,12 @@ built. Contributors: propose here first.
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Move tool (the default action on the image, until the tools palette): drag moves the selected
-  layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag.
+  layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag. Auto-Select:
+  the drag takes the layer whose pixels are under the pointer (inside a group, the layer itself;
+  a layer already selected keeps the whole selection moving; Ctrl held: no auto-select). Snap:
+  the edges and centers of what moves stick to those of the canvas and of the other visible
+  layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
+  turns it off.
 
 ## Proposed
 
@@ -75,6 +80,10 @@ built. Contributors: propose here first.
 
 ### Canvas and view
 
+- [ ] Smart guides also show equal spacing between three layers or more (Photoshop's distance
+      marks), and the distance to the nearest layer while Alt-dragging.
+- [ ] An option to make Auto-Select pick the top group rather than the layer (Photoshop's
+      "Group / Layer" choice).
 - [ ] Right-click on the canvas lists the layers under the pointer to select one (Photoshop
       with the Move tool).
 - [ ] Alt+wheel zooms without Ctrl; R rotates the view (non-destructive, like Photoshop).

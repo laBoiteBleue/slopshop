@@ -33,6 +33,12 @@ export type LayerView = {
   transform: [number, number, number, number, number, number];
 };
 
+/** A rectangle in document pixels (right and bottom exclusive). */
+export type Bounds = { left: number; top: number; right: number; bottom: number };
+
+/** What moving layers can snap to (SnapTargets in lib.rs). */
+export type SnapTargets = { moving: Bounds | null; others: Bounds[] };
+
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
 export type BlendModeId =
   | "normal"
@@ -545,6 +551,12 @@ export const engine = {
     return new ImageData(pixels, width, height);
   },
   /** Add a mask made from the transparency of a raster layer (one undo entry). */
+  /** The layer showing a pixel at document pixel (x, y): the Move tool's Auto-Select. */
+  layerAt: (documentId: number, x: number, y: number) =>
+    invoke<number | null>("layer_at", { documentId, x, y }),
+  /** What moving `ids` can snap to (bounds in document pixels). */
+  moveSnapTargets: (documentId: number, ids: number[]) =>
+    invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
   addMaskFromTransparency: (documentId: number, layerId: number) =>
     serial(() => invoke<DocumentView>("add_mask_from_transparency", { documentId, layerId })),
   /**

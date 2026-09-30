@@ -49,6 +49,7 @@ const fr: Messages = {
   "menu.view.zoomIn": "Zoom avant",
   "menu.view.zoomOut": "Zoom arrière",
   "menu.view.fit": "Taille écran",
+  "menu.view.snap": "Magnétisme",
   "menu.view.actualSize": "100 %",
   "menu.help": "Aide",
   "menu.help.about": "À propos de SlopShop",

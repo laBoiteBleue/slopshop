@@ -22,6 +22,7 @@
     type ExportStarted,
     type GpuInfo,
     type LayerView,
+    type SnapTargets,
     type OpenFailed,
     type OpenFinished,
     type Opening,
@@ -35,7 +36,7 @@
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
-  import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
+  import Viewport, { type FrameStats, type Guide } from "./lib/Viewport.svelte";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
 
   /** Open documents, in tab order. */
@@ -288,29 +289,165 @@
   let mainElement: HTMLElement;
 
   // The Move tool (ADR 0017): a left drag on the image moves the selected layers live, in whole
-  // document pixels (the fractions carry over), one undo entry per drag.
-  let moveIds: number[] = [];
-  let moveCarry = { x: 0, y: 0 };
+  // document pixels, one undo entry per drag. As in Photoshop: Auto-Select takes the layer under
+  // the pointer (not with Ctrl), and the moving layers snap to the canvas and to the other layers
+  // (edges and centers, not with Ctrl), with magenta smart guides.
+  /** Snapping distance, in screen (CSS) pixels. */
+  const SNAP_CSS_PX = 6;
+  /** View > Snap. */
+  let snapping = $state(true);
+  type MoveDrag = {
+    document: number;
+    /** Known once Auto-Select answered. */
+    ids: number[] | null;
+    targets: SnapTargets | null;
+    /** The pointer's movement since the start, and the whole pixels sent so far. */
+    raw: { x: number; y: number };
+    applied: { x: number; y: number };
+    docPerCss: number;
+    free: boolean;
+  };
+  let moveDrag: MoveDrag | null = null;
+  let guides = $state<Guide[]>([]);
 
-  function onMoveDrag(dx: number, dy: number) {
+  function onMoveStart(x: number, y: number, ctrl: boolean) {
     const doc = active;
     if (!doc) return;
-    if (moveIds.length === 0) {
-      moveIds = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
-      moveCarry = { x: 0, y: 0 };
-      if (moveIds.length === 0) return;
+    const drag: MoveDrag = {
+      document: doc.id,
+      ids: null,
+      targets: null,
+      raw: { x: 0, y: 0 },
+      applied: { x: 0, y: 0 },
+      docPerCss: 1,
+      free: false,
+    };
+    moveDrag = drag;
+    void (async () => {
+      let ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+      if (!ctrl) {
+        const hit = await engine.layerAt(doc.id, Math.floor(x), Math.floor(y)).catch(() => null);
+        if (hit !== null && !ids.includes(hit)) {
+          layersPanel?.selectOnly(hit);
+          ids = [hit];
+        }
+      }
+      if (moveDrag !== drag) return;
+      drag.ids = ids;
+      if (ids.length > 0 && snapping) {
+        drag.targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+      }
+      if (moveDrag === drag) flushMove(drag);
+    })();
+  }
+
+  function onMoveDrag(dx: number, dy: number, docPerCss: number, free: boolean) {
+    const drag = moveDrag;
+    if (!drag) return;
+    drag.raw = { x: drag.raw.x + dx, y: drag.raw.y + dy };
+    drag.docPerCss = docPerCss;
+    drag.free = free;
+    flushMove(drag);
+  }
+
+  /** Send the whole pixels the drag has moved since the last time, snapped. */
+  function flushMove(drag: MoveDrag) {
+    if (!drag.ids || drag.ids.length === 0) return;
+    let { x, y } = drag.raw;
+    let shown: Guide[] = [];
+    if (drag.targets && snapping && !drag.free) {
+      const doc = tabs.find((d) => d.id === drag.document);
+      if (doc) {
+        const snapped = snapMove(drag.targets, doc, x, y, SNAP_CSS_PX * drag.docPerCss);
+        ({ x, y } = snapped);
+        shown = snapped.guides;
+      }
     }
-    moveCarry = { x: moveCarry.x + dx, y: moveCarry.y + dy };
-    const x = Math.trunc(moveCarry.x);
-    const y = Math.trunc(moveCarry.y);
-    if (x === 0 && y === 0) return;
-    moveCarry = { x: moveCarry.x - x, y: moveCarry.y - y };
-    live(doc.id, { kind: "translateLayers", ids: moveIds, dx: x, dy: y });
+    guides = shown;
+    const tx = Math.round(x);
+    const ty = Math.round(y);
+    const dx = tx - drag.applied.x;
+    const dy = ty - drag.applied.y;
+    if (dx === 0 && dy === 0) return;
+    drag.applied = { x: tx, y: ty };
+    live(drag.document, { kind: "translateLayers", ids: drag.ids, dx, dy });
+  }
+
+  /**
+   * The move (`x`, `y`) adjusted so that an edge or the center of what moves meets an edge or the
+   * center of the canvas or of another layer within `threshold` document pixels, per axis, with
+   * a guide for each alignment.
+   */
+  function snapMove(
+    targets: SnapTargets,
+    doc: DocumentView,
+    x: number,
+    y: number,
+    threshold: number,
+  ): { x: number; y: number; guides: Guide[] } {
+    const m = targets.moving;
+    if (!m) return { x, y, guides: [] };
+    const canvas = { left: 0, top: 0, right: doc.width, bottom: doc.height };
+    const all = [canvas, ...targets.others];
+    const moved = { left: m.left + x, top: m.top + y, right: m.right + x, bottom: m.bottom + y };
+    type Match = { shift: number; at: number; span: [number, number] };
+    const best = (edges: number[], lines: { at: number; span: [number, number] }[]) => {
+      let found: Match | null = null;
+      for (const edge of edges) {
+        for (const line of lines) {
+          const shift = line.at - edge;
+          if (Math.abs(shift) <= threshold && (!found || Math.abs(shift) < Math.abs(found.shift))) {
+            found = { shift, ...line };
+          }
+        }
+      }
+      return found;
+    };
+    const vertical = all.flatMap((b) =>
+      [b.left, (b.left + b.right) / 2, b.right].map((at) => ({
+        at,
+        span: [b.top, b.bottom] as [number, number],
+      })),
+    );
+    const horizontal = all.flatMap((b) =>
+      [b.top, (b.top + b.bottom) / 2, b.bottom].map((at) => ({
+        at,
+        span: [b.left, b.right] as [number, number],
+      })),
+    );
+    const snapX = best([moved.left, (moved.left + moved.right) / 2, moved.right], vertical);
+    const snapY = best([moved.top, (moved.top + moved.bottom) / 2, moved.bottom], horizontal);
+    const nx = x + (snapX?.shift ?? 0);
+    const ny = y + (snapY?.shift ?? 0);
+    const top = m.top + ny;
+    const bottom = m.bottom + ny;
+    const left = m.left + nx;
+    const right = m.right + nx;
+    const shown: Guide[] = [];
+    if (snapX) {
+      shown.push({
+        x1: snapX.at,
+        x2: snapX.at,
+        y1: Math.min(top, snapX.span[0]),
+        y2: Math.max(bottom, snapX.span[1]),
+      });
+    }
+    if (snapY) {
+      shown.push({
+        y1: snapY.at,
+        y2: snapY.at,
+        x1: Math.min(left, snapY.span[0]),
+        x2: Math.max(right, snapY.span[1]),
+      });
+    }
+    return { x: nx, y: ny, guides: shown };
   }
 
   function onMoveEnd() {
-    if (moveIds.length > 0 && active) void endGesture(active.id);
-    moveIds = [];
+    const drag = moveDrag;
+    moveDrag = null;
+    guides = [];
+    if (drag && (drag.applied.x !== 0 || drag.applied.y !== 0)) void endGesture(drag.document);
   }
 
   /** A thumbnail of the dragged layers following the pointer. */
@@ -1065,6 +1202,7 @@
           cmd(t("menu.view.zoomOut"), () => void viewport?.stepZoom(false), keys("mod", "-"), !doc),
           separator,
           cmd(t("menu.view.fit"), () => void viewport?.fit(), keys("mod", "0"), !doc),
+          { ...cmd(t("menu.view.snap"), () => (snapping = !snapping)), checked: snapping },
           cmd(t("menu.view.actualSize"), () => void viewport?.zoomTo(1), keys("mod", "1"), !doc),
         ],
       },
@@ -1326,8 +1464,10 @@
               documentId={active.id}
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
+              onmovestart={onMoveStart}
               onmove={onMoveDrag}
               onmoveend={onMoveEnd}
+              {guides}
             />
           {/key}
         {:else if ready}
