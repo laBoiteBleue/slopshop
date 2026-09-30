@@ -43,6 +43,7 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
+  import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
 
@@ -502,6 +503,45 @@
         : { kind: "canvasSize", width, height, anchor },
     );
   }
+
+  // The Crop tool (C, ADR 0017): a frame on the image; applying it reframes the canvas, and
+  // nothing is deleted. What the frame snaps to is fetched when it opens.
+  let cropping = $state<{ document: number; targets: Bounds[] } | null>(null);
+
+  async function startCrop() {
+    const doc = active;
+    if (!doc || cropping) return;
+    commitTransform();
+    // Nothing moves: every visible layer is a target.
+    const targets = await engine.moveSnapTargets(doc.id, []).catch(() => null);
+    if (active?.id !== doc.id || cropping) return;
+    cropping = { document: doc.id, targets: [canvasBounds(doc), ...(targets?.others ?? [])] };
+  }
+
+  function applyCrop(frame: Bounds) {
+    const current = cropping;
+    cropping = null;
+    if (!current) return;
+    const doc = tabs.find((d) => d.id === current.document);
+    const unchanged =
+      doc &&
+      frame.left === 0 &&
+      frame.top === 0 &&
+      frame.right === doc.width &&
+      frame.bottom === doc.height;
+    if (unchanged) return;
+    void edit(current.document, {
+      kind: "crop",
+      x: frame.left,
+      y: frame.top,
+      width: frame.right - frame.left,
+      height: frame.bottom - frame.top,
+    });
+  }
+
+  $effect(() => {
+    if (cropping && cropping.document !== activeId) cropping = null;
+  });
 
   function rotateImage(turn: ImageTurn) {
     if (active) void edit(active.id, { kind: "rotateImage", turn });
@@ -1230,6 +1270,7 @@
       {
         label: t("menu.image"),
         items: [
+          cmd(t("menu.image.crop"), () => void startCrop(), "C", !doc),
           cmd(
             t("menu.image.imageSize"),
             () => openSizeDialog("image"),
@@ -1363,6 +1404,18 @@
         if (!e.repeat) openSizeDialog(e.code === "KeyI" ? "image" : "canvas");
         return;
       }
+    }
+    // C: the Crop tool (a letter alone, as Photoshop's tools; not while typing).
+    if (
+      (e.key === "c" || e.key === "C") &&
+      !hasShortcutModifier(e) &&
+      !e.altKey &&
+      !isTextField(e.target) &&
+      active
+    ) {
+      e.preventDefault();
+      if (!e.repeat) void startCrop();
+      return;
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
     const key = e.key.toLowerCase();
@@ -1607,13 +1660,21 @@
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
-              onmove={transforming ? undefined : onMoveDrag}
+              onmove={transforming || cropping ? undefined : onMoveDrag}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
               {guides}
             >
               {#snippet overlay(mapping)}
-                {#if transforming && transforming.document === active?.id}
+                {#if cropping && cropping.document === active?.id}
+                  <CropBox
+                    {mapping}
+                    canvas={canvasBounds(active)}
+                    targets={snapping ? cropping.targets : []}
+                    onapply={applyCrop}
+                    oncancel={() => (cropping = null)}
+                  />
+                {:else if transforming && transforming.document === active?.id}
                   <FreeTransform
                     {mapping}
                     box={transforming.box}
