@@ -12,6 +12,7 @@
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
 mod atomic;
+pub mod collection;
 pub mod export;
 mod icc;
 mod orient;
