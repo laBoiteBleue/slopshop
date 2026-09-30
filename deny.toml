@@ -22,6 +22,9 @@ allow = [
     "Unlicense",
     "CC0-1.0",
     "NCSA",
+    # Boost: permissive, OSI and FSF approved, no attribution needed in binaries (clipboard-win
+    # and error-code, the Windows side of arboard).
+    "BSL-1.0",
     # File-level copyleft (modified MPL files must stay MPL); compatible with MIT distribution.
     "MPL-2.0",
 ]
