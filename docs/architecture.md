@@ -48,6 +48,9 @@ do not depend on each other: export receives its pixel source as a closure (see
   ([ADR 0017](adr/0017-non-destructive-transforms.md)) and an optional
   mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision`
   increases on every change.
+- `resample`: how a transformed layer is sampled ([ADR 0018](adr/0018-resampling.md)): EWA
+  with a Jinc-windowed Jinc kernel and anti-ringing, from the pyramid level matching the scale;
+  computed per layer once, shared by the CPU compositor and the GPU (same kernel table).
 - `thumbnail`: small previews of rasters for the UI, read from the coarsest pyramid level
   that is large enough and converted like an 8-bit sRGB export.
 - `blend`: blend modes and blend spaces ([ADR 0012](adr/0012-blend-modes.md)), the reference
@@ -73,7 +76,8 @@ do not depend on each other: export receives its pixel source as a closure (see
 A wgpu compute pipeline composites visible layers in linear light (premultiplied alpha) over a
 checkerboard and encodes sRGB for display, for exactly the output-sized area. Raster layers are
 sampled from a GPU tile cache (texture array, LRU) at the pyramid level matching the zoom; only
-visible tiles are uploaded. The display
+visible tiles are uploaded. Transformed layers are resampled like the CPU does (zoomed in, at
+document pixels, so the view shows what export writes). The display
 encoding is a *view transform*; the document is never converted. Headless: no surface needed.
 For export, `Renderer::render_region` runs the same compositing code on a document region at
 full resolution (level 0 always) and reads back the working-space values as premultiplied RGBA
@@ -146,7 +150,8 @@ document ──▶ pixel source ──▶ band channel ──▶ convert ──�
                                                 no alpha)   WebP: whole frame)
 ```
 
-- Full-width bands of 256 rows, pyramid level 0 only: premultiplied RGBA f32 in the working
+- Full-width bands of 256 rows, pyramid level 0 (resampled layers: the level their scale
+  needs, ADR 0018): premultiplied RGBA f32 in the working
   space, finite values unclipped (NaN → 0 and ±inf → ±65504 by the source, counted). At most 3
   source bands in memory (produced, queued, converted), so memory depends on the width only.
 - `core::convert` is the only place where values change format; every lossy event (clipping,
