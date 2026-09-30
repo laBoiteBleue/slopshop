@@ -2,6 +2,13 @@
 //! Photoshop's parameters. The compositors apply them to what is below the layer, in the
 //! document's blend space (`Blender::adjust`); the GPU renderer runs the same math.
 
+use std::sync::LazyLock;
+
+use crate::color::{ColorSpace, Mat3, TransferFunction, WORKING_SPACE, mat_vec};
+
+/// Number of parameters of an adjustment ([`Adjustment::params`]).
+pub const PARAM_COUNT: usize = 16;
+
 /// An adjustment and its parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Adjustment {
@@ -39,12 +46,49 @@ pub enum Adjustment {
     Posterize { levels: f32 },
     /// White where the luminance reaches `level` (in `[0, 1]`, shown 1–255), black elsewhere.
     Threshold { level: f32 },
+    /// Gray made from each color's hue family, with Photoshop's six weights in % (−200…300):
+    /// reds, yellows, greens, cyans, blues, magentas. Optionally tinted: the gray becomes the
+    /// HSL lightness of a color of hue `tint_hue` (degrees, 0…360) and saturation
+    /// `tint_saturation` (0…100).
+    BlackWhite {
+        weights: [f32; 6],
+        tint: bool,
+        tint_hue: f32,
+        tint_saturation: f32,
+    },
+    /// Cyan–red, magenta–green and yellow–blue shifts (−100…100) of the shadows, midtones and
+    /// highlights, optionally keeping each color's HSL lightness (GIMP's model of Photoshop's
+    /// tool, whose exact curves are not published).
+    ColorBalance {
+        shadows: [f32; 3],
+        midtones: [f32; 3],
+        highlights: [f32; 3],
+        preserve_luminosity: bool,
+    },
+    /// A colored filter in front of the lens, in linear light: the color is multiplied by
+    /// `color` (sRGB-encoded, in `[0, 1]`) with `density` (0…100), optionally keeping the
+    /// luminance.
+    PhotoFilter {
+        color: [f32; 3],
+        density: f32,
+        preserve_luminosity: bool,
+    },
+    /// Each output channel as a sum of the input channels weighted in % (−200…200) plus a
+    /// constant in % of white (−200…200): `[red, green, blue, constant]`. Monochrome: the red
+    /// row for every channel (Photoshop's gray output).
+    ChannelMixer {
+        red: [f32; 4],
+        green: [f32; 4],
+        blue: [f32; 4],
+        monochrome: bool,
+    },
 }
 
 impl Adjustment {
     /// Every adjustment, with the parameters a new layer gets (Photoshop's defaults): neutral
-    /// ones, except for Invert, Posterize and Threshold, which change the image by nature.
-    pub const DEFAULTS: [Adjustment; 8] = [
+    /// ones, except for Invert, Posterize, Threshold, Black & White and Photo Filter, which
+    /// change the image by nature.
+    pub const DEFAULTS: [Adjustment; 12] = [
         Adjustment::Exposure {
             exposure: 0.0,
             offset: 0.0,
@@ -75,6 +119,30 @@ impl Adjustment {
         Adjustment::Threshold {
             level: 128.0 / 255.0,
         },
+        Adjustment::BlackWhite {
+            weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0],
+            tint: false,
+            tint_hue: 42.0,
+            tint_saturation: 20.0,
+        },
+        Adjustment::ColorBalance {
+            shadows: [0.0; 3],
+            midtones: [0.0; 3],
+            highlights: [0.0; 3],
+            preserve_luminosity: true,
+        },
+        // Photoshop's Warming Filter (85).
+        Adjustment::PhotoFilter {
+            color: [236.0 / 255.0, 138.0 / 255.0, 0.0],
+            density: 25.0,
+            preserve_luminosity: true,
+        },
+        Adjustment::ChannelMixer {
+            red: [100.0, 0.0, 0.0, 0.0],
+            green: [0.0, 100.0, 0.0, 0.0],
+            blue: [0.0, 0.0, 100.0, 0.0],
+            monochrome: false,
+        },
     ];
 
     /// Stable identifier (files, IPC).
@@ -88,6 +156,10 @@ impl Adjustment {
             Adjustment::Invert => "invert",
             Adjustment::Posterize { .. } => "posterize",
             Adjustment::Threshold { .. } => "threshold",
+            Adjustment::BlackWhite { .. } => "blackWhite",
+            Adjustment::ColorBalance { .. } => "colorBalance",
+            Adjustment::PhotoFilter { .. } => "photoFilter",
+            Adjustment::ChannelMixer { .. } => "channelMixer",
         }
     }
 
@@ -107,45 +179,111 @@ impl Adjustment {
             Adjustment::Invert => 5,
             Adjustment::Posterize { .. } => 6,
             Adjustment::Threshold { .. } => 7,
+            Adjustment::BlackWhite { .. } => 8,
+            Adjustment::ColorBalance { .. } => 9,
+            Adjustment::PhotoFilter { .. } => 10,
+            Adjustment::ChannelMixer { .. } => 11,
         }
     }
 
-    /// The parameters in a fixed order (files, IPC, GPU): unused ones are 0.
-    pub fn params(&self) -> [f32; 5] {
+    /// How many of [`Self::params`] the adjustment uses.
+    pub fn param_count(&self) -> usize {
+        match self {
+            Adjustment::Exposure { .. } | Adjustment::HueSaturation { .. } => 3,
+            Adjustment::Levels { .. } => 5,
+            Adjustment::BrightnessContrast { .. } | Adjustment::Vibrance { .. } => 2,
+            Adjustment::Invert => 0,
+            Adjustment::Posterize { .. } | Adjustment::Threshold { .. } => 1,
+            Adjustment::BlackWhite { .. } => 9,
+            Adjustment::ColorBalance { .. } => 10,
+            Adjustment::PhotoFilter { .. } => 5,
+            Adjustment::ChannelMixer { .. } => 13,
+        }
+    }
+
+    /// The parameters in a fixed order (files, IPC, GPU): unused ones are 0, flags 0 or 1.
+    pub fn params(&self) -> [f32; PARAM_COUNT] {
+        let mut p = [0.0; PARAM_COUNT];
+        let used = self.used_params();
+        p[..used.len()].copy_from_slice(&used);
+        p
+    }
+
+    /// The parameters the adjustment uses ([`Self::param_count`] of them).
+    fn used_params(&self) -> Vec<f32> {
+        let flag = |b: bool| if b { 1.0 } else { 0.0 };
         match *self {
             Adjustment::Exposure {
                 exposure,
                 offset,
                 gamma,
-            } => [exposure, offset, gamma, 0.0, 0.0],
+            } => vec![exposure, offset, gamma],
             Adjustment::HueSaturation {
                 hue,
                 saturation,
                 lightness,
-            } => [hue, saturation, lightness, 0.0, 0.0],
+            } => vec![hue, saturation, lightness],
             Adjustment::Levels {
                 input_black,
                 input_white,
                 gamma,
                 output_black,
                 output_white,
-            } => [input_black, input_white, gamma, output_black, output_white],
+            } => vec![input_black, input_white, gamma, output_black, output_white],
             Adjustment::BrightnessContrast {
                 brightness,
                 contrast,
-            } => [brightness, contrast, 0.0, 0.0, 0.0],
+            } => vec![brightness, contrast],
             Adjustment::Vibrance {
                 vibrance,
                 saturation,
-            } => [vibrance, saturation, 0.0, 0.0, 0.0],
-            Adjustment::Invert => [0.0; 5],
-            Adjustment::Posterize { levels } => [levels, 0.0, 0.0, 0.0, 0.0],
-            Adjustment::Threshold { level } => [level, 0.0, 0.0, 0.0, 0.0],
+            } => vec![vibrance, saturation],
+            Adjustment::Invert => vec![],
+            Adjustment::Posterize { levels } => vec![levels],
+            Adjustment::Threshold { level } => vec![level],
+            Adjustment::BlackWhite {
+                weights,
+                tint,
+                tint_hue,
+                tint_saturation,
+            } => [&weights[..], &[flag(tint), tint_hue, tint_saturation]].concat(),
+            Adjustment::ColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+            } => [
+                &shadows[..],
+                &midtones,
+                &highlights,
+                &[flag(preserve_luminosity)],
+            ]
+            .concat(),
+            Adjustment::PhotoFilter {
+                color,
+                density,
+                preserve_luminosity,
+            } => [&color[..], &[density, flag(preserve_luminosity)]].concat(),
+            Adjustment::ChannelMixer {
+                red,
+                green,
+                blue,
+                monochrome,
+            } => [&red[..], &green, &blue, &[flag(monochrome)]].concat(),
         }
     }
 
-    /// The adjustment `id` with `params` (as [`Self::params`] orders them).
-    pub fn from_params(id: &str, p: [f32; 5]) -> Option<Adjustment> {
+    /// The adjustment `id` with `params` (as [`Self::params`] orders them; missing ones are 0,
+    /// flags are set when not 0). `None` for an unknown id or more than [`PARAM_COUNT`] values.
+    pub fn from_params(id: &str, params: &[f32]) -> Option<Adjustment> {
+        if params.len() > PARAM_COUNT {
+            return None;
+        }
+        let mut p = [0.0; PARAM_COUNT];
+        p[..params.len()].copy_from_slice(params);
+        let flag = |v: f32| v != 0.0;
+        let array = |at: usize| -> [f32; 3] { [p[at], p[at + 1], p[at + 2]] };
+        let row = |at: usize| -> [f32; 4] { [p[at], p[at + 1], p[at + 2], p[at + 3]] };
         Some(match Self::defaults(id)? {
             Adjustment::Exposure { .. } => Adjustment::Exposure {
                 exposure: p[0],
@@ -175,6 +313,29 @@ impl Adjustment {
             Adjustment::Invert => Adjustment::Invert,
             Adjustment::Posterize { .. } => Adjustment::Posterize { levels: p[0] },
             Adjustment::Threshold { .. } => Adjustment::Threshold { level: p[0] },
+            Adjustment::BlackWhite { .. } => Adjustment::BlackWhite {
+                weights: [p[0], p[1], p[2], p[3], p[4], p[5]],
+                tint: flag(p[6]),
+                tint_hue: p[7],
+                tint_saturation: p[8],
+            },
+            Adjustment::ColorBalance { .. } => Adjustment::ColorBalance {
+                shadows: array(0),
+                midtones: array(3),
+                highlights: array(6),
+                preserve_luminosity: flag(p[9]),
+            },
+            Adjustment::PhotoFilter { .. } => Adjustment::PhotoFilter {
+                color: array(0),
+                density: p[3],
+                preserve_luminosity: flag(p[4]),
+            },
+            Adjustment::ChannelMixer { .. } => Adjustment::ChannelMixer {
+                red: row(0),
+                green: row(4),
+                blue: row(8),
+                monochrome: flag(p[12]),
+            },
         })
     }
 
@@ -225,12 +386,43 @@ impl Adjustment {
             Adjustment::Invert => true,
             Adjustment::Posterize { levels } => within(levels, 2.0, 255.0),
             Adjustment::Threshold { level } => within(level, 0.0, 1.0),
+            Adjustment::BlackWhite {
+                weights,
+                tint_hue,
+                tint_saturation,
+                ..
+            } => {
+                weights.iter().all(|&w| within(w, -200.0, 300.0))
+                    && within(tint_hue, 0.0, 360.0)
+                    && within(tint_saturation, 0.0, 100.0)
+            }
+            Adjustment::ColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                ..
+            } => [shadows, midtones, highlights]
+                .iter()
+                .flatten()
+                .all(|&v| within(v, -100.0, 100.0)),
+            Adjustment::PhotoFilter { color, density, .. } => {
+                color.iter().all(|&c| within(c, 0.0, 1.0)) && within(density, 0.0, 100.0)
+            }
+            Adjustment::ChannelMixer {
+                red, green, blue, ..
+            } => [red, green, blue]
+                .iter()
+                .flatten()
+                .all(|&v| within(v, -200.0, 200.0)),
         }
     }
 
     /// Runs in linear light whatever the document's blend space (ADR 0020).
     pub fn is_linear(&self) -> bool {
-        matches!(self, Adjustment::Exposure { .. })
+        matches!(
+            self,
+            Adjustment::Exposure { .. } | Adjustment::PhotoFilter { .. }
+        )
     }
 
     /// The adjusted straight color.
@@ -322,12 +514,150 @@ impl Adjustment {
                 };
                 [v; 3]
             }
+            Adjustment::BlackWhite {
+                weights,
+                tint,
+                tint_hue,
+                tint_saturation,
+            } => {
+                let gray = black_and_white(c, weights.map(|w| f64::from(w) / 100.0));
+                if tint {
+                    from_hsl(
+                        f64::from(tint_hue),
+                        f64::from(tint_saturation) / 100.0,
+                        gray,
+                    )
+                } else {
+                    [gray; 3]
+                }
+            }
+            Adjustment::ColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+            } => {
+                let lightness = hsl_lightness(c);
+                // Each range's share at this lightness (GIMP's masks): shadows fade out above
+                // ⅓, highlights in above ⅔, midtones in between.
+                let (a, b, scale) = (0.25, 0.333, 0.7);
+                let weights = [
+                    ((lightness - b) / -a + 0.5).clamp(0.0, 1.0) * scale,
+                    ((lightness - b) / a + 0.5).clamp(0.0, 1.0)
+                        * ((lightness + b - 1.0) / -a + 0.5).clamp(0.0, 1.0)
+                        * scale,
+                    ((lightness + b - 1.0) / a + 0.5).clamp(0.0, 1.0) * scale,
+                ];
+                let mut out = c;
+                for (channel, v) in out.iter_mut().enumerate() {
+                    for (range, weight) in [shadows, midtones, highlights].iter().zip(weights) {
+                        *v += f64::from(range[channel]) / 100.0 * weight;
+                    }
+                }
+                if preserve_luminosity {
+                    set_hsl_lightness(out, lightness)
+                } else {
+                    out
+                }
+            }
+            Adjustment::PhotoFilter {
+                color,
+                density,
+                preserve_luminosity,
+            } => {
+                let filter = filter_color(color);
+                let d = f64::from(density) / 100.0;
+                let mut out = [0, 1, 2].map(|i| c[i] + (c[i] * filter[i] - c[i]) * d);
+                let y = |c: [f64; 3]| (0..3).map(|i| WORKING_LUMA[i] * c[i]).sum::<f64>();
+                let (before, after) = (y(c), y(out));
+                if preserve_luminosity && after > 0.0 {
+                    out = out.map(|v| v * before / after);
+                }
+                out
+            }
+            Adjustment::ChannelMixer {
+                red,
+                green,
+                blue,
+                monochrome,
+            } => {
+                let mix = |row: [f32; 4]| {
+                    let w = row.map(|w| f64::from(w) / 100.0);
+                    w[0] * c[0] + w[1] * c[1] + w[2] * c[2] + w[3]
+                };
+                if monochrome {
+                    [mix(red); 3]
+                } else {
+                    [mix(red), mix(green), mix(blue)]
+                }
+            }
         }
     }
 }
 
 /// The luminance weights of Threshold (Rec. 601, on the adjusted values, as Photoshop).
 pub const LUMA: [f64; 3] = [0.299, 0.587, 0.114];
+
+/// The luminance (`Y`) of each primary of the working space (linear Rec.2020).
+pub const WORKING_LUMA: [f64; 3] = [0.2627, 0.6780, 0.0593];
+
+/// A Photo Filter color (sRGB-encoded) as linear working-space values, what it multiplies.
+pub fn filter_color(color: [f32; 3]) -> [f64; 3] {
+    static SRGB_TO_WORKING: LazyLock<Mat3> =
+        LazyLock::new(|| ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE));
+    let linear = color.map(|v| f64::from(TransferFunction::Srgb.decode(v)));
+    mat_vec(&SRGB_TO_WORKING, linear)
+}
+
+/// Black & White's gray: the smallest component, plus what the two others add, weighted by
+/// the hue family they make (`weights`: reds, yellows, greens, cyans, blues, magentas): the
+/// largest component's primary for the part above the middle one, the secondary of the two
+/// largest for the part between the smallest and the middle one.
+fn black_and_white(c: [f64; 3], weights: [f64; 6]) -> f64 {
+    let mut order = [0, 1, 2];
+    order.sort_by(|&i, &j| c[j].total_cmp(&c[i]));
+    let [max, mid, min] = order;
+    // Primaries at even indices (red 0, green 2, blue 4), secondaries between them.
+    let primary = weights[2 * max];
+    let secondary = weights[match (max.min(mid), max.max(mid)) {
+        (0, 1) => 1,
+        (1, 2) => 3,
+        _ => 5,
+    }];
+    c[min] + (c[mid] - c[min]) * secondary + (c[max] - c[mid]) * primary
+}
+
+/// HSL lightness: the mean of the smallest and largest components.
+fn hsl_lightness(c: [f64; 3]) -> f64 {
+    (c[0].max(c[1]).max(c[2]) + c[0].min(c[1]).min(c[2])) / 2.0
+}
+
+/// The color of hue `degrees`, HSL saturation `s` and lightness `l`.
+fn from_hsl(degrees: f64, s: f64, l: f64) -> [f64; 3] {
+    let chroma = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let gray = [l - chroma / 2.0; 3];
+    if chroma <= 0.0 {
+        return [l; 3];
+    }
+    // The fully saturated hue, shifted and scaled to the chroma.
+    let hue = shift_hue([1.0, 0.0, 0.0], degrees);
+    [0, 1, 2].map(|i| gray[i] + hue[i] * chroma)
+}
+
+/// `c` with HSL lightness `l`, keeping its hue and HSL saturation.
+fn set_hsl_lightness(c: [f64; 3], l: f64) -> [f64; 3] {
+    let (max, min) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+    let chroma = max - min;
+    let room = 1.0 - (2.0 * hsl_lightness(c) - 1.0).abs();
+    if chroma <= 0.0 || room <= 0.0 {
+        return [l; 3];
+    }
+    let s = (chroma / room).min(1.0);
+    let target = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    // The hue as components in [0, 1] (smallest 0, largest 1), scaled to the new chroma.
+    let lo = l - target / 2.0;
+    c.map(|v| lo + (v - min) / chroma * target)
+}
 
 /// Rotate the hue by `degrees`, keeping each color's smallest and largest component (the hue of
 /// HSL and HSV, around the RGB hexagon); works for values outside `[0, 1]` too.
@@ -387,10 +717,15 @@ mod tests {
         let c = [0.2, 0.55, 0.9];
         for a in Adjustment::DEFAULTS {
             assert!(a.is_valid(), "{a:?}");
-            assert_eq!(Adjustment::from_params(a.id(), a.params()), Some(a));
+            assert_eq!(Adjustment::from_params(a.id(), &a.params()), Some(a));
+            assert!(a.params()[a.param_count()..].iter().all(|&p| p == 0.0));
             let changes = matches!(
                 a,
-                Adjustment::Invert | Adjustment::Posterize { .. } | Adjustment::Threshold { .. }
+                Adjustment::Invert
+                    | Adjustment::Posterize { .. }
+                    | Adjustment::Threshold { .. }
+                    | Adjustment::BlackWhite { .. }
+                    | Adjustment::PhotoFilter { .. }
             );
             assert_eq!(!close(a.apply(c), c), changes, "{a:?}");
         }
@@ -516,5 +851,123 @@ mod tests {
             output_white: 1.0,
         };
         assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn parameters_round_trip_and_missing_ones_are_zero() {
+        let mixer = Adjustment::ChannelMixer {
+            red: [80.0, 20.0, 0.0, -10.0],
+            green: [0.0, 100.0, 0.0, 0.0],
+            blue: [10.0, 10.0, 80.0, 5.0],
+            monochrome: true,
+        };
+        assert_eq!(
+            Adjustment::from_params("channelMixer", &mixer.params()),
+            Some(mixer)
+        );
+        // Files of schema 0.7 hold five values.
+        assert_eq!(
+            Adjustment::from_params("posterize", &[6.0, 0.0, 0.0, 0.0, 0.0]),
+            Some(Adjustment::Posterize { levels: 6.0 })
+        );
+        assert_eq!(Adjustment::from_params("invert", &[0.0; 17]), None);
+    }
+
+    #[test]
+    fn black_and_white_weighs_each_hue_family() {
+        let a = Adjustment::defaults("blackWhite").unwrap();
+        // Primaries and secondaries get their weight; grays stay; mixtures blend.
+        assert!(close(a.apply([1.0, 0.0, 0.0]), [0.4; 3]));
+        assert!(close(a.apply([1.0, 1.0, 0.0]), [0.6; 3]));
+        assert!(close(a.apply([0.0, 0.0, 1.0]), [0.2; 3]));
+        assert!(close(a.apply([1.0, 0.0, 1.0]), [0.8; 3]));
+        assert!(close(a.apply([0.3; 3]), [0.3; 3]));
+        // Orange: 0.5 of yellow above black, 0.5 of red above that.
+        assert!(close(a.apply([1.0, 0.5, 0.0]), [0.5; 3]));
+        let Adjustment::BlackWhite { weights, .. } = a else {
+            unreachable!()
+        };
+        let tinted = Adjustment::BlackWhite {
+            weights,
+            tint: true,
+            tint_hue: 120.0,
+            tint_saturation: 100.0,
+        };
+        // Green at the gray's lightness.
+        assert!(close(tinted.apply([0.25; 3]), [0.0, 0.5, 0.0]));
+    }
+
+    #[test]
+    fn color_balance_moves_each_range_and_can_keep_the_lightness() {
+        let reds = |range: usize, preserve: bool| {
+            let mut ranges = [[0.0; 3]; 3];
+            ranges[range][0] = 100.0;
+            Adjustment::ColorBalance {
+                shadows: ranges[0],
+                midtones: ranges[1],
+                highlights: ranges[2],
+                preserve_luminosity: preserve,
+            }
+        };
+        let (dark, mid, light) = ([0.1; 3], [0.5; 3], [0.9; 3]);
+        // Shadows move dark colors, not light ones; highlights the reverse.
+        assert!(reds(0, false).apply(dark)[0] > 0.5);
+        assert!(close(reds(0, false).apply(light), light));
+        assert!(reds(2, false).apply(light)[0] > 0.9);
+        assert!(close(reds(2, false).apply(dark), dark));
+        assert!(reds(1, false).apply(mid)[0] > 0.5);
+        // Keeping the lightness: redder, as light as before.
+        let kept = reds(1, true).apply(mid);
+        assert!(kept[0] > kept[1]);
+        assert!((hsl_lightness(kept) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn photo_filter_multiplies_in_linear_light_and_can_keep_the_luminance() {
+        let full = |preserve: bool| Adjustment::PhotoFilter {
+            color: [1.0, 0.0, 0.0],
+            density: 100.0,
+            preserve_luminosity: preserve,
+        };
+        assert!(full(false).is_linear());
+        let white = [1.0; 3];
+        // sRGB red is inside Rec.2020: the filter keeps that color only.
+        let red = filter_color([1.0, 0.0, 0.0]);
+        assert!(close(full(false).apply(white), red));
+        let kept = full(true).apply(white);
+        let y = |c: [f64; 3]| (0..3).map(|i| WORKING_LUMA[i] * c[i]).sum::<f64>();
+        assert!((y(kept) - 1.0).abs() < 1e-9);
+        let none = Adjustment::PhotoFilter {
+            color: [1.0, 0.0, 0.0],
+            density: 0.0,
+            preserve_luminosity: false,
+        };
+        assert!(close(none.apply([0.2, 0.4, 0.6]), [0.2, 0.4, 0.6]));
+    }
+
+    #[test]
+    fn working_luma_is_the_y_of_the_working_primaries() {
+        let y = WORKING_SPACE.primaries.to_xyz()[1];
+        for (a, b) in y.iter().zip(WORKING_LUMA) {
+            assert!((a - b).abs() < 1e-4, "{y:?}");
+        }
+    }
+
+    #[test]
+    fn channel_mixer_sums_weighted_channels() {
+        let swap = Adjustment::ChannelMixer {
+            red: [0.0, 0.0, 100.0, 0.0],
+            green: [0.0, 100.0, 0.0, 0.0],
+            blue: [100.0, 0.0, 0.0, 10.0],
+            monochrome: false,
+        };
+        assert!(close(swap.apply([0.2, 0.4, 0.6]), [0.6, 0.4, 0.3]));
+        let mono = Adjustment::ChannelMixer {
+            red: [40.0, 40.0, 20.0, 0.0],
+            green: [0.0, 100.0, 0.0, 0.0],
+            blue: [0.0, 0.0, 100.0, 0.0],
+            monochrome: true,
+        };
+        assert!(close(mono.apply([1.0, 0.5, 0.0]), [0.6; 3]));
     }
 }
