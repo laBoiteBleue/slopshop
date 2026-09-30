@@ -208,7 +208,7 @@
   style:cursor={drag?.kind === "scale"
     ? cursorFor(drag.handle)
     : drag?.kind === "move"
-      ? "move"
+      ? "default"
       : ROTATE_CURSOR}
   onpointerdown={(e) => begin(e, "rotate")}
   onpointermove={onPointerMove}
@@ -219,7 +219,7 @@
     class="body"
     points={outline}
     role="presentation"
-    style:cursor={drag ? undefined : "move"}
+    style:cursor={drag ? undefined : "default"}
     onpointerdown={(e) => begin(e, "move")}
     ondblclick={() => oncommit()}
   />

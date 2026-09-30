@@ -565,7 +565,6 @@
   class:native={presentsNatively}
   class:hand={spaceHeld}
   class:panning={panning !== null}
-  class:move-tool={onmove !== undefined}
   bind:this={container}
   role="presentation"
   onpointerdown={onPointerDown}
@@ -611,10 +610,6 @@
 
   canvas.hidden {
     display: none;
-  }
-
-  .viewport.move-tool {
-    cursor: move;
   }
 
   .viewport.hand {
