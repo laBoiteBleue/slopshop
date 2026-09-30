@@ -63,8 +63,12 @@ pub enum ImportWarning {
     /// A layered document (Photoshop) was opened as its flattened image: its layers were not
     /// imported (they could not be read, or the caller asked for the image).
     LayersFlattened,
-    /// Adjustment and fill layers are not supported yet: they were left out.
+    /// Some adjustment and fill layers are not supported yet: they were left out.
     AdjustmentLayersSkipped,
+    /// Some settings of adjustment layers are not supported yet (Levels per channel,
+    /// Hue/Saturation color ranges, legacy Brightness/Contrast, a blend mode other than normal):
+    /// the adjustment is close, not identical.
+    AdjustmentsApproximated,
     /// Layer styles (effects) and advanced blending options are not supported yet: they were
     /// left out.
     LayerStylesIgnored,
@@ -90,6 +94,7 @@ impl ImportWarning {
             ImportWarning::ColorInfoUnsupported => "colorInfoUnsupported",
             ImportWarning::LayersFlattened => "layersFlattened",
             ImportWarning::AdjustmentLayersSkipped => "adjustmentLayersSkipped",
+            ImportWarning::AdjustmentsApproximated => "adjustmentsApproximated",
             ImportWarning::LayerStylesIgnored => "layerStylesIgnored",
             ImportWarning::LayersRasterized => "layersRasterized",
             ImportWarning::PixelsOutsideCanvas => "pixelsOutsideCanvas",

@@ -112,6 +112,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       CPU and GPU, `.slop` 0.7
 - [x] Adjustment layers, UI: Layer > New Adjustment Layer, a Properties panel with live sliders
 - [x] Brightness/Contrast, Vibrance, Invert, Posterize, Threshold
+- [x] PSD import of adjustment layers: the eight reproduced ones become adjustment layers
 - [ ] Black & White, Color Balance, Photo Filter, Channel Mixer (more than five parameters)
 - [ ] Curves (with a curve editor)
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through

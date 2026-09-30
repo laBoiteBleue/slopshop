@@ -27,6 +27,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use flate2::read::ZlibDecoder;
+use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType, WORKING_SPACE,
 };
@@ -133,7 +134,9 @@ enum Kind {
     GroupStart,
     /// The bottom of a group (a hidden divider).
     GroupEnd,
-    /// No pixels to import (adjustment layers, fill layers without pixels).
+    /// An adjustment layer this version reproduces (ADR 0020): `Record::adjustment`.
+    Adjustment,
+    /// No pixels to import (other adjustment layers, fill layers without pixels).
     Skipped,
 }
 
@@ -167,6 +170,10 @@ struct Record {
     masks_simplified: bool,
     /// The color of a solid color fill layer, encoded (0–1) in the document's space.
     solid_color: Option<[f32; 3]>,
+    /// The adjustment of an adjustment layer this version reproduces.
+    adjustment: Option<Adjustment>,
+    /// Some of its settings are left out (see `read_adjustment`).
+    adjustment_approximated: bool,
 }
 
 /// Read the layers of a document positioned at its layer and mask information section.
@@ -253,7 +260,7 @@ fn read_layer_info<R: Read + Seek>(
     }
     if !records
         .iter()
-        .any(|r| matches!(r.kind, Kind::Pixels | Kind::SolidColor))
+        .any(|r| matches!(r.kind, Kind::Pixels | Kind::SolidColor | Kind::Adjustment))
     {
         return Ok(None);
     }
@@ -298,7 +305,7 @@ fn read_layer_info<R: Read + Seek>(
             for &(id, len) in &record.channels {
                 let wanted = match record.kind {
                     Kind::Pixels => context.wants(record, id),
-                    Kind::SolidColor | Kind::GroupStart => {
+                    Kind::SolidColor | Kind::GroupStart | Kind::Adjustment => {
                         record.mask.is_some_and(|(mask, _)| mask == id)
                     }
                     _ => false,
@@ -322,6 +329,7 @@ fn read_layer_info<R: Read + Seek>(
                         Kind::Pixels => build_layer(record, raw, context).map(Some),
                         Kind::SolidColor => build_solid(record, raw, context).map(Some),
                         Kind::GroupStart => build_group(record, raw, context).map(Some),
+                        Kind::Adjustment => build_adjustment(record, raw, context).map(Some),
                         _ => Ok(None),
                     })
                 })
@@ -368,6 +376,12 @@ fn read_layer_info<R: Read + Seek>(
         }
         if built.cropped {
             notes.push(ImportWarning::PixelsOutsideCanvas);
+        }
+        // Adjustment layers blend in normal mode only for now.
+        if record.kind == Kind::Adjustment
+            && (record.adjustment_approximated || blend_mode != BlendMode::Normal)
+        {
+            notes.push(ImportWarning::AdjustmentsApproximated);
         }
         let content = match built.content {
             LayerContent::Group { .. } => LayerContent::Group {
@@ -491,11 +505,14 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         rasterized: false,
         masks_simplified: false,
         solid_color: None,
+        adjustment: None,
+        adjustment_approximated: false,
     };
     let mut vector_mask = false;
     let mut section_key: Option<[u8; 4]> = None;
     let mut adjustment = false;
     let mut fill_layer = false;
+    let mut brightness_contrast: Option<(Option<i32>, Option<i32>)> = None;
     while let Some((key, block)) = data.block(input.big) {
         match &key {
             b"luni" if block.len() >= 4 => {
@@ -533,7 +550,24 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
                 record.solid_color = solid_color(block);
             }
             key if FILL_KEYS.contains(&key) => fill_layer = true,
-            key if ADJUSTMENT_KEYS.contains(&key) => adjustment = true,
+            key if ADJUSTMENT_KEYS.contains(&key) => {
+                adjustment = true;
+                if let Some((parsed, approximated)) = read_adjustment(key, block) {
+                    record.adjustment = Some(parsed);
+                    record.adjustment_approximated |= approximated;
+                }
+            }
+            // Brightness/Contrast's descriptor: current Photoshop versions keep the values
+            // there (`brit` stays at 0); the legacy mode is reproduced approximately.
+            b"CgEd" => {
+                brightness_contrast = Some((
+                    descriptor_long(block, b"Brgh"),
+                    descriptor_long(block, b"Cntr"),
+                ));
+                if descriptor_bool(block, b"useLegacy").unwrap_or(false) {
+                    record.adjustment_approximated = true;
+                }
+            }
             _ => {}
         }
     }
@@ -572,6 +606,21 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         }
     }
 
+    if let (
+        Some(Adjustment::BrightnessContrast {
+            brightness,
+            contrast,
+        }),
+        Some((new_brightness, new_contrast)),
+    ) = (&mut record.adjustment, brightness_contrast)
+    {
+        if let Some(v) = new_brightness {
+            *brightness = (v as f32).clamp(-150.0, 150.0);
+        }
+        if let Some(v) = new_contrast {
+            *contrast = (v as f32).clamp(-50.0, 100.0);
+        }
+    }
     if record.kind == Kind::GroupStart
         && let Some(key) = section_key
     {
@@ -583,7 +632,11 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         // need vector rendering.
         let vector_only = vector_mask && record.mask.is_none();
         if adjustment {
-            record.kind = Kind::Skipped;
+            record.kind = if record.adjustment.is_some() {
+                Kind::Adjustment
+            } else {
+                Kind::Skipped
+            };
         } else if fill_layer && empty {
             record.kind = match record.solid_color {
                 Some(_) if !vector_only => Kind::SolidColor,
@@ -594,6 +647,139 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         }
     }
     Ok(record)
+}
+
+/// The adjustment of an adjustment layer's block, and whether it is only approximated (settings
+/// this version leaves out: Levels per channel, Hue/Saturation color ranges); `None` for
+/// adjustments not reproduced yet, or damaged blocks (the layer is then skipped).
+fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
+    let u16_at = |at: usize| {
+        block
+            .get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
+    let i16_at = |at: usize| {
+        block
+            .get(at..at + 2)
+            .map(|b| i16::from_be_bytes([b[0], b[1]]))
+    };
+    let f32_at = |at: usize| {
+        block
+            .get(at..at + 4)
+            .map(|b| f32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let adjustment = match key {
+        // Version, then records of (input black, input white, output black, output white,
+        // gamma × 100), 0–255: the composite first, then each channel.
+        b"levl" => {
+            let record = |i: usize| -> Option<[u16; 5]> {
+                let at = 2 + i * 10;
+                Some([
+                    u16_at(at)?,
+                    u16_at(at + 2)?,
+                    u16_at(at + 4)?,
+                    u16_at(at + 6)?,
+                    u16_at(at + 8)?,
+                ])
+            };
+            let [ib, iw, ob, ow, g] = record(0)?;
+            let identity = [0, 255, 0, 255, 100];
+            let per_channel = (1..4).any(|i| record(i).is_some_and(|r| r != identity));
+            let unit = |v: u16| f32::from(v.min(255)) / 255.0;
+            (
+                Adjustment::Levels {
+                    input_black: unit(ib),
+                    input_white: unit(iw),
+                    gamma: (f32::from(g) / 100.0).clamp(0.01, 9.99),
+                    output_black: unit(ob),
+                    output_white: unit(ow),
+                },
+                per_channel,
+            )
+        }
+        // Version, then exposure, offset and gamma as big-endian floats.
+        b"expA" => (
+            Adjustment::Exposure {
+                exposure: f32_at(2)?,
+                offset: f32_at(6)?,
+                gamma: f32_at(10)?,
+            },
+            false,
+        ),
+        // Version, colorize, padding, colorization (3 × i16), master (hue, saturation,
+        // lightness), then six color ranges (4 × i16 of range, 3 × i16 of settings).
+        b"hue2" => {
+            if block.get(2).copied()? != 0 {
+                // Colorize is not reproduced yet.
+                return None;
+            }
+            let ranges = (0..6).any(|i| {
+                let at = 16 + i * 14 + 8;
+                (0..3).any(|k| i16_at(at + k * 2).is_some_and(|v| v != 0))
+            });
+            (
+                Adjustment::HueSaturation {
+                    hue: f32::from(i16_at(10)?),
+                    saturation: f32::from(i16_at(12)?),
+                    lightness: f32::from(i16_at(14)?),
+                },
+                ranges,
+            )
+        }
+        // Brightness, contrast (i16), then the mean and Lab-only settings.
+        b"brit" => (
+            Adjustment::BrightnessContrast {
+                brightness: f32::from(i16_at(0)?).clamp(-150.0, 150.0),
+                contrast: f32::from(i16_at(2)?).clamp(-50.0, 100.0),
+            },
+            false,
+        ),
+        // A descriptor with `vibrance` and `Strt` (saturation) as longs.
+        b"vibA" => (
+            Adjustment::Vibrance {
+                vibrance: descriptor_long(block, b"vibrance").unwrap_or(0) as f32,
+                saturation: descriptor_long(block, b"Strt").unwrap_or(0) as f32,
+            },
+            false,
+        ),
+        b"nvrt" => (Adjustment::Invert, false),
+        // The number of levels.
+        b"post" => (
+            Adjustment::Posterize {
+                levels: f32::from(u16_at(0)?.clamp(2, 255)),
+            },
+            false,
+        ),
+        // The level, 1–255.
+        b"thrs" => (
+            Adjustment::Threshold {
+                level: f32::from(u16_at(0)?.clamp(1, 255)) / 255.0,
+            },
+            false,
+        ),
+        _ => return None,
+    };
+    adjustment.0.is_valid().then_some(adjustment)
+}
+
+/// A descriptor item `key` of type `ty`: its value's bytes (found by key, as for `SoCo`). A
+/// 4-character key is written after a zero length, a longer one after its length.
+fn descriptor_value<'a>(block: &'a [u8], key: &[u8], ty: &[u8; 4], len: usize) -> Option<&'a [u8]> {
+    let mut pattern = Vec::with_capacity(4 + key.len() + 4);
+    let length = if key.len() == 4 { 0 } else { key.len() as u32 };
+    pattern.extend(length.to_be_bytes());
+    pattern.extend(key);
+    pattern.extend(ty);
+    let at = block.windows(pattern.len()).position(|w| w == pattern)? + pattern.len();
+    block.get(at..at + len)
+}
+
+fn descriptor_long(block: &[u8], key: &[u8]) -> Option<i32> {
+    descriptor_value(block, key, b"long", 4).map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn descriptor_bool(block: &[u8], key: &[u8]) -> Option<bool> {
+    descriptor_value(block, key, b"bool", 1).map(|b| b[0] != 0)
 }
 
 /// The color of a solid color fill layer from its `SoCo` block, encoded (0–1): its red, green
@@ -940,6 +1126,21 @@ fn build_group(
 }
 
 /// A solid color fill layer: a fill of its color, in the working space, with its mask.
+fn build_adjustment(
+    record: &Record,
+    raw: &[(i16, Vec<u8>)],
+    context: &Context,
+) -> Result<Built, ImportError> {
+    let adjustment = record
+        .adjustment
+        .ok_or_else(|| corrupt("adjustment layer without its adjustment"))?;
+    Ok(Built {
+        content: LayerContent::Adjustment { adjustment },
+        mask: build_mask(record, raw, context)?,
+        cropped: false,
+    })
+}
+
 fn build_solid(
     record: &Record,
     raw: &[(i16, Vec<u8>)],

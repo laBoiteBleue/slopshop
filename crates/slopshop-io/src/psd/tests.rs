@@ -982,3 +982,186 @@ fn solid_color_fill_layers_become_fill_layers() {
     assert_eq!(pixel(&mask.image, 0, 0), [0]);
     assert_eq!(opened.layer_warnings, [Vec::<ImportWarning>::new()]);
 }
+
+#[test]
+fn adjustment_layers_are_imported_with_their_settings() {
+    use slopshop_core::adjust::Adjustment;
+    // An adjustment layer: no pixels, one tagged block.
+    let adjustment = |name: &'static str, key: &[u8; 4], block: Vec<u8>| {
+        let mut layer = TestLayer::new(name, [0; 4], Vec::new());
+        layer.channels = (-1..3).map(|c| (c, Vec::new())).collect();
+        layer.blocks.push((*key, block));
+        layer
+    };
+    let be16 = |values: &[i16]| {
+        values
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect::<Vec<u8>>()
+    };
+    // Levels: version, the composite record, then channel records (identity, except one).
+    let mut levels = be16(&[2, 7, 235, 0, 255, 72]);
+    levels.extend(be16(&[0, 255, 0, 255, 100]));
+    let mut per_channel = levels.clone();
+    per_channel.extend(be16(&[10, 255, 0, 255, 100]));
+    // Exposure: version, then three floats.
+    let mut exposure = be16(&[1]);
+    for v in [-0.39f32, 0.0168, 0.91] {
+        exposure.extend(v.to_be_bytes());
+    }
+    // Hue/Saturation: version, colorize, padding, colorization, master, six empty ranges.
+    let hue = |colorize: u8| {
+        let mut b = be16(&[2]);
+        b.extend([colorize, 0]);
+        b.extend(be16(&[0, 25, 0, -17, 19, 4]));
+        b.extend(vec![0; 6 * 14]);
+        b
+    };
+    // Brightness/Contrast: zeros in `brit`, the values in its descriptor.
+    let mut cged = vec![0, 0, 0, 16];
+    for (key, value) in [(b"Brgh", 34i32), (b"Cntr", 18)] {
+        cged.extend([0, 0, 0, 0]);
+        cged.extend(key);
+        cged.extend(b"long");
+        cged.extend(value.to_be_bytes());
+    }
+    cged.extend([0, 0, 0, 9]);
+    cged.extend(b"useLegacy");
+    cged.extend(b"bool");
+    cged.push(0);
+    let mut brightness = adjustment("Brightness/Contrast 1", b"brit", be16(&[0, 0, 127, 0]));
+    brightness.blocks.push((*b"CgEd", cged));
+    let mut vibrance = vec![0, 0, 0, 16];
+    for (key, value) in [(&b"vibrance"[..], -6i32), (&b"Strt"[..], 2)] {
+        let length = if key.len() == 4 {
+            0u32
+        } else {
+            key.len() as u32
+        };
+        vibrance.extend(length.to_be_bytes());
+        vibrance.extend(key);
+        vibrance.extend(b"long");
+        vibrance.extend(value.to_be_bytes());
+    }
+
+    let mut doc = Doc::new(3, 8, 16, 16, rgb8_planes(16, 16).0);
+    let background = TestLayer::new(
+        "Background",
+        [0, 0, 16, 16],
+        (0..3)
+            .map(|c| (c, plane8(16, 16, |x, _| x as u8 * 10)))
+            .collect(),
+    );
+    doc.layers = vec![
+        background,
+        brightness,
+        adjustment("Levels 1", b"levl", levels),
+        adjustment("Levels 2", b"levl", per_channel),
+        adjustment("Exposure 1", b"expA", exposure),
+        adjustment("Vibrance 1", b"vibA", vibrance),
+        adjustment("Hue/Saturation 1", b"hue2", hue(0)),
+        adjustment("Colorize", b"hue2", hue(1)),
+        adjustment("Invert 1", b"nvrt", Vec::new()),
+        adjustment("Posterize 1", b"post", be16(&[4, 0])),
+        adjustment("Threshold 1", b"thrs", be16(&[128, 0])),
+        adjustment("Curves 1", b"curv", vec![0; 8]),
+    ];
+    let opened = open_layers("adjustments.psd", &doc);
+    // Colorize and Curves are not reproduced yet.
+    assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
+    let adjustments: Vec<(String, Adjustment)> = opened
+        .document
+        .layers()
+        .iter()
+        .filter_map(|l| match l.content {
+            slopshop_core::LayerContent::Adjustment { adjustment } => {
+                Some((l.name.clone(), adjustment))
+            }
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = adjustments.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Brightness/Contrast 1",
+            "Levels 1",
+            "Levels 2",
+            "Exposure 1",
+            "Vibrance 1",
+            "Hue/Saturation 1",
+            "Invert 1",
+            "Posterize 1",
+            "Threshold 1"
+        ]
+    );
+    let find = |name: &str| {
+        adjustments
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, a)| *a)
+            .unwrap()
+    };
+    assert_eq!(
+        find("Brightness/Contrast 1"),
+        Adjustment::BrightnessContrast {
+            brightness: 34.0,
+            contrast: 18.0
+        }
+    );
+    assert_eq!(
+        find("Levels 1"),
+        Adjustment::Levels {
+            input_black: 7.0 / 255.0,
+            input_white: 235.0 / 255.0,
+            gamma: 0.72,
+            output_black: 0.0,
+            output_white: 1.0
+        }
+    );
+    assert_eq!(
+        find("Exposure 1"),
+        Adjustment::Exposure {
+            exposure: -0.39,
+            offset: 0.0168,
+            gamma: 0.91
+        }
+    );
+    assert_eq!(
+        find("Vibrance 1"),
+        Adjustment::Vibrance {
+            vibrance: -6.0,
+            saturation: 2.0
+        }
+    );
+    assert_eq!(
+        find("Hue/Saturation 1"),
+        Adjustment::HueSaturation {
+            hue: -17.0,
+            saturation: 19.0,
+            lightness: 4.0
+        }
+    );
+    assert_eq!(find("Posterize 1"), Adjustment::Posterize { levels: 4.0 });
+    assert_eq!(
+        find("Threshold 1"),
+        Adjustment::Threshold {
+            level: 128.0 / 255.0
+        }
+    );
+    // Levels with a channel of its own: close, not identical.
+    let warnings_of = |name: &str| {
+        opened
+            .document
+            .all_layers()
+            .zip(&opened.layer_warnings)
+            .find(|(l, _)| l.name == name)
+            .map(|(_, w)| w.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        warnings_of("Levels 2"),
+        [ImportWarning::AdjustmentsApproximated]
+    );
+    assert!(warnings_of("Levels 1").is_empty());
+}
