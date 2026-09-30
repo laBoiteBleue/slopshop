@@ -24,5 +24,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0017 | [Non-destructive transforms](0017-non-destructive-transforms.md) | accepted |
 | 0018 | [Resampling transformed layers](0018-resampling.md)             | accepted |
 | 0019 | [DXC compiles the shaders on Windows](0019-dxc-shader-compiler.md) | accepted |
+| 0020 | [Adjustment layers](0020-adjustment-layers.md)                     | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
