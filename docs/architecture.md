@@ -101,7 +101,8 @@ Proves the engine runs without the UI.
 
 ### `app` (implemented, minimal)
 
-Tauri shell + Svelte UI: viewport, layer panel (visibility, live opacity, rename, drag to
+Tauri shell + Svelte UI laid out like Photoshop ([ADR 0013](adr/0013-familiar-layout.md)): a
+menu bar (File, Edit, Image, Layer, View, Help) with Photoshop's shortcuts, viewport, layer panel (visibility, live opacity, rename, drag to
 reorder, delete, add fill, blend mode, document blend space), undo/redo, Save / Save As of `.slop` documents (asking before
 unsaved changes are lost), FR/EN interface. The IPC client serializes mutations so
 they reach the engine in order (Tauri runs async commands concurrently). Commands are `async` (never on the main thread); GPU work runs in

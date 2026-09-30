@@ -92,7 +92,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
   JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW, PSD and more are planned
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
-- A desktop app validating the stack: document tabs (reorder, rename, drop a tab on the canvas
+- A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts): document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
   fill, visibility, live opacity, Photoshop's blend modes, rename, drag to reorder, delete) with
   perceptual or linear blending per document, images dropped on the canvas
