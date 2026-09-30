@@ -8,6 +8,7 @@
   import type { Bounds, Matrix } from "./engine";
   import { getLocale, t } from "./i18n/index.svelte";
   import type { ViewMapping } from "./Viewport.svelte";
+  import Guides from "./Guides.svelte";
   import { SNAP_CSS_PX, snapHandle, snapMove, type AxisSnap, type Guide } from "./snap";
   import { hasShortcutModifier } from "./platform";
 
@@ -59,8 +60,6 @@
   /** A press moving less than this (CSS pixels) is a click, not a drag. */
   const CLICK_SLOP = 3;
   let drag = $state<Drag | null>(null);
-  /** Half the length of a measure's end ticks, in CSS pixels. */
-  const SERIF_PX = 4;
   /** Smart guides of the current snap, in document pixels. */
   let guides = $state<Guide[]>([]);
   /** What the drag does, shown next to the pointer. */
@@ -327,19 +326,7 @@
     />
   {/each}
   <circle class="pivot" cx={screenCenter[0]} cy={screenCenter[1]} r="3" />
-  {#each guides as guide, i (i)}
-    {@const [x1, y1] = mapping.toViewport(guide.x1, guide.y1)}
-    {@const [x2, y2] = mapping.toViewport(guide.x2, guide.y2)}
-    <line class="guide" {x1} {y1} {x2} {y2} />
-    {#if guide.measure}
-      <!-- End ticks (serifs), a fixed size on screen, across the measure. -->
-      {@const length = Math.hypot(x2 - x1, y2 - y1) || 1}
-      {@const nx = ((y1 - y2) / length) * SERIF_PX}
-      {@const ny = ((x2 - x1) / length) * SERIF_PX}
-      <line class="guide" x1={x1 - nx} y1={y1 - ny} x2={x1 + nx} y2={y1 + ny} />
-      <line class="guide" x1={x2 - nx} y1={y2 - ny} x2={x2 + nx} y2={y2 + ny} />
-    {/if}
-  {/each}
+  <Guides {guides} {mapping} />
 </svg>
 {#if readout}
   <div class="readout" style:left="{readout.x}px" style:top="{readout.y}px">{readout.text}</div>
@@ -364,13 +351,6 @@
     fill: #fff;
     stroke: #1a1a1a;
     stroke-width: 1;
-  }
-
-  /* Smart guides, magenta as in Photoshop (and the Move tool's). */
-  .guide {
-    stroke: #ff2bd6;
-    stroke-width: 1;
-    pointer-events: none;
   }
 
   .pivot {

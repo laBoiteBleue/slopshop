@@ -18,6 +18,8 @@ const en = {
   "menu.edit.redo": "Redo",
   "menu.edit.paste": "Paste",
   "menu.edit.pasteNewDocument": "Paste as New Document",
+  "menu.image.crop": "Crop",
+  "crop.readout": "{width} × {height} px",
   "menu.image.imageSize": "Image Size…",
   "menu.image.canvasSize": "Canvas Size…",
   "menu.image.rotation": "Image Rotation",

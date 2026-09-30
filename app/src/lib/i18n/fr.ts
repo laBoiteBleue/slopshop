@@ -18,6 +18,8 @@ const fr: Messages = {
   "menu.edit.redo": "Rétablir",
   "menu.edit.paste": "Coller",
   "menu.edit.pasteNewDocument": "Coller dans un nouveau document",
+  "menu.image.crop": "Recadrage",
+  "crop.readout": "{width} × {height} px",
   "menu.image.imageSize": "Taille de l'image…",
   "menu.image.canvasSize": "Taille de la zone de travail…",
   "menu.image.rotation": "Rotation de l'image",

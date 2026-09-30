@@ -71,6 +71,13 @@ built. Contributors: propose here first.
   Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All
   undoable, and nothing is cut: pixels outside the canvas are kept, resizing resamples when
   shown.
+- Crop tool (C, Image > Crop): a frame on the whole image with eight handles, the outside
+  shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
+  a corner keeps the proportions), outside to draw a new one; edges snap to the canvas, the
+  layers and their sizes, with magenta guides (Ctrl: freely). A readout shows the size. Enter,
+  a double-click inside or a click outside applies; Esc cancels. Whole pixels only, and nothing
+  is deleted: cropped pixels stay outside the canvas. Image > Crop to a selection comes with
+  selections.
 
 ## Proposed
 
