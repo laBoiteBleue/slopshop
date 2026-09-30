@@ -17,6 +17,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use slopshop_core::color::PixelFormat;
 use slopshop_core::view::Viewport;
 use slopshop_core::{
     BlendMode, Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Rect,
@@ -638,10 +639,30 @@ fn insert_imported(
     target: OpenTarget,
 ) -> Result<DocumentView, String> {
     let warnings: Vec<_> = imported.warnings.iter().map(|w| w.id()).collect();
+    insert_image(
+        state,
+        name,
+        &layer_name(path),
+        imported.image,
+        warnings,
+        target,
+    )
+}
+
+/// Put an image into its target: a new tab named `tab_name`, or a new top layer (undoable);
+/// the layer is named `layer_name` either way.
+fn insert_image(
+    state: &AppState,
+    tab_name: &str,
+    layer_name: &str,
+    image: RasterImage,
+    warnings: Vec<&'static str>,
+    target: OpenTarget,
+) -> Result<DocumentView, String> {
     match target {
         OpenTarget::NewTab => state.add_document(
-            image_session(imported.image, &layer_name(path)),
-            Some(name.to_owned()),
+            image_session(image, layer_name),
+            Some(tab_name.to_owned()),
             warnings,
         ),
         OpenTarget::Layer { document_id } => {
@@ -654,12 +675,12 @@ fn insert_imported(
                 index: session.document().layers().len(),
                 layer: Layer {
                     id: layer_id,
-                    name: layer_name(path),
+                    name: layer_name.to_owned(),
                     visible: true,
                     opacity: 1.0,
                     blend_mode: BlendMode::Normal,
                     content: LayerContent::Raster {
-                        image: Arc::new(imported.image),
+                        image: Arc::new(image),
                     },
                 },
             };
@@ -908,6 +929,87 @@ async fn quit(app: AppHandle) -> Result<(), String> {
         .get_webview_window(MAIN_WINDOW)
         .ok_or("no main window")?;
     window.close().map_err(|e| e.to_string())
+}
+
+/// What the clipboard held when pasting.
+enum ClipboardContent {
+    /// Files copied in the file manager.
+    Files(Vec<PathBuf>),
+    /// An image (copied from a browser, a screenshot…): 8-bit sRGB, straight alpha.
+    Image(RasterImage),
+    Nothing,
+}
+
+/// Read the clipboard: copied files first (the file manager may also put an icon image), then
+/// an image. Blocking.
+fn read_clipboard() -> Result<ClipboardContent, String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    if let Ok(files) = clipboard.get().file_list()
+        && !files.is_empty()
+    {
+        return Ok(ClipboardContent::Files(files));
+    }
+    match clipboard.get_image() {
+        Ok(image) => {
+            let size = Size::new(
+                u32::try_from(image.width).map_err(|e| e.to_string())?,
+                u32::try_from(image.height).map_err(|e| e.to_string())?,
+            );
+            // Clipboard images are 8-bit sRGB RGBA with straight alpha on every platform.
+            RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &image.bytes)
+                .map(ClipboardContent::Image)
+                .map_err(|e| e.to_string())
+        }
+        Err(arboard::Error::ContentNotAvailable) => Ok(ClipboardContent::Nothing),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The outcome of `paste`.
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum Pasted {
+    /// Copied files, opened like dropped ones (their outcomes arrive as `open-*` events).
+    Files,
+    /// A copied image, in `document` (a new tab when `new_tab`).
+    Image {
+        document: DocumentView,
+        new_tab: bool,
+    },
+    /// Neither files nor an image.
+    Nothing,
+}
+
+/// Paste: copied files open as dropped files would (layers of `document_id`, or new tabs), a
+/// copied image becomes a layer named `name` of `document_id`, or a new tab named `name`.
+#[tauri::command]
+async fn paste(app: AppHandle, document_id: Option<u64>, name: String) -> Result<Pasted, String> {
+    let content = tauri::async_runtime::spawn_blocking(read_clipboard)
+        .await
+        .map_err(|e| e.to_string())??;
+    match content {
+        ClipboardContent::Files(paths) => {
+            open_images(app, paths, document_id).await?;
+            Ok(Pasted::Files)
+        }
+        ClipboardContent::Image(image) => {
+            let target = match document_id {
+                Some(document_id) => OpenTarget::Layer { document_id },
+                None => OpenTarget::NewTab,
+            };
+            let state = app.state::<AppState>();
+            let document = insert_image(&state, &name, &name, image, Vec::new(), target)?;
+            Ok(Pasted::Image {
+                document,
+                new_tab: document_id.is_none(),
+            })
+        }
+        ClipboardContent::Nothing => Ok(Pasted::Nothing),
+    }
 }
 
 /// Largest thumbnail side a request may ask for, in pixels.
@@ -1349,6 +1451,7 @@ pub fn run() {
             present_view,
             reveal_in_folder,
             layer_thumbnail,
+            paste,
             save_document,
             quit,
             export::export_defaults,
@@ -1422,6 +1525,38 @@ mod tests {
 
     fn tab_ids(documents: &Documents) -> Vec<u64> {
         documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn pasted_images_become_a_layer_or_a_new_tab() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let image = || {
+            RasterImage::from_pixels(Size::new(3, 2), PixelFormat::RGBA8_SRGB, &[200; 3 * 2 * 4])
+                .unwrap()
+        };
+        let layers = doc.layers.len();
+        let target = OpenTarget::Layer {
+            document_id: doc.id,
+        };
+        let view = insert_image(&state, "Pasted", "Pasted", image(), Vec::new(), target).unwrap();
+        assert_eq!(view.id, doc.id);
+        assert_eq!(view.layers.len(), layers + 1);
+        assert_eq!(view.layers.last().unwrap().name, "Pasted");
+        let tab = insert_image(
+            &state,
+            "Pasted",
+            "Pasted",
+            image(),
+            Vec::new(),
+            OpenTarget::NewTab,
+        )
+        .unwrap();
+        assert_ne!(tab.id, doc.id);
+        assert_eq!((tab.width, tab.height), (3, 2));
+        assert_eq!(tab.name.as_deref(), Some("Pasted"));
     }
 
     #[test]

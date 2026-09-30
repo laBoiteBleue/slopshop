@@ -24,8 +24,8 @@ RAW/DICOM interpretation, permissive licensing, contained `unsafe`).
    unsupported ICC profiles, extra pages/frames, unsupported bit depths) is either refused with
    an explicit message or imported with a visible warning.
 4. **Licensing policy.**
-   - Default build: permissive licenses only (MIT, Apache-2.0, BSD, Zlib, ISC, Unicode, MPL-2.0
-     as file-level copyleft is acceptable).
+   - Default build: permissive licenses only (MIT, Apache-2.0, BSD, Zlib, ISC, Unicode, Boost
+     BSL-1.0; MPL-2.0 as file-level copyleft is acceptable).
    - **LGPL is allowed only when isolated**: in a separate crate behind a feature, dynamically
      linked or in a worker process, and replaceable by the user.
    - **GPL and AGPL are forbidden** in every build (e.g. libjxl's Rust bindings, MuPDF,
