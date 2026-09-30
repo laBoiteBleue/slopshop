@@ -450,18 +450,14 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
-    /// The edit that resamples the whole image to `size` (Image > Image Size, ADR 0018): the
-    /// canvas takes that size and every top-level layer is scaled by the same factors (a
-    /// group's layers with it). Pixels are not rewritten: they are resampled when shown.
-    pub fn resize_image(doc: &Document, size: Size) -> Result<Edit, EditError> {
+    /// The edit that gives the canvas `size` and applies `by` (a map of the document's space)
+    /// to every top-level layer, a group's layers with it: what Image Size, Canvas Size, Crop
+    /// and Image Rotation do (ADR 0017). Pixels are never rewritten, and what falls outside the
+    /// canvas is kept.
+    pub fn reframe_image(doc: &Document, size: Size, by: Affine) -> Result<Edit, EditError> {
         if size.is_empty() {
             return Err(EditError::EmptyCanvas);
         }
-        let old = doc.size();
-        let by = Affine::scale(
-            f64::from(size.width) / f64::from(old.width.max(1)),
-            f64::from(size.height) / f64::from(old.height.max(1)),
-        );
         let mut edits = vec![Edit::SetCanvasSize { size }];
         for layer in doc.layers() {
             let transform = layer.transform.then(by).snapped();
@@ -472,6 +468,64 @@ impl Edit {
             });
         }
         Ok(Edit::Batch(edits))
+    }
+
+    /// The edit that resamples the whole image to `size` (Image > Image Size, ADR 0018): the
+    /// canvas takes that size and every top-level layer is scaled by the same factors. Pixels
+    /// are resampled when shown.
+    pub fn resize_image(doc: &Document, size: Size) -> Result<Edit, EditError> {
+        let old = doc.size();
+        let by = Affine::scale(
+            f64::from(size.width) / f64::from(old.width.max(1)),
+            f64::from(size.height) / f64::from(old.height.max(1)),
+        );
+        Edit::reframe_image(doc, size, by)
+    }
+
+    /// The edit that gives the canvas `size` keeping the image where `anchor` says (Image >
+    /// Canvas Size): `(0, 0)` keeps the top-left corner, `(0.5, 0.5)` the center, `(1, 1)` the
+    /// bottom-right corner. Layers move by whole pixels (an odd difference puts the extra pixel
+    /// on the right or bottom), so they are not resampled.
+    pub fn canvas_size(doc: &Document, size: Size, anchor: (f64, f64)) -> Result<Edit, EditError> {
+        let old = doc.size();
+        let offset = |new: u32, old: u32, at: f64| {
+            ((f64::from(new) - f64::from(old)) * at.clamp(0.0, 1.0)).floor()
+        };
+        let by = Affine::translation(
+            offset(size.width, old.width, anchor.0),
+            offset(size.height, old.height, anchor.1),
+        );
+        Edit::reframe_image(doc, size, by)
+    }
+
+    /// The edit that keeps only `area` of the canvas, `[x, y, width, height]` in document pixels
+    /// (it may extend past the canvas): Crop. Nothing is deleted; layers move by whole pixels.
+    pub fn crop(doc: &Document, area: [i64; 4]) -> Result<Edit, EditError> {
+        let [x, y, width, height] = area;
+        let side = |v: i64| u32::try_from(v).map_err(|_| EditError::EmptyCanvas);
+        let size = Size::new(side(width)?, side(height)?);
+        Edit::reframe_image(doc, size, Affine::translation(-x as f64, -y as f64))
+    }
+
+    /// The edit that turns or flips the whole image (Image > Image Rotation): exact, pixels are
+    /// copied, never resampled; a quarter turn swaps the canvas's sides.
+    pub fn rotate_image(doc: &Document, turn: ImageTurn) -> Result<Edit, EditError> {
+        let size = doc.size();
+        let (w, h) = (f64::from(size.width), f64::from(size.height));
+        let (a, b, c, d, e, f) = match turn {
+            ImageTurn::Clockwise => (0.0, 1.0, -1.0, 0.0, h, 0.0),
+            ImageTurn::CounterClockwise => (0.0, -1.0, 1.0, 0.0, 0.0, w),
+            ImageTurn::HalfTurn => (-1.0, 0.0, 0.0, -1.0, w, h),
+            ImageTurn::FlipHorizontal => (-1.0, 0.0, 0.0, 1.0, w, 0.0),
+            ImageTurn::FlipVertical => (1.0, 0.0, 0.0, -1.0, 0.0, h),
+        };
+        let turned = match turn {
+            ImageTurn::Clockwise | ImageTurn::CounterClockwise => {
+                Size::new(size.height, size.width)
+            }
+            _ => size,
+        };
+        Edit::reframe_image(doc, turned, Affine { a, b, c, d, e, f })
     }
 
     /// The edit that replaces group `id` by its layers, in its place and order: Layer > Ungroup
@@ -550,6 +604,21 @@ impl Edit {
         }
         Ok(Edit::Batch(edits))
     }
+}
+
+/// A turn or flip of the whole image (Image > Image Rotation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageTurn {
+    /// 90° clockwise.
+    Clockwise,
+    /// 90° counter clockwise.
+    CounterClockwise,
+    /// 180°.
+    HalfTurn,
+    /// Left and right swap.
+    FlipHorizontal,
+    /// Top and bottom swap.
+    FlipVertical,
 }
 
 /// `ids` without those inside another of them (they move with it), in stacking order: depth
@@ -743,6 +812,82 @@ mod tests {
                 size: Size::new(0, 4)
             }
             .apply(&mut doc),
+            Err(EditError::EmptyCanvas)
+        );
+    }
+
+    #[test]
+    fn image_turns_are_exact_and_swap_the_sides() {
+        let mut doc = Document::new(Size::new(8, 6));
+        let ids = stack(&mut doc, &["a"]);
+        let place =
+            |doc: &Document, x: f64, y: f64| doc.layer(ids[0]).unwrap().transform.apply(x, y);
+        // Clockwise: the top-left pixel (center 0.5, 0.5) goes to the top-right corner.
+        let undo = Edit::rotate_image(&doc, ImageTurn::Clockwise)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(6, 8));
+        assert_eq!(place(&doc, 0.5, 0.5), (5.5, 0.5));
+        assert!(doc.layer(ids[0]).unwrap().transform.is_pixel_exact());
+        undo.apply(&mut doc).unwrap();
+        for (turn, expected) in [
+            (ImageTurn::CounterClockwise, (0.5, 7.5)),
+            (ImageTurn::HalfTurn, (7.5, 5.5)),
+            (ImageTurn::FlipHorizontal, (7.5, 0.5)),
+            (ImageTurn::FlipVertical, (0.5, 5.5)),
+        ] {
+            let undo = Edit::rotate_image(&doc, turn)
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
+            assert_eq!(place(&doc, 0.5, 0.5), expected, "{turn:?}");
+            assert!(doc.layer(ids[0]).unwrap().transform.is_pixel_exact());
+            undo.apply(&mut doc).unwrap();
+        }
+        // Four quarter turns come back exactly.
+        for _ in 0..4 {
+            Edit::rotate_image(&doc, ImageTurn::Clockwise)
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
+        }
+        assert_eq!(doc.size(), Size::new(8, 6));
+        assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
+    }
+
+    #[test]
+    fn canvas_size_and_crop_move_layers_by_whole_pixels() {
+        let mut doc = Document::new(Size::new(8, 6));
+        let ids = stack(&mut doc, &["a"]);
+        let transform = |doc: &Document| doc.layer(ids[0]).unwrap().transform;
+        // Centered, 3 more pixels: 1 on the left, 2 on the right.
+        let undo = Edit::canvas_size(&doc, Size::new(11, 6), (0.5, 0.5))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(11, 6));
+        assert_eq!(transform(&doc), Affine::translation(1.0, 0.0));
+        undo.apply(&mut doc).unwrap();
+        // Anchored bottom-right, smaller: the image moves up and left, nothing is cut.
+        Edit::canvas_size(&doc, Size::new(5, 4), (1.0, 1.0))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(transform(&doc), Affine::translation(-3.0, -2.0));
+        let undo = Edit::crop(&doc, [1, 1, 3, 2])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(3, 2));
+        assert_eq!(transform(&doc), Affine::translation(-4.0, -3.0));
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(
+            Edit::crop(&doc, [0, 0, 0, 3]).and_then(|e| e.apply(&mut doc)),
+            Err(EditError::EmptyCanvas)
+        );
+        assert_eq!(
+            Edit::crop(&doc, [0, 0, -2, 3]).and_then(|e| e.apply(&mut doc)),
             Err(EditError::EmptyCanvas)
         );
     }
