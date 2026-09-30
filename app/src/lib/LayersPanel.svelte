@@ -263,7 +263,8 @@
   onblur={() => (drag = null)}
 />
 
-<section class="panel" aria-label={t("layers.title")}>
+<!-- Files dropped on the panel become layers of this document (see dropTargetAt in App). -->
+<section class="panel" data-drop="layer" aria-label={t("layers.title")}>
   <div class="tabs">
     <span class="tab active">{t("layers.title")}</span>
   </div>

@@ -338,13 +338,16 @@
     showError(t("open.failed", { name: failed.name, error: reason }));
   }
 
-  /** Drop zones: the image of the active tab adds layers; anywhere else opens new tabs. */
+  /**
+   * Drop zones: the image and the layers panel of the active tab add layers; anywhere else
+   * opens new tabs.
+   */
   function dropTargetAt(position: { x: number; y: number }): "tab" | "layer" {
     // Tauri labels the position physical, but only WebView2 reports device pixels; WebKit
     // (macOS, Linux) already reports CSS pixels.
     const scale = isWindows ? window.devicePixelRatio : 1;
     const element = document.elementFromPoint(position.x / scale, position.y / scale);
-    if (active && element?.closest(".stage")) return "layer";
+    if (active && element?.closest(".stage, [data-drop='layer']")) return "layer";
     return "tab";
   }
 
