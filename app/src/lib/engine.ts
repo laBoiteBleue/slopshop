@@ -136,6 +136,12 @@ export type PresentInfo = {
   renderMs: number;
 };
 
+/** What a paste found on the clipboard (Pasted in app/src-tauri/src/lib.rs). */
+export type Pasted =
+  | { kind: "files" }
+  | { kind: "image"; document: DocumentView; newTab: boolean }
+  | { kind: "nothing" };
+
 /** Where an opened image goes. */
 export type OpenTarget = { kind: "newTab" } | { kind: "layer"; documentId: number };
 
@@ -488,6 +494,12 @@ export const engine = {
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /**
+   * Paste the clipboard: copied files open like dropped ones (layers of `documentId`, or new
+   * tabs; outcomes arrive as `open-*` events), a copied image becomes a layer named `name` of
+   * `documentId`, or a new tab.
+   */
+  paste: (documentId: number | null, name: string) => invoke<Pasted>("paste", { documentId, name }),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   perform: (documentId: number, edit: EditRequest) =>
