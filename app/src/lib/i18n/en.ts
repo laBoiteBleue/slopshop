@@ -188,6 +188,7 @@ const en = {
   "export.format.exr": "OpenEXR",
   "export.format.jpeg": "JPEG",
   "export.format.webp": "WebP",
+  "export.format.psd": "Photoshop (layers)",
   "export.depth": "Bit depth",
   "export.depth.u8": "8-bit",
   "export.depth.u16": "16-bit",
@@ -233,6 +234,8 @@ const en = {
   "export.report.nonFinite": "{count} infinite or NaN values were replaced",
   "export.report.halfOverflow": "{count} values exceeded the 16-bit float range",
   "export.report.precisionReduced": "Written as 16-bit floats: less precise than the image",
+  "export.report.pixelsOutsideCanvas":
+    "Parts of layers were outside the canvas: the layered file keeps only what is inside",
   "export.report.bigTiff": "Written as BigTIFF (over 4 GB): some older software cannot read it",
   "export.report.alphaFlattened":
     "{count} partly transparent pixels were flattened over the background color",

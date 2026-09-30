@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use slopshop_core::{CancelToken, ColorSpace, Document, Progress};
 use slopshop_io::export::{
-    ExportReport, ExportSpec, default_spec, export_image, max_side, supports_gray, supports_space,
+    ExportReport, ExportSpec, default_spec, export_image, export_psd, max_side, supports_gray,
+    supports_space,
 };
 use slopshop_render::Renderer;
 use tauri::{AppHandle, Manager, State};
@@ -177,9 +178,18 @@ fn run_export(
     progress: &mut dyn FnMut(Progress),
 ) -> Result<ExportReport, ExportFailed> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let source = slopshop_render::export_source(renderer, document);
-        export_image(path, document.size(), spec, source, cancel, progress)
-            .map_err(|e| ExportFailed::new(None, &e))
+        match spec.psd_options() {
+            // A layered file: each layer rendered on its own.
+            Some(options) => {
+                let mut render = slopshop_render::export_renderer(renderer);
+                export_psd(path, document, &options, &mut render, cancel, progress)
+            }
+            None => {
+                let source = slopshop_render::export_source(renderer, document);
+                export_image(path, document.size(), spec, source, cancel, progress)
+            }
+        }
+        .map_err(|e| ExportFailed::new(None, &e))
     }))
     .unwrap_or_else(|panic| {
         Err(ExportFailed {

@@ -194,6 +194,7 @@ const fr: Messages = {
   "export.format.exr": "OpenEXR",
   "export.format.jpeg": "JPEG",
   "export.format.webp": "WebP",
+  "export.format.psd": "Photoshop (calques)",
   "export.depth": "Profondeur",
   "export.depth.u8": "8 bits",
   "export.depth.u16": "16 bits",
@@ -240,6 +241,8 @@ const fr: Messages = {
   "export.report.nonFinite": "{count} valeurs infinies ou NaN ont été remplacées",
   "export.report.halfOverflow": "{count} valeurs dépassaient la plage du flottant 16 bits",
   "export.report.precisionReduced": "Écrit en flottants 16 bits : moins précis que l'image",
+  "export.report.pixelsOutsideCanvas":
+    "Des parties de calques étaient hors de la zone de travail : le fichier en calques ne garde que l'intérieur",
   "export.report.bigTiff":
     "Écrit en BigTIFF (plus de 4 Go) : certains anciens logiciels ne peuvent pas le lire",
   "export.report.alphaFlattened":
