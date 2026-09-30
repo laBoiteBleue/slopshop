@@ -27,7 +27,12 @@ node model the document is heading to (ADR 0009).
    - Levels (RGB): input black and white, gamma, output black and white.
    Then Brightness/Contrast (black and white kept: a gamma and an S-curve, as Photoshop's
    current mode behaves; Adobe's exact curves are not published), Vibrance, Invert, Posterize
-   and Threshold. Curves (with an editor) and others follow on the same model.
+   and Threshold; then Black & White (a gray from each color's hue family, optionally
+   tinted), Color Balance (GIMP's model: shifts weighted by lightness ranges, HSL lightness
+   optionally kept), Photo Filter (a multiplication in linear light, luminance optionally
+   kept) and Channel Mixer. Up to 16 parameters each (flags as 0 or 1): on the GPU they use
+   layer fields an adjustment has no other use for. Curves (with an editor) and others follow
+   on the same model.
 5. **Blend mode**: normal only for now; the others (luminosity, color…) come later.
 6. **Both compositors**: a step of the shared step list (`Step::Adjust`), computed identically
    by the CPU reference and the GPU (tested against each other).
