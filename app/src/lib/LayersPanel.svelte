@@ -42,20 +42,83 @@
   // Panels list layers top to bottom, like every image editor.
   let rows = $derived([...doc.layers].reverse());
 
-  // Selection is UI state, not document state (it is not undoable).
-  let selectedId = $state<number | null>(null);
-  let selected = $derived(doc.layers.find((l) => l.id === selectedId) ?? null);
+  // Selection is UI state, not document state (it is not undoable). Several layers can be
+  // selected, as in Photoshop: click selects one, Ctrl+click adds or removes one, Shift+click
+  // selects a range from the anchor. The active layer (always a selected one, when any is) is
+  // the one rename, the Layer menu and the options show; actions apply to every selected layer.
+  let selectedIds = $state<number[]>([]);
+  let activeId = $state<number | null>(null);
+  let anchorId: number | null = null;
+  let selectedSet = $derived(new Set(selectedIds));
+  let selected = $derived(doc.layers.find((l) => l.id === activeId) ?? null);
+  /** Selected layers, bottom to top. */
+  let selection = $derived(doc.layers.filter((l) => selectedSet.has(l.id)));
   let knownIds = new Set<number>();
+
+  function select(ids: number[], active: number | null) {
+    selectedIds = ids;
+    activeId = active;
+    anchorId = active;
+  }
+
+  /** The topmost of `ids` in the stack. */
+  function topmost(ids: number[]): number | null {
+    const set = new Set(ids);
+    return doc.layers.findLast((l) => set.has(l.id))?.id ?? null;
+  }
 
   $effect(() => {
     const ids = doc.layers.map((l) => l.id);
-    // Select newly created layers, and fall back to the top layer if the selection vanished.
     const created = ids.filter((id) => !knownIds.has(id));
     const first = knownIds.size === 0;
     knownIds = new Set(ids);
-    if (created.length > 0 && !first) selectedId = created[created.length - 1];
-    else if (selectedId === null || !ids.includes(selectedId)) selectedId = ids.at(-1) ?? null;
+    untrack(() => {
+      // New layers become the selection (several for a layered import).
+      if (created.length > 0 && !first) {
+        select(created, created[created.length - 1]);
+        return;
+      }
+      // Deleted layers leave it; when none is left, the top layer is selected (a deliberate
+      // "Deselect Layers" keeps the selection empty).
+      const present = new Set(ids);
+      const kept = selectedIds.filter((id) => present.has(id));
+      if (first || (kept.length === 0 && selectedIds.length > 0)) {
+        const top = ids.at(-1) ?? null;
+        select(top === null ? [] : [top], top);
+      } else if (kept.length < selectedIds.length) {
+        selectedIds = kept;
+        if (activeId === null || !present.has(activeId)) activeId = topmost(kept);
+        if (anchorId === null || !present.has(anchorId)) anchorId = activeId;
+      }
+    });
   });
+
+  /** One edit, or one batch (a single undo entry) for several. */
+  function batchOf(edits: EditRequest[]): EditRequest {
+    return edits.length === 1 ? edits[0] : { kind: "batch", edits };
+  }
+
+  function toggleSelected(id: number) {
+    if (selectedSet.has(id)) {
+      selectedIds = selectedIds.filter((s) => s !== id);
+      if (activeId === id) activeId = topmost(selectedIds);
+      anchorId = activeId;
+    } else {
+      selectedIds = [...selectedIds, id];
+      activeId = id;
+      anchorId = id;
+    }
+  }
+
+  /** Select the rows from the anchor to `id` (inclusive); the anchor stays. */
+  function selectRange(id: number) {
+    const displayed = rows.map((l) => l.id);
+    const from = displayed.indexOf(anchorId ?? id);
+    const to = displayed.indexOf(id);
+    if (from < 0 || to < 0) return select([id], id);
+    selectedIds = displayed.slice(Math.min(from, to), Math.max(from, to) + 1);
+    activeId = id;
+  }
 
   let newColor = $state("#e84ca3");
   let list: HTMLUListElement;
@@ -66,11 +129,16 @@
     edit({ kind: "addFillLayer", name, color: [...hexToSrgb(newColor), 1] });
   }
 
-  // Commands of the Layer menu, on the selected layer.
+  // Commands of the Layer and Select menus.
 
-  /** The selected layer, if any. */
+  /** The active layer, if any. */
   export function selectedLayer(): LayerView | null {
     return selected;
+  }
+
+  /** Every selected layer, bottom to top. */
+  export function selectedLayers(): LayerView[] {
+    return selection;
   }
 
   export function renameSelected() {
@@ -78,7 +146,19 @@
   }
 
   export function deleteSelected() {
-    if (selected) void edit({ kind: "removeLayer", id: selected.id });
+    if (selection.length === 0) return;
+    void edit(batchOf(selection.map((l) => ({ kind: "removeLayer", id: l.id }))));
+  }
+
+  export function selectAllLayers() {
+    const ids = doc.layers.map((l) => l.id);
+    selectedIds = ids;
+    if (activeId === null) activeId = ids.at(-1) ?? null;
+    anchorId = activeId;
+  }
+
+  export function deselectLayers() {
+    select([], null);
   }
 
   // Rename: double-click on the name, or F2 on the selected layer.
@@ -123,6 +203,28 @@
       drag = null;
       return;
     }
+    // Alt+Ctrl+A: select all layers, as in Photoshop.
+    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && e.code === "KeyA") {
+      if (isTextField(e.target)) return;
+      e.preventDefault();
+      selectAllLayers();
+      return;
+    }
+    // Delete (or Backspace) deletes the selected layers, as in Photoshop without a selection.
+    if (
+      (e.key === "Delete" || e.key === "Backspace") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.repeat
+    ) {
+      // Not while a modal dialog (e.g. export) has the keyboard.
+      if (isTextField(e.target) || renaming !== null || drag?.active) return;
+      if (document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      deleteSelected();
+      return;
+    }
     if (e.key !== "F2" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTextField(e.target) || !selected || renaming !== null || drag?.active) return;
     e.preventDefault();
@@ -147,12 +249,17 @@
       : opacityPercent(selected),
   );
 
+  /** Set the opacity of `layers` (one undo entry). */
+  function opacityEdit(layers: LayerView[], opacity: number): EditRequest {
+    return batchOf(layers.map((l) => ({ kind: "setLayerOpacity", id: l.id, opacity })));
+  }
+
   function onOpacitySliderInput(value: string) {
     if (!selected) return;
     const percent = Number(value);
     opacityDraft = { layerId: selected.id, percent };
     draftVersion++;
-    live({ kind: "setLayerOpacity", id: selected.id, opacity: percent / 100 });
+    live(opacityEdit(selection, percent / 100));
   }
 
   function endOpacityGesture() {
@@ -176,28 +283,34 @@
     window.addEventListener("blur", end);
   }
 
-  // The field edits the layer that was selected when it got focus, even if the selection
+  // The field edits the layers that were selected when it got focus, even if the selection
   // changes before `change` fires (clicking another row commits the field on blur).
-  let opacityFieldLayer: number | null = null;
+  let opacityFieldLayers: number[] | null = null;
+  let opacityFieldActive: number | null = null;
 
   function onOpacityFieldChange(input: HTMLInputElement) {
-    const target = doc.layers.find((l) => l.id === (opacityFieldLayer ?? selectedId)) ?? null;
+    const ids = new Set(opacityFieldLayers ?? selectedIds);
+    const targets = doc.layers.filter((l) => ids.has(l.id));
+    const shownId = opacityFieldLayers ? opacityFieldActive : activeId;
     const n = input.valueAsNumber;
     // Empty or invalid: restore the displayed value instead of treating it as 0.
-    if (!target || input.value.trim() === "" || !Number.isFinite(n)) {
+    if (targets.length === 0 || input.value.trim() === "" || !Number.isFinite(n)) {
       input.value = String(opacityPercent(selected));
       return;
     }
     const clamped = Math.min(Math.max(Math.round(n), 0), 100);
-    if (clamped !== opacityPercent(target)) {
+    const changed = targets.filter((l) => opacityPercent(l) !== clamped);
+    if (changed.length > 0) {
       const version = ++draftVersion;
-      if (target.id === selectedId) opacityDraft = { layerId: target.id, percent: clamped };
-      void edit({ kind: "setLayerOpacity", id: target.id, opacity: clamped / 100 }).then(() => {
+      if (shownId !== null && shownId === activeId) {
+        opacityDraft = { layerId: shownId, percent: clamped };
+      }
+      void edit(opacityEdit(changed, clamped / 100)).then(() => {
         if (version === draftVersion && !sliderHeld) opacityDraft = null;
       });
     }
-    // The field always shows the selected layer (written directly: Svelte skips unchanged values).
-    input.value = String(target.id === selectedId ? clamped : opacityPercent(selected));
+    // The field always shows the active layer (written directly: Svelte skips unchanged values).
+    input.value = String(shownId === activeId ? clamped : opacityPercent(selected));
   }
 
   // Drag to reorder, with pointer events (HTML5 drag and drop is intercepted by Tauri on
@@ -208,9 +321,13 @@
   const DRAG_THRESHOLD = 4;
   type Drag = { id: number; from: number; startY: number; active: boolean; slot: number };
   let drag = $state<Drag | null>(null);
+  // A press on a layer of a multiple selection keeps the selection (to drag it all) and
+  // selects that layer alone on release if no drag happened.
+  let collapseOnRelease: number | null = null;
 
   function onRowPointerDown(e: PointerEvent, row: number, layer: LayerView) {
     drag = null;
+    collapseOnRelease = null;
     if (e.button !== 0) return;
     if (renaming !== null) {
       // A press on the row being renamed belongs to its input.
@@ -219,8 +336,22 @@
       list.querySelector<HTMLInputElement>("input.rename")?.blur();
     }
     if ((e.target as HTMLElement).closest("button.eye")) return;
-    selectedId = layer.id;
     list.focus({ preventScroll: true });
+    if (e.shiftKey) {
+      selectRange(layer.id);
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      toggleSelected(layer.id);
+      return;
+    }
+    if (selectedSet.has(layer.id) && selectedIds.length > 1) {
+      activeId = layer.id;
+      anchorId = layer.id;
+      collapseOnRelease = layer.id;
+    } else {
+      select([layer.id], layer.id);
+    }
     drag = { id: layer.id, from: row, startY: e.clientY, active: false, slot: row };
   }
 
@@ -247,12 +378,38 @@
 
   function onWindowPointerUp() {
     if (!drag) return;
-    const { id, from, active, slot } = drag;
+    const { id, active, slot } = drag;
     drag = null;
-    if (!active || slot === from || slot === from + 1) return;
-    const finalRow = slot > from ? slot - 1 : slot;
-    // Rows are displayed top to bottom; the stack index counts from the bottom.
-    edit({ kind: "moveLayer", id, index: rows.length - 1 - finalRow });
+    const collapse = collapseOnRelease;
+    collapseOnRelease = null;
+    if (!active) {
+      if (collapse === id) select([id], id);
+      return;
+    }
+    moveToSlot(selectedSet.has(id) ? selectedIds : [id], slot);
+  }
+
+  /**
+   * Move `ids` (keeping their order) to `slot`, an insertion position among the displayed rows
+   * (0 = above the first row), as one undo entry.
+   */
+  function moveToSlot(ids: number[], slot: number) {
+    const moving = new Set(ids);
+    const displayed = rows.map((l) => l.id);
+    const above = displayed.slice(0, slot).filter((id) => !moving.has(id));
+    const below = displayed.slice(slot).filter((id) => !moving.has(id));
+    const moved = displayed.filter((id) => moving.has(id));
+    // Rows are displayed top to bottom; the stack counts from the bottom.
+    const target = [...above, ...moved, ...below].reverse();
+    const order = doc.layers.map((l) => l.id);
+    const edits: EditRequest[] = [];
+    target.forEach((id, index) => {
+      if (order[index] === id) return;
+      order.splice(order.indexOf(id), 1);
+      order.splice(index, 0, id);
+      edits.push({ kind: "moveLayer", id, index });
+    });
+    if (edits.length > 0) void edit(batchOf(edits));
   }
 </script>
 
@@ -277,10 +434,13 @@
       value={selected?.blendMode ?? "normal"}
       disabled={!selected}
       onchange={(e) => {
-        if (selected) {
-          const mode = e.currentTarget.value as BlendModeId;
-          void edit({ kind: "setLayerBlendMode", id: selected.id, mode });
-        }
+        const mode = e.currentTarget.value as BlendModeId;
+        const edits = selection.map((l) => ({
+          kind: "setLayerBlendMode" as const,
+          id: l.id,
+          mode,
+        }));
+        if (edits.length > 0) void edit(batchOf(edits));
       }}
     >
       {#each BLEND_MODE_GROUPS as group, i (i)}
@@ -313,8 +473,11 @@
       autocomplete="off"
       value={shownOpacity}
       disabled={!selected}
-      onfocus={() => (opacityFieldLayer = selectedId)}
-      onblur={() => (opacityFieldLayer = null)}
+      onfocus={() => {
+        opacityFieldLayers = [...selectedIds];
+        opacityFieldActive = activeId;
+      }}
+      onblur={() => (opacityFieldLayers = null)}
       onchange={(e) => onOpacityFieldChange(e.currentTarget)}
     />
     <span class="unit">%</span>
@@ -339,7 +502,7 @@
     {#each rows as layer, row (layer.id)}
       <li
         data-row={row}
-        class:selected={layer.id === selectedId}
+        class:selected={selectedSet.has(layer.id)}
         class:hidden-layer={!layer.visible}
         class:drop-before={drag?.active && drag.slot === row}
         class:drop-after={drag?.active && row === rows.length - 1 && drag.slot === rows.length}
@@ -416,9 +579,9 @@
     </button>
     <button
       class="tool"
-      title={t("layers.delete")}
-      disabled={!selected}
-      onclick={() => selected && edit({ kind: "removeLayer", id: selected.id })}
+      title={t(selection.length > 1 ? "layers.deleteSelected" : "layers.delete")}
+      disabled={selection.length === 0}
+      onclick={deleteSelected}
     >
       <Icon name="trash" />
     </button>

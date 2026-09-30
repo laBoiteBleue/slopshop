@@ -102,7 +102,9 @@ export type EditRequest =
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
-  | { kind: "removeLayerMask"; id: number };
+  | { kind: "removeLayerMask"; id: number }
+  /** Several edits as one undo entry, applied in order: all or none. */
+  | { kind: "batch"; edits: EditRequest[] };
 
 /** View changes; positions and deltas are in viewport device pixels. */
 export type ViewRequest =
