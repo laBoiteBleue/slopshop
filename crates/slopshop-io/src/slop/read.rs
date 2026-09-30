@@ -19,8 +19,8 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION_CLIPPED,
-    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
+    NODE_VERSION_CLIPPED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -370,6 +370,28 @@ pub(super) fn read_node(
                 children,
                 pass_through,
             }
+        }
+        NODE_ADJUSTMENT if (3..=NODE_VERSION_TRANSFORMED).contains(&node.version) => {
+            let id = node
+                .params
+                .get("adjustment")
+                .and_then(Value::as_str)
+                .ok_or_else(|| corrupt("adjustment node without an adjustment"))?;
+            let values: [f32; 5] = node
+                .params
+                .get("values")
+                .and_then(Value::as_array)
+                .and_then(|v| {
+                    v.iter()
+                        .map(|v| v.as_f64().map(|v| v as f32))
+                        .collect::<Option<Vec<f32>>>()
+                })
+                .and_then(|v| v.try_into().ok())
+                .ok_or_else(|| corrupt("adjustment node without its five values"))?;
+            // An adjustment this version does not know comes from a newer SlopShop.
+            let adjustment = slopshop_core::adjust::Adjustment::from_params(id, values)
+                .ok_or_else(|| FileError::UnknownNodeType(format!("adjustment {id}")))?;
+            LayerContent::Adjustment { adjustment }
         }
         _ => return Err(FileError::UnknownNodeType(versioned())),
     };

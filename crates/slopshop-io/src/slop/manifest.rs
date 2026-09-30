@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 6;
+pub(crate) const SCHEMA_MINOR: u32 = 7;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -26,6 +26,10 @@ pub(crate) const NODE_RASTER: &str = "slopshop.raster";
 pub(crate) const NODE_FILL: &str = "slopshop.fill";
 /// A layer group (schema 0.4, ADR 0015): its `inputs` are its children, bottom to top.
 pub(crate) const NODE_GROUP: &str = "slopshop.group";
+/// An adjustment layer (schema 0.7, ADR 0020): `params.adjustment` (its identifier) and
+/// `params.values` (its parameters, in `Adjustment::params` order). Written at the version of the
+/// other nodes (3 and up).
+pub(crate) const NODE_ADJUSTMENT: &str = "slopshop.adjustment";
 /// Version of the raster, fill and group parameters written: 2 adds `blend_mode` (schema 0.2),
 /// 3 adds `mask` (schema 0.3). Version 1 (schema 0.1) is read as normal mode, versions below 3
 /// as unmasked. Groups (schema 0.4) start at version 3, with `pass_through`.
