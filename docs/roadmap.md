@@ -66,7 +66,9 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
 
 - [x] Blend modes (Photoshop's, except Dissolve) and a blend space per document: perceptual or
       linear ([ADR 0012](adr/0012-blend-modes.md))
-- [ ] Layer masks; Dissolve
+- [x] Layer masks: from a layer's transparency, enabled or disabled, deleted
+      ([ADR 0014](adr/0014-layer-masks.md)); thumbnails in the layers panel
+- [ ] Dissolve blend mode; painting in masks (with the brushes of Phase 3)
 - [ ] Non-destructive transforms (move, scale, rotate) with quality resampling
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
 - [ ] Groups (a `.slop` or PSD imported into a document arrives as a group); 🔶 stack-to-DAG
