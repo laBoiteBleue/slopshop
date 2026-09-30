@@ -26,11 +26,25 @@ pub enum Adjustment {
         output_black: f32,
         output_white: f32,
     },
+    /// Brightness (−150…150) and contrast (−50…100), keeping black and white where they are
+    /// (like Photoshop's current, non-legacy mode; Adobe's exact curves are not published):
+    /// brightness is a gamma, contrast an S-curve around middle gray.
+    BrightnessContrast { brightness: f32, contrast: f32 },
+    /// Vibrance (−100…100) raises the saturation of dull colors more than of saturated ones;
+    /// saturation (−100…100) changes them all.
+    Vibrance { vibrance: f32, saturation: f32 },
+    /// Each channel `v ↦ 1 − v`.
+    Invert,
+    /// Each channel quantized to `levels` (2…255) values.
+    Posterize { levels: f32 },
+    /// White where the luminance reaches `level` (in `[0, 1]`, shown 1–255), black elsewhere.
+    Threshold { level: f32 },
 }
 
 impl Adjustment {
-    /// Every adjustment, at its neutral parameters (changing nothing).
-    pub const NEUTRAL: [Adjustment; 3] = [
+    /// Every adjustment, with the parameters a new layer gets (Photoshop's defaults): neutral
+    /// ones, except for Invert, Posterize and Threshold, which change the image by nature.
+    pub const DEFAULTS: [Adjustment; 8] = [
         Adjustment::Exposure {
             exposure: 0.0,
             offset: 0.0,
@@ -48,6 +62,19 @@ impl Adjustment {
             output_black: 0.0,
             output_white: 1.0,
         },
+        Adjustment::BrightnessContrast {
+            brightness: 0.0,
+            contrast: 0.0,
+        },
+        Adjustment::Vibrance {
+            vibrance: 0.0,
+            saturation: 0.0,
+        },
+        Adjustment::Invert,
+        Adjustment::Posterize { levels: 4.0 },
+        Adjustment::Threshold {
+            level: 128.0 / 255.0,
+        },
     ];
 
     /// Stable identifier (files, IPC).
@@ -56,12 +83,17 @@ impl Adjustment {
             Adjustment::Exposure { .. } => "exposure",
             Adjustment::HueSaturation { .. } => "hueSaturation",
             Adjustment::Levels { .. } => "levels",
+            Adjustment::BrightnessContrast { .. } => "brightnessContrast",
+            Adjustment::Vibrance { .. } => "vibrance",
+            Adjustment::Invert => "invert",
+            Adjustment::Posterize { .. } => "posterize",
+            Adjustment::Threshold { .. } => "threshold",
         }
     }
 
-    /// The adjustment with this identifier, at its neutral parameters.
-    pub fn neutral(id: &str) -> Option<Adjustment> {
-        Self::NEUTRAL.into_iter().find(|a| a.id() == id)
+    /// The adjustment with this identifier, with its default parameters ([`Self::DEFAULTS`]).
+    pub fn defaults(id: &str) -> Option<Adjustment> {
+        Self::DEFAULTS.into_iter().find(|a| a.id() == id)
     }
 
     /// Number shared with the GPU renderer.
@@ -70,6 +102,11 @@ impl Adjustment {
             Adjustment::Exposure { .. } => 0,
             Adjustment::HueSaturation { .. } => 1,
             Adjustment::Levels { .. } => 2,
+            Adjustment::BrightnessContrast { .. } => 3,
+            Adjustment::Vibrance { .. } => 4,
+            Adjustment::Invert => 5,
+            Adjustment::Posterize { .. } => 6,
+            Adjustment::Threshold { .. } => 7,
         }
     }
 
@@ -93,12 +130,23 @@ impl Adjustment {
                 output_black,
                 output_white,
             } => [input_black, input_white, gamma, output_black, output_white],
+            Adjustment::BrightnessContrast {
+                brightness,
+                contrast,
+            } => [brightness, contrast, 0.0, 0.0, 0.0],
+            Adjustment::Vibrance {
+                vibrance,
+                saturation,
+            } => [vibrance, saturation, 0.0, 0.0, 0.0],
+            Adjustment::Invert => [0.0; 5],
+            Adjustment::Posterize { levels } => [levels, 0.0, 0.0, 0.0, 0.0],
+            Adjustment::Threshold { level } => [level, 0.0, 0.0, 0.0, 0.0],
         }
     }
 
     /// The adjustment `id` with `params` (as [`Self::params`] orders them).
     pub fn from_params(id: &str, p: [f32; 5]) -> Option<Adjustment> {
-        Some(match Self::neutral(id)? {
+        Some(match Self::defaults(id)? {
             Adjustment::Exposure { .. } => Adjustment::Exposure {
                 exposure: p[0],
                 offset: p[1],
@@ -116,6 +164,17 @@ impl Adjustment {
                 output_black: p[3],
                 output_white: p[4],
             },
+            Adjustment::BrightnessContrast { .. } => Adjustment::BrightnessContrast {
+                brightness: p[0],
+                contrast: p[1],
+            },
+            Adjustment::Vibrance { .. } => Adjustment::Vibrance {
+                vibrance: p[0],
+                saturation: p[1],
+            },
+            Adjustment::Invert => Adjustment::Invert,
+            Adjustment::Posterize { .. } => Adjustment::Posterize { levels: p[0] },
+            Adjustment::Threshold { .. } => Adjustment::Threshold { level: p[0] },
         })
     }
 
@@ -155,6 +214,17 @@ impl Adjustment {
                     && within(output_black, 0.0, 1.0)
                     && within(output_white, 0.0, 1.0)
             }
+            Adjustment::BrightnessContrast {
+                brightness,
+                contrast,
+            } => within(brightness, -150.0, 150.0) && within(contrast, -50.0, 100.0),
+            Adjustment::Vibrance {
+                vibrance,
+                saturation,
+            } => within(vibrance, -100.0, 100.0) && within(saturation, -100.0, 100.0),
+            Adjustment::Invert => true,
+            Adjustment::Posterize { levels } => within(levels, 2.0, 255.0),
+            Adjustment::Threshold { level } => within(level, 0.0, 1.0),
         }
     }
 
@@ -209,9 +279,55 @@ impl Adjustment {
                     ob + t * (ow - ob)
                 })
             }
+            Adjustment::BrightnessContrast {
+                brightness,
+                contrast,
+            } => {
+                // Brightness: a gamma (100 → v^0.5); contrast: an S-curve of exponent
+                // 1 + contrast / 100 on each half, 0, ½ and 1 fixed.
+                let gamma = (-f64::from(brightness) / 100.0).exp2();
+                let k = 1.0 + f64::from(contrast) / 100.0;
+                c.map(|v| {
+                    let v = v.abs().powf(gamma).copysign(v);
+                    if !(0.0..=1.0).contains(&v) {
+                        v
+                    } else if v < 0.5 {
+                        0.5 * (2.0 * v).powf(k)
+                    } else {
+                        1.0 - 0.5 * (2.0 * (1.0 - v)).powf(k)
+                    }
+                })
+            }
+            Adjustment::Vibrance {
+                vibrance,
+                saturation,
+            } => {
+                let (max, min) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+                // Dull colors (little chroma) get the most of it.
+                let dullness = 1.0 - (max - min).clamp(0.0, 1.0);
+                let vibrant = saturate(c, f64::from(vibrance) / 100.0 * dullness);
+                saturate(vibrant, f64::from(saturation) / 100.0)
+            }
+            Adjustment::Invert => c.map(|v| 1.0 - v),
+            Adjustment::Posterize { levels } => {
+                let n = f64::from(levels).round();
+                c.map(|v| ((v.clamp(0.0, 1.0) * n).floor().min(n - 1.0)) / (n - 1.0))
+            }
+            Adjustment::Threshold { level } => {
+                let luminance = LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
+                let v = if luminance >= f64::from(level) {
+                    1.0
+                } else {
+                    0.0
+                };
+                [v; 3]
+            }
         }
     }
 }
+
+/// The luminance weights of Threshold (Rec. 601, on the adjusted values, as Photoshop).
+pub const LUMA: [f64; 3] = [0.299, 0.587, 0.114];
 
 /// Rotate the hue by `degrees`, keeping each color's smallest and largest component (the hue of
 /// HSL and HSV, around the RGB hexagon); works for values outside `[0, 1]` too.
@@ -267,14 +383,69 @@ mod tests {
     }
 
     #[test]
-    fn neutral_adjustments_change_nothing() {
+    fn default_adjustments_are_valid_and_the_neutral_ones_change_nothing() {
         let c = [0.2, 0.55, 0.9];
-        for a in Adjustment::NEUTRAL {
+        for a in Adjustment::DEFAULTS {
             assert!(a.is_valid(), "{a:?}");
-            assert!(close(a.apply(c), c), "{a:?}");
             assert_eq!(Adjustment::from_params(a.id(), a.params()), Some(a));
+            let changes = matches!(
+                a,
+                Adjustment::Invert | Adjustment::Posterize { .. } | Adjustment::Threshold { .. }
+            );
+            assert_eq!(!close(a.apply(c), c), changes, "{a:?}");
         }
-        assert_eq!(Adjustment::neutral("curves"), None);
+        assert_eq!(Adjustment::defaults("curves"), None);
+    }
+
+    #[test]
+    fn brightness_and_contrast_keep_black_and_white() {
+        let a = Adjustment::BrightnessContrast {
+            brightness: 100.0,
+            contrast: 50.0,
+        };
+        assert!(close(
+            a.apply([0.0, 1.0, 0.5]).map(|v| v.clamp(0.0, 1.0))[..2]
+                .try_into()
+                .map(|x: [f64; 2]| [x[0], x[1], 0.0])
+                .unwrap(),
+            [0.0, 1.0, 0.0]
+        ));
+        // Brighter: middle gray rises; more contrast: dark gets darker around a fixed middle.
+        let bright = Adjustment::BrightnessContrast {
+            brightness: 100.0,
+            contrast: 0.0,
+        };
+        assert!(bright.apply([0.25; 3])[0] > 0.25);
+        let contrast = Adjustment::BrightnessContrast {
+            brightness: 0.0,
+            contrast: 100.0,
+        };
+        assert!(close(
+            contrast.apply([0.5, 0.25, 0.75]),
+            [0.5, 0.125, 0.875]
+        ));
+    }
+
+    #[test]
+    fn vibrance_favors_dull_colors_and_invert_posterize_threshold_quantize() {
+        let v = Adjustment::Vibrance {
+            vibrance: 100.0,
+            saturation: 0.0,
+        };
+        let dull = [0.55, 0.45, 0.45];
+        let vivid = [0.9, 0.1, 0.1];
+        let gain = |c: [f64; 3], out: [f64; 3]| (out[0] - out[1]) / (c[0] - c[1]);
+        assert!(gain(dull, v.apply(dull)) > gain(vivid, v.apply(vivid)));
+        assert!(close(
+            Adjustment::Invert.apply([0.2, 0.5, 1.0]),
+            [0.8, 0.5, 0.0]
+        ));
+        let p = Adjustment::Posterize { levels: 2.0 };
+        assert!(close(p.apply([0.2, 0.6, 1.0]), [0.0, 1.0, 1.0]));
+        let t = Adjustment::Threshold { level: 0.5 };
+        assert!(close(t.apply([0.9, 0.9, 0.9]), [1.0; 3]));
+        assert!(close(t.apply([0.1, 0.9, 0.1]), [1.0; 3]));
+        assert!(close(t.apply([0.9, 0.1, 0.1]), [0.0; 3]));
     }
 
     #[test]

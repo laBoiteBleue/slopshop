@@ -867,7 +867,7 @@ mod tests {
             clipped: false,
             transform: Affine::IDENTITY,
             content: LayerContent::Adjustment {
-                adjustment: Adjustment::NEUTRAL[0],
+                adjustment: Adjustment::DEFAULTS[0],
             },
         };
         Edit::InsertLayer {
@@ -895,7 +895,7 @@ mod tests {
             offset: 0.0,
             gamma: 1.0,
         };
-        for (target, adjustment) in [(id, out_of_range), (ids[0], Adjustment::NEUTRAL[1])] {
+        for (target, adjustment) in [(id, out_of_range), (ids[0], Adjustment::DEFAULTS[1])] {
             assert_eq!(
                 Edit::SetAdjustment {
                     id: target,

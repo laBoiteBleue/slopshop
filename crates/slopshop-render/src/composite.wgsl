@@ -782,6 +782,11 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 const ADJUST_EXPOSURE: u32 = 0u;
 const ADJUST_HUE_SATURATION: u32 = 1u;
 const ADJUST_LEVELS: u32 = 2u;
+const ADJUST_BRIGHTNESS_CONTRAST: u32 = 3u;
+const ADJUST_VIBRANCE: u32 = 4u;
+const ADJUST_INVERT: u32 = 5u;
+const ADJUST_POSTERIZE: u32 = 6u;
+const ADJUST_THRESHOLD: u32 = 7u;
 
 // Rotate the hue by `degrees`, keeping each color's smallest and largest component.
 fn shift_hue(c: vec3<f32>, degrees: f32) -> vec3<f32> {
@@ -841,9 +846,33 @@ fn adjust_color(kind: u32, p: vec4<f32>, p4: f32, c: vec3<f32>) -> vec3<f32> {
             let l = p.z / 100.0;
             return select(saturated + (1.0 - saturated) * l, saturated * (1.0 + l), l < 0.0);
         }
-        default: {
+        case ADJUST_LEVELS: {
             let t = pow(clamp((c - p.x) / (p.y - p.x), vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / p.z));
             return p.w + t * (p4 - p.w);
+        }
+        case ADJUST_BRIGHTNESS_CONTRAST: {
+            let v = sign(c) * pow(abs(c), vec3<f32>(exp2(-p.x / 100.0)));
+            let k = 1.0 + p.y / 100.0;
+            let low = 0.5 * pow(max(2.0 * v, vec3<f32>(0.0)), vec3<f32>(k));
+            let high = 1.0 - 0.5 * pow(max(2.0 * (1.0 - v), vec3<f32>(0.0)), vec3<f32>(k));
+            let curved = select(high, low, v < vec3<f32>(0.5));
+            let inside = v >= vec3<f32>(0.0) & v <= vec3<f32>(1.0);
+            return select(v, curved, inside);
+        }
+        case ADJUST_VIBRANCE: {
+            let dullness = 1.0 - clamp(max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)), 0.0, 1.0);
+            return saturate_hsl(saturate_hsl(c, p.x / 100.0 * dullness), p.y / 100.0);
+        }
+        case ADJUST_INVERT: {
+            return 1.0 - c;
+        }
+        case ADJUST_POSTERIZE: {
+            let n = round(p.x);
+            return min(floor(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * n), vec3<f32>(n - 1.0)) / (n - 1.0);
+        }
+        default: {
+            let luminance = dot(vec3<f32>(0.299, 0.587, 0.114), c);
+            return vec3<f32>(select(0.0, 1.0, luminance >= p.x));
         }
     }
 }

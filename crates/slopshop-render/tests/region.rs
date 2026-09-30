@@ -1306,3 +1306,51 @@ fn gpu_adjustment_layers_match_the_cpu_reference_compositor() {
         }
     }
 }
+
+#[test]
+fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
+    use slopshop_core::adjust::Adjustment;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(200, 160);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        for adjustment in [
+            Adjustment::BrightnessContrast {
+                brightness: 60.0,
+                contrast: 40.0,
+            },
+            Adjustment::BrightnessContrast {
+                brightness: -120.0,
+                contrast: -30.0,
+            },
+            Adjustment::Vibrance {
+                vibrance: 70.0,
+                saturation: -20.0,
+            },
+            Adjustment::Invert,
+            // 7 levels: no 8-bit value (k / 255) falls on a step (255 is not a multiple of 7).
+            Adjustment::Posterize { levels: 7.0 },
+            Adjustment::Threshold { level: 0.45 },
+        ] {
+            let mut s = Session::new(Document::new(size));
+            s.perform(Edit::SetBlendSpace { space }).unwrap();
+            // A smooth gradient: posterize and threshold steps fall between samples, not on them.
+            let base = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+                vec![(x * 255 / 199) as u8, (y * 255 / 159) as u8, 128, 255]
+            });
+            push_into(&mut s, None, raster(&base), BlendMode::Normal, 1.0);
+            push_into(
+                &mut s,
+                None,
+                LayerContent::Adjustment { adjustment },
+                BlendMode::Normal,
+                0.85,
+            );
+            assert_matches_cpu(
+                &r,
+                s.document(),
+                size.bounds(),
+                &format!("{space:?} {adjustment:?}"),
+            );
+        }
+    }
+}
