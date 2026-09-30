@@ -47,6 +47,10 @@ impl Session {
     /// Apply an edit and record it. Ends any gesture in progress first. On error nothing
     /// changes, history included.
     pub fn perform(&mut self, edit: Edit) -> Result<(), EditError> {
+        // An empty batch changes nothing: no history entry, no revision.
+        if matches!(&edit, Edit::Batch(edits) if edits.is_empty()) {
+            return Ok(());
+        }
         self.end_gesture();
         let inverse = edit.apply(&mut self.document)?;
         self.push_undo(inverse);

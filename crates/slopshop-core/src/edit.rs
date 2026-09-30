@@ -99,6 +99,8 @@ pub enum EditError {
     TooDeep {
         depth: usize,
     },
+    /// An operation on several layers was given none.
+    NoLayers,
 }
 
 impl fmt::Display for EditError {
@@ -124,6 +126,7 @@ impl fmt::Display for EditError {
             EditError::TooDeep { depth } => {
                 write!(f, "{depth} nested groups (at most {MAX_GROUP_DEPTH})")
             }
+            EditError::NoLayers => write!(f, "no layers given"),
         }
     }
 }
@@ -311,6 +314,141 @@ fn check_depth(doc: &Document, parent: Option<LayerId>, height: usize) -> Result
         });
     }
     Ok(())
+}
+
+impl Edit {
+    /// The edit that puts `ids` into `group`, a new empty group layer (its id from
+    /// [`Document::allocate_layer_id`]), as one unit: Photoshop's Layer > Group Layers. The group
+    /// takes the place of the topmost of the layers, which keep their stacking order; a layer
+    /// inside another of `ids` moves with it.
+    pub fn group_layers(doc: &Document, group: Layer, ids: &[LayerId]) -> Result<Edit, EditError> {
+        if group.children().is_none_or(|children| !children.is_empty()) {
+            return Err(EditError::NotAGroup(group.id));
+        }
+        let moving = outermost_in_order(doc, ids)?;
+        let topmost = *moving.last().ok_or(EditError::NoLayers)?;
+        let (parent, index) = doc
+            .locate(topmost)
+            .ok_or(EditError::UnknownLayer(topmost))?;
+        let group_id = group.id;
+        let mut edits = vec![Edit::InsertLayer {
+            parent,
+            index: index + 1,
+            layer: group,
+        }];
+        edits.extend(
+            moving
+                .iter()
+                .enumerate()
+                .map(|(index, &id)| Edit::MoveLayer {
+                    id,
+                    parent: Some(group_id),
+                    index,
+                }),
+        );
+        Ok(Edit::Batch(edits))
+    }
+
+    /// The edit that replaces group `id` by its layers, in its place and order: Layer > Ungroup
+    /// Layers. The group's opacity, blend mode and mask go with it.
+    pub fn ungroup(doc: &Document, id: LayerId) -> Result<Edit, EditError> {
+        let group = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let children = group.children().ok_or(EditError::NotAGroup(id))?;
+        let (parent, index) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
+        // Each child lands just below the group, which moves up one place each time.
+        let mut edits: Vec<Edit> = children
+            .iter()
+            .enumerate()
+            .map(|(i, child)| Edit::MoveLayer {
+                id: child.id,
+                parent,
+                index: index + i,
+            })
+            .collect();
+        edits.push(Edit::RemoveLayer { id });
+        Ok(Edit::Batch(edits))
+    }
+
+    /// The edit that moves `ids` into `parent` (`None`: the top level) at `index` among the layers
+    /// of `parent` that do not move (0 = below them all), keeping their stacking order; a layer
+    /// inside another of `ids` moves with it. Layers already in place are left alone: the edit
+    /// is an empty batch when nothing moves.
+    pub fn move_layers(
+        doc: &Document,
+        ids: &[LayerId],
+        parent: Option<LayerId>,
+        index: usize,
+    ) -> Result<Edit, EditError> {
+        let moving = outermost_in_order(doc, ids)?;
+        if moving.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        let staying: Vec<LayerId> = siblings(doc, parent)?
+            .iter()
+            .map(|l| l.id)
+            .filter(|id| !moving.contains(id))
+            .collect();
+        if index > staying.len() {
+            return Err(EditError::IndexOutOfRange {
+                index,
+                len: staying.len(),
+            });
+        }
+        // Each layer goes right above the previous one (the first above the staying layer below
+        // the insertion point); the positions are worked out on a copy as the moves happen.
+        let mut plan = doc.clone();
+        let mut edits = Vec::new();
+        for (k, &id) in moving.iter().enumerate() {
+            let below = if k > 0 {
+                Some(moving[k - 1])
+            } else {
+                index.checked_sub(1).map(|i| staying[i])
+            };
+            let position = match below {
+                None => 0,
+                Some(below) => siblings(&plan, parent)?
+                    .iter()
+                    .filter(|l| l.id != id)
+                    .position(|l| l.id == below)
+                    .map_or(0, |p| p + 1),
+            };
+            if plan.locate(id) == Some((parent, position)) {
+                continue;
+            }
+            let edit = Edit::MoveLayer {
+                id,
+                parent,
+                index: position,
+            };
+            edit.clone().apply(&mut plan)?;
+            edits.push(edit);
+        }
+        Ok(Edit::Batch(edits))
+    }
+}
+
+/// `ids` without those inside another of them (they move with it), in stacking order: depth
+/// first, each group before its layers, bottom to top.
+fn outermost_in_order(doc: &Document, ids: &[LayerId]) -> Result<Vec<LayerId>, EditError> {
+    let wanted: HashSet<LayerId> = ids.iter().copied().collect();
+    for &id in &wanted {
+        doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+    }
+    let inside_another = |id: LayerId| {
+        let mut parent = doc.locate(id).and_then(|(parent, _)| parent);
+        while let Some(group) = parent {
+            if wanted.contains(&group) {
+                return true;
+            }
+            parent = doc.locate(group).and_then(|(parent, _)| parent);
+        }
+        false
+    };
+    Ok(doc
+        .all_layers()
+        .map(|l| l.id)
+        .filter(|&id| wanted.contains(&id) && !inside_another(id))
+        .collect())
 }
 
 fn validate_new_layer(
@@ -910,5 +1048,97 @@ mod tests {
                 depth: MAX_GROUP_DEPTH + 1
             })
         );
+    }
+
+    #[test]
+    fn grouping_takes_the_place_of_the_topmost_layer_and_ungrouping_restores() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b", "c", "d"]);
+        let group = group_layer(&mut doc, "g", Vec::new());
+        let g = group.id;
+        let edit = Edit::group_layers(&doc, group, &[ids[2], ids[0]]).unwrap();
+        let undo = edit.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["b", "g", " a", " c", "d"]);
+
+        let ungroup = Edit::ungroup(&doc, g).unwrap();
+        let regroup = ungroup.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["b", "a", "c", "d"]);
+        regroup.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["b", "g", " a", " c", "d"]);
+        // Undoing the grouping (after the ungroup was undone) restores the original stack.
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["a", "b", "c", "d"]);
+
+        assert_eq!(
+            Edit::ungroup(&doc, ids[0]),
+            Err(EditError::NotAGroup(ids[0]))
+        );
+        let empty = group_layer(&mut doc, "empty", Vec::new());
+        assert_eq!(
+            Edit::group_layers(&doc, empty, &[]),
+            Err(EditError::NoLayers)
+        );
+    }
+
+    #[test]
+    fn grouping_a_group_with_one_of_its_layers_moves_the_group_whole() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        let outer = group_layer(&mut doc, "outer", Vec::new());
+        Edit::group_layers(&doc, outer.clone(), &[ids[1]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["a", "outer", " b"]);
+        let wrap = group_layer(&mut doc, "wrap", Vec::new());
+        // `b` is inside `outer`: it moves with it.
+        Edit::group_layers(&doc, wrap, &[ids[1], outer.id, ids[0]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["wrap", " a", " outer", "  b"]);
+    }
+
+    #[test]
+    fn several_layers_move_together_into_and_out_of_groups() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b", "c", "d", "e"]);
+        let g = group_layer(&mut doc, "g", Vec::new());
+        let g_id = g.id;
+        Edit::group_layers(&doc, g, &[ids[4]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["a", "b", "c", "d", "g", " e"]);
+
+        // a and c into g, below e (index 0 among g's staying layers).
+        let edit = Edit::move_layers(&doc, &[ids[2], ids[0]], Some(g_id), 0).unwrap();
+        let before = doc.layers().to_vec();
+        let undo = edit.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["b", "d", "g", " a", " c", " e"]);
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.layers(), before.as_slice());
+
+        // b and d to the top of the stack (above the 3 staying top-level layers: a, c, g).
+        Edit::move_layers(&doc, &[ids[1], ids[3]], None, 3)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["a", "c", "g", " e", "b", "d"]);
+
+        // Already in place: nothing to do.
+        assert_eq!(
+            Edit::move_layers(&doc, &[ids[1], ids[3]], None, 3),
+            Ok(Edit::Batch(Vec::new()))
+        );
+        assert_eq!(
+            Edit::move_layers(&doc, &[ids[0]], None, 9),
+            // Four layers stay at the top level: c, g, b, d.
+            Err(EditError::IndexOutOfRange { index: 9, len: 4 })
+        );
+        assert!(matches!(
+            Edit::move_layers(&doc, &[g_id], Some(g_id), 0).and_then(|edit| edit.apply(&mut doc)),
+            Err(EditError::MoveIntoItself(_))
+        ));
     }
 }
