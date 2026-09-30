@@ -54,9 +54,10 @@ built. Contributors: propose here first.
   handles. Drag inside to move (Shift: along one axis); a corner scales keeping the proportions
   (Shift: freely), a side scales one way (Shift: proportionally), Alt scales about the center;
   drag outside to rotate about the center (Shift: steps of 15°). A readout next to the pointer
-  shows the move, the size in % or the angle. Enter, a double-click inside or a click outside
-  (without dragging) applies it as one undo entry; Esc or Ctrl+Z cancels it; Ctrl+T again,
-  another edit or another tab applies it.
+  shows the move, the size in % or the angle. Enter, the ✓ button next to the box, Ctrl+T
+  again, a double-click inside or a click outside (without dragging) applies it as one undo
+  entry; Esc, ✕ or Ctrl+Z cancels it. Another edit or another tab asks "Apply the
+  transformation?" (Apply / Don't Apply / Cancel), as Photoshop does.
   Pixels are never resampled into the layer: the transform stays editable.
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
   Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
