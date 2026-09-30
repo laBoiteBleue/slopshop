@@ -125,7 +125,9 @@ const fr: Messages = {
   "open.warning.layersFlattened":
     "Les calques Photoshop n'ont pas pu être importés : l'image aplatie a été ouverte",
   "open.warning.adjustmentLayersSkipped":
-    "Les calques de réglage et de remplissage ne sont pas encore pris en charge : ils ont été ignorés",
+    "Certains calques de réglage et de remplissage ne sont pas encore pris en charge : ils ont été ignorés",
+  "open.warning.adjustmentsApproximated":
+    "Certains paramètres des calques de réglage ne sont pas encore pris en charge (niveaux par couche, plages de couleurs, mode ancien, mode de fusion) : le résultat est proche, pas identique",
   "open.warning.layerStylesIgnored":
     "Les styles de calque et les options de fusion avancées ne sont pas encore pris en charge : ils ont été ignorés",
   "open.warning.layersRasterized":

@@ -125,7 +125,9 @@ const en = {
   "open.warning.layersFlattened":
     "Photoshop layers could not be imported: the flattened image was opened",
   "open.warning.adjustmentLayersSkipped":
-    "Adjustment and fill layers are not supported yet: they were left out",
+    "Some adjustment and fill layers are not supported yet: they were left out",
+  "open.warning.adjustmentsApproximated":
+    "Some adjustment layer settings are not supported yet (per-channel levels, color ranges, legacy mode, blend mode): the result is close, not identical",
   "open.warning.layerStylesIgnored":
     "Layer styles and advanced blending options are not supported yet: they were left out",
   "open.warning.layersRasterized":

@@ -280,6 +280,7 @@ export type ImportWarning =
   | "colorInfoUnsupported"
   | "layersFlattened"
   | "adjustmentLayersSkipped"
+  | "adjustmentsApproximated"
   | "layerStylesIgnored"
   | "layersRasterized"
   | "pixelsOutsideCanvas"
