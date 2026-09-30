@@ -256,10 +256,19 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     versions of SlopShop read only whole-pixel translations and refuse the others.
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
-    `vibrance`, `invert`, `posterize` or `threshold`; `params.values` holds five numbers, the
-    unused ones 0: exposure, offset, gamma; hue, saturation, lightness; input black, input
+    `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,
+    `colorBalance`, `photoFilter` or `channelMixer`. `params.values` holds its parameters in
+    this order: exposure, offset, gamma; hue, saturation, lightness; input black, input
     white, gamma, output black, output white; brightness, contrast; vibrance, saturation;
-    nothing (invert); levels (posterize); level in [0, 1] (threshold).
+    nothing (invert); levels (posterize); level in [0, 1] (threshold); the reds, yellows,
+    greens, cyans, blues and magentas weights, tint (flag), tint hue, tint saturation (black
+    and white); the cyan–red, magenta–green and yellow–blue shifts of the shadows, the
+    midtones and the highlights, preserve luminosity (flag) (color balance); the filter color
+    (sRGB-encoded r, g, b in [0, 1]), density, preserve luminosity (flag) (photo filter); the
+    red, green and blue output rows (red, green and blue weights, then the constant, in %),
+    monochrome (flag) (channel mixer). Flags are 0 or 1. Schema 0.7 writes five numbers, the
+    unused ones 0; from 0.8, at least five (so that 0.7 readers still read the first eight
+    adjustments) and at most 16, missing ones read as 0.
     Parameters out of range make the file invalid; an unknown adjustment comes from a newer
     SlopShop. No `inputs`.
   - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills and adjustments.
