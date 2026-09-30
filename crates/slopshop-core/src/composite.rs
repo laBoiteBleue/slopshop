@@ -3,7 +3,8 @@
 //!
 //! It produces a region of the document at full resolution (pyramid level 0, never coarser), as
 //! premultiplied RGBA `f32` in the working space: visible layers from bottom to top, each
-//! combined with what is below by its blend mode, in the document's blend space (ADR 0012). Raster texels are decoded exactly like the raster codec does on
+//! combined with what is below by its blend mode, in the document's blend space (ADR 0012),
+//! after its mask (ADR 0014). Raster texels are decoded exactly like the raster codec does on
 //! import, except for the display clamp: finite values are kept as they are, however large.
 //! Only non-finite values are replaced, and counted: NaN reads as 0, and ±inf as
 //! ±[`MAX_FINITE_SAMPLE`] (the display bound, also the largest half float). Not ±`f32::MAX`:
@@ -59,10 +60,66 @@ impl fmt::Display for CompositeError {
 
 impl std::error::Error for CompositeError {}
 
-/// A visible layer, ready to be sampled, with its blend mode.
+/// A visible layer, ready to be sampled, with its blend mode and mask.
 struct Source<'a> {
     mode: BlendMode,
     content: SourceContent<'a>,
+    /// The layer's own alpha is ignored (a mask made from its transparency, ADR 0014).
+    replaces_alpha: bool,
+    /// An enabled mask.
+    mask: Option<MaskSource<'a>>,
+}
+
+/// Level 0 of a mask image, read as coverage.
+struct MaskSource<'a> {
+    level: &'a RasterLevel,
+    codec: Codec,
+}
+
+impl MaskSource<'_> {
+    /// Coverage at document pixel (`x`, `y`): the mask sample, linear, clamped to `[0, 1]`;
+    /// 0 outside the mask image. Non-finite samples are not counted (the GPU does the same):
+    /// NaN reads as 0, ±inf as ±[`MAX_FINITE_SAMPLE`], so 1 or 0 once clamped.
+    fn coverage(&self, x: u32, y: u32) -> f64 {
+        let size = self.level.size();
+        if x >= size.width || y >= size.height {
+            return 0.0;
+        }
+        let coord = TileCoord {
+            col: x / TILE_SIZE,
+            row: y / TILE_SIZE,
+        };
+        let Some(tile) = self.level.tile(coord) else {
+            return 0.0;
+        };
+        let start =
+            ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * self.codec.bytes_per_pixel;
+        let Some(px) = tile.get(start..start + self.codec.bytes_per_pixel) else {
+            return 0.0;
+        };
+        let (color, _) = self.codec.read_mapped(px, &mut |v| {
+            if v.is_nan() {
+                0.0
+            } else if v.is_infinite() {
+                MAX_FINITE_SAMPLE.copysign(v)
+            } else {
+                v
+            }
+        });
+        f64::from(color[0]).clamp(0.0, 1.0)
+    }
+}
+
+/// A layer's color with its alpha ignored: straight color, alpha 1 (then opacity).
+fn opaque(premultiplied: [f64; 4], opacity: f64) -> [f64; 4] {
+    let a = premultiplied[3];
+    let straight = |c: f64| if a > 0.0 { c / a } else { 0.0 };
+    [
+        straight(premultiplied[0]) * opacity,
+        straight(premultiplied[1]) * opacity,
+        straight(premultiplied[2]) * opacity,
+        opacity,
+    ]
 }
 
 enum SourceContent<'a> {
@@ -105,9 +162,15 @@ pub fn composite_region(
         .iter()
         .filter(|layer| layer.visible && layer.opacity > 0.0)
         .filter_map(|layer| {
+            let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
             let content = match &layer.content {
                 LayerContent::Fill { color } => {
-                    let a = f64::from(color.a) * f64::from(layer.opacity);
+                    let alpha = if replaces_alpha {
+                        1.0
+                    } else {
+                        f64::from(color.a)
+                    };
+                    let a = alpha * f64::from(layer.opacity);
                     SourceContent::Fill([
                         f64::from(color.r) * a,
                         f64::from(color.g) * a,
@@ -125,9 +188,17 @@ pub fn composite_region(
                     }
                 }
             };
+            let mask = layer.mask.as_ref().filter(|m| m.enabled).and_then(|m| {
+                Some(MaskSource {
+                    level: m.image.levels().first()?,
+                    codec: Codec::new(m.image.stored_format()),
+                })
+            });
             Some(Source {
                 mode: layer.blend_mode,
                 content,
+                replaces_alpha,
+                mask,
             })
         })
         .collect();
@@ -172,10 +243,19 @@ fn composite_row(
     acc.fill([0.0; 4]);
     for source in sources {
         let mode = source.mode;
+        let masked = |src: [f64; 4], x: u32| match &source.mask {
+            Some(mask) => {
+                let coverage = mask.coverage(x, y);
+                src.map(|c| c * coverage)
+            }
+            None => src,
+        };
         match &source.content {
             SourceContent::Fill(color) => {
-                for dst in acc.iter_mut() {
-                    blender.blend(mode, color, dst);
+                for (i, dst) in acc.iter_mut().enumerate() {
+                    // Fits: the pixel is inside the region.
+                    let src = masked(*color, x0 + i as u32);
+                    blender.blend(mode, &src, dst);
                 }
             }
             SourceContent::Raster {
@@ -204,7 +284,12 @@ fn composite_row(
                             let Some(px) = tile.get(start..start + codec.bytes_per_pixel) else {
                                 continue;
                             };
-                            let src = texel(codec, px, matrix.as_ref(), *opacity, report);
+                            let src = if source.replaces_alpha {
+                                opaque(texel(codec, px, matrix.as_ref(), 1.0, report), *opacity)
+                            } else {
+                                texel(codec, px, matrix.as_ref(), *opacity, report)
+                            };
+                            let src = masked(src, px_x);
                             blender.blend(mode, &src, &mut acc[(px_x - x0) as usize]);
                         }
                     }
@@ -304,6 +389,7 @@ mod tests {
                 visible,
                 opacity,
                 blend_mode: BlendMode::Normal,
+                mask: None,
                 content,
             },
         }
@@ -660,6 +746,164 @@ mod tests {
                 }
                 _ => assert!(wrong.is_empty(), "16-bit {space:?}: {:?}…", wrong.first()),
             }
+        }
+    }
+
+    /// A 2×1 straight RGBA8 sRGB raster: an opaque red pixel and a half-transparent green one.
+    fn red_and_half_green() -> Arc<RasterImage> {
+        let pixels = [255, 0, 0, 255, 0, 255, 0, 128];
+        Arc::new(
+            RasterImage::from_pixels(Size::new(2, 1), PixelFormat::RGBA8_SRGB, &pixels).unwrap(),
+        )
+    }
+
+    fn set_mask(doc: &mut Document, id: LayerId, mask: Option<crate::document::LayerMask>) {
+        Edit::SetLayerMask { id, mask }.apply(doc).unwrap();
+    }
+
+    #[test]
+    fn a_mask_from_transparency_keeps_the_look_and_moves_the_alpha() {
+        let image = red_and_half_green();
+        let mut doc = linear_document(Size::new(2, 1));
+        let id = add(
+            &mut doc,
+            LayerContent::Raster {
+                image: image.clone(),
+            },
+            1.0,
+            true,
+        );
+        let (before, _) = composite(&doc, doc.size().bounds());
+
+        let mask = crate::document::LayerMask::from_transparency(&image).unwrap();
+        assert_eq!(mask.image.format().layout, ChannelLayout::Gray);
+        set_mask(&mut doc, id, Some(mask));
+        // Same coverage, now from the mask: the look does not change.
+        let (masked, _) = composite(&doc, doc.size().bounds());
+        assert_close(&masked, &before);
+
+        // Disabled: the layer's own alpha is still ignored, so the green pixel is opaque.
+        Edit::SetLayerMaskEnabled { id, enabled: false }
+            .apply(&mut doc)
+            .unwrap();
+        let (disabled, _) = composite(&doc, doc.size().bounds());
+        assert!((disabled[7] - 1.0).abs() < 1e-6, "{disabled:?}");
+        assert!(disabled[5] > 0.9, "full green: {disabled:?}");
+
+        // Deleted: the layer's own alpha is back.
+        set_mask(&mut doc, id, None);
+        let (deleted, _) = composite(&doc, doc.size().bounds());
+        assert_close(&deleted, &before);
+    }
+
+    #[test]
+    fn mask_values_scale_coverage_and_outside_the_mask_is_hidden() {
+        // A gray 8-bit linear mask of one pixel at 25%: the second pixel is outside it.
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let mask_image =
+            Arc::new(RasterImage::from_pixels(Size::new(1, 1), format, &[64]).unwrap());
+        let mut doc = linear_document(Size::new(2, 1));
+        let id = add(&mut doc, fill(0.0, 0.0, 1.0, 1.0), 1.0, true);
+        set_mask(
+            &mut doc,
+            id,
+            Some(crate::document::LayerMask {
+                image: mask_image,
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        );
+        let (out, _) = composite(&doc, doc.size().bounds());
+        let quarter = 64.0 / 255.0;
+        assert_close(&out, &[0.0, 0.0, quarter, quarter, 0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn mask_edits_round_trip_and_are_validated() {
+        let image = red_and_half_green();
+        let mut doc = linear_document(Size::new(2, 1));
+        let id = add(
+            &mut doc,
+            LayerContent::Raster {
+                image: image.clone(),
+            },
+            1.0,
+            true,
+        );
+        assert!(matches!(
+            Edit::SetLayerMaskEnabled { id, enabled: false }.apply(&mut doc),
+            Err(crate::edit::EditError::NoMask(_))
+        ));
+        let mask = crate::document::LayerMask::from_transparency(&image).unwrap();
+        let inverse = Edit::SetLayerMask {
+            id,
+            mask: Some(mask.clone()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(inverse, Edit::SetLayerMask { id, mask: None });
+        let toggled = Edit::SetLayerMaskEnabled { id, enabled: false }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(toggled, Edit::SetLayerMaskEnabled { id, enabled: true });
+        // A color image is not a mask.
+        let not_gray = crate::document::LayerMask {
+            image: image.clone(),
+            enabled: true,
+            replaces_alpha: false,
+        };
+        assert_eq!(
+            Edit::SetLayerMask {
+                id,
+                mask: Some(not_gray)
+            }
+            .apply(&mut doc),
+            Err(crate::edit::EditError::InvalidMask)
+        );
+        // An image without alpha has no transparency to take.
+        let rgb = PixelFormat {
+            layout: ChannelLayout::Rgb,
+            ..PixelFormat::RGBA8_SRGB
+        };
+        let opaque_image = RasterImage::from_pixels(Size::new(1, 1), rgb, &[1, 2, 3]).unwrap();
+        assert!(crate::document::LayerMask::from_transparency(&opaque_image).is_none());
+    }
+
+    #[test]
+    fn alpha_masks_keep_the_sample_type_and_every_value() {
+        let size = Size::new(300, 260);
+        let format = PixelFormat {
+            layout: ChannelLayout::Rgba,
+            sample: SampleType::U16,
+            color_space: ColorSpace::SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let alpha = |x: u32, y: u32| ((x * 211 + y * 17) % 65536) as u16;
+        let pixels: Vec<u8> = (0..size.height)
+            .flat_map(|y| (0..size.width).map(move |x| (x, y)))
+            .flat_map(|(x, y)| [1000u16, 2000, 3000, alpha(x, y)])
+            .flat_map(u16::to_ne_bytes)
+            .collect();
+        let image = RasterImage::from_pixels(size, format, &pixels).unwrap();
+        let mask = image.alpha_mask().unwrap();
+        assert_eq!(mask.size(), size);
+        assert_eq!(mask.format().sample, SampleType::U16);
+        assert_eq!(mask.format().layout, ChannelLayout::Gray);
+        let level = &mask.levels()[0];
+        for (x, y) in [(0, 0), (299, 259), (256, 3), (17, 255)] {
+            let tile = level
+                .tile(TileCoord {
+                    col: x / TILE_SIZE,
+                    row: y / TILE_SIZE,
+                })
+                .unwrap();
+            let at = (((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) * 2) as usize;
+            assert_eq!(u16::from_ne_bytes([tile[at], tile[at + 1]]), alpha(x, y));
         }
     }
 }

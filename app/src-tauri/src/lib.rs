@@ -20,8 +20,8 @@ use serde::Serialize;
 use slopshop_core::color::PixelFormat;
 use slopshop_core::view::Viewport;
 use slopshop_core::{
-    BlendMode, Document, Edit, Layer, LayerContent, LayerId, LinearRgba, RasterImage, Rect,
-    Session, Size,
+    BlendMode, Document, Edit, Layer, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage,
+    Rect, Session, Size,
 };
 use slopshop_io::slop::SlopFile;
 use slopshop_render::Renderer;
@@ -407,6 +407,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
             visible: true,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
+            mask: None,
             content,
         },
     };
@@ -679,6 +680,7 @@ fn insert_image(
                     visible: true,
                     opacity: 1.0,
                     blend_mode: BlendMode::Normal,
+                    mask: None,
                     content: LayerContent::Raster {
                         image: Arc::new(image),
                     },
@@ -1012,19 +1014,58 @@ async fn paste(app: AppHandle, document_id: Option<u64>, name: String) -> Result
     }
 }
 
+/// Add a mask made from the transparency of a raster layer (ADR 0014), undoable. Copying the
+/// alpha channel of a large image takes a while: done on a worker, outside the document lock.
+#[tauri::command]
+async fn add_mask_from_transparency(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_id: u64,
+) -> Result<DocumentView, String> {
+    let id = LayerId::from_raw(layer_id);
+    let image = {
+        let mut documents = state.documents()?;
+        let layer = documents
+            .get_mut(document_id)?
+            .session
+            .document()
+            .layer(id)
+            .ok_or("unknown layer")?;
+        match &layer.content {
+            LayerContent::Raster { image } => image.clone(),
+            LayerContent::Fill { .. } => return Err("a fill layer has no transparency".to_owned()),
+        }
+    };
+    let mask = tauri::async_runtime::spawn_blocking(move || LayerMask::from_transparency(&image))
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("the layer has no transparency")?;
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    document
+        .session
+        .perform(Edit::SetLayerMask {
+            id,
+            mask: Some(mask),
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
 /// Largest thumbnail side a request may ask for, in pixels.
 const MAX_THUMBNAIL_SIDE: u32 = 512;
 
-/// Thumbnail of a raster layer, at most `max_side` pixels on its longer side (capped at
-/// [`MAX_THUMBNAIL_SIDE`]): raw binary, a header of width and height (`u32` little-endian),
-/// then RGBA8 sRGB pixels with straight alpha. Fill layers have none (the UI shows their
-/// color).
+/// Thumbnail of a raster layer, or of a layer's mask with `mask`, at most `max_side` pixels on
+/// its longer side (capped at [`MAX_THUMBNAIL_SIDE`]): raw binary, a header of width and
+/// height (`u32` little-endian), then RGBA8 pixels with straight alpha (sRGB; mask coverage
+/// values as they are). Fill layers have no layer thumbnail (the UI shows their color).
 #[tauri::command]
 async fn layer_thumbnail(
     state: State<'_, AppState>,
     document_id: u64,
     layer_id: u64,
     max_side: u32,
+    mask: bool,
 ) -> Result<Response, String> {
     let image = {
         let mut documents = state.documents()?;
@@ -1034,14 +1075,22 @@ async fn layer_thumbnail(
             .document()
             .layer(LayerId::from_raw(layer_id))
             .ok_or("unknown layer")?;
-        match &layer.content {
-            LayerContent::Raster { image } => image.clone(),
-            LayerContent::Fill { .. } => return Err("fill layers have no thumbnail".to_owned()),
+        match (&layer.content, &layer.mask, mask) {
+            (_, Some(layer_mask), true) => layer_mask.image.clone(),
+            (_, None, true) => return Err("the layer has no mask".to_owned()),
+            (LayerContent::Raster { image }, _, false) => image.clone(),
+            (LayerContent::Fill { .. }, _, false) => {
+                return Err("fill layers have no thumbnail".to_owned());
+            }
         }
     };
     let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
     let thumbnail = tauri::async_runtime::spawn_blocking(move || {
-        slopshop_core::thumbnail::raster_thumbnail(&image, max_side)
+        if mask {
+            slopshop_core::thumbnail::mask_thumbnail(&image, max_side)
+        } else {
+            slopshop_core::thumbnail::raster_thumbnail(&image, max_side)
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -1451,6 +1500,7 @@ pub fn run() {
             present_view,
             reveal_in_folder,
             layer_thumbnail,
+            add_mask_from_transparency,
             paste,
             save_document,
             quit,
@@ -1525,6 +1575,62 @@ mod tests {
 
     fn tab_ids(documents: &Documents) -> Vec<u64> {
         documents.tabs.iter().map(|d| d.meta.id).collect()
+    }
+
+    #[test]
+    fn mask_requests_and_views() {
+        let mut s = blank_session();
+        let pixels = [10, 20, 30, 128, 40, 50, 60, 255];
+        let image =
+            RasterImage::from_pixels(Size::new(2, 1), PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let mask = LayerMask::from_transparency(&image).unwrap();
+        let id = s.allocate_layer_id();
+        let index = s.document().layers().len();
+        s.perform(Edit::InsertLayer {
+            index,
+            layer: Layer {
+                id,
+                name: "masked".to_owned(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::Raster {
+                    image: Arc::new(image),
+                },
+                mask: Some(mask),
+            },
+        })
+        .unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = view.layers.last().unwrap();
+        assert!(layer.has_alpha);
+        assert!(layer.mask.as_ref().is_some_and(|m| m.enabled));
+        let request = |json: String| {
+            serde_json::from_str::<EditRequest>(&json)
+                .unwrap()
+                .into_edit(&mut blank_session())
+                .unwrap()
+        };
+        let raw = id.get();
+        s.perform(request(format!(
+            r#"{{"kind":"setLayerMaskEnabled","id":{raw},"enabled":false}}"#
+        )))
+        .unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert!(
+            view.layers
+                .last()
+                .unwrap()
+                .mask
+                .as_ref()
+                .is_some_and(|m| !m.enabled)
+        );
+        s.perform(request(format!(
+            r#"{{"kind":"removeLayerMask","id":{raw}}}"#
+        )))
+        .unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert!(view.layers.last().unwrap().mask.is_none());
     }
 
     #[test]
@@ -1603,6 +1709,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
+            mask: None,
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },

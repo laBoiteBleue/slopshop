@@ -26,6 +26,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
         visible: true,
         opacity,
         blend_mode: BlendMode::Normal,
+        mask: None,
         content,
     };
     Edit::InsertLayer { index, layer }.apply(doc).unwrap();

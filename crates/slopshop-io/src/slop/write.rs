@@ -139,14 +139,17 @@ fn kept_images(
     images
 }
 
+/// Every image of the document: layer rasters and masks.
 fn rasters(document: &Document) -> impl Iterator<Item = &Arc<RasterImage>> {
-    document
-        .layers()
-        .iter()
-        .filter_map(|layer| match &layer.content {
+    document.layers().iter().flat_map(|layer| {
+        let content = match &layer.content {
             LayerContent::Raster { image } => Some(image),
             LayerContent::Fill { .. } => None,
-        })
+        };
+        content
+            .into_iter()
+            .chain(layer.mask.as_ref().map(|m| &m.image))
+    })
 }
 
 fn write_slot(file: &mut File, slot: &Slot) -> Result<(), FileError> {
@@ -429,6 +432,28 @@ fn build_manifest(
             _ => Map::new(),
         };
         params.insert("blend_mode".to_owned(), Value::from(layer.blend_mode.id()));
+        if let Some(mask) = &layer.mask {
+            let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
+            params.insert(
+                "mask".to_owned(),
+                json!({
+                    "image": key,
+                    "enabled": mask.enabled,
+                    "replaces_alpha": mask.replaces_alpha,
+                }),
+            );
+        }
+        if let Some(mask) = &layer.mask {
+            let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
+            params.insert(
+                "mask".to_owned(),
+                json!({
+                    "image": key,
+                    "enabled": mask.enabled,
+                    "replaces_alpha": mask.replaces_alpha,
+                }),
+            );
+        }
         nodes.insert(
             id.to_string(),
             NodeDto {

@@ -159,6 +159,10 @@ const FLAG_PREMULTIPLIED: u32 = 1;
 const FLAG_GRAY: u32 = 2;
 /// The document blends in perceptual space (ADR 0012).
 const FLAG_PERCEPTUAL: u32 = 4;
+/// The layer has an enabled mask, described by the `mask_*` fields (ADR 0014).
+const FLAG_MASK: u32 = 8;
+/// The layer's own alpha is ignored (a mask made from its transparency, ADR 0014).
+const FLAG_IGNORE_ALPHA: u32 = 16;
 /// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
 const BLEND_SHIFT: u32 = 8;
 
@@ -533,7 +537,7 @@ impl Renderer {
 }
 
 /// Size of one `Layer` in composite.wgsl.
-const LAYER_BYTES: usize = 144;
+const LAYER_BYTES: usize = 192;
 
 /// GPU-ready description of the visible layers of one frame.
 struct PreparedLayers {
@@ -558,16 +562,25 @@ impl Renderer {
 
         // Plan the pyramid level of every raster layer together, so that all visible tiles
         // fit in the cache: coarser levels rather than missing layers.
+        // Two plans per layer: its raster, then its enabled mask (ADR 0014), planned together.
         let mut plans: Vec<Option<RasterPlan<'_>>> = layers
             .iter()
-            .map(|layer| match (&layer.content, visible_doc) {
-                (LayerContent::Raster { image }, Some(visible)) => {
-                    Some(RasterPlan::new(image, visible, view.scale))
-                }
-                _ => None,
+            .flat_map(|layer| {
+                let Some(visible) = visible_doc else {
+                    return [None, None];
+                };
+                let content = match &layer.content {
+                    LayerContent::Raster { image } => {
+                        Some(RasterPlan::new(image, visible, view.scale))
+                    }
+                    LayerContent::Fill { .. } => None,
+                };
+                let mask =
+                    enabled_mask(layer).map(|image| RasterPlan::new(image, visible, view.scale));
+                [content, mask]
             })
             .collect();
-        let mut tables: Vec<Vec<u32>> = vec![Vec::new(); layers.len()];
+        let mut tables: Vec<Vec<u32>> = vec![Vec::new(); plans.len()];
         if plans.iter().any(Option::is_some) {
             fit_tile_budget(&mut plans, self.tile_capacity);
             for format in GpuTileFormat::ALL {
@@ -666,8 +679,18 @@ impl Renderer {
     }
 }
 
-/// Encode visible `layers` (bottom to top) with their raster plans and tile slots. Raster layers
-/// without a plan (nothing of them to sample) are left out.
+/// The image of a layer's mask, when it has an enabled one.
+fn enabled_mask(layer: &Layer) -> Option<&RasterImage> {
+    layer
+        .mask
+        .as_ref()
+        .filter(|mask| mask.enabled)
+        .map(|mask| mask.image.as_ref())
+}
+
+/// Encode visible `layers` (bottom to top) with their plans and tile slots: two per layer, its
+/// raster then its enabled mask. Raster layers without a plan (nothing of them to sample) are
+/// left out, and so are layers whose enabled mask has none (the mask hides them there).
 fn encode_layers(
     layers: &[&Layer],
     plans: &[Option<RasterPlan<'_>>],
@@ -679,7 +702,14 @@ fn encode_layers(
         bytes: Vec::new(),
         tile_table: Vec::new(),
     };
-    for ((layer, plan), table) in layers.iter().zip(plans).zip(tables) {
+    let mut tables = tables.into_iter();
+    for (i, layer) in layers.iter().enumerate() {
+        let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
+        let table = tables.next().unwrap_or_default();
+        let mask_table = tables.next().unwrap_or_default();
+        if enabled_mask(layer).is_some() && mask_plan.is_none() {
+            continue;
+        }
         let mut fields = LayerFields {
             flags: layer.blend_mode.index() << BLEND_SHIFT,
             ..LayerFields::default()
@@ -687,10 +717,12 @@ fn encode_layers(
         if blend_space == BlendSpace::Perceptual {
             fields.flags |= FLAG_PERCEPTUAL;
         }
+        let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
         match &layer.content {
             LayerContent::Fill { color } => {
                 fields.kind = KIND_FILL;
-                let a = color.a * layer.opacity;
+                let alpha = if replaces_alpha { 1.0 } else { color.a };
+                let a = alpha * layer.opacity;
                 fields.color = [color.r * a, color.g * a, color.b * a, a];
             }
             LayerContent::Raster { .. } => {
@@ -715,8 +747,23 @@ fn encode_layers(
                 }
                 (fields.transfer, fields.transfer2) = transfer_fields(stored.color_space.transfer);
                 fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
+                if replaces_alpha {
+                    fields.flags |= FLAG_IGNORE_ALPHA;
+                }
                 prepared.tile_table.extend(table);
             }
+        }
+        if let Some(mask) = mask_plan {
+            fields.flags |= FLAG_MASK;
+            let range = mask.range();
+            let size = mask.image.levels()[mask.level].size();
+            fields.mask_level_scale = mask.factor() as f32;
+            fields.mask_table_offset = prepared.tile_table.len() as u32;
+            fields.mask_tile_origin = [range.x, range.y];
+            fields.mask_tile_count = [range.width, range.height];
+            fields.mask_level_size = [size.width, size.height];
+            fields.mask_format = mask.format.index() as u32;
+            prepared.tile_table.extend(mask_table);
         }
         fields.write(&mut prepared.bytes);
         prepared.count += 1;
@@ -927,6 +974,8 @@ fn shader_source() -> String {
     }
     constants += &format!("const FLAG_PERCEPTUAL: u32 = {FLAG_PERCEPTUAL}u;\n");
     constants += &format!("const BLEND_SHIFT: u32 = {BLEND_SHIFT}u;\n");
+    constants += &format!("const FLAG_MASK: u32 = {FLAG_MASK}u;\n");
+    constants += &format!("const FLAG_IGNORE_ALPHA: u32 = {FLAG_IGNORE_ALPHA}u;\n");
     constants += &format!(
         "const DIVISION_EPSILON: f32 = {:?};\n",
         slopshop_core::blend::DIVISION_EPSILON as f32
@@ -972,6 +1021,13 @@ struct LayerFields {
     transfer: [f32; 4],
     transfer2: [f32; 4],
     matrix: [[f32; 4]; 3],
+    // The enabled mask (FLAG_MASK), sampled like a gray linear raster.
+    mask_tile_origin: [u32; 2],
+    mask_tile_count: [u32; 2],
+    mask_level_size: [u32; 2],
+    mask_table_offset: u32,
+    mask_level_scale: f32,
+    mask_format: u32,
 }
 
 impl LayerFields {
@@ -1002,6 +1058,19 @@ impl LayerFields {
         {
             out.extend(v.to_le_bytes());
         }
+        for v in self
+            .mask_tile_origin
+            .iter()
+            .chain(&self.mask_tile_count)
+            .chain(&self.mask_level_size)
+        {
+            out.extend(v.to_le_bytes());
+        }
+        out.extend(self.mask_table_offset.to_le_bytes());
+        out.extend(self.mask_level_scale.to_le_bytes());
+        out.extend(self.mask_format.to_le_bytes());
+        // Padding to the struct's 16-byte alignment.
+        out.resize(start + LAYER_BYTES, 0);
         debug_assert_eq!(out.len() - start, LAYER_BYTES);
     }
 }

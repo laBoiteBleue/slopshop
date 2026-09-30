@@ -30,6 +30,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
                 visible: true,
                 opacity,
                 blend_mode: BlendMode::Normal,
+                mask: None,
                 content: LayerContent::Fill { color },
             },
         })
@@ -208,6 +209,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
             visible: true,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
+            mask: None,
             content: LayerContent::Raster {
                 image: Arc::new(image),
             },
@@ -332,6 +334,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
                 visible: true,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
+                mask: None,
                 content: LayerContent::Raster {
                     image: image.clone(),
                 },

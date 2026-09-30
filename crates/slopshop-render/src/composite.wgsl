@@ -53,7 +53,7 @@ const TF_PARAMETRIC: u32 = 4u;
 const TF_PQ: u32 = 5u;
 const TF_HLG: u32 = 6u;
 
-// 144 bytes; keep in sync with `LayerFields` in lib.rs.
+// 192 bytes; keep in sync with `LayerFields` in lib.rs.
 struct Layer {
     // Fill: working-space linear RGBA, premultiplied, opacity applied. Raster: unused.
     color: vec4<f32>,
@@ -76,6 +76,13 @@ struct Layer {
     m0: vec4<f32>,
     m1: vec4<f32>,
     m2: vec4<f32>,
+    // The enabled mask (FLAG_MASK, ADR 0014): a gray linear raster, planned like a layer.
+    mask_tile_origin: vec2<u32>,
+    mask_tile_count: vec2<u32>,
+    mask_level_size: vec2<u32>,
+    mask_table_offset: u32,
+    mask_level_scale: f32,
+    mask_format: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -311,7 +318,56 @@ fn sample_raster(layer: Layer, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
             weight += w;
         }
     }
-    return sum / max(weight, 1e-12) * layer.opacity;
+    return sum / max(weight, 1e-12);
+}
+
+// Share of the output pixel that falls inside a raster layer's image (it sits at the document
+// origin): 0 or 1 for an exact texel, the covered area otherwise.
+fn inside_raster(layer: Layer, footprint: Footprint) -> f32 {
+    if footprint.exact {
+        let t = footprint.texel;
+        let inside = all(t >= vec2<i32>(0)) && all(t < vec2<i32>(layer.level_size));
+        return select(0.0, 1.0, inside);
+    }
+    let extent = vec2<f32>(layer.level_size) * layer.level_scale;
+    let covered = max(min(footprint.hi, extent) - max(footprint.lo, vec2<f32>(0.0)), vec2<f32>(0.0));
+    let area = max(footprint.hi - footprint.lo, vec2<f32>(1e-12));
+    return (covered.x * covered.y) / (area.x * area.y);
+}
+
+// A layer's mask seen as a raster layer: gray, linear, opaque, so that its texels read as
+// (coverage, coverage, coverage, 1).
+fn mask_view(layer: Layer) -> Layer {
+    var m = layer;
+    m.kind = KIND_RASTER;
+    m.opacity = 1.0;
+    m.level_scale = layer.mask_level_scale;
+    m.table_offset = layer.mask_table_offset;
+    m.tile_origin = layer.mask_tile_origin;
+    m.tile_count = layer.mask_tile_count;
+    m.level_size = layer.mask_level_size;
+    m.format = layer.mask_format;
+    m.flags = FLAG_GRAY;
+    m.transfer = vec4<f32>(f32(TF_LINEAR), 0.0, 0.0, 0.0);
+    m.transfer2 = vec4<f32>(0.0);
+    m.m0 = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    m.m1 = vec4<f32>(0.0, 1.0, 0.0, 0.0);
+    m.m2 = vec4<f32>(0.0, 0.0, 1.0, 0.0);
+    return m;
+}
+
+// The mask's coverage over the footprint, in [0, 1]; 0 outside the mask image. Non-finite mask
+// samples are not counted (like the CPU reference).
+fn mask_coverage(layer: Layer, footprint: Footprint) -> f32 {
+    let mask = mask_view(layer);
+    var uncounted = 0u;
+    var value = 0.0;
+    if footprint.exact {
+        value = texel_color(mask, footprint.texel, true, &uncounted).r;
+    } else {
+        value = sample_raster(mask, footprint.lo, footprint.hi).r;
+    }
+    return clamp(value, 0.0, 1.0);
 }
 
 // Blend modes (ADR 0012), the same math as slopshop_core::blend in f32. The MODE_* constants,
@@ -546,10 +602,19 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
         var src = layer.color;
         if layer.kind == KIND_RASTER {
             if footprint.exact {
-                src = texel_color(layer, footprint.texel, true, count) * layer.opacity;
+                src = texel_color(layer, footprint.texel, true, count);
             } else {
                 src = sample_raster(layer, footprint.lo, footprint.hi);
             }
+            // A mask made from the layer's transparency replaces its alpha (ADR 0014).
+            // Only where the image is: outside it the layer stays transparent.
+            if (layer.flags & FLAG_IGNORE_ALPHA) != 0u {
+                src = vec4<f32>(unpremultiply(src), 1.0) * inside_raster(layer, footprint);
+            }
+            src = src * layer.opacity;
+        }
+        if (layer.flags & FLAG_MASK) != 0u {
+            src = src * mask_coverage(layer, footprint);
         }
         acc = blend_layer(src, acc, layer.flags);
         if footprint.exact {
