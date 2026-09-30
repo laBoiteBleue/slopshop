@@ -821,6 +821,8 @@ fn groups_adjustments_clipping_and_styles_are_reported() {
     let mut group = TestLayer::section("Group", 1);
     group.opacity = 128;
     group.hidden = true;
+    // Pass-through, as Photoshop writes it: in the section block, the record saying normal.
+    group.blocks[0].1 = [&1u32.to_be_bytes()[..], b"8BIM", b"pass"].concat();
     let mut levels = TestLayer::new("Levels", [0; 4], Vec::new());
     levels.blocks.push((*b"levl", vec![0; 4]));
     let mut clipped = full("clipped");
@@ -849,10 +851,22 @@ fn groups_adjustments_clipping_and_styles_are_reported() {
     let opened = open_layers("groups.psd", &doc);
     let layers = opened.document.layers();
     let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
-    assert_eq!(names, ["child", "clipped", "text", "styled", "vivid"]);
-    // The hidden group at 50 % hides its layer and halves its opacity.
-    assert!(!layers[0].visible);
-    assert!((layers[0].opacity - 128.0 / 255.0).abs() < 1e-6);
+    assert_eq!(names, ["Group", "clipped", "text", "styled", "vivid"]);
+    // The group, hidden at 50 %, passing through, holds its layer.
+    let group = &layers[0];
+    assert!(!group.visible);
+    assert!((group.opacity - 128.0 / 255.0).abs() < 1e-6);
+    let slopshop_core::LayerContent::Group {
+        children,
+        pass_through,
+    } = &group.content
+    else {
+        panic!("a group expected");
+    };
+    assert!(*pass_through);
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "child");
+    assert!(children[0].visible && children[0].opacity == 1.0);
     assert!(
         (layers[3].opacity - 128.0 / 255.0).abs() < 1e-6,
         "fill opacity"
@@ -860,10 +874,12 @@ fn groups_adjustments_clipping_and_styles_are_reported() {
     assert_eq!(layers[3].blend_mode, slopshop_core::BlendMode::Subtract);
     assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
     use ImportWarning::*;
+    // In the order of `all_layers`: the group, its layer, then the others.
     assert_eq!(
         opened.layer_warnings,
         [
-            vec![GroupsFlattened],
+            vec![],
+            vec![],
             vec![ClippingIgnored],
             vec![LayersRasterized],
             vec![LayerStylesIgnored],

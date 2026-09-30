@@ -35,4 +35,4 @@ pub use edit::{Edit, EditError};
 pub use geom::{Rect, Size};
 pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;
-pub use session::Session;
+pub use session::{Copies, Session};

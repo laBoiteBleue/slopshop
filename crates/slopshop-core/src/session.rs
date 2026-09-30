@@ -1,7 +1,18 @@
 //! A document together with its undo/redo history.
 
+use crate::blend::BlendMode;
 use crate::document::{Document, Layer, LayerContent, LayerId};
 use crate::edit::{Edit, EditError};
+
+/// What [`Session::insert_layer_copies`] made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Copies {
+    /// The group holding the copies, when one was asked for.
+    pub group: Option<LayerId>,
+    /// The id of each copy, in the order the copied layers and their subtrees are walked depth
+    /// first (as [`Document::all_layers`] does).
+    pub ids: Vec<LayerId>,
+}
 
 /// An editing session: the document and the inverse edits needed to undo/redo.
 ///
@@ -68,34 +79,68 @@ impl Session {
 
     /// Insert copies of `layers` (bottom to top, e.g. another document's stack) above the
     /// current stack, with fresh ids (groups with everything inside them), as one undoable
-    /// entry. Raster pixels are shared, never copied. Returns the new ids of the copies of
-    /// `layers`, bottom to top; on error nothing changes.
-    pub fn insert_layer_copies(&mut self, layers: &[Layer]) -> Result<Vec<LayerId>, EditError> {
+    /// entry; inside a new pass-through group named `group` when given. Raster pixels are
+    /// shared, never copied. On error nothing changes.
+    pub fn insert_layer_copies(
+        &mut self,
+        layers: &[Layer],
+        group: Option<String>,
+    ) -> Result<Copies, EditError> {
+        let mut ids = Vec::new();
+        let copies: Vec<Layer> = layers
+            .iter()
+            .map(|layer| self.fresh_copy(layer, &mut ids))
+            .collect();
         let base = self.document.layers().len();
-        let mut ids = Vec::with_capacity(layers.len());
-        let mut edits = Vec::with_capacity(layers.len());
-        for (offset, layer) in layers.iter().enumerate() {
-            let copy = self.fresh_copy(layer);
-            ids.push(copy.id);
-            edits.push(Edit::InsertLayer {
-                parent: None,
-                index: base + offset,
-                layer: copy,
-            });
-        }
-        if !edits.is_empty() {
-            self.perform(Edit::Batch(edits))?;
-        }
-        Ok(ids)
+        let (group, edit) = match group {
+            Some(name) => {
+                let id = self.document.allocate_layer_id();
+                let edit = Edit::InsertLayer {
+                    parent: None,
+                    index: base,
+                    layer: Layer {
+                        id,
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::Group {
+                            children: copies,
+                            pass_through: true,
+                        },
+                    },
+                };
+                (Some(id), edit)
+            }
+            None => (
+                None,
+                Edit::Batch(
+                    copies
+                        .into_iter()
+                        .enumerate()
+                        .map(|(offset, layer)| Edit::InsertLayer {
+                            parent: None,
+                            index: base + offset,
+                            layer,
+                        })
+                        .collect(),
+                ),
+            ),
+        };
+        self.perform(edit)?;
+        Ok(Copies { group, ids })
     }
 
-    /// A copy of `layer`, and for a group of everything inside it, with fresh ids.
-    fn fresh_copy(&mut self, layer: &Layer) -> Layer {
+    /// A copy of `layer`, and for a group of everything inside it, with fresh ids, pushed to
+    /// `ids` depth first.
+    fn fresh_copy(&mut self, layer: &Layer, ids: &mut Vec<LayerId>) -> Layer {
         let mut copy = layer.clone();
         copy.id = self.document.allocate_layer_id();
+        ids.push(copy.id);
         if let LayerContent::Group { children, .. } = &mut copy.content {
             for child in children.iter_mut() {
-                *child = self.fresh_copy(child);
+                *child = self.fresh_copy(child, ids);
             }
         }
         copy
@@ -335,8 +380,9 @@ mod tests {
         let mut target = Session::new(Document::new(Size::new(16, 16)));
         let existing = add_layer(&mut target, "background");
         let ids = target
-            .insert_layer_copies(source.document().layers())
-            .unwrap();
+            .insert_layer_copies(source.document().layers(), None)
+            .unwrap()
+            .ids;
         assert_eq!(names(&target), ["background", "fill", "photo"]);
         let layers = target.document().layers();
         assert_eq!(ids, [layers[1].id, layers[2].id]);
@@ -350,7 +396,32 @@ mod tests {
         // One undo removes both copies.
         target.undo().unwrap();
         assert_eq!(names(&target), ["background"]);
-        assert!(target.insert_layer_copies(&[]).unwrap().is_empty());
+        assert!(
+            target
+                .insert_layer_copies(&[], None)
+                .unwrap()
+                .ids
+                .is_empty()
+        );
+
+        // Into a group: one layer at the top, holding the copies.
+        let copies = target
+            .insert_layer_copies(source.document().layers(), Some("import".into()))
+            .unwrap();
+        let group = copies.group.unwrap();
+        assert_eq!(names(&target), ["background", "import"]);
+        let inside: Vec<LayerId> = target
+            .document()
+            .layer(group)
+            .unwrap()
+            .children()
+            .unwrap()
+            .iter()
+            .map(|l| l.id)
+            .collect();
+        assert_eq!(inside, copies.ids);
+        target.undo().unwrap();
+        assert_eq!(names(&target), ["background"]);
     }
 
     #[test]
@@ -401,8 +472,9 @@ mod tests {
         add_layer(&mut target, "a");
         add_layer(&mut target, "b");
         let ids = target
-            .insert_layer_copies(source.document().layers())
-            .unwrap();
+            .insert_layer_copies(source.document().layers(), None)
+            .unwrap()
+            .ids;
         let copy = target.document().layer(ids[0]).unwrap();
         let copied_child = copy.children().unwrap()[0].id;
         let all: Vec<LayerId> = target.document().all_layers().map(|l| l.id).collect();

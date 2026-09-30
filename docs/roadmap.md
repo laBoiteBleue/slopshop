@@ -42,7 +42,8 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       RGB, duotone; transparency, ICC; raw, RLE, zip)
 - [x] PSD/PSB import, stage 2: layers with their blend modes, opacity, visibility and masks,
       solid color fills; what the engine lacks is reported layer by layer
-- [ ] PSD/PSB import, next stages: groups and clipping (with Phase 2), then export
+- [x] PSD/PSB import: groups as groups (pass-through or isolated, with their masks)
+- [ ] PSD/PSB import, next stages: clipping masks (with Phase 2), then export
       ([formats plan](formats.md#psd-and-psb-p0))
 - [ ] Import phases 2–6: JPEG XL, JPEG 2000, AVIF; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
@@ -89,7 +90,8 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       `.slop` 0.4
 - [x] Groups in the layers panel: folders that fold, New Group, Group Layers (Ctrl+G), Ungroup
       Layers (Shift+Ctrl+G), drag into and out of groups, Pass Through in the blend modes
-- [ ] PSD groups, a `.slop` or PSD imported into a document arriving as a group
+- [x] PSD groups; a document of several layers (`.slop`, PSD, a tab) imported into another
+      arrives as a group named after it
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation

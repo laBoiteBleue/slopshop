@@ -8,22 +8,21 @@
 //! channels, blend mode, opacity, flags, mask, name, tagged blocks), then every layer's channels,
 //! each compressed on its own like the composite. Layers come bottom to top, as in a document.
 //!
-//! What the engine holds: pixel layers and solid color fill layers with their name,
-//! visibility, opacity (times their fill opacity), blend mode and layer mask, at the document's depth and in its color space; 8/16-bit
+//! What the engine holds: pixel layers, solid color fill layers and groups (ADR 0015:
+//! pass-through or isolated, nested) with their name, visibility, opacity (times their fill
+//! opacity), blend mode and layer mask, at the document's depth and in its color space; 8/16-bit
 //! documents blend in perceptual space and 32-bit ones in linear light, as in Photoshop. What it
 //! does not hold yet is approximated and reported, layer by layer:
-//! - groups: their layers are imported without them, hidden with a hidden group, their opacity
-//!   multiplied by the group's (exact for pass-through groups at full opacity);
 //! - clipping masks, layer styles and advanced blending ("Blend If", the fill opacity of the
 //!   modes where it differs from opacity): ignored;
 //! - adjustment layers, and gradient, pattern or vector-only fill layers without pixels: left
 //!   out;
 //! - text, shapes, smart objects, fill layers and vector masks: their pixels, which Photoshop
 //!   stores (a vector mask as the user mask it renders);
-//! - mask density and feather, a vector mask beside a pixel mask, and the masks of groups:
-//!   ignored;
+//! - mask density and feather, and a vector mask beside a pixel mask: ignored;
 //! - pixels outside the canvas: cropped.
 
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -274,7 +273,6 @@ fn read_layer_info<R: Read + Seek>(
         _ => SampleType::U8,
     };
     check_layers_budget(&records, canvas, header, sample)?;
-    let groups = group_effects(&records);
 
     // Channels, layer after layer: a batch of layers is read, then decoded in parallel.
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -300,7 +298,9 @@ fn read_layer_info<R: Read + Seek>(
             for &(id, len) in &record.channels {
                 let wanted = match record.kind {
                     Kind::Pixels => context.wants(record, id),
-                    Kind::SolidColor => record.mask.is_some_and(|(mask, _)| mask == id),
+                    Kind::SolidColor | Kind::GroupStart => {
+                        record.mask.is_some_and(|(mask, _)| mask == id)
+                    }
                     _ => false,
                 };
                 if wanted {
@@ -321,6 +321,7 @@ fn read_layer_info<R: Read + Seek>(
                     scope.spawn(move || match record.kind {
                         Kind::Pixels => build_layer(record, raw, context).map(Some),
                         Kind::SolidColor => build_solid(record, raw, context).map(Some),
+                        Kind::GroupStart => build_group(record, raw, context).map(Some),
                         _ => Ok(None),
                     })
                 })
@@ -338,18 +339,23 @@ fn read_layer_info<R: Read + Seek>(
         }
     }
 
-    let mut layers = Vec::new();
-    let mut layer_warnings = Vec::new();
-    for ((record, group), built) in records.iter().zip(&groups).zip(built) {
+    // The tree: records come bottom to top, a group as its divider (bottom), its layers, then
+    // its own record (top). A divider opens a level; the group's record closes it.
+    let mut levels: Vec<Vec<Layer>> = vec![Vec::new()];
+    let mut notes_of: HashMap<LayerId, Vec<ImportWarning>> = HashMap::new();
+    let mut next_id = 1;
+    for (record, built) in records.iter().zip(built) {
+        if record.kind == Kind::GroupEnd {
+            levels.push(Vec::new());
+            continue;
+        }
         let Some(built) = built else { continue };
+        let pass_through = record.kind == Kind::GroupStart && &record.blend_key == b"pass";
         let (blend_mode, known_mode) = match blend_mode(&record.blend_key) {
             Some(mode) => (mode, true),
-            None => (BlendMode::Normal, false),
+            None => (BlendMode::Normal, pass_through),
         };
         let mut notes = Vec::new();
-        if group.in_group {
-            notes.push(ImportWarning::GroupsFlattened);
-        }
         if record.clipping {
             notes.push(ImportWarning::ClippingIgnored);
         }
@@ -366,25 +372,50 @@ fn read_layer_info<R: Read + Seek>(
         if built.cropped {
             notes.push(ImportWarning::PixelsOutsideCanvas);
         }
-        let opacity =
-            f32::from(record.opacity) / 255.0 * f32::from(record.fill) / 255.0 * group.opacity;
-        layers.push(Layer {
-            id: LayerId::from_raw(layers.len() as u64 + 1),
+        let content = match built.content {
+            LayerContent::Group { .. } => LayerContent::Group {
+                // A group record without its divider (damaged files) is an empty group.
+                children: if levels.len() > 1 {
+                    levels.pop().unwrap_or_default()
+                } else {
+                    Vec::new()
+                },
+                pass_through,
+            },
+            content => content,
+        };
+        let id = LayerId::from_raw(next_id);
+        next_id += 1;
+        let opacity = f32::from(record.opacity) / 255.0 * f32::from(record.fill) / 255.0;
+        if !notes.is_empty() {
+            notes_of.insert(id, notes);
+        }
+        let layer = Layer {
+            id,
             name: record.name.clone(),
-            visible: !record.hidden && group.visible,
+            visible: !record.hidden,
             opacity: opacity.clamp(0.0, 1.0),
             blend_mode,
-            content: built.content,
+            content,
             mask: built.mask,
-        });
-        layer_warnings.push(notes);
+        };
+        if let Some(level) = levels.last_mut() {
+            level.push(layer);
+        }
     }
+    // Dividers without their group record: their layers join the level below.
+    while levels.len() > 1 {
+        let orphans = levels.pop().unwrap_or_default();
+        if let Some(level) = levels.last_mut() {
+            level.extend(orphans);
+        }
+    }
+    let layers = levels.pop().unwrap_or_default();
     let blend_space = if header.depth == 32 {
         BlendSpace::Linear
     } else {
         BlendSpace::Perceptual
     };
-    let next_id = layers.len() as u64 + 1;
     let document = Document::restore(
         canvas,
         slopshop_core::color::WORKING_SPACE,
@@ -393,6 +424,10 @@ fn read_layer_info<R: Read + Seek>(
         next_id,
     )
     .map_err(|e| corrupt(&format!("layers: {e:?}")))?;
+    let layer_warnings = document
+        .all_layers()
+        .map(|layer| notes_of.remove(&layer.id).unwrap_or_default())
+        .collect();
     Ok(Some(ImportedLayers {
         document,
         warnings,
@@ -459,6 +494,7 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         solid_color: None,
     };
     let mut vector_mask = false;
+    let mut section_key: Option<[u8; 4]> = None;
     let mut adjustment = false;
     let mut fill_layer = false;
     while let Some((key, block)) = data.block(input.big) {
@@ -480,6 +516,10 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
                     1 | 2 => record.kind = Kind::GroupStart,
                     3 => record.kind = Kind::GroupEnd,
                     _ => {}
+                }
+                // A group's own blend mode (`pass` for pass-through) follows, when present.
+                if block.len() >= 12 && &block[4..8] == b"8BIM" {
+                    section_key = block[8..12].try_into().ok();
                 }
             }
             b"iOpa" if !block.is_empty() => record.fill = block[0],
@@ -533,6 +573,11 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         }
     }
 
+    if record.kind == Kind::GroupStart
+        && let Some(key) = section_key
+    {
+        record.blend_key = key;
+    }
     if record.kind == Kind::Pixels {
         let empty = bounds.width() * bounds.height() == 0;
         // A shape whose outline is only a vector mask (not rendered to a mask channel) would
@@ -650,50 +695,6 @@ impl<'a> Slice<'a> {
         let data = self.take(len).ok()?;
         Some((key, data))
     }
-}
-
-/// How groups affect each record: visible only if every enclosing group is, opacity times
-/// theirs.
-#[derive(Debug, Clone, Copy)]
-struct GroupEffect {
-    visible: bool,
-    opacity: f32,
-    in_group: bool,
-}
-
-/// Records come bottom to top: a group is its divider (bottom), its layers, then its own
-/// record (top). Walking top to bottom opens a group at its record and closes it at its
-/// divider.
-fn group_effects(records: &[Record]) -> Vec<GroupEffect> {
-    let mut stack: Vec<GroupEffect> = Vec::new();
-    let mut effects = vec![
-        GroupEffect {
-            visible: true,
-            opacity: 1.0,
-            in_group: false,
-        };
-        records.len()
-    ];
-    for (record, effect) in records.iter().zip(effects.iter_mut()).rev() {
-        let outer = stack.last().copied().unwrap_or(GroupEffect {
-            visible: true,
-            opacity: 1.0,
-            in_group: false,
-        });
-        *effect = outer;
-        match record.kind {
-            Kind::GroupStart => stack.push(GroupEffect {
-                visible: outer.visible && !record.hidden,
-                opacity: outer.opacity * f32::from(record.opacity) / 255.0,
-                in_group: true,
-            }),
-            Kind::GroupEnd => {
-                stack.pop();
-            }
-            Kind::Pixels | Kind::SolidColor | Kind::Skipped => {}
-        }
-    }
-    effects
 }
 
 /// Photoshop's blend mode keys.
@@ -920,6 +921,22 @@ fn build_layer(
         },
         mask: build_mask(record, raw, context)?,
         cropped,
+    })
+}
+
+/// A group's record: its mask (its layers come from the tree, see `read_layer_info`).
+fn build_group(
+    record: &Record,
+    raw: &[(i16, Vec<u8>)],
+    context: &Context,
+) -> Result<Built, ImportError> {
+    Ok(Built {
+        content: LayerContent::Group {
+            children: Vec::new(),
+            pass_through: true,
+        },
+        mask: build_mask(record, raw, context)?,
+        cropped: false,
     })
 }
 

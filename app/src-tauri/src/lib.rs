@@ -202,8 +202,7 @@ impl Documents {
         let from = self.get_mut(source)?;
         let document = from.session.document().clone();
         let warnings: Vec<Vec<&'static str>> = document
-            .layers()
-            .iter()
+            .all_layers()
             .map(|layer| {
                 from.layer_warnings
                     .get(&layer.id)
@@ -211,7 +210,8 @@ impl Documents {
                     .unwrap_or_default()
             })
             .collect();
-        insert_document_layers(self.get_mut(target)?, &document, warnings)
+        let name = from.meta.name.clone();
+        insert_document_layers(self.get_mut(target)?, &document, warnings, name)
     }
 }
 
@@ -220,18 +220,22 @@ impl Documents {
 const WARNING_BLEND_SPACE: &str = "blendSpaceDiffers";
 
 /// Add copies of every layer of `source` on top of `target` (one undo entry), with the import
-/// warnings of each (`warnings`, in stack order).
+/// warnings of each (`warnings`, in the order of `Document::all_layers`). Several top-level
+/// layers arrive inside a group named `name` (the source's file or tab name), so that an
+/// imported document stays one item of the stack; a single one arrives as it is.
 fn insert_document_layers(
     target: &mut OpenDocument,
     source: &Document,
     warnings: Vec<Vec<&'static str>>,
+    name: Option<String>,
 ) -> Result<DocumentView, String> {
     let other_space = source.blend_space() != target.session.document().blend_space();
-    let ids = target
+    let group = (source.layers().len() > 1).then(|| name.unwrap_or_else(|| "Layers".to_owned()));
+    let copies = target
         .session
-        .insert_layer_copies(source.layers())
+        .insert_layer_copies(source.layers(), group)
         .map_err(|e| e.to_string())?;
-    for (id, mut warnings) in ids.into_iter().zip(warnings) {
+    for (id, mut warnings) in copies.ids.into_iter().zip(warnings) {
         if other_space {
             warnings.push(WARNING_BLEND_SPACE);
         }
@@ -372,7 +376,8 @@ impl AppState {
         self.add_document_with(session, name, per_layer, file)
     }
 
-    /// [`Self::add_document_from`], with the warnings of each layer (in the document's order).
+    /// [`Self::add_document_from`], with the warnings of each layer (in the order of
+    /// `Document::all_layers`).
     fn add_document_with(
         &self,
         session: Session,
@@ -392,8 +397,7 @@ impl AppState {
         let ids: Vec<LayerId> = document
             .session
             .document()
-            .layers()
-            .iter()
+            .all_layers()
             .map(|l| l.id)
             .collect();
         for (id, warnings) in ids.into_iter().zip(warnings) {
@@ -568,10 +572,11 @@ fn open_path(
                     Some(file),
                 ),
                 OpenTarget::Layer { document_id } => {
-                    let warnings = vec![Vec::new(); document.layers().len()];
+                    let warnings = vec![Vec::new(); document.all_layers().count()];
+                    let group = Some(layer_name(path));
                     state.documents().and_then(|mut documents| {
                         let target = documents.get_mut(document_id)?;
-                        insert_document_layers(target, &document, warnings)
+                        insert_document_layers(target, &document, warnings, group)
                     })
                 }
             };
@@ -597,7 +602,9 @@ fn open_path(
                 slopshop_io::Opened::Image(imported) => {
                     insert_imported(&state, path, &name, imported, target)
                 }
-                slopshop_io::Opened::Layers(layers) => insert_layers(&state, &name, layers, target),
+                slopshop_io::Opened::Layers(layers) => {
+                    insert_layers(&state, path, &name, layers, target)
+                }
             };
             inserted.map_err(|e| {
                 let code = if e == DOCUMENT_CLOSED {
@@ -673,10 +680,12 @@ fn insert_imported(
 /// document (undoable). Each layer keeps the file's warnings and its own.
 fn insert_layers(
     state: &AppState,
+    path: &Path,
     name: &str,
     imported: slopshop_io::ImportedLayers,
     target: OpenTarget,
 ) -> Result<DocumentView, String> {
+    let group_name = layer_name(path);
     let common: Vec<&'static str> = imported.warnings.iter().map(|w| w.id()).collect();
     let warnings: Vec<Vec<&'static str>> = imported
         .layer_warnings
@@ -700,7 +709,7 @@ fn insert_layers(
         ),
         OpenTarget::Layer { document_id } => state.documents().and_then(|mut documents| {
             let target = documents.get_mut(document_id)?;
-            insert_document_layers(target, &imported.document, warnings)
+            insert_document_layers(target, &imported.document, warnings, Some(group_name))
         }),
     }
 }
@@ -1871,7 +1880,7 @@ mod tests {
         let source = documents.get_mut(1).unwrap().session.document().clone();
         let target = documents.get_mut(2).unwrap();
         let before = target.session.document().layers().len();
-        let view = insert_document_layers(target, &source, vec![Vec::new(); 1]).unwrap();
+        let view = insert_document_layers(target, &source, vec![Vec::new(); 1], None).unwrap();
         assert_eq!(view.layers.len(), before + source.layers().len());
         assert!(
             view.warnings.is_empty(),
@@ -1887,11 +1896,62 @@ mod tests {
         }
         .apply(&mut linear)
         .unwrap();
-        let view = insert_document_layers(target, &linear, vec![Vec::new(); 1]).unwrap();
+        let view = insert_document_layers(target, &linear, vec![Vec::new(); 1], None).unwrap();
         assert_eq!(view.warnings, [WARNING_BLEND_SPACE]);
         // The warning follows the imported layers.
         target.session.undo().unwrap();
         assert!(target.view().warnings.is_empty());
+    }
+
+    #[test]
+    fn documents_of_several_layers_arrive_as_a_group() {
+        let mut documents = documents_with(2);
+        // A second layer in the source, with a warning of its own.
+        let source_doc = documents.get_mut(1).unwrap();
+        let second = source_doc.session.allocate_layer_id();
+        source_doc
+            .session
+            .perform(Edit::InsertLayer {
+                parent: None,
+                index: 1,
+                layer: Layer {
+                    id: second,
+                    name: "second".into(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
+                    mask: None,
+                    content: LayerContent::Fill {
+                        color: slopshop_core::LinearRgba::new(0.0, 1.0, 0.0, 1.0),
+                    },
+                },
+            })
+            .unwrap();
+        source_doc
+            .layer_warnings
+            .insert(second, vec![WARNING_BLEND_SPACE]);
+        documents.copy_layers(1, 2).unwrap();
+
+        let target = documents.get_mut(2).unwrap();
+        let top = target.session.document().layers().last().unwrap().clone();
+        assert_eq!(top.name, "doc 1");
+        let children = top.children().unwrap();
+        assert_eq!(children.len(), 2);
+        // The warning follows the copy of its layer.
+        assert_eq!(
+            target.layer_warnings.get(&children[1].id),
+            Some(&vec![WARNING_BLEND_SPACE])
+        );
+        assert!(!target.layer_warnings.contains_key(&children[0].id));
+        target.session.undo().unwrap();
+        assert!(
+            target
+                .session
+                .document()
+                .layers()
+                .iter()
+                .all(|l| !l.is_group())
+        );
     }
 
     #[test]
