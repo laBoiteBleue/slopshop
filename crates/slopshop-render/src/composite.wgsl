@@ -777,6 +777,95 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
     return vec4<f32>(unpremultiply(src), 1.0);
 }
 
+// Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
+// `format` is the adjustment (Adjustment::index), `color` and `transfer.x` its parameters.
+const ADJUST_EXPOSURE: u32 = 0u;
+const ADJUST_HUE_SATURATION: u32 = 1u;
+const ADJUST_LEVELS: u32 = 2u;
+
+// Rotate the hue by `degrees`, keeping each color's smallest and largest component.
+fn shift_hue(c: vec3<f32>, degrees: f32) -> vec3<f32> {
+    let hi = max(c.r, max(c.g, c.b));
+    let lo = min(c.r, min(c.g, c.b));
+    let chroma = hi - lo;
+    if chroma <= 0.0 || degrees == 0.0 {
+        return c;
+    }
+    var h: f32;
+    if hi == c.r {
+        h = (c.g - c.b) / chroma;
+        h = h - 6.0 * floor(h / 6.0);
+    } else if hi == c.g {
+        h = (c.b - c.r) / chroma + 2.0;
+    } else {
+        h = (c.r - c.g) / chroma + 4.0;
+    }
+    h = h + degrees / 60.0;
+    h = h - 6.0 * floor(h / 6.0);
+    let x = chroma * (1.0 - abs(h - 2.0 * floor(h / 2.0) - 1.0));
+    var rgb: vec3<f32>;
+    switch u32(h) {
+        case 0u: { rgb = vec3<f32>(chroma, x, 0.0); }
+        case 1u: { rgb = vec3<f32>(x, chroma, 0.0); }
+        case 2u: { rgb = vec3<f32>(0.0, chroma, x); }
+        case 3u: { rgb = vec3<f32>(0.0, x, chroma); }
+        case 4u: { rgb = vec3<f32>(x, 0.0, chroma); }
+        default: { rgb = vec3<f32>(chroma, 0.0, x); }
+    }
+    return rgb + lo;
+}
+
+// Scale the HSL saturation by 1 + amount, at most to full saturation, keeping the lightness.
+fn saturate_hsl(c: vec3<f32>, amount: f32) -> vec3<f32> {
+    let hi = max(c.r, max(c.g, c.b));
+    let lo = min(c.r, min(c.g, c.b));
+    let chroma = hi - lo;
+    let l = (hi + lo) * 0.5;
+    let room = 1.0 - abs(2.0 * l - 1.0);
+    if chroma <= 0.0 || room <= 0.0 || amount == 0.0 {
+        return c;
+    }
+    let s = chroma / room;
+    let target_s = clamp(s * (1.0 + amount), 0.0, max(1.0, s));
+    return l + (c - l) * (target_s / s);
+}
+
+fn adjust_color(kind: u32, p: vec4<f32>, p4: f32, c: vec3<f32>) -> vec3<f32> {
+    switch kind {
+        case ADJUST_EXPOSURE: {
+            let v = c * exp2(p.x) + p.y;
+            return sign(v) * pow(abs(v), vec3<f32>(1.0 / p.z));
+        }
+        case ADJUST_HUE_SATURATION: {
+            let saturated = saturate_hsl(shift_hue(c, p.x), p.y / 100.0);
+            let l = p.z / 100.0;
+            return select(saturated + (1.0 - saturated) * l, saturated * (1.0 + l), l < 0.0);
+        }
+        default: {
+            let t = pow(clamp((c - p.x) / (p.y - p.x), vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / p.z));
+            return p.w + t * (p4 - p.w);
+        }
+    }
+}
+
+// `below` with an adjustment layer applied, mixed by `coverage` (Blender::adjust in core).
+fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
+    let alpha = below.a;
+    if !(coverage > 0.0) || alpha <= 0.0 {
+        return below;
+    }
+    let straight = below.rgb / alpha;
+    let perceptual = (layer.flags & FLAG_PERCEPTUAL) != 0u;
+    var adjusted: vec3<f32>;
+    if layer.format == ADJUST_EXPOSURE {
+        adjusted = adjust_color(layer.format, layer.color, layer.transfer.x, straight);
+    } else {
+        let encoded = to_blend(straight, perceptual);
+        adjusted = from_blend(adjust_color(layer.format, layer.color, layer.transfer.x, encoded), perceptual);
+    }
+    return fade(below, vec4<f32>(adjusted * alpha, alpha), coverage, perceptual);
+}
+
 // Where an output pixel samples the document.
 struct Footprint {
     // Display: the document rectangle covered, area-filtered at each layer's planned level.
@@ -829,6 +918,17 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             continue;
         }
         let resampled = resampled_rasters(layer, footprint);
+        if layer.kind == KIND_ADJUST {
+            var coverage = layer.opacity;
+            if (layer.flags & FLAG_MASK) != 0u {
+                coverage *= mask_coverage(layer, footprint, resampled[1]);
+            }
+            acc = adjust_layer(layer, acc, coverage);
+            if footprint.exact {
+                acc = saturated(acc, count);
+            }
+            continue;
+        }
         if layer.kind == KIND_GROUP_END {
             if depth == 0u {
                 continue;
