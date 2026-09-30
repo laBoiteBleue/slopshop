@@ -39,8 +39,90 @@
   const live = (request: EditRequest) => onlive(documentId, request);
   const gestureEnd = () => ongestureend(documentId);
 
-  // Panels list layers top to bottom, like every image editor.
-  let rows = $derived([...doc.layers].reverse());
+  // Panels list layers top to bottom, like every image editor. Groups (ADR 0015) show their
+  // layers indented below them, unless folded.
+  type Row = {
+    layer: LayerView;
+    /** Groups around the layer. */
+    depth: number;
+    /** Its group, null at the top level. */
+    parent: number | null;
+    /** Its index among its siblings (0 = bottom). */
+    index: number;
+    /** Visible, and so are all its groups. */
+    shown: boolean;
+  };
+  /** Groups folded in the panel (UI state, like the selection). */
+  let collapsed = $state<Set<number>>(new Set());
+
+  /** Rows as displayed, top to bottom: each group above its layers, unless folded. */
+  function flatten(
+    layers: LayerView[],
+    depth: number,
+    parent: number | null,
+    shown: boolean,
+    out: Row[],
+  ): Row[] {
+    for (let index = layers.length - 1; index >= 0; index--) {
+      const layer = layers[index];
+      const visible = shown && layer.visible;
+      out.push({ layer, depth, parent, index, shown: visible });
+      if (layer.kind === "group" && !collapsed.has(layer.id)) {
+        flatten(layer.children, depth + 1, layer.id, visible, out);
+      }
+    }
+    return out;
+  }
+  let rows = $derived(flatten(doc.layers, 0, null, true, []));
+
+  /** Every layer, depth first, each group before its layers, bottom to top (as the engine). */
+  function walk(layers: LayerView[], out: LayerView[]): LayerView[] {
+    for (const layer of layers) {
+      out.push(layer);
+      walk(layer.children, out);
+    }
+    return out;
+  }
+  let allLayers = $derived(walk(doc.layers, []));
+  /** The group of each layer that is in one. */
+  let parents = $derived.by(() => {
+    const map = new Map<number, number>();
+    for (const layer of allLayers) {
+      for (const child of layer.children) map.set(child.id, layer.id);
+    }
+    return map;
+  });
+
+  /** The layers directly inside `parent` (null: the top level), bottom to top. */
+  function childrenOf(parent: number | null): LayerView[] {
+    if (parent === null) return doc.layers;
+    return allLayers.find((l) => l.id === parent)?.children ?? [];
+  }
+
+  /** Whether `id` is `ancestor` or inside it. */
+  function within(id: number, ancestor: number): boolean {
+    for (let at: number | undefined = id; at !== undefined; at = parents.get(at)) {
+      if (at === ancestor) return true;
+    }
+    return false;
+  }
+
+  /** `ids` without those inside another of them (they go with it). */
+  function outermost(ids: number[]): number[] {
+    const set = new Set(ids);
+    return ids.filter((id) => {
+      for (let at = parents.get(id); at !== undefined; at = parents.get(at)) {
+        if (set.has(at)) return false;
+      }
+      return true;
+    });
+  }
+
+  function toggleFold(id: number) {
+    const next = new Set(collapsed);
+    if (!next.delete(id)) next.add(id);
+    collapsed = next;
+  }
 
   // Selection is UI state, not document state (it is not undoable). Several layers can be
   // selected, as in Photoshop: click selects one, Ctrl+click adds or removes one, Shift+click
@@ -50,9 +132,9 @@
   let activeId = $state<number | null>(null);
   let anchorId: number | null = null;
   let selectedSet = $derived(new Set(selectedIds));
-  let selected = $derived(doc.layers.find((l) => l.id === activeId) ?? null);
-  /** Selected layers, bottom to top. */
-  let selection = $derived(doc.layers.filter((l) => selectedSet.has(l.id)));
+  let selected = $derived(allLayers.find((l) => l.id === activeId) ?? null);
+  /** Selected layers, depth first, bottom to top. */
+  let selection = $derived(allLayers.filter((l) => selectedSet.has(l.id)));
   let knownIds = new Set<number>();
 
   function select(ids: number[], active: number | null) {
@@ -64,11 +146,11 @@
   /** The topmost of `ids` in the stack. */
   function topmost(ids: number[]): number | null {
     const set = new Set(ids);
-    return doc.layers.findLast((l) => set.has(l.id))?.id ?? null;
+    return allLayers.findLast((l) => set.has(l.id))?.id ?? null;
   }
 
   $effect(() => {
-    const ids = doc.layers.map((l) => l.id);
+    const ids = allLayers.map((l) => l.id);
     const created = ids.filter((id) => !knownIds.has(id));
     const first = knownIds.size === 0;
     knownIds = new Set(ids);
@@ -112,7 +194,7 @@
 
   /** Select the rows from the anchor to `id` (inclusive); the anchor stays. */
   function selectRange(id: number) {
-    const displayed = rows.map((l) => l.id);
+    const displayed = rows.map((r) => r.layer.id);
     const from = displayed.indexOf(anchorId ?? id);
     const to = displayed.indexOf(id);
     if (from < 0 || to < 0) return select([id], id);
@@ -147,11 +229,41 @@
 
   export function deleteSelected() {
     if (selection.length === 0) return;
-    void edit(batchOf(selection.map((l) => ({ kind: "removeLayer", id: l.id }))));
+    // A group takes its layers with it.
+    const ids = outermost(selection.map((l) => l.id));
+    void edit(batchOf(ids.map((id) => ({ kind: "removeLayer", id }))));
+  }
+
+  /** A new empty group above the active layer, or at the top. */
+  export function newGroup() {
+    const n = allLayers.filter((l) => l.kind === "group").length + 1;
+    const name = t("layers.defaultGroupName", { n });
+    const parent = selected ? (parents.get(selected.id) ?? null) : null;
+    const index = selected
+      ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
+      : doc.layers.length;
+    void edit({ kind: "addGroup", name, parent, index });
+  }
+
+  /** Put the selected layers into a new group (Layer > Group Layers, Ctrl+G). */
+  export function groupSelected() {
+    if (selection.length === 0) return;
+    const n = allLayers.filter((l) => l.kind === "group").length + 1;
+    void edit({ kind: "groupLayers", ids: selectedIds, name: t("layers.defaultGroupName", { n }) });
+  }
+
+  /** Replace the active group by its layers, which become the selection (Shift+Ctrl+G). */
+  export function ungroupSelected() {
+    const group = selected;
+    if (group?.kind !== "group") return;
+    const children = group.children.map((l) => l.id);
+    void edit({ kind: "ungroup", id: group.id }).then(() => {
+      if (children.length > 0) select(children, children[children.length - 1]);
+    });
   }
 
   export function selectAllLayers() {
-    const ids = doc.layers.map((l) => l.id);
+    const ids = allLayers.map((l) => l.id);
     selectedIds = ids;
     if (activeId === null) activeId = ids.at(-1) ?? null;
     anchorId = activeId;
@@ -201,6 +313,14 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag?.active) {
       drag = null;
+      return;
+    }
+    // Ctrl+G groups the selected layers, Shift+Ctrl+G ungroups, as in Photoshop.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyG" && !e.repeat) {
+      if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      if (e.shiftKey) ungroupSelected();
+      else groupSelected();
       return;
     }
     // Alt+Ctrl+A: select all layers, as in Photoshop.
@@ -290,7 +410,7 @@
 
   function onOpacityFieldChange(input: HTMLInputElement) {
     const ids = new Set(opacityFieldLayers ?? selectedIds);
-    const targets = doc.layers.filter((l) => ids.has(l.id));
+    const targets = allLayers.filter((l) => ids.has(l.id));
     const shownId = opacityFieldLayers ? opacityFieldActive : activeId;
     const n = input.valueAsNumber;
     // Empty or invalid: restore the displayed value instead of treating it as 0.
@@ -313,13 +433,40 @@
     input.value = String(shownId === activeId ? clamped : opacityPercent(selected));
   }
 
+  /** A mode for every selected layer; "passThrough" applies to the selected groups. */
+  function onBlendModeChange(value: string) {
+    const edits: EditRequest[] = [];
+    for (const layer of selection) {
+      if (value === "passThrough") {
+        if (layer.kind === "group" && !layer.passThrough) {
+          edits.push({ kind: "setGroupPassThrough", id: layer.id, passThrough: true });
+        }
+        continue;
+      }
+      edits.push({ kind: "setLayerBlendMode", id: layer.id, mode: value as BlendModeId });
+      if (layer.kind === "group" && layer.passThrough) {
+        edits.push({ kind: "setGroupPassThrough", id: layer.id, passThrough: false });
+      }
+    }
+    if (edits.length > 0) void edit(batchOf(edits));
+  }
+
   // Drag to reorder, with pointer events (HTML5 drag and drop is intercepted by Tauri on
   // Windows, where the window handles file drops). The pointer is captured only once a drag
   // really starts: capturing on pointerdown would retarget click/dblclick to the row and break
   // the buttons inside it (rename, visibility). Releases are tracked on the window, so a press
   // that leaves the list before the threshold cannot leave a stale drag behind.
   const DRAG_THRESHOLD = 4;
-  type Drag = { id: number; from: number; startY: number; active: boolean; slot: number };
+  type Drag = {
+    id: number;
+    from: number;
+    startY: number;
+    active: boolean;
+    /** Insertion position among the displayed rows (0 = above the first row). */
+    slot: number;
+    /** A group row whose middle is under the pointer: the layers go into it. */
+    into: number | null;
+  };
   let drag = $state<Drag | null>(null);
   // A press on a layer of a multiple selection keeps the selection (to drag it all) and
   // selects that layer alone on release if no drag happened.
@@ -352,7 +499,7 @@
     } else {
       select([layer.id], layer.id);
     }
-    drag = { id: layer.id, from: row, startY: e.clientY, active: false, slot: row };
+    drag = { id: layer.id, from: row, startY: e.clientY, active: false, slot: row, into: null };
   }
 
   function onRowPointerMove(e: PointerEvent) {
@@ -368,17 +515,32 @@
       // Keep receiving moves and the final pointerup even outside the list.
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
-    // Slot = insertion position among displayed rows (0 = above the first row).
     const items = [...list.querySelectorAll<HTMLElement>("li[data-row]")];
     drag.slot = items.filter((el) => {
       const r = el.getBoundingClientRect();
       return r.top + r.height / 2 < e.clientY;
     }).length;
+    // The middle half of a group row: into the group (not into one being moved).
+    drag.into = null;
+    for (const el of items) {
+      const r = el.getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 4 || e.clientY > r.bottom - r.height / 4) continue;
+      const group = rows[Number(el.dataset.row)]?.layer;
+      const moving = movingIds(drag.id);
+      if (group?.kind === "group" && !moving.some((id) => within(group.id, id))) {
+        drag.into = group.id;
+      }
+    }
+  }
+
+  /** The layers a drag of `id` moves: the selection when `id` is part of it. */
+  function movingIds(id: number): number[] {
+    return selectedSet.has(id) ? selectedIds : [id];
   }
 
   function onWindowPointerUp() {
     if (!drag) return;
-    const { id, active, slot } = drag;
+    const { id, active, slot, into } = drag;
     drag = null;
     const collapse = collapseOnRelease;
     collapseOnRelease = null;
@@ -386,30 +548,31 @@
       if (collapse === id) select([id], id);
       return;
     }
-    moveToSlot(selectedSet.has(id) ? selectedIds : [id], slot);
+    const ids = outermost(movingIds(id));
+    const target = dropTarget(new Set(ids), into, slot);
+    // The engine leaves layers already in place alone (no undo entry when nothing moves).
+    if (target) void edit({ kind: "moveLayers", ids, ...target });
   }
 
   /**
-   * Move `ids` (keeping their order) to `slot`, an insertion position among the displayed rows
-   * (0 = above the first row), as one undo entry.
+   * Where a drop puts the `moving` layers: into group `into` (at its top), else just above the
+   * row at `slot` (below the last row: the bottom of the stack). `index` counts the layers of
+   * `parent` that stay. Null for a drop inside one of the moving groups.
    */
-  function moveToSlot(ids: number[], slot: number) {
-    const moving = new Set(ids);
-    const displayed = rows.map((l) => l.id);
-    const above = displayed.slice(0, slot).filter((id) => !moving.has(id));
-    const below = displayed.slice(slot).filter((id) => !moving.has(id));
-    const moved = displayed.filter((id) => moving.has(id));
-    // Rows are displayed top to bottom; the stack counts from the bottom.
-    const target = [...above, ...moved, ...below].reverse();
-    const order = doc.layers.map((l) => l.id);
-    const edits: EditRequest[] = [];
-    target.forEach((id, index) => {
-      if (order[index] === id) return;
-      order.splice(order.indexOf(id), 1);
-      order.splice(index, 0, id);
-      edits.push({ kind: "moveLayer", id, index });
-    });
-    if (edits.length > 0) void edit(batchOf(edits));
+  function dropTarget(
+    moving: Set<number>,
+    into: number | null,
+    slot: number,
+  ): { parent: number | null; index: number } | null {
+    const staying = (layers: LayerView[]) => layers.filter((l) => !moving.has(l.id));
+    if (into !== null) return { parent: into, index: staying(childrenOf(into)).length };
+    const row = rows[slot];
+    if (!row) return { parent: null, index: 0 };
+    if (row.parent !== null && [...moving].some((id) => within(row.parent as number, id))) {
+      return null;
+    }
+    const index = staying(childrenOf(row.parent).slice(0, row.index + 1)).length;
+    return { parent: row.parent, index };
   }
 </script>
 
@@ -431,18 +594,17 @@
       class="blend-mode"
       aria-label={t("layers.blendMode")}
       title={t("layers.blendMode")}
-      value={selected?.blendMode ?? "normal"}
+      value={selected?.kind === "group" && selected.passThrough
+        ? "passThrough"
+        : (selected?.blendMode ?? "normal")}
       disabled={!selected}
-      onchange={(e) => {
-        const mode = e.currentTarget.value as BlendModeId;
-        const edits = selection.map((l) => ({
-          kind: "setLayerBlendMode" as const,
-          id: l.id,
-          mode,
-        }));
-        if (edits.length > 0) void edit(batchOf(edits));
-      }}
+      onchange={(e) => onBlendModeChange(e.currentTarget.value)}
     >
+      {#if selected?.kind === "group"}
+        <!-- Groups only: their layers blend through them (ADR 0015). -->
+        <option value="passThrough">{t("blendMode.passThrough")}</option>
+        <hr />
+      {/if}
       {#each BLEND_MODE_GROUPS as group, i (i)}
         {#if i > 0}<hr />{/if}
         {#each group as mode (mode)}
@@ -507,13 +669,17 @@
       if (e.button === 0 && e.target === e.currentTarget) deselectLayers();
     }}
   >
-    {#each rows as layer, row (layer.id)}
+    {#each rows as { layer, depth, shown }, row (layer.id)}
       <li
         data-row={row}
         class:selected={selectedSet.has(layer.id)}
-        class:hidden-layer={!layer.visible}
-        class:drop-before={drag?.active && drag.slot === row}
-        class:drop-after={drag?.active && row === rows.length - 1 && drag.slot === rows.length}
+        class:hidden-layer={!shown}
+        class:drop-into={drag?.active && drag.into === layer.id}
+        class:drop-before={drag?.active && drag.into === null && drag.slot === row}
+        class:drop-after={drag?.active &&
+          drag.into === null &&
+          row === rows.length - 1 &&
+          drag.slot === rows.length}
         onpointerdown={(e) => onRowPointerDown(e, row, layer)}
         onpointermove={onRowPointerMove}
       >
@@ -525,7 +691,21 @@
         >
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
-        <span class="thumb"><LayerThumbnail {documentId} {layer} size={36} /></span>
+        {#if depth > 0}<span class="indent" style:width="{depth * 16}px"></span>{/if}
+        {#if layer.kind === "group"}
+          <button
+            class="fold"
+            title={t(collapsed.has(layer.id) ? "layers.expand" : "layers.collapse")}
+            aria-expanded={!collapsed.has(layer.id)}
+            onpointerdown={(e) => e.stopPropagation()}
+            onclick={() => toggleFold(layer.id)}
+          >
+            <Icon name={collapsed.has(layer.id) ? "chevronRight" : "chevronDown"} size={12} />
+          </button>
+          <span class="thumb folder"><Icon name="folder" size={26} /></span>
+        {:else}
+          <span class="thumb"><LayerThumbnail {documentId} {layer} size={36} /></span>
+        {/if}
         {#if layer.mask}
           <!-- Shift+click toggles the mask, as in Photoshop. -->
           <button
@@ -582,6 +762,9 @@
 
   <div class="footer">
     <input type="color" bind:value={newColor} title={t("layers.fillColor")} />
+    <button class="tool" title={t("layers.newGroup")} onclick={newGroup}>
+      <Icon name="folderPlus" />
+    </button>
     <button class="tool" title={t("layers.addFill")} onclick={addFill}>
       <Icon name="plus" />
     </button>
@@ -705,6 +888,41 @@
     height: 2px;
     background: var(--accent);
     z-index: 1;
+  }
+
+  li.drop-into {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .indent {
+    flex: none;
+  }
+
+  .fold {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 100%;
+    margin-left: 2px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    flex: none;
+  }
+
+  .fold:hover {
+    color: var(--text);
+  }
+
+  .thumb.folder {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    margin-left: 2px;
+    color: var(--text-muted);
   }
 
   li.drop-before::before {

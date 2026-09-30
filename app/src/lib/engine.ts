@@ -101,8 +101,15 @@ export type EditRequest =
   | { kind: "setLayerVisible"; id: number; visible: boolean }
   | { kind: "setLayerOpacity"; id: number; opacity: number }
   | { kind: "renameLayer"; id: number; name: string }
-  /** `index` is the final position in the stack, 0 = bottom. */
-  | { kind: "moveLayer"; id: number; index: number }
+  /** `index` is the final position among the layers of `parent` (null: the top level), 0 = bottom. */
+  | { kind: "moveLayer"; id: number; parent?: number | null; index: number }
+  /** `index` counts the layers of `parent` that do not move (0 = below them all). */
+  | { kind: "moveLayers"; ids: number[]; parent: number | null; index: number }
+  | { kind: "addGroup"; name: string; parent: number | null; index: number }
+  /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
+  | { kind: "groupLayers"; ids: number[]; name: string }
+  | { kind: "ungroup"; id: number }
+  | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }

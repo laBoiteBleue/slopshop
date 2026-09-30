@@ -2086,6 +2086,76 @@ mod tests {
     }
 
     #[test]
+    fn group_requests_build_the_layer_tree() {
+        let mut s = blank_session();
+        let apply = |s: &mut Session, json: String| {
+            let edit = serde_json::from_str::<EditRequest>(&json)
+                .unwrap()
+                .into_edit(s)
+                .unwrap();
+            s.perform(edit).unwrap();
+        };
+        for name in ["a", "b"] {
+            apply(
+                &mut s,
+                format!(r#"{{"kind":"addFillLayer","name":"{name}","color":[1,0,0,1]}}"#),
+            );
+        }
+        let ids: Vec<u64> = s.document().layers().iter().map(|l| l.id.get()).collect();
+        apply(
+            &mut s,
+            format!(
+                r#"{{"kind":"groupLayers","ids":[{},{}],"name":"G"}}"#,
+                ids[1], ids[2]
+            ),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers.len(), 2);
+        let group = &view.layers[1];
+        assert_eq!((group.kind, group.pass_through), ("group", true));
+        assert_eq!(group.children.len(), 2);
+        let g = group.id;
+
+        // A new group inside, then the bottom layer moved into it; pass-through off.
+        apply(
+            &mut s,
+            format!(r#"{{"kind":"addGroup","name":"inner","parent":{g},"index":2}}"#),
+        );
+        let inner = s
+            .document()
+            .layer(LayerId::from_raw(g))
+            .unwrap()
+            .children()
+            .unwrap()[2]
+            .id
+            .get();
+        apply(
+            &mut s,
+            format!(
+                r#"{{"kind":"moveLayers","ids":[{}],"parent":{inner},"index":0}}"#,
+                ids[0]
+            ),
+        );
+        apply(
+            &mut s,
+            format!(r#"{{"kind":"setGroupPassThrough","id":{g},"passThrough":false}}"#),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers.len(), 1);
+        assert!(!view.layers[0].pass_through);
+        assert_eq!(view.layers[0].children[2].children[0].id, ids[0]);
+
+        apply(&mut s, format!(r#"{{"kind":"ungroup","id":{g}}}"#));
+        let names: Vec<&str> = s
+            .document()
+            .layers()
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect();
+        assert_eq!(names, ["a", "b", "inner"]);
+    }
+
+    #[test]
     fn blend_requests_become_edits_and_unknown_ids_are_errors() {
         let mut s = blank_session();
         let id = s.document().layers()[0].id.get();
