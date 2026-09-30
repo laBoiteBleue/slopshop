@@ -65,9 +65,24 @@
   }
 
   /** `#rrggbb` → sRGB-encoded RGBA in [0, 1]. The engine converts it to its working space. */
-  function addFill() {
+  export function addFill() {
     const name = t("layers.defaultFillName", { n: doc.layers.length + 1 });
     edit({ kind: "addFillLayer", name, color: [...hexToSrgb(newColor), 1] });
+  }
+
+  // Commands of the Layer menu, on the selected layer.
+
+  /** The selected layer, if any. */
+  export function selectedLayer(): LayerView | null {
+    return selected;
+  }
+
+  export function renameSelected() {
+    if (selected) renaming = selected.id;
+  }
+
+  export function deleteSelected() {
+    if (selected) void edit({ kind: "removeLayer", id: selected.id });
   }
 
   // Rename: double-click on the name, or F2 on the selected layer.
