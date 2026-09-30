@@ -40,7 +40,8 @@ do not depend on each other: export receives its pixel source as a closure (see
   parametric, PQ, HLG…), conversion matrices with Bradford adaptation, the working space
   (linear Rec.2020, [ADR 0007](adr/0007-color-management.md)), `PixelFormat`, f16 conversion.
 - `raster`: immutable tiled images (256 px tiles in the source format, shared via `Arc`) with a
-  display pyramid ([ADR 0005](adr/0005-pixel-storage-v0.md)).
+  display pyramid ([ADR 0005](adr/0005-pixel-storage-v0.md)). An image smaller than its canvas
+  (`from_placed`) shares one tile, and its pyramid tiles, for the uniform area around it.
 - `document`: a layer stack, bottom to top, addressed by stable `LayerId`s that are never
   reused. Layers are procedural *fills* or *rasters*, each with an opacity, a blend mode and an
   optional mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision` increases on every change.
@@ -78,8 +79,9 @@ more raster images than the GPU tile cache holds.
 ### `slopshop-io` (implemented, minimal)
 
 Decodes files into `RasterImage` in their native precision (`image` codecs, `tiff` directly, an
-in-house PSD/PSB reader for the flattened composite in `psd`), with an in-house matrix/TRC ICC
-reader and EXIF orientation. Formats not supported yet are recognized
+in-house PSD/PSB reader in `psd`), with an in-house matrix/TRC ICC reader and EXIF orientation.
+`open_file` opens a layered file (Photoshop) as a `Document` with warnings per layer, anything
+else as an image; `open_image` always gives an image (a PSD's flattened composite). Formats not supported yet are recognized
 and refused with an explicit reason; see [ADR 0006](adr/0006-universal-import-and-licensing.md).
 
 Export (`export`) writes PNG (8/16-bit), TIFF (8/16-bit, 32-bit float; BigTIFF when needed),

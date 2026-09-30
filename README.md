@@ -89,7 +89,8 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   [ADR 0011](docs/adr/0011-gray-export.md)).
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS,
-  and Photoshop PSD/PSB (their flattened image for now: layers come next).
+  and Photoshop PSD/PSB with their layers (blend modes, masks, solid color fills; groups,
+  adjustment layers and layer styles are not supported yet and are reported).
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
   JPEG XL, JPEG 2000, AVIF, DICOM, camera RAW and more are planned
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.

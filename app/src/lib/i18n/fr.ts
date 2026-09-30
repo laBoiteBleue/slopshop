@@ -71,7 +71,21 @@ const fr: Messages = {
   "open.warning.blendSpaceDiffers":
     "Des calques viennent d'un document qui fusionne différemment : ils suivent maintenant l'espace de fusion de ce document",
   "open.warning.layersFlattened":
-    "Les calques Photoshop ne sont pas encore importés : l'image aplatie a été ouverte",
+    "Les calques Photoshop n'ont pas pu être importés : l'image aplatie a été ouverte",
+  "open.warning.groupsFlattened":
+    "Les groupes de calques ne sont pas encore pris en charge : leurs calques ont été importés sans eux",
+  "open.warning.clippingIgnored":
+    "Les masques d'écrêtage ne sont pas encore pris en charge : les calques écrêtés s'affichent sans écrêtage",
+  "open.warning.adjustmentLayersSkipped":
+    "Les calques de réglage et de remplissage ne sont pas encore pris en charge : ils ont été ignorés",
+  "open.warning.layerStylesIgnored":
+    "Les styles de calque et les options de fusion avancées ne sont pas encore pris en charge : ils ont été ignorés",
+  "open.warning.layersRasterized":
+    "Textes, formes, objets dynamiques et masques vectoriels ont été importés en pixels",
+  "open.warning.pixelsOutsideCanvas":
+    "Les parties de calques hors de la zone de travail ont été recadrées",
+  "open.warning.masksSimplified":
+    "La densité et le contour progressif des masques, et les masques vectoriels combinés à un masque de fusion, ne sont pas encore pris en charge : ils ont été ignorés",
   "open.warning.colorInfoUnsupported":
     "Informations de couleur du fichier pas encore prises en charge : couleurs lues en sRGB",
 
@@ -90,7 +104,7 @@ const fr: Messages = {
   "open.skipped": "{count} fichiers ignorés : pas des images que SlopShop sait ouvrir",
   "open.error.archive": "impossible de lire ce dossier ou cette archive zip ({detail})",
   "open.error.psdWithoutComposite":
-    "ce document Photoshop a été enregistré sans son image aplatie (« Compatibilité maximale » désactivée) : SlopShop ne sait pas encore ouvrir ses calques",
+    "ce document Photoshop a été enregistré sans son image aplatie (« Compatibilité maximale » désactivée) et ses calques n'ont pas pu être lus",
   "open.error.internal": "erreur interne ({detail})",
 
   "save.title": "Enregistrer sous",

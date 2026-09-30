@@ -368,6 +368,18 @@ impl AppState {
         warnings: Vec<&'static str>,
         file: Option<SlopFile>,
     ) -> Result<DocumentView, String> {
+        let per_layer = vec![warnings; session.document().layers().len()];
+        self.add_document_with(session, name, per_layer, file)
+    }
+
+    /// [`Self::add_document_from`], with the warnings of each layer (in the document's order).
+    fn add_document_with(
+        &self,
+        session: Session,
+        name: Option<String>,
+        warnings: Vec<Vec<&'static str>>,
+        file: Option<SlopFile>,
+    ) -> Result<DocumentView, String> {
         let meta = DocumentMeta {
             id: self.next_document_id.fetch_add(1, Ordering::Relaxed),
             name,
@@ -377,16 +389,16 @@ impl AppState {
         let mut document = OpenDocument::new(session, meta, output);
         document.path = file.as_ref().map(|f| f.path().to_owned());
         document.file = file;
-        if !warnings.is_empty() {
-            let ids: Vec<LayerId> = document
-                .session
-                .document()
-                .layers()
-                .iter()
-                .map(|l| l.id)
-                .collect();
-            for id in ids {
-                document.layer_warnings.insert(id, warnings.clone());
+        let ids: Vec<LayerId> = document
+            .session
+            .document()
+            .layers()
+            .iter()
+            .map(|l| l.id)
+            .collect();
+        for (id, warnings) in ids.into_iter().zip(warnings) {
+            if !warnings.is_empty() {
+                document.layer_warnings.insert(id, warnings);
             }
         }
         let view = document.view();
@@ -574,13 +586,19 @@ fn open_path(
         let decoded = if target_gone {
             Err((CODE_DOCUMENT_CLOSED, DOCUMENT_CLOSED.to_owned()))
         } else {
-            slopshop_io::open_image(path).map_err(|e| (e.code(), e.to_string()))
+            slopshop_io::open_file(path).map_err(|e| (e.code(), e.to_string()))
         };
-        decoded.and_then(|imported| {
+        decoded.and_then(|opened| {
             if let Some(turn) = turn {
                 turn.wait();
             }
-            insert_imported(&state, path, &name, imported, target).map_err(|e| {
+            let inserted = match opened {
+                slopshop_io::Opened::Image(imported) => {
+                    insert_imported(&state, path, &name, imported, target)
+                }
+                slopshop_io::Opened::Layers(layers) => insert_layers(&state, &name, layers, target),
+            };
+            inserted.map_err(|e| {
                 let code = if e == DOCUMENT_CLOSED {
                     CODE_DOCUMENT_CLOSED
                 } else {
@@ -648,6 +666,42 @@ fn insert_imported(
         warnings,
         target,
     )
+}
+
+/// Put a layered file (Photoshop) into its target: a new tab, or its layers on top of the
+/// document (undoable). Each layer keeps the file's warnings and its own.
+fn insert_layers(
+    state: &AppState,
+    name: &str,
+    imported: slopshop_io::ImportedLayers,
+    target: OpenTarget,
+) -> Result<DocumentView, String> {
+    let common: Vec<&'static str> = imported.warnings.iter().map(|w| w.id()).collect();
+    let warnings: Vec<Vec<&'static str>> = imported
+        .layer_warnings
+        .iter()
+        .map(|own| {
+            let mut all = common.clone();
+            for id in own.iter().map(|w| w.id()) {
+                if !all.contains(&id) {
+                    all.push(id);
+                }
+            }
+            all
+        })
+        .collect();
+    match target {
+        OpenTarget::NewTab => state.add_document_with(
+            Session::new(imported.document),
+            Some(name.to_owned()),
+            warnings,
+            None,
+        ),
+        OpenTarget::Layer { document_id } => state.documents().and_then(|mut documents| {
+            let target = documents.get_mut(document_id)?;
+            insert_document_layers(target, &imported.document, warnings)
+        }),
+    }
 }
 
 /// Put an image into its target: a new tab named `tab_name`, or a new top layer (undoable);

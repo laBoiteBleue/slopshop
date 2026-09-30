@@ -194,6 +194,13 @@ export type ImportWarning =
   | "nonFiniteSamples"
   | "colorInfoUnsupported"
   | "layersFlattened"
+  | "groupsFlattened"
+  | "clippingIgnored"
+  | "adjustmentLayersSkipped"
+  | "layerStylesIgnored"
+  | "layersRasterized"
+  | "pixelsOutsideCanvas"
+  | "masksSimplified"
   | "blendSpaceDiffers";
 
 export type OpenErrorCode =
