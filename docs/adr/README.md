@@ -21,5 +21,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0014 | [Layer masks](0014-layer-masks.md)                              | accepted |
 | 0015 | [Layer groups](0015-layer-groups.md)                            | accepted |
 | 0016 | [Clipping masks](0016-clipping-masks.md)                        | accepted |
+| 0017 | [Non-destructive transforms](0017-non-destructive-transforms.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

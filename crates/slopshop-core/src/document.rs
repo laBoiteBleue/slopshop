@@ -96,6 +96,8 @@ pub struct Layer {
     /// Shown only where the nearest layer below it that is not clipped (its base) has pixels:
     /// a clipping mask (ADR 0016).
     pub clipped: bool,
+    /// From the layer's content (and mask) to its parent's space (ADR 0017).
+    pub transform: crate::transform::Affine,
 }
 
 /// A layer mask (ADR 0014): a gray raster at the document origin whose samples are the layer's
@@ -430,6 +432,9 @@ fn validate_restored(
         if crate::edit::validate_opacity(layer.opacity).is_err() {
             return Err(RestoreError::InvalidOpacity(id));
         }
+        if crate::edit::validate_transform(layer.transform).is_err() {
+            return Err(RestoreError::UnsupportedTransform(id));
+        }
         if let LayerContent::Fill { color } = &layer.content
             && !color.is_finite()
         {
@@ -469,6 +474,8 @@ pub enum RestoreError {
     InvalidMask(LayerId),
     /// A group nested deeper than [`MAX_GROUP_DEPTH`].
     TooDeep(LayerId),
+    /// A transform the compositors cannot apply yet (ADR 0017).
+    UnsupportedTransform(LayerId),
 }
 
 impl fmt::Display for RestoreError {
@@ -484,6 +491,9 @@ impl fmt::Display for RestoreError {
             RestoreError::InvalidOpacity(id) => write!(f, "{id} has an invalid opacity"),
             RestoreError::InvalidColor(id) => write!(f, "{id} has a non-finite color"),
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
+            RestoreError::UnsupportedTransform(id) => {
+                write!(f, "{id} has a transform that is not supported yet")
+            }
             RestoreError::TooDeep(id) => {
                 write!(f, "{id} is nested deeper than {MAX_GROUP_DEPTH} groups")
             }
@@ -500,6 +510,7 @@ mod tests {
 
     fn fill(id: u64, opacity: f32) -> Layer {
         Layer {
+            transform: crate::transform::Affine::IDENTITY,
             clipped: false,
             id: LayerId(id),
             name: format!("fill {id}"),

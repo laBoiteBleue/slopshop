@@ -17,8 +17,8 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_FILL, NODE_GROUP,
-    NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR, Schema, Writer,
+    NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_TRANSFORMED, NodeDto,
+    PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -444,6 +444,12 @@ fn build_manifest(
         if layer.clipped {
             params.insert("clipped".to_owned(), Value::from(true));
         }
+        if !layer.transform.is_identity() {
+            params.insert(
+                "transform".to_owned(),
+                Value::from(layer.transform.to_array().to_vec()),
+            );
+        }
         if let Some(mask) = &layer.mask {
             let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
             params.insert(
@@ -459,7 +465,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer.clipped {
+                version: if !layer.transform.is_identity() {
+                    NODE_VERSION_TRANSFORMED
+                } else if layer.clipped {
                     NODE_VERSION_CLIPPED
                 } else {
                     NODE_VERSION

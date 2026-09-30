@@ -44,7 +44,8 @@ do not depend on each other: export receives its pixel source as a closure (see
   (`from_placed`) shares one tile, and its pyramid tiles, for the uniform area around it.
 - `document`: a layer tree, bottom to top, addressed by stable `LayerId`s that are never
   reused. Layers are procedural *fills*, *rasters* or *groups* of other layers
-  ([ADR 0015](adr/0015-layer-groups.md)), each with an opacity, a blend mode and an optional
+  ([ADR 0015](adr/0015-layer-groups.md)), each with an opacity, a blend mode, a transform to its parent
+  ([ADR 0017](adr/0017-non-destructive-transforms.md)) and an optional
   mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision`
   increases on every change.
 - `thumbnail`: small previews of rasters for the UI, read from the coarsest pyramid level

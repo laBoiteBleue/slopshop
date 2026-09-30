@@ -90,7 +90,11 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       ([ADR 0014](adr/0014-layer-masks.md)); thumbnails in the layers panel
 - [x] Dissolve blend mode (a noise fixed by document position, identical on CPU and GPU)
 - [ ] Painting in masks (with the brushes of Phase 3)
-- [ ] Non-destructive transforms (move, scale, rotate) with quality resampling
+- [x] Non-destructive transforms, step 1 ([ADR 0017](adr/0017-non-destructive-transforms.md)): a
+      transform per layer (a group's applies inside it), whole-pixel moves rendered exactly,
+      the Move tool (drag on the image, arrows, Shift+arrows), `.slop` 0.6
+- [ ] Transforms, step 2: Free Transform (Ctrl+T: scale, rotate, flip) with quality resampling;
+      Image Size, Canvas Size, Crop and Rotate Image as transforms of the layers
 - [ ] Adjustment layers as nodes (levels, curves, hue/saturation, exposure)
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,

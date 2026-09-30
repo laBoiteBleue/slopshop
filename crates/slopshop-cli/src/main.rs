@@ -182,6 +182,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                 parent: None,
                 index,
                 layer: Layer {
+                    transform: slopshop_core::Affine::IDENTITY,
                     clipped: false,
                     id,
                     name: name.into(),

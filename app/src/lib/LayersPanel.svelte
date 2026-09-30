@@ -264,6 +264,19 @@
     if (edits.length > 0) void edit(batchOf(edits));
   }
 
+  const ARROWS: Record<string, [number, number]> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+
+  /** Move the selected layers by whole document pixels (one undo entry). */
+  export function moveSelected(dx: number, dy: number) {
+    if (selection.length === 0 || (dx === 0 && dy === 0)) return;
+    void edit({ kind: "translateLayers", ids: selectedIds, dx, dy });
+  }
+
   /** Copies of the selected layers, each above its original (Layer > Duplicate Layer, Ctrl+J). */
   export function duplicateSelected() {
     if (selection.length === 0) return;
@@ -371,6 +384,16 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag?.active) {
       endDrag();
+      return;
+    }
+    // Arrows move the selected layers by 1 pixel, 10 with Shift (the Move tool, ADR 0017).
+    const arrow = ARROWS[e.key];
+    if (arrow && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.target instanceof HTMLInputElement || isTextField(e.target)) return;
+      if (document.querySelector("dialog[open]") || renaming !== null) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      moveSelected(arrow[0] * step, arrow[1] * step);
       return;
     }
     // Alt+Ctrl+G clips the selected layers to the layers below them, or releases them.

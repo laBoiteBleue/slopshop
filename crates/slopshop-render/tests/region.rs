@@ -32,6 +32,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
             parent: None,
             index,
             layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: "layer".into(),
@@ -781,6 +782,7 @@ fn push_into(
             parent,
             index,
             layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: "layer".into(),
@@ -954,6 +956,80 @@ fn gpu_clipping_masks_match_the_cpu_reference_compositor() {
             1.0,
         );
         clip(&mut s, clipped_group);
+
+        for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
+            let gpu = render(&r, s.document(), region);
+            let mut cpu = vec![0.0; gpu.len()];
+            slopshop_core::composite::composite_region(s.document(), region, &mut cpu).unwrap();
+            for (i, (g, c)) in gpu.iter().zip(&cpu).enumerate() {
+                let tolerance = 1e-4 * c.abs().max(1.0);
+                assert!(
+                    (g - c).abs() <= tolerance,
+                    "{space:?} {region:?} sample {i}: GPU {g} vs CPU {c}"
+                );
+            }
+        }
+    }
+}
+
+/// Move layer `id` by whole pixels.
+fn translate(session: &mut Session, id: LayerId, x: f64, y: f64) {
+    session
+        .perform(Edit::SetLayerTransform {
+            id,
+            transform: slopshop_core::Affine::translation(x, y),
+        })
+        .unwrap();
+}
+
+#[test]
+fn gpu_moved_layers_match_the_cpu_reference_compositor() {
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        let mut s = Session::new(Document::new(size));
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        let background = image(size, PixelFormat::RGBA8_SRGB, pattern);
+        let bg = push_into(&mut s, None, raster(&background), BlendMode::Normal, 1.0);
+        translate(&mut s, bg, -37.0, 21.0);
+        let small = image(Size::new(180, 150), PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![(x * 3) as u8, (y * 5) as u8, 90, ((x + y) % 256) as u8]
+        });
+        let moved = push_into(&mut s, None, raster(&small), BlendMode::Multiply, 0.8);
+        translate(&mut s, moved, 200.0, -40.0);
+        // A moved, masked group holding a moved layer and a clipped one.
+        let folder = push_into(&mut s, None, group(false), BlendMode::Screen, 0.9);
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let mask = image(Size::new(200, 200), gray, |x, _| vec![(x % 256) as u8]);
+        s.perform(Edit::SetLayerMask {
+            id: folder,
+            mask: Some(slopshop_core::LayerMask {
+                image: mask,
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        })
+        .unwrap();
+        translate(&mut s, folder, 60.0, 50.0);
+        let inside = push_into(&mut s, Some(folder), raster(&small), BlendMode::Normal, 1.0);
+        translate(&mut s, inside, -20.0, 10.0);
+        let clipped = push_into(
+            &mut s,
+            Some(folder),
+            raster(&background),
+            BlendMode::Overlay,
+            1.0,
+        );
+        s.perform(Edit::SetLayerClipped {
+            id: clipped,
+            clipped: true,
+        })
+        .unwrap();
 
         for region in [Rect::new(0, 0, 300, 280), Rect::new(250, 100, 50, 180)] {
             let gpu = render(&r, s.document(), region);

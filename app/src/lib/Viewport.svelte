@@ -21,6 +21,8 @@
     revision,
     native = false,
     onframe,
+    onmove,
+    onmoveend,
   }: {
     /** Open document. Read once: the viewport is recreated for another document. */
     documentId: number;
@@ -32,6 +34,12 @@
      */
     native?: boolean;
     onframe?: (stats: FrameStats) => void;
+    /**
+     * The Move tool (ADR 0017): a left drag on the image moves by (`dx`, `dy`) document pixels
+     * (fractions: the owner rounds), then ends.
+     */
+    onmove?: (dx: number, dy: number) => void;
+    onmoveend?: () => void;
   } = $props();
 
   // One viewport per document (it is keyed by document): capture the id, since props are
@@ -393,15 +401,33 @@
     );
   }
 
+  // Move tool: a left drag (without Space) moves the selected layers.
+  let moving = $state<{ pointerId: number; x: number; y: number } | null>(null);
+
   function onPointerDown(e: PointerEvent) {
     const hand = e.button === 1 || (e.button === 0 && spaceHeld);
-    if (!hand) return;
+    if (!hand) {
+      if (e.button === 0 && onmove) {
+        container.setPointerCapture(e.pointerId);
+        moving = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+      }
+      return;
+    }
     e.preventDefault(); // no middle-click autoscroll
     container.setPointerCapture(e.pointerId);
     panning = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (moving && e.pointerId === moving.pointerId) {
+      // Output pixels are device pixels; a document pixel is `zoom` of them.
+      const scale = window.devicePixelRatio / (target?.zoom ?? 1);
+      const dx = (e.clientX - moving.x) * scale;
+      const dy = (e.clientY - moving.y) * scale;
+      moving = { ...moving, x: e.clientX, y: e.clientY };
+      if (dx !== 0 || dy !== 0) onmove?.(dx, dy);
+      return;
+    }
     if (!panning || e.pointerId !== panning.pointerId) return;
     const dpr = window.devicePixelRatio;
     const dx = (e.clientX - panning.x) * dpr;
@@ -412,6 +438,10 @@
 
   function endPan(e: PointerEvent) {
     if (panning && e.pointerId === panning.pointerId) panning = null;
+    if (moving && e.pointerId === moving.pointerId) {
+      moving = null;
+      onmoveend?.();
+    }
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
@@ -453,6 +483,10 @@
   onblur={() => {
     spaceHeld = false;
     panning = null;
+    if (moving) {
+      moving = null;
+      onmoveend?.();
+    }
   }}
 />
 
@@ -461,6 +495,7 @@
   class:native={presentsNatively}
   class:hand={spaceHeld}
   class:panning={panning !== null}
+  class:move-tool={onmove !== undefined}
   bind:this={container}
   role="presentation"
   onpointerdown={onPointerDown}
@@ -492,6 +527,10 @@
 
   canvas.hidden {
     display: none;
+  }
+
+  .viewport.move-tool {
+    cursor: move;
   }
 
   .viewport.hand {

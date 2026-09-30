@@ -29,6 +29,8 @@ export type LayerView = {
   passThrough: boolean;
   /** Clipped to the layer below it (ADR 0016). */
   clipped: boolean;
+  /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
+  transform: [number, number, number, number, number, number];
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
@@ -115,6 +117,8 @@ export type EditRequest =
   | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
   | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
   | { kind: "setLayerClipped"; id: number; clipped: boolean }
+  /** Move layers by whole document pixels (a group moves whole). */
+  | { kind: "translateLayers"; ids: number[]; dx: number; dy: number }
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }

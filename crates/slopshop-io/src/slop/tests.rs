@@ -62,6 +62,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id,
         name: name.to_owned(),
@@ -197,6 +198,7 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
     for (x, y) in a.iter().zip(b) {
         assert_eq!((x.id, &x.name, x.visible), (y.id, &y.name, y.visible));
         assert_eq!(x.clipped, y.clipped, "{}", x.name);
+        assert_eq!(x.transform, y.transform, "{}", x.name);
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
         match (&x.mask, &y.mask) {
@@ -577,9 +579,26 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
+/// The document of the golden fixture of schema 0.6: the schema 0.5 one, its gradient layer
+/// moved by (-7, 3) and its folder by (5, 0) (ADR 0017).
+fn golden_document() -> Document {
+    let mut doc = golden_document_v0_5();
+    let gradient = doc.layers()[0].id;
+    let folder = doc.layers()[2].id;
+    for (id, x, y) in [(gradient, -7.0, 3.0), (folder, 5.0, 0.0)] {
+        Edit::SetLayerTransform {
+            id,
+            transform: slopshop_core::Affine::translation(x, y),
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    doc
+}
+
 /// The document of the golden fixture of schema 0.5: the schema 0.4 one, its hidden top layer
 /// clipped to the group below it.
-fn golden_document() -> Document {
+fn golden_document_v0_5() -> Document {
     let mut doc = golden_document_v0_4();
     let top = doc.layers().last().unwrap().id;
     Edit::SetLayerClipped {
@@ -603,6 +622,7 @@ fn golden_document_v0_4() -> Document {
     let folder = doc.allocate_layer_id();
     let inner = doc.allocate_layer_id();
     let group = |id, name: &str, pass_through, mode, opacity, mask| Layer {
+        transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id,
         name: name.to_owned(),
@@ -750,6 +770,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.4")).unwrap();
     assert_same(&golden_document_v0_4(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.5")).unwrap();
+    assert_same(&golden_document_v0_5(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.6")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 

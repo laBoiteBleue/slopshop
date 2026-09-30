@@ -468,6 +468,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
         parent: None,
         index: 0,
         layer: Layer {
+            transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,
             name: name.to_owned(),
@@ -790,6 +791,7 @@ fn insert_image(
                 parent: None,
                 index: session.document().layers().len(),
                 layer: Layer {
+                    transform: slopshop_core::Affine::IDENTITY,
                     clipped: false,
                     id: layer_id,
                     name: layer_name.to_owned(),
@@ -1851,6 +1853,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
                 name: "masked".to_owned(),
@@ -1969,6 +1972,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    transform: slopshop_core::Affine::IDENTITY,
                     clipped: false,
                     id: second,
                     name: "second".into(),
@@ -2031,6 +2035,7 @@ mod tests {
         );
         let id = document.session.allocate_layer_id();
         let layer = Layer {
+            transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,
             name: "fill".to_owned(),

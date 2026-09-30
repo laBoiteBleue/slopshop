@@ -19,8 +19,8 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION_CLIPPED, NodeDto,
-    PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    DocumentDto, Manifest, NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION_CLIPPED,
+    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -319,7 +319,7 @@ pub(super) fn read_node(
         return Err(corrupt("a node is used twice"));
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
-    let known_version = (1..=NODE_VERSION_CLIPPED).contains(&node.version);
+    let known_version = (1..=NODE_VERSION_TRANSFORMED).contains(&node.version);
     let content = match node.kind.as_str() {
         NODE_RASTER if known_version => {
             let key = node
@@ -351,7 +351,7 @@ pub(super) fn read_node(
                 color: LinearRgba::new(color[0], color[1], color[2], color[3]),
             }
         }
-        NODE_GROUP if (3..=NODE_VERSION_CLIPPED).contains(&node.version) => {
+        NODE_GROUP if (3..=NODE_VERSION_TRANSFORMED).contains(&node.version) => {
             // Checked before going deeper: the file is untrusted.
             if depth >= MAX_GROUP_DEPTH {
                 return Err(corrupt("groups nested too deep"));
@@ -382,10 +382,12 @@ pub(super) fn read_node(
             .get("clipped")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+    let transform = node_transform(node)?;
     if !node.extra.is_empty() {
         residue.nodes.insert(id, node.extra.clone());
     }
     Ok(Layer {
+        transform,
         clipped,
         id: LayerId::from_raw(id),
         name: node.name.clone(),
@@ -395,6 +397,28 @@ pub(super) fn read_node(
         mask,
         content,
     })
+}
+
+/// A node's transform (version 5; the identity before). One this version cannot apply comes
+/// from a newer SlopShop.
+fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
+    let values = match node.params.get("transform") {
+        None | Some(Value::Null) => return Ok(slopshop_core::Affine::IDENTITY),
+        Some(Value::Array(values)) if node.version >= NODE_VERSION_TRANSFORMED => values,
+        Some(_) => return Err(corrupt("invalid transform")),
+    };
+    let numbers: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
+    let array: [f64; 6] = numbers
+        .try_into()
+        .map_err(|_| corrupt("a transform has six numbers"))?;
+    let transform = slopshop_core::Affine::from_array(array);
+    if !transform.is_finite() {
+        return Err(corrupt("invalid transform"));
+    }
+    if transform.integer_translation().is_none() {
+        return Err(FileError::UnknownNodeType("transform".to_owned()));
+    }
+    Ok(transform)
 }
 
 /// A node's blend mode. Version 1 had none: normal. A mode this version does not know comes

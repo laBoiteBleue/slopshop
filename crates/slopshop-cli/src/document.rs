@@ -51,6 +51,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
         let id = document.allocate_layer_id();
         let index = document.layers().len();
         let layer = Layer {
+            transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,
             name: layer_name(input),
@@ -171,8 +172,13 @@ fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
                 }
             ),
         };
+        let placed = match layer.transform.integer_translation() {
+            _ if layer.transform.is_identity() => String::new(),
+            Some((x, y)) => format!(", moved by ({x}, {y})"),
+            None => format!(", transform {:?}", layer.transform.to_array()),
+        };
         println!(
-            "{}#{} {:?}: {content}, {} at opacity {}{}",
+            "{}#{} {:?}: {content}, {} at opacity {}{}{placed}",
             "  ".repeat(depth),
             layer.id.get(),
             layer.name,
