@@ -32,7 +32,7 @@ USAGE:
                     [--compression fast|small|none|deflate|lzw|lossy|lossless]
                     [--quality 0-100] [--subsampling 444|422|420]
                     [--no-alpha] [--matte RRGGBB] [--no-dither] [--gray | --color]
-                    [--cpu] [--bench]
+                    [--scale FACTOR] [--cpu] [--bench]
         Open a .slop document, or an image file as a one-layer document, and export
         it to PNG, TIFF, OpenEXR, JPEG or WebP with the format's default settings
         (ADR 0008, 0010); each option overrides one of them. Prints the settings used
@@ -60,6 +60,8 @@ USAGE:
                        the file's color space; colors are reported. Default for gray
                        documents (gray images, neutral fills).
         --color        Color samples, even for a gray document.
+        --scale        Resample the whole image by FACTOR first (e.g. 4 or 0.25), like
+                       Image Size: the quality resampling of transformed layers.
         --cpu          Composite on the CPU instead of the GPU (also used when no
                        GPU is available).
         --bench        Also print timings (open, GPU init, export, throughput, time
