@@ -2,6 +2,18 @@
   /** A smart guide: a line in document pixels. */
   export type Guide = { x1: number; y1: number; x2: number; y2: number };
 
+  /** How an overlay (e.g. Free Transform's box) maps between the document and the viewport. */
+  export type ViewMapping = {
+    /** Where a document point is in the viewport, in CSS pixels. */
+    toViewport: (x: number, y: number) => [number, number];
+    /** The document point under a window point (`clientX`, `clientY`). */
+    toDocument: (clientX: number, clientY: number) => [number, number];
+    /** Document pixels per CSS pixel. */
+    docPerCss: number;
+    /** Space is held: a drag pans (the hand tool), overlays let it through. */
+    hand: boolean;
+  };
+
   export type FrameStats = {
     /** 1 = 100%. */
     zoom: number;
@@ -14,7 +26,7 @@
 </script>
 
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { engine, type DeviceRect, type ViewInfo, type ViewRequest } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
@@ -28,6 +40,7 @@
     onmove,
     onmoveend,
     guides = [],
+    overlay,
   }: {
     /** Open document. Read once: the viewport is recreated for another document. */
     documentId: number;
@@ -50,6 +63,8 @@
     onmoveend?: () => void;
     /** Smart guides to draw over the image, in document pixels. */
     guides?: Guide[];
+    /** Drawn over the image, following the view (it handles its own pointer events). */
+    overlay?: Snippet<[ViewMapping]>;
   } = $props();
 
   // One viewport per document (it is keyed by document): capture the id, since props are
@@ -88,6 +103,8 @@
   let shown: View | null = null;
   /** Latest view known from the engine. */
   let target: View | null = null;
+  /** `target`, for what follows the view on screen (overlays). */
+  let targetView = $state<View | null>(null);
   /** View requests sent but not answered yet. */
   let viewRequestsInFlight = 0;
   /** View answers received so far: tells whether the view moved while a frame rendered. */
@@ -191,6 +208,7 @@
       // (e.g. a resize re-fit). Otherwise keep the newer target: the next frame catches up.
       if (viewResponses === responsesAtStart && viewRequestsInFlight === 0 && !animating) {
         target = shown;
+        targetView = target;
       }
       applyReprojection();
       error = null;
@@ -257,6 +275,7 @@
     if (!info || destroyed) return;
     viewResponses++;
     target = { zoom: info.zoom, origin: info.origin };
+    targetView = target;
     applyReprojection();
     // The zoom readout follows the view immediately, not the next frame.
     if (lastStats) report({ ...lastStats, zoom: info.zoom, fit: info.fit });
@@ -466,6 +485,27 @@
     return [((x - view.origin[0]) * view.zoom) / dpr, ((y - view.origin[1]) * view.zoom) / dpr];
   }
 
+  const mapping: ViewMapping | null = $derived.by(() => {
+    const view = targetView;
+    if (!view) return null;
+    const dpr = window.devicePixelRatio;
+    return {
+      toViewport: (x, y) => [
+        ((x - view.origin[0]) * view.zoom) / dpr,
+        ((y - view.origin[1]) * view.zoom) / dpr,
+      ],
+      toDocument: (clientX, clientY) => {
+        const rect = container.getBoundingClientRect();
+        return [
+          view.origin[0] + ((clientX - rect.left) * dpr) / view.zoom,
+          view.origin[1] + ((clientY - rect.top) * dpr) / view.zoom,
+        ];
+      },
+      docPerCss: dpr / view.zoom,
+      hand: spaceHeld,
+    };
+  });
+
   function endPan(e: PointerEvent) {
     if (panning && e.pointerId === panning.pointerId) panning = null;
     if (moving && e.pointerId === moving.pointerId) {
@@ -546,6 +586,9 @@
       style:height="{Math.max(1, Math.round(Math.abs(y2 - y1)))}px"
     ></div>
   {/each}
+  {#if overlay && mapping}
+    {@render overlay(mapping)}
+  {/if}
   {#if error}
     <p class="error" role="alert">{t("viewport.renderFailed", { error })}</p>
   {/if}

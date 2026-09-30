@@ -21,7 +21,9 @@
     type ExportSpec,
     type ExportStarted,
     type GpuInfo,
+    type Bounds,
     type LayerView,
+    type Matrix,
     type SnapTargets,
     type OpenFailed,
     type OpenFinished,
@@ -37,6 +39,8 @@
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import Viewport, { type FrameStats, type Guide } from "./lib/Viewport.svelte";
+  import FreeTransform from "./lib/FreeTransform.svelte";
+  import * as affine from "./lib/affine";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
 
   /** Open documents, in tab order. */
@@ -170,11 +174,26 @@
   }
 
   // Mutations name the document they were made for, taken when the user acts.
-  const edit = (id: number, request: EditRequest) => sync(engine.perform(id, request));
-  const live = (id: number, request: EditRequest) => sync(engine.performLive(id, request));
+  // Any other edit applies a Free Transform in progress first: it is its own gesture.
+  const edit = (id: number, request: EditRequest) => {
+    commitTransform();
+    return sync(engine.perform(id, request));
+  };
+  const live = (id: number, request: EditRequest) => {
+    commitTransform();
+    return sync(engine.performLive(id, request));
+  };
   const endGesture = (id: number) => sync(engine.endGesture(id));
-  const undo = () => active && sync(engine.undo(active.id));
-  const redo = () => active && sync(engine.redo(active.id));
+  const cancelGesture = (id: number) => sync(engine.cancelGesture(id));
+  // Undo during a Free Transform cancels it (the transform is not applied yet).
+  const undo = () => {
+    if (transforming) cancelTransform();
+    else if (active) void sync(engine.undo(active.id));
+  };
+  const redo = () => {
+    commitTransform();
+    if (active) void sync(engine.redo(active.id));
+  };
 
   // --- Tab drag: reorder in the tab bar, or drop on the canvas to copy the tab's layers ---------
   //
@@ -350,7 +369,7 @@
     flushMove(drag);
   }
 
-  /** Send the whole pixels the drag has moved since the last time, snapped. */
+  /** Send the whole pixels the drag has moved since it began, snapped (replacing the last). */
   function flushMove(drag: MoveDrag) {
     if (!drag.ids || drag.ids.length === 0) return;
     let { x, y } = drag.raw;
@@ -366,11 +385,10 @@
     guides = shown;
     const tx = Math.round(x);
     const ty = Math.round(y);
-    const dx = tx - drag.applied.x;
-    const dy = ty - drag.applied.y;
-    if (dx === 0 && dy === 0) return;
+    if (tx === drag.applied.x && ty === drag.applied.y) return;
     drag.applied = { x: tx, y: ty };
-    live(drag.document, { kind: "translateLayers", ids: drag.ids, dx, dy });
+    const move: EditRequest = { kind: "translateLayers", ids: drag.ids, dx: tx, dy: ty };
+    void sync(engine.performLive(drag.document, move, true));
   }
 
   /**
@@ -447,7 +465,73 @@
     const drag = moveDrag;
     moveDrag = null;
     guides = [];
-    if (drag && (drag.applied.x !== 0 || drag.applied.y !== 0)) void endGesture(drag.document);
+    if (!drag?.ids) return;
+    // Back where it started: no undo entry.
+    if (drag.applied.x === 0 && drag.applied.y === 0) void cancelGesture(drag.document);
+    else void endGesture(drag.document);
+  }
+
+  // Free Transform (Ctrl+T, ADR 0018): a box on the image scales, rotates and moves the selected
+  // layers live, as one gesture replaced at each step; Enter applies it (one undo entry), Esc or
+  // undo cancels it. Another edit, another tab or Ctrl+T again applies it first.
+  type Transforming = { document: number; ids: number[]; box: Bounds; matrix: Matrix };
+  let transforming = $state<Transforming | null>(null);
+
+  async function startFreeTransform() {
+    const doc = active;
+    if (!doc || transforming) return;
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (ids.length === 0) return;
+    const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+    // Nothing to transform (empty layers), or the user moved on meanwhile.
+    if (!targets?.moving || active?.id !== doc.id || transforming) return;
+    transforming = { document: doc.id, ids, box: targets.moving, matrix: affine.IDENTITY };
+  }
+
+  function onTransformChange(matrix: Matrix) {
+    const current = transforming;
+    if (!current) return;
+    current.matrix = matrix;
+    const request: EditRequest = { kind: "transformLayers", ids: current.ids, matrix };
+    void sync(engine.performLive(current.document, request, true));
+  }
+
+  function commitTransform() {
+    const current = transforming;
+    if (!current) return;
+    transforming = null;
+    if (affine.isIdentity(current.matrix)) void cancelGesture(current.document);
+    else void endGesture(current.document);
+  }
+
+  function cancelTransform() {
+    const current = transforming;
+    if (!current) return;
+    transforming = null;
+    void cancelGesture(current.document);
+  }
+
+  $effect(() => {
+    if (transforming && transforming.document !== activeId) commitTransform();
+  });
+
+  /**
+   * Edit > Transform's quarter turns and flips of the selected layers, about the center of their
+   * bounds, placed on whole pixels so that their pixels are copied, not resampled.
+   */
+  async function quickTransform(by: Matrix) {
+    commitTransform();
+    const doc = active;
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (!doc || ids.length === 0) return;
+    const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+    const box = targets?.moving;
+    if (!box) return;
+    const around = affine.about(by, (box.left + box.right) / 2, (box.top + box.bottom) / 2);
+    const matrix: Matrix = [...around];
+    matrix[4] = Math.round(matrix[4]);
+    matrix[5] = Math.round(matrix[5]);
+    void edit(doc.id, { kind: "transformLayers", ids, matrix });
   }
 
   /** A thumbnail of the dragged layers following the pointer. */
@@ -1123,6 +1207,41 @@
           cmd(t("menu.edit.paste"), () => void paste(false), keys("mod", "V")),
           cmd(t("menu.edit.pasteNewDocument"), () => void paste(true)),
           separator,
+          cmd(
+            t("menu.edit.freeTransform"),
+            () => (transforming ? commitTransform() : void startFreeTransform()),
+            keys("mod", "T"),
+            !doc || selectedCount === 0,
+          ),
+          {
+            kind: "submenu",
+            label: t("menu.edit.transform"),
+            disabled: !doc || selectedCount === 0,
+            items: [
+              cmd(
+                t("menu.edit.transform.rotate180"),
+                () => void quickTransform(affine.rotation(Math.PI)),
+              ),
+              cmd(
+                t("menu.edit.transform.rotateCw"),
+                () => void quickTransform(affine.rotation(Math.PI / 2)),
+              ),
+              cmd(
+                t("menu.edit.transform.rotateCcw"),
+                () => void quickTransform(affine.rotation(-Math.PI / 2)),
+              ),
+              separator,
+              cmd(
+                t("menu.edit.transform.flipHorizontal"),
+                () => void quickTransform(affine.scaling(-1, 1)),
+              ),
+              cmd(
+                t("menu.edit.transform.flipVertical"),
+                () => void quickTransform(affine.scaling(1, -1)),
+              ),
+            ],
+          },
+          separator,
           {
             kind: "submenu",
             label: t("menu.edit.language"),
@@ -1270,6 +1389,14 @@
     if ((key === "v" || e.code === "KeyV") && !e.shiftKey) {
       e.preventDefault();
       if (!e.repeat) void paste(false);
+      return;
+    }
+    if ((key === "t" || e.code === "KeyT") && !e.shiftKey) {
+      e.preventDefault();
+      if (!e.repeat) {
+        if (transforming) commitTransform();
+        else void startFreeTransform();
+      }
       return;
     }
     if (key === "z" && !e.shiftKey) {
@@ -1465,10 +1592,22 @@
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
-              onmove={onMoveDrag}
+              onmove={transforming ? undefined : onMoveDrag}
               onmoveend={onMoveEnd}
               {guides}
-            />
+            >
+              {#snippet overlay(mapping)}
+                {#if transforming && transforming.document === active?.id}
+                  <FreeTransform
+                    {mapping}
+                    box={transforming.box}
+                    onchange={onTransformChange}
+                    oncommit={commitTransform}
+                    oncancel={cancelTransform}
+                  />
+                {/if}
+              {/snippet}
+            </Viewport>
           {/key}
         {:else if ready}
           <div class="welcome">
