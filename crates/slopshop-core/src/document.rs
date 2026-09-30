@@ -333,6 +333,26 @@ impl Document {
         }
     }
 
+    /// `ids` that are in the document and not inside another of them (a group carries its
+    /// layers), in stacking order: depth first, each group before its layers, bottom to top.
+    pub fn outermost(&self, ids: &[LayerId]) -> Vec<LayerId> {
+        let wanted: HashSet<LayerId> = ids.iter().copied().collect();
+        let inside_another = |id: LayerId| {
+            let mut parent = self.locate(id).and_then(|(parent, _)| parent);
+            while let Some(group) = parent {
+                if wanted.contains(&group) {
+                    return true;
+                }
+                parent = self.locate(group).and_then(|(parent, _)| parent);
+            }
+            false
+        };
+        self.all_layers()
+            .map(|l| l.id)
+            .filter(|&id| wanted.contains(&id) && !inside_another(id))
+            .collect()
+    }
+
     /// Number of groups around a layer: 0 at the top level.
     pub fn depth(&self, id: LayerId) -> Option<usize> {
         let mut depth = 0;

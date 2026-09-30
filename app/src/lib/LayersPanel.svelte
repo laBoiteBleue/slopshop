@@ -21,10 +21,16 @@
     onlive,
     ongestureend,
     contextMenu = [],
+    onlayerdrag,
   }: {
     doc: DocumentView;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
     contextMenu?: MenuItem[];
+    /**
+     * A drag of layers in progress (where the pointer is), or its end (`null`): the app lets it
+     * go on to another tab.
+     */
+    onlayerdrag?: (drag: { ids: number[]; pointerId: number; x: number; y: number } | null) => void;
     /** A discrete edit (one undo entry) of document `documentId`; settles once applied. */
     onedit: (documentId: number, edit: EditRequest) => Promise<void>;
     /** A live edit within a gesture (applied immediately). */
@@ -345,7 +351,7 @@
 
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag?.active) {
-      drag = null;
+      endDrag();
       return;
     }
     // Ctrl+J duplicates the selected layers, as in Photoshop.
@@ -499,6 +505,7 @@
   const DRAG_THRESHOLD = 4;
   type Drag = {
     id: number;
+    pointerId: number;
     from: number;
     startY: number;
     active: boolean;
@@ -539,7 +546,15 @@
     } else {
       select([layer.id], layer.id);
     }
-    drag = { id: layer.id, from: row, startY: e.clientY, active: false, slot: row, into: null };
+    drag = {
+      id: layer.id,
+      pointerId: e.pointerId,
+      from: row,
+      startY: e.clientY,
+      active: false,
+      slot: row,
+      into: null,
+    };
   }
 
   function onRowPointerMove(e: PointerEvent) {
@@ -560,6 +575,12 @@
       const r = el.getBoundingClientRect();
       return r.top + r.height / 2 < e.clientY;
     }).length;
+    onlayerdrag?.({
+      ids: outermost(movingIds(drag.id)),
+      pointerId: drag.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+    });
     // The middle half of a group row: into the group (not into one being moved).
     drag.into = null;
     for (const el of items) {
@@ -573,21 +594,32 @@
     }
   }
 
+  /** End a drag of layers, for the panel and for the app. */
+  function endDrag() {
+    if (drag?.active) onlayerdrag?.(null);
+    drag = null;
+  }
+
   /** The layers a drag of `id` moves: the selection when `id` is part of it. */
   function movingIds(id: number): number[] {
     return selectedSet.has(id) ? selectedIds : [id];
   }
 
-  function onWindowPointerUp() {
+  function onWindowPointerUp(e: PointerEvent) {
     if (!drag) return;
     const { id, active, slot, into } = drag;
-    drag = null;
+    endDrag();
+    // Released outside the list (a tab, the image): not a move within this panel.
+    const r = list.getBoundingClientRect();
+    const inList =
+      e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom;
     const collapse = collapseOnRelease;
     collapseOnRelease = null;
     if (!active) {
       if (collapse === id) select([id], id);
       return;
     }
+    if (!inList) return;
     const ids = outermost(movingIds(id));
     const target = dropTarget(new Set(ids), into, slot);
     // The engine leaves layers already in place alone (no undo entry when nothing moves).
@@ -619,8 +651,8 @@
 <svelte:window
   onkeydown={onWindowKeydown}
   onpointerup={onWindowPointerUp}
-  onpointercancel={() => (drag = null)}
-  onblur={() => (drag = null)}
+  onpointercancel={endDrag}
+  onblur={endDrag}
 />
 
 <!-- Files dropped on the panel become layers of this document (see dropTargetAt in App). -->

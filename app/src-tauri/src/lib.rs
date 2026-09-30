@@ -20,8 +20,8 @@ use serde::Serialize;
 use slopshop_core::color::PixelFormat;
 use slopshop_core::view::Viewport;
 use slopshop_core::{
-    BlendMode, Document, Edit, Layer, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage,
-    Rect, Session, Size,
+    BlendMode, BlendSpace, Document, Edit, Layer, LayerContent, LayerId, LayerMask, LinearRgba,
+    RasterImage, Rect, Session, Size,
 };
 use slopshop_io::slop::SlopFile;
 use slopshop_render::Renderer;
@@ -193,13 +193,43 @@ impl Documents {
         Ok(())
     }
 
-    /// Copy every layer of `source` on top of `target`, as one undoable edit of `target`, with
-    /// their import warnings. Pixels are shared, never copied.
-    fn copy_layers(&mut self, source: u64, target: u64) -> Result<DocumentView, String> {
+    /// Copy every layer of `source` on top of `target` (grouped when there are several), or only
+    /// the layers `ids` (as they are, each group with its layers), as one undoable edit of
+    /// `target`, with their import warnings. Pixels are shared, never copied.
+    fn copy_layers(
+        &mut self,
+        source: u64,
+        target: u64,
+        ids: Option<&[u64]>,
+    ) -> Result<DocumentView, String> {
         if source == target {
             return Err("a document cannot be copied into itself".to_owned());
         }
         let from = self.get_mut(source)?;
+        if let Some(ids) = ids {
+            let document = from.session.document();
+            let ids: Vec<LayerId> = ids.iter().copied().map(LayerId::from_raw).collect();
+            let layers: Vec<Layer> = document
+                .outermost(&ids)
+                .into_iter()
+                .filter_map(|id| document.layer(id).cloned())
+                .collect();
+            if layers.is_empty() {
+                return Err("no layers to copy".to_owned());
+            }
+            let warnings: Vec<Vec<&'static str>> = layers
+                .iter()
+                .flat_map(|layer| layer.subtree())
+                .map(|layer| {
+                    from.layer_warnings
+                        .get(&layer.id)
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect();
+            let space = document.blend_space();
+            return insert_layer_copies(self.get_mut(target)?, &layers, space, warnings, None);
+        }
         let document = from.session.document().clone();
         let warnings: Vec<Vec<&'static str>> = document
             .all_layers()
@@ -229,11 +259,30 @@ fn insert_document_layers(
     warnings: Vec<Vec<&'static str>>,
     name: Option<String>,
 ) -> Result<DocumentView, String> {
-    let other_space = source.blend_space() != target.session.document().blend_space();
     let group = (source.layers().len() > 1).then(|| name.unwrap_or_else(|| "Layers".to_owned()));
+    insert_layer_copies(
+        target,
+        source.layers(),
+        source.blend_space(),
+        warnings,
+        group,
+    )
+}
+
+/// Add copies of `layers` (from a document blending in `space`) on top of `target` (one undo
+/// entry), inside a new group named `group` if given, with the warnings of each copied layer
+/// (`warnings`, depth first as `Layer::subtree` walks them).
+fn insert_layer_copies(
+    target: &mut OpenDocument,
+    layers: &[Layer],
+    space: BlendSpace,
+    warnings: Vec<Vec<&'static str>>,
+    group: Option<String>,
+) -> Result<DocumentView, String> {
+    let other_space = space != target.session.document().blend_space();
     let copies = target
         .session
-        .insert_layer_copies(source.layers(), group)
+        .insert_layer_copies(layers, group)
         .map_err(|e| e.to_string())?;
     for (id, mut warnings) in copies.ids.into_iter().zip(warnings) {
         if other_space {
@@ -882,15 +931,18 @@ async fn move_document(
     state.documents()?.move_tab(document_id, index)
 }
 
-/// Copy every layer of `source_id` on top of `target_id` (e.g. a tab dropped on the canvas),
-/// as one undoable edit of the target.
+/// Copy every layer of `source_id` on top of `target_id` (a tab dropped on the canvas), or only
+/// `layer_ids` (layers dragged to another tab), as one undoable edit of the target.
 #[tauri::command]
 async fn copy_layers(
     state: State<'_, AppState>,
     source_id: u64,
     target_id: u64,
+    layer_ids: Option<Vec<u64>>,
 ) -> Result<DocumentView, String> {
-    state.documents()?.copy_layers(source_id, target_id)
+    state
+        .documents()?
+        .copy_layers(source_id, target_id, layer_ids.as_deref())
 }
 
 /// Opens in progress.
@@ -1681,7 +1733,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use slopshop_core::BlendSpace;
 
     #[test]
     fn opens_insert_in_the_order_asked_whatever_order_they_end_in() {
@@ -1930,7 +1981,19 @@ mod tests {
         source_doc
             .layer_warnings
             .insert(second, vec![WARNING_BLEND_SPACE]);
-        documents.copy_layers(1, 2).unwrap();
+        // Only the chosen layer, as it is (no group), with its own warning.
+        documents.copy_layers(1, 2, Some(&[second.get()])).unwrap();
+        let target = documents.get_mut(2).unwrap();
+        let top = target.session.document().layers().last().unwrap().clone();
+        assert_eq!(top.name, "second");
+        assert_eq!(
+            target.layer_warnings.get(&top.id),
+            Some(&vec![WARNING_BLEND_SPACE])
+        );
+        target.session.undo().unwrap();
+        assert!(documents.copy_layers(1, 2, Some(&[999])).is_err());
+
+        documents.copy_layers(1, 2, None).unwrap();
 
         let target = documents.get_mut(2).unwrap();
         let top = target.session.document().layers().last().unwrap().clone();
@@ -2009,12 +2072,15 @@ mod tests {
         let mut documents = documents_with(2);
         let source_layers = documents.tabs[0].session.document().layers().len();
         let before = documents.tabs[1].session.document().layers().len();
-        let view = documents.copy_layers(1, 2).unwrap();
+        let view = documents.copy_layers(1, 2, None).unwrap();
         assert_eq!(view.layers.len(), before + source_layers);
         documents.tabs[1].session.undo().unwrap();
         assert_eq!(documents.tabs[1].session.document().layers().len(), before);
-        assert!(documents.copy_layers(2, 2).is_err());
-        assert_eq!(documents.copy_layers(9, 2).unwrap_err(), DOCUMENT_CLOSED);
+        assert!(documents.copy_layers(2, 2, None).is_err());
+        assert_eq!(
+            documents.copy_layers(9, 2, None).unwrap_err(),
+            DOCUMENT_CLOSED
+        );
     }
 
     #[test]

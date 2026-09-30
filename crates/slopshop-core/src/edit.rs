@@ -428,30 +428,15 @@ impl Edit {
 }
 
 /// `ids` without those inside another of them (they move with it), in stacking order: depth
-/// first, each group before its layers, bottom to top.
+/// first, each group before its layers, bottom to top. Unknown ids are errors.
 pub(crate) fn outermost_in_order(
     doc: &Document,
     ids: &[LayerId],
 ) -> Result<Vec<LayerId>, EditError> {
-    let wanted: HashSet<LayerId> = ids.iter().copied().collect();
-    for &id in &wanted {
-        doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+    if let Some(&unknown) = ids.iter().find(|&&id| doc.layer(id).is_none()) {
+        return Err(EditError::UnknownLayer(unknown));
     }
-    let inside_another = |id: LayerId| {
-        let mut parent = doc.locate(id).and_then(|(parent, _)| parent);
-        while let Some(group) = parent {
-            if wanted.contains(&group) {
-                return true;
-            }
-            parent = doc.locate(group).and_then(|(parent, _)| parent);
-        }
-        false
-    };
-    Ok(doc
-        .all_layers()
-        .map(|l| l.id)
-        .filter(|&id| wanted.contains(&id) && !inside_another(id))
-        .collect())
+    Ok(doc.outermost(ids))
 }
 
 fn validate_new_layer(
