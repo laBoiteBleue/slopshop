@@ -910,6 +910,46 @@ async fn quit(app: AppHandle) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
 
+/// Largest thumbnail side a request may ask for, in pixels.
+const MAX_THUMBNAIL_SIDE: u32 = 512;
+
+/// Thumbnail of a raster layer, at most `max_side` pixels on its longer side (capped at
+/// [`MAX_THUMBNAIL_SIDE`]): raw binary, a header of width and height (`u32` little-endian),
+/// then RGBA8 sRGB pixels with straight alpha. Fill layers have none (the UI shows their
+/// color).
+#[tauri::command]
+async fn layer_thumbnail(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_id: u64,
+    max_side: u32,
+) -> Result<Response, String> {
+    let image = {
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        let layer = document
+            .session
+            .document()
+            .layer(LayerId::from_raw(layer_id))
+            .ok_or("unknown layer")?;
+        match &layer.content {
+            LayerContent::Raster { image } => image.clone(),
+            LayerContent::Fill { .. } => return Err("fill layers have no thumbnail".to_owned()),
+        }
+    };
+    let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
+    let thumbnail = tauri::async_runtime::spawn_blocking(move || {
+        slopshop_core::thumbnail::raster_thumbnail(&image, max_side)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity(8 + thumbnail.pixels.len());
+    bytes.extend(thumbnail.size.width.to_le_bytes());
+    bytes.extend(thumbnail.size.height.to_le_bytes());
+    bytes.extend(thumbnail.pixels);
+    Ok(Response::new(bytes))
+}
+
 /// Show a file in the system's file manager, selected (e.g. an exported file).
 #[tauri::command]
 async fn reveal_in_folder(app: AppHandle, path: PathBuf) -> Result<(), String> {
@@ -1308,6 +1348,7 @@ pub fn run() {
             presenter_mode,
             present_view,
             reveal_in_folder,
+            layer_thumbnail,
             save_document,
             quit,
             export::export_defaults,

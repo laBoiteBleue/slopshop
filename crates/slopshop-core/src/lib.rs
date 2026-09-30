@@ -24,6 +24,7 @@ pub mod geom;
 pub mod job;
 pub mod raster;
 pub mod session;
+pub mod thumbnail;
 pub mod tile;
 pub mod view;
 
