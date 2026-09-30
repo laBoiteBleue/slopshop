@@ -2,8 +2,8 @@
   // Free Transform (Ctrl+T, as in Photoshop): a box around the selected layers with eight
   // handles. Drag inside to move, a handle to scale (corners keep the proportions, Shift frees
   // them; sides scale one way, Shift keeps the proportions; Alt scales about the center), and
-  // outside to rotate about the center (Shift: steps of 15°). Enter or a double-click inside
-  // applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
+  // outside to rotate about the center (Shift: steps of 15°). Enter, a double-click inside or a
+  // click outside (without dragging) applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
   import * as affine from "./affine";
   import type { Bounds, Matrix } from "./engine";
   import { getLocale, t } from "./i18n/index.svelte";
@@ -44,7 +44,12 @@
     start: Matrix;
     startRotation: number;
     from: [number, number];
+    /** Where the pointer went down (CSS pixels), and whether it has left that spot. */
+    client: [number, number];
+    moved: boolean;
   };
+  /** A press moving less than this (CSS pixels) is a click, not a drag. */
+  const CLICK_SLOP = 3;
   let drag = $state<Drag | null>(null);
   /** What the drag does, shown next to the pointer. */
   let readout = $state<{ text: string; x: number; y: number } | null>(null);
@@ -96,6 +101,8 @@
       start: matrix,
       startRotation: rotation,
       from: mapping.toDocument(e.clientX, e.clientY),
+      client: [e.clientX, e.clientY],
+      moved: false,
     };
   }
 
@@ -107,6 +114,11 @@
 
   function onPointerMove(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.pointerId) return;
+    if (!drag.moved) {
+      const distance = Math.hypot(e.clientX - drag.client[0], e.clientY - drag.client[1]);
+      if (distance < CLICK_SLOP) return;
+      drag.moved = true;
+    }
     const p = mapping.toDocument(e.clientX, e.clientY);
     const { start, from } = drag;
     let text = "";
@@ -173,8 +185,11 @@
 
   function onPointerUp(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.pointerId) return;
+    // A click outside the box, as in Photoshop: apply.
+    const commit = drag.kind === "rotate" && !drag.moved;
     drag = null;
     readout = null;
+    if (commit) oncommit();
   }
 
   function isTextField(target: EventTarget | null): boolean {
