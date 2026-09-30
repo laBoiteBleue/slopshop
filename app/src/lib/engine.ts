@@ -36,7 +36,27 @@ export type LayerView = {
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
-export type AdjustmentId = "exposure" | "hueSaturation" | "levels";
+export type AdjustmentId =
+  | "brightnessContrast"
+  | "levels"
+  | "exposure"
+  | "vibrance"
+  | "hueSaturation"
+  | "invert"
+  | "posterize"
+  | "threshold";
+
+/** Adjustments in the order of Photoshop's New Adjustment Layer menu. */
+export const ADJUSTMENTS: AdjustmentId[] = [
+  "brightnessContrast",
+  "levels",
+  "exposure",
+  "vibrance",
+  "hueSaturation",
+  "invert",
+  "posterize",
+  "threshold",
+];
 
 /** Turns and flips of Image > Image Rotation. */
 export type ImageTurn =

@@ -8,6 +8,7 @@
   import {
     DOCUMENT_CLOSED,
     DOCUMENT_EXTENSION,
+    ADJUSTMENTS,
     EXPORT_FORMATS,
     engine,
     onExportEvents,
@@ -1324,7 +1325,7 @@
             kind: "submenu",
             label: t("menu.layer.newAdjustment"),
             disabled: !doc,
-            items: (["exposure", "hueSaturation", "levels"] as const).map((adjustment) =>
+            items: ADJUSTMENTS.map((adjustment) =>
               cmd(`${t(`adjustment.${adjustment}`)}…`, () =>
                 layersPanel?.addAdjustment(adjustment),
               ),

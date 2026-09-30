@@ -71,7 +71,8 @@ built. Contributors: propose here first.
   Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All
   undoable, and nothing is cut: pixels outside the canvas are kept, resizing resamples when
   shown.
-- Adjustment layers (Layer > New Adjustment Layer): Exposure, Hue/Saturation, Levels, placed
+- Adjustment layers (Layer > New Adjustment Layer, in Photoshop's order): Brightness/Contrast,
+  Levels, Exposure, Vibrance, Hue/Saturation, Invert, Posterize, Threshold, placed
   above the active layer (in its folder) and selected. A Properties panel below Layers (the
   list never moves; the maintainer's choice) shows the selected adjustment's parameters: sliders applied live (one undo entry
   per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays

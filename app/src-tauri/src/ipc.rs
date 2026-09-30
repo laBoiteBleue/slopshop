@@ -434,7 +434,7 @@ impl EditRequest {
                 parent,
                 index,
             } => {
-                let adjustment = Adjustment::neutral(&adjustment)
+                let adjustment = Adjustment::defaults(&adjustment)
                     .ok_or(format!("unknown adjustment {adjustment}"))?;
                 Edit::InsertLayer {
                     parent: parent.map(LayerId::from_raw),

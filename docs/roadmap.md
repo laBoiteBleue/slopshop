@@ -111,7 +111,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       Hue/Saturation and Levels, applied to what is below (opacity, mask, clipping, groups),
       CPU and GPU, `.slop` 0.7
 - [x] Adjustment layers, UI: Layer > New Adjustment Layer, a Properties panel with live sliders
-- [ ] Curves (with a curve editor), then Brightness/Contrast, Vibrance, Color Balance…
+- [x] Brightness/Contrast, Vibrance, Invert, Posterize, Threshold
+- [ ] Black & White, Color Balance, Photo Filter, Channel Mixer (more than five parameters)
+- [ ] Curves (with a curve editor)
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
       `.slop` 0.4

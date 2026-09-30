@@ -25,7 +25,9 @@ node model the document is heading to (ADR 0009).
    - Exposure: exposure (stops), offset, gamma correction;
    - Hue/Saturation (master): hue (−180…180°), saturation and lightness (−100…100);
    - Levels (RGB): input black and white, gamma, output black and white.
-   Curves (with an editor) and others follow on the same model.
+   Then Brightness/Contrast (black and white kept: a gamma and an S-curve, as Photoshop's
+   current mode behaves; Adobe's exact curves are not published), Vibrance, Invert, Posterize
+   and Threshold. Curves (with an editor) and others follow on the same model.
 5. **Blend mode**: normal only for now; the others (luminosity, color…) come later.
 6. **Both compositors**: a step of the shared step list (`Step::Adjust`), computed identically
    by the CPU reference and the GPU (tested against each other).
