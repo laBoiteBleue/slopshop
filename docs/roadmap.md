@@ -57,7 +57,7 @@ maintainer; each phase ends with a usable, tested state. Items marked 🔶 requi
       the features that need them
 - [ ] Window behavior: a second launch focuses the running window (and opens its files in
       tabs); window size and position remembered
-- [ ] Layer thumbnails in the layers panel
+- [x] Layer thumbnails in the layers panel
 
 ## Phase 2 — Non-destructive core
 

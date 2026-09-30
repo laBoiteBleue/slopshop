@@ -44,6 +44,8 @@ do not depend on each other: export receives its pixel source as a closure (see
 - `document`: a layer stack, bottom to top, addressed by stable `LayerId`s that are never
   reused. Layers are procedural *fills* or *rasters*, each with an opacity and a blend mode; the
   document has a blend space. `revision` increases on every change.
+- `thumbnail`: small previews of rasters for the UI, read from the coarsest pyramid level
+  that is large enough and converted like an 8-bit sRGB export.
 - `blend`: blend modes and blend spaces ([ADR 0012](adr/0012-blend-modes.md)), the reference
   math that the CPU compositor uses and the GPU shader mirrors.
 - `edit`: `Edit` is the only mutation path. Edits are validated (failure leaves the document
@@ -103,7 +105,7 @@ Proves the engine runs without the UI.
 
 Tauri shell + Svelte UI laid out like Photoshop ([ADR 0013](adr/0013-familiar-layout.md)): a
 menu bar (File, Edit, Image, Layer, View, Help) with Photoshop's shortcuts, viewport, layer panel (visibility, live opacity, rename, drag to
-reorder, delete, add fill, blend mode, document blend space), undo/redo, Save / Save As of `.slop` documents (asking before
+reorder, delete, add fill, blend mode, document blend space, thumbnails), undo/redo, Save / Save As of `.slop` documents (asking before
 unsaved changes are lost), FR/EN interface. The IPC client serializes mutations so
 they reach the engine in order (Tauri runs async commands concurrently). Commands are `async` (never on the main thread); GPU work runs in
 `spawn_blocking`. The shell owns the open documents (one per tab, each with its own history and
