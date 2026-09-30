@@ -99,14 +99,5 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # nextest runs every test of every binary in parallel (cargo test runs the binaries one
-      # after the other, so the slow GPU tests, on WARP on Windows, would queue up).
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-
       - name: Test
-        run: cargo nextest run --workspace --locked --no-fail-fast
-
-      - name: Doc tests
-        run: cargo test --workspace --locked --doc
+        run: cargo test --workspace --locked
