@@ -710,9 +710,9 @@ fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: &T) {
     }
 }
 
-/// Files to open at startup: paths given on the command line, or in dev builds the test image
-/// (`SLOPSHOP_OPEN`, else `out/default.jpg` at the repository root) so that every restart
-/// shows real pixels without clicking through a dialog.
+/// Files to open at startup: paths given on the command line, or in dev builds the test file
+/// (`SLOPSHOP_OPEN`, else `out/default.slop`, else `out/default.jpg` at the repository root) so
+/// that every restart shows real content without clicking through a dialog.
 fn startup_files() -> Vec<PathBuf> {
     let from_args: Vec<PathBuf> = std::env::args_os()
         .skip(1)
@@ -722,10 +722,12 @@ fn startup_files() -> Vec<PathBuf> {
     if !from_args.is_empty() || !cfg!(debug_assertions) {
         return from_args;
     }
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
     std::env::var_os("SLOPSHOP_OPEN")
         .map(PathBuf::from)
-        .or_else(|| Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out/default.jpg")))
-        .filter(|p| p.is_file())
+        .into_iter()
+        .chain(["default.slop", "default.jpg"].map(|name| out.join(name)))
+        .find(|p| p.is_file())
         .into_iter()
         .collect()
 }

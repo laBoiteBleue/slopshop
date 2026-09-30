@@ -29,7 +29,7 @@ cd app && npm install                             # once
 cd app && npm run format && npm run check        # format + type-check the UI (incl. i18n catalogs)
 cd app && npm run tauri dev                      # run the desktop app
 cargo run -p slopshop-cli -- --help              # headless CLI
-# Dev builds of the app open out/default.jpg (or $SLOPSHOP_OPEN) at startup, if present.
+# Dev builds of the app open $SLOPSHOP_OPEN, else out/default.slop, else out/default.jpg at startup.
 ```
 
 **Before finishing any task:** format, lint and test (all commands above except `tauri dev`) and
