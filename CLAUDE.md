@@ -33,20 +33,27 @@ cargo run -p slopshop-cli -- --help              # headless CLI
 ```
 
 **Before finishing any task:** format, lint and test (all commands above except `tauri dev`) and
-make sure they pass. Say so explicitly if something could not be run. Then hand over for manual
-testing (see Workflow).
+make sure they pass. Say so explicitly if something could not be run. Then follow the Workflow:
+merge on green CI, or stop for the maintainer when the change needs their decision.
 
 ## Workflow
 
 - **One branch and one pull request per feature or fix**, one at a time: branch from an
   up-to-date `main` (`feat/…`, `fix/…`) before the first change. CI runs on every pull
   request (Linux, macOS, Windows).
-- **Never commit before the maintainer has tested the change.** When a change is ready: run
-  the checks below, then stop and describe what to test (commands, expected behavior). Commit
-  only after the maintainer confirms. Once they have, push the branch and open the pull request
-  (`gh pr create`); push nothing else without being asked.
-- **Never merge without the maintainer's go-ahead.** Pull requests are merged with "Rebase and
-  merge", so `main` stays linear and keeps the individual commits.
+- **Autonomy (maintainer decision, 2026-09-30).** For work covered by automated tests and
+  following established conventions (engine, formats, CLI, GPU rendering checked against the
+  CPU, UI that follows existing patterns, bug fixes with a regression test, docs): implement,
+  run the checks below, commit, push, open the pull request (`gh pr create`) and merge it
+  once its CI is green, then move on to the next roadmap item. Keep a cumulative "to test"
+  list in the pull requests and replies, which the maintainer goes through when they choose;
+  problems they find are fixed first.
+- **Stop and ask before** decisions that are hard to reverse (file format changes beyond a
+  compatible addition, architecture, structuring ADRs, significant or native dependencies),
+  product and ergonomics choices, `unsafe` code, and anything risky for the maintainer's data
+  or the repository.
+- Pull requests are merged with "Rebase and merge", so `main` stays linear and keeps the
+  individual commits. Push nothing else without being asked.
 - Commits are small and logical, with clear messages (conventional-commit style prefixes).
 - The maintainer tests on Windows only: macOS/Linux-specific work cannot be validated by them;
   keep it deferred or rely on CI, and say explicitly what is untested on those platforms.
