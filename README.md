@@ -116,6 +116,9 @@ Prerequisites:
 - Tauri system dependencies for your OS: see the
   [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (WebView2 on Windows,
   Xcode Command Line Tools on macOS, WebKitGTK and friends on Linux)
+- On Windows, Visual Studio's C++ ATL component as well (Visual Studio Installer > Modify >
+  Individual components > "C++ ATL for latest build tools"): the shader compiler, DXC, is
+  built in and links against it ([ADR 0019](docs/adr/0019-dxc-shader-compiler.md))
 - A GPU with Vulkan, Metal or DirectX 12 support
 
 Run the desktop app:
