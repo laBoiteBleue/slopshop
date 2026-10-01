@@ -75,7 +75,7 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
 ## PDF (P1)
 
 PDF is how many images arrive (designers, print, scans). Photoshop opens PDFs by rasterizing
-their pages. Export (one page holding the image) is planned with the other missing exports.
+their pages. Export writes one page holding the image.
 
 - **Import** (done, hayro, pure Rust): the Import PDF dialog shows the pages as thumbnails to
   pick and the resolution (300 pixels/inch by default, remembered) or the size in pixels of a
@@ -87,6 +87,12 @@ their pages. Export (one page holding the image) is planned with the other missi
   `--dpi`. Content the renderer
   cannot draw (unsupported fonts, undecodable images) is reported. Fonts that are not embedded
   use the 14 standard fonts the renderer carries.
+- **Export** (done, in-house writer, Flate through flate2): one page holding the image, 8-bit
+  gray or RGB in an ICC-based color space (any space an ICC profile describes, as JPEG and
+  TIFF), alpha as a soft mask. One point per pixel (the page opens at the image's size at 72
+  dpi); beyond 200 inches (Acrobat's largest page) the page is scaled down, every pixel kept.
+  The color samples stream to the file (the PNG Up predictor, a length object after the
+  stream); the soft mask is compressed in memory meanwhile.
 - **Not yet**: encrypted files; the page's own color space (the renderer converts CMYK,
   ICC-based and Lab content to sRGB: a CMYK engine would keep it); a 16-bit or gray mode;
   pages beyond 65,535 pixels a side; PDFium as an optional backend for difficult files;
@@ -116,9 +122,9 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | JPEG XL | `.jxl` | ✅ | ✅ lossless | P1 lossy export | jxl-oxide (pure Rust); export: zune-jpegxl (pure Rust, lossless) with our own image header; lossy would need libjxl (C++, BSD) | import: first frame of animations (reported); native depth (8/16-bit, float); color from the code points or the ICC profile; CMYK refused. Export: 8/16-bit, alpha, gray, every space as JPEG XL's color encodings. The Rust bindings of libjxl are GPL: not usable |
 | AVIF | `.avif` | ✅ | ✅ | done | rav1d and rav1e without assembly, our own container reader, avif-serialize ([ADR 0021](adr/0021-avif-import.md)) | import: 8-bit, or 10/12-bit as 16-bit; alpha; grids; `colr`, `irot`, `imir`, `clap`; the still image of animations (reported). Export: 8/10-bit, alpha, gray, spaces with H.273 code points (HDR included); lossy only (rav1e has no lossless mode) |
 | Camera RAW (Camera Raw formats, DNG) | `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.pef`, … | ✅ basic | — | — | rawler (LGPL-2.1) in the separate `slopshop-raw` helper ([ADR 0023](adr/0023-camera-raw-helper.md)) | developed "as shot": rawler's demosaicing (PPG, bilinear X-Trans), the camera's white balance (highlights clipped to white) and color matrix to linear Rec.2020, no tone curve, scene-linear float; four-color sensors refused; no export (as Photoshop); an adjustable development node is future work |
-| DICOM | `.dcm`, `.dicom` | ✅ | — | — | dicom-rs (pure Rust: native, deflate, RLE, JPEG incl. lossless 12/16-bit); JPEG 2000 frames through hayro-jpeg2000 | every frame (slice) at its precision (signed samples offset), in one isolated group with the display window (after the modality rescale) as one Levels on top, acting on the slices only, nothing cut; several files opened together (a series) make one such document, ordered by Instance Number; no window: 8-bit as is, deeper stretched from min to max; MONOCHROME1 inverted; SIGMOID and VOI LUT tables approximated (reported); JPEG-LS (CharLS is C++), big endian and palette color refused; files without the `DICM` prefix or without an extension not recognized yet; flattened opens (CLI) give the first frame |
+| DICOM | `.dcm`, `.dicom` | ✅ | ✅ Secondary Capture | — | dicom-rs (pure Rust: native, deflate, RLE, JPEG incl. lossless 12/16-bit); JPEG 2000 frames through hayro-jpeg2000 | every frame (slice) at its precision (signed samples offset), in one isolated group with the display window (after the modality rescale) as one Levels on top, acting on the slices only, nothing cut; several files opened together (a series) make one such document, ordered by Instance Number; no window: 8-bit as is, deeper stretched from min to max; MONOCHROME1 inverted; SIGMOID and VOI LUT tables approximated (reported); JPEG-LS (CharLS is C++), big endian and palette color refused; files without the `DICM` prefix or without an extension not recognized yet; flattened opens (CLI) give the first frame. Export: a Secondary Capture image (modality OT, new UIDs, empty patient attributes), MONOCHROME2 or RGB, 8/16-bit, uncompressed Explicit VR Little Endian, display values (sRGB), no alpha; 16-bit gray carries the window of its whole range; the rows stream into the pixel data (at most 65,535 px per side, 4 GiB) |
 | JPEG 2000 | `.jp2`, `.jpf`, `.jpx`, `.j2k`, `.j2c`, `.jpc` | ✅ | — | P2 export | hayro-jpeg2000 (pure Rust) | JP2 and raw codestreams; native depth (8/16-bit, deeper as float); gray, RGB, alpha (straight or premultiplied); sRGB, sYCC, ROMM-RGB, ICC; CMYK and CIELab refused, e-sRGB read as sRGB (reported); single-threaded decoder. OpenJPEG declared itself unmaintained in 2026 |
-| **Photoshop PDF, Generic PDF** | `.pdf`, `.pdp` | ✅ pages | — | P2 layers | hayro (pure Rust) | import only, pages rasterized as 8-bit sRGB, see [PDF](#pdf-p1); `.pdp` not recognized yet |
+| **Photoshop PDF, Generic PDF** | `.pdf`, `.pdp` | ✅ pages | ✅ one page | P2 layers | hayro (pure Rust); in-house writer | pages rasterized as 8-bit sRGB; export: one page holding the image, see [PDF](#pdf-p1); `.pdp` not recognized yet |
 | HEIF / HEIC | `.heic`, `.heif` | ⛔ | — | P2 | OS decoders (Windows WIC, macOS ImageIO) or libheif (LGPL, isolated) | HEVC patent pools (ADR 0006); refused with an explanation |
 | Cineon | `.cin` | — | — | P2 | in-house (simple header, 10-bit log) | needs a log transfer function in the color model; DPX (film scans) is the same family |
 | Multi-Picture Format, JPEG Stereo | `.mpo`, `.jps` | — | — | P2 | JPEG decoder + MPF index | stereo pairs; the first image probably opens as a JPEG already (to verify); the model has one image per layer |
@@ -146,7 +152,7 @@ Formats that are not in Photoshop's list, read by SlopShop or planned.
 | farbfeld | `.ff` | ✅ | ✅ | done | `image` / in-house writer | export: 16-bit sRGB RGBA |
 | DDS | `.dds` | ✅ | ✅ uncompressed | — | `image` (DXT1/3/5); in-house reader and writer for uncompressed files | import: DXT1/3/5, uncompressed 24/32-bit RGB with 8-bit channels, the top-level surface (other cube faces and volume slices reported); BC4–7 and float via `dds` later. Export: uncompressed BGRA (BGR without alpha), 8-bit sRGB, no mip levels; block compression not written |
 | ICO | `.ico` | ✅ | ✅ | done | `image` / in-house writer (`png`) | export: one 8-bit sRGB PNG image (Windows Vista and later), alpha, at most 256 px per side |
-| FITS | `.fits`, `.fit`, `.fts` | ✅ | — | — | in-house reader | astronomy; the first image (primary or IMAGE extension) at its precision, flipped upright, NAXIS3 = 3 as RGB; an automatic stretch ("STF auto") as a Levels layer; floats scaled to [0, 1] (reported); tile-compressed images not supported yet |
+| FITS | `.fits`, `.fit`, `.fts` | ✅ | ✅ | done | in-house reader and writer | astronomy; the first image (primary or IMAGE extension) at its precision, flipped upright, NAXIS3 = 3 as RGB; an automatic stretch ("STF auto") as a Levels layer; floats scaled to [0, 1] (reported); tile-compressed images not supported yet. Export: the primary HDU, gray or RGB planes, 8/16-bit (BZERO 32768) or 32-bit float, display values (sRGB), no alpha, streamed |
 | Krita, GIMP, OpenRaster | `.kra`, `.xcf`, `.ora` | 🔎 | — | P2 | in-house readers | layered: same staging as PSD; ORA also as a layered export |
 | SVG | `.svg`, `.svgz` | ✅ | — | — | resvg (pure Rust) | rasterized as 8-bit sRGB through the Import SVG dialog (resolution or size; 96 px/inch, the intrinsic size, by default), transparent where nothing is drawn; text with the system's fonts; no export (maintainer's choice); re-rendering at any zoom later |
 | Adobe Illustrator | `.ai` | 🔎 | — | P2 | as PDF | modern `.ai` files are PDF-compatible |
