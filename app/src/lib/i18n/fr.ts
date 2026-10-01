@@ -198,6 +198,8 @@ const fr: Messages = {
   "export.format.psb": "Photoshop grand format (PSB, calques)",
   "export.format.bmp": "BMP",
   "export.format.tga": "Targa",
+  "export.format.pnm": "Netpbm (PGM, PPM, PAM)",
+  "export.format.pfm": "Portable Float Map",
   "export.depth": "Profondeur",
   "export.depth.u8": "8 bits",
   "export.depth.u16": "16 bits",
