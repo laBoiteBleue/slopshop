@@ -222,6 +222,12 @@ const en = {
   "export.format.tga": "Targa",
   "export.format.pnm": "Netpbm (PGM, PPM, PAM)",
   "export.format.pfm": "Portable Float Map",
+  "export.format.qoi": "QOI",
+  "export.format.ff": "farbfeld",
+  "export.format.hdr": "Radiance HDR",
+  "export.format.ico": "Windows icon (ICO)",
+  "export.format.gif": "GIF (256 colors)",
+  "export.format.dds": "DDS (uncompressed)",
   "export.depth": "Bit depth",
   "export.depth.u8": "8-bit",
   "export.depth.u16": "16-bit",
@@ -274,6 +280,8 @@ const en = {
   "export.report.alphaFlattened":
     "{count} partly transparent pixels were flattened over the background color",
   "export.report.colorDiscarded": "{count} pixels had color and were written as their luminance",
+  "export.report.colorsQuantized":
+    "{count} pixels were changed to fit the palette (256 colors, transparency on or off)",
   "export.error.io": "cannot write the file ({detail})",
   "export.error.source": "rendering failed ({detail})",
   "export.error.cancelled": "cancelled",

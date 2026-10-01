@@ -229,6 +229,12 @@ const fr: Messages = {
   "export.format.tga": "Targa",
   "export.format.pnm": "Netpbm (PGM, PPM, PAM)",
   "export.format.pfm": "Portable Float Map",
+  "export.format.qoi": "QOI",
+  "export.format.ff": "farbfeld",
+  "export.format.hdr": "Radiance HDR",
+  "export.format.ico": "Icône Windows (ICO)",
+  "export.format.gif": "GIF (256 couleurs)",
+  "export.format.dds": "DDS (non compressé)",
   "export.depth": "Profondeur",
   "export.depth.u8": "8 bits",
   "export.depth.u16": "16 bits",
@@ -283,6 +289,8 @@ const fr: Messages = {
   "export.report.alphaFlattened":
     "{count} pixels partiellement transparents ont été aplatis sur la couleur de fond",
   "export.report.colorDiscarded": "{count} pixels en couleur ont été écrits en luminance",
+  "export.report.colorsQuantized":
+    "{count} pixels ont été modifiés pour tenir dans la palette (256 couleurs, transparence tout ou rien)",
   "export.error.io": "impossible d'écrire le fichier ({detail})",
   "export.error.source": "échec du rendu ({detail})",
   "export.error.cancelled": "annulé",

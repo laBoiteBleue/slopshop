@@ -755,6 +755,13 @@ pub enum ExportFormatId {
     Pfm,
     Avif,
     Jxl,
+    Qoi,
+    #[serde(rename = "ff")]
+    Farbfeld,
+    Hdr,
+    Ico,
+    Gif,
+    Dds,
 }
 
 impl ExportFormatId {
@@ -773,6 +780,12 @@ impl ExportFormatId {
             ExportFormatId::Pfm => ExportFormatKind::Pfm,
             ExportFormatId::Avif => ExportFormatKind::Avif,
             ExportFormatId::Jxl => ExportFormatKind::Jxl,
+            ExportFormatId::Qoi => ExportFormatKind::Qoi,
+            ExportFormatId::Farbfeld => ExportFormatKind::Farbfeld,
+            ExportFormatId::Hdr => ExportFormatKind::Hdr,
+            ExportFormatId::Ico => ExportFormatKind::Ico,
+            ExportFormatId::Gif => ExportFormatKind::Gif,
+            ExportFormatId::Dds => ExportFormatKind::Dds,
         }
     }
 }
@@ -925,6 +938,12 @@ impl ExportSpecDto {
                 None,
             ),
             ExportFormat::Pfm => (ExportFormatId::Pfm, S::F32, None),
+            ExportFormat::Qoi => (ExportFormatId::Qoi, S::U8, None),
+            ExportFormat::Farbfeld => (ExportFormatId::Farbfeld, S::U16, None),
+            ExportFormat::Hdr => (ExportFormatId::Hdr, S::F32, None),
+            ExportFormat::Ico => (ExportFormatId::Ico, S::U8, None),
+            ExportFormat::Gif => (ExportFormatId::Gif, S::U8, None),
+            ExportFormat::Dds => (ExportFormatId::Dds, S::U8, None),
             ExportFormat::Jxl { depth } => (
                 ExportFormatId::Jxl,
                 match depth {
@@ -1118,14 +1137,31 @@ impl ExportSpecDto {
                     quality: self.quality.filter(|q| *q <= 100).ok_or_else(quality)?,
                 }
             }
-            ExportFormatId::Pfm => {
+            ExportFormatId::Pfm
+            | ExportFormatId::Qoi
+            | ExportFormatId::Farbfeld
+            | ExportFormatId::Hdr
+            | ExportFormatId::Ico
+            | ExportFormatId::Gif
+            | ExportFormatId::Dds => {
                 if self.compression.is_some() {
                     return Err(compression());
                 }
-                if self.sample != S::F32 {
+                // Formats with one sample type and no settings.
+                let (format, only) = match self.format {
+                    ExportFormatId::Qoi => (ExportFormat::Qoi, S::U8),
+                    ExportFormatId::Farbfeld => (ExportFormat::Farbfeld, S::U16),
+                    ExportFormatId::Hdr => (ExportFormat::Hdr, S::F32),
+                    ExportFormatId::Ico => (ExportFormat::Ico, S::U8),
+                    ExportFormatId::Gif => (ExportFormat::Gif, S::U8),
+                    ExportFormatId::Dds => (ExportFormat::Dds, S::U8),
+                    ExportFormatId::Pfm => (ExportFormat::Pfm, S::F32),
+                    other => return Err(invalid(format!("{other:?} settings"))),
+                };
+                if self.sample != only {
                     return Err(sample());
                 }
-                ExportFormat::Pfm
+                format
             }
             ExportFormatId::Bmp | ExportFormatId::Tga => {
                 if self.sample != S::U8 {
@@ -1347,12 +1383,23 @@ mod tests {
             ExportFormatId::Pfm,
             ExportFormatId::Avif,
             ExportFormatId::Jxl,
+            ExportFormatId::Qoi,
+            ExportFormatId::Farbfeld,
+            ExportFormatId::Hdr,
+            ExportFormatId::Ico,
+            ExportFormatId::Gif,
+            ExportFormatId::Dds,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
             assert_eq!(dto.format, format);
             assert_eq!(dto.to_spec(None).unwrap(), spec, "{format:?}");
         }
+        // As the CLI and the UI spell it.
+        assert_eq!(
+            serde_json::to_string(&ExportFormatId::Farbfeld).unwrap(),
+            r#""ff""#
+        );
         let tiff = ExportSpec {
             format: ExportFormat::Tiff {
                 sample: TiffSample::F32,
@@ -1443,9 +1490,37 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<ExportSpecDto>(
-                r#"{"format":"gif","sample":"u8","compression":null,"quality":null,"subsampling":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false,"gray":false}"#
+                r#"{"format":"svg","sample":"u8","compression":null,"quality":null,"subsampling":null,"space":"srgb","keepAlpha":false,"matte":[1.0,1.0,1.0],"dither":false,"gray":false}"#
             )
             .is_err()
+        );
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Gif;
+                d.sample = S::U16;
+                d.compression = None;
+            }),
+            invalid,
+            "16-bit GIF"
+        );
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Gif;
+                d.sample = S::U8;
+                d.compression = None;
+            }),
+            Ok(()),
+            "GIF"
+        );
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Hdr;
+                d.sample = S::F32;
+                d.compression = None;
+                d.keep_alpha = false;
+            }),
+            Err("unsupportedSpace"),
+            "Radiance HDR is linear only"
         );
         assert_eq!(with(&|d| d.gray = true), Ok(()), "gray PNG");
         assert_eq!(
