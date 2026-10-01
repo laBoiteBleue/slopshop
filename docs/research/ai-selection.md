@@ -432,6 +432,21 @@ Readings:
   BiRefNet export, Grounding DINO with real tokens, then the large-image pipeline (coarse mask
   plus refinement of the uncertain band at full resolution) and quality on labelled images.
 
+### Other execution providers (2026-10-01)
+
+- **WebGPU**: `ort`'s prebuilt ONNX Runtime with WebGPU does not link with MSVC 14.44 (Visual
+  Studio 2022 Build Tools): it needs a newer C++ standard library (`__std_rotate`,
+  `__std_max_element_8i`…, Visual Studio 2026). Not measured yet; installing newer build tools
+  is the maintainer's call. In the product the helper would ship as a built executable, so this
+  only concerns building it.
+- **TensorRT for RTX**: downloading the SDK needs an **NVIDIA Developer Program account** and
+  accepting NVIDIA's license; NVIDIA lists the **CUDA Toolkit 12.9 or later** as a prerequisite;
+  RTX 30 series and later. ONNX Runtime's built-in TensorRT-RTX EP is deprecated in favour of
+  NVIDIA's standalone plugin (NVIDIA/TensorRT-RTX-EP-ABI), which is built from source today
+  ([ONNX Runtime](https://onnxruntime.ai/docs/execution-providers/TensorRTRTX-ExecutionProvider.html),
+  [NVIDIA](https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/installing-tensorrt-rtx/installing.html)).
+  How SlopShop could fetch it for its users (redistribution terms, account) is for the ADR.
+
 ## 8. Open questions for the maintainer
 
 1. **Weight license policy** (extends ADR 0006 to model weights):

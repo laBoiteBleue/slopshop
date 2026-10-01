@@ -7,7 +7,8 @@
 //! does not depend on the values, so no image or tokenizer is needed here; quality is another
 //! experiment.
 //!
-//!     cargo run --release -- [--models <dir>] [--ep cpu|directml]... [--only <model>] [--runs N]
+//!     cargo run --release --features directml|webgpu -- [--models <dir>]
+//!         [--ep cpu|directml|webgpu]... [--only <model>] [--runs N] [--opt basic|none]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -149,16 +150,20 @@ fn models() -> Vec<Model> {
 #[derive(Clone, Copy, PartialEq)]
 enum Ep {
     Cpu,
-    #[cfg(windows)]
+    #[cfg(feature = "directml")]
     DirectMl,
+    #[cfg(feature = "webgpu")]
+    WebGpu,
 }
 
 impl Ep {
     fn parse(s: &str) -> Option<Self> {
         match s {
             "cpu" => Some(Ep::Cpu),
-            #[cfg(windows)]
+            #[cfg(feature = "directml")]
             "directml" => Some(Ep::DirectMl),
+            #[cfg(feature = "webgpu")]
+            "webgpu" => Some(Ep::WebGpu),
             _ => None,
         }
     }
@@ -166,8 +171,10 @@ impl Ep {
     fn name(self) -> &'static str {
         match self {
             Ep::Cpu => "CPU",
-            #[cfg(windows)]
+            #[cfg(feature = "directml")]
             Ep::DirectMl => "DirectML",
+            #[cfg(feature = "webgpu")]
+            Ep::WebGpu => "WebGPU",
         }
     }
 }
@@ -176,7 +183,10 @@ fn session(path: &Path, ep: Ep, level: GraphOptimizationLevel) -> ort::Result<Se
     let builder = Session::builder()?.with_optimization_level(level)?;
     let mut builder = match ep {
         Ep::Cpu => builder,
-        #[cfg(windows)]
+        #[cfg(feature = "webgpu")]
+        Ep::WebGpu => builder
+            .with_execution_providers([ort::ep::WebGPU::default().build().error_on_failure()])?,
+        #[cfg(feature = "directml")]
         Ep::DirectMl => builder
             // DirectML's requirements (ONNX Runtime documentation).
             .with_memory_pattern(false)?
@@ -342,8 +352,10 @@ fn main() {
         }
     }
     if eps.is_empty() {
-        #[cfg(windows)]
+        #[cfg(feature = "directml")]
         eps.push(Ep::DirectMl);
+        #[cfg(feature = "webgpu")]
+        eps.push(Ep::WebGpu);
         eps.push(Ep::Cpu);
     }
     println!(
