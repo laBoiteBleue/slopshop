@@ -66,7 +66,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       closes after the items above (maintainer, 2026-10-01); open to contributors, with each
       format's priority and approach in [formats.md](formats.md)
 - [x] PDF import: the Import PDF dialog (pages as thumbnails, resolution or size), pages
-      rasterized as 8-bit sRGB, several pages like a multi-file open
+      rasterized as 8-bit sRGB, the picked pages in one group over a white background
       ([formats plan](formats.md#pdf-p1))
 - [x] Export (PNG/TIFF/EXR first, [ADR 0008](adr/0008-export.md))
 - [x] JPEG and WebP export, background color for alpha-less exports
