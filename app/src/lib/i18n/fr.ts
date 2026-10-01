@@ -156,6 +156,8 @@ const fr: Messages = {
     "La densité et le contour progressif des masques, et les masques vectoriels combinés à un masque de fusion, ne sont pas encore pris en charge : ils ont été ignorés",
   "open.warning.pdfContentSkipped":
     "Une partie du contenu de la page PDF n'a pas pu être dessinée (police ou image non prise en charge)",
+  "open.warning.dicomWindowApproximated":
+    "La fenêtre d'affichage DICOM (sigmoïde ou table) a été approchée par une fenêtre linéaire",
   "open.warning.colorInfoUnsupported":
     "Informations de couleur du fichier pas encore prises en charge : couleurs lues en sRGB",
 

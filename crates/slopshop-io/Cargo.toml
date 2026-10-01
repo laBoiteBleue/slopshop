@@ -91,6 +91,10 @@ serde_json = "1.0.151"
 # only, through flate2 (already in the tree, pure Rust backend); the other methods and
 # encryption are left out. MIT.
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+dicom-object = { version = "0.10", default-features = false }
+dicom-pixeldata = { version = "0.10", default-features = false, features = ["native", "rayon"] }
+dicom-dictionary-std = "0.10"
+dicom-core = "0.10"
 
 [lints]
 workspace = true
