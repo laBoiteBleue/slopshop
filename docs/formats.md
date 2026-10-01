@@ -108,11 +108,11 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | TIFF | `.tif`, `.tiff` | ✅ | ✅ | done | `tiff` | CMYK and Lab refused; BigTIFF export |
 | OpenEXR | `.exr` | ✅ | ✅ | done | `exr` | deep data not supported; gray export pending (needs a luminance-only reader) |
 | WebP | `.webp` | ✅ | ✅ | done | `image-webp`, libwebp (lossy export) | |
-| GIF | `.gif` | ✅ (first frame) | — | P2 export | `gif` | animation import needs frame support in the model |
+| GIF | `.gif` | ✅ (first frame) | ✅ one frame | P2 animation | `gif`; export palette: `color_quant` (NeuQuant) | animation import needs frame support in the model. Export: sRGB, at most 256 colors (exact when the image has no more, else a learned palette, without dithering yet), transparency on or off; changed pixels reported |
 | BMP | `.bmp` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB (V5 header), alpha; embedded V5 ICC not read yet; `.dib` not recognized yet |
 | Targa | `.tga` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB, alpha, RLE or uncompressed; Photoshop also uses `.vda`, `.icb`, `.vst`: not recognized yet |
 | Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | ✅ | done | `image`; PFM and every export in-house | export: PGM/PPM/PAM 8/16-bit sRGB, PFM 32-bit float linear |
-| Radiance | `.hdr` | ✅ | — | P2 export | `image` | RGBE, kept linear, never tone-mapped; XYZE variant not supported |
+| Radiance | `.hdr` | ✅ | ✅ | done | `image` / in-house writer | RGBE, kept linear, never tone-mapped; XYZE variant not supported. Export: linear sRGB, no alpha, flat scanlines; negative values clipped (reported) |
 | JPEG XL | `.jxl` | ✅ | ✅ lossless | P1 lossy export | jxl-oxide (pure Rust); export: zune-jpegxl (pure Rust, lossless) with our own image header; lossy would need libjxl (C++, BSD) | import: first frame of animations (reported); native depth (8/16-bit, float); color from the code points or the ICC profile; CMYK refused. Export: 8/16-bit, alpha, gray, every space as JPEG XL's color encodings. The Rust bindings of libjxl are GPL: not usable |
 | AVIF | `.avif` | ✅ | ✅ | done | rav1d and rav1e without assembly, our own container reader, avif-serialize ([ADR 0021](adr/0021-avif-import.md)) | import: 8-bit, or 10/12-bit as 16-bit; alpha; grids; `colr`, `irot`, `imir`, `clap`; the still image of animations (reported). Export: 8/10-bit, alpha, gray, spaces with H.273 code points (HDR included); lossy only (rav1e has no lossless mode) |
 | Camera RAW (Camera Raw formats, DNG) | `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.pef`, … | 🔎 | — | P1 | rawler (LGPL-2.1, isolated behind a feature) | a non-destructive development node, not a baked import; demosaic algorithms written clean-room (the best known ones are GPL) |
@@ -142,10 +142,10 @@ Formats that are not in Photoshop's list, read by SlopShop or planned.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| QOI | `.qoi` | ✅ | — | P3 export | `qoi` | |
-| farbfeld | `.ff` | ✅ | — | P3 export | `image` | |
-| DDS | `.dds` | ✅ | — | — | `image` | DXT1/3/5; BC4–7 and float via `dds` later |
-| ICO | `.ico` | ✅ | — | P3 export | `image` | |
+| QOI | `.qoi` | ✅ | ✅ | done | `qoi` / in-house writer | export: 8-bit, alpha, sRGB or linear sRGB (the header's flag) |
+| farbfeld | `.ff` | ✅ | ✅ | done | `image` / in-house writer | export: 16-bit sRGB RGBA |
+| DDS | `.dds` | ✅ | ✅ uncompressed | — | `image` (DXT1/3/5); in-house reader and writer for uncompressed files | import: DXT1/3/5, uncompressed 24/32-bit RGB with 8-bit channels, the top-level surface (other cube faces and volume slices reported); BC4–7 and float via `dds` later. Export: uncompressed BGRA (BGR without alpha), 8-bit sRGB, no mip levels; block compression not written |
+| ICO | `.ico` | ✅ | ✅ | done | `image` / in-house writer (`png`) | export: one 8-bit sRGB PNG image (Windows Vista and later), alpha, at most 256 px per side |
 | FITS | `.fits`, `.fit`, `.fts` | ✅ | — | — | in-house reader | astronomy; the first image (primary or IMAGE extension) at its precision, flipped upright, NAXIS3 = 3 as RGB; an automatic stretch ("STF auto") as a Levels layer; floats scaled to [0, 1] (reported); tile-compressed images not supported yet |
 | Krita, GIMP, OpenRaster | `.kra`, `.xcf`, `.ora` | 🔎 | — | P2 | in-house readers | layered: same staging as PSD; ORA also as a layered export |
 | SVG | `.svg`, `.svgz` | ✅ | — | — | resvg (pure Rust) | rasterized as 8-bit sRGB through the Import SVG dialog (resolution or size; 96 px/inch, the intrinsic size, by default), transparent where nothing is drawn; text with the system's fonts; no export (maintainer's choice); re-rendering at any zoom later |

@@ -84,9 +84,10 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   and WebP (lossy or lossless), AVIF (8/10-bit, HDR included), lossless JPEG XL (8/16-bit), BMP
   and Targa (8-bit sRGB),
   Netpbm (8/16-bit) and PFM (32-bit
-  float) at full resolution, streamed in
-  bands (WebP excepted: it holds
-  one frame, at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
+  float), QOI, farbfeld (16-bit), Radiance HDR, ICO, GIF (one frame, 256 colors) and
+  uncompressed DDS at full resolution, streamed in
+  bands (WebP, ICO and GIF excepted: they hold
+  the image, WebP at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
   chromaticities), transparency flattened over a chosen background when the file has no alpha,
   gray files (PNG, TIFF, JPEG; the default for gray images), and every lossy conversion
   reported ([ADR 0008](docs/adr/0008-export.md), [ADR 0010](docs/adr/0010-jpeg-webp-export.md),
