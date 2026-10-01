@@ -27,7 +27,7 @@ USAGE:
         output of --size, to a PNG file.
         Defaults: --size 1024x768 --doc 12000x8000 --out slopshop.png
 
-    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg|webp|psd|psb|bmp|tga|pnm|pfm]
+    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg|webp|psd|psb|bmp|tga|pnm|pfm|avif]
                     [--depth u8|u16|f16|f32] [--space ID]
                     [--compression fast|small|none|deflate|lzw|lossy|lossless|rle]
                     [--quality 0-100] [--subsampling 444|422|420]
@@ -39,21 +39,23 @@ USAGE:
         and the export report.
         --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
                        .jpg, .jpeg, .webp, .psd, .psb, .bmp, .tga, .pnm, .ppm, .pgm,
-                       .pam, .pfm). PSD and PSB keep the
+                       .pam, .pfm, .avif). PSD and PSB keep the
                        layers (groups, masks, blend modes, adjustment layers); PSB
                        goes beyond PSD's 30,000 pixels per side.
         --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG and
                        WebP: u8. PSD and PSB: u8, u16. BMP and TGA: u8. PNM: u8,
-                       u16. PFM: f32.
+                       u16. PFM: f32. AVIF: u8, u16 (written at 10 bits).
                        The color space stays the default one unless --space is given.
         --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
                        linear-rec2020, rec2100-pq, rec2100-hlg. TIFF, JPEG and WebP:
                        all but PQ and HLG. OpenEXR: linear-srgb, linear-rec2020.
-                       BMP, TGA and PNM: srgb. PFM: linear-srgb.
+                       BMP, TGA and PNM: srgb. PFM: linear-srgb. AVIF: all but
+                       adobe-rgb and prophoto.
         --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
                        lossless ZIP, no option. JPEG: see --quality, --subsampling.
                        WebP: lossy (default), lossless. TGA: rle (default), none.
-        --quality      JPEG 1 to 100, lossy WebP 0 to 100. Default: 90.
+        --quality      JPEG 1 to 100, lossy WebP and AVIF 0 to 100. Default: 90 (AVIF:
+                       80).
         --subsampling  JPEG chroma subsampling: 444 (full color), 422, 420 (smallest).
                        Default: 444.
         --no-alpha     Drop the alpha channel: the image is flattened over the matte.

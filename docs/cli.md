@@ -73,11 +73,11 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 
 | Option | Values | Meaning |
 |---|---|---|
-| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, any case) |
+| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, any case) |
 | `--depth` | `u8`, `u16`, `f16`, `f32` | Sample type: 8/16-bit integers, 16/32-bit floats (see the table below for each format). The color space stays the default one unless `--space` is given |
 | `--space` | see [Color spaces](#color-spaces) | Color space of the file. Always tagged in the file |
 | `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm and PFM are uncompressed |
-| `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP) | Quality of lossy compression |
+| `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP, AVIF) | Quality of lossy compression |
 | `--subsampling` | `444`, `422`, `420` | JPEG only: chroma subsampling. `444` keeps full color resolution, `420` gives the smallest files |
 | `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG never has alpha; a layered PSD or PSB always keeps it |
 | `--matte` | `RRGGBB` or `#RRGGBB` | Color transparency is flattened over when there is no alpha, as sRGB hex. Default: `ffffff` (white) |
@@ -113,6 +113,16 @@ images near the size limit may not fit, even at low quality. The export then fai
 alpha unless the document is opaque or `--no-alpha` is given. BMP is uncompressed (at most
 4 GiB); Targa is run-length encoded by default (`--compression none` for uncompressed), at
 most 65 535 pixels per side. Rows are streamed: memory does not grow with the image.
+
+### AVIF
+
+8-bit, or 10-bit with `--depth u16` (the default when a visible raster is deeper than 8-bit),
+4:4:4, quality 80 by default, with alpha unless the document is opaque, monochrome for gray. The
+space is declared with H.273 code points: sRGB, Display P3, Rec.2020, linear, PQ and HLG (HDR)
+are available, Adobe RGB and ProPhoto are not. Always lossy: the encoder (rav1e, pure Rust,
+without its assembly, [ADR 0021](adr/0021-avif-import.md)) has no lossless mode yet. The whole
+image is held while it is encoded (at most 16 384 pixels per side); a 4000 × 2000 photo takes
+about 4 s on the maintainer's machine (32 threads).
 
 ### Netpbm and PFM
 
@@ -165,6 +175,7 @@ Which spaces each format can store *and tag* so that it reads back as the same s
 
 - **PNG**: all of them (sRGB chunk, cICP chunk, or ICC profile).
 - **BMP**, **Targa** and **Netpbm**: `srgb` only. **PFM**: `linear-srgb` only.
+- **AVIF**: all but `adobe-rgb` and `prophoto` (H.273 code points).
 - **TIFF**, **JPEG**, **WebP**, **PSD** and **PSB**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
 - **OpenEXR**: `linear-srgb` and `linear-rec2020` (EXR samples are linear; the primaries go in
   the `chromaticities` attribute).
