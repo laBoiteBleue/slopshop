@@ -948,20 +948,19 @@ fn export(args: &Args) -> Result<Outcome, String> {
             slopshop_io::slop::SlopFile::open(&args.input).map_err(|e| cannot_open(&e))?;
         (document, Vec::new())
     } else if args.page.is_some() || args.dpi.is_some() {
-        if !slopshop_io::pdf::is_pdf_file(&args.input).map_err(|e| cannot_open(&e))? {
-            return Err("--page and --dpi apply to PDF files only".to_owned());
-        }
-        let pdf = slopshop_io::pdf::PdfFile::open(&args.input).map_err(|e| cannot_open(&e))?;
+        let file = slopshop_io::vector::VectorFile::open(&args.input)
+            .map_err(|e| cannot_open(&e))?
+            .ok_or("--page and --dpi apply to PDF and SVG files only")?;
         let page = args.page.unwrap_or(1);
-        if page > pdf.page_count() {
+        if page > file.page_count() {
             return Err(format!(
                 "--page {page}: {} has {} page(s)",
                 args.input.display(),
-                pdf.page_count()
+                file.page_count()
             ));
         }
-        let imported = pdf
-            .render(page - 1, args.dpi.unwrap_or(slopshop_io::pdf::DEFAULT_DPI))
+        let imported = file
+            .render(page - 1, args.dpi.unwrap_or(file.default_dpi()))
             .map_err(|e| cannot_open(&e))?;
         let warnings = imported.warnings.iter().map(|w| w.id()).collect();
         (

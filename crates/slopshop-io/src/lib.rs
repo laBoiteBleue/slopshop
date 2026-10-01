@@ -27,7 +27,9 @@ pub mod pdf;
 mod pfm;
 mod psd;
 pub mod slop;
+mod svg;
 mod tiff_import;
+pub mod vector;
 
 use std::fmt;
 use std::fs::File;
@@ -323,6 +325,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if fits::is_fits(&head) {
         drop(file);
         fits::decode(path)?
+    } else if svg::is_svg(&head, path) {
+        drop(file);
+        svg::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -684,7 +689,6 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
         return Some(error);
     }
     let by_extension = match extension.as_str() {
-        "svg" | "svgz" => Some("SVG"),
         "kra" => Some("Krita"),
         "xcf" => Some("GIMP XCF"),
         "ora" => Some("OpenRaster"),
@@ -1077,7 +1081,7 @@ mod tests {
     fn recognized_formats_that_are_not_supported_yet() {
         let cases: [(&str, Vec<u8>, &str); 6] = [
             ("photo.heic", b"\0\0\0\x18ftypheic\0\0\0\0".to_vec(), "heic"),
-            ("drawing.svg", b"<svg".to_vec(), "notYetSupported"),
+            ("logo.eps", b"%!PS-Adobe".to_vec(), "notYetSupported"),
             ("art.xcf", b"gimp xcf ".to_vec(), "notYetSupported"),
             // A CMYK Photoshop document (header only): refused until the engine has CMYK.
             (

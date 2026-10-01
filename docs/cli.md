@@ -86,7 +86,7 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 | `--color` | | Color samples, even for a gray document |
 | `--scale` | a factor, e.g. `4` or `0.25` | Resample the whole image by this factor first, like Image Size: sides are rounded, and layers are resampled with the quality filter of transformed layers ([ADR 0018](adr/0018-resampling.md)) |
 | `--page` | a page number, from 1 | PDF input: the page to export. Default: `1` (the others are reported) |
-| `--dpi` | `1` to `10000` | PDF input: the resolution the page is rasterized at, as 8-bit sRGB, transparent where the page draws nothing. Default: `300` |
+| `--dpi` | `1` to `10000` | PDF or SVG input: the resolution it is rasterized at, as 8-bit sRGB, transparent where nothing is drawn. Default: `300` for PDF, `96` for SVG (its intrinsic size) |
 | `--cpu` | | Composite on the CPU instead of the GPU |
 | `--bench` | | Also print timings (open, GPU init, export, throughput, time in the pixel source) and the number of bands |
 
