@@ -752,6 +752,7 @@ pub enum ExportFormatId {
     Pnm,
     Pfm,
     Avif,
+    Jxl,
 }
 
 impl ExportFormatId {
@@ -769,6 +770,7 @@ impl ExportFormatId {
             ExportFormatId::Pnm => ExportFormatKind::Pnm,
             ExportFormatId::Pfm => ExportFormatKind::Pfm,
             ExportFormatId::Avif => ExportFormatKind::Avif,
+            ExportFormatId::Jxl => ExportFormatKind::Jxl,
         }
     }
 }
@@ -921,6 +923,14 @@ impl ExportSpecDto {
                 None,
             ),
             ExportFormat::Pfm => (ExportFormatId::Pfm, S::F32, None),
+            ExportFormat::Jxl { depth } => (
+                ExportFormatId::Jxl,
+                match depth {
+                    PngDepth::U8 => S::U8,
+                    PngDepth::U16 => S::U16,
+                },
+                None,
+            ),
             ExportFormat::Avif { depth, quality: q } => {
                 quality = Some(q);
                 let sample = match depth {
@@ -1074,6 +1084,18 @@ impl ExportSpecDto {
                     return Err(compression());
                 }
                 ExportFormat::Pnm {
+                    depth: match self.sample {
+                        S::U8 => PngDepth::U8,
+                        S::U16 => PngDepth::U16,
+                        S::F16 | S::F32 => return Err(sample()),
+                    },
+                }
+            }
+            ExportFormatId::Jxl => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                ExportFormat::Jxl {
                     depth: match self.sample {
                         S::U8 => PngDepth::U8,
                         S::U16 => PngDepth::U16,
@@ -1322,6 +1344,7 @@ mod tests {
             ExportFormatId::Pnm,
             ExportFormatId::Pfm,
             ExportFormatId::Avif,
+            ExportFormatId::Jxl,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);

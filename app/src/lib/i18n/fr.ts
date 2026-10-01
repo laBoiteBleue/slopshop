@@ -195,6 +195,7 @@ const fr: Messages = {
   "export.format.jpeg": "JPEG",
   "export.format.webp": "WebP",
   "export.format.avif": "AVIF",
+  "export.format.jxl": "JPEG XL (sans perte)",
   "export.format.psd": "Photoshop (calques)",
   "export.format.psb": "Photoshop grand format (PSB, calques)",
   "export.format.bmp": "BMP",

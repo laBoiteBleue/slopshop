@@ -189,6 +189,7 @@ const en = {
   "export.format.jpeg": "JPEG",
   "export.format.webp": "WebP",
   "export.format.avif": "AVIF",
+  "export.format.jxl": "JPEG XL (lossless)",
   "export.format.psd": "Photoshop (layers)",
   "export.format.psb": "Photoshop large document (PSB, layers)",
   "export.format.bmp": "BMP",
