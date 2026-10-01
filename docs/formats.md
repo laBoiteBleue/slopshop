@@ -75,14 +75,16 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
 ## PDF (P1)
 
 PDF is how many images arrive (designers, print, scans). Photoshop opens PDFs by rasterizing
-their pages. Import only: PDF export is not planned.
+their pages. Export (one page holding the image) is planned with the other missing exports.
 
 - **Import** (done, hayro, pure Rust): the Import PDF dialog shows the pages as thumbnails to
   pick and the resolution (300 pixels/inch by default, remembered) or the size in pixels of a
-  page. Each picked page is rasterized as 8-bit sRGB, transparent where the page draws nothing
-  (like Photoshop), and opens like a file of a multi-file open (tabs, or layers when dropped on
-  the canvas). Without the dialog (command line, folders, zips, the CLI), the first page opens at
-  300 dpi and the others are reported; the CLI has `--page` and `--dpi`. Content the renderer
+  page. The picked pages are rasterized as 8-bit sRGB and open as one document (the maintainer's
+  layout, never a tab per page): an isolated group named after the file, the pages in it (the
+  first on top) over a white background layer; dropped on a document, that group lands on top
+  of it. Without the dialog (command line, folders, zips), the first page opens the same way at
+  300 dpi and the others are reported; the CLI exports the page over white and has `--page` and
+  `--dpi`. Content the renderer
   cannot draw (unsupported fonts, undecodable images) is reported. Fonts that are not embedded
   use the 14 standard fonts the renderer carries.
 - **Not yet**: encrypted files; the page's own color space (the renderer converts CMYK,
