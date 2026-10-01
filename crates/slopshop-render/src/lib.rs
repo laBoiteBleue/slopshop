@@ -816,6 +816,15 @@ fn encode_layers(
                     matrix: [vec4(12), [0.0; 4], [0.0; 4]],
                     ..LayerFields::default()
                 };
+                // Curves' lookup tables (composite, red, green, blue), after the tile slots.
+                if let Some(curves) = adjustment.curves() {
+                    fields.table_offset = prepared.tile_table.len() as u32;
+                    for curve in &curves {
+                        prepared
+                            .tile_table
+                            .extend(curve.lut().iter().map(|v| v.to_bits()));
+                    }
+                }
                 if let Some(mask) = mask_plan {
                     set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
                 }
@@ -1210,6 +1219,10 @@ fn shader_source() -> String {
     constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
     constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
     constants += &format!("const KIND_ADJUST: u32 = {KIND_ADJUST}u;\n");
+    constants += &format!(
+        "const CURVE_LUT: u32 = {}u;\n",
+        slopshop_core::curve::CURVE_LUT
+    );
     let [r, g, b] = SRGB_LUMA;
     constants += &format!("const SRGB_LUMA: vec3<f32> = vec3<f32>({r:?}, {g:?}, {b:?});\n");
     constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");

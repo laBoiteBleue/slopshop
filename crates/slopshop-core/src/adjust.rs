@@ -5,6 +5,7 @@
 use std::sync::LazyLock;
 
 use crate::color::{ColorSpace, Mat3, TransferFunction, WORKING_SPACE, mat_vec};
+use crate::curve::{Curve, lookup};
 
 /// Number of parameters of an adjustment ([`Adjustment::params`]).
 pub const PARAM_COUNT: usize = 16;
@@ -82,13 +83,22 @@ pub enum Adjustment {
         blue: [f32; 4],
         monochrome: bool,
     },
+    /// Tone curves: each channel through its own curve, then all three through the composite
+    /// (`rgb`) one, as Photoshop's RGB curves. Not in [`Adjustment::params`]: the curves are
+    /// their own data.
+    Curves {
+        rgb: Curve,
+        red: Curve,
+        green: Curve,
+        blue: Curve,
+    },
 }
 
 impl Adjustment {
     /// Every adjustment, with the parameters a new layer gets (Photoshop's defaults): neutral
     /// ones, except for Invert, Posterize, Threshold, Black & White and Photo Filter, which
     /// change the image by nature.
-    pub const DEFAULTS: [Adjustment; 12] = [
+    pub const DEFAULTS: [Adjustment; 13] = [
         Adjustment::Exposure {
             exposure: 0.0,
             offset: 0.0,
@@ -143,6 +153,12 @@ impl Adjustment {
             blue: [0.0, 0.0, 100.0, 0.0],
             monochrome: false,
         },
+        Adjustment::Curves {
+            rgb: Curve::IDENTITY,
+            red: Curve::IDENTITY,
+            green: Curve::IDENTITY,
+            blue: Curve::IDENTITY,
+        },
     ];
 
     /// Stable identifier (files, IPC).
@@ -160,6 +176,7 @@ impl Adjustment {
             Adjustment::ColorBalance { .. } => "colorBalance",
             Adjustment::PhotoFilter { .. } => "photoFilter",
             Adjustment::ChannelMixer { .. } => "channelMixer",
+            Adjustment::Curves { .. } => "curves",
         }
     }
 
@@ -183,6 +200,7 @@ impl Adjustment {
             Adjustment::ColorBalance { .. } => 9,
             Adjustment::PhotoFilter { .. } => 10,
             Adjustment::ChannelMixer { .. } => 11,
+            Adjustment::Curves { .. } => 12,
         }
     }
 
@@ -192,7 +210,7 @@ impl Adjustment {
             Adjustment::Exposure { .. } | Adjustment::HueSaturation { .. } => 3,
             Adjustment::Levels { .. } => 5,
             Adjustment::BrightnessContrast { .. } | Adjustment::Vibrance { .. } => 2,
-            Adjustment::Invert => 0,
+            Adjustment::Invert | Adjustment::Curves { .. } => 0,
             Adjustment::Posterize { .. } | Adjustment::Threshold { .. } => 1,
             Adjustment::BlackWhite { .. } => 9,
             Adjustment::ColorBalance { .. } => 10,
@@ -238,7 +256,7 @@ impl Adjustment {
                 vibrance,
                 saturation,
             } => vec![vibrance, saturation],
-            Adjustment::Invert => vec![],
+            Adjustment::Invert | Adjustment::Curves { .. } => vec![],
             Adjustment::Posterize { levels } => vec![levels],
             Adjustment::Threshold { level } => vec![level],
             Adjustment::BlackWhite {
@@ -336,6 +354,8 @@ impl Adjustment {
                 blue: row(8),
                 monochrome: flag(p[12]),
             },
+            // Curves are set with Adjustment::Curves itself.
+            curves @ Adjustment::Curves { .. } => curves,
         })
     }
 
@@ -414,6 +434,33 @@ impl Adjustment {
                 .iter()
                 .flatten()
                 .all(|&v| within(v, -200.0, 200.0)),
+            // Valid by construction (Curve::new).
+            Adjustment::Curves { .. } => true,
+        }
+    }
+
+    /// Curves' curves: composite, red, green, blue.
+    pub fn curves(&self) -> Option<[Curve; 4]> {
+        match *self {
+            Adjustment::Curves {
+                rgb,
+                red,
+                green,
+                blue,
+            } => Some([rgb, red, green, blue]),
+            _ => None,
+        }
+    }
+
+    /// Ready to apply to many colors: Curves' lookup tables computed once.
+    pub fn prepare(&self) -> Prepared {
+        let luts = match self.curves() {
+            Some(curves) => curves.iter().map(Curve::lut).collect(),
+            None => Vec::new(),
+        };
+        Prepared {
+            adjustment: *self,
+            luts,
         }
     }
 
@@ -425,8 +472,13 @@ impl Adjustment {
         )
     }
 
-    /// The adjusted straight color.
+    /// The adjusted straight color (for one color; [`Self::prepare`] for many).
     pub fn apply(&self, c: [f64; 3]) -> [f64; 3] {
+        self.prepare().apply(c)
+    }
+
+    /// The adjusted straight color, with the lookup tables of [`Self::prepare`].
+    fn apply_with(&self, c: [f64; 3], luts: &[Vec<f32>]) -> [f64; 3] {
         match *self {
             Adjustment::Exposure {
                 exposure,
@@ -601,7 +653,31 @@ impl Adjustment {
                     [mix(red), mix(green), mix(blue)]
                 }
             }
+            Adjustment::Curves { .. } => {
+                // Composite, red, green, blue.
+                let rgb = &luts[0];
+                [0, 1, 2].map(|i| lookup(rgb, lookup(&luts[i + 1], c[i])))
+            }
         }
+    }
+}
+
+/// An adjustment with what applying it needs computed once ([`Adjustment::prepare`]).
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    adjustment: Adjustment,
+    /// Curves' lookup tables (composite, red, green, blue); empty for other adjustments.
+    luts: Vec<Vec<f32>>,
+}
+
+impl Prepared {
+    pub fn adjustment(&self) -> &Adjustment {
+        &self.adjustment
+    }
+
+    /// The adjusted straight color.
+    pub fn apply(&self, c: [f64; 3]) -> [f64; 3] {
+        self.adjustment.apply_with(c, &self.luts)
     }
 }
 
@@ -744,7 +820,7 @@ mod tests {
             );
             assert_eq!(!close(a.apply(c), c), changes, "{a:?}");
         }
-        assert_eq!(Adjustment::defaults("curves"), None);
+        assert_eq!(Adjustment::defaults("selectiveColor"), None);
     }
 
     #[test]
@@ -980,6 +1056,34 @@ mod tests {
         let y = ColorSpace::SRGB.primaries.to_xyz()[1];
         for (a, b) in y.iter().zip(SRGB_LUMA) {
             assert!((a - b).abs() < 1e-4, "{y:?}");
+        }
+    }
+
+    #[test]
+    fn curves_map_each_channel_then_all_through_the_composite() {
+        let curve = |points: &[[u8; 2]]| Curve::new(points).unwrap();
+        let a = Adjustment::Curves {
+            rgb: curve(&[[0, 0], [255, 128]]),
+            red: curve(&[[0, 255], [255, 0]]),
+            green: Curve::IDENTITY,
+            blue: Curve::IDENTITY,
+        };
+        // Red inverted, then everything halved.
+        let half = 128.0 / 255.0;
+        assert!(close(a.apply([0.0, 1.0, 0.5]), [half, half, half * 0.5]));
+        assert_eq!(a.param_count(), 0);
+        assert!(a.is_valid());
+        // Close to the exact curves (the lookup tables are interpolated).
+        let s = curve(&[[0, 0], [90, 150], [255, 255]]);
+        let b = Adjustment::Curves {
+            rgb: s,
+            red: Curve::IDENTITY,
+            green: Curve::IDENTITY,
+            blue: Curve::IDENTITY,
+        };
+        let out = b.prepare().apply([0.2, 0.4, 0.8]);
+        for (o, x) in out.iter().zip([0.2, 0.4, 0.8]) {
+            assert!((o - s.value(x)).abs() < 1e-4);
         }
     }
 

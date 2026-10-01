@@ -1376,6 +1376,7 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
 #[test]
 fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
     use slopshop_core::adjust::Adjustment;
+    use slopshop_core::curve::Curve;
     let Some(r) = renderer() else { return };
     let size = Size::new(200, 160);
     for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
@@ -1416,6 +1417,12 @@ fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
                 green: [0.0, 100.0, 0.0, 0.0],
                 blue: [0.0, 0.0, 100.0, 0.0],
                 monochrome: true,
+            },
+            Adjustment::Curves {
+                rgb: Curve::new(&[[0, 20], [70, 50], [180, 220], [255, 250]]).unwrap(),
+                red: Curve::new(&[[0, 0], [128, 170], [255, 255]]).unwrap(),
+                green: Curve::IDENTITY,
+                blue: Curve::new(&[[40, 0], [200, 255]]).unwrap(),
             },
         ] {
             let mut s = Session::new(Document::new(size));

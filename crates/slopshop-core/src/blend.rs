@@ -308,7 +308,7 @@ impl Blender {
     /// [`Self::fade`]'s; alpha is kept.
     pub fn adjust(
         &self,
-        adjustment: &crate::adjust::Adjustment,
+        adjustment: &crate::adjust::Prepared,
         below: &[f64; 4],
         coverage: f64,
     ) -> [f64; 4] {
@@ -317,7 +317,7 @@ impl Blender {
             return *below;
         }
         let straight = unpremultiply(below);
-        let adjusted = if adjustment.is_linear() {
+        let adjusted = if adjustment.adjustment().is_linear() {
             adjustment.apply(straight)
         } else {
             self.decode(adjustment.apply(self.encode(straight)))
