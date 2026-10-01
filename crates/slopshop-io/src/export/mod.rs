@@ -56,6 +56,7 @@
 mod avif;
 mod bmp;
 mod dds;
+mod dicom;
 mod exr;
 mod farbfeld;
 mod fits;
@@ -94,6 +95,7 @@ use self::avif::AvifWriter;
 pub use self::avif::MAX_SIDE as AVIF_MAX_SIDE;
 use self::bmp::BmpWriter;
 use self::dds::DdsWriter;
+use self::dicom::DicomWriter;
 use self::exr::ExrWriter;
 use self::farbfeld::FarbfeldWriter;
 use self::fits::FitsWriter;
@@ -148,6 +150,8 @@ pub enum ExportFormatKind {
     Dds,
     /// Flexible Image Transport System (astronomy).
     Fits,
+    /// A DICOM Secondary Capture image.
+    Dicom,
 }
 
 impl ExportFormatKind {
@@ -283,6 +287,11 @@ pub enum ExportFormat {
     Fits {
         sample: TiffSample,
     },
+    /// A Secondary Capture image: gray (MONOCHROME2) or RGB, 8/16-bit, uncompressed,
+    /// sRGB-encoded display values by convention, no alpha.
+    Dicom {
+        depth: PngDepth,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -322,6 +331,7 @@ impl ExportFormat {
             ExportFormat::Gif => ExportFormatKind::Gif,
             ExportFormat::Dds => ExportFormatKind::Dds,
             ExportFormat::Fits { .. } => ExportFormatKind::Fits,
+            ExportFormat::Dicom { .. } => ExportFormatKind::Dicom,
         }
     }
 
@@ -330,7 +340,8 @@ impl ExportFormat {
         match self {
             ExportFormat::Png { depth, .. }
             | ExportFormat::Pnm { depth }
-            | ExportFormat::Jxl { depth } => match depth {
+            | ExportFormat::Jxl { depth }
+            | ExportFormat::Dicom { depth } => match depth {
                 PngDepth::U8 => SampleType::U8,
                 PngDepth::U16 => SampleType::U16,
             },
@@ -649,6 +660,8 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Ico => Some(ico::MAX_SIDE),
         // GIF also bounds the pixel count (`gif::MAX_PIXELS`: the image is held in memory).
         ExportFormatKind::Gif => Some(gif::MAX_SIDE),
+        // DICOM also bounds the pixel data (4 GiB, checked by its writer).
+        ExportFormatKind::Dicom => Some(dicom::MAX_SIDE),
         // QOI also bounds the pixel count (`qoi::MAX_PIXELS`, checked by its writer).
         ExportFormatKind::Pnm
         | ExportFormatKind::Pfm
@@ -663,8 +676,8 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
     }
 }
 
-/// Whether a file of this format can store an alpha channel (JPEG, PFM, Radiance HDR and FITS
-/// cannot: their exports are always flattened over the matte).
+/// Whether a file of this format can store an alpha channel (JPEG, PFM, Radiance HDR, FITS and
+/// DICOM cannot: their exports are always flattened over the matte).
 pub fn supports_alpha(kind: ExportFormatKind) -> bool {
     !matches!(
         kind,
@@ -672,6 +685,7 @@ pub fn supports_alpha(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Pfm
             | ExportFormatKind::Hdr
             | ExportFormatKind::Fits
+            | ExportFormatKind::Dicom
     )
 }
 
@@ -710,7 +724,7 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         | ExportFormatKind::Dds => *space == ColorSpace::SRGB,
         // Display values, sRGB-encoded by convention (float samples too), as our importer
         // declares them.
-        ExportFormatKind::Fits => *space == ColorSpace::SRGB,
+        ExportFormatKind::Fits | ExportFormatKind::Dicom => *space == ColorSpace::SRGB,
         // Float samples, linear, by convention.
         ExportFormatKind::Pfm | ExportFormatKind::Hdr => *space == ColorSpace::LINEAR_SRGB,
         // The header's color space byte: sRGB, or "all channels linear".
@@ -735,9 +749,11 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     match kind {
         ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
         ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
-        // By convention: the sRGB curve, or linear for floats (FITS: display values, float
-        // ones too).
-        ExportFormatKind::Pnm | ExportFormatKind::Fits => *space == ColorSpace::SRGB,
+        // By convention: the sRGB curve, or linear for floats (FITS and DICOM: display values,
+        // float ones too).
+        ExportFormatKind::Pnm | ExportFormatKind::Fits | ExportFormatKind::Dicom => {
+            *space == ColorSpace::SRGB
+        }
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
         // Monochrome AV1, its transfer declared with the code points.
         ExportFormatKind::Avif => avif::avif_code(space).is_some(),
@@ -769,6 +785,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Avif
             | ExportFormatKind::Jxl
             | ExportFormatKind::Fits
+            | ExportFormatKind::Dicom
     )
 }
 
@@ -888,6 +905,14 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
                 TiffSample::U16
             };
             (ExportFormat::Fits { sample }, ColorSpace::SRGB)
+        }
+        ExportFormatKind::Dicom => {
+            let depth = if rasters.iter().all(|format| format.sample == SampleType::U8) {
+                PngDepth::U8
+            } else {
+                PngDepth::U16
+            };
+            (ExportFormat::Dicom { depth }, ColorSpace::SRGB)
         }
         ExportFormatKind::Jxl => {
             let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
@@ -1176,6 +1201,9 @@ pub fn export_image(
         ExportFormat::Fits { .. } => {
             FormatWriter::Fits(Box::new(FitsWriter::new(file, size, target)?))
         }
+        ExportFormat::Dicom { .. } => {
+            FormatWriter::Dicom(Box::new(DicomWriter::new(file, size, target)?))
+        }
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -1233,6 +1261,7 @@ enum FormatWriter {
     Gif(Box<GifWriter>),
     Dds(Box<DdsWriter>),
     Fits(Box<FitsWriter>),
+    Dicom(Box<DicomWriter>),
 }
 
 impl FormatWriter {
@@ -1257,6 +1286,7 @@ impl FormatWriter {
             FormatWriter::Gif(w) => w.write_rows(first_row, rows),
             FormatWriter::Dds(w) => w.write_rows(first_row, rows),
             FormatWriter::Fits(w) => w.write_rows(first_row, rows),
+            FormatWriter::Dicom(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1281,6 +1311,7 @@ impl FormatWriter {
             FormatWriter::Gif(w) => (*w).finish(),
             FormatWriter::Dds(w) => (*w).finish(),
             FormatWriter::Fits(w) => (*w).finish(),
+            FormatWriter::Dicom(w) => (*w).finish(),
         }
     }
 }

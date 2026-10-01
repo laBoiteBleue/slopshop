@@ -2645,3 +2645,135 @@ fn fits_refuses_alpha_and_other_spaces() {
     assert!(!supports_gray(kind, &ColorSpace::LINEAR_SRGB));
     assert_eq!(max_side(kind), None);
 }
+
+#[test]
+fn dicom_round_trips_bit_exact_as_secondary_capture() {
+    use ChannelLayout::{Gray, Rgb};
+    use dicom_dictionary_std::tags;
+    // An odd number of 8-bit samples: the pixel data is padded to an even length.
+    let size = Size::new(301, 263);
+    for (layout, sample) in [
+        (Gray, SampleType::U8),
+        (Gray, SampleType::U16),
+        (Rgb, SampleType::U8),
+        (Rgb, SampleType::U16),
+    ] {
+        let modulo = if sample == SampleType::U8 {
+            256
+        } else {
+            65_536
+        };
+        let image = pattern_raster(size, layout, sample, ColorSpace::SRGB, |x, y, c| {
+            ((x * 211 + y * 97 + c as u32 * 4000) % modulo) as u16
+        });
+        let doc = raster_document(image);
+        let spec = default_spec(ExportFormatKind::Dicom, &doc);
+        let depth = if sample == SampleType::U8 {
+            PngDepth::U8
+        } else {
+            PngDepth::U16
+        };
+        assert_eq!(spec.format, ExportFormat::Dicom { depth });
+        assert_eq!(
+            (spec.space, spec.gray, spec.keep_alpha),
+            (ColorSpace::SRGB, layout == Gray, false)
+        );
+        let path = temp_path(&format!("{layout:?}-{sample:?}.dcm"));
+        assert_eq!(export(&doc, &path, &spec).unwrap(), ExportReport::default());
+
+        let object = dicom_object::open_file(&path).unwrap();
+        let text = |tag| {
+            object
+                .element(tag)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .trim()
+                .to_owned()
+        };
+        assert_eq!(text(tags::SOP_CLASS_UID), "1.2.840.10008.5.1.4.1.1.7");
+        assert_eq!(
+            text(tags::SOP_INSTANCE_UID),
+            object.meta().media_storage_sop_instance_uid()
+        );
+        assert_eq!(text(tags::MODALITY), "OT");
+        assert_eq!(
+            text(tags::PHOTOMETRIC_INTERPRETATION),
+            if layout == Gray { "MONOCHROME2" } else { "RGB" }
+        );
+        assert_eq!(
+            object.meta().transfer_syntax().trim_end_matches('\0'),
+            "1.2.840.10008.1.2.1"
+        );
+        let windowed = (layout, sample) == (Gray, SampleType::U16);
+        assert_eq!(object.element(tags::WINDOW_CENTER).is_ok(), windowed);
+
+        let (back, format) = opened_samples(&path);
+        assert_eq!(
+            (format.layout, format.sample, format.color_space),
+            (layout, sample, ColorSpace::SRGB)
+        );
+        assert!(
+            composite_u16(&back) == composite_u16(&doc),
+            "{layout:?} {sample:?} is not bit-exact"
+        );
+        // Shown as the document showed it: as it is, or through the window of the whole range.
+        let flattened = raster_document(open_image(&path).unwrap().image);
+        std::fs::remove_file(&path).ok();
+        assert!(
+            composite_u16(&flattened) == composite_u16(&doc),
+            "{layout:?} {sample:?} is not shown as it was"
+        );
+    }
+}
+
+#[test]
+fn dicom_refuses_alpha_other_spaces_and_large_images() {
+    let path = temp_path("refused.dcm");
+    let dicom = |depth| ExportFormat::Dicom { depth };
+    let cases = [
+        (
+            simple_spec(dicom(PngDepth::U8), ColorSpace::SRGB, true),
+            Size::new(4, 4),
+            "invalidSpec",
+        ),
+        (
+            simple_spec(dicom(PngDepth::U16), ColorSpace::DISPLAY_P3, false),
+            Size::new(4, 4),
+            "unsupportedSpace",
+        ),
+        // Rows and Columns are 16-bit.
+        (
+            simple_spec(dicom(PngDepth::U8), ColorSpace::SRGB, false),
+            Size::new(65_536, 1),
+            "tooLarge",
+        ),
+        // Within the sides, beyond the 32-bit length of the pixel data.
+        (
+            simple_spec(dicom(PngDepth::U16), ColorSpace::SRGB, false),
+            Size::new(65_535, 65_535),
+            "tooLarge",
+        ),
+    ];
+    for (spec, size, code) in cases {
+        let result = export_image(
+            &path,
+            size,
+            &spec,
+            |_, _| panic!("the source must not be called"),
+            &CancelToken::new(),
+            &mut |_| panic!("no progress expected"),
+        );
+        assert_eq!(
+            result.unwrap_err().code(),
+            code,
+            "{:?} {size:?}",
+            spec.format
+        );
+        assert!(!path.exists() && temp_files(&path).is_empty());
+    }
+    let kind = ExportFormatKind::Dicom;
+    assert!(!supports_alpha(kind) && has_gray(kind));
+    assert!(supports_gray(kind, &ColorSpace::SRGB));
+    assert_eq!(max_side(kind), Some(65_535));
+}
