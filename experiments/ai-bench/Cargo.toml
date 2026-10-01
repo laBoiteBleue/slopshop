@@ -14,6 +14,9 @@ license = "MIT OR Apache-2.0"
 # build time, a different build per execution provider feature below.
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "tls-native", "api-27"] }
 
+# The refinement experiment reads the test photo and writes PNG crops.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
 [features]
 # One GPU execution provider per build: the prebuilt binaries do not combine them.
 # DirectML (Windows; DirectML.dll ships with it).

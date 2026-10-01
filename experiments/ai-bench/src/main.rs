@@ -10,6 +10,8 @@
 //!     cargo run --release --features directml|webgpu -- [--models <dir>]
 //!         [--ep cpu|directml|webgpu]... [--only <model>] [--runs N] [--opt basic|none]
 
+mod refine;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -361,6 +363,9 @@ fn default_dir() -> PathBuf {
 
 fn main() {
     let mut dir = default_dir();
+    if std::env::args().nth(1).as_deref() == Some("refine") {
+        return refine_main(dir);
+    }
     let mut eps = Vec::new();
     let mut only = None;
     let mut runs = 20;
@@ -417,5 +422,55 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+/// `ai-bench refine <image> [--ep E] [--scale S] [--click X Y] [--radius R] [--eps E] [--out D]`:
+/// the large-image pipeline (see refine.rs).
+fn refine_main(dir: PathBuf) {
+    let mut args = std::env::args().skip(2);
+    let Some(image) = args.next() else {
+        return eprintln!("refine <image> [options]");
+    };
+    let mut ep = Ep::Cpu;
+    let mut options = refine::Options {
+        image: PathBuf::from(image),
+        scale: 1.0,
+        click: (0.5, 0.4),
+        boxed: None,
+        crop: (0.1, 0.35),
+        radius: 8,
+        eps: 1e-3,
+        out: dir.join("refine-out"),
+    };
+    while let Some(arg) = args.next() {
+        let mut value = || args.next().unwrap_or_default();
+        match arg.as_str() {
+            "--ep" => ep = Ep::parse(&value()).unwrap_or(Ep::Cpu),
+            "--scale" => options.scale = value().parse().unwrap_or(1.0),
+            "--click" => {
+                options.click = (
+                    value().parse().unwrap_or(0.5),
+                    value().parse().unwrap_or(0.4),
+                )
+            }
+            "--box" => {
+                let v: Vec<f32> = (0..4).map(|_| value().parse().unwrap_or(0.0)).collect();
+                options.boxed = Some([v[0], v[1], v[2], v[3]]);
+            }
+            "--crop" => {
+                options.crop = (
+                    value().parse().unwrap_or(0.1),
+                    value().parse().unwrap_or(0.35),
+                )
+            }
+            "--radius" => options.radius = value().parse().unwrap_or(8),
+            "--eps" => options.eps = value().parse().unwrap_or(1e-3),
+            "--out" => options.out = PathBuf::from(value()),
+            other => return eprintln!("unknown argument {other}"),
+        }
+    }
+    if let Err(e) = refine::run(&dir, ep, &options) {
+        eprintln!("refine failed: {e}");
     }
 }

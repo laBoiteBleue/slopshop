@@ -476,6 +476,30 @@ system CUDA install.
 - The product would ship Microsoft's build in the `slopshop-ai` helper, with NVIDIA's runtime
   libraries fetched on demand (cuDNN alone is about 900 MB unpacked).
 
+### Large images: coarse mask, then refinement of the band (2026-10-01)
+
+The maintainer's idea, prototyped in `ai-bench refine` on a CC0 portrait with loose grey hair on
+a blurred grey background (4000×5000, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Bearded_man_with_long_hair-3052641.jpg)),
+CUDA, warm:
+1. downscale to 1024² (66 ms on the CPU, to move to the GPU), SAM 2.1 base+ with a box: encoder
+   44 ms, decoder about 5 ms;
+2. logits upsampled to full resolution: 16 ms; the coarse edge is a blur about 20 px wide (the
+   decoder's 256² grid), and SAM's grid shows as faint blocks on textured clothes;
+3. uncertain band (1–99 %): 2–46 % of the pixels depending on the subject (a threshold on the
+   probability is too wide; a distance to the half-way contour is better);
+4. refinement of the band:
+   - **classical guided filter** (luminance guide, tiles with margins): 70–180 ms for 20 MP; it
+     tightens the edge but **does not recover strands** when hair and background have similar
+     tones (radius 8 to 32 tried);
+   - **BiRefNet lite on a full-resolution crop of the band** (800² resized to its 1024² input):
+     **161 ms per crop**, and it **separates individual strands**, background showing between
+     them: real hair matting.
+
+Conclusion: coarse selection by SAM (instant), then **learned refinement on the band's tiles at
+full resolution** (progressive, about 0.16 s per tile on this GPU), the classical filter only as
+a fallback without a GPU. Still to measure: seams between overlapping tiles, the cost on
+100–300 MP, BiRefNet's VRAM, and a comparison with dedicated matting models.
+
 ## 8. Open questions for the maintainer
 
 1. **Weight license policy** (extends ADR 0006 to model weights):
