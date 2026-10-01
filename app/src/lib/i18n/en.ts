@@ -234,6 +234,7 @@ const en = {
   "export.format.fits": "FITS",
   "export.format.dcm": "DICOM",
   "export.format.pdf": "PDF (one page)",
+  "export.format.jp2": "JPEG 2000",
   "export.depth": "Bit depth",
   "export.depth.u8": "8-bit",
   "export.depth.u16": "16-bit",

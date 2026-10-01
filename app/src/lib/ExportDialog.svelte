@@ -142,8 +142,8 @@
             id="export-compression"
             bind:value={spec.compression}
             onchange={() => {
-              // Lossy WebP has a quality, lossless WebP none.
-              if (spec && target.format === "webp") {
+              // Lossy WebP and JPEG 2000 have a quality, their lossless modes none.
+              if (spec && (target.format === "webp" || target.format === "jp2")) {
                 spec.quality = spec.compression === "lossy" ? DEFAULT_QUALITY : null;
               }
             }}

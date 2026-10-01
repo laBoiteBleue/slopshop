@@ -17,8 +17,8 @@ use slopshop_core::{
 };
 use slopshop_io::export::{
     AvifDepth, ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression, TiffCompression,
-    TiffSample, WebpCompression, has_gray, supports_gray, supports_space,
+    Jpeg2000Compression, JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression,
+    TiffCompression, TiffSample, WebpCompression, has_gray, supports_gray, supports_space,
 };
 
 /// Identity of an open document (one per tab). Ids are never reused, so the UI can tell
@@ -769,6 +769,8 @@ pub enum ExportFormatId {
     #[serde(rename = "dcm")]
     Dicom,
     Pdf,
+    #[serde(rename = "jp2")]
+    Jpeg2000,
 }
 
 impl ExportFormatId {
@@ -796,6 +798,7 @@ impl ExportFormatId {
             ExportFormatId::Fits => ExportFormatKind::Fits,
             ExportFormatId::Dicom => ExportFormatKind::Dicom,
             ExportFormatId::Pdf => ExportFormatKind::Pdf,
+            ExportFormatId::Jpeg2000 => ExportFormatKind::Jpeg2000,
         }
     }
 }
@@ -955,6 +958,20 @@ impl ExportSpecDto {
             ExportFormat::Gif => (ExportFormatId::Gif, S::U8, None),
             ExportFormat::Dds => (ExportFormatId::Dds, S::U8, None),
             ExportFormat::Pdf => (ExportFormatId::Pdf, S::U8, None),
+            ExportFormat::Jpeg2000 { depth, compression } => {
+                let compression = match compression {
+                    Jpeg2000Compression::Lossy { quality: q } => {
+                        quality = Some(q);
+                        C::Lossy
+                    }
+                    Jpeg2000Compression::Lossless => C::Lossless,
+                };
+                let sample = match depth {
+                    PngDepth::U8 => S::U8,
+                    PngDepth::U16 => S::U16,
+                };
+                (ExportFormatId::Jpeg2000, sample, Some(compression))
+            }
             ExportFormat::Fits { sample } => (
                 ExportFormatId::Fits,
                 match sample {
@@ -1032,9 +1049,11 @@ impl ExportSpecDto {
         if self.format != ExportFormatId::Jpeg && self.subsampling.is_some() {
             return Err(invalid("subsampling".to_owned()));
         }
-        let lossy_webp = self.format == ExportFormatId::Webp && self.compression == Some(C::Lossy);
+        // Lossy WebP and lossy JPEG 2000 have a quality, their lossless modes none.
+        let lossy = matches!(self.format, ExportFormatId::Webp | ExportFormatId::Jpeg2000)
+            && self.compression == Some(C::Lossy);
         let quality_format = matches!(self.format, ExportFormatId::Jpeg | ExportFormatId::Avif);
-        if !quality_format && !lossy_webp && self.quality.is_some() {
+        if !quality_format && !lossy && self.quality.is_some() {
             return Err(quality());
         }
         let format = match self.format {
@@ -1152,6 +1171,23 @@ impl ExportSpecDto {
                     },
                 }
             }
+            ExportFormatId::Jpeg2000 => ExportFormat::Jpeg2000 {
+                depth: match self.sample {
+                    S::U8 => PngDepth::U8,
+                    S::U16 => PngDepth::U16,
+                    S::F16 | S::F32 => return Err(sample()),
+                },
+                compression: match self.compression {
+                    Some(C::Lossless) => Jpeg2000Compression::Lossless,
+                    Some(C::Lossy) => Jpeg2000Compression::Lossy {
+                        quality: self
+                            .quality
+                            .filter(|q| (1..=100).contains(q))
+                            .ok_or_else(quality)?,
+                    },
+                    _ => return Err(compression()),
+                },
+            },
             ExportFormatId::Fits => {
                 if self.compression.is_some() {
                     return Err(compression());
@@ -1447,6 +1483,7 @@ mod tests {
             ExportFormatId::Fits,
             ExportFormatId::Dicom,
             ExportFormatId::Pdf,
+            ExportFormatId::Jpeg2000,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
@@ -1462,6 +1499,21 @@ mod tests {
             serde_json::to_string(&ExportFormatId::Dicom).unwrap(),
             r#""dcm""#
         );
+        assert_eq!(
+            serde_json::to_string(&ExportFormatId::Jpeg2000).unwrap(),
+            r#""jp2""#
+        );
+        // Lossy JPEG 2000 keeps its quality through the DTO.
+        let lossy = ExportSpec {
+            format: ExportFormat::Jpeg2000 {
+                depth: PngDepth::U16,
+                compression: Jpeg2000Compression::Lossy { quality: 42 },
+            },
+            ..default_spec(ExportFormatKind::Jpeg2000, &document)
+        };
+        let dto = ExportSpecDto::new(&lossy);
+        assert_eq!(dto.quality, Some(42));
+        assert_eq!(dto.to_spec(None).unwrap(), lossy);
         let tiff = ExportSpec {
             format: ExportFormat::Tiff {
                 sample: TiffSample::F32,
@@ -1625,6 +1677,24 @@ mod tests {
             invalid,
             "16-bit PDF"
         );
+        let jp2 = |compression, quality| {
+            move |d: &mut ExportSpecDto| {
+                d.format = ExportFormatId::Jpeg2000;
+                d.sample = S::U16;
+                d.compression = Some(compression);
+                d.quality = quality;
+            }
+        };
+        assert_eq!(with(&jp2(C::Lossless, None)), Ok(()), "lossless JPEG 2000");
+        assert_eq!(with(&jp2(C::Lossy, Some(50))), Ok(()), "lossy JPEG 2000");
+        assert_eq!(with(&jp2(C::Lossy, None)), invalid, "no quality");
+        assert_eq!(with(&jp2(C::Lossy, Some(0))), invalid, "quality 0");
+        assert_eq!(
+            with(&jp2(C::Lossless, Some(50))),
+            invalid,
+            "lossless quality"
+        );
+        assert_eq!(with(&jp2(C::Rle, None)), invalid, "RLE JPEG 2000");
         assert_eq!(with(&|d| d.gray = true), Ok(()), "gray PNG");
         assert_eq!(
             with(&|d| {
