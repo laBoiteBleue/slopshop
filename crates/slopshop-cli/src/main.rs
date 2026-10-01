@@ -2,6 +2,7 @@
 //!
 //! Exists from day one to keep the engine honest: everything it does works without the UI.
 
+mod bench;
 mod document;
 mod export;
 
@@ -85,6 +86,15 @@ USAGE:
     slopshop inspect <FILE.slop> [--bench]
         Show a document file: generation, size, unused bytes, and its layers.
 
+    slopshop bench <FILE> [--size WxH] [--at X,Y] [--frames N]
+        Time the viewport renderer on a .slop document, or an image file as a
+        one-layer document: the same view redrawn (fit, then 100 %), a pan and a
+        zoom, as the app shows them, without reading the pixels back.
+        --size         The viewport, in pixels. Default: 1920x1080.
+        --at           The document point the 100 % views, the pan and the zoom
+                       start from, in pixels. Default: the document center.
+        --frames       Frames per scenario, 2 or more. Default: 30.
+
     slopshop --help | --version
 ";
 
@@ -96,6 +106,7 @@ fn main() -> ExitCode {
         Some("export") => export::run(&args[1..]),
         Some("save") => document::save(&args[1..]),
         Some("inspect") => document::inspect(&args[1..]),
+        Some("bench") => bench::run(&args[1..]),
         Some("--version" | "-V") => {
             println!("slopshop {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -254,6 +265,7 @@ mod tests {
             "slopshop export",
             "slopshop save",
             "slopshop inspect",
+            "slopshop bench",
         ] {
             assert!(docs.contains(command), "{command}");
         }

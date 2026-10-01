@@ -111,8 +111,9 @@ saves. Full writes (first save, Save As, compaction, exports) share `atomic::Tem
 
 `slopshop gpu`, `slopshop render`, `slopshop export` (a `.slop` document or an image file,
 opened as a one-layer document, exported with the format defaults and optional overrides),
-`slopshop save` (images to a `.slop` document, one layer each) and `slopshop inspect`;
-`--bench` prints timings.
+`slopshop save` (images to a `.slop` document, one layer each), `slopshop inspect` and
+`slopshop bench` (viewport frames of a document redrawn, panned and zoomed, timed on the CPU
+and, through timestamp queries, on the GPU); `--bench` prints timings.
 Proves the engine runs without the UI.
 
 ### `app` (implemented, minimal)

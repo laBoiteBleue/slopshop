@@ -1054,7 +1054,7 @@ fn export(args: &Args) -> Result<Outcome, String> {
 }
 
 /// A document of the image's size holding the image as its only layer.
-fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, String> {
+pub(crate) fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, String> {
     let mut document = Document::new(image.size());
     let id = document.allocate_layer_id();
     let edit = Edit::InsertLayer {
@@ -1079,7 +1079,7 @@ fn single_layer_document(image: RasterImage, name: &str) -> Result<Document, Str
     Ok(document)
 }
 
-fn layer_name(path: &Path) -> String {
+pub(crate) fn layer_name(path: &Path) -> String {
     path.file_stem()
         .map_or_else(|| "Image".to_owned(), |s| s.to_string_lossy().into_owned())
 }
