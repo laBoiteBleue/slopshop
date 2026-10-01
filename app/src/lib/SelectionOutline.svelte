@@ -1,9 +1,10 @@
 <script lang="ts">
   // The marching ants (ADR 0024): the selection's outline, computed by the engine at the screen's
-  // resolution over the visible area (plus a margin, so that small pans need nothing new), and
-  // drawn here with an animated dash, where coverage crosses one half (as Photoshop does; Quick
-  // Mask shows a soft edge). The engine is asked again only when the selection, the level of
-  // detail or the area changes enough.
+  // resolution over the visible area (plus a view of margin on every side, so that pans and
+  // zooms out need nothing new for a while), and drawn here with an animated dash, where coverage
+  // crosses one half (as Photoshop does; Quick Mask shows a soft edge). The engine is asked again
+  // only when the selection, the level of detail or the area changes enough: at once, one
+  // request at a time, the latest wins (as frames do); the last outline stays drawn meanwhile.
   import { untrack } from "svelte";
   import { engine, type SelectionOutline } from "./engine";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -14,6 +15,7 @@
     selectionKey,
     width,
     height,
+    hidden = false,
   }: {
     mapping: ViewMapping;
     /** Read once: the overlay is recreated with the viewport for another document. */
@@ -22,21 +24,57 @@
     /** Canvas size, document pixels. */
     width: number;
     height: number;
+    /** Not drawn (Quick Mask shows the selection): kept, so its outline is ready again. */
+    hidden?: boolean;
   } = $props();
 
   const docId = untrack(() => documentId);
   let element: HTMLDivElement;
   let box = $state({ width: 0, height: 0 });
 
-  type Fetched = {
-    key: number;
-    zoom: number;
-    region: { x: number; y: number; width: number; height: number };
-    outline: SelectionOutline;
-  };
+  type Region = { x: number; y: number; width: number; height: number };
+  type Wanted = { key: number; zoom: number; region: Region };
+  type Fetched = Wanted & { outline: SelectionOutline };
   let fetched = $state.raw<Fetched | null>(null);
-  let request = 0;
-  let timer = 0;
+  /** The request the engine is working on, and the latest one waiting for it. */
+  let inFlight: Wanted | null = null;
+  let waiting: Wanted | null = null;
+  let destroyed = false;
+  $effect(() => () => {
+    destroyed = true;
+  });
+
+  type Area = { left: number; top: number; right: number; bottom: number };
+
+  /** `w` is the outline wanted for `area` at `level` of selection `key`. */
+  function covers(w: Wanted | null, key: number, level: number, area: Area): boolean {
+    return (
+      w !== null &&
+      w.key === key &&
+      w.zoom === level &&
+      area.left >= w.region.x &&
+      area.top >= w.region.y &&
+      area.right <= w.region.x + w.region.width &&
+      area.bottom <= w.region.y + w.region.height
+    );
+  }
+
+  function send() {
+    if (inFlight || !waiting || destroyed) return;
+    const next = waiting;
+    waiting = null;
+    inFlight = next;
+    engine
+      .selectionOutline(docId, next.region, next.zoom)
+      .then((outline) => {
+        if (!destroyed) fetched = { ...next, outline };
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight = null;
+        send();
+      });
+  }
 
   /** Device pixels per document pixel, rounded down to a power of two (one pyramid level). */
   const zoom = $derived(2 ** Math.floor(Math.log2(window.devicePixelRatio / mapping.docPerCss)));
@@ -58,43 +96,26 @@
     const key = selectionKey;
     const area = visible;
     const level = zoom;
-    if (!area) return;
+    if (!area || hidden) return;
     const current = untrack(() => fetched);
-    const covered =
-      current &&
-      current.key === key &&
-      current.zoom === level &&
-      area.left >= current.region.x &&
-      area.top >= current.region.y &&
-      area.right <= current.region.x + current.region.width &&
-      area.bottom <= current.region.y + current.region.height;
-    if (covered) return;
-    // Half a view of margin on every side.
-    const marginX = Math.ceil((area.right - area.left) / 2);
-    const marginY = Math.ceil((area.bottom - area.top) / 2);
+    if ([current, inFlight, waiting].some((w) => covers(w, key, level, area))) return;
+    // A whole view of margin on every side.
+    const marginX = area.right - area.left;
+    const marginY = area.bottom - area.top;
     const x = Math.max(0, area.left - marginX);
     const y = Math.max(0, area.top - marginY);
-    const region = {
-      x,
-      y,
-      width: Math.max(0, Math.min(width, area.right + marginX) - x),
-      height: Math.max(0, Math.min(height, area.bottom + marginY) - y),
+    waiting = {
+      key,
+      zoom: level,
+      region: {
+        x,
+        y,
+        width: Math.max(0, Math.min(width, area.right + marginX) - x),
+        height: Math.max(0, Math.min(height, area.bottom + marginY) - y),
+      },
     };
-    // A new selection is fetched at once; view changes wait for the view to settle a little.
-    const delay = current?.key === key ? 60 : 0;
-    window.clearTimeout(timer);
-    const id = ++request;
-    timer = window.setTimeout(() => {
-      engine
-        .selectionOutline(docId, region, level)
-        .then((lines) => {
-          if (id === request) fetched = { key, zoom: level, region, outline: lines };
-        })
-        .catch(() => undefined);
-    }, delay);
+    send();
   });
-
-  $effect(() => () => window.clearTimeout(timer));
 
   /** Polylines as an SVG path in viewport pixels, on pixel centers for crisp lines. */
   function toPath(lines: SelectionOutline): string {
@@ -108,7 +129,9 @@
     return parts.join("");
   }
 
-  const current = $derived(fetched && fetched.key === selectionKey ? fetched.outline : null);
+  const current = $derived(
+    !hidden && fetched && fetched.key === selectionKey ? fetched.outline : null,
+  );
   const path = $derived(current ? toPath(current) : "");
 </script>
 

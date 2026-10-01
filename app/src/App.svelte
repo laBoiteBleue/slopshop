@@ -1919,8 +1919,9 @@
               {guides}
             >
               {#snippet overlay(mapping)}
-                {#if active?.selectionKey != null && !active.quickMask}
+                {#if active?.selectionKey != null}
                   <SelectionOutline
+                    hidden={active.quickMask}
                     {mapping}
                     documentId={active.id}
                     selectionKey={active.selectionKey}
