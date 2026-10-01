@@ -16,7 +16,7 @@ use slopshop_core::{
     Session, Size,
 };
 use slopshop_io::export::{
-    ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
+    AvifDepth, ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
     JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression, TiffCompression,
     TiffSample, WebpCompression, has_gray, supports_gray, supports_space,
 };
@@ -751,6 +751,7 @@ pub enum ExportFormatId {
     Tga,
     Pnm,
     Pfm,
+    Avif,
 }
 
 impl ExportFormatId {
@@ -767,6 +768,7 @@ impl ExportFormatId {
             ExportFormatId::Tga => ExportFormatKind::Tga,
             ExportFormatId::Pnm => ExportFormatKind::Pnm,
             ExportFormatId::Pfm => ExportFormatKind::Pfm,
+            ExportFormatId::Avif => ExportFormatKind::Avif,
         }
     }
 }
@@ -919,6 +921,14 @@ impl ExportSpecDto {
                 None,
             ),
             ExportFormat::Pfm => (ExportFormatId::Pfm, S::F32, None),
+            ExportFormat::Avif { depth, quality: q } => {
+                quality = Some(q);
+                let sample = match depth {
+                    AvifDepth::U8 => S::U8,
+                    AvifDepth::U10 => S::U16,
+                };
+                (ExportFormatId::Avif, sample, None)
+            }
             ExportFormat::Tga { compression } => (
                 ExportFormatId::Tga,
                 S::U8,
@@ -964,7 +974,8 @@ impl ExportSpecDto {
             return Err(invalid("subsampling".to_owned()));
         }
         let lossy_webp = self.format == ExportFormatId::Webp && self.compression == Some(C::Lossy);
-        if self.format != ExportFormatId::Jpeg && !lossy_webp && self.quality.is_some() {
+        let quality_format = matches!(self.format, ExportFormatId::Jpeg | ExportFormatId::Avif);
+        if !quality_format && !lossy_webp && self.quality.is_some() {
             return Err(quality());
         }
         let format = match self.format {
@@ -1068,6 +1079,19 @@ impl ExportSpecDto {
                         S::U16 => PngDepth::U16,
                         S::F16 | S::F32 => return Err(sample()),
                     },
+                }
+            }
+            ExportFormatId::Avif => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                ExportFormat::Avif {
+                    depth: match self.sample {
+                        S::U8 => AvifDepth::U8,
+                        S::U16 => AvifDepth::U10,
+                        S::F16 | S::F32 => return Err(sample()),
+                    },
+                    quality: self.quality.filter(|q| *q <= 100).ok_or_else(quality)?,
                 }
             }
             ExportFormatId::Pfm => {
@@ -1297,6 +1321,7 @@ mod tests {
             ExportFormatId::Tga,
             ExportFormatId::Pnm,
             ExportFormatId::Pfm,
+            ExportFormatId::Avif,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
@@ -1507,6 +1532,24 @@ mod tests {
         assert_eq!(psd(&|d| d.compression = Some(C::Fast)), invalid);
         assert_eq!(psd(&|d| d.keep_alpha = false), invalid, "PSD without alpha");
         assert_eq!(psd(&|d| d.gray = true), invalid, "gray PSD");
+        let avif = |change: &dyn Fn(&mut ExportSpecDto)| {
+            with(&|d| {
+                d.format = ExportFormatId::Avif;
+                d.compression = None;
+                d.quality = Some(80);
+                change(d);
+            })
+        };
+        assert_eq!(avif(&|_| {}), Ok(()), "8-bit AVIF");
+        assert_eq!(avif(&|d| d.sample = S::U16), Ok(()), "10-bit AVIF");
+        assert_eq!(
+            avif(&|d| d.quality = None),
+            invalid,
+            "AVIF without a quality"
+        );
+        assert_eq!(avif(&|d| d.quality = Some(101)), invalid, "quality 101");
+        assert_eq!(avif(&|d| d.sample = S::F32), invalid, "float AVIF");
+        assert_eq!(avif(&|d| d.compression = Some(C::Lossless)), invalid);
         assert_eq!(
             with(&|d| d.compression = Some(C::Lossless)),
             invalid,
