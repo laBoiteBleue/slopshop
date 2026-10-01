@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Mutex, mpsc};
 
-use slopshop_core::adjust::{Adjustment, WORKING_LUMA};
+use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
 use slopshop_core::color::{
     AlphaMode, ColorSpace, Mat3, PixelFormat, TransferFunction, WORKING_SPACE,
 };
@@ -800,7 +800,7 @@ fn encode_layers(
                 // The 16 parameters in fields an adjustment has no other use for.
                 let mut p = adjustment.params();
                 if let Adjustment::PhotoFilter { color, .. } = adjustment {
-                    // The shader multiplies by the working-space color.
+                    // The shader multiplies by the linear sRGB color.
                     let filter = slopshop_core::adjust::filter_color(*color);
                     p[..3].copy_from_slice(&filter.map(|v| v as f32));
                 }
@@ -1210,8 +1210,8 @@ fn shader_source() -> String {
     constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
     constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
     constants += &format!("const KIND_ADJUST: u32 = {KIND_ADJUST}u;\n");
-    let [r, g, b] = WORKING_LUMA;
-    constants += &format!("const WORKING_LUMA: vec3<f32> = vec3<f32>({r:?}, {g:?}, {b:?});\n");
+    let [r, g, b] = SRGB_LUMA;
+    constants += &format!("const SRGB_LUMA: vec3<f32> = vec3<f32>({r:?}, {g:?}, {b:?});\n");
     constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");
     constants += &format!("const RESAMPLE_NEAREST: u32 = {RESAMPLE_NEAREST}u;\n");
     constants += &format!("const RESAMPLE_EWA: u32 = {RESAMPLE_EWA}u;\n");
