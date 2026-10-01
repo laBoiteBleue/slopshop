@@ -171,7 +171,9 @@ paints on an empty layer or in a mask.
       ants, the Select menu (All, Deselect, Reselect, Inverse), tool groups in the toolbar
 - [x] Quick Mask (Q): a view overlay drawn by the GPU after compositing, never cached
 - [x] Lasso and Polygonal Lasso
-- [ ] Selection → layer mask, Image > Crop to the selection
+- [x] Selection → layer mask (Reveal / Hide Selection, and Reveal / Hide All), Image > Crop to
+      the selection
+- [ ] Select > Modify: Feather, Expand, Contract, Smooth, Border
 - [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
