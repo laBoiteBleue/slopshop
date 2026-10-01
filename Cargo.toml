@@ -5,6 +5,7 @@ members = [
     "crates/slopshop-render",
     "crates/slopshop-io",
     "crates/slopshop-cli",
+    "crates/slopshop-raw",
     "app/src-tauri",
 ]
 
