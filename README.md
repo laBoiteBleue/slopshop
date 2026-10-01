@@ -85,9 +85,9 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   and Targa (8-bit sRGB),
   Netpbm (8/16-bit) and PFM (32-bit
   float), QOI, farbfeld (16-bit), Radiance HDR, ICO, GIF (one frame, 256 colors),
-  uncompressed DDS, FITS (8/16-bit, 32-bit float), DICOM (Secondary Capture, 8/16-bit) and PDF
-  (one page) at full resolution, streamed in
-  bands (WebP, ICO and GIF excepted: they hold
+  uncompressed DDS, FITS (8/16-bit, 32-bit float), DICOM (Secondary Capture, 8/16-bit), PDF
+  (one page) and JPEG 2000 (8/16-bit, lossless or lossy) at full resolution, streamed in
+  bands (WebP, AVIF, JPEG XL, JPEG 2000, ICO and GIF excepted: they hold
   the image, WebP at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
   chromaticities), transparency flattened over a chosen background when the file has no alpha,
   gray files (PNG, TIFF, JPEG and others; the default for gray images), and every lossy conversion

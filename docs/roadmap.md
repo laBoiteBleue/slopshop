@@ -62,7 +62,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Export to QOI, farbfeld, Radiance HDR, ICO, GIF (one frame, 256 colors) and DDS
       (uncompressed); uncompressed DDS import
 - [x] Export to DICOM (Secondary Capture), FITS and PDF (one page)
-- [ ] An export for every format read: JPEG 2000 (not camera RAW, not SVG)
+- [x] Export to JPEG 2000 (openjp2): JP2, lossless or lossy; with the items above, an export
+      for every format read (not camera RAW, not SVG)
 - [x] Camera RAW, basic: developed "as shot" to linear Rec.2020 in a separate helper process,
       rawler being LGPL ([ADR 0023](adr/0023-camera-raw-helper.md))
 - [ ] Other formats (KRA/XCF/ORA, legacy formats, a RAW development module): the format track
