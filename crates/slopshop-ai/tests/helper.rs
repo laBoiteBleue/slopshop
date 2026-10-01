@@ -1,0 +1,71 @@
+//! The helper end to end: started as a process, SAM 2.1 selects a shape on a synthetic image.
+//! Needs ONNX Runtime and the models, so it runs only when they are given:
+//! `SLOPSHOP_AI_RUNTIME` (the ONNX Runtime library), `SLOPSHOP_AI_MODELS` (the models folder,
+//! as `experiments/ai-bench/fetch_models.py` lays it out), and optionally `SLOPSHOP_AI_PROVIDER`
+//! and `SLOPSHOP_AI_LIBRARY_PATHS` (NVIDIA's libraries, `;`- or `:`-separated). Skipped
+//! otherwise (CI has neither).
+
+use std::path::{Path, PathBuf};
+
+use slopshop_ai::{Client, Launch, MASK_SIDE, Point};
+
+#[test]
+fn sam_selects_the_clicked_shape() {
+    let (Some(runtime), Some(models)) = (
+        std::env::var_os("SLOPSHOP_AI_RUNTIME"),
+        std::env::var_os("SLOPSHOP_AI_MODELS"),
+    ) else {
+        eprintln!("SLOPSHOP_AI_RUNTIME / SLOPSHOP_AI_MODELS not set: skipped");
+        return;
+    };
+    let provider = std::env::var("SLOPSHOP_AI_PROVIDER").unwrap_or_else(|_| "auto".into());
+    let library_paths: Vec<PathBuf> = std::env::var_os("SLOPSHOP_AI_LIBRARY_PATHS")
+        .map(|paths| std::env::split_paths(&paths).collect())
+        .unwrap_or_default();
+    let library_paths: Vec<&Path> = library_paths.iter().map(PathBuf::as_path).collect();
+    let mut client = Client::start(&Launch {
+        executable: Path::new(env!("CARGO_BIN_EXE_slopshop-ai")),
+        runtime: Path::new(&runtime),
+        models: Path::new(&models),
+        provider: &provider,
+        library_paths: &library_paths,
+    })
+    .expect("the helper starts");
+
+    // A light disc on a dark background, 640×480.
+    let (w, h) = (640usize, 480usize);
+    let mut rgb = vec![30u8; w * h * 3];
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = (x as f32 - 320.0, y as f32 - 240.0);
+            if dx * dx + dy * dy < 120.0 * 120.0 {
+                rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[230, 200, 60]);
+            }
+        }
+    }
+    client
+        .sam_encode(1, w as u32, h as u32, rgb)
+        .expect("SAM encodes");
+    eprintln!("provider: {}", client.provider);
+    let click = Point {
+        x: 320.0,
+        y: 240.0,
+        positive: true,
+    };
+    let (logits, score) = client
+        .sam_decode(1, vec![click], None)
+        .expect("SAM decodes");
+    assert_eq!(logits.len(), MASK_SIDE * MASK_SIDE);
+    let at = |x: f32, y: f32| {
+        let (mx, my) = (
+            (x / w as f32 * MASK_SIDE as f32) as usize,
+            (y / h as f32 * MASK_SIDE as f32) as usize,
+        );
+        logits[my * MASK_SIDE + mx]
+    };
+    assert!(at(320.0, 240.0) > 0.0, "the disc's center is inside");
+    assert!(at(20.0, 20.0) < 0.0, "a corner is outside");
+    assert!(score > 0.5, "score {score}");
+    // Another key than the encoded image's is refused.
+    assert!(client.sam_decode(2, vec![click], None).is_err());
+}
