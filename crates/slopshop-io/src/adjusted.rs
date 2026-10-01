@@ -12,29 +12,20 @@ use slopshop_core::{BlendMode, BlendSpace, Document};
 
 use crate::{Decoded, ImportError, Imported, ImportedLayers, Opened};
 
-/// One image of a file, and the Levels that show it.
-pub(crate) struct Slice {
-    pub name: String,
-    pub imported: Imported,
-    /// The adjustment's layer name and the adjustment; `None` for an image shown as it is.
-    pub levels: Option<(String, Adjustment)>,
-}
-
-/// A document of `slices`, the first on top. A slice with Levels is an isolated group of its
-/// image and the Levels, so that they change that image only, wherever the group goes (another
-/// document, among other slices); one without is its image alone.
-pub(crate) fn layered(slices: Vec<Slice>) -> Result<Opened, ImportError> {
-    let size = slices
+/// A document of one isolated group named `name`: `images` (named, the first on top) and above
+/// them `levels` (named), which changes those images only, wherever the group goes (another
+/// document, beside other images).
+pub(crate) fn layered(
+    name: String,
+    images: Vec<(String, Imported)>,
+    levels: Option<(String, Adjustment)>,
+) -> Result<Opened, ImportError> {
+    let size = images
         .first()
-        .map(|s| s.imported.image.size())
+        .map(|(_, imported)| imported.image.size())
         .ok_or_else(|| ImportError::Decode("no image".into()))?;
-    let mut next = 1u64;
-    let mut id = || {
-        next += 1;
-        LayerId::from_raw(next - 1)
-    };
-    let layer = |id: LayerId, name: String, content: LayerContent| Layer {
-        id,
+    let layer = |id: u64, name: String, content: LayerContent| Layer {
+        id: LayerId::from_raw(id),
         name,
         visible: true,
         opacity: 1.0,
@@ -45,47 +36,44 @@ pub(crate) fn layered(slices: Vec<Slice>) -> Result<Opened, ImportError> {
         transform: slopshop_core::Affine::IDENTITY,
     };
     let mut warnings = Vec::new();
-    let mut layers = Vec::with_capacity(slices.len());
-    let mut count = 0;
-    // Bottom to top: the last slice first.
-    for slice in slices.into_iter().rev() {
-        for warning in slice.imported.warnings {
+    let mut children = Vec::with_capacity(images.len() + 1);
+    let mut next = 2u64;
+    // Bottom to top: the last image first.
+    for (image_name, imported) in images.into_iter().rev() {
+        for warning in imported.warnings {
             if !warnings.contains(&warning) {
                 warnings.push(warning);
             }
         }
-        let image = LayerContent::Raster {
-            image: Arc::new(slice.imported.image),
-        };
-        layers.push(match slice.levels {
-            None => {
-                count += 1;
-                layer(id(), slice.name, image)
-            }
-            Some((levels_name, levels)) => {
-                count += 3;
-                let group = id();
-                let children = vec![
-                    layer(id(), slice.name.clone(), image),
-                    layer(
-                        id(),
-                        levels_name,
-                        LayerContent::Adjustment { adjustment: levels },
-                    ),
-                ];
-                layer(
-                    group,
-                    slice.name,
-                    LayerContent::Group {
-                        children,
-                        pass_through: false,
-                    },
-                )
-            }
-        });
+        children.push(layer(
+            next,
+            image_name,
+            LayerContent::Raster {
+                image: Arc::new(imported.image),
+            },
+        ));
+        next += 1;
     }
-    let document = Document::restore(size, WORKING_SPACE, BlendSpace::Perceptual, layers, next)
-        .map_err(|e| ImportError::Decode(format!("adjusted image: {e:?}")))?;
+    if let Some((levels_name, adjustment)) = levels {
+        children.push(layer(
+            next,
+            levels_name,
+            LayerContent::Adjustment { adjustment },
+        ));
+        next += 1;
+    }
+    let count = children.len() + 1;
+    let group = layer(
+        1,
+        name,
+        LayerContent::Group {
+            children,
+            pass_through: false,
+        },
+    );
+    let document =
+        Document::restore(size, WORKING_SPACE, BlendSpace::Perceptual, vec![group], next)
+            .map_err(|e| ImportError::Decode(format!("adjusted image: {e:?}")))?;
     Ok(Opened::Layers(ImportedLayers {
         document,
         warnings,
