@@ -95,8 +95,8 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | OpenEXR | `.exr` | ✅ | ✅ | done | `exr` | deep data not supported; gray export pending (needs a luminance-only reader) |
 | WebP | `.webp` | ✅ | ✅ | done | `image-webp`, libwebp (lossy export) | |
 | GIF | `.gif` | ✅ (first frame) | — | P2 export | `gif` | animation import needs frame support in the model |
-| BMP | `.bmp` | ✅ | — | P2 export | `image` | embedded V5 ICC not read yet; `.dib` not recognized yet |
-| Targa | `.tga` | ✅ | — | P2 export | `image` | Photoshop also uses `.vda`, `.icb`, `.vst`: not recognized yet |
+| BMP | `.bmp` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB (V5 header), alpha; embedded V5 ICC not read yet; `.dib` not recognized yet |
+| Targa | `.tga` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB, alpha, RLE or uncompressed; Photoshop also uses `.vda`, `.icb`, `.vst`: not recognized yet |
 | Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | — | P2 export | `image`, zune-ppm (PFM) | |
 | Radiance | `.hdr` | ✅ | — | P2 export | `image` | RGBE, kept linear, never tone-mapped; XYZE variant not supported |
 | JPEG XL | `.jxl` | 🔎 | — | P1 | jxl-rs or jxl-oxide (pure Rust); export: own thin FFI to libjxl (BSD) | the Rust bindings of libjxl are GPL: not usable |

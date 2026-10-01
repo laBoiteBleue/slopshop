@@ -81,7 +81,8 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
 - A headless wgpu renderer that composites a view of the document in linear light.
 - A `slopshop` CLI (GPU info, headless render to PNG, export, `.slop` documents).
 - Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float), OpenEXR (32/16-bit float), JPEG
-  and WebP (lossy or lossless) at full resolution, streamed in bands (WebP excepted: it holds
+  and WebP (lossy or lossless), BMP and Targa (8-bit sRGB) at full resolution, streamed in
+  bands (WebP excepted: it holds
   one frame, at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
   chromaticities), transparency flattened over a chosen background when the file has no alpha,
   gray files (PNG, TIFF, JPEG; the default for gray images), and every lossy conversion
