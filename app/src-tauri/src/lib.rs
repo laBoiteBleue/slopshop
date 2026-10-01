@@ -2075,6 +2075,7 @@ pub fn run() {
             selection::add_layer_masks,
             selection::crop_to_selection,
             selection::modify_selection,
+            selection::magic_wand,
             selection::selection_outline,
             layer_at,
             move_snap_targets,

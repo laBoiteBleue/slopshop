@@ -140,6 +140,60 @@ pub async fn select_shape(
     set_selection(&state, document_id, image)
 }
 
+/// The Magic Wand at document pixel (`x`, `y`): similar colors, within `tolerance` (0–255),
+/// connected or not, combined by `mode`. It samples the composited document, or with
+/// `layer_id` only that layer (placed as in the document).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn magic_wand(
+    state: State<'_, AppState>,
+    document_id: u64,
+    x: u32,
+    y: u32,
+    tolerance: f32,
+    contiguous: bool,
+    anti_alias: bool,
+    layer_id: Option<u64>,
+    mode: String,
+) -> Result<DocumentView, String> {
+    let combine = combine(&mode)?;
+    let (source, current) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document();
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        let source = match layer_id {
+            None => doc.clone(),
+            Some(raw) => {
+                let id = LayerId::from_raw(raw);
+                let mut layer = doc.layer(id).ok_or("unknown layer")?.clone();
+                // Alone, at the top level: placed by its own transform and its groups'.
+                layer.transform = layer.transform.then(doc.parent_transform(id));
+                layer.clipped = false;
+                slopshop_core::Document::restore(
+                    doc.size(),
+                    doc.working_space(),
+                    doc.blend_space(),
+                    vec![layer],
+                    doc.next_layer_id(),
+                )
+                .map_err(|e| e.to_string())?
+            }
+        };
+        (source, current)
+    };
+    let options = selection::WandOptions {
+        tolerance,
+        contiguous,
+        anti_alias,
+    };
+    let image = on_worker(move || {
+        selection::magic_wand(&source, current.as_deref(), (x, y), options, combine)
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    set_selection(&state, document_id, image)
+}
+
 /// Select > All.
 #[tauri::command]
 pub async fn select_all(

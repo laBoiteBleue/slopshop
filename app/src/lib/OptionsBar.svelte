@@ -15,6 +15,7 @@
     selectionMode = $bindable(),
     feather = $bindable(),
     antiAlias = $bindable(),
+    wand = $bindable(),
   }: {
     tool: ToolId;
     /** Move tool: a drag takes the layer under the pointer (Ctrl inverts it). */
@@ -23,8 +24,10 @@
     selectionMode: SelectionMode;
     /** Selection tools: Gaussian softening of the edge, in pixels. */
     feather: number;
-    /** Elliptical Marquee and lassos: smooth edges. */
+    /** Elliptical Marquee, lassos and Magic Wand: smooth edges. */
     antiAlias: boolean;
+    /** Magic Wand: tolerance (0–255), connected pixels only, every layer or the active one. */
+    wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
   } = $props();
 
   const current = $derived(toolInfo(tool));
@@ -68,24 +71,54 @@
       </button>
     {/each}
     <span class="divider"></span>
-    <label class="option">
-      {t("options.feather")}
-      <input
-        type="number"
-        min="0"
-        max={MAX_FEATHER}
-        step="1"
-        value={feather}
-        oninput={(e) => setFeather(e.currentTarget.valueAsNumber)}
-        onchange={(e) => (e.currentTarget.valueAsNumber = feather)}
-      />
-      px
-    </label>
-    {#if tool !== "marquee"}
+    {#if tool === "wand"}
+      <label class="option">
+        {t("options.tolerance")}
+        <input
+          type="number"
+          min="0"
+          max="255"
+          step="1"
+          value={wand.tolerance}
+          oninput={(e) => {
+            const v = e.currentTarget.valueAsNumber;
+            if (Number.isFinite(v)) wand.tolerance = Math.min(Math.max(v, 0), 255);
+          }}
+          onchange={(e) => (e.currentTarget.valueAsNumber = wand.tolerance)}
+        />
+      </label>
       <label class="option">
         <input type="checkbox" bind:checked={antiAlias} />
         {t("options.antiAlias")}
       </label>
+      <label class="option">
+        <input type="checkbox" bind:checked={wand.contiguous} />
+        {t("options.contiguous")}
+      </label>
+      <label class="option">
+        <input type="checkbox" bind:checked={wand.sampleAll} />
+        {t("options.sampleAll")}
+      </label>
+    {:else}
+      <label class="option">
+        {t("options.feather")}
+        <input
+          type="number"
+          min="0"
+          max={MAX_FEATHER}
+          step="1"
+          value={feather}
+          oninput={(e) => setFeather(e.currentTarget.valueAsNumber)}
+          onchange={(e) => (e.currentTarget.valueAsNumber = feather)}
+        />
+        px
+      </label>
+      {#if tool !== "marquee"}
+        <label class="option">
+          <input type="checkbox" bind:checked={antiAlias} />
+          {t("options.antiAlias")}
+        </label>
+      {/if}
     {/if}
   {/if}
 </div>
