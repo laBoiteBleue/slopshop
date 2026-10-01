@@ -33,13 +33,14 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 6] = [
+const FORMATS: [ExportFormatKind; 7] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
     ExportFormatKind::Jpeg,
     ExportFormatKind::Webp,
     ExportFormatKind::Psd,
+    ExportFormatKind::Psb,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -109,7 +110,7 @@ impl Depth {
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
             ExportFormatKind::Jpeg | ExportFormatKind::Webp => self == Depth::U8,
-            ExportFormatKind::Psd => self.psd().is_some(),
+            ExportFormatKind::Psd | ExportFormatKind::Psb => self.psd().is_some(),
         }
     }
 }
@@ -176,7 +177,10 @@ impl Compression {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Webp => self.is_webp(),
-            ExportFormatKind::Exr | ExportFormatKind::Jpeg | ExportFormatKind::Psd => false,
+            ExportFormatKind::Exr
+            | ExportFormatKind::Jpeg
+            | ExportFormatKind::Psd
+            | ExportFormatKind::Psb => false,
         }
     }
 }
@@ -379,7 +383,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 ExportFormatKind::Jpeg => {
                     format!("{name} has no --compression option (use --quality and --subsampling)")
                 }
-                ExportFormatKind::Psd => {
+                ExportFormatKind::Psd | ExportFormatKind::Psb => {
                     format!("{name} has no --compression option (it always uses RLE)")
                 }
                 _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
@@ -415,7 +419,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--subsampling is not available for {name} (JPEG only)"
         ));
     }
-    if format == ExportFormatKind::Psd && no_alpha {
+    if format.is_layered() && no_alpha {
         return Err(format!(
             "--no-alpha is not available for {name} (layers keep their transparency)"
         ));
@@ -600,6 +604,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "jpg" | "jpeg" => Some(ExportFormatKind::Jpeg),
         "webp" => Some(ExportFormatKind::Webp),
         "psd" => Some(ExportFormatKind::Psd),
+        "psb" => Some(ExportFormatKind::Psb),
         _ => None,
     }
 }
@@ -613,6 +618,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Jpeg => "jpeg",
         ExportFormatKind::Webp => "webp",
         ExportFormatKind::Psd => "psd",
+        ExportFormatKind::Psb => "psb",
     }
 }
 
@@ -624,6 +630,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Jpeg => "JPEG",
         ExportFormatKind::Webp => "WebP",
         ExportFormatKind::Psd => "Photoshop (layered PSD)",
+        ExportFormatKind::Psb => "Photoshop large document (layered PSB)",
     }
 }
 
@@ -685,6 +692,9 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
             }
         }
         ExportFormat::Psd { depth } => ExportFormat::Psd {
+            depth: args.depth.and_then(Depth::psd).unwrap_or(depth),
+        },
+        ExportFormat::Psb { depth } => ExportFormat::Psb {
             depth: args.depth.and_then(Depth::psd).unwrap_or(depth),
         },
     };
@@ -749,7 +759,7 @@ fn describe(spec: &ExportSpec) -> String {
                 WebpCompression::Lossless => Compression::Lossless,
             }),
         ),
-        ExportFormat::Psd { depth } => (
+        ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => (
             match depth {
                 PsdDepth::U8 => Depth::U8,
                 PsdDepth::U16 => Depth::U16,

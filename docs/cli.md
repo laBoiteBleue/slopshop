@@ -16,7 +16,7 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 |---|---|
 | [`slopshop gpu`](#slopshop-gpu) | Show the GPU adapter the engine would use |
 | [`slopshop render`](#slopshop-render) | Render a built-in demo document to a PNG file |
-| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP or a layered PSD |
+| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP or a layered PSD or PSB |
 | [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
 | [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
 | `slopshop --help`, `slopshop -h` | Print the usage |
@@ -58,8 +58,8 @@ Opens `INPUT` (a `.slop` document, recognized by its content, or any image forma
 reads: PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, OpenEXR, HDR, DDS, as a
 one-layer document) and writes the composited image to `OUTPUT`
 through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export.md),
-[ADR 0010](adr/0010-jpeg-webp-export.md)). A PSD keeps the layers instead (see
-[Layered PSD](#layered-psd)):
+[ADR 0010](adr/0010-jpeg-webp-export.md)). A PSD or PSB keeps the layers instead (see
+[Layered PSD and PSB](#layered-psd-and-psb)):
 
 - the format's **default settings** for this document, each option overriding one of them;
 - the **GPU** renders the pixels (the CPU compositor when there is no GPU, or with `--cpu`);
@@ -72,13 +72,13 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 
 | Option | Values | Meaning |
 |---|---|---|
-| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `psd` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.psd`, any case) |
+| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `psd`, `psb` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.psd`, `.psb`, any case) |
 | `--depth` | `u8`, `u16`, `f16`, `f32` | Sample type: 8/16-bit integers, 16/32-bit floats (see the table below for each format). The color space stays the default one unless `--space` is given |
 | `--space` | see [Color spaces](#color-spaces) | Color space of the file. Always tagged in the file |
 | `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP) | PNG and TIFF are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling` |
 | `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP) | Quality of lossy compression |
 | `--subsampling` | `444`, `422`, `420` | JPEG only: chroma subsampling. `444` keeps full color resolution, `420` gives the smallest files |
-| `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG never has alpha; a layered PSD always keeps it |
+| `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG never has alpha; a layered PSD or PSB always keeps it |
 | `--matte` | `RRGGBB` or `#RRGGBB` | Color transparency is flattened over when there is no alpha, as sRGB hex. Default: `ffffff` (white) |
 | `--no-dither` | | No dither for 8-bit samples (dither reduces banding; it is on by default) |
 | `--gray` | | Gray samples (PNG, TIFF and JPEG): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
@@ -92,7 +92,7 @@ Options can come in any order, before or after the paths. An option the format d
 
 ### Formats and defaults
 
-| | PNG | TIFF | OpenEXR | JPEG | WebP | PSD |
+| | PNG | TIFF | OpenEXR | JPEG | WebP | PSD, PSB |
 |---|---|---|---|---|---|---|
 | `--depth` | `u8`, `u16` | `u8`, `u16`, `f32` | `f32`, `f16` | `u8` | `u8` | `u8`, `u16` |
 | Default depth | `u8` if every visible raster is 8-bit, else `u16` | the deepest source type (`f32` when any source is float) | `f32` | `u8` | `u8` | as PNG |
@@ -100,16 +100,17 @@ Options can come in any order, before or after the paths. An option the format d
 | Compression | `fast` | `deflate` | ZIP (fixed) | quality 90, `444` | `lossy`, quality 90 (alpha kept losslessly) | RLE (fixed) |
 | Alpha | kept unless the document is opaque | kept unless the document is opaque | kept unless the document is opaque | never: flattened over the matte | kept unless the document is opaque | always kept |
 | Gray | yes, default for gray documents | yes, default for gray documents | no | yes, default for gray documents | no | no |
-| Size limit | 2³¹−1 px per side | BigTIFF above 4 GiB | about 2³⁰ px per side | 65 500 px per side | 16 383 px per side | 30 000 px per side (no PSB yet) |
+| Size limit | 2³¹−1 px per side | BigTIFF above 4 GiB | about 2³⁰ px per side | 65 500 px per side | 16 383 px per side | PSD: 30 000 px per side; PSB: 300 000 |
 
 Lossy WebP stores its image modes in a first partition limited to 512 KiB: very detailed
 images near the size limit may not fit, even at low quality. The export then fails with
 `contentTooComplex`; lossless WebP and JPEG have no such limit.
 
-### Layered PSD
+### Layered PSD and PSB
 
 A `.psd` output keeps the document's structure, for Photoshop and the other editors that read
-PSD layers:
+PSD layers; a `.psb` (Photoshop's large document format) does the same beyond PSD's 30,000
+pixels per side:
 
 - pixel layers with their position, opacity, blend mode, visibility and clipping; groups (pass
   through or isolated); layer masks (disabled ones too); fill layers, as pixels;
@@ -121,6 +122,8 @@ PSD layers:
 Every layer is rendered on its own at its pixel size, so transformed (rotated, scaled) layers
 are written resampled, and a layer's parts outside the canvas are cut (reported as
 `pixelsOutsideCanvas`). Layer styles, text and smart objects do not exist in SlopShop yet.
+The compressed layers wait in a temporary file next to `OUTPUT` until the file is assembled:
+memory does not grow with the document.
 
 The **source space** is the color space of the input image (from its ICC profile, cICP, gAMA/cHRM
 or format convention). A document is **opaque** when its bottom layer is an opaque fill or an
@@ -146,7 +149,7 @@ a gray image or a neutral fill, with one image at least: its gray samples are th
 Which spaces each format can store *and tag* so that it reads back as the same space:
 
 - **PNG**: all of them (sRGB chunk, cICP chunk, or ICC profile).
-- **TIFF**, **JPEG**, **WebP** and **PSD**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
+- **TIFF**, **JPEG**, **WebP**, **PSD** and **PSB**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
 - **OpenEXR**: `linear-srgb` and `linear-rec2020` (EXR samples are linear; the primaries go in
   the `chromaticities` attribute).
 
@@ -179,7 +182,7 @@ report: clippedHigh (1234 samples)
 | `precisionReduced` | The samples are 16-bit floats, less precise than the image |
 | `bigTiff` | The file was written as BigTIFF (over 4 GiB): some older software cannot read it |
 | `alphaFlattened` | Partly transparent pixels were flattened over the matte (count in pixels) |
-| `pixelsOutsideCanvas` | Parts of layers were outside the canvas: the layered PSD keeps only what is inside |
+| `pixelsOutsideCanvas` | Parts of layers were outside the canvas: the layered PSD or PSB keeps only what is inside |
 
 ### Examples
 
