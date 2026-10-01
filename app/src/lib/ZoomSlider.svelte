@@ -3,6 +3,7 @@
   import { formatZoom } from "./format";
   import { t } from "./i18n/index.svelte";
   import Icon from "./Icon.svelte";
+  import { keepFocus } from "./platform";
 
   let {
     zoom,
@@ -101,6 +102,7 @@
   />
   <button
     class="icon-btn"
+    onmousedown={keepFocus}
     disabled={zoom === null}
     title={t("menu.view.actualSize")}
     aria-label={t("menu.view.actualSize")}
@@ -110,6 +112,7 @@
   </button>
   <button
     class="icon-btn"
+    onmousedown={keepFocus}
     disabled={zoom === null}
     title={t("menu.view.fit")}
     aria-label={t("menu.view.fit")}

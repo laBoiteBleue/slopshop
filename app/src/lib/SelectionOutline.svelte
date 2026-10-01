@@ -1,11 +1,11 @@
 <script lang="ts">
   // The marching ants (ADR 0024): the selection's outline, computed by the engine at the screen's
   // resolution over the visible area (plus a margin, so that small pans need nothing new), and
-  // drawn here with an animated dash. A feathered selection also shows where its soft edge
-  // starts and ends, dotted. The engine is asked again only when the selection, the level of
+  // drawn here with an animated dash, where coverage crosses one half (as Photoshop does; Quick
+  // Mask shows a soft edge). The engine is asked again only when the selection, the level of
   // detail or the area changes enough.
   import { untrack } from "svelte";
-  import { engine, type Polylines, type SelectionOutline } from "./engine";
+  import { engine, type SelectionOutline } from "./engine";
   import type { ViewMapping } from "./Viewport.svelte";
 
   let {
@@ -97,7 +97,7 @@
   $effect(() => () => window.clearTimeout(timer));
 
   /** Polylines as an SVG path in viewport pixels, on pixel centers for crisp lines. */
-  function toPath(lines: Polylines): string {
+  function toPath(lines: SelectionOutline): string {
     const parts: string[] = [];
     for (const line of lines) {
       for (let i = 0; i < line.length; i += 2) {
@@ -109,10 +109,7 @@
   }
 
   const current = $derived(fetched && fetched.key === selectionKey ? fetched.outline : null);
-  const path = $derived(current ? toPath(current.middle) : "");
-  const softPath = $derived(
-    current?.soft ? toPath(current.soft.outer) + toPath(current.soft.inner) : "",
-  );
+  const path = $derived(current ? toPath(current) : "");
 </script>
 
 <div
@@ -123,10 +120,6 @@
   aria-hidden="true"
 >
   <svg>
-    {#if softPath}
-      <path class="soft-under" d={softPath} />
-      <path class="soft" d={softPath} />
-    {/if}
     <path class="under" d={path} />
     <path class="ants" d={path} />
   </svg>
@@ -158,18 +151,6 @@
     stroke: #000000;
     stroke-dasharray: 4 4;
     animation: march 0.6s linear infinite;
-  }
-
-  /* The limits of a soft edge: dotted, still, fainter than the ants. */
-  .soft-under {
-    stroke: #ffffff;
-    opacity: 0.6;
-  }
-
-  .soft {
-    stroke: #000000;
-    stroke-dasharray: 1 3;
-    opacity: 0.8;
   }
 
   @keyframes march {

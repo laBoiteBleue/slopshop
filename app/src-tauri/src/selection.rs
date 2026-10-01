@@ -207,10 +207,9 @@ pub async fn reselect(
 const MAX_OUTLINE_POINTS: usize = 60_000;
 
 /// The marching ants of the selection over `x, y, width, height` (document pixels) at `zoom`
-/// (screen pixels per document pixel): raw binary, little-endian `u32`s: the number of sets of
-/// lines (0 when nothing is selected, 1, or 3 for a soft selection: the middle, then the outer
-/// and inner limits of its soft edge), then for each set its number of lines, and for each line
-/// its number of points and their `x, y` in document pixels.
+/// (screen pixels per document pixel): raw binary, little-endian `u32`s: the number of lines,
+/// then for each its number of points and their `x, y` in document pixels. No lines when
+/// nothing is selected.
 #[tauri::command]
 pub async fn selection_outline(
     state: State<'_, AppState>,
@@ -234,26 +233,19 @@ pub async fn selection_outline(
             0
         };
         let levels = image.levels().len();
-        let found = loop {
-            match selection::outlines(&image, level, region, MAX_OUTLINE_POINTS) {
-                Some(found) => break found,
+        let lines = loop {
+            match selection::outline(&image, level, region, MAX_OUTLINE_POINTS) {
+                Some(lines) => break lines,
                 None if level + 1 < levels => level += 1,
-                None => break selection::Outlines::default(),
+                None => break Vec::new(),
             }
         };
-        let mut sets = vec![&found.middle];
-        if let Some((outer, inner)) = &found.soft {
-            sets.extend([outer, inner]);
-        }
-        let mut bytes = (sets.len() as u32).to_le_bytes().to_vec();
-        for lines in sets {
-            bytes.extend_from_slice(&(lines.len() as u32).to_le_bytes());
-            for line in lines {
-                bytes.extend_from_slice(&(line.len() as u32).to_le_bytes());
-                for [px, py] in line {
-                    bytes.extend_from_slice(&px.to_le_bytes());
-                    bytes.extend_from_slice(&py.to_le_bytes());
-                }
+        let mut bytes = (lines.len() as u32).to_le_bytes().to_vec();
+        for line in &lines {
+            bytes.extend_from_slice(&(line.len() as u32).to_le_bytes());
+            for [px, py] in line {
+                bytes.extend_from_slice(&px.to_le_bytes());
+                bytes.extend_from_slice(&py.to_le_bytes());
             }
         }
         Ok(Response::new(bytes))

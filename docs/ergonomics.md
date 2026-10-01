@@ -113,8 +113,8 @@ built. Contributors: propose here first.
   circle and Alt draws from the center (once the press keys are released); a click deselects. A
   small +, − or × next to the pointer shows how the next shape combines (maintainer's idea).
   Options bar: the four modes, Feather (px), Anti-alias for the ellipse. Marching ants follow the
-  selection at any zoom; a feathered selection also shows where its soft edge starts and ends,
-  as two still dotted lines (maintainer's idea). Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
+  selection at any zoom, where coverage crosses one half (a soft edge will show in Quick Mask,
+  Q: the maintainer preferred it to dotted limits around the ants). Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
   Inverse (Shift+Ctrl+I). Selecting is undoable; crop and size changes deselect.
 
 ## Proposed

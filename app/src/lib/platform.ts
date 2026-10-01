@@ -12,3 +12,12 @@ export const modifierLabel = isMac ? "⌘" : "Ctrl";
 export function hasShortcutModifier(e: KeyboardEvent | MouseEvent): boolean {
   return isMac ? e.metaKey : e.ctrlKey;
 }
+
+/**
+ * `onmousedown` of toolbar-like buttons (tools, options, view icons): a click acts without
+ * taking the keyboard focus, as native toolbars do, so no focus ring appears when a key is
+ * pressed next and Space or Enter keep going to the image.
+ */
+export function keepFocus(e: MouseEvent) {
+  e.preventDefault();
+}

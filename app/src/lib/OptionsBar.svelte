@@ -7,6 +7,7 @@
   import type { MessageKey } from "./i18n/en";
   import { MAX_FEATHER } from "./selection";
   import { isSelectionTool, toolInfo, type ToolId } from "./tools";
+  import { keepFocus } from "./platform";
 
   let {
     tool,
@@ -56,6 +57,7 @@
       <button
         class="icon-btn"
         class:on={selectionMode === entry.mode}
+        onmousedown={keepFocus}
         aria-pressed={selectionMode === entry.mode}
         title={t(entry.label)}
         aria-label={t(entry.label)}
