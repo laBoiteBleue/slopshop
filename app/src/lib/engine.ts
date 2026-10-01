@@ -256,6 +256,7 @@ export type PresentInfo = {
 export type Pasted =
   | { kind: "files" }
   | { kind: "image"; document: DocumentView; newTab: boolean }
+  | { kind: "layers"; document: DocumentView; newTab: boolean }
   | { kind: "nothing" };
 
 /** What an open found in folders and zip archives (OpenSummary in lib.rs). */
@@ -769,6 +770,13 @@ export const engine = {
    * `documentId`, or a new tab.
    */
   paste: (documentId: number | null, name: string) => invoke<Pasted>("paste", { documentId, name }),
+  /**
+   * Edit > Copy on layers: keep `layerIds` of a document (a group with its content) for Paste,
+   * which brings them when the system clipboard has no newer files or image. Resolves with how
+   * many were copied. Queued after the edits already sent.
+   */
+  copyLayersToClipboard: (documentId: number, layerIds: number[]) =>
+    serial(() => invoke<number>("copy_layers_to_clipboard", { documentId, layerIds })),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   perform: (documentId: number, edit: EditRequest) =>

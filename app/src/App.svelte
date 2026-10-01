@@ -1087,11 +1087,24 @@
   // --- Paste ------------------------------------------------------------------------------------
 
   /** Paste the clipboard into the active document (as layers), or into a new tab. */
+  /** Edit > Copy (Ctrl+C) on the selected layers; with `cut`, they are then deleted (Ctrl+X). */
+  async function copyLayers(cut: boolean) {
+    const doc = active;
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (!doc || ids.length === 0) return;
+    try {
+      await engine.copyLayersToClipboard(doc.id, ids);
+      if (cut) layersPanel?.deleteSelected();
+    } catch (e) {
+      showError(t("copy.failed", { error: String(e) }));
+    }
+  }
+
   async function paste(intoNewTab: boolean) {
     const target = intoNewTab ? null : activeId;
     try {
       const pasted = await engine.paste(target, t("paste.layerName"));
-      if (pasted.kind === "image") {
+      if (pasted.kind === "image" || pasted.kind === "layers") {
         upsert(pasted.document);
         if (pasted.newTab) activate(pasted.document.id);
       } else if (pasted.kind === "nothing") {
@@ -1286,6 +1299,18 @@
           cmd(t("menu.edit.undo"), () => void undo(), keys("mod", "Z"), !doc?.canUndo),
           cmd(t("menu.edit.redo"), () => void redo(), keys("mod", "shift", "Z"), !doc?.canRedo),
           separator,
+          cmd(
+            t("menu.edit.cut"),
+            () => void copyLayers(true),
+            keys("mod", "X"),
+            !doc || selectedCount === 0,
+          ),
+          cmd(
+            t("menu.edit.copy"),
+            () => void copyLayers(false),
+            keys("mod", "C"),
+            !doc || selectedCount === 0,
+          ),
           cmd(t("menu.edit.paste"), () => void paste(false), keys("mod", "V")),
           cmd(t("menu.edit.pasteNewDocument"), () => void paste(true)),
           separator,
@@ -1536,6 +1561,11 @@
     if ((key === "v" || e.code === "KeyV") && !e.shiftKey) {
       e.preventDefault();
       if (!e.repeat) void paste(false);
+      return;
+    }
+    if ((key === "c" || e.code === "KeyC" || key === "x" || e.code === "KeyX") && !e.shiftKey) {
+      e.preventDefault();
+      if (!e.repeat) void copyLayers(key === "x" || e.code === "KeyX");
       return;
     }
     if ((key === "t" || e.code === "KeyT") && !e.shiftKey) {

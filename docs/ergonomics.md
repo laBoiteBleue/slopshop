@@ -39,7 +39,9 @@ built. Contributors: propose here first.
 - One instance: opening a file while the app runs focuses it; the window remembers its size and
   place.
 - Drop files on the image or the layers panel: layers; elsewhere: new tabs. Folders and zips open
-  like several files. Paste (Ctrl+V) an image or a file as a layer.
+  like several files. Paste (Ctrl+V) an image or a file as a layer;
+  Copy and Cut (Ctrl+C, Ctrl+X) the selected layers, Paste them on top of any document or as a new
+  one.
 - A layered file imported into a document arrives as one group named after it.
 - Tabs: reorder by dragging, rename by double-click, drop a tab on another image to copy its
   layers, Ctrl+Tab.
