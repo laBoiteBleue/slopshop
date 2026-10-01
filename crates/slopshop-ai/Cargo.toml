@@ -17,6 +17,8 @@ required-features = ["helper"]
 # The executable: ONNX Runtime, loaded at run time from a library the app downloads (never
 # linked, never shipped with the editor). The library side (protocol, client) needs nothing.
 helper = ["dep:ort"]
+# The installer of ONNX Runtime and the models (`install` module): HTTPS, SHA-256, inflate.
+install = ["dep:ureq", "dep:sha2", "dep:flate2"]
 
 [dependencies]
 # ONNX Runtime bindings (MIT OR Apache-2.0), only in the helper. `load-dynamic`: nothing is
@@ -30,6 +32,14 @@ ort = { version = "=2.0.0-rc.13", default-features = false, optional = true, fea
     "cuda",
     "directml",
 ] }
+# HTTPS client for the installer (MIT OR Apache-2.0): blocking (downloads run on their own
+# thread), rustls with its default ring provider and Mozilla's roots, no tokio. std has no HTTP.
+ureq = { version = "3.4.2", optional = true, default-features = false, features = ["rustls"] }
+# SHA-256 of downloaded files, to check them against their pins (RustCrypto, MIT OR Apache-2.0).
+sha2 = { version = "0.11.0", optional = true }
+# Inflates the files fetched from inside zip archives (raw deflate), on zlib-rs; both are
+# already in the workspace through DICOM's decoders (MIT OR Apache-2.0, Zlib).
+flate2 = { version = "1.1.10", optional = true, default-features = false, features = ["zlib-rs"] }
 
 [lints]
 workspace = true
@@ -37,3 +47,7 @@ workspace = true
 [[test]]
 name = "helper"
 required-features = ["helper"]
+
+[[test]]
+name = "install"
+required-features = ["install"]

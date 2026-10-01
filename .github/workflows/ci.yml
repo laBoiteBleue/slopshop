@@ -99,13 +99,14 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # The AI helper's executable is behind a feature (ADR 0025); it builds without ONNX
-      # Runtime (loaded at run time), and its end-to-end test skips without the models.
+      # The AI helper and its installer are behind features (ADR 0025); the helper builds
+      # without ONNX Runtime (loaded at run time), and its end-to-end test skips without the
+      # models.
       - name: Clippy (AI helper)
-        run: cargo clippy -p slopshop-ai --all-targets --features helper --locked -- -D warnings
+        run: cargo clippy -p slopshop-ai --all-targets --features helper,install --locked -- -D warnings
 
       - name: Test
         run: cargo test --workspace --locked
 
       - name: Test (AI helper)
-        run: cargo test -p slopshop-ai --features helper --locked
+        run: cargo test -p slopshop-ai --features helper,install --locked
