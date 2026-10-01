@@ -15,6 +15,7 @@
     onOpenEvents,
     type DocumentView,
     type EditRequest,
+    type LayerMaskKind,
     type SelectionMode,
     type SelectionShape,
     type ExportFailed,
@@ -36,6 +37,7 @@
     type SaveFailed,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
+  import type { MessageKey } from "./lib/i18n/en";
   import ExportDialog from "./lib/ExportDialog.svelte";
   import VectorImportDialog from "./lib/VectorImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
@@ -366,6 +368,19 @@
   function toggleQuickMask() {
     const doc = active;
     if (doc) selectionCommand((id) => engine.setQuickMask(id, !doc.quickMask));
+  }
+
+  /** Image > Crop: to the selection's bounds when there is one, else the Crop tool. */
+  function cropImage() {
+    if (active?.selectionKey != null) selectionCommand(engine.cropToSelection);
+    else selectTool("crop");
+  }
+
+  /** Layer > Layer Mask's new masks, on the selected layers that have none. */
+  function addLayerMasks(kind: LayerMaskKind) {
+    const doc = active;
+    const ids = (layersPanel?.selectedLayers() ?? []).filter((l) => !l.mask).map((l) => l.id);
+    if (doc && ids.length > 0) selectionCommand((id) => engine.addLayerMasks(id, ids, kind));
   }
 
   function selectionCommand(run: (id: number) => Promise<DocumentView>) {
@@ -1230,6 +1245,15 @@
   let layerCommands = $derived.by(() => {
     const doc = active;
     const layer = layersPanel?.selectedLayer() ?? null;
+    const maskless = (layersPanel?.selectedLayers() ?? []).filter((l) => !l.mask);
+    /** A new mask on the selected layers without one; from the selection, only with one. */
+    const maskCommand = (kind: LayerMaskKind, label: MessageKey) =>
+      command(
+        t(label),
+        () => addLayerMasks(kind),
+        undefined,
+        maskless.length === 0 || (kind.endsWith("Selection") && doc?.selectionKey == null),
+      );
     const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const several = selectedCount > 1;
     return {
@@ -1279,6 +1303,10 @@
         keys("shift", "mod", "G"),
         layer?.kind !== "group",
       ),
+      maskRevealAll: maskCommand("revealAll", "menu.layer.maskRevealAll"),
+      maskHideAll: maskCommand("hideAll", "menu.layer.maskHideAll"),
+      maskRevealSelection: maskCommand("revealSelection", "menu.layer.maskRevealSelection"),
+      maskHideSelection: maskCommand("hideSelection", "menu.layer.maskHideSelection"),
       maskFromTransparency: command(
         t("menu.layer.maskFromTransparency"),
         () => doc && layer && void sync(engine.addMaskFromTransparency(doc.id, layer.id)),
@@ -1322,6 +1350,8 @@
       c.ungroup,
       separator,
       c.clipping,
+      c.maskRevealAll,
+      c.maskRevealSelection,
       c.maskFromTransparency,
       c.maskToggle,
       c.maskDelete,
@@ -1445,7 +1475,7 @@
       {
         label: t("menu.image"),
         items: [
-          cmd(t("menu.image.crop"), () => selectTool("crop"), "C", !doc),
+          cmd(t("menu.image.crop"), cropImage, "C", !doc),
           cmd(
             t("menu.image.imageSize"),
             () => openSizeDialog("image"),
@@ -1504,6 +1534,10 @@
             label: t("menu.layer.mask"),
             disabled: !layer,
             items: [
+              layerCommands.maskRevealAll,
+              layerCommands.maskHideAll,
+              layerCommands.maskRevealSelection,
+              layerCommands.maskHideSelection,
               layerCommands.maskFromTransparency,
               layerCommands.maskToggle,
               layerCommands.maskDelete,

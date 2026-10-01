@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
-use slopshop_core::{Edit, RasterImage, Rect, Size};
+use slopshop_core::{Edit, LayerContent, LayerId, LayerMask, RasterImage, Rect, Size};
 use tauri::State;
 use tauri::ipc::Response;
 
@@ -214,6 +214,129 @@ pub async fn set_quick_mask(
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
     document.overlays.quick_mask = on;
+    Ok(document.view())
+}
+
+/// Layer > Layer Mask > Reveal All, Hide All, Reveal Selection or Hide Selection (`kind`:
+/// `revealAll`, `hideAll`, `revealSelection`, `hideSelection`) on each of `layer_ids` that has no
+/// mask yet, as one undo entry. A mask from the selection drops the selection, as Photoshop does.
+#[tauri::command]
+pub async fn add_layer_masks(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_ids: Vec<u64>,
+    kind: String,
+) -> Result<DocumentView, String> {
+    let (from_selection, hide) = match kind.as_str() {
+        "revealAll" => (false, false),
+        "hideAll" => (false, true),
+        "revealSelection" => (true, false),
+        "hideSelection" => (true, true),
+        other => return Err(format!("unknown layer mask {other}")),
+    };
+    // Each layer's mask size and placement, from a snapshot of the document.
+    let (targets, selection) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document();
+        let canvas = doc.size();
+        let mut targets = Vec::new();
+        for raw in layer_ids {
+            let id = LayerId::from_raw(raw);
+            let layer = doc.layer(id).ok_or("unknown layer")?;
+            if layer.mask.is_some() {
+                continue;
+            }
+            let to_document = layer.transform.then(doc.parent_transform(id));
+            let size = match &layer.content {
+                LayerContent::Raster { image } => image.size(),
+                // Fills, groups and adjustments: the canvas, seen from the layer.
+                _ => {
+                    let inverse = to_document
+                        .inverse()
+                        .ok_or("a layer transform is not invertible")?;
+                    let [_, _, x1, y1] = inverse.map_rect([
+                        0.0,
+                        0.0,
+                        f64::from(canvas.width),
+                        f64::from(canvas.height),
+                    ]);
+                    let side = |v: f64| v.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
+                    Size::new(side(x1), side(y1))
+                }
+            };
+            targets.push((id, size, to_document));
+        }
+        let selection = doc.selection().map(|s| Arc::clone(s.image()));
+        (targets, selection)
+    };
+    if from_selection && selection.is_none() {
+        return Err("nothing is selected".to_owned());
+    }
+    let masks = on_worker(move || {
+        targets
+            .into_iter()
+            .map(|(id, size, to_document)| {
+                let image = match &selection {
+                    Some(selection) if from_selection => {
+                        selection::layer_mask(selection, size, to_document, hide)
+                    }
+                    _ => selection::uniform_mask(size, !hide),
+                }
+                .map_err(|e| e.to_string())?;
+                Ok((id, image))
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })
+    .await?;
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let mut edits: Vec<Edit> = masks
+        .into_iter()
+        .map(|(id, image)| Edit::SetLayerMask {
+            id,
+            mask: Some(LayerMask {
+                image: Arc::new(image),
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        })
+        .collect();
+    if edits.is_empty() {
+        return Ok(document.view());
+    }
+    if from_selection {
+        edits.push(Edit::SetSelection { selection: None });
+    }
+    document
+        .session
+        .perform(Edit::Batch(edits))
+        .map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
+/// Image > Crop with a selection: the canvas becomes the selection's bounds (nothing is deleted,
+/// ADR 0017), which drops the selection.
+#[tauri::command]
+pub async fn crop_to_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+) -> Result<DocumentView, String> {
+    let (_, current) = snapshot(&state, document_id)?;
+    let image = current.ok_or("nothing is selected")?;
+    let bounds = on_worker(move || Ok(selection::bounds(&image))).await?;
+    let Some(bounds) = bounds else {
+        return Err("nothing is selected".to_owned());
+    };
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let area = [
+        i64::from(bounds.x),
+        i64::from(bounds.y),
+        i64::from(bounds.width),
+        i64::from(bounds.height),
+    ];
+    let crop = Edit::crop(document.session.document(), area).map_err(|e| e.to_string())?;
+    document.session.perform(crop).map_err(|e| e.to_string())?;
     Ok(document.view())
 }
 
