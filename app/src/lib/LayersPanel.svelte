@@ -295,6 +295,22 @@
     if (edits.length > 0) void edit(batchOf(edits));
   }
 
+  /**
+   * The eye of `layer`: within a selection of several layers, shows or hides them all (as the
+   * clicked one becomes, one undo entry); otherwise toggles that layer alone.
+   */
+  function toggleEye(layer: LayerView) {
+    const visible = !layer.visible;
+    if (selection.length > 1 && selectedSet.has(layer.id)) {
+      const edits = selection
+        .filter((l) => l.visible !== visible)
+        .map((l): EditRequest => ({ kind: "setLayerVisible", id: l.id, visible }));
+      if (edits.length > 0) void edit(batchOf(edits));
+      return;
+    }
+    void edit({ kind: "setLayerVisible", id: layer.id, visible });
+  }
+
   // The right-click menu: where it is open, if it is.
   let menuAt = $state<{ x: number; y: number } | null>(null);
 
@@ -855,7 +871,7 @@
           class="eye"
           title={t(layer.visible ? "layers.hide" : "layers.show")}
           aria-pressed={layer.visible}
-          onclick={() => edit({ kind: "setLayerVisible", id: layer.id, visible: !layer.visible })}
+          onclick={() => toggleEye(layer)}
         >
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
