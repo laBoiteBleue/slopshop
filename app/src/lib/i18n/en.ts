@@ -155,6 +155,8 @@ const en = {
     "Mask density and feather, and vector masks combined with a pixel mask, are not supported yet: they were left out",
   "open.warning.pdfContentSkipped":
     "Some content of the PDF page could not be drawn (an unsupported font or image)",
+  "open.warning.dicomWindowApproximated":
+    "The DICOM display window (sigmoid or lookup table) was approximated by a linear window",
   "open.warning.colorInfoUnsupported":
     "The file's color information is not supported yet: colors read as sRGB",
 

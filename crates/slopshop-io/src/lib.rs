@@ -14,6 +14,7 @@
 mod atomic;
 mod avif;
 pub mod collection;
+mod dicom;
 pub mod export;
 mod icc;
 mod jpeg2000;
@@ -88,6 +89,9 @@ pub enum ImportWarning {
     /// Some content of a PDF page could not be rendered (an unsupported font or an image that
     /// failed to decode): it is missing from the page.
     PdfContentSkipped,
+    /// The DICOM display window is a sigmoid or a lookup table, or is invalid: it was read as a
+    /// linear window, the closest one.
+    DicomWindowApproximated,
 }
 
 impl ImportWarning {
@@ -109,6 +113,7 @@ impl ImportWarning {
             ImportWarning::PixelsOutsideCanvas => "pixelsOutsideCanvas",
             ImportWarning::MasksSimplified => "masksSimplified",
             ImportWarning::PdfContentSkipped => "pdfContentSkipped",
+            ImportWarning::DicomWindowApproximated => "dicomWindowApproximated",
         }
     }
 }
@@ -246,10 +251,13 @@ pub(crate) struct Decoded {
 /// Decode a file: a layered document (Photoshop) as its layers when the engine can hold them,
 /// anything else as [`open_image`] does. Blocking and CPU-heavy: call it off the UI thread.
 pub fn open_file(path: &Path) -> Result<Opened, ImportError> {
-    let mut head = Vec::with_capacity(4);
-    File::open(path)?.take(4).read_to_end(&mut head)?;
+    let mut head = Vec::with_capacity(132);
+    File::open(path)?.take(132).read_to_end(&mut head)?;
     if psd::is_psd(&head) {
         return psd::open(path);
+    }
+    if dicom::is_dicom(&head) {
+        return dicom::open(path);
     }
     open_image(path).map(Opened::Image)
 }
@@ -285,6 +293,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if pdf::is_pdf(&head) {
         drop(file);
         pdf::decode(path)?
+    } else if dicom::is_dicom(&head) {
+        drop(file);
+        dicom::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -648,9 +659,6 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
     let signatures: [(&[u8], &'static str); 1] = [(b"SIMPLE  =", "FITS")];
     if let Some((_, name)) = signatures.iter().find(|(sig, _)| head.starts_with(sig)) {
         return Some(ImportError::NotYetSupported(name));
-    }
-    if head.get(128..132) == Some(b"DICM") {
-        return Some(ImportError::NotYetSupported("DICOM"));
     }
     let by_extension = match extension.as_str() {
         "svg" | "svgz" => Some("SVG"),
@@ -1060,15 +1068,7 @@ mod tests {
                 "notYetSupported",
             ),
             ("shot.cr2", b"II*\0\x10\0\0\0CR".to_vec(), "notYetSupported"),
-            (
-                "scan.dcm",
-                {
-                    let mut v = vec![0u8; 132];
-                    v[128..132].copy_from_slice(b"DICM");
-                    v
-                },
-                "notYetSupported",
-            ),
+            ("art.kra", b"PK".to_vec(), "notYetSupported"),
         ];
         for (name, bytes, code) in cases {
             let error = open_bytes(name, &bytes).unwrap_err();

@@ -33,9 +33,13 @@ pub(crate) fn is_jpeg2000(head: &[u8]) -> bool {
 }
 
 pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
-    let data = std::fs::read(path)?;
+    decode_bytes(&std::fs::read(path)?)
+}
+
+/// A JP2 file or a raw codestream held in memory (also a DICOM frame).
+pub(crate) fn decode_bytes(data: &[u8]) -> Result<Decoded, ImportError> {
     let decode_error = |e| ImportError::Decode(format!("JPEG 2000: {e}"));
-    let header = jp2_header(&data);
+    let header = jp2_header(data);
     let mut warnings = Vec::new();
     match header.enumerated {
         Some(CIELAB) => return Err(ImportError::UnsupportedPixels("CIELab".to_owned())),
@@ -43,7 +47,7 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
         _ => {}
     }
 
-    let image = Image::new(&data, &DecodeSettings::default()).map_err(decode_error)?;
+    let image = Image::new(data, &DecodeSettings::default()).map_err(decode_error)?;
     let (gray, icc) = match image.color_space() {
         J2kSpace::Gray => (true, None),
         J2kSpace::RGB => (false, None),

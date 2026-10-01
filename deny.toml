@@ -49,6 +49,9 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "build-time macro via exr; no vulnerability" },
     # proc-macro-error: used by gtk-rs 0.18 macros ← Tauri on Linux (GTK3 webview).
     { id = "RUSTSEC-2024-0370", reason = "build-time macro via Tauri's GTK3 stack on Linux" },
+    # encoding: decodes the character sets of DICOM text attributes ← dicom-encoding ←
+    # dicom-object (DICOM import). Runtime code, but on text only: pixels never go through it.
+    { id = "RUSTSEC-2021-0153", reason = "DICOM text decoding via dicom-rs; no vulnerability" },
 ]
 
 [sources]

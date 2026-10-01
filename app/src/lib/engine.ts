@@ -310,6 +310,7 @@ export type ImportWarning =
   | "pixelsOutsideCanvas"
   | "masksSimplified"
   | "pdfContentSkipped"
+  | "dicomWindowApproximated"
   | "blendSpaceDiffers";
 
 /** A PDF page's size in points (1/72 inch), its rotation applied. */
