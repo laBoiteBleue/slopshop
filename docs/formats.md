@@ -72,11 +72,18 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
 PDF is how many images arrive (designers, print, scans). Photoshop opens PDFs by rasterizing
 their pages. Import only: PDF export is not planned.
 
-- **Import**: each page rasterized at a resolution chosen when opening (size or DPI), in its
-  color space when the page declares one (ICC-based); CMYK pages are refused or reported until
-  the engine has CMYK. Several pages open like a multi-file open (tabs, or layers when dropped
-  on the canvas). Pure-Rust hayro by default, PDFium as an optional backend for difficult files.
-  Later: re-rendering the vector page at any zoom instead of fixed pixels. MuPDF, Poppler and
+- **Import** (done, hayro, pure Rust): the Import PDF dialog shows the pages as thumbnails to
+  pick and the resolution (300 pixels/inch by default, remembered) or the size in pixels of a
+  page. Each picked page is rasterized as 8-bit sRGB, transparent where the page draws nothing
+  (like Photoshop), and opens like a file of a multi-file open (tabs, or layers when dropped on
+  the canvas). Without the dialog (command line, folders, zips, the CLI), the first page opens at
+  300 dpi and the others are reported; the CLI has `--page` and `--dpi`. Content the renderer
+  cannot draw (unsupported fonts, undecodable images) is reported. Fonts that are not embedded
+  use the 14 standard fonts the renderer carries.
+- **Not yet**: encrypted files; the page's own color space (the renderer converts CMYK,
+  ICC-based and Lab content to sRGB: a CMYK engine would keep it); a 16-bit or gray mode;
+  pages beyond 65,535 pixels a side; PDFium as an optional backend for difficult files;
+  re-rendering the vector page at any zoom instead of fixed pixels. MuPDF, Poppler and
   Ghostscript are GPL/AGPL: excluded.
 - **Photoshop PDF** saved with "Preserve Photoshop Editing Capabilities" embeds the PSD data:
   once the PSD reader exists, those files open with their layers.
@@ -104,7 +111,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | Camera RAW (Camera Raw formats, DNG) | `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.pef`, … | 🔎 | — | P1 | rawler (LGPL-2.1, isolated behind a feature) | a non-destructive development node, not a baked import; demosaic algorithms written clean-room (the best known ones are GPL) |
 | DICOM | `.dcm` | 🔎 | — | P1 | dicom-rs | an interpretation node (modality and VOI LUT) instead of baking the window; 12-bit JPEG needs libjpeg-turbo |
 | JPEG 2000 | `.jp2`, `.jpf`, `.jpx`, `.j2k`, `.j2c`, `.jpc` | ✅ | — | P2 export | hayro-jpeg2000 (pure Rust) | JP2 and raw codestreams; native depth (8/16-bit, deeper as float); gray, RGB, alpha (straight or premultiplied); sRGB, sYCC, ROMM-RGB, ICC; CMYK and CIELab refused, e-sRGB read as sRGB (reported); single-threaded decoder. OpenJPEG declared itself unmaintained in 2026 |
-| **Photoshop PDF, Generic PDF** | `.pdf`, `.pdp` | 🔎 | — | **P1** | hayro → PDFium (optional) | import only, see [PDF](#pdf-p1) |
+| **Photoshop PDF, Generic PDF** | `.pdf`, `.pdp` | ✅ pages | — | P2 layers | hayro (pure Rust) | import only, pages rasterized as 8-bit sRGB, see [PDF](#pdf-p1); `.pdp` not recognized yet |
 | HEIF / HEIC | `.heic`, `.heif` | ⛔ | — | P2 | OS decoders (Windows WIC, macOS ImageIO) or libheif (LGPL, isolated) | HEVC patent pools (ADR 0006); refused with an explanation |
 | Cineon | `.cin` | — | — | P2 | in-house (simple header, 10-bit log) | needs a log transfer function in the color model; DPX (film scans) is the same family |
 | Multi-Picture Format, JPEG Stereo | `.mpo`, `.jps` | — | — | P2 | JPEG decoder + MPF index | stereo pairs; the first image probably opens as a JPEG already (to verify); the model has one image per layer |

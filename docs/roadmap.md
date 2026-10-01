@@ -56,10 +56,11 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [ ] JPEG XL lossy export (needs libjxl, C++)
 - [x] JPEG 2000 import (hayro-jpeg2000): JP2 and raw codestreams, native depth
 - [ ] Import phases 2–6: DICOM, FITS; camera RAW; KRA/XCF/ORA,
-      SVG, PDF; optional native backends. Every Photoshop format, with its priority and
+      SVG; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)
-- [ ] PDF import: pages rasterized at a chosen resolution, several pages like a multi-file
-      open ([formats plan](formats.md#pdf-p1))
+- [x] PDF import: the Import PDF dialog (pages as thumbnails, resolution or size), pages
+      rasterized as 8-bit sRGB, several pages like a multi-file open
+      ([formats plan](formats.md#pdf-p1))
 - [x] Export (PNG/TIFF/EXR first, [ADR 0008](adr/0008-export.md))
 - [x] JPEG and WebP export, background color for alpha-less exports
       ([ADR 0010](adr/0010-jpeg-webp-export.md))
