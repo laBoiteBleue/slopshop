@@ -126,6 +126,16 @@ decodes and demosaics, our steps apply the as-shot white balance and the camera 
 linear Rec.2020, and the image goes to the importer through a pipe. Keeps rawler replaceable
 and a decoder crash out of the editor.
 
+### `slopshop-ai` (in progress)
+
+The AI helper ([ADR 0025](adr/0025-ai-selection.md)). The library holds the protocol (binary
+frames on the helper's standard input and output) and the client the app starts it with; it
+needs nothing. The `slopshop-ai` executable (feature `helper`) loads ONNX Runtime at run time
+from a library the app downloads (never linked, never shipped with the editor), picks CUDA,
+DirectML or the CPU, and runs SAM 2.1: an image is encoded once, then each prompt (points, a
+box) is decoded in milliseconds into 256² logits, which `selection::select_logits` turns into a
+selection over the canvas. A model's crash or its memory stays out of the editor.
+
 ### `slopshop-cli` (implemented, minimal)
 
 `slopshop gpu`, `slopshop render`, `slopshop export` (a `.slop` document or an image file,
