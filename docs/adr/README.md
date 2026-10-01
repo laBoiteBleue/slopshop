@@ -27,5 +27,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0020 | [Adjustment layers](0020-adjustment-layers.md)                     | accepted |
 | 0021 | [AVIF import with rav1d, without assembly](0021-avif-import.md)    | accepted |
 | 0022 | [Display cache: composited tiles addressed by their content](0022-display-cache.md) | accepted |
+| 0023 | [Camera RAW through a separate helper process](0023-camera-raw-helper.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

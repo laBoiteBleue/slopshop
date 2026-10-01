@@ -107,6 +107,14 @@ manifest, an append-only log with two commit slots, so a save only writes what c
 crash leaves the previous save readable. `SlopFile` keeps what the file already holds between
 saves. Full writes (first save, Save As, compaction, exports) share `atomic::TempFile`.
 
+### `slopshop-raw` (implemented, basic)
+
+A separate executable the importer runs for each camera RAW file
+([ADR 0023](adr/0023-camera-raw-helper.md)): rawler (LGPL-2.1, used by this crate only)
+decodes and demosaics, our steps apply the as-shot white balance and the camera matrix to
+linear Rec.2020, and the image goes to the importer through a pipe. Keeps rawler replaceable
+and a decoder crash out of the editor.
+
 ### `slopshop-cli` (implemented, minimal)
 
 `slopshop gpu`, `slopshop render`, `slopshop export` (a `.slop` document or an image file,
