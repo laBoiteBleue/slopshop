@@ -4,7 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { message, open as openDialog, save } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import {
     DOCUMENT_CLOSED,
     DOCUMENT_EXTENSION,
@@ -44,7 +44,10 @@
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import PropertiesPanel from "./lib/PropertiesPanel.svelte";
-  import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
+  import Viewport, { type FrameStats, type PointerTool } from "./lib/Viewport.svelte";
+  import Toolbar from "./lib/Toolbar.svelte";
+  import OptionsBar from "./lib/OptionsBar.svelte";
+  import { toolForKey, type ToolId } from "./lib/tools";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import CropBox from "./lib/CropBox.svelte";
@@ -320,10 +323,22 @@
   let tabHover = $state<{ id: number; timer: number } | null>(null);
   let mainElement: HTMLElement;
 
+  // The tools (ADR 0013): the toolbar's active tool decides what a left press on the image does.
+  let tool = $state<ToolId>("move");
+  /** The Zoom tool's option: a click zooms out (Alt inverts it). */
+  let zoomOut = $state(false);
+
+  function selectTool(id: ToolId) {
+    // Free Transform's box and the crop frame would both take the pointer.
+    if (id === "crop") commitTransform();
+    tool = id;
+  }
+
   // The Move tool (ADR 0017): a left drag on the image moves the selected layers live, in whole
-  // document pixels, one undo entry per drag. As in Photoshop: Auto-Select takes the layer under
-  // the pointer (not with Ctrl), and the moving layers snap to the canvas and to the other layers
-  // (edges and centers, not with Ctrl), with magenta smart guides.
+  // document pixels, one undo entry per drag. As in Photoshop: Auto-Select (the options bar)
+  // takes the layer under the pointer, Ctrl inverting it; the moving layers snap to the canvas
+  // and to the other layers (edges and centers, not with Ctrl), with magenta smart guides.
+  let autoSelect = $state(true);
   /** View > Snap. */
   let snapping = $state(true);
   type MoveDrag = {
@@ -355,7 +370,7 @@
     moveDrag = drag;
     void (async () => {
       let ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
-      if (!ctrl) {
+      if (autoSelect !== ctrl) {
         const hit = await engine.layerAt(doc.id, Math.floor(x), Math.floor(y)).catch(() => null);
         if (hit !== null && !ids.includes(hit)) {
           layersPanel?.selectOnly(hit);
@@ -429,9 +444,15 @@
   };
   let transforming = $state<Transforming | null>(null);
 
+  /** What a left press on the image does; `null` while an overlay takes it (crop frame, transform box). */
+  const pointerTool: PointerTool = $derived(
+    tool === "hand" ? "hand" : tool === "crop" || transforming ? null : tool,
+  );
+
   async function startFreeTransform() {
     const doc = active;
     if (!doc || transforming) return;
+    if (tool === "crop") tool = "move";
     const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
     if (ids.length === 0) return;
     const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
@@ -513,19 +534,47 @@
     );
   }
 
-  // The Crop tool (C, ADR 0017): a frame on the image; applying it reframes the canvas, and
-  // nothing is deleted. What the frame snaps to is fetched when it opens.
-  let cropping = $state<{ document: number; targets: Bounds[] } | null>(null);
+  // The Crop tool (C, ADR 0017): a frame on the image while the tool is active; applying it
+  // reframes the canvas, and nothing is deleted. As in Photoshop, a new frame then starts on the
+  // new canvas, and Esc starts it over. What the frame snaps to is fetched when it opens.
+  type Cropping = { document: number; width: number; height: number; targets: Bounds[] };
+  let cropping = $state<Cropping | null>(null);
+  let cropBox = $state<CropBox | null>(null);
+  /** Bumped by each frame requested: only the latest one opens. */
+  let cropRequest = 0;
+  /** A crop being applied: the next frame waits for the new canvas. */
+  let cropApplying = $state(false);
 
-  async function startCrop() {
-    const doc = active;
-    if (!doc || cropping) return;
-    commitTransform();
+  async function startCrop(doc: DocumentView) {
+    const request = ++cropRequest;
     // Nothing moves: every visible layer is a target.
     const targets = await engine.moveSnapTargets(doc.id, []).catch(() => null);
-    if (active?.id !== doc.id || cropping) return;
-    cropping = { document: doc.id, targets: [canvasBounds(doc), ...(targets?.others ?? [])] };
+    if (request !== cropRequest) return;
+    cropping = {
+      document: doc.id,
+      width: doc.width,
+      height: doc.height,
+      targets: [canvasBounds(doc), ...(targets?.others ?? [])],
+    };
   }
+
+  $effect(() => {
+    // The frame follows the tool, the active tab and its canvas (an undone crop, Image Size).
+    const doc = active;
+    const current = cropping;
+    if (tool !== "crop" || !doc) {
+      cropRequest++;
+      if (current) cropping = null;
+      return;
+    }
+    if (cropApplying) return;
+    const stale =
+      !current ||
+      current.document !== doc.id ||
+      current.width !== doc.width ||
+      current.height !== doc.height;
+    if (stale) untrack(() => void startCrop(doc));
+  });
 
   function applyCrop(frame: Bounds) {
     const current = cropping;
@@ -539,17 +588,25 @@
       frame.right === doc.width &&
       frame.bottom === doc.height;
     if (unchanged) return;
+    cropApplying = true;
     void edit(current.document, {
       kind: "crop",
       x: frame.left,
       y: frame.top,
       width: frame.right - frame.left,
       height: frame.bottom - frame.top,
-    });
+    }).finally(() => (cropApplying = false));
   }
 
-  $effect(() => {
-    if (cropping && cropping.document !== activeId) cropping = null;
+  /** The options bar's apply and cancel buttons, for the crop frame or the transform box. */
+  const pending = $derived.by(() => {
+    if (cropping && cropping.document === activeId) {
+      return { commit: () => cropBox?.apply(), cancel: () => (cropping = null) };
+    }
+    if (transforming && transforming.document === activeId) {
+      return { commit: commitTransform, cancel: cancelTransform };
+    }
+    return null;
   });
 
   function rotateImage(turn: ImageTurn) {
@@ -1364,7 +1421,7 @@
       {
         label: t("menu.image"),
         items: [
-          cmd(t("menu.image.crop"), () => void startCrop(), "C", !doc),
+          cmd(t("menu.image.crop"), () => selectTool("crop"), "C", !doc),
           cmd(
             t("menu.image.imageSize"),
             () => openSizeDialog("image"),
@@ -1509,17 +1566,14 @@
         return;
       }
     }
-    // C: the Crop tool (a letter alone, as Photoshop's tools; not while typing).
-    if (
-      (e.key === "c" || e.key === "C") &&
-      !hasShortcutModifier(e) &&
-      !e.altKey &&
-      !isTextField(e.target) &&
-      active
-    ) {
-      e.preventDefault();
-      if (!e.repeat) void startCrop();
-      return;
+    // The tools: a letter alone (V, C, H, Z), as in Photoshop; not while typing.
+    if (!hasShortcutModifier(e) && !e.altKey && !isTextField(e.target)) {
+      const picked = toolForKey(e.code);
+      if (picked) {
+        e.preventDefault();
+        if (!e.repeat) selectTool(picked);
+        return;
+      }
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
     const key = e.key.toLowerCase();
@@ -1662,6 +1716,16 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
+  <OptionsBar
+    {tool}
+    bind:autoSelect
+    bind:zoomOut
+    hasDocument={active !== null}
+    {pending}
+    onactualsize={() => void viewport?.zoomTo(1)}
+    onfit={() => void viewport?.fit()}
+  />
+
   <main
     class:has-panel={active !== null}
     class:transferring={layerTransfer !== null}
@@ -1670,6 +1734,14 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
+    <Toolbar
+      {tool}
+      onselect={selectTool}
+      ondoubleclick={(picked) => {
+        if (picked === "hand") void viewport?.fit();
+        else if (picked === "zoom") void viewport?.zoomTo(1);
+      }}
+    />
     <section class="workspace">
       <div
         class="tabbar"
@@ -1768,8 +1840,10 @@
               documentId={active.id}
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
+              tool={pointerTool}
+              {zoomOut}
               onmovestart={onMoveStart}
-              onmove={transforming || cropping ? undefined : onMoveDrag}
+              onmove={onMoveDrag}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
               {guides}
@@ -1777,6 +1851,7 @@
               {#snippet overlay(mapping)}
                 {#if cropping && cropping.document === active?.id}
                   <CropBox
+                    bind:this={cropBox}
                     {mapping}
                     canvas={canvasBounds(active)}
                     targets={snapping ? cropping.targets : []}
@@ -2085,7 +2160,7 @@
 
   .app {
     display: grid;
-    grid-template-rows: 30px 1fr 22px;
+    grid-template-rows: 30px 32px 1fr 22px;
     height: 100vh;
   }
 
@@ -2122,14 +2197,14 @@
 
   main {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: 40px 1fr;
     gap: 1px;
     min-height: 0;
     background: var(--border-dark);
   }
 
   main.has-panel {
-    grid-template-columns: 1fr 260px;
+    grid-template-columns: 40px 1fr 260px;
   }
 
   /* Native presentation: the canvas area shows the window surface drawn by the engine. */
