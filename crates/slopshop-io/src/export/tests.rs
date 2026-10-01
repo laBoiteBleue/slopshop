@@ -2491,3 +2491,157 @@ fn gif_quantizes_many_colors_and_reports_it() {
     let mean = error as f64 / f64::from(w * h * 3);
     assert!(mean < 4.0, "mean error {mean}");
 }
+
+/// The first image of a file as `open_file` opens it, before the window or stretch above it
+/// (DICOM, FITS), alone in a document; and its format.
+fn opened_samples(path: &Path) -> (Document, PixelFormat) {
+    let image = match crate::open_file(path).unwrap() {
+        crate::Opened::Image(imported) => Arc::new(imported.image),
+        crate::Opened::Layers(layers) => layers
+            .document
+            .all_layers()
+            .find_map(|layer| match &layer.content {
+                LayerContent::Raster { image } => Some(Arc::clone(image)),
+                _ => None,
+            })
+            .expect("an image layer"),
+    };
+    let format = image.format();
+    let mut doc = Document::new(image.size());
+    push_layer(&mut doc, LayerContent::Raster { image }, 1.0);
+    (doc, format)
+}
+
+#[test]
+fn fits_round_trips_bit_exact_bottom_row_first() {
+    use ChannelLayout::{Gray, Rgb};
+    for (layout, sample) in [
+        (Gray, SampleType::U8),
+        (Gray, SampleType::U16),
+        (Rgb, SampleType::U8),
+        (Rgb, SampleType::U16),
+    ] {
+        let modulo = if sample == SampleType::U8 {
+            256
+        } else {
+            65_536
+        };
+        let image = pattern_raster(ODD_SIZE, layout, sample, ColorSpace::SRGB, |x, y, c| {
+            ((x * 211 + y * 97 + c as u32 * 4000) % modulo) as u16
+        });
+        let doc = raster_document(image);
+        let spec = default_spec(ExportFormatKind::Fits, &doc);
+        let expected = ExportFormat::Fits {
+            sample: if sample == SampleType::U8 {
+                TiffSample::U8
+            } else {
+                TiffSample::U16
+            },
+        };
+        assert_eq!(spec.format, expected);
+        assert_eq!(
+            (spec.space, spec.gray, spec.keep_alpha),
+            (ColorSpace::SRGB, layout == Gray, false)
+        );
+        let path = temp_path(&format!("{layout:?}-{sample:?}.fits"));
+        assert_eq!(export(&doc, &path, &spec).unwrap(), ExportReport::default());
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len() % 2880, 0);
+        assert!(bytes.starts_with(b"SIMPLE  =                    T"));
+        let header = String::from_utf8_lossy(&bytes[..2880]);
+        assert_eq!(
+            header.contains("BZERO   =                32768"),
+            sample == SampleType::U16
+        );
+        assert_eq!(
+            header.contains("NAXIS3  =                    3"),
+            layout == Rgb
+        );
+        if (layout, sample) == (Gray, SampleType::U8) {
+            // The bottom row first.
+            let last = (ODD_SIZE.height - 1) * 97;
+            let expected: Vec<u8> = (0..ODD_SIZE.width)
+                .map(|x| ((x * 211 + last) % 256) as u8)
+                .collect();
+            assert_eq!(&bytes[2880..2880 + ODD_SIZE.width as usize], &expected[..]);
+        }
+        let (back, format) = opened_samples(&path);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            (format.layout, format.sample, format.color_space),
+            (layout, sample, ColorSpace::SRGB)
+        );
+        assert!(
+            composite_u16(&back) == composite_u16(&doc),
+            "{layout:?} {sample:?} is not bit-exact"
+        );
+    }
+}
+
+#[test]
+fn float_fits_keeps_its_values() {
+    // From 0 to 1, which the importer's scaling to [0, 1] leaves as they are.
+    let size = Size::new(70, 300);
+    let last = size.pixel_count() - 1;
+    let values: Vec<f32> = (0..size.pixel_count())
+        .map(|i| i as f32 / last as f32)
+        .collect();
+    let format = PixelFormat {
+        layout: ChannelLayout::Gray,
+        sample: SampleType::F32,
+        color_space: ColorSpace::SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let doc = raster_document(RasterImage::from_pixels(size, format, &bytes).unwrap());
+    let spec = ExportSpec {
+        format: ExportFormat::Fits {
+            sample: TiffSample::F32,
+        },
+        ..default_spec(ExportFormatKind::Fits, &doc)
+    };
+    assert!(spec.gray);
+    let path = temp_path("float.fits");
+    assert_eq!(export(&doc, &path, &spec).unwrap(), ExportReport::default());
+    let (back, format) = opened_samples(&path);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(format.sample, SampleType::F32);
+    let worst = composite_all(&back)
+        .iter()
+        .zip(composite_all(&doc))
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max);
+    assert!(worst < 1e-5, "{worst}");
+}
+
+#[test]
+fn fits_refuses_alpha_and_other_spaces() {
+    let path = temp_path("refused.fits");
+    let fits = ExportFormat::Fits {
+        sample: TiffSample::U16,
+    };
+    let cases = [
+        (simple_spec(fits, ColorSpace::SRGB, true), "invalidSpec"),
+        (
+            simple_spec(fits, ColorSpace::LINEAR_SRGB, false),
+            "unsupportedSpace",
+        ),
+    ];
+    for (spec, code) in cases {
+        let result = export_image(
+            &path,
+            Size::new(4, 4),
+            &spec,
+            |_, _| panic!("the source must not be called"),
+            &CancelToken::new(),
+            &mut |_| panic!("no progress expected"),
+        );
+        assert_eq!(result.unwrap_err().code(), code, "{:?}", spec.space);
+        assert!(!path.exists() && temp_files(&path).is_empty());
+    }
+    let kind = ExportFormatKind::Fits;
+    assert!(!supports_alpha(kind) && has_gray(kind));
+    assert!(supports_gray(kind, &ColorSpace::SRGB));
+    assert!(!supports_gray(kind, &ColorSpace::LINEAR_SRGB));
+    assert_eq!(max_side(kind), None);
+}

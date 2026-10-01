@@ -39,7 +39,7 @@
 //!   plus the previous row count. `rows` holds a whole number of rows (a band: [`BAND_ROWS`]
 //!   rows, fewer for the last one) of exactly `size.width × target.bytes_per_pixel()` bytes each,
 //!   interleaved samples in the `target` format. 16/32-bit samples are little-endian, except
-//!   for PNG, Netpbm and farbfeld (big-endian).
+//!   for PNG, Netpbm, farbfeld and FITS (big-endian).
 //! - `finish(self) -> Result<Vec<ExportNotice>, ExportError>`: called once after the last row.
 //!   Writes what remains (trailers, offsets), flushes everything and reports its notices (e.g.
 //!   [`ExportNotice::BigTiff`]); it must surface every write error (beware of encoders that
@@ -58,6 +58,7 @@ mod bmp;
 mod dds;
 mod exr;
 mod farbfeld;
+mod fits;
 mod gif;
 mod hdr;
 mod ico;
@@ -95,6 +96,7 @@ use self::bmp::BmpWriter;
 use self::dds::DdsWriter;
 use self::exr::ExrWriter;
 use self::farbfeld::FarbfeldWriter;
+use self::fits::FitsWriter;
 use self::gif::GifWriter;
 use self::hdr::HdrWriter;
 use self::ico::IcoWriter;
@@ -144,6 +146,8 @@ pub enum ExportFormatKind {
     Ico,
     Gif,
     Dds,
+    /// Flexible Image Transport System (astronomy).
+    Fits,
 }
 
 impl ExportFormatKind {
@@ -274,6 +278,11 @@ pub enum ExportFormat {
     Gif,
     /// An uncompressed 8-bit sRGB surface (BGRA, or BGR without alpha).
     Dds,
+    /// One image (gray, or three planes for RGB), 8/16-bit or 32-bit float, sRGB-encoded
+    /// display values by convention, no alpha.
+    Fits {
+        sample: TiffSample,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -312,6 +321,7 @@ impl ExportFormat {
             ExportFormat::Ico => ExportFormatKind::Ico,
             ExportFormat::Gif => ExportFormatKind::Gif,
             ExportFormat::Dds => ExportFormatKind::Dds,
+            ExportFormat::Fits { .. } => ExportFormatKind::Fits,
         }
     }
 
@@ -330,7 +340,7 @@ impl ExportFormat {
                 AvifDepth::U8 => SampleType::U8,
                 AvifDepth::U10 => SampleType::U16,
             },
-            ExportFormat::Tiff { sample, .. } => match sample {
+            ExportFormat::Tiff { sample, .. } | ExportFormat::Fits { sample } => match sample {
                 TiffSample::U8 => SampleType::U8,
                 TiffSample::U16 => SampleType::U16,
                 TiffSample::F32 => SampleType::F32,
@@ -645,19 +655,23 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         | ExportFormatKind::Qoi
         | ExportFormatKind::Farbfeld
         | ExportFormatKind::Hdr
-        | ExportFormatKind::Dds => None,
+        | ExportFormatKind::Dds
+        | ExportFormatKind::Fits => None,
         ExportFormatKind::Avif => Some(avif::MAX_SIDE),
         ExportFormatKind::Jxl => Some(jxl::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
 
-/// Whether a file of this format can store an alpha channel (JPEG, PFM and Radiance HDR cannot:
-/// their exports are always flattened over the matte).
+/// Whether a file of this format can store an alpha channel (JPEG, PFM, Radiance HDR and FITS
+/// cannot: their exports are always flattened over the matte).
 pub fn supports_alpha(kind: ExportFormatKind) -> bool {
     !matches!(
         kind,
-        ExportFormatKind::Jpeg | ExportFormatKind::Pfm | ExportFormatKind::Hdr
+        ExportFormatKind::Jpeg
+            | ExportFormatKind::Pfm
+            | ExportFormatKind::Hdr
+            | ExportFormatKind::Fits
     )
 }
 
@@ -694,6 +708,9 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         | ExportFormatKind::Ico
         | ExportFormatKind::Gif
         | ExportFormatKind::Dds => *space == ColorSpace::SRGB,
+        // Display values, sRGB-encoded by convention (float samples too), as our importer
+        // declares them.
+        ExportFormatKind::Fits => *space == ColorSpace::SRGB,
         // Float samples, linear, by convention.
         ExportFormatKind::Pfm | ExportFormatKind::Hdr => *space == ColorSpace::LINEAR_SRGB,
         // The header's color space byte: sRGB, or "all channels linear".
@@ -718,8 +735,9 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     match kind {
         ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
         ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
-        // By convention: the sRGB curve, or linear for floats.
-        ExportFormatKind::Pnm => *space == ColorSpace::SRGB,
+        // By convention: the sRGB curve, or linear for floats (FITS: display values, float
+        // ones too).
+        ExportFormatKind::Pnm | ExportFormatKind::Fits => *space == ColorSpace::SRGB,
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
         // Monochrome AV1, its transfer declared with the code points.
         ExportFormatKind::Avif => avif::avif_code(space).is_some(),
@@ -750,6 +768,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Pfm
             | ExportFormatKind::Avif
             | ExportFormatKind::Jxl
+            | ExportFormatKind::Fits
     )
 }
 
@@ -862,6 +881,14 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         ExportFormatKind::Ico => (ExportFormat::Ico, ColorSpace::SRGB),
         ExportFormatKind::Gif => (ExportFormat::Gif, ColorSpace::SRGB),
         ExportFormatKind::Dds => (ExportFormat::Dds, ColorSpace::SRGB),
+        ExportFormatKind::Fits => {
+            let sample = if rasters.iter().all(|format| format.sample == SampleType::U8) {
+                TiffSample::U8
+            } else {
+                TiffSample::U16
+            };
+            (ExportFormat::Fits { sample }, ColorSpace::SRGB)
+        }
         ExportFormatKind::Jxl => {
             let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
             // 8-bit: a source space with a curve (linear light needs more bits), else sRGB.
@@ -1060,7 +1087,10 @@ pub fn export_image(
             dither: spec.dither,
             big_endian: matches!(
                 spec.format.kind(),
-                ExportFormatKind::Png | ExportFormatKind::Pnm | ExportFormatKind::Farbfeld
+                ExportFormatKind::Png
+                    | ExportFormatKind::Pnm
+                    | ExportFormatKind::Farbfeld
+                    | ExportFormatKind::Fits
             ),
             matte: spec.matte,
             blend_space: spec.blend_space,
@@ -1143,6 +1173,9 @@ pub fn export_image(
         ExportFormat::Ico => FormatWriter::Ico(Box::new(IcoWriter::new(file, size, target)?)),
         ExportFormat::Gif => FormatWriter::Gif(Box::new(GifWriter::new(file, size, target)?)),
         ExportFormat::Dds => FormatWriter::Dds(Box::new(DdsWriter::new(file, size, target)?)),
+        ExportFormat::Fits { .. } => {
+            FormatWriter::Fits(Box::new(FitsWriter::new(file, size, target)?))
+        }
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -1199,6 +1232,7 @@ enum FormatWriter {
     Ico(Box<IcoWriter>),
     Gif(Box<GifWriter>),
     Dds(Box<DdsWriter>),
+    Fits(Box<FitsWriter>),
 }
 
 impl FormatWriter {
@@ -1222,6 +1256,7 @@ impl FormatWriter {
             FormatWriter::Ico(w) => w.write_rows(first_row, rows),
             FormatWriter::Gif(w) => w.write_rows(first_row, rows),
             FormatWriter::Dds(w) => w.write_rows(first_row, rows),
+            FormatWriter::Fits(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1245,6 +1280,7 @@ impl FormatWriter {
             FormatWriter::Ico(w) => (*w).finish(),
             FormatWriter::Gif(w) => (*w).finish(),
             FormatWriter::Dds(w) => (*w).finish(),
+            FormatWriter::Fits(w) => (*w).finish(),
         }
     }
 }
