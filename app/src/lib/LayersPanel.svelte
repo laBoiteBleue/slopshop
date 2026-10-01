@@ -947,14 +947,14 @@
 
   <div class="footer">
     <input type="color" bind:value={newColor} title={t("layers.fillColor")} />
-    <button class="tool" title={t("layers.newGroup")} onclick={newGroup}>
+    <button class="icon-btn" title={t("layers.newGroup")} onclick={newGroup}>
       <Icon name="folderPlus" />
     </button>
-    <button class="tool" title={t("layers.addFill")} onclick={addFill}>
+    <button class="icon-btn" title={t("layers.addFill")} onclick={addFill}>
       <Icon name="plus" />
     </button>
     <button
-      class="tool"
+      class="icon-btn"
       title={t(selection.length > 1 ? "layers.deleteSelected" : "layers.delete")}
       disabled={selection.length === 0}
       onclick={deleteSelected}
@@ -1217,21 +1217,5 @@
     padding: 0;
     border: 1px solid var(--border-strong);
     background: none;
-  }
-
-  .tool {
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 22px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--text-muted);
-  }
-
-  .tool:hover:not(:disabled) {
-    color: var(--text);
-    background: var(--hover);
   }
 </style>

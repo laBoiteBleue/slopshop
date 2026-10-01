@@ -1706,7 +1706,7 @@
               <span class="tab-zoom">@ {formatZoom(frame.zoom)}</span>
             {/if}
             <button
-              class="tab-close"
+              class="icon-btn tab-close"
               title={t("tabs.closeHint", { mod: modifierLabel })}
               onpointerdown={(e) => e.stopPropagation()}
               onclick={() => closeTab(doc.id)}
@@ -1765,8 +1765,10 @@
             <img src="/favicon.svg" alt="" draggable="false" />
             <p>{t("welcome.title")}</p>
             <div class="welcome-actions">
-              <button onclick={() => openWithDialog()}>{t("welcome.open")}</button>
-              <button onclick={newDocument}>{t("welcome.new")}</button>
+              <button class="btn primary" onclick={() => openWithDialog()}>
+                {t("welcome.open")}
+              </button>
+              <button class="btn" onclick={newDocument}>{t("welcome.new")}</button>
             </div>
             <p class="muted">{t("welcome.drop")}</p>
           </div>
@@ -1925,7 +1927,7 @@
             {t("export.progress", { name: job.name, percent: percent(job) })}
           </span>
           <button
-            class="card-button"
+            class="icon-btn card-button"
             title={t("export.stop")}
             aria-label={t("export.stop")}
             onclick={() => engine.cancelExport(job.id)}
@@ -1941,7 +1943,7 @@
         <div class="export-row">
           <span class="export-title">{result.title}</span>
           <button
-            class="card-button"
+            class="icon-btn card-button"
             title={t("export.dismiss")}
             aria-label={t("export.dismiss")}
             onclick={() => dismissToast(result.key)}
@@ -2027,14 +2029,8 @@
   }
 
   .card-button {
-    display: grid;
-    place-items: center;
-    width: 16px;
-    height: 16px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--text-muted);
+    width: 20px;
+    height: 20px;
     font-size: 9px;
   }
 
@@ -2048,11 +2044,6 @@
   }
 
   .card-link:hover {
-    color: var(--text);
-  }
-
-  .card-button:hover {
-    background: var(--hover);
     color: var(--text);
   }
 
@@ -2212,14 +2203,8 @@
   }
 
   .tab-close {
-    display: grid;
-    place-items: center;
     width: 18px;
     height: 18px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--text-muted);
     font-size: 10px;
     visibility: hidden;
   }
@@ -2227,11 +2212,6 @@
   .tab.active .tab-close,
   .tab:hover .tab-close {
     visibility: visible;
-  }
-
-  .tab-close:hover {
-    background: var(--hover);
-    color: var(--text);
   }
 
   .tab.pending {
@@ -2287,16 +2267,6 @@
   .welcome-actions {
     display: flex;
     gap: 8px;
-  }
-
-  .welcome-actions button {
-    padding: 5px 14px;
-    border: 1px solid var(--border-strong);
-    background: var(--field);
-  }
-
-  .welcome-actions button:hover {
-    background: var(--hover);
   }
 
   .muted {

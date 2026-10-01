@@ -165,8 +165,8 @@
       </p>
     </div>
     <footer>
-      <button type="button" onclick={onclose}>{t("sizeDialog.cancel")}</button>
-      <button type="submit" class="primary" disabled={!valid}>{t("sizeDialog.ok")}</button>
+      <button type="button" class="btn" onclick={onclose}>{t("sizeDialog.cancel")}</button>
+      <button type="submit" class="btn primary" disabled={!valid}>{t("sizeDialog.ok")}</button>
     </footer>
   </form>
 </dialog>
@@ -265,9 +265,5 @@
     gap: 6px;
     padding: 8px 10px;
     border-top: 1px solid var(--border-dark);
-  }
-
-  footer button {
-    min-width: 76px;
   }
 </style>

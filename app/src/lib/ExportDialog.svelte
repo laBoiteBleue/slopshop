@@ -219,8 +219,8 @@
       {/if}
     </div>
     <footer>
-      <button type="button" onclick={onclose}>{t("export.cancel")}</button>
-      <button type="submit" class="primary" disabled={!spec || tooLargeFor !== null}>
+      <button type="button" class="btn" onclick={onclose}>{t("export.cancel")}</button>
+      <button type="submit" class="btn primary" disabled={!spec || tooLargeFor !== null}>
         {t("export.confirm")}
       </button>
     </footer>
@@ -324,27 +324,5 @@
     gap: 6px;
     padding: 8px 10px;
     border-top: 1px solid var(--border-dark);
-  }
-
-  footer button {
-    min-width: 76px;
-    height: 22px;
-    padding: 0 10px;
-    border: 1px solid var(--border-strong);
-    background: var(--field);
-  }
-
-  footer button:hover:not(:disabled) {
-    background: var(--hover);
-  }
-
-  footer .primary {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: #ffffff;
-  }
-
-  footer .primary:hover:not(:disabled) {
-    background: #4d9af0;
   }
 </style>
