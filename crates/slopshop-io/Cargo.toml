@@ -95,6 +95,7 @@ dicom-object = { version = "0.10", default-features = false }
 dicom-pixeldata = { version = "0.10", default-features = false, features = ["native", "rayon"] }
 dicom-dictionary-std = "0.10"
 dicom-core = "0.10"
+resvg = "0.48"
 
 [lints]
 workspace = true

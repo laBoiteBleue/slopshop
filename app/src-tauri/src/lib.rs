@@ -9,7 +9,7 @@
 
 mod export;
 mod ipc;
-mod pdf;
+mod vector;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -362,8 +362,8 @@ struct AppState {
     surface_size: Mutex<Option<Size>>,
     /// Exports running (see the `export` module).
     exports: ExportJobs,
-    /// The PDF the PDF Import dialog shows (see the `pdf` module).
-    pdf: Arc<pdf::PdfCache>,
+    /// The file the Import PDF / SVG dialog shows (see the `vector` module).
+    vector: Arc<vector::VectorCache>,
 }
 
 impl AppState {
@@ -381,7 +381,7 @@ impl AppState {
             presenter: Mutex::new(None),
             surface_size: Mutex::new(None),
             exports: ExportJobs::default(),
-            pdf: Arc::default(),
+            vector: Arc::default(),
         }
     }
 
@@ -582,8 +582,8 @@ impl Drop for Turn<'_> {
 enum Source<'a> {
     /// The file, whatever it holds.
     File,
-    /// One page of a PDF, at a resolution.
-    Page(&'a pdf::PdfPage),
+    /// One page of a PDF or an SVG, at a resolution.
+    Page(&'a vector::VectorPage),
     /// DICOM files opened together (a series, the path being the first): one document.
     Series(&'a [PathBuf]),
 }
@@ -1895,10 +1895,10 @@ pub fn run() {
             openings,
             open_failures,
             open_images,
-            pdf::pdf_pages,
-            pdf::pdf_thumbnail,
-            pdf::close_pdf,
-            pdf::open_pdf_pages,
+            vector::vector_info,
+            vector::vector_thumbnail,
+            vector::close_vector,
+            vector::open_vector_pages,
             perform,
             perform_live,
             end_gesture,

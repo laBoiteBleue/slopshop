@@ -22,25 +22,17 @@ use slopshop_core::Size;
 use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, SampleType};
 
 use crate::orient::Orientation;
+use crate::vector::{PageSize, Thumbnail};
 use crate::{Decoded, ImportError, ImportWarning, Imported, check_budget, finish};
 
 /// The resolution pages are rendered at when nobody chose one (Photoshop's default).
 pub const DEFAULT_DPI: f32 = 300.0;
 
-/// PDF lengths are in points.
-const POINTS_PER_INCH: f32 = 72.0;
+use crate::vector::POINTS_PER_INCH;
 
 /// Whether `head` starts like a PDF file.
 pub(crate) fn is_pdf(head: &[u8]) -> bool {
     head.starts_with(b"%PDF")
-}
-
-/// Whether the file at `path` is a PDF (by its content).
-pub fn is_pdf_file(path: &Path) -> std::io::Result<bool> {
-    use std::io::Read;
-    let mut head = Vec::with_capacity(4);
-    std::fs::File::open(path)?.take(4).read_to_end(&mut head)?;
-    Ok(is_pdf(&head))
 }
 
 /// The first page at [`DEFAULT_DPI`], reporting the others.
@@ -51,34 +43,6 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
         decoded.warnings.insert(0, ImportWarning::FirstPageOnly);
     }
     Ok(decoded)
-}
-
-/// A page's size in points (1/72 inch), its rotation applied.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PageSize {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl PageSize {
-    /// The size in pixels at `dpi`, as the page is rendered: rounded, so that a resolution
-    /// computed from a size in pixels gives that size back.
-    pub fn pixels(self, dpi: f32) -> (u32, u32) {
-        let scale = dpi / POINTS_PER_INCH;
-        // Float-to-integer `as` saturates.
-        (
-            (self.width * scale).round() as u32,
-            (self.height * scale).round() as u32,
-        )
-    }
-}
-
-/// A small RGBA8 image (straight alpha, sRGB), for previews.
-#[derive(Debug)]
-pub struct Thumbnail {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
 }
 
 /// A PDF file read for import. Pages are rendered on demand; it can be shared between threads

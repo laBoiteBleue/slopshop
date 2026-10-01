@@ -30,12 +30,12 @@
     type OpenFailed,
     type OpenFinished,
     type Opening,
-    type PdfPageSize,
+    type VectorInfo,
     type SaveFailed,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
-  import PdfImportDialog from "./lib/PdfImportDialog.svelte";
+  import VectorImportDialog from "./lib/VectorImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
@@ -665,58 +665,58 @@
 
   // --- Opening files ---------------------------------------------------------------------------
 
-  /** The PDF Import dialog, while it is shown: settled with the choice, or null if cancelled. */
-  type PdfChoice = { pages: number[]; dpi: number };
-  let pdfImport = $state<{
+  /** The Import PDF / SVG dialog, while it is shown: settled with the choice, or null. */
+  type VectorChoice = { pages: number[]; dpi: number };
+  let vectorImport = $state<{
     path: string;
-    pages: PdfPageSize[];
-    settle: (choice: PdfChoice | null) => void;
+    info: VectorInfo;
+    settle: (choice: VectorChoice | null) => void;
   } | null>(null);
 
-  /** Settles when the dialogs asked before are done: PDFs dropped meanwhile wait their turn. */
-  let pdfTurn: Promise<unknown> = Promise.resolve();
+  /** Settles when the dialogs asked before are done: files dropped meanwhile wait their turn. */
+  let vectorTurn: Promise<unknown> = Promise.resolve();
 
-  function askPdfImport(path: string, pages: PdfPageSize[]): Promise<PdfChoice | null> {
-    const asked = pdfTurn.then(
-      () => new Promise<PdfChoice | null>((settle) => (pdfImport = { path, pages, settle })),
+  function askVectorImport(path: string, info: VectorInfo): Promise<VectorChoice | null> {
+    const asked = vectorTurn.then(
+      () => new Promise<VectorChoice | null>((settle) => (vectorImport = { path, info, settle })),
     );
-    pdfTurn = asked;
+    vectorTurn = asked;
     return asked;
   }
 
-  function settlePdfImport(choice: PdfChoice | null) {
-    const settle = pdfImport?.settle;
-    pdfImport = null;
+  function settleVectorImport(choice: VectorChoice | null) {
+    const settle = vectorImport?.settle;
+    vectorImport = null;
     settle?.(choice);
   }
 
   /**
-   * Open files in new tabs, or as layers of a document, in the order of `paths`. PDFs ask
-   * which pages and at what resolution first (PDF Import), one after the other. Progress and
-   * outcomes (new tabs, updated documents, failures) arrive as events.
+   * Open files in new tabs, or as layers of a document, in the order of `paths`. PDFs and SVGs
+   * ask which pages and at what resolution first (Import PDF / SVG), one after the other.
+   * Progress and outcomes (new tabs, updated documents, failures) arrive as events.
    */
   async function openFiles(paths: string[], target: "tab" | { layerOf: number }) {
-    const isPdf = (path: string) => /\.pdf$/i.test(path);
-    const others = paths.filter((path) => !isPdf(path));
+    const isVector = (path: string) => /\.(pdf|svgz?)$/i.test(path);
+    const others = paths.filter((path) => !isVector(path));
     if (others.length > 0) await openPaths(others, target);
     const documentId = target === "tab" ? null : target.layerOf;
-    for (const path of paths.filter(isPdf)) {
-      let pages: PdfPageSize[];
+    for (const path of paths.filter(isVector)) {
+      let info: VectorInfo;
       try {
-        pages = await engine.pdfPages(path);
+        info = await engine.vectorInfo(path);
       } catch {
-        // Not readable as a PDF (damaged, encrypted…): the usual open reports why.
+        // Not readable (damaged, encrypted…): the usual open reports why.
         await openPaths([path], target);
         continue;
       }
-      const choice = await askPdfImport(path, pages);
+      const choice = await askVectorImport(path, info);
       if (choice === null) {
-        void engine.closePdf(path);
+        void engine.closeVector(path);
         continue;
       }
       const failuresBefore = openFailureCount;
       try {
-        await engine.openPdfPages(path, choice.pages, choice.dpi, documentId);
+        await engine.openVectorPages(path, choice.pages, choice.dpi, documentId);
       } catch (e) {
         if (openFailureCount === failuresBefore) showError(String(e));
       }
@@ -1891,14 +1891,14 @@
   {/key}
 {/if}
 
-{#if pdfImport}
-  {#key pdfImport}
-    <PdfImportDialog
-      path={pdfImport.path}
-      name={fileNameOf(pdfImport.path)}
-      pages={pdfImport.pages}
-      onopen={(pages, dpi) => settlePdfImport({ pages, dpi })}
-      onclose={() => settlePdfImport(null)}
+{#if vectorImport}
+  {#key vectorImport}
+    <VectorImportDialog
+      path={vectorImport.path}
+      name={fileNameOf(vectorImport.path)}
+      info={vectorImport.info}
+      onopen={(pages, dpi) => settleVectorImport({ pages, dpi })}
+      onclose={() => settleVectorImport(null)}
     />
   {/key}
 {/if}

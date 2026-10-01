@@ -71,8 +71,8 @@ USAGE:
         --scale        Resample the whole image by FACTOR first (e.g. 4 or 0.25), like
                        Image Size: the quality resampling of transformed layers.
         --page         PDF input: the page to export, from 1. Default: 1.
-        --dpi          PDF input: the resolution the page is rendered at, 1 to 10000.
-                       Default: 300.
+        --dpi          PDF or SVG input: the resolution it is rendered at, 1 to 10000.
+                       Default: 300 for PDF, 96 for SVG (its intrinsic size).
         --cpu          Composite on the CPU instead of the GPU (also used when no
                        GPU is available).
         --bench        Also print timings (open, GPU init, export, throughput, time

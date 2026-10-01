@@ -1,38 +1,40 @@
 <script lang="ts">
-  // File > Open of a PDF, as in Photoshop's Import PDF: the pages as thumbnails to pick (the
-  // first one by default; Shift+click picks a range), and the resolution they are rasterized at,
-  // or the size in pixels of the first picked page (the resolution follows). Each page opens like
-  // a file: a tab, or a layer. The resolution is remembered for the next PDF.
+  // File > Open of a PDF or an SVG, as in Photoshop's Import PDF and Rasterize SVG: the pages as
+  // thumbnails to pick (the first one by default; Shift+click picks a range; a single page is just
+  // previewed), and the resolution they are rasterized at, or the size in pixels of the first
+  // picked page (the resolution follows). Each page opens like a file: a tab, or a layer. The
+  // resolution is remembered for the next file of the same kind.
   import { onMount, untrack } from "svelte";
-  import { engine, type PdfPageSize } from "./engine";
+  import { engine, type PageSize, type VectorInfo } from "./engine";
   import { t } from "./i18n/index.svelte";
 
   let {
     path,
     name,
-    pages,
+    info,
     onopen,
     onclose,
   }: {
     path: string;
     /** The file's name, shown in the title. */
     name: string;
-    pages: PdfPageSize[];
+    info: VectorInfo;
     /** Open `pages` (from 0, in page order) at `dpi`. */
     onopen: (pages: number[], dpi: number) => void;
     onclose: () => void;
   } = $props();
 
-  /** The renderer's largest side, in pixels. */
-  const MAX_SIDE = 65_535;
   const MIN_DPI = 1;
   const MAX_DPI = 10_000;
-  const DEFAULT_DPI = 300;
-  const STORAGE_KEY = "slopshop.pdfImport.dpi";
-  /** Thumbnail box side, in CSS pixels. */
+  /** Thumbnail box side, in CSS pixels (a single page is previewed larger). */
   const THUMBNAIL = 104;
+  const PREVIEW = 300;
 
-  const sizes = untrack(() => pages);
+  const { kind, defaultDpi, pages: sizes } = untrack(() => info);
+  /** The PDF renderer's largest side, in pixels; SVGs are only bounded by memory. */
+  const MAX_SIDE = kind === "pdf" ? 65_535 : 300_000;
+  const STORAGE_KEY = `slopshop.${kind}Import.dpi`;
+  const single = sizes.length === 1;
   let selected = $state<boolean[]>(sizes.map((_, i) => i === 0));
   let dpi = $state(savedDpi());
   /** The last page clicked, for Shift+click ranges. */
@@ -46,11 +48,11 @@
     } catch {
       // Storage unavailable: the default.
     }
-    return DEFAULT_DPI;
+    return defaultDpi;
   }
 
   /** A page's size in pixels at `dpi`, rounded as the engine renders it. */
-  function pixels(page: PdfPageSize, dpi: number): [number, number] {
+  function pixels(page: PageSize, dpi: number): [number, number] {
     return [Math.round((page.width * dpi) / 72), Math.round((page.height * dpi) / 72)];
   }
 
@@ -112,7 +114,8 @@
   /** Renders the page's thumbnail once it scrolls into view. */
   function thumbnail(canvas: HTMLCanvasElement, page: number) {
     const size = sizes[page];
-    const scale = THUMBNAIL / Math.max(size.width, size.height);
+    const box = single ? PREVIEW : THUMBNAIL;
+    const scale = box / Math.max(size.width, size.height);
     // The page's proportions before the pixels arrive.
     canvas.width = Math.max(1, Math.round(size.width * scale));
     canvas.height = Math.max(1, Math.round(size.height * scale));
@@ -120,9 +123,9 @@
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         observer.disconnect();
-        const side = Math.round(THUMBNAIL * devicePixelRatio);
+        const side = Math.round(box * devicePixelRatio);
         engine
-          .pdfThumbnail(path, page, side)
+          .vectorThumbnail(path, page, side)
           .then((image) => {
             canvas.width = image.width;
             canvas.height = image.height;
@@ -149,46 +152,52 @@
 
 <dialog
   bind:this={dialog}
-  aria-labelledby="pdf-title"
+  aria-labelledby="vector-title"
   oncancel={(e) => {
     e.preventDefault();
     onclose();
   }}
 >
   <form onsubmit={submit}>
-    <header id="pdf-title">{t("pdfDialog.title")} — {name}</header>
+    <header id="vector-title">
+      {t(kind === "pdf" ? "vectorDialog.titlePdf" : "vectorDialog.titleSvg")} — {name}
+    </header>
     <div class="body">
-      <section class="pages" aria-label={t("pdfDialog.pages")}>
-        <div class="grid">
-          {#each sizes as _, i (i)}
-            <button
-              type="button"
-              class="page"
-              class:selected={selected[i]}
-              aria-pressed={selected[i]}
-              aria-label={t("pdfDialog.page", { number: i + 1 })}
-              onclick={(e) => toggle(i, e)}
-            >
-              <span class="sheet"><canvas use:thumbnail={i}></canvas></span>
-              <span class="number">{i + 1}</span>
+      <section class="pages" aria-label={t("vectorDialog.pages")}>
+        {#if single}
+          <div class="preview"><canvas use:thumbnail={0}></canvas></div>
+        {:else}
+          <div class="grid">
+            {#each sizes as _, i (i)}
+              <button
+                type="button"
+                class="page"
+                class:selected={selected[i]}
+                aria-pressed={selected[i]}
+                aria-label={t("vectorDialog.page", { number: i + 1 })}
+                onclick={(e) => toggle(i, e)}
+              >
+                <span class="sheet"><canvas use:thumbnail={i}></canvas></span>
+                <span class="number">{i + 1}</span>
+              </button>
+            {/each}
+          </div>
+          <div class="selection">
+            <span>{t("vectorDialog.selected", { count: picked.length, total: sizes.length })}</span>
+            <button type="button" class="btn small" onclick={() => selectAll(true)}>
+              {t("vectorDialog.all")}
             </button>
-          {/each}
-        </div>
-        <div class="selection">
-          <span>{t("pdfDialog.selected", { count: picked.length, total: sizes.length })}</span>
-          <button type="button" class="btn small" onclick={() => selectAll(true)}>
-            {t("pdfDialog.all")}
-          </button>
-          <button type="button" class="btn small" onclick={() => selectAll(false)}>
-            {t("pdfDialog.none")}
-          </button>
-        </div>
+            <button type="button" class="btn small" onclick={() => selectAll(false)}>
+              {t("vectorDialog.none")}
+            </button>
+          </div>
+        {/if}
       </section>
       <section class="fields">
-        <label for="pdf-dpi">{t("pdfDialog.resolution")}</label>
+        <label for="vector-dpi">{t("vectorDialog.resolution")}</label>
         <span class="unit-field">
           <input
-            id="pdf-dpi"
+            id="vector-dpi"
             type="number"
             step="any"
             min={MIN_DPI}
@@ -196,31 +205,33 @@
             value={shownDpi}
             oninput={(e) => setDpi((e.currentTarget as HTMLInputElement).valueAsNumber)}
           />
-          {t("pdfDialog.ppi")}
+          {t("vectorDialog.ppi")}
         </span>
-        <span class="caption">{t("pdfDialog.sizeOf", { number: reference + 1 })}</span>
-        <label for="pdf-width">{t("pdfDialog.width")}</label>
+        <span class="caption">
+          {single ? t("vectorDialog.size") : t("vectorDialog.sizeOf", { number: reference + 1 })}
+        </span>
+        <label for="vector-width">{t("vectorDialog.width")}</label>
         <span class="unit-field">
-          <input id="pdf-width" type="number" min="1" value={refWidth} oninput={onWidth} />
-          {t("pdfDialog.px")}
+          <input id="vector-width" type="number" min="1" value={refWidth} oninput={onWidth} />
+          {t("vectorDialog.px")}
         </span>
-        <label for="pdf-height">{t("pdfDialog.height")}</label>
+        <label for="vector-height">{t("vectorDialog.height")}</label>
         <span class="unit-field">
-          <input id="pdf-height" type="number" min="1" value={refHeight} oninput={onHeight} />
-          {t("pdfDialog.px")}
+          <input id="vector-height" type="number" min="1" value={refHeight} oninput={onHeight} />
+          {t("vectorDialog.px")}
         </span>
-        <span class="label">{t("pdfDialog.mode")}</span>
-        <span class="mode">{t("pdfDialog.modeValue")}</span>
+        <span class="label">{t("vectorDialog.mode")}</span>
+        <span class="mode">{t("vectorDialog.modeValue")}</span>
         {#if picked.length === 0}
-          <p class="invalid">{t("pdfDialog.noPage")}</p>
+          <p class="invalid">{t("vectorDialog.noPage")}</p>
         {:else if tooLarge}
-          <p class="invalid">{t("pdfDialog.tooLarge", { max: MAX_SIDE })}</p>
+          <p class="invalid">{t("vectorDialog.tooLarge", { max: MAX_SIDE })}</p>
         {/if}
       </section>
     </div>
     <footer>
-      <button type="button" class="btn" onclick={onclose}>{t("pdfDialog.cancel")}</button>
-      <button type="submit" class="btn primary" disabled={!valid}>{t("pdfDialog.ok")}</button>
+      <button type="button" class="btn" onclick={onclose}>{t("vectorDialog.cancel")}</button>
+      <button type="submit" class="btn primary" disabled={!valid}>{t("vectorDialog.ok")}</button>
     </footer>
   </form>
 </dialog>
@@ -275,6 +286,23 @@
     background: var(--pasteboard);
     border: 1px solid var(--border-dark);
     align-content: start;
+  }
+
+  .preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 360px;
+    background: var(--pasteboard);
+    border: 1px solid var(--border-dark);
+  }
+
+  .preview canvas {
+    max-width: 100%;
+    max-height: 340px;
+    /* A checkerboard behind transparent drawings. */
+    background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 16px 16px;
+    box-shadow: 0 1px 3px #0008;
   }
 
   .page {
