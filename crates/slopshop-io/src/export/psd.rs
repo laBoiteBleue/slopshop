@@ -533,10 +533,17 @@ fn blend_key(mode: BlendMode) -> [u8; 4] {
 /// of 4-byte types.
 fn descriptor(items: &[(&[u8], &[u8; 4], Vec<u8>)]) -> Vec<u8> {
     let mut out = 16u32.to_be_bytes().to_vec();
-    out.extend(1u32.to_be_bytes());
+    out.extend(object(b"null", items));
+    out
+}
+
+/// A descriptor's body (also the value of an `Objc` item): an empty name, the class, and the
+/// items.
+fn object(class: &[u8; 4], items: &[(&[u8], &[u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let mut out = 1u32.to_be_bytes().to_vec();
     out.extend([0, 0]);
     out.extend(0u32.to_be_bytes());
-    out.extend(b"null");
+    out.extend(class);
     out.extend((items.len() as u32).to_be_bytes());
     for (key, ty, value) in items {
         let length = if key.len() == 4 { 0 } else { key.len() as u32 };
@@ -546,6 +553,28 @@ fn descriptor(items: &[(&[u8], &[u8; 4], Vec<u8>)]) -> Vec<u8> {
         out.extend(value);
     }
     out
+}
+
+fn double(v: f64) -> Vec<u8> {
+    v.to_be_bytes().to_vec()
+}
+
+/// Black & White's tint (hue in degrees, saturation in %) as the RGB color (0–255) Photoshop
+/// stores: that hue and saturation in HSB, at the brightness of Photoshop's default tint.
+fn tint_color(hue: f32, saturation: f32) -> [f64; 3] {
+    let value = 225.0;
+    let chroma = value * f64::from(saturation) / 100.0;
+    let h = f64::from(hue).rem_euclid(360.0) / 60.0;
+    let x = chroma * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    [r, g, b].map(|c| c + value - chroma)
 }
 
 fn long(v: i32) -> Vec<u8> {
@@ -656,6 +685,87 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::Posterize { levels } => vec![(*b"post", be16(&[round(levels), 0]))],
         Adjustment::Threshold { level } => {
             vec![(*b"thrs", be16(&[(level * 255.0).round() as i16, 0]))]
+        }
+        Adjustment::BlackWhite {
+            weights,
+            tint,
+            tint_hue,
+            tint_saturation,
+        } => {
+            let [r, g, b] = tint_color(tint_hue, tint_saturation);
+            let color = object(
+                b"RGBC",
+                &[
+                    (b"Rd  ", b"doub", double(r)),
+                    (b"Grn ", b"doub", double(g)),
+                    (b"Bl  ", b"doub", double(b)),
+                ],
+            );
+            let w = |i: usize| long(weights[i].round() as i32);
+            vec![(
+                *b"blwh",
+                descriptor(&[
+                    (b"Rd  ", b"long", w(0)),
+                    (b"Yllw", b"long", w(1)),
+                    (b"Grn ", b"long", w(2)),
+                    (b"Cyn ", b"long", w(3)),
+                    (b"Bl  ", b"long", w(4)),
+                    (b"Mgnt", b"long", w(5)),
+                    (b"useTint", b"bool", vec![u8::from(tint)]),
+                    (b"tintColor", b"Objc", color),
+                    (b"bwPresetKind", b"long", long(1)),
+                ]),
+            )]
+        }
+        Adjustment::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+            preserve_luminosity,
+        } => {
+            let values: Vec<i16> = [shadows, midtones, highlights]
+                .iter()
+                .flatten()
+                .map(|&v| round(v))
+                .collect();
+            let mut b = be16(&values);
+            b.extend([u8::from(preserve_luminosity), 0]);
+            vec![(*b"blnc", b)]
+        }
+        Adjustment::PhotoFilter {
+            color,
+            density,
+            preserve_luminosity,
+        } => {
+            // Version 2, the color in Lab (L 0–10000, a and b in hundredths).
+            let [l, a, b] = crate::lab::srgb_to_lab(color.map(f64::from));
+            let hundredths = |v: f64| (v * 100.0).round() as i16;
+            let mut block = be16(&[2, 7]);
+            block.extend(((l * 100.0).round().clamp(0.0, 10000.0) as u16).to_be_bytes());
+            block.extend(be16(&[hundredths(a), hundredths(b), 0]));
+            block.extend((density.round() as u32).to_be_bytes());
+            block.extend([u8::from(preserve_luminosity), 0, 0, 0]);
+            vec![(*b"phfl", block)]
+        }
+        Adjustment::ChannelMixer {
+            red,
+            green,
+            blue,
+            monochrome,
+        } => {
+            let mut b = be16(&[1, i16::from(monochrome)]);
+            for row in [red, green, blue] {
+                b.extend(be16(&[
+                    round(row[0]),
+                    round(row[1]),
+                    round(row[2]),
+                    0,
+                    round(row[3]),
+                ]));
+            }
+            // The fourth channel (none in RGB): unchanged.
+            b.extend(be16(&[0, 0, 0, 100, 0]));
+            vec![(*b"mixr", b)]
         }
     }
 }

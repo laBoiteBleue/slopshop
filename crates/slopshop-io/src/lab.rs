@@ -27,7 +27,7 @@ pub(crate) fn lab_to_srgb([l, a, b]: [f64; 3]) -> [f64; 3] {
     let xyz = [0, 1, 2].map(|i| D50_XYZ[i] * f(xyz[i]));
     // The sRGB matrix is invertible: its primaries are valid.
     let to_rgb = mat_inverse(&srgb_to_xyz_d50()).unwrap_or([[0.0; 3]; 3]);
-    mat_vec(&to_rgb, xyz).map(|v| encode(v))
+    mat_vec(&to_rgb, xyz).map(encode)
 }
 
 /// sRGB-encoded values as a Lab color.
