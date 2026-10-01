@@ -159,6 +159,16 @@ pub fn select_shape(
     if edges.feather > 0.0 {
         new = feather(&new, edges.feather);
     }
+    finish(canvas, current, new, combine)
+}
+
+/// A new selection `new` combined with `current` (the document's selection, if any).
+fn finish(
+    canvas: Size,
+    current: Option<&RasterImage>,
+    new: Mask,
+    combine: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
     let result = match (combine, current) {
         (Combine::Replace, _) | (Combine::Add, None) => new,
         // Nothing selected: nothing to subtract from or intersect with.
@@ -1046,6 +1056,326 @@ fn transform_1d(f: &[f64], d: &mut [f64], hull: &mut [usize], bounds: &mut [f64]
     }
 }
 
+// --- Magic Wand --------------------------------------------------------------------------------
+
+/// How the Magic Wand picks pixels (Photoshop's options).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WandOptions {
+    /// The largest difference from the clicked pixel's color (any of red, green, blue, alpha, in
+    /// 8-bit display values: 0–255) for a pixel to be selected.
+    pub tolerance: f32,
+    /// Only pixels connected to the clicked one (4-connected); otherwise every similar pixel.
+    pub contiguous: bool,
+    /// Soften the edge over about a pixel.
+    pub anti_alias: bool,
+}
+
+/// How many composited tiles the contiguous fill keeps at once (64 MB).
+const WAND_TILE_CACHE: usize = 256;
+
+/// The Magic Wand: the pixels of `source` (the whole document, or a document holding only the
+/// layer to sample) whose color is within the tolerance of the one at `seed`, combined with
+/// `current` on its canvas. Colors are compared as displayed (8-bit sRGB, straight alpha).
+/// `source` is composited tile by tile when needed: a contiguous fill only reads the tiles it
+/// reaches, and memory stays bounded whatever the canvas.
+pub fn magic_wand(
+    source: &crate::document::Document,
+    current: Option<&RasterImage>,
+    seed: (u32, u32),
+    options: WandOptions,
+    combine: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
+    let canvas = source.size();
+    if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
+        return Err(SelectionError::InvalidShape);
+    }
+    let mut mask = Mask::new(canvas)?;
+    if seed.0 >= canvas.width || seed.1 >= canvas.height {
+        return finish(canvas, current, mask, combine);
+    }
+    let sampler = WandSampler::new(source);
+    let (col, row) = (seed.0 as usize / T, seed.1 as usize / T);
+    let reference = sampler.tile(col, row, &mask)[(seed.1 as usize % T) * T + seed.0 as usize % T];
+    let tolerance = options.tolerance;
+    let similar =
+        move |p: [f32; 4]| (0..4).all(|c| (p[c] - reference[c]).abs() <= tolerance + 1e-3);
+    if options.contiguous {
+        flood(&sampler, &mut mask, seed, &similar);
+    } else {
+        let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let per_thread = tiles.len().div_ceil(threads).max(1);
+        let shape = &mask;
+        let sampler = &sampler;
+        let similar = &similar;
+        let mut done: Vec<(usize, Tile)> = Vec::new();
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = tiles
+                .chunks(per_thread)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|&index| {
+                                let (col, row) = (index % shape.columns, index / shape.columns);
+                                let pixels = sampler.tile(col, row, shape);
+                                let (w, h) = shape.valid(col, row);
+                                let mut values = vec![0u16; T * T];
+                                for y in 0..h {
+                                    for x in 0..w {
+                                        if similar(pixels[y * T + x]) {
+                                            values[y * T + x] = FULL;
+                                        }
+                                    }
+                                }
+                                pad(&mut values, w, h);
+                                (index, Tile::Data(values))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            for worker in workers {
+                // Invariant: comparing colors does not panic.
+                done.extend(worker.join().expect("magic wand worker panicked"));
+            }
+        });
+        for (index, tile) in done {
+            mask.tiles[index] = tile;
+        }
+    }
+    if options.anti_alias {
+        mask = soften(&mask);
+    }
+    finish(canvas, current, mask, combine)
+}
+
+/// The composited colors of a document, tile by tile, as displayed: whole 8-bit sRGB values
+/// (0–255), straight alpha (transparent pixels read as transparent black).
+struct WandSampler<'a> {
+    document: &'a crate::document::Document,
+    to_srgb: crate::color::Mat3,
+}
+
+impl<'a> WandSampler<'a> {
+    fn new(document: &'a crate::document::Document) -> Self {
+        Self {
+            document,
+            to_srgb: document.working_space().matrix_to(&ColorSpace::LINEAR_SRGB),
+        }
+    }
+
+    /// Tile (`col`, `row`): `T²` colors, row-major (its valid part; the rest transparent).
+    fn tile(&self, col: usize, row: usize, mask: &Mask) -> Vec<[f32; 4]> {
+        let (w, h) = mask.valid(col, row);
+        let region = Rect::new((col * T) as u32, (row * T) as u32, w as u32, h as u32);
+        let mut rgba = vec![0f32; w * h * 4];
+        let mut out = vec![[0f32; 4]; T * T];
+        if crate::composite::composite_region(self.document, region, &mut rgba).is_err() {
+            return out;
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+                let a = p[3].clamp(0.0, 1.0);
+                let color = if a > 0.0 {
+                    let linear = crate::color::mat_vec(
+                        &self.to_srgb,
+                        [
+                            f64::from(p[0] / a),
+                            f64::from(p[1] / a),
+                            f64::from(p[2] / a),
+                        ],
+                    );
+                    linear.map(|v| {
+                        (crate::color::srgb_encode((v as f32).clamp(0.0, 1.0)) * 255.0).round()
+                    })
+                } else {
+                    [0.0; 3]
+                };
+                out[y * T + x] = [color[0], color[1], color[2], (a * 255.0).round()];
+            }
+        }
+        out
+    }
+}
+
+/// The contiguous fill from `seed`, tile by tile: each tile is filled from the pixels where the
+/// fill entered it (a scanline fill), and passes on the pixels where it leaves it. The tiles a
+/// wave of the fill reaches are composited together, on every core, and kept in a bounded cache
+/// (8-bit colors: 256 KB a tile).
+fn flood(
+    sampler: &WandSampler<'_>,
+    mask: &mut Mask,
+    seed: (u32, u32),
+    similar: &(impl Fn([f32; 4]) -> bool + Sync),
+) {
+    let (columns, rows) = (mask.columns, mask.rows);
+    let mut selected: HashMap<usize, Vec<u16>> = HashMap::new();
+    let mut cache: HashMap<usize, (u64, Vec<[u8; 4]>)> = HashMap::new();
+    let mut clock = 0u64;
+    let mut pending: Vec<(usize, Vec<(usize, usize)>)> = vec![(
+        (seed.1 as usize / T) * columns + seed.0 as usize / T,
+        vec![(seed.0 as usize % T, seed.1 as usize % T)],
+    )];
+    while !pending.is_empty() {
+        clock += 1;
+        // This wave: at most half the cache's tiles, so that they all stay cached meanwhile.
+        let mut wave: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+        let mut tiles: Vec<usize> = Vec::new();
+        let mut rest = Vec::new();
+        for (index, seeds) in pending.drain(..) {
+            if tiles.contains(&index) || tiles.len() < WAND_TILE_CACHE / 2 {
+                if !tiles.contains(&index) {
+                    tiles.push(index);
+                }
+                wave.push((index, seeds));
+            } else {
+                rest.push((index, seeds));
+            }
+        }
+        pending = rest;
+        let missing: Vec<usize> = tiles
+            .iter()
+            .copied()
+            .filter(|i| !cache.contains_key(i))
+            .collect();
+        while cache.len() + missing.len() > WAND_TILE_CACHE {
+            let oldest = cache
+                .iter()
+                .filter(|(i, _)| !tiles.contains(i))
+                .min_by_key(|(_, (t, _))| *t)
+                .map(|(i, _)| *i);
+            match oldest {
+                Some(i) => {
+                    cache.remove(&i);
+                }
+                None => break,
+            }
+        }
+        let shape = &*mask;
+        let composited: Vec<(usize, Vec<[u8; 4]>)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = missing
+                .iter()
+                .map(|&index| {
+                    scope.spawn(move || {
+                        let tile = sampler.tile(index % columns, index / columns, shape);
+                        (index, tile.iter().map(|p| p.map(|v| v as u8)).collect())
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                // Invariant: compositing a tile does not panic.
+                .map(|w| w.join().expect("magic wand compositing panicked"))
+                .collect()
+        });
+        for (index, pixels) in composited {
+            cache.insert(index, (clock, pixels));
+        }
+        for (index, seeds) in wave {
+            let (col, row) = (index % columns, index / columns);
+            let (w, h) = mask.valid(col, row);
+            let Some(entry) = cache.get_mut(&index) else {
+                continue;
+            };
+            entry.0 = clock;
+            let pixels = &entry.1;
+            let at = |x: usize, y: usize| pixels[y * T + x].map(f32::from);
+            let values = selected.entry(index).or_insert_with(|| vec![0u16; T * T]);
+            let mut stack: Vec<(usize, usize)> = seeds
+                .into_iter()
+                .filter(|&(x, y)| x < w && y < h && values[y * T + x] == 0 && similar(at(x, y)))
+                .collect();
+            // Pixels leaving the tile, by neighbor: above, below, left, right.
+            let mut out: [Vec<(usize, usize)>; 4] = Default::default();
+            while let Some((x, y)) = stack.pop() {
+                if values[y * T + x] != 0 {
+                    continue;
+                }
+                // The run of similar, unselected pixels through (x, y).
+                let mut x0 = x;
+                while x0 > 0 && values[y * T + x0 - 1] == 0 && similar(at(x0 - 1, y)) {
+                    x0 -= 1;
+                }
+                let mut x1 = x;
+                while x1 + 1 < w && values[y * T + x1 + 1] == 0 && similar(at(x1 + 1, y)) {
+                    x1 += 1;
+                }
+                for xi in x0..=x1 {
+                    values[y * T + xi] = FULL;
+                    if y > 0 {
+                        if values[(y - 1) * T + xi] == 0 && similar(at(xi, y - 1)) {
+                            stack.push((xi, y - 1));
+                        }
+                    } else if row > 0 {
+                        out[0].push((xi, T - 1));
+                    }
+                    if y + 1 < h {
+                        if values[(y + 1) * T + xi] == 0 && similar(at(xi, y + 1)) {
+                            stack.push((xi, y + 1));
+                        }
+                    } else if h == T && row + 1 < rows {
+                        out[1].push((xi, 0));
+                    }
+                }
+                if x0 == 0 && col > 0 {
+                    out[2].push((T - 1, y));
+                }
+                if x1 + 1 == w && w == T && col + 1 < columns {
+                    out[3].push((0, y));
+                }
+            }
+            let neighbors = [
+                row.checked_sub(1).map(|r| r * columns + col),
+                (row + 1 < rows).then(|| (row + 1) * columns + col),
+                col.checked_sub(1).map(|c| row * columns + c),
+                (col + 1 < columns).then(|| row * columns + col + 1),
+            ];
+            for (seeds, neighbor) in out.into_iter().zip(neighbors) {
+                if let Some(neighbor) = neighbor
+                    && !seeds.is_empty()
+                {
+                    pending.push((neighbor, seeds));
+                }
+            }
+        }
+    }
+    for (index, mut values) in selected {
+        let (w, h) = mask.valid(index % columns, index / columns);
+        pad(&mut values, w, h);
+        mask.tiles[index] = Tile::Data(values);
+    }
+}
+
+/// A 3×3 average on the tiles that are not uniform: about a pixel of anti-aliasing.
+fn soften(mask: &Mask) -> Mask {
+    let mut out = mask.clone();
+    for (index, tile) in out.tiles.iter_mut().enumerate() {
+        if tile.constant().is_some() {
+            continue;
+        }
+        let (col, row) = (index % mask.columns, index / mask.columns);
+        let (w, h) = mask.valid(col, row);
+        let mut values = vec![0u16; T * T];
+        for y in 0..h {
+            for x in 0..w {
+                let (gx, gy) = ((col * T + x) as isize, (row * T + y) as isize);
+                let mut sum = 0u32;
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        sum += u32::from(mask.at(gx + dx, gy + dy));
+                    }
+                }
+                values[y * T + x] = (sum / 9) as u16;
+            }
+        }
+        pad(&mut values, w, h);
+        *tile = Tile::Data(values);
+    }
+    out
+}
+
 // --- Rasterization -----------------------------------------------------------------------------
 
 /// The coverage of a closed polygon on a canvas: each pixel gets the exact fraction of its area
@@ -1915,6 +2245,107 @@ mod tests {
         );
         assert!(modify(canvas, &square, Modify::Expand(MAX_MODIFY + 1.0)).is_err());
         assert!(modify(canvas, &square, Modify::Feather(MAX_FEATHER + 1.0)).is_err());
+    }
+
+    /// A 600×300 document: red on the left half, blue on the right with a red square in it
+    /// (not touching the left half), and a slightly different red strip at the top left.
+    fn wand_document() -> crate::document::Document {
+        use crate::document::{Document, Layer, LayerContent};
+        use crate::edit::Edit;
+        let (w, h) = (600usize, 300usize);
+        let mut pixels = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let red = x < 300 || ((450..500).contains(&x) && (100..150).contains(&y));
+                let rgb = if x < 300 && y < 20 {
+                    [245, 8, 0]
+                } else if red {
+                    [255, 0, 0]
+                } else {
+                    [0, 0, 255]
+                };
+                pixels[(y * w + x) * 4..(y * w + x) * 4 + 4]
+                    .copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+        let image = RasterImage::from_pixels(Size::new(600, 300), PixelFormat::RGBA8_SRGB, &pixels)
+            .unwrap();
+        let mut doc = Document::new(Size::new(600, 300));
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "colors".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: crate::blend::BlendMode::Normal,
+                content: LayerContent::Raster {
+                    image: Arc::new(image),
+                },
+                mask: None,
+                clipped: false,
+                transform: Affine::IDENTITY,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        doc
+    }
+
+    #[test]
+    fn the_magic_wand_selects_similar_colors_contiguous_or_not() {
+        let doc = wand_document();
+        let wand = |contiguous: bool, tolerance: f32| {
+            let options = WandOptions {
+                tolerance,
+                contiguous,
+                anti_alias: false,
+            };
+            magic_wand(&doc, None, (100, 150), options, Combine::Replace)
+                .unwrap()
+                .unwrap()
+        };
+        // Contiguous: the left half (across tiles), not the red square inside the blue.
+        let left = wand(true, 32.0);
+        assert_eq!(left.gray_at(0, 299), 1.0);
+        assert_eq!(left.gray_at(299, 0), 1.0);
+        assert_eq!(left.gray_at(300, 150), 0.0);
+        assert_eq!(left.gray_at(460, 120), 0.0);
+        assert_eq!(bounds(&left), Some(Rect::new(0, 0, 300, 300)));
+        // A low tolerance leaves out the slightly different strip.
+        let strict = wand(true, 4.0);
+        assert_eq!(strict.gray_at(100, 10), 0.0);
+        assert_eq!(strict.gray_at(100, 20), 1.0);
+        // Not contiguous: every red pixel, the square included.
+        let all = wand(false, 32.0);
+        assert_eq!(all.gray_at(460, 120), 1.0);
+        assert_eq!(all.gray_at(449, 120), 0.0);
+        // Anti-aliased: a soft pixel on the edge.
+        let options = WandOptions {
+            tolerance: 32.0,
+            contiguous: true,
+            anti_alias: true,
+        };
+        let soft = magic_wand(&doc, None, (100, 150), options, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let edge = soft.gray_at(299, 150);
+        assert!(edge > 0.5 && edge < 1.0, "{edge}");
+        // Added to a selection.
+        let square = select(Size::new(600, 300), &rect(500.0, 200.0, 550.0, 250.0));
+        let added = magic_wand(&doc, Some(&square), (100, 150), options, Combine::Add)
+            .unwrap()
+            .unwrap();
+        assert_eq!(added.gray_at(520, 220), 1.0);
+        assert_eq!(added.gray_at(100, 150), 1.0);
+        // Outside the canvas: nothing.
+        assert!(
+            magic_wand(&doc, None, (900, 10), options, Combine::Replace)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
