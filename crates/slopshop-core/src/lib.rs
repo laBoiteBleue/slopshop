@@ -20,6 +20,7 @@ mod blue_noise;
 pub mod color;
 pub mod composite;
 pub mod convert;
+pub mod curve;
 pub mod document;
 pub mod edit;
 pub mod geom;

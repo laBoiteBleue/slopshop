@@ -780,6 +780,8 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 // Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
 // `format` is the adjustment (Adjustment::index); its 16 parameters are `color`, `transfer`,
 // `transfer2` and `m0` (p0 to p3), Photo Filter's color already linear (sRGB primaries).
+// Curves' lookup tables (composite, red, green, blue: CURVE_LUT f32 each) are in the tile
+// table from `table_offset`.
 const ADJUST_EXPOSURE: u32 = 0u;
 const ADJUST_HUE_SATURATION: u32 = 1u;
 const ADJUST_LEVELS: u32 = 2u;
@@ -792,6 +794,16 @@ const ADJUST_BLACK_WHITE: u32 = 8u;
 const ADJUST_COLOR_BALANCE: u32 = 9u;
 const ADJUST_PHOTO_FILTER: u32 = 10u;
 const ADJUST_CHANNEL_MIXER: u32 = 11u;
+const ADJUST_CURVES: u32 = 12u;
+
+// A curve's lookup table at `v` (clamped to [0, 1]), linearly interpolated (curve::lookup).
+fn curve_at(offset: u32, v: f32) -> f32 {
+    let t = clamp(v, 0.0, 1.0) * f32(CURVE_LUT - 1u);
+    let i = min(u32(t), CURVE_LUT - 2u);
+    let a = bitcast<f32>(tile_table[offset + i]);
+    let b = bitcast<f32>(tile_table[offset + i + 1u]);
+    return a + (b - a) * (t - f32(i));
+}
 
 // Rotate the hue by `degrees`, keeping each color's smallest and largest component.
 fn shift_hue(c: vec3<f32>, degrees: f32) -> vec3<f32> {
@@ -895,7 +907,7 @@ fn black_and_white(c: vec3<f32>, w: array<f32, 6>) -> f32 {
     return c[lo] + (c[mid] - c[lo]) * weights[secondary] + (c[hi] - c[mid]) * weights[2u * hi];
 }
 
-fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, c: vec3<f32>) -> vec3<f32> {
+fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, table: u32, c: vec3<f32>) -> vec3<f32> {
     switch kind {
         case ADJUST_EXPOSURE: {
             let v = c * exp2(p.x) + p.y;
@@ -985,6 +997,15 @@ fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<
             }
             return vec3<f32>(red, dot(p1, v) / 100.0, dot(p2, v) / 100.0);
         }
+        case ADJUST_CURVES: {
+            // Each channel through its curve, then the composite one.
+            let n = CURVE_LUT;
+            return vec3<f32>(
+                curve_at(table, curve_at(table + n, c.r)),
+                curve_at(table, curve_at(table + 2u * n, c.g)),
+                curve_at(table, curve_at(table + 3u * n, c.b)),
+            );
+        }
         default: {
             return c;
         }
@@ -1006,10 +1027,10 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     let p2 = layer.transfer2;
     let p3 = layer.m0;
     if kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER {
-        adjusted = adjust_color(kind, p0, p1, p2, p3, straight);
+        adjusted = adjust_color(kind, p0, p1, p2, p3, layer.table_offset, straight);
     } else {
         let encoded = to_blend(straight, perceptual);
-        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, encoded), perceptual);
+        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, layer.table_offset, encoded), perceptual);
     }
     return fade(below, vec4<f32>(adjusted * alpha, alpha), coverage, perceptual);
 }

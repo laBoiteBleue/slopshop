@@ -253,7 +253,7 @@ enum Op<'a> {
     /// Boxed: much larger than the other steps.
     Layer(Box<Source<'a>>),
     Adjust {
-        adjustment: Adjustment,
+        adjustment: crate::adjust::Prepared,
         opacity: f64,
         mask: Option<MaskSource<'a>>,
     },
@@ -503,7 +503,7 @@ pub fn composite_region(
                 opacity,
                 transform,
             } => Some(Op::Adjust {
-                adjustment,
+                adjustment: adjustment.prepare(),
                 opacity: f64::from(opacity),
                 mask: enabled(layer).and_then(|m| mask_source(m, transform)),
             }),
@@ -1914,7 +1914,7 @@ mod tests {
                     .flat_map(|px| {
                         let px = px.map(f64::from);
                         blender
-                            .adjust(&adjust, &px, f64::from(opacity))
+                            .adjust(&adjust.prepare(), &px, f64::from(opacity))
                             .map(|v| v as f32)
                     })
                     .collect();
