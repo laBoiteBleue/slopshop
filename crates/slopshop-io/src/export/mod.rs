@@ -65,6 +65,7 @@ mod hdr;
 mod ico;
 mod jpeg;
 mod jxl;
+mod pdf;
 mod png;
 mod pnm;
 mod psd;
@@ -106,6 +107,7 @@ use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::jxl::JxlWriter;
 pub use self::jxl::MAX_SIDE as JXL_MAX_SIDE;
+use self::pdf::PdfWriter;
 use self::png::PngWriter;
 use self::pnm::{PfmWriter, PnmWriter};
 use self::qoi::QoiWriter;
@@ -152,6 +154,8 @@ pub enum ExportFormatKind {
     Fits,
     /// A DICOM Secondary Capture image.
     Dicom,
+    /// One page holding the image.
+    Pdf,
 }
 
 impl ExportFormatKind {
@@ -292,6 +296,9 @@ pub enum ExportFormat {
     Dicom {
         depth: PngDepth,
     },
+    /// One page holding the image (one point per pixel), 8-bit gray or RGB in an ICC-based
+    /// color space, alpha as a soft mask.
+    Pdf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -332,6 +339,7 @@ impl ExportFormat {
             ExportFormat::Dds => ExportFormatKind::Dds,
             ExportFormat::Fits { .. } => ExportFormatKind::Fits,
             ExportFormat::Dicom { .. } => ExportFormatKind::Dicom,
+            ExportFormat::Pdf => ExportFormatKind::Pdf,
         }
     }
 
@@ -367,7 +375,8 @@ impl ExportFormat {
             | ExportFormat::Qoi
             | ExportFormat::Ico
             | ExportFormat::Gif
-            | ExportFormat::Dds => SampleType::U8,
+            | ExportFormat::Dds
+            | ExportFormat::Pdf => SampleType::U8,
             ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => match depth {
                 PsdDepth::U8 => SampleType::U8,
                 PsdDepth::U16 => SampleType::U16,
@@ -669,7 +678,8 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         | ExportFormatKind::Farbfeld
         | ExportFormatKind::Hdr
         | ExportFormatKind::Dds
-        | ExportFormatKind::Fits => None,
+        | ExportFormatKind::Fits
+        | ExportFormatKind::Pdf => None,
         ExportFormatKind::Avif => Some(avif::MAX_SIDE),
         ExportFormatKind::Jxl => Some(jxl::MAX_SIDE),
         ExportFormatKind::Tiff => None,
@@ -699,7 +709,8 @@ pub fn supports_alpha(kind: ExportFormatKind) -> bool {
 ///   scene-linear;
 /// - JPEG: spaces an ICC profile can describe (APP2 segments; not PQ or HLG);
 /// - WebP: spaces an ICC profile can describe (ICCP chunk; not PQ or HLG);
-/// - PSD: spaces an ICC profile can describe (image resource 1039).
+/// - PSD: spaces an ICC profile can describe (image resource 1039);
+/// - PDF: spaces an ICC profile can describe (an ICC-based color space).
 pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_matrix_trc(space).is_ok();
     match kind {
@@ -710,7 +721,8 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         | ExportFormatKind::Jpeg
         | ExportFormatKind::Webp
         | ExportFormatKind::Psd
-        | ExportFormatKind::Psb => icc_writable(),
+        | ExportFormatKind::Psb
+        | ExportFormatKind::Pdf => icc_writable(),
         ExportFormatKind::Exr => {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
@@ -740,7 +752,7 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
 /// them, so that they read back as the same values (the primaries only define the luminance):
 /// - PNG: the sRGB curve (sRGB chunk), or curves an ICC gray profile can describe (iCCP; not PQ
 ///   or HLG, which PNG only declares with cICP, for RGB);
-/// - TIFF and JPEG: curves an ICC gray profile can describe;
+/// - TIFF, JPEG and PDF: curves an ICC gray profile can describe;
 /// - EXR: not yet (luminance-only files are not read back by our importer);
 /// - WebP: never (it has no gray samples);
 /// - PSD and PSB: not yet (layered files are written in RGB).
@@ -748,7 +760,7 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_gray_trc(space).is_ok();
     match kind {
         ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
-        ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
+        ExportFormatKind::Tiff | ExportFormatKind::Jpeg | ExportFormatKind::Pdf => icc_writable(),
         // By convention: the sRGB curve, or linear for floats (FITS and DICOM: display values,
         // float ones too).
         ExportFormatKind::Pnm | ExportFormatKind::Fits | ExportFormatKind::Dicom => {
@@ -786,6 +798,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Jxl
             | ExportFormatKind::Fits
             | ExportFormatKind::Dicom
+            | ExportFormatKind::Pdf
     )
 }
 
@@ -883,6 +896,7 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             common_8_bit_space(unique_space),
         ),
         ExportFormatKind::Bmp => (ExportFormat::Bmp, ColorSpace::SRGB),
+        ExportFormatKind::Pdf => (ExportFormat::Pdf, common_8_bit_space(unique_space)),
         ExportFormatKind::Pnm => {
             let depth = if rasters.iter().all(|format| format.sample == SampleType::U8) {
                 PngDepth::U8
@@ -1204,6 +1218,7 @@ pub fn export_image(
         ExportFormat::Dicom { .. } => {
             FormatWriter::Dicom(Box::new(DicomWriter::new(file, size, target)?))
         }
+        ExportFormat::Pdf => FormatWriter::Pdf(Box::new(PdfWriter::new(file, size, target)?)),
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -1262,6 +1277,7 @@ enum FormatWriter {
     Dds(Box<DdsWriter>),
     Fits(Box<FitsWriter>),
     Dicom(Box<DicomWriter>),
+    Pdf(Box<PdfWriter>),
 }
 
 impl FormatWriter {
@@ -1287,6 +1303,7 @@ impl FormatWriter {
             FormatWriter::Dds(w) => w.write_rows(first_row, rows),
             FormatWriter::Fits(w) => w.write_rows(first_row, rows),
             FormatWriter::Dicom(w) => w.write_rows(first_row, rows),
+            FormatWriter::Pdf(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1312,6 +1329,7 @@ impl FormatWriter {
             FormatWriter::Dds(w) => (*w).finish(),
             FormatWriter::Fits(w) => (*w).finish(),
             FormatWriter::Dicom(w) => (*w).finish(),
+            FormatWriter::Pdf(w) => (*w).finish(),
         }
     }
 }
