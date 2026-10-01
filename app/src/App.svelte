@@ -30,10 +30,12 @@
     type OpenFailed,
     type OpenFinished,
     type Opening,
+    type PdfPageSize,
     type SaveFailed,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
+  import PdfImportDialog from "./lib/PdfImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
@@ -663,11 +665,65 @@
 
   // --- Opening files ---------------------------------------------------------------------------
 
+  /** The PDF Import dialog, while it is shown: settled with the choice, or null if cancelled. */
+  type PdfChoice = { pages: number[]; dpi: number };
+  let pdfImport = $state<{
+    path: string;
+    pages: PdfPageSize[];
+    settle: (choice: PdfChoice | null) => void;
+  } | null>(null);
+
+  /** Settles when the dialogs asked before are done: PDFs dropped meanwhile wait their turn. */
+  let pdfTurn: Promise<unknown> = Promise.resolve();
+
+  function askPdfImport(path: string, pages: PdfPageSize[]): Promise<PdfChoice | null> {
+    const asked = pdfTurn.then(
+      () => new Promise<PdfChoice | null>((settle) => (pdfImport = { path, pages, settle })),
+    );
+    pdfTurn = asked;
+    return asked;
+  }
+
+  function settlePdfImport(choice: PdfChoice | null) {
+    const settle = pdfImport?.settle;
+    pdfImport = null;
+    settle?.(choice);
+  }
+
   /**
-   * Open files in new tabs, or as layers of a document, in the order of `paths`. Progress and
+   * Open files in new tabs, or as layers of a document, in the order of `paths`. PDFs ask
+   * which pages and at what resolution first (PDF Import), one after the other. Progress and
    * outcomes (new tabs, updated documents, failures) arrive as events.
    */
   async function openFiles(paths: string[], target: "tab" | { layerOf: number }) {
+    const isPdf = (path: string) => /\.pdf$/i.test(path);
+    const others = paths.filter((path) => !isPdf(path));
+    if (others.length > 0) await openPaths(others, target);
+    const documentId = target === "tab" ? null : target.layerOf;
+    for (const path of paths.filter(isPdf)) {
+      let pages: PdfPageSize[];
+      try {
+        pages = await engine.pdfPages(path);
+      } catch {
+        // Not readable as a PDF (damaged, encrypted…): the usual open reports why.
+        await openPaths([path], target);
+        continue;
+      }
+      const choice = await askPdfImport(path, pages);
+      if (choice === null) {
+        void engine.closePdf(path);
+        continue;
+      }
+      const failuresBefore = openFailureCount;
+      try {
+        await engine.openPdfPages(path, choice.pages, choice.dpi, documentId);
+      } catch (e) {
+        if (openFailureCount === failuresBefore) showError(String(e));
+      }
+    }
+  }
+
+  async function openPaths(paths: string[], target: "tab" | { layerOf: number }) {
     const failuresBefore = openFailureCount;
     try {
       const summary = await engine.openImages(paths, target === "tab" ? null : target.layerOf);
@@ -1829,6 +1885,18 @@
       height={sizeDoc.height}
       onapply={applySize}
       onclose={() => (sizeDialog = null)}
+    />
+  {/key}
+{/if}
+
+{#if pdfImport}
+  {#key pdfImport}
+    <PdfImportDialog
+      path={pdfImport.path}
+      name={fileNameOf(pdfImport.path)}
+      pages={pdfImport.pages}
+      onopen={(pages, dpi) => settlePdfImport({ pages, dpi })}
+      onclose={() => settlePdfImport(null)}
     />
   {/key}
 {/if}

@@ -42,6 +42,24 @@ const fr: Messages = {
   "sizeDialog.anchor": "Position",
   "sizeDialog.ok": "OK",
   "sizeDialog.cancel": "Annuler",
+  "pdfDialog.title": "Importer un PDF",
+  "pdfDialog.pages": "Pages",
+  "pdfDialog.page": "Page {number}",
+  "pdfDialog.all": "Toutes",
+  "pdfDialog.none": "Aucune",
+  "pdfDialog.selected": "{count} sur {total} sélectionnées",
+  "pdfDialog.resolution": "Résolution",
+  "pdfDialog.ppi": "pixels/pouce",
+  "pdfDialog.sizeOf": "Taille de la page {number}",
+  "pdfDialog.width": "Largeur",
+  "pdfDialog.height": "Hauteur",
+  "pdfDialog.px": "px",
+  "pdfDialog.mode": "Mode",
+  "pdfDialog.modeValue": "RVB, 8 bits (sRVB), fond transparent",
+  "pdfDialog.noPage": "Sélectionnez au moins une page",
+  "pdfDialog.tooLarge": "Trop grand : {max} pixels par côté au plus",
+  "pdfDialog.ok": "OK",
+  "pdfDialog.cancel": "Annuler",
   "menu.edit.freeTransform": "Transformation manuelle",
   "menu.edit.transform": "Transformation",
   "menu.edit.transform.rotate180": "Rotation 180°",
@@ -136,6 +154,8 @@ const fr: Messages = {
     "Les parties de calques hors de la zone de travail ont été recadrées",
   "open.warning.masksSimplified":
     "La densité et le contour progressif des masques, et les masques vectoriels combinés à un masque de fusion, ne sont pas encore pris en charge : ils ont été ignorés",
+  "open.warning.pdfContentSkipped":
+    "Une partie du contenu de la page PDF n'a pas pu être dessinée (police ou image non prise en charge)",
   "open.warning.colorInfoUnsupported":
     "Informations de couleur du fichier pas encore prises en charge : couleurs lues en sRGB",
 

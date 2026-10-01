@@ -309,7 +309,11 @@ export type ImportWarning =
   | "layersRasterized"
   | "pixelsOutsideCanvas"
   | "masksSimplified"
+  | "pdfContentSkipped"
   | "blendSpaceDiffers";
+
+/** A PDF page's size in points (1/72 inch), its rotation applied. */
+export type PdfPageSize = { width: number; height: number };
 
 export type OpenErrorCode =
   | "io"
@@ -686,6 +690,29 @@ export const engine = {
    */
   openImages: (paths: string[], documentId: number | null) =>
     invoke<OpenSummary>("open_images", { paths, documentId }),
+  /**
+   * The pages of a PDF, for the PDF Import dialog; the file stays parsed for its next calls,
+   * until `openPdfPages` or `closePdf`. Rejects if the file cannot be read as a PDF.
+   */
+  pdfPages: (path: string) => invoke<PdfPageSize[]>("pdf_pages", { path }),
+  /** A PDF page (from 0) on white, at most `maxSide` pixels on its longer side (RGBA8 sRGB). */
+  pdfThumbnail: async (path: string, page: number, maxSide: number) => {
+    const buffer = await invoke<ArrayBuffer>("pdf_thumbnail", { path, page, maxSide });
+    const view = new DataView(buffer);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
+    return new ImageData(pixels, width, height);
+  },
+  /** The PDF Import dialog was cancelled. */
+  closePdf: (path: string) => invoke<void>("close_pdf", { path }),
+  /**
+   * Open PDF pages (from 0) rendered at `dpi`, in parallel: each in a new tab or, with a
+   * `documentId`, each as a new top layer of that document, in the order given. Outcomes
+   * arrive as `open-*` events, like `openImages`.
+   */
+  openPdfPages: (path: string, pages: number[], dpi: number, documentId: number | null) =>
+    invoke<void>("open_pdf_pages", { path, pages, dpi, documentId }),
   /**
    * Save a document to its `.slop` file (incremental), or to `path` (Save As: a new compact
    * file the document continues with). Rejects with a `SaveFailed`. Queued after the edits
