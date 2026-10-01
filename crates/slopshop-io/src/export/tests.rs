@@ -1789,3 +1789,179 @@ fn float_rgb_linear() -> PixelFormat {
         alpha: AlphaMode::Straight,
     }
 }
+
+/// A raster of `size` whose samples `f(x, y, channel)` gives (8-bit or 16-bit values).
+fn pattern_raster(
+    size: Size,
+    layout: ChannelLayout,
+    sample: SampleType,
+    space: ColorSpace,
+    f: impl Fn(u32, u32, usize) -> u16,
+) -> RasterImage {
+    let format = PixelFormat {
+        layout,
+        sample,
+        color_space: space,
+        alpha: AlphaMode::Straight,
+    };
+    let channels = layout.channels() as usize;
+    let mut bytes = Vec::new();
+    for y in 0..size.height {
+        for x in 0..size.width {
+            for c in 0..channels {
+                let v = f(x, y, c);
+                if sample == SampleType::U8 {
+                    bytes.push(v as u8);
+                } else {
+                    bytes.extend(v.to_ne_bytes());
+                }
+            }
+        }
+    }
+    RasterImage::from_pixels(size, format, &bytes).unwrap()
+}
+
+/// A document's composite, as 16-bit values in reading order.
+fn composite_u16(doc: &Document) -> Vec<u16> {
+    let size = doc.size();
+    let mut out = vec![0f32; size.pixel_count() as usize * 4];
+    composite_region(doc, size.bounds(), &mut out).unwrap();
+    out.iter()
+        .map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16)
+        .collect()
+}
+
+fn avif_spec(depth: AvifDepth, quality: u8, space: ColorSpace) -> ExportSpec {
+    ExportSpec {
+        format: ExportFormat::Avif { depth, quality },
+        space,
+        keep_alpha: false,
+        matte: WHITE_MATTE,
+        dither: false,
+        gray: false,
+        blend_space: BlendSpace::default(),
+    }
+}
+
+/// Export `doc` to AVIF with `spec`, and read it back with our importer.
+fn avif_round_trip(name: &str, doc: &Document, spec: &ExportSpec) -> crate::Imported {
+    let path = temp_path(&format!("{name}.avif"));
+    let report = export(doc, &path, spec).unwrap();
+    assert_eq!(report, ExportReport::default(), "{name}");
+    assert!(temp_files(&path).is_empty());
+    let back = open_image(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    back
+}
+
+#[test]
+fn best_quality_avif_is_close_with_alpha() {
+    let size = Size::new(48, 40);
+    let image = pattern_raster(
+        size,
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        ColorSpace::SRGB,
+        |x, y, c| match c {
+            0 => (x * 5) as u16,
+            1 => (y * 6) as u16,
+            2 => 128,
+            _ => 128 + (x * 2) as u16,
+        },
+    );
+    let doc = raster_document(image);
+    let mut spec = avif_spec(AvifDepth::U8, 100, ColorSpace::SRGB);
+    spec.keep_alpha = true;
+    let back = avif_round_trip("best", &doc, &spec);
+    let format = back.image.format();
+    assert_eq!(
+        (format.layout, format.sample, format.color_space),
+        (ChannelLayout::Rgba, SampleType::U8, ColorSpace::SRGB)
+    );
+    let (got, want) = (
+        composite_u16(&raster_document(back.image)),
+        composite_u16(&doc),
+    );
+    let worst = got
+        .iter()
+        .zip(&want)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    // A few 8-bit steps at most.
+    assert!(worst < 4 * 257, "{worst}");
+}
+
+#[test]
+fn lossy_avif_stays_close_and_keeps_its_space_and_depth() {
+    let size = Size::new(64, 48);
+    // 16-bit Display P3, smooth: written at 10 bits with alpha.
+    let image = pattern_raster(
+        size,
+        ChannelLayout::Rgba,
+        SampleType::U16,
+        ColorSpace::DISPLAY_P3,
+        |x, y, c| match c {
+            0 => (x * 1000) as u16,
+            1 => (y * 1300) as u16,
+            2 => 30_000,
+            _ => 20_000 + (x * 500) as u16,
+        },
+    );
+    let doc = raster_document(image);
+    let mut spec = avif_spec(AvifDepth::U10, 90, ColorSpace::DISPLAY_P3);
+    spec.keep_alpha = true;
+    let back = avif_round_trip("p3-10bit", &doc, &spec);
+    let format = back.image.format();
+    assert_eq!(
+        (format.layout, format.sample, format.color_space),
+        (ChannelLayout::Rgba, SampleType::U16, ColorSpace::DISPLAY_P3)
+    );
+    let (a, b) = (
+        composite_u16(&raster_document(back.image)),
+        composite_u16(&doc),
+    );
+    let mean = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| f64::from(x.abs_diff(*y)))
+        .sum::<f64>()
+        / a.len() as f64;
+    assert!(mean < 400.0, "mean difference {mean} of 65535");
+}
+
+#[test]
+fn gray_and_hdr_avif_are_declared() {
+    let size = Size::new(40, 24);
+    let gray = pattern_raster(
+        size,
+        ChannelLayout::Gray,
+        SampleType::U8,
+        ColorSpace::SRGB,
+        |x, y, _| ((x * 6 + y) % 256) as u16,
+    );
+    let mut spec = avif_spec(AvifDepth::U8, 85, ColorSpace::SRGB);
+    spec.gray = true;
+    let back = avif_round_trip("gray", &raster_document(gray), &spec);
+    assert_eq!(back.image.format().layout, ChannelLayout::Gray);
+
+    let hdr = pattern_raster(
+        size,
+        ChannelLayout::Rgb,
+        SampleType::U16,
+        ColorSpace::REC2100_PQ,
+        |x, _, _| (x * 1500) as u16,
+    );
+    let spec = avif_spec(AvifDepth::U10, 85, ColorSpace::REC2100_PQ);
+    let back = avif_round_trip("pq", &raster_document(hdr), &spec);
+    assert_eq!(back.image.format().color_space, ColorSpace::REC2100_PQ);
+    // Spaces without code points (Adobe RGB) are refused.
+    assert!(!supports_space(
+        ExportFormatKind::Avif,
+        &ColorSpace::ADOBE_RGB
+    ));
+    assert!(supports_space(
+        ExportFormatKind::Avif,
+        &ColorSpace::REC2100_HLG
+    ));
+}
