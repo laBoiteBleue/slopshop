@@ -27,6 +27,10 @@ zune-jpeg = { workspace = true }
 # - OpenEXR chromaticities (the primaries of the file). Default features: `rayon`, which
 #   `image` already enables on it.
 exr = { workspace = true }
+# JPEG XL import: pure Rust (MIT OR Apache-2.0), decodes every bit depth and keeps the file's
+# color encoding and ICC profile; the Rust bindings of libjxl are GPL (ADR 0006). `rayon` is
+# already in the tree through `image`.
+jxl-oxide = { version = "0.12.6", default-features = false, features = ["rayon"] }
 # TIFF export compresses its own strips (tiff's streaming encoder ignores compression, and its
 # codecs are private) with the codecs tiff uses internally, already in the tree through it:
 # - LZW;

@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 /// Extensions of the files the importer reads, and of documents.
-const OPENABLE: [&str; 26] = [
+const OPENABLE: [&str; 27] = [
     "png", "jpg", "jpeg", "jpe", "jfif", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "pnm",
-    "pbm", "pgm", "ppm", "pfm", "pam", "qoi", "ff", "exr", "hdr", "dds", "psd", "psb", "slop",
+    "pbm", "pgm", "ppm", "pfm", "pam", "qoi", "ff", "exr", "hdr", "dds", "jxl", "psd", "psb",
+    "slop",
 ];
 
 /// Largest entry extracted from an archive, uncompressed: well beyond any image the engine can
