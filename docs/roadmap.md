@@ -173,7 +173,8 @@ paints on an empty layer or in a mask.
 - [x] Lasso and Polygonal Lasso
 - [x] Selection → layer mask (Reveal / Hide Selection, and Reveal / Hide All), Image > Crop to
       the selection
-- [ ] Select > Modify: Feather, Expand, Contract, Smooth, Border
+- [x] Select > Modify: Border, Smooth, Expand, Contract (exact distance to the outline, rounded
+      corners), Feather (Shift+F6)
 - [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
