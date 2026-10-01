@@ -25,7 +25,8 @@ pub(crate) fn layered(
 }
 
 /// A document of one isolated group named `name`: `below` (named), `images` (named, the first on
-/// top), then `above` (named). The canvas fits the largest image.
+/// top), then `above` (named). Only the first image is shown, the others hidden (the
+/// maintainer's choice: one slice, page or frame at a time). The canvas fits the largest image.
 pub(crate) fn grouped(
     name: String,
     images: Vec<(String, Imported)>,
@@ -56,19 +57,21 @@ pub(crate) fn grouped(
         next += 1;
     }
     // Bottom to top: the last image first.
-    for (image_name, imported) in images.into_iter().rev() {
+    for (index, (image_name, imported)) in images.into_iter().enumerate().rev() {
         for warning in imported.warnings {
             if !warnings.contains(&warning) {
                 warnings.push(warning);
             }
         }
-        children.push(layer(
+        let mut image = layer(
             next,
             image_name,
             LayerContent::Raster {
                 image: Arc::new(imported.image),
             },
-        ));
+        );
+        image.visible = index == 0;
+        children.push(image);
         next += 1;
     }
     if let Some((above_name, content)) = above {

@@ -19,6 +19,7 @@ mod dds;
 mod dicom;
 pub mod export;
 mod fits;
+mod frames;
 mod icc;
 mod jpeg2000;
 mod jxl;
@@ -290,6 +291,9 @@ pub fn open_file(path: &Path) -> Result<Opened, ImportError> {
     if pdf::is_pdf(&head) {
         return pdf::open(path);
     }
+    if let Some(opened) = frames::open(path, &head)? {
+        return Ok(opened);
+    }
     open_image(path).map(Opened::Image)
 }
 
@@ -427,7 +431,7 @@ fn has_non_finite(pixels: &[u8], sample: SampleType) -> bool {
 
 /// Formats decoded through the `image` crate's individual codecs. The format comes from the
 /// content, or from the extension for formats without a signature (TGA).
-fn decode_generic(path: &Path, head: &[u8]) -> Result<Decoded, ImportError> {
+pub(crate) fn decode_generic(path: &Path, head: &[u8]) -> Result<Decoded, ImportError> {
     let mut reader = ImageReader::open(path)?.with_guessed_format()?;
     let format = reader.format().ok_or(ImportError::Unrecognized)?;
     if format == ImageFormat::Jpeg {
@@ -771,7 +775,7 @@ fn check_jpeg_components(path: &Path) -> Result<(), ImportError> {
 }
 
 /// Whether an animated container holds more than one frame (only the first is imported).
-fn is_animated(format: ImageFormat, path: &Path) -> bool {
+pub(crate) fn is_animated(format: ImageFormat, path: &Path) -> bool {
     let Ok(file) = File::open(path) else {
         return false;
     };
