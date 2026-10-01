@@ -57,6 +57,7 @@ mod avif;
 mod bmp;
 mod exr;
 mod jpeg;
+mod jxl;
 mod png;
 mod pnm;
 mod psd;
@@ -88,6 +89,8 @@ use self::bmp::BmpWriter;
 use self::exr::ExrWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
+use self::jxl::JxlWriter;
+pub use self::jxl::MAX_SIDE as JXL_MAX_SIDE;
 use self::png::PngWriter;
 use self::pnm::{PfmWriter, PnmWriter};
 use self::tga::TgaWriter;
@@ -121,6 +124,7 @@ pub enum ExportFormatKind {
     /// Netpbm's float format.
     Pfm,
     Avif,
+    Jxl,
 }
 
 impl ExportFormatKind {
@@ -235,6 +239,10 @@ pub enum ExportFormat {
         depth: AvifDepth,
         quality: u8,
     },
+    /// Lossless JPEG XL, 8/16-bit.
+    Jxl {
+        depth: PngDepth,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -266,13 +274,16 @@ impl ExportFormat {
             ExportFormat::Pnm { .. } => ExportFormatKind::Pnm,
             ExportFormat::Pfm => ExportFormatKind::Pfm,
             ExportFormat::Avif { .. } => ExportFormatKind::Avif,
+            ExportFormat::Jxl { .. } => ExportFormatKind::Jxl,
         }
     }
 
     /// Type of the samples written to the file.
     pub fn sample_type(&self) -> SampleType {
         match self {
-            ExportFormat::Png { depth, .. } | ExportFormat::Pnm { depth } => match depth {
+            ExportFormat::Png { depth, .. }
+            | ExportFormat::Pnm { depth }
+            | ExportFormat::Jxl { depth } => match depth {
                 PngDepth::U8 => SampleType::U8,
                 PngDepth::U16 => SampleType::U16,
             },
@@ -559,6 +570,7 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Tga => Some(tga::MAX_SIDE),
         ExportFormatKind::Pnm | ExportFormatKind::Pfm => None,
         ExportFormatKind::Avif => Some(avif::MAX_SIDE),
+        ExportFormatKind::Jxl => Some(jxl::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
@@ -602,6 +614,8 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
         // H.273 code points (`colr` and the AV1 header): the spaces cICP names, HDR included.
         ExportFormatKind::Avif => avif::avif_code(space).is_some(),
+        // JPEG XL's color encodings: any primaries, any curve but ICC parametric ones.
+        ExportFormatKind::Jxl => jxl::can_declare(space),
     }
 }
 
@@ -623,6 +637,7 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
         // Monochrome AV1, its transfer declared with the code points.
         ExportFormatKind::Avif => avif::avif_code(space).is_some(),
+        ExportFormatKind::Jxl => jxl::can_declare(space),
         ExportFormatKind::Exr
         | ExportFormatKind::Webp
         | ExportFormatKind::Psd
@@ -642,6 +657,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Pnm
             | ExportFormatKind::Pfm
             | ExportFormatKind::Avif
+            | ExportFormatKind::Jxl
     )
 }
 
@@ -748,6 +764,15 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             (ExportFormat::Pnm { depth }, ColorSpace::SRGB)
         }
         ExportFormatKind::Pfm => (ExportFormat::Pfm, ColorSpace::LINEAR_SRGB),
+        ExportFormatKind::Jxl => {
+            let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
+            // 8-bit: a source space with a curve (linear light needs more bits), else sRGB.
+            let space = unique_space
+                .filter(|s| jxl::can_declare(s) && (deep || s.transfer != TransferFunction::Linear))
+                .unwrap_or(ColorSpace::SRGB);
+            let depth = if deep { PngDepth::U16 } else { PngDepth::U8 };
+            (ExportFormat::Jxl { depth }, space)
+        }
         ExportFormatKind::Avif => {
             let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
             let declarable = |space: &ColorSpace| avif::avif_code(space).is_some();
@@ -996,6 +1021,12 @@ pub fn export_image(
             FormatWriter::Pnm(Box::new(PnmWriter::new(file, size, target)?))
         }
         ExportFormat::Pfm => FormatWriter::Pfm(Box::new(PfmWriter::new(file, size, target)?)),
+        ExportFormat::Jxl { .. } => FormatWriter::Jxl(Box::new(JxlWriter::new(
+            file,
+            size,
+            target,
+            cancel.clone(),
+        )?)),
         ExportFormat::Avif { quality, .. } => FormatWriter::Avif(Box::new(AvifWriter::new(
             file,
             size,
@@ -1053,6 +1084,7 @@ enum FormatWriter {
     Pnm(Box<PnmWriter>),
     Pfm(Box<PfmWriter>),
     Avif(Box<AvifWriter>),
+    Jxl(Box<JxlWriter>),
 }
 
 impl FormatWriter {
@@ -1069,6 +1101,7 @@ impl FormatWriter {
             FormatWriter::Pnm(w) => w.write_rows(first_row, rows),
             FormatWriter::Pfm(w) => w.write_rows(first_row, rows),
             FormatWriter::Avif(w) => w.write_rows(first_row, rows),
+            FormatWriter::Jxl(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1085,6 +1118,7 @@ impl FormatWriter {
             FormatWriter::Pnm(w) => (*w).finish(),
             FormatWriter::Pfm(w) => (*w).finish(),
             FormatWriter::Avif(w) => (*w).finish(),
+            FormatWriter::Jxl(w) => (*w).finish(),
         }
     }
 }

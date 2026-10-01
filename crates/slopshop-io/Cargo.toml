@@ -42,6 +42,11 @@ rav1d = { version = "1.1.0", default-features = false, features = ["bitdepth_8",
 rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 avif-serialize = "0.8.9"
 
+# JPEG XL export: zune-jpegxl (MIT OR Apache-2.0 OR Zlib), pure Rust, lossless only; the
+# lossy encoder is libjxl (C++), not built for now (maintainer's choice).
+zune-jpegxl = "0.5.2"
+# - its option types; already in the tree through zune-jpeg.
+zune-core = "0.5.3"
 # TIFF export compresses its own strips (tiff's streaming encoder ignores compression, and its
 # codecs are private) with the codecs tiff uses internally, already in the tree through it:
 # - LZW;
