@@ -50,7 +50,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       adjustment layers, with a merged composite ([formats plan](formats.md#psd-and-psb-p0))
 - [x] PSB export (above 30,000 px per side), streamed: memory does not grow with the document
 - [x] JPEG XL import (jxl-oxide)
-- [ ] Import phases 2–6: JPEG 2000, AVIF; DICOM, FITS; camera RAW; KRA/XCF/ORA,
+- [x] AVIF import (rav1d without assembly, [ADR 0021](adr/0021-avif-import.md))
+- [ ] Import phases 2–6: JPEG 2000; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)
 - [ ] PDF import: pages rasterized at a chosen resolution, several pages like a multi-file

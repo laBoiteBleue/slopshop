@@ -100,7 +100,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | ✅ | done | `image`; PFM and every export in-house | export: PGM/PPM/PAM 8/16-bit sRGB, PFM 32-bit float linear |
 | Radiance | `.hdr` | ✅ | — | P2 export | `image` | RGBE, kept linear, never tone-mapped; XYZE variant not supported |
 | JPEG XL | `.jxl` | ✅ | — | P1 export | jxl-oxide (pure Rust); export: own thin FFI to libjxl (BSD) | first frame of animations (reported); native depth (8/16-bit, float); color from the code points or the ICC profile; CMYK refused; the Rust bindings of libjxl are GPL: not usable |
-| AVIF | `.avif` | 🔎 | — | P1 | avif-decode (rav1d) or dav1d; export: ravif / rav1e | grid AVIF needs libheif (LGPL, isolated) |
+| AVIF | `.avif` | ✅ | — | P1 export | rav1d without assembly, our own container reader ([ADR 0021](adr/0021-avif-import.md)); export: ravif / rav1e | 8-bit, or 10/12-bit as 16-bit; alpha; grids; `colr`, `irot`, `imir`, `clap`; the still image of animations (reported) |
 | Camera RAW (Camera Raw formats, DNG) | `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.pef`, … | 🔎 | — | P1 | rawler (LGPL-2.1, isolated behind a feature) | a non-destructive development node, not a baked import; demosaic algorithms written clean-room (the best known ones are GPL) |
 | DICOM | `.dcm` | 🔎 | — | P1 | dicom-rs | an interpretation node (modality and VOI LUT) instead of baking the window; 12-bit JPEG needs libjpeg-turbo |
 | JPEG 2000 | `.jp2`, `.jpf`, `.jpx`, `.j2k`, `.j2c`, `.jpc` | 🔎 | — | P1 | hayro-jpeg2000 (pure Rust) → OpenJPEG (optional) | OpenJPEG declared itself unmaintained in 2026 |
