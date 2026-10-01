@@ -38,8 +38,8 @@
 //!   order, from top to bottom, without gaps: `first_row` is 0, then the previous `first_row`
 //!   plus the previous row count. `rows` holds a whole number of rows (a band: [`BAND_ROWS`]
 //!   rows, fewer for the last one) of exactly `size.width × target.bytes_per_pixel()` bytes each,
-//!   interleaved samples in the `target` format. 16/32-bit samples are little-endian for TIFF
-//!   and EXR (big-endian for PNG only).
+//!   interleaved samples in the `target` format. 16/32-bit samples are little-endian, except
+//!   for PNG, Netpbm and farbfeld (big-endian).
 //! - `finish(self) -> Result<Vec<ExportNotice>, ExportError>`: called once after the last row.
 //!   Writes what remains (trailers, offsets), flushes everything and reports its notices (e.g.
 //!   [`ExportNotice::BigTiff`]); it must surface every write error (beware of encoders that
@@ -56,11 +56,14 @@
 mod avif;
 mod bmp;
 mod exr;
+mod farbfeld;
+mod hdr;
 mod jpeg;
 mod jxl;
 mod png;
 mod pnm;
 mod psd;
+mod qoi;
 mod tga;
 mod tiff;
 mod webp;
@@ -87,12 +90,15 @@ use self::avif::AvifWriter;
 pub use self::avif::MAX_SIDE as AVIF_MAX_SIDE;
 use self::bmp::BmpWriter;
 use self::exr::ExrWriter;
+use self::farbfeld::FarbfeldWriter;
+use self::hdr::HdrWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::jxl::JxlWriter;
 pub use self::jxl::MAX_SIDE as JXL_MAX_SIDE;
 use self::png::PngWriter;
 use self::pnm::{PfmWriter, PnmWriter};
+use self::qoi::QoiWriter;
 use self::tga::TgaWriter;
 use self::tiff::TiffWriter;
 pub use self::webp::MAX_SIDE as WEBP_MAX_SIDE;
@@ -125,6 +131,10 @@ pub enum ExportFormatKind {
     Pfm,
     Avif,
     Jxl,
+    Qoi,
+    Farbfeld,
+    /// Radiance RGBE.
+    Hdr,
 }
 
 impl ExportFormatKind {
@@ -243,6 +253,12 @@ pub enum ExportFormat {
     Jxl {
         depth: PngDepth,
     },
+    /// 8-bit sRGB or linear sRGB, alpha kept or not, lossless.
+    Qoi,
+    /// 16-bit sRGB, always RGBA (opaque without alpha).
+    Farbfeld,
+    /// Radiance RGBE (8-bit mantissas, shared exponent), linear sRGB primaries, no alpha.
+    Hdr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -275,6 +291,9 @@ impl ExportFormat {
             ExportFormat::Pfm => ExportFormatKind::Pfm,
             ExportFormat::Avif { .. } => ExportFormatKind::Avif,
             ExportFormat::Jxl { .. } => ExportFormatKind::Jxl,
+            ExportFormat::Qoi => ExportFormatKind::Qoi,
+            ExportFormat::Farbfeld => ExportFormatKind::Farbfeld,
+            ExportFormat::Hdr => ExportFormatKind::Hdr,
         }
     }
 
@@ -287,7 +306,8 @@ impl ExportFormat {
                 PngDepth::U8 => SampleType::U8,
                 PngDepth::U16 => SampleType::U16,
             },
-            ExportFormat::Pfm => SampleType::F32,
+            ExportFormat::Pfm | ExportFormat::Hdr => SampleType::F32,
+            ExportFormat::Farbfeld => SampleType::U16,
             ExportFormat::Avif { depth, .. } => match depth {
                 AvifDepth::U8 => SampleType::U8,
                 AvifDepth::U10 => SampleType::U16,
@@ -304,7 +324,8 @@ impl ExportFormat {
             ExportFormat::Jpeg { .. }
             | ExportFormat::Webp { .. }
             | ExportFormat::Bmp
-            | ExportFormat::Tga { .. } => SampleType::U8,
+            | ExportFormat::Tga { .. }
+            | ExportFormat::Qoi => SampleType::U8,
             ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => match depth {
                 PsdDepth::U8 => SampleType::U8,
                 PsdDepth::U16 => SampleType::U16,
@@ -423,6 +444,21 @@ impl ExportNotice {
         }
     }
 
+    /// Add `more` to the count of a notice that counts something (nothing otherwise).
+    fn add_count(&mut self, more: u64) {
+        match self {
+            ExportNotice::ClippedHigh(n)
+            | ExportNotice::ClippedLow(n)
+            | ExportNotice::NonFinite(n)
+            | ExportNotice::HalfOverflow(n)
+            | ExportNotice::AlphaFlattened(n)
+            | ExportNotice::ColorDiscarded(n) => *n = n.saturating_add(more),
+            ExportNotice::PrecisionReduced
+            | ExportNotice::BigTiff
+            | ExportNotice::PixelsOutsideCanvas => {}
+        }
+    }
+
     /// Number of samples concerned, for the notices that count something.
     pub fn count(self) -> Option<u64> {
         match self {
@@ -477,14 +513,17 @@ impl ExportReport {
 
     /// Add `count` non-finite samples replaced by the pixel source.
     fn add_non_finite(&mut self, count: u64) {
-        if let Some(ExportNotice::NonFinite(n)) = self
-            .notices
-            .iter_mut()
-            .find(|n| matches!(n, ExportNotice::NonFinite(_)))
-        {
-            *n += count;
-        } else {
-            self.notices.push(ExportNotice::NonFinite(count));
+        self.add(ExportNotice::NonFinite(count));
+    }
+
+    /// Add a notice; one already there with the same id and a count gets the counts added
+    /// (e.g. a writer's own clipping, after the conversion's).
+    fn add(&mut self, notice: ExportNotice) {
+        let same = self.notices.iter_mut().find(|n| n.id() == notice.id());
+        match (same, notice.count()) {
+            (Some(existing), Some(count)) => existing.add_count(count),
+            (Some(_), None) => {}
+            (None, _) => self.notices.push(notice),
         }
     }
 }
@@ -568,17 +607,25 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Psb => Some(psd::PSB_MAX_SIDE),
         ExportFormatKind::Bmp => Some(bmp::MAX_SIDE),
         ExportFormatKind::Tga => Some(tga::MAX_SIDE),
-        ExportFormatKind::Pnm | ExportFormatKind::Pfm => None,
+        // QOI also bounds the pixel count (`qoi::MAX_PIXELS`, checked by its writer).
+        ExportFormatKind::Pnm
+        | ExportFormatKind::Pfm
+        | ExportFormatKind::Qoi
+        | ExportFormatKind::Farbfeld
+        | ExportFormatKind::Hdr => None,
         ExportFormatKind::Avif => Some(avif::MAX_SIDE),
         ExportFormatKind::Jxl => Some(jxl::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
 
-/// Whether a file of this format can store an alpha channel (JPEG cannot: its exports are
-/// always flattened over the matte).
+/// Whether a file of this format can store an alpha channel (JPEG, PFM and Radiance HDR cannot:
+/// their exports are always flattened over the matte).
 pub fn supports_alpha(kind: ExportFormatKind) -> bool {
-    !matches!(kind, ExportFormatKind::Jpeg | ExportFormatKind::Pfm)
+    !matches!(
+        kind,
+        ExportFormatKind::Jpeg | ExportFormatKind::Pfm | ExportFormatKind::Hdr
+    )
 }
 
 /// Whether a file of this format can store `space` and declare it, so that it reads back as
@@ -607,11 +654,14 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
         // No color tagging: sRGB by convention (BMP's header declares it).
-        ExportFormatKind::Bmp | ExportFormatKind::Tga | ExportFormatKind::Pnm => {
-            *space == ColorSpace::SRGB
-        }
+        ExportFormatKind::Bmp
+        | ExportFormatKind::Tga
+        | ExportFormatKind::Pnm
+        | ExportFormatKind::Farbfeld => *space == ColorSpace::SRGB,
         // Float samples, linear, by convention.
-        ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
+        ExportFormatKind::Pfm | ExportFormatKind::Hdr => *space == ColorSpace::LINEAR_SRGB,
+        // The header's color space byte: sRGB, or "all channels linear".
+        ExportFormatKind::Qoi => *space == ColorSpace::SRGB || *space == ColorSpace::LINEAR_SRGB,
         // H.273 code points (`colr` and the AV1 header): the spaces cICP names, HDR included.
         ExportFormatKind::Avif => avif::avif_code(space).is_some(),
         // JPEG XL's color encodings: any primaries, any curve but ICC parametric ones.
@@ -643,7 +693,10 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         | ExportFormatKind::Psd
         | ExportFormatKind::Psb
         | ExportFormatKind::Bmp
-        | ExportFormatKind::Tga => false,
+        | ExportFormatKind::Tga
+        | ExportFormatKind::Qoi
+        | ExportFormatKind::Farbfeld
+        | ExportFormatKind::Hdr => false,
     }
 }
 
@@ -764,6 +817,9 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             (ExportFormat::Pnm { depth }, ColorSpace::SRGB)
         }
         ExportFormatKind::Pfm => (ExportFormat::Pfm, ColorSpace::LINEAR_SRGB),
+        ExportFormatKind::Qoi => (ExportFormat::Qoi, ColorSpace::SRGB),
+        ExportFormatKind::Farbfeld => (ExportFormat::Farbfeld, ColorSpace::SRGB),
+        ExportFormatKind::Hdr => (ExportFormat::Hdr, ColorSpace::LINEAR_SRGB),
         ExportFormatKind::Jxl => {
             let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
             // 8-bit: a source space with a curve (linear light needs more bits), else sRGB.
@@ -962,7 +1018,7 @@ pub fn export_image(
             dither: spec.dither,
             big_endian: matches!(
                 spec.format.kind(),
-                ExportFormatKind::Png | ExportFormatKind::Pnm
+                ExportFormatKind::Png | ExportFormatKind::Pnm | ExportFormatKind::Farbfeld
             ),
             matte: spec.matte,
             blend_space: spec.blend_space,
@@ -1037,6 +1093,11 @@ pub fn export_image(
         ExportFormat::Tga { compression } => {
             FormatWriter::Tga(Box::new(TgaWriter::new(file, size, target, compression)?))
         }
+        ExportFormat::Qoi => FormatWriter::Qoi(Box::new(QoiWriter::new(file, size, target)?)),
+        ExportFormat::Farbfeld => {
+            FormatWriter::Farbfeld(Box::new(FarbfeldWriter::new(file, size, target)?))
+        }
+        ExportFormat::Hdr => FormatWriter::Hdr(Box::new(HdrWriter::new(file, size, target)?)),
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -1053,7 +1114,9 @@ pub fn export_image(
     };
     let conversion = bands.run(source, &mut writer, progress)?;
     let mut report = ExportReport::new(&spec.format, &conversion);
-    report.notices.extend(writer.finish()?);
+    for notice in writer.finish()? {
+        report.add(notice);
+    }
     // Durable before it replaces the destination: a crash must not leave a truncated file
     // under the final name.
     sync.sync_all()?;
@@ -1085,6 +1148,9 @@ enum FormatWriter {
     Pfm(Box<PfmWriter>),
     Avif(Box<AvifWriter>),
     Jxl(Box<JxlWriter>),
+    Qoi(Box<QoiWriter>),
+    Farbfeld(Box<FarbfeldWriter>),
+    Hdr(Box<HdrWriter>),
 }
 
 impl FormatWriter {
@@ -1102,6 +1168,9 @@ impl FormatWriter {
             FormatWriter::Pfm(w) => w.write_rows(first_row, rows),
             FormatWriter::Avif(w) => w.write_rows(first_row, rows),
             FormatWriter::Jxl(w) => w.write_rows(first_row, rows),
+            FormatWriter::Qoi(w) => w.write_rows(first_row, rows),
+            FormatWriter::Farbfeld(w) => w.write_rows(first_row, rows),
+            FormatWriter::Hdr(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1119,6 +1188,9 @@ impl FormatWriter {
             FormatWriter::Pfm(w) => (*w).finish(),
             FormatWriter::Avif(w) => (*w).finish(),
             FormatWriter::Jxl(w) => (*w).finish(),
+            FormatWriter::Qoi(w) => (*w).finish(),
+            FormatWriter::Farbfeld(w) => (*w).finish(),
+            FormatWriter::Hdr(w) => (*w).finish(),
         }
     }
 }

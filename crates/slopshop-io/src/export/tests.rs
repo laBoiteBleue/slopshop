@@ -2080,3 +2080,239 @@ fn jxl_declares_wide_custom_and_hdr_spaces() {
         );
     }
 }
+
+fn simple_spec(format: ExportFormat, space: ColorSpace, keep_alpha: bool) -> ExportSpec {
+    ExportSpec {
+        format,
+        space,
+        keep_alpha,
+        matte: WHITE_MATTE,
+        dither: true,
+        gray: false,
+        blend_space: BlendSpace::default(),
+    }
+}
+
+/// Save `input` as PNG, import it, export it with `spec` to `name` and decode the file with the
+/// `image` crate; our importer must read it back in `spec.space`.
+fn simple_round_trip(
+    name: &str,
+    input: &image::DynamicImage,
+    spec: &ExportSpec,
+) -> image::DynamicImage {
+    let source = temp_path(&format!("{name}-in.png"));
+    input.save(&source).unwrap();
+    let doc = raster_document(open_image(&source).unwrap().image);
+    std::fs::remove_file(&source).ok();
+    let path = temp_path(name);
+    let report = export(&doc, &path, spec).unwrap();
+    assert_eq!(report, ExportReport::default(), "{name}");
+    assert!(temp_files(&path).is_empty());
+    let output = image::ImageReader::open(&path)
+        .unwrap()
+        .with_guessed_format()
+        .unwrap()
+        .decode()
+        .unwrap();
+    let back = open_image(&path).unwrap();
+    assert_eq!(back.image.format().color_space, spec.space, "{name}");
+    std::fs::remove_file(&path).ok();
+    output
+}
+
+#[test]
+fn qoi_and_farbfeld_round_trip_bit_exact() {
+    let (w, h) = (ODD_SIZE.width, ODD_SIZE.height);
+    // Runs, small differences (QOI's DIFF and LUMA operations), repeats (INDEX) and detail.
+    let rgb = image::RgbImage::from_fn(w, h, |x, y| {
+        let v = if x < 60 { 40 } else { (x * 7 + y) as u8 };
+        image::Rgb([v, (y * 3 + x / 9) as u8, (x ^ y) as u8])
+    });
+    let rgba = image::RgbaImage::from_fn(w, h, |x, y| {
+        let alpha = if x % 50 < 25 {
+            255
+        } else {
+            1 + ((x * 13 + y * 7) % 255) as u8
+        };
+        image::Rgba([
+            (x * 5 + y) as u8,
+            (y * 11) as u8,
+            (x / 3 + 2 * y) as u8,
+            alpha,
+        ])
+    });
+    for keep_alpha in [false, true] {
+        let input: image::DynamicImage = if keep_alpha {
+            rgba.clone().into()
+        } else {
+            rgb.clone().into()
+        };
+        let spec = simple_spec(ExportFormat::Qoi, ColorSpace::SRGB, keep_alpha);
+        let output = simple_round_trip(&format!("simple-{keep_alpha}.qoi"), &input, &spec);
+        assert_eq!(output.color().has_alpha(), keep_alpha);
+        assert!(output == input, "QOI alpha {keep_alpha} is not bit-exact");
+    }
+
+    let rgba16 = image::ImageBuffer::<image::Rgba<u16>, Vec<u16>>::from_fn(w, h, |x, y| {
+        image::Rgba([
+            (x * 200) as u16,
+            (y * 120) as u16,
+            ((x * y) % 65_536) as u16,
+            1 + ((x * 211 + y) % 65_535) as u16,
+        ])
+    });
+    let spec = simple_spec(ExportFormat::Farbfeld, ColorSpace::SRGB, true);
+    let output = simple_round_trip("rgba16.ff", &rgba16.clone().into(), &spec);
+    assert!(output.to_rgba16() == rgba16, "farbfeld is not bit-exact");
+    // Without alpha: opaque RGBA.
+    let rgb16 = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(w, h, |x, y| {
+        image::Rgb([
+            (x * 200) as u16,
+            (y * 120) as u16,
+            ((x * y) % 65_536) as u16,
+        ])
+    });
+    let spec = simple_spec(ExportFormat::Farbfeld, ColorSpace::SRGB, false);
+    let output = simple_round_trip("rgb16.ff", &rgb16.clone().into(), &spec);
+    assert_eq!(output.color(), image::ColorType::Rgba16);
+    assert!(
+        output.to_rgb16() == rgb16,
+        "opaque farbfeld is not bit-exact"
+    );
+    assert!(output.to_rgba16().pixels().all(|p| p[3] == 65_535));
+}
+
+#[test]
+fn linear_qoi_is_declared_linear() {
+    let image = pattern_raster(
+        Size::new(40, 300),
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        ColorSpace::LINEAR_SRGB,
+        |x, y, c| (((x * 7 + y * 3 + c as u32 * 50) % 255) + u32::from(c == 3)) as u16,
+    );
+    let doc = raster_document(image);
+    let spec = simple_spec(ExportFormat::Qoi, ColorSpace::LINEAR_SRGB, true);
+    let path = temp_path("linear.qoi");
+    assert_eq!(export(&doc, &path, &spec).unwrap(), ExportReport::default());
+    let back = open_image(&path).unwrap().image;
+    std::fs::remove_file(&path).ok();
+    assert_eq!(back.format().color_space, ColorSpace::LINEAR_SRGB);
+    assert!(composite_u16(&raster_document(back)) == composite_u16(&doc));
+}
+
+#[test]
+fn radiance_hdr_round_trips_within_rgbe_precision() {
+    let size = Size::new(37, 300);
+    let format = float_rgb_linear();
+    // Never exactly 0: a matrix round trip could make a 0 slightly negative.
+    let values: Vec<f32> = (0..size.pixel_count() as usize * 3)
+        .map(|i| ((i * 37) % 1000) as f32 * 0.05 - 4.975)
+        .collect();
+    let negative = values.iter().filter(|v| **v < 0.0).count() as u64;
+    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let image = RasterImage::from_pixels(size, format, &bytes).unwrap();
+    let doc = raster_document(image);
+    let spec = default_spec(ExportFormatKind::Hdr, &doc);
+    assert_eq!(spec.format, ExportFormat::Hdr);
+    assert_eq!(spec.space, ColorSpace::LINEAR_SRGB);
+    assert!(!spec.keep_alpha);
+    let path = temp_path("float.hdr");
+    let report = export(&doc, &path, &spec).unwrap();
+    assert_eq!(report.notices, [ExportNotice::ClippedLow(negative)]);
+    let back = open_image(&path).unwrap().image;
+    std::fs::remove_file(&path).ok();
+    assert_eq!(back.format().color_space, ColorSpace::LINEAR_SRGB);
+    assert_eq!(back.format().layout, ChannelLayout::Rgb);
+    // Both through the working space: compare in linear sRGB.
+    let read = linear_srgb_composite(&raster_document(back));
+    for (pixel, expected) in read
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(values.as_chunks::<3>().0)
+    {
+        let clipped: Vec<f32> = expected.iter().map(|v| v.max(0.0)).collect();
+        let max = clipped.iter().copied().fold(0f32, f32::max);
+        // Half a mantissa step of the brightest channel, and float rounding.
+        for (got, want) in pixel.iter().zip(&clipped) {
+            assert!(
+                (got - want).abs() <= max / 256.0 + max * 1e-4 + 1e-5,
+                "{got} {want} in {expected:?}"
+            );
+        }
+    }
+}
+
+/// A document's composite as linear sRGB values, RGB.
+fn linear_srgb_composite(doc: &Document) -> Vec<f32> {
+    let to_srgb = slopshop_core::color::WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB);
+    composite_all(doc)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|px| {
+            let c = LinearRgba::new(px[0], px[1], px[2], px[3]).transform(&to_srgb);
+            [c.r, c.g, c.b]
+        })
+        .collect()
+}
+
+#[test]
+fn simple_formats_refuse_what_they_cannot_store() {
+    let path = temp_path("refused.qoi");
+    let small = Size::new(4, 4);
+    let cases = [
+        (
+            simple_spec(ExportFormat::Hdr, ColorSpace::SRGB, false),
+            small,
+            "unsupportedSpace",
+        ),
+        (
+            simple_spec(ExportFormat::Hdr, ColorSpace::LINEAR_SRGB, true),
+            small,
+            "invalidSpec",
+        ),
+        (
+            simple_spec(ExportFormat::Farbfeld, ColorSpace::LINEAR_SRGB, true),
+            small,
+            "unsupportedSpace",
+        ),
+        (
+            simple_spec(ExportFormat::Qoi, ColorSpace::DISPLAY_P3, true),
+            small,
+            "unsupportedSpace",
+        ),
+        // QOI readers refuse more than 400 million pixels.
+        (
+            simple_spec(ExportFormat::Qoi, ColorSpace::SRGB, true),
+            Size::new(20_000, 20_001),
+            "tooLarge",
+        ),
+    ];
+    for (spec, size, code) in cases {
+        let result = export_image(
+            &path,
+            size,
+            &spec,
+            |_, _| panic!("the source must not be called"),
+            &CancelToken::new(),
+            &mut |_| panic!("no progress expected"),
+        );
+        assert_eq!(result.unwrap_err().code(), code, "{:?}", spec.format);
+        assert!(!path.exists() && temp_files(&path).is_empty());
+    }
+    for kind in [
+        ExportFormatKind::Qoi,
+        ExportFormatKind::Farbfeld,
+        ExportFormatKind::Hdr,
+    ] {
+        assert!(!has_gray(kind), "{kind:?}");
+        assert!(!supports_gray(kind, &ColorSpace::SRGB), "{kind:?}");
+    }
+    assert!(supports_space(
+        ExportFormatKind::Qoi,
+        &ColorSpace::LINEAR_SRGB
+    ));
+    assert!(!supports_alpha(ExportFormatKind::Hdr));
+}
