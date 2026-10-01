@@ -7,21 +7,25 @@ const ONNXRUNTIME: License = License {
     name: "MIT",
     url: "https://github.com/microsoft/onnxruntime/blob/main/LICENSE",
     commercial: true,
+    accept: false,
 };
 const CUDA: License = License {
     name: "NVIDIA CUDA Toolkit EULA",
     url: "https://docs.nvidia.com/cuda/eula/index.html",
     commercial: true,
+    accept: true,
 };
 const CUDNN: License = License {
     name: "NVIDIA cuDNN Software License Agreement",
     url: "https://docs.nvidia.com/deeplearning/cudnn/backend/latest/reference/eula.html",
     commercial: true,
+    accept: true,
 };
 const SAM2: License = License {
     name: "Apache-2.0",
     url: "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
     commercial: true,
+    accept: false,
 };
 
 /// Every component, by id.
