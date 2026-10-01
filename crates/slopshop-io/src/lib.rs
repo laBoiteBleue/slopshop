@@ -15,6 +15,7 @@ mod adjusted;
 mod atomic;
 mod avif;
 pub mod collection;
+mod dds;
 mod dicom;
 pub mod export;
 mod fits;
@@ -328,6 +329,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if fits::is_fits(&head) {
         drop(file);
         fits::decode(path)?
+    } else if dds::is_uncompressed_dds(&head) {
+        drop(file);
+        dds::decode(path)?
     } else if svg::is_svg(&head, path) {
         drop(file);
         svg::decode(path)?
