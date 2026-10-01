@@ -41,7 +41,9 @@ built. Contributors: propose here first.
 - Drop files on the image or the layers panel: layers; elsewhere: new tabs. Folders and zips open
   like several files. Paste (Ctrl+V) an image or a file as a layer;
   Copy and Cut (Ctrl+C, Ctrl+X) the selected layers, Paste them on top of any document or as a new
-  one.
+  one. Several images in one file (PDF pages, DICOM slices, animation frames) open
+  as one document: one isolated group, the first image shown, the others hidden; the eye of a
+  layer in a multi-selection shows or hides the whole selection.
 - A layered file imported into a document arrives as one group named after it.
 - Tabs: reorder by dragging, rename by double-click, drop a tab on another image to copy its
   layers, Ctrl+Tab.
