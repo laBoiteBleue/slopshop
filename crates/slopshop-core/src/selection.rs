@@ -1499,6 +1499,77 @@ pub fn color_range(
     }
 }
 
+// --- AI masks ----------------------------------------------------------------------------------
+
+/// A model's mask over the whole canvas (ADR 0025): `side`² logits (positive: inside) stretched
+/// over the canvas, read bilinearly, inside where positive, its edge softened over about a
+/// pixel; combined with `current` by `combine`. The coarse selection that Refine Edge improves.
+pub fn select_logits(
+    canvas: Size,
+    current: Option<&RasterImage>,
+    logits: &[f32],
+    side: usize,
+    combine: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
+    if side == 0 || logits.len() != side * side || logits.iter().any(|v| v.is_nan()) {
+        return Err(SelectionError::InvalidShape);
+    }
+    let mut mask = Mask::new(canvas)?;
+    let (sx, sy) = (
+        side as f64 / f64::from(canvas.width),
+        side as f64 / f64::from(canvas.height),
+    );
+    let at = |x: usize, y: usize| logits[y.min(side - 1) * side + x.min(side - 1)];
+    let inside = |x: usize, y: usize| -> bool {
+        let fx = ((x as f64 + 0.5) * sx - 0.5).max(0.0);
+        let fy = ((y as f64 + 0.5) * sy - 0.5).max(0.0);
+        let (x0, y0) = (fx as usize, fy as usize);
+        let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+        top * (1.0 - ty) + bottom * ty > 0.0
+    };
+    let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = tiles.len().div_ceil(threads).max(1);
+    let (shape, inside) = (&mask, &inside);
+    let mut done: Vec<(usize, Tile)> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = tiles
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&index| {
+                            let (col, row) = (index % shape.columns, index / shape.columns);
+                            let (w, h) = shape.valid(col, row);
+                            let mut values = vec![0u16; T * T];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    if inside(col * T + x, row * T + y) {
+                                        values[y * T + x] = FULL;
+                                    }
+                                }
+                            }
+                            pad(&mut values, w, h);
+                            (index, Tile::Data(values))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: reading logits does not panic (indices are clamped).
+            done.extend(worker.join().expect("logits worker panicked"));
+        }
+    });
+    for (index, tile) in done {
+        mask.tiles[index] = tile;
+    }
+    finish(canvas, current, soften(&mask), combine)
+}
+
 // --- Rasterization -----------------------------------------------------------------------------
 
 /// The coverage of a closed polygon on a canvas: each pixel gets the exact fraction of its area
@@ -2516,6 +2587,35 @@ mod tests {
             ..range
         };
         assert!(color_range(&doc, None, &bad).is_err());
+    }
+
+    #[test]
+    fn model_logits_become_a_selection_over_the_canvas() {
+        // 4×4 logits, positive in the middle 2×2: the middle half of the canvas.
+        let mut logits = vec![-5.0f32; 16];
+        for (x, y) in [(1, 1), (2, 1), (1, 2), (2, 2)] {
+            logits[y * 4 + x] = 5.0;
+        }
+        let canvas = Size::new(800, 400);
+        let image = select_logits(canvas, None, &logits, 4, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        assert_eq!(image.gray_at(400, 200), 1.0);
+        assert_eq!(image.gray_at(20, 20), 0.0);
+        assert_eq!(image.gray_at(780, 380), 0.0);
+        let b = bounds(&image).unwrap();
+        // The zero crossing lies halfway between the logits' centers: at 1/4 and 3/4.
+        assert!(
+            (b.x as i64 - 200).abs() <= 2 && (b.y as i64 - 100).abs() <= 2,
+            "{b:?}"
+        );
+        assert!(select_logits(canvas, None, &logits, 3, Combine::Replace).is_err());
+        let negative = vec![-1.0f32; 16];
+        assert!(
+            select_logits(canvas, None, &negative, 4, Combine::Replace)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
