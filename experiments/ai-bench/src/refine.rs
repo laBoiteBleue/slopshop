@@ -317,13 +317,49 @@ pub fn run(models: &Path, ep: Ep, o: &Options) -> Result<(), String> {
     let alpha = out["output_image"]
         .try_extract_array::<f32>()
         .map_err(|e| e.to_string())?;
+    // BiRefNet decides by itself what the foreground is: it is trusted only where it agrees with
+    // the coarse mask where that one is sure (or is its exact opposite, when the selection is not
+    // the salient object), and only inside the uncertain band.
+    let crop_alpha = |x: usize, y: usize| {
+        let (sx, sy) = (x * SIDE as usize / 800, y * SIDE as usize / 800);
+        1.0 / (1.0 + (-alpha[[0, 0, sy, sx]]).exp())
+    };
+    let (mut direct, mut inverse, mut sure) = (0.0f64, 0.0f64, 0usize);
+    for y in 0..800usize.min(hu - cy) {
+        for x in 0..800usize.min(wu - cx) {
+            let p = coarse[(cy + y) * wu + cx + x];
+            if p <= 0.01 || p >= 0.99 {
+                let truth = if p >= 0.5 { 1.0 } else { 0.0 };
+                let a = f64::from(crop_alpha(x, y));
+                direct += (a - truth).abs();
+                inverse += (1.0 - a - truth).abs();
+                sure += 1;
+            }
+        }
+    }
+    let (direct, inverse) = (direct / sure.max(1) as f64, inverse / sure.max(1) as f64);
+    let choice = if direct <= 0.1 && direct <= inverse {
+        "BiRefNet as it is"
+    } else if inverse <= 0.1 {
+        "BiRefNet inverted"
+    } else {
+        "the guided filter (BiRefNet disagrees)"
+    };
+    println!(
+        "BiRefNet vs the sure part of the coarse mask: error {direct:.3} direct, {inverse:.3} inverted → {choice}"
+    );
     let mut learned = refined.clone();
-    for y in 0..800usize {
-        for x in 0..800usize {
-            let (sx, sy) = (x * SIDE as usize / 800, y * SIDE as usize / 800);
-            let a = 1.0 / (1.0 + (-alpha[[0, 0, sy, sx]]).exp());
-            if cy + y < hu && cx + x < wu {
-                learned[(cy + y) * wu + cx + x] = a;
+    for y in 0..800usize.min(hu - cy) {
+        for x in 0..800usize.min(wu - cx) {
+            let k = (cy + y) * wu + cx + x;
+            let p = coarse[k];
+            if p > 0.01 && p < 0.99 {
+                let a = crop_alpha(x, y);
+                if choice.starts_with("BiRefNet as") {
+                    learned[k] = a;
+                } else if choice.starts_with("BiRefNet inv") {
+                    learned[k] = 1.0 - a;
+                }
             }
         }
     }

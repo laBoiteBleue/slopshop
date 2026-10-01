@@ -500,6 +500,23 @@ full resolution** (progressive, about 0.16 s per tile on this GPU), the classica
 a fallback without a GPU. Still to measure: seams between overlapping tiles, the cost on
 100–300 MP, BiRefNet's VRAM, and a comparison with dedicated matting models.
 
+### Refinement when the selection is not "the subject" (2026-10-01)
+
+The maintainer's question: BiRefNet decides by itself what the foreground is. Tested on a 50 MP
+CC0 photo of a long-haired cat on a wooden fence ([Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Long-haired_calico_cat_on_top_of_wooden_fence_2025-09-21.jpg)):
+- **cat selected** (one click): BiRefNet on a full-resolution crop of the band separates the
+  fur hair by hair against the sky (one small hole in a dark patch); the guided filter leaves a
+  halo of sky and cuts the hairs;
+- **fence selected** (one click on the rail): BiRefNet on a crop where the fur hangs over the
+  rail mattes **the cat**, the opposite of the selection there.
+
+Guard prototyped: BiRefNet's crop is compared with the coarse mask where that one is sure (below
+1 % or above 99 %): used as it is when it agrees (error 0.03 for the cat), inverted when it is the
+exact opposite, and otherwise the guided filter (error 0.43 / 0.57 for the fence: BiRefNet
+picked a third region), and only inside the uncertain band. This avoids gross errors but gives
+no hair detail when the selection is not salient: a **mask- or trimap-guided, class-agnostic
+matting model** is the principled refinement (candidates and licenses under review).
+
 ## 8. Open questions for the maintainer
 
 1. **Weight license policy** (extends ADR 0006 to model weights):
