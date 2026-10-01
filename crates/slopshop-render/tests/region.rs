@@ -212,10 +212,11 @@ fn non_finite_samples_are_mapped_and_counted() {
     // A NaN alpha is transparent.
     assert_eq!(at(&out, region, 1, 0), [0.0; 4]);
 
-    // Under an opaque layer, nothing shows through; the samples are still replaced.
+    // Under a layer that hides the whole canvas, nothing shows through: the layer is not
+    // composited at all (like a hidden one), so none of its samples reach the result.
     let blue = LinearRgba::new(0.0, 0.0, 1.0, 1.0);
     push_layer(&mut s, LayerContent::Fill { color: blue }, 1.0);
-    assert_eq!(r.render_region(s.document(), region, &mut out).unwrap(), 4);
+    assert_eq!(r.render_region(s.document(), region, &mut out).unwrap(), 0);
     for x in 0..2 {
         assert_eq!(at(&out, region, x, 0), [0.0, 0.0, 1.0, 1.0], "pixel {x}");
     }

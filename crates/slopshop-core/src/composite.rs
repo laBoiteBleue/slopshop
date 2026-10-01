@@ -109,11 +109,18 @@ pub enum Step<'a> {
 }
 
 /// The steps that composite `document`, bottom to top. Hidden layers, layers at opacity 0 and
-/// groups without visible content are left out; a pass-through group at full opacity without an
-/// enabled mask changes nothing to its children's result, so they are inlined.
+/// groups without visible content are left out; so are the layers below a sibling that hides the
+/// whole canvas (opaque everywhere on it: a stack of image slices composites its top one only);
+/// a pass-through group at full opacity without an enabled mask changes nothing to its
+/// children's result, so they are inlined.
 pub fn steps(document: &Document) -> Vec<Step<'_>> {
     let mut steps = Vec::new();
-    push_steps(document.layers(), Affine::IDENTITY, &mut steps);
+    push_steps(
+        document.layers(),
+        Affine::IDENTITY,
+        document.size(),
+        &mut steps,
+    );
     steps
 }
 
@@ -135,10 +142,47 @@ fn enabled(layer: &Layer) -> Option<&LayerMask> {
     layer.mask.as_ref().filter(|m| m.enabled)
 }
 
+/// Whether `layer` (its siblings mapped to the document by `parent`) hides everything below it
+/// on a `canvas`-sized document: shown, not clipped, normal at full opacity, no enabled mask,
+/// and opaque over the whole canvas (a fill of an opaque color, or an image without alpha
+/// covering it at whole pixels). Clipped layers above it keep it opaque: they only draw atop.
+fn covers(layer: &Layer, parent: Affine, canvas: Size) -> bool {
+    if !shown(layer)
+        || layer.clipped
+        || layer.blend_mode != BlendMode::Normal
+        || layer.opacity < 1.0
+        || enabled(layer).is_some()
+    {
+        return false;
+    }
+    match &layer.content {
+        LayerContent::Fill { color } => color.a >= 1.0,
+        LayerContent::Raster { image } => {
+            let size = image.size();
+            !image.format().layout.has_alpha()
+                && layer
+                    .transform
+                    .then(parent)
+                    .integer_translation()
+                    .is_some_and(|(x, y)| {
+                        x <= 0
+                            && y <= 0
+                            && x + i64::from(size.width) >= i64::from(canvas.width)
+                            && y + i64::from(size.height) >= i64::from(canvas.height)
+                    })
+        }
+        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => false,
+    }
+}
+
 /// Steps of sibling `layers` (in a space mapped to the document by `parent`): each base with the
-/// clipped layers above it (ADR 0016).
-fn push_steps<'a>(layers: &'a [Layer], parent: Affine, steps: &mut Vec<Step<'a>>) {
-    let mut i = 0;
+/// clipped layers above it (ADR 0016), from the topmost one that hides the whole canvas.
+fn push_steps<'a>(layers: &'a [Layer], parent: Affine, canvas: Size, steps: &mut Vec<Step<'a>>) {
+    // What is below a layer hiding the whole canvas cannot show: skipped.
+    let mut i = layers
+        .iter()
+        .rposition(|layer| covers(layer, parent, canvas))
+        .unwrap_or(0);
     while i < layers.len() {
         // A layer and the clipped layers above it (a clipped layer without a base is drawn as
         // usual: it is the first of its level).
@@ -154,19 +198,19 @@ fn push_steps<'a>(layers: &'a [Layer], parent: Affine, steps: &mut Vec<Step<'a>>
             continue;
         }
         if clipped.is_empty() {
-            push_layer(base, Role::Plain, parent, steps);
+            push_layer(base, Role::Plain, parent, canvas, steps);
             continue;
         }
         let start = steps.len();
         steps.push(Step::Begin { isolated: true });
-        push_layer(base, Role::Base, parent, steps);
+        push_layer(base, Role::Base, parent, canvas, steps);
         if steps.len() == start + 1 {
             // The base draws nothing: nothing shows through it.
             steps.truncate(start);
             continue;
         }
         for layer in clipped {
-            push_layer(layer, Role::Clipped, parent, steps);
+            push_layer(layer, Role::Clipped, parent, canvas, steps);
         }
         steps.push(Step::End {
             mask: None,
@@ -189,7 +233,13 @@ fn group_mode(layer: &Layer) -> BlendMode {
     }
 }
 
-fn push_layer<'a>(layer: &'a Layer, role: Role, parent: Affine, steps: &mut Vec<Step<'a>>) {
+fn push_layer<'a>(
+    layer: &'a Layer,
+    role: Role,
+    parent: Affine,
+    canvas: Size,
+    steps: &mut Vec<Step<'a>>,
+) {
     let transform = layer.transform.then(parent);
     let (mode, opacity) = match role {
         Role::Base => (BlendMode::Normal, 1.0),
@@ -223,12 +273,12 @@ fn push_layer<'a>(layer: &'a Layer, role: Role, parent: Affine, steps: &mut Vec<
     let passes = *pass_through && role == Role::Plain;
     let mask = enabled(layer);
     if passes && opacity >= 1.0 && mask.is_none() {
-        push_steps(children, transform, steps);
+        push_steps(children, transform, canvas, steps);
         return;
     }
     let start = steps.len();
     steps.push(Step::Begin { isolated: !passes });
-    push_steps(children, transform, steps);
+    push_steps(children, transform, canvas, steps);
     if steps.len() == start + 1 {
         // Nothing visible inside: the group changes nothing.
         steps.truncate(start);
@@ -1543,6 +1593,59 @@ mod tests {
             assert!(matches!(steps(&grouped)[1], Step::Begin { isolated: true }));
             assert_close(&all(&grouped), &all(&flat));
         }
+    }
+
+    /// A gray image filling the 4 × 2 test canvas with `value`.
+    fn slice(value: u8) -> LayerContent {
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        raster(Size::new(4, 2), format, &[value; 8])
+    }
+
+    #[test]
+    fn layers_hidden_by_an_opaque_sibling_are_skipped() {
+        let mut doc = document(BlendSpace::Perceptual);
+        for value in [10, 20, 30] {
+            let layer = new_layer(&mut doc, slice(value), BlendMode::Normal, 1.0);
+            push(&mut doc, layer);
+        }
+        assert_eq!(steps(&doc).len(), 1, "only the top slice");
+        let mut top_only = document(BlendSpace::Perceptual);
+        let layer = new_layer(&mut top_only, slice(30), BlendMode::Normal, 1.0);
+        push(&mut top_only, layer);
+        assert_close(&all(&doc), &all(&top_only));
+
+        // What is above still applies, over the top slice only.
+        let above = new_layer(&mut doc, varied(0.4), BlendMode::Multiply, 1.0);
+        push(&mut doc, above);
+        assert_eq!(steps(&doc).len(), 2);
+
+        // A top slice that leaves part of the canvas uncovered, translucent or not in normal mode
+        // hides nothing.
+        for change in 0..3 {
+            let mut doc = document(BlendSpace::Perceptual);
+            let below = new_layer(&mut doc, slice(10), BlendMode::Normal, 1.0);
+            push(&mut doc, below);
+            let mut top = new_layer(&mut doc, slice(30), BlendMode::Normal, 1.0);
+            match change {
+                0 => top.transform = crate::transform::Affine::translation(1.0, 0.0),
+                1 => top.opacity = 0.5,
+                _ => top.blend_mode = BlendMode::Screen,
+            }
+            push(&mut doc, top);
+            assert_eq!(steps(&doc).len(), 2, "change {change}");
+        }
+
+        // An opaque fill hides what is below it too.
+        let mut doc = document(BlendSpace::Perceptual);
+        let below = new_layer(&mut doc, slice(10), BlendMode::Normal, 1.0);
+        push(&mut doc, below);
+        opaque_base(&mut doc);
+        assert_eq!(steps(&doc).len(), 1);
     }
 
     #[test]
