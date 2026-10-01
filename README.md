@@ -86,7 +86,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   chromaticities), transparency flattened over a chosen background when the file has no alpha,
   gray files (PNG, TIFF, JPEG; the default for gray images), and every lossy conversion
   reported ([ADR 0008](docs/adr/0008-export.md), [ADR 0010](docs/adr/0010-jpeg-webp-export.md),
-  [ADR 0011](docs/adr/0011-gray-export.md)). Export to Photoshop PSD (8/16-bit) keeps the
+  [ADR 0011](docs/adr/0011-gray-export.md)). Export to Photoshop PSD and PSB (8/16-bit) keeps the
   layers: groups, clipping, masks, blend modes and adjustment layers.
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS,
