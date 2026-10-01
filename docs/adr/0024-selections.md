@@ -58,6 +58,11 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
   selection to layer mask, Image > Crop to the selection, and the ants overlay.
 - AI selection (click, box, subject, text) produces the same masks; its inference runtime is a
   separate decision, under research.
+- Select > Modify: Expand, Contract and Border use the exact Euclidean distance to the outline
+  (where coverage crosses one half), computed tile by tile near the outline only, so their
+  corners are round and their cost does not grow with the canvas; a soft selection gets a crisp,
+  anti-aliased edge at that distance. Smooth blurs and brings the edge back to one pixel;
+  Feather blurs.
 - Quick Mask (Q) shows soft edges: a view overlay the GPU draws over the finished frame (after
   the display cache, in the encoded display space as Photoshop does), sampling the selection's
   pyramid like a layer's mask.

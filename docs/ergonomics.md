@@ -121,7 +121,9 @@ built. Contributors: propose here first.
   Mask Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
   the ants). Painting in Quick Mask comes with the brushes. Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
-  Inverse (Shift+Ctrl+I). Selecting is undoable; crop and size changes deselect.
+  Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
+  dialog with one number of pixels, remembered for the session; the canvas edge is not an
+  outline, as in Photoshop by default). Selecting is undoable; crop and size changes deselect.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
