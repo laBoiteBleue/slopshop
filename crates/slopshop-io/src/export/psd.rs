@@ -20,6 +20,7 @@ use std::path::Path;
 use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType};
 use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter};
+use slopshop_core::curve::Curve;
 use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use slopshop_core::{BlendMode, CancelToken, LinearRgba, Progress, Rect, Size};
 
@@ -766,6 +767,34 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             // The fourth channel (none in RGB): unchanged.
             b.extend(be16(&[0, 0, 0, 100, 0]));
             vec![(*b"mixr", b)]
+        }
+        Adjustment::Curves { .. } => {
+            // Points as (output, input) for the composite, red, green and blue curves, then
+            // the same in a `Crv ` block, as Photoshop writes them.
+            let curves = adjustment.curves().unwrap_or([Curve::IDENTITY; 4]);
+            let points = |curve: &Curve| {
+                let mut b = (curve.points().len() as u16).to_be_bytes().to_vec();
+                for &[input, output] in curve.points() {
+                    b.extend(u16::from(output).to_be_bytes());
+                    b.extend(u16::from(input).to_be_bytes());
+                }
+                b
+            };
+            let mut b = vec![0];
+            b.extend(1u16.to_be_bytes());
+            b.extend(0b1111u32.to_be_bytes());
+            for curve in &curves {
+                b.extend(points(curve));
+            }
+            b.extend(b"Crv ");
+            b.extend(4u16.to_be_bytes());
+            b.extend(4u32.to_be_bytes());
+            for (channel, curve) in curves.iter().enumerate() {
+                b.extend((channel as u16).to_be_bytes());
+                b.extend(points(curve));
+            }
+            b.resize(b.len().next_multiple_of(4), 0);
+            vec![(*b"curv", b)]
         }
     }
 }

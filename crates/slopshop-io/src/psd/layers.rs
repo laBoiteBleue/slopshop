@@ -31,6 +31,7 @@ use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType, WORKING_SPACE,
 };
+use slopshop_core::curve::Curve;
 use slopshop_core::{
     BlendMode, BlendSpace, Document, Layer, LayerContent, LayerId, LayerMask, LinearRgba,
     RasterImage, Rect, Size,
@@ -894,6 +895,41 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
                     green: row(1)?,
                     blue: row(2)?,
                     monochrome: u16_at(2)? != 0,
+                },
+                false,
+            )
+        }
+        // A map flag, the version, a bitmap of the curves present (composite, red, green,
+        // blue, then channels RGB documents do not have), then each curve: a point count and
+        // points as (output, input), 0–255. Drawn ("map") curves are not read.
+        b"curv" => {
+            if block.first().copied()? != 0 || !matches!(u16_at(1)?, 1 | 4) {
+                return None;
+            }
+            let present = u32_at(3)?;
+            let mut curves = [Curve::IDENTITY; 4];
+            let mut at = 7;
+            for channel in (0..32).filter(|c| present & (1 << c) != 0) {
+                let count = usize::from(u16_at(at)?);
+                let points = (0..count)
+                    .map(|i| {
+                        let (output, input) = (u16_at(at + 2 + i * 4)?, u16_at(at + 4 + i * 4)?);
+                        Some([input.min(255) as u8, output.min(255) as u8])
+                    })
+                    .collect::<Option<Vec<[u8; 2]>>>()?;
+                at += 2 + count * 4;
+                if channel < 4 {
+                    // More points than SlopShop keeps: the layer is left out.
+                    curves[channel] = Curve::new(&points)?;
+                }
+            }
+            let [rgb, red, green, blue] = curves;
+            (
+                Adjustment::Curves {
+                    rgb,
+                    red,
+                    green,
+                    blue,
                 },
                 false,
             )

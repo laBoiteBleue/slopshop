@@ -587,9 +587,42 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
+/// The document of the golden fixture of schema 0.9: the schema 0.8 one with Curves on top.
+fn golden_document() -> Document {
+    use slopshop_core::curve::Curve;
+    let mut doc = golden_document_v0_8();
+    let id = doc.allocate_layer_id();
+    let index = doc.layers().len();
+    Edit::InsertLayer {
+        parent: None,
+        index,
+        layer: Layer {
+            id,
+            name: "Curves".into(),
+            visible: true,
+            opacity: 0.8,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: slopshop_core::Affine::IDENTITY,
+            content: LayerContent::Adjustment {
+                adjustment: slopshop_core::adjust::Adjustment::Curves {
+                    rgb: Curve::new(&[[0, 10], [100, 140], [255, 240]]).unwrap(),
+                    red: Curve::new(&[[0, 0], [128, 150], [255, 255]]).unwrap(),
+                    green: Curve::IDENTITY,
+                    blue: Curve::new(&[[20, 0], [255, 255]]).unwrap(),
+                },
+            },
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
 /// The document of the golden fixture of schema 0.8: the schema 0.7 one with a Channel Mixer
 /// on top, an adjustment of more than five values.
-fn golden_document() -> Document {
+fn golden_document_v0_8() -> Document {
     let mut doc = golden_document_v0_7();
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
@@ -849,6 +882,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.7")).unwrap();
     assert_same(&golden_document_v0_7(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.8")).unwrap();
+    assert_same(&golden_document_v0_8(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.9")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 
@@ -1070,7 +1105,7 @@ fn damaged_layer_trees_are_refused() {
     );
     assert_eq!(
         read(
-            &adjustment(r#""adjustment":"curves","values":[0,0,0,0,0]"#),
+            &adjustment(r#""adjustment":"selectiveColor","values":[0,0,0,0,0]"#),
             "[1]"
         ),
         Err("newerVersion"),
