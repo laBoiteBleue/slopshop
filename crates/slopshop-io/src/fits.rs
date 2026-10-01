@@ -32,7 +32,7 @@ pub(crate) fn is_fits(head: &[u8]) -> bool {
     head.starts_with(b"SIMPLE  =")
 }
 
-/// The image, and above it its stretch as Levels.
+/// The image and its stretch as Levels, in an isolated group.
 pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
     let (decoded, levels) = read(path)?;
     let imported = finish(decoded)?;
@@ -40,7 +40,12 @@ pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
         .file_stem()
         .map_or_else(|| "FITS".to_owned(), |s| s.to_string_lossy().into_owned());
     match levels {
-        Some(levels) => adjusted::layered(name, imported, "STF auto".to_owned(), levels),
+        // An isolated group: the stretch changes this image only.
+        Some(levels) => adjusted::layered(vec![adjusted::Slice {
+            name,
+            imported,
+            levels: Some(("STF auto".to_owned(), levels)),
+        }]),
         None => Ok(Opened::Image(imported)),
     }
 }
@@ -470,7 +475,15 @@ mod tests {
         let Opened::Layers(layers) = open(&fixture("gray16.fits")).unwrap() else {
             panic!("expected layers");
         };
-        assert_eq!(layers.document.layers()[1].name, "STF auto");
+        let group = &layers.document.layers()[0];
+        let slopshop_core::document::LayerContent::Group {
+            children,
+            pass_through: false,
+        } = &group.content
+        else {
+            panic!("expected an isolated group");
+        };
+        assert_eq!(children[1].name, "STF auto");
         let flattened = decode(&fixture("gray16.fits")).unwrap();
         assert!(flattened.warnings.contains(&ImportWarning::LayersFlattened));
     }
