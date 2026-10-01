@@ -71,6 +71,8 @@
   function begin(e: PointerEvent) {
     if (e.button !== 0 || mapping.hand) return;
     e.preventDefault();
+    // The press keeps the focus where it was: a field being typed in (Feather) is done.
+    if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     const from = documentPoint(e);
     drag = {

@@ -36,8 +36,9 @@
     { mode: "intersect", icon: "selectionIntersect", label: "options.mode.intersect" },
   ];
 
+  /** Typed values apply at once (the next shape uses them, even while the field has focus). */
   function setFeather(value: number) {
-    feather = Number.isFinite(value) ? Math.min(Math.max(value, 0), MAX_FEATHER) : 0;
+    if (Number.isFinite(value)) feather = Math.min(Math.max(value, 0), MAX_FEATHER);
   }
 </script>
 
@@ -75,7 +76,8 @@
         max={MAX_FEATHER}
         step="1"
         value={feather}
-        onchange={(e) => setFeather(e.currentTarget.valueAsNumber)}
+        oninput={(e) => setFeather(e.currentTarget.valueAsNumber)}
+        onchange={(e) => (e.currentTarget.valueAsNumber = feather)}
       />
       px
     </label>
