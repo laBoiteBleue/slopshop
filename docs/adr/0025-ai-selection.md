@@ -1,6 +1,6 @@
 # 0025 — AI selection
 
-Status: proposed (2026-10-01), for the maintainer's review. Builds on the research and
+Status: accepted (2026-10-01, by the maintainer). Builds on the research and
 measurements in [ai-selection.md](../research/ai-selection.md) and on selections
 ([ADR 0024](0024-selections.md)).
 

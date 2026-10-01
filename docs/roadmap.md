@@ -179,8 +179,9 @@ paints on an empty layer or in a mask.
       tile by tile with a bounded cache (50 MP: about 1 s)
 - [x] Select > Color Range: eyedroppers (sample, add, subtract) on the image or a live
       preview, Fuzziness, Invert, within the selection if any
-- [ ] Quick Selection with SAM 2.1 (brush strokes as prompts), with the AI selection
-- [ ] AI selection (click, box, subject, text), after choosing the inference runtime
+- [ ] AI selection ([ADR 0025](adr/0025-ai-selection.md)): the `slopshop-ai` helper (ONNX
+      Runtime), Quick Selection and Object Selection (SAM 2.1), Refine Edge (ViTMatte on the
+      outline's tiles), Select > Subject (BiRefNet), Select > Semantic (SAM 3)
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
 

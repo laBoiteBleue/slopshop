@@ -29,6 +29,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0022 | [Display cache: composited tiles addressed by their content](0022-display-cache.md) | accepted |
 | 0023 | [Camera RAW through a separate helper process](0023-camera-raw-helper.md) | accepted |
 | 0024 | [Selections](0024-selections.md) | accepted |
-| 0025 | [AI selection](0025-ai-selection.md) | proposed |
+| 0025 | [AI selection](0025-ai-selection.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
