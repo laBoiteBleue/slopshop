@@ -55,7 +55,7 @@ built. Contributors: propose here first.
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M), the lassos (L) and Crop (C); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L), the Magic Wand (W) and Crop (C); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -116,6 +116,10 @@ built. Contributors: propose here first.
   a click per corner, the line to the pointer by steps of 45° with Shift; a click on the first
   corner (a small circle tells), a double-click or Enter closes it, Backspace removes the last
   corner, Esc drops it. Same keys, badge and click-to-deselect as the marquees.
+  Magic Wand (W): a click selects the pixels of a similar color (Tolerance, 0–255 on the
+  displayed 8-bit values, 32 by default), connected to the clicked one (Contiguous) or anywhere;
+  it samples the active layer, or the image as displayed with Sample All Layers (unchecked by
+  default, as in Photoshop); Anti-alias softens its edge by about a pixel.
   Options bar: the four modes, Feather (px), Anti-alias for the ellipse and the lassos. Marching ants follow the
   selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Edit in Quick
   Mask Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading

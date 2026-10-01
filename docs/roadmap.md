@@ -175,6 +175,10 @@ paints on an empty layer or in a mask.
       the selection
 - [x] Select > Modify: Border, Smooth, Expand, Contract (exact distance to the outline, rounded
       corners), Feather (Shift+F6)
+- [x] Magic Wand (W): tolerance, contiguous or not, anti-alias, the active layer or every layer;
+      tile by tile with a bounded cache (50 MP: about 1 s)
+- [ ] Select > Color Range
+- [ ] Quick Selection with SAM 2.1 (brush strokes as prompts), with the AI selection
 - [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)

@@ -58,6 +58,10 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
   selection to layer mask, Image > Crop to the selection, and the ants overlay.
 - AI selection (click, box, subject, text) produces the same masks; its inference runtime is a
   separate decision, under research.
+- The Magic Wand compares colors as displayed (8-bit sRGB, straight alpha), on the composited
+  document or a document holding only the sampled layer; it composites tile by tile, the tiles a
+  contiguous fill reaches in parallel waves, with a bounded cache, so its memory does not grow
+  with the canvas.
 - Select > Modify: Expand, Contract and Border use the exact Euclidean distance to the outline
   (where coverage crosses one half), computed tile by tile near the outline only, so their
   corners are round and their cost does not grow with the canvas; a soft selection gets a crisp,
