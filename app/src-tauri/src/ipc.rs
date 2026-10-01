@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use slopshop_core::adjust::{Adjustment, PARAM_COUNT};
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
+use slopshop_core::curve::Curve;
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
     BlendMode, BlendSpace, Document, Edit, ImageTurn, Layer, LayerContent, LayerId, LinearRgba,
@@ -151,6 +152,16 @@ impl LayerView {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView {
                     id: adjustment.id(),
                     values: adjustment.params(),
+                    curves: adjustment
+                        .curves()
+                        .map(|curves| curves.map(|c| c.points().to_vec())),
+                    curve_samples: adjustment.curves().map(|curves| {
+                        curves.map(|c| {
+                            (0..=CURVE_SAMPLES)
+                                .map(|i| c.value(i as f64 / CURVE_SAMPLES as f64) as f32)
+                                .collect()
+                        })
+                    }),
                 }),
                 _ => None,
             },
@@ -177,7 +188,14 @@ impl LayerView {
 pub struct AdjustmentView {
     pub id: &'static str,
     pub values: [f32; PARAM_COUNT],
+    /// Curves' points `[input, output]` on 0–255: composite, red, green, blue.
+    pub curves: Option<[Vec<[u8; 2]>; 4]>,
+    /// Each curve's output at `i / CURVE_SAMPLES` (0 to 1), for the editor to draw.
+    pub curve_samples: Option<[Vec<f32>; 4]>,
 }
+
+/// Intervals of [`AdjustmentView::curve_samples`].
+const CURVE_SAMPLES: usize = 128;
 
 /// A layer's mask, as the layers panel shows it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -283,6 +301,10 @@ pub enum EditRequest {
         id: u64,
         adjustment: String,
         values: Vec<f32>,
+        /// Curves' points (`AdjustmentView::curves`); required for `curves`, ignored
+        /// otherwise.
+        #[serde(default)]
+        curves: Option<Vec<Vec<[u8; 2]>>>,
     },
     /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
     GroupLayers {
@@ -457,12 +479,19 @@ impl EditRequest {
                 id,
                 adjustment,
                 values,
-            } => Edit::SetAdjustment {
-                id: LayerId::from_raw(id),
-                adjustment: Adjustment::from_params(&adjustment, &values).ok_or(format!(
+                curves,
+            } => {
+                let mut built = Adjustment::from_params(&adjustment, &values).ok_or(format!(
                     "unknown adjustment {adjustment} or too many values"
-                ))?,
-            },
+                ))?;
+                if built.curves().is_some() {
+                    built = curves_adjustment(curves.as_deref())?;
+                }
+                Edit::SetAdjustment {
+                    id: LayerId::from_raw(id),
+                    adjustment: built,
+                }
+            }
             EditRequest::GroupLayers { ids, name } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 let group = new_group(session, name);
@@ -690,6 +719,21 @@ impl FrameHeader {
         bytes[48..56].copy_from_slice(&self.origin[1].to_le_bytes());
         bytes
     }
+}
+
+/// A Curves adjustment from four lists of points (composite, red, green, blue).
+fn curves_adjustment(lists: Option<&[Vec<[u8; 2]>]>) -> Result<Adjustment, String> {
+    let lists = lists
+        .filter(|lists| lists.len() == 4)
+        .ok_or("curves need four lists of points")?;
+    let curve =
+        |points: &[[u8; 2]]| Curve::new(points).ok_or(format!("invalid curve points {points:?}"));
+    Ok(Adjustment::Curves {
+        rgb: curve(&lists[0])?,
+        red: curve(&lists[1])?,
+        green: curve(&lists[2])?,
+        blue: curve(&lists[3])?,
+    })
 }
 
 /// Export file formats.

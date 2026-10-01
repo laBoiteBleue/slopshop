@@ -32,14 +32,22 @@ export type LayerView = {
   /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
   transform: [number, number, number, number, number, number];
   /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
-  /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). */
-  adjustment: { id: AdjustmentId; values: number[] } | null;
+  /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). Curves:
+   * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
+   * curves, and `curveSamples`, each curve's output (0–1) at evenly spaced inputs. */
+  adjustment: {
+    id: AdjustmentId;
+    values: number[];
+    curves: number[][][] | null;
+    curveSamples: number[][] | null;
+  } | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
 export type AdjustmentId =
   | "brightnessContrast"
   | "levels"
+  | "curves"
   | "exposure"
   | "vibrance"
   | "hueSaturation"
@@ -55,6 +63,7 @@ export type AdjustmentId =
 export const ADJUSTMENTS: AdjustmentId[] = [
   "brightnessContrast",
   "levels",
+  "curves",
   "exposure",
   "vibrance",
   "hueSaturation",
@@ -175,6 +184,8 @@ export type EditRequest =
       id: number;
       adjustment: AdjustmentId;
       values: number[];
+      /** Curves only: the points of the composite, red, green and blue curves. */
+      curves?: number[][][];
     }
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }

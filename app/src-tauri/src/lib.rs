@@ -2539,6 +2539,30 @@ mod tests {
         let adjustment = view.layers[1].adjustment.as_ref().unwrap();
         assert_eq!(adjustment.id, "channelMixer");
         assert_eq!(adjustment.values[12], 1.0);
+        // Curves: their points.
+        let json = format!(
+            r#"{{"kind":"setAdjustment","id":{},"adjustment":"curves","values":[],"curves":[[[0,0],[128,160],[255,255]],[[0,0],[255,255]],[[0,0],[255,255]],[[30,0],[255,255]]]}}"#,
+            id.get()
+        );
+        let edit = serde_json::from_str::<EditRequest>(&json)
+            .unwrap()
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let adjustment = view.layers[1].adjustment.as_ref().unwrap();
+        assert_eq!(adjustment.id, "curves");
+        let curves = adjustment.curves.as_ref().unwrap();
+        assert_eq!(curves[0], [[0, 0], [128, 160], [255, 255]]);
+        assert_eq!(curves[3], [[30, 0], [255, 255]]);
+        let bad = format!(
+            r#"{{"kind":"setAdjustment","id":{},"adjustment":"curves","values":[],"curves":[[[9,0],[3,255]],[],[],[]]}}"#,
+            id.get()
+        );
+        let edit = serde_json::from_str::<EditRequest>(&bad)
+            .unwrap()
+            .into_edit(&mut s);
+        assert!(edit.is_err());
         let too_many = format!(
             r#"{{"kind":"setAdjustment","id":{},"adjustment":"invert","values":[{}]}}"#,
             id.get(),
@@ -2549,7 +2573,7 @@ mod tests {
             .into_edit(&mut s);
         assert!(edit.is_err());
         let unknown = serde_json::from_str::<EditRequest>(
-            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"curves","parent":null,"index":0}"#,
+            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"selectiveColor","parent":null,"index":0}"#,
         )
         .unwrap()
         .into_edit(&mut s);
