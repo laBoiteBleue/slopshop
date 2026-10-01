@@ -1,7 +1,8 @@
 # Dependency policy (ADR 0006), checked in CI with `cargo deny check`.
 
 [graph]
-all-features = false
+# Every feature: the AI helper and its installer are behind features (ADR 0025).
+all-features = true
 
 [licenses]
 version = 2
@@ -36,6 +37,9 @@ exceptions = [
     # rawler (camera RAW decoding) is LGPL-2.1: used only by slopshop-raw, a separate and
     # replaceable executable the editor runs for each RAW import (ADR 0006, ADR 0023).
     { allow = ["LGPL-2.1"], crate = "rawler" },
+    # webpki-roots is Mozilla's list of root certificates, as data under CDLA-Permissive-2.0
+    # (permissive: use and share, keep the notice). For the AI installer's HTTPS (ADR 0025).
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
 ]
 
 [bans]
