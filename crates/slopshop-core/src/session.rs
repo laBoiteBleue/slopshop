@@ -107,9 +107,10 @@ impl Session {
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         mask: None,
+                        // Isolated: the copied document's adjustments stay within it.
                         content: LayerContent::Group {
                             children: copies,
-                            pass_through: true,
+                            pass_through: false,
                         },
                     },
                 };

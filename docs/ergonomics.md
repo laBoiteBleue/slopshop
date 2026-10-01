@@ -27,6 +27,10 @@ built. Contributors: propose here first.
    normal case: the main action contained (accent, soft shadow), the others text buttons, icon
    buttons with a round hover, a ripple on press. Dense rows (layers, tabs, menus) keep the
    editor's compact style.
+8. **Groups keep their adjustments** (maintainer's choice, 2026-10-01). New groups, and a document
+   copied into another as a group, are isolated (blend mode Normal): an adjustment layer inside
+   changes the group only. Photoshop passes through by default; Pass Through stays one choice
+   away in the blend modes.
 
 ## Done
 
