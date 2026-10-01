@@ -100,6 +100,11 @@ dicom-pixeldata = { version = "0.10", default-features = false, features = ["nat
 dicom-dictionary-std = "0.10"
 dicom-core = "0.10"
 resvg = "0.48"
+# JPEG 2000 export: openjp2 (BSD-2-Clause), the Rust port of OpenJPEG 2.5, no C toolchain;
+# used through its safe Rust API only (no `unsafe` in our code). hayro-jpeg2000 only decodes.
+# `std` is required (the crate does not build without it); `file-io` gives the safe file
+# stream, its only safe output (it brings `libc`, bindings only, no C code built).
+openjp2 = { version = "0.6.1", default-features = false, features = ["std", "file-io"] }
 
 [lints]
 workspace = true

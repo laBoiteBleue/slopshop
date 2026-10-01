@@ -64,6 +64,7 @@ mod gif;
 mod hdr;
 mod ico;
 mod jpeg;
+mod jpeg2000;
 mod jxl;
 mod pdf;
 mod png;
@@ -105,6 +106,7 @@ use self::hdr::HdrWriter;
 use self::ico::IcoWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
+use self::jpeg2000::Jpeg2000Writer;
 use self::jxl::JxlWriter;
 pub use self::jxl::MAX_SIDE as JXL_MAX_SIDE;
 use self::pdf::PdfWriter;
@@ -156,6 +158,8 @@ pub enum ExportFormatKind {
     Dicom,
     /// One page holding the image.
     Pdf,
+    /// JPEG 2000 in the JP2 container.
+    Jpeg2000,
 }
 
 impl ExportFormatKind {
@@ -213,6 +217,16 @@ pub enum WebpCompression {
     Lossy { quality: u8 },
     /// VP8L: every sample kept.
     Lossless,
+}
+
+/// How a JPEG 2000 file is compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Jpeg2000Compression {
+    /// The reversible 5/3 wavelet: every sample kept.
+    Lossless,
+    /// The irreversible 9/7 wavelet, 1 to 100: the compression ratio is 2^((100 − quality) /
+    /// 12.5), about 1:1 at 100, 16:1 at 50.
+    Lossy { quality: u8 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -299,6 +313,11 @@ pub enum ExportFormat {
     /// One page holding the image (one point per pixel), 8-bit gray or RGB in an ICC-based
     /// color space, alpha as a soft mask.
     Pdf,
+    /// JP2, 8/16-bit, gray or RGB, alpha kept or not, sRGB, lossless or lossy.
+    Jpeg2000 {
+        depth: PngDepth,
+        compression: Jpeg2000Compression,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -340,6 +359,7 @@ impl ExportFormat {
             ExportFormat::Fits { .. } => ExportFormatKind::Fits,
             ExportFormat::Dicom { .. } => ExportFormatKind::Dicom,
             ExportFormat::Pdf => ExportFormatKind::Pdf,
+            ExportFormat::Jpeg2000 { .. } => ExportFormatKind::Jpeg2000,
         }
     }
 
@@ -349,7 +369,8 @@ impl ExportFormat {
             ExportFormat::Png { depth, .. }
             | ExportFormat::Pnm { depth }
             | ExportFormat::Jxl { depth }
-            | ExportFormat::Dicom { depth } => match depth {
+            | ExportFormat::Dicom { depth }
+            | ExportFormat::Jpeg2000 { depth, .. } => match depth {
                 PngDepth::U8 => SampleType::U8,
                 PngDepth::U16 => SampleType::U16,
             },
@@ -682,6 +703,8 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         | ExportFormatKind::Pdf => None,
         ExportFormatKind::Avif => Some(avif::MAX_SIDE),
         ExportFormatKind::Jxl => Some(jxl::MAX_SIDE),
+        // JPEG 2000 also bounds the samples held (`jpeg2000::MAX_SAMPLES`).
+        ExportFormatKind::Jpeg2000 => Some(jpeg2000::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
@@ -737,6 +760,8 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         // Display values, sRGB-encoded by convention (float samples too), as our importer
         // declares them.
         ExportFormatKind::Fits | ExportFormatKind::Dicom => *space == ColorSpace::SRGB,
+        // The `colr` box's enumerated sRGB (no ICC profile yet).
+        ExportFormatKind::Jpeg2000 => *space == ColorSpace::SRGB,
         // Float samples, linear, by convention.
         ExportFormatKind::Pfm | ExportFormatKind::Hdr => *space == ColorSpace::LINEAR_SRGB,
         // The header's color space byte: sRGB, or "all channels linear".
@@ -766,6 +791,8 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Pnm | ExportFormatKind::Fits | ExportFormatKind::Dicom => {
             *space == ColorSpace::SRGB
         }
+        // The `colr` box's enumerated greyscale: the sRGB curve.
+        ExportFormatKind::Jpeg2000 => *space == ColorSpace::SRGB,
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
         // Monochrome AV1, its transfer declared with the code points.
         ExportFormatKind::Avif => avif::avif_code(space).is_some(),
@@ -799,6 +826,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Fits
             | ExportFormatKind::Dicom
             | ExportFormatKind::Pdf
+            | ExportFormatKind::Jpeg2000
     )
 }
 
@@ -897,6 +925,18 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         ),
         ExportFormatKind::Bmp => (ExportFormat::Bmp, ColorSpace::SRGB),
         ExportFormatKind::Pdf => (ExportFormat::Pdf, common_8_bit_space(unique_space)),
+        ExportFormatKind::Jpeg2000 => {
+            let depth = if rasters.iter().all(|format| format.sample == SampleType::U8) {
+                PngDepth::U8
+            } else {
+                PngDepth::U16
+            };
+            let compression = Jpeg2000Compression::Lossless;
+            (
+                ExportFormat::Jpeg2000 { depth, compression },
+                ColorSpace::SRGB,
+            )
+        }
         ExportFormatKind::Pnm => {
             let depth = if rasters.iter().all(|format| format.sample == SampleType::U8) {
                 PngDepth::U8
@@ -1219,6 +1259,9 @@ pub fn export_image(
             FormatWriter::Dicom(Box::new(DicomWriter::new(file, size, target)?))
         }
         ExportFormat::Pdf => FormatWriter::Pdf(Box::new(PdfWriter::new(file, size, target)?)),
+        ExportFormat::Jpeg2000 { compression, .. } => FormatWriter::Jpeg2000(Box::new(
+            Jpeg2000Writer::new(file, size, target, compression, cancel.clone())?,
+        )),
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -1278,6 +1321,7 @@ enum FormatWriter {
     Fits(Box<FitsWriter>),
     Dicom(Box<DicomWriter>),
     Pdf(Box<PdfWriter>),
+    Jpeg2000(Box<Jpeg2000Writer>),
 }
 
 impl FormatWriter {
@@ -1304,6 +1348,7 @@ impl FormatWriter {
             FormatWriter::Fits(w) => w.write_rows(first_row, rows),
             FormatWriter::Dicom(w) => w.write_rows(first_row, rows),
             FormatWriter::Pdf(w) => w.write_rows(first_row, rows),
+            FormatWriter::Jpeg2000(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1330,6 +1375,7 @@ impl FormatWriter {
             FormatWriter::Fits(w) => (*w).finish(),
             FormatWriter::Dicom(w) => (*w).finish(),
             FormatWriter::Pdf(w) => (*w).finish(),
+            FormatWriter::Jpeg2000(w) => (*w).finish(),
         }
     }
 }

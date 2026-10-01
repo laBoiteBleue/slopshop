@@ -2917,3 +2917,184 @@ fn pdf_declares_the_space_and_bounds_its_page() {
     assert!(supports_gray(kind, &ColorSpace::SRGB));
     assert_eq!(max_side(kind), None);
 }
+
+/// A JPEG 2000 spec in sRGB.
+fn jp2_spec(depth: PngDepth, compression: Jpeg2000Compression, keep_alpha: bool) -> ExportSpec {
+    ExportSpec {
+        format: ExportFormat::Jpeg2000 { depth, compression },
+        ..simple_spec(ExportFormat::Bmp, ColorSpace::SRGB, keep_alpha)
+    }
+}
+
+/// Export `doc` to JP2 and read it back with our importer; the file's size too.
+fn jp2_round_trip(name: &str, doc: &Document, spec: &ExportSpec) -> (Document, PixelFormat, u64) {
+    let path = temp_path(&format!("{name}.jp2"));
+    assert_eq!(
+        export(doc, &path, spec).unwrap(),
+        ExportReport::default(),
+        "{name}"
+    );
+    assert!(temp_files(&path).is_empty());
+    let bytes = std::fs::metadata(&path).unwrap().len();
+    let back = open_image(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(back.warnings.is_empty(), "{name}: {:?}", back.warnings);
+    let format = back.image.format();
+    (raster_document(back.image), format, bytes)
+}
+
+#[test]
+fn lossless_jpeg2000_round_trips_bit_exact() {
+    use ChannelLayout::{Gray, GrayAlpha, Rgb, Rgba};
+    let cases = [
+        (Gray, SampleType::U8, ODD_SIZE),
+        (Rgb, SampleType::U8, ODD_SIZE),
+        (Rgba, SampleType::U8, ODD_SIZE),
+        (GrayAlpha, SampleType::U8, Size::new(70, 40)),
+        (Gray, SampleType::U16, Size::new(70, 40)),
+        (Rgb, SampleType::U16, Size::new(70, 40)),
+        (Rgba, SampleType::U16, Size::new(70, 40)),
+        // Several tiles, the last ones partial.
+        (Rgb, SampleType::U8, Size::new(1030, 20)),
+        // Tiny images: one resolution level.
+        (Rgba, SampleType::U8, Size::new(3, 2)),
+        (Gray, SampleType::U16, Size::new(1, 1)),
+    ];
+    for (layout, sample, size) in cases {
+        let modulo = if sample == SampleType::U8 {
+            256
+        } else {
+            65_536
+        };
+        let channels = layout.channels() as usize;
+        let image = pattern_raster(size, layout, sample, ColorSpace::SRGB, |x, y, c| {
+            let v = (x * 211 + y * 97 + c as u32 * 4000) % modulo;
+            // Alpha above 0: the color under alpha 0 is not kept, by design.
+            let alpha = layout.has_alpha() && c == channels - 1;
+            (if alpha { v.max(1) } else { v }) as u16
+        });
+        let doc = raster_document(image);
+        let spec = default_spec(ExportFormatKind::Jpeg2000, &doc);
+        let depth = if sample == SampleType::U8 {
+            PngDepth::U8
+        } else {
+            PngDepth::U16
+        };
+        assert_eq!(
+            spec.format,
+            ExportFormat::Jpeg2000 {
+                depth,
+                compression: Jpeg2000Compression::Lossless
+            }
+        );
+        assert_eq!(
+            (spec.space, spec.gray, spec.keep_alpha),
+            (ColorSpace::SRGB, layout.is_gray(), layout.has_alpha())
+        );
+        let name = format!("{layout:?}-{sample:?}-{}x{}", size.width, size.height);
+        let (back, format, _) = jp2_round_trip(&name, &doc, &spec);
+        assert_eq!(
+            (format.layout, format.sample, format.color_space),
+            (layout, sample, ColorSpace::SRGB),
+            "{name}"
+        );
+        assert!(
+            composite_u16(&back) == composite_u16(&doc),
+            "{name} is not bit-exact"
+        );
+    }
+}
+
+#[test]
+fn lossy_jpeg2000_is_close_and_smaller() {
+    // A smooth image with some detail.
+    let size = Size::new(256, 200);
+    let image = pattern_raster(
+        size,
+        ChannelLayout::Rgb,
+        SampleType::U8,
+        ColorSpace::SRGB,
+        |x, y, c| ((x + y * 2 + c as u32 * 30) / 3 + (x * y) % 7) as u16 % 256,
+    );
+    let doc = raster_document(image);
+    let lossless = jp2_spec(PngDepth::U8, Jpeg2000Compression::Lossless, false);
+    let (_, _, lossless_bytes) = jp2_round_trip("lossless", &doc, &lossless);
+    let lossy = jp2_spec(
+        PngDepth::U8,
+        Jpeg2000Compression::Lossy { quality: 75 },
+        false,
+    );
+    let (back, format, lossy_bytes) = jp2_round_trip("lossy", &doc, &lossy);
+    assert_eq!(format.sample, SampleType::U8);
+    assert!(
+        lossy_bytes < lossless_bytes,
+        "{lossy_bytes} vs {lossless_bytes}"
+    );
+    let (a, b) = (composite_u16(&back), composite_u16(&doc));
+    let mean = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| f64::from(x.abs_diff(*y)))
+        .sum::<f64>()
+        / a.len() as f64
+        / 257.0;
+    assert!(mean < 3.0, "mean error {mean} (8-bit steps)");
+}
+
+#[test]
+fn jpeg2000_refuses_what_it_cannot_store() {
+    let path = temp_path("refused.jp2");
+    let lossless = Jpeg2000Compression::Lossless;
+    let cases = [
+        (
+            ExportSpec {
+                space: ColorSpace::LINEAR_SRGB,
+                ..jp2_spec(PngDepth::U16, lossless, true)
+            },
+            Size::new(4, 4),
+            "unsupportedSpace",
+        ),
+        (
+            jp2_spec(
+                PngDepth::U8,
+                Jpeg2000Compression::Lossy { quality: 0 },
+                true,
+            ),
+            Size::new(4, 4),
+            "invalidSpec",
+        ),
+        (
+            jp2_spec(PngDepth::U8, lossless, false),
+            Size::new(65_536, 1),
+            "tooLarge",
+        ),
+        // Within the sides, beyond the samples held.
+        (
+            jp2_spec(PngDepth::U8, lossless, true),
+            Size::new(16_385, 16_384),
+            "tooLarge",
+        ),
+    ];
+    for (spec, size, code) in cases {
+        let result = export_image(
+            &path,
+            size,
+            &spec,
+            |_, _| panic!("the source must not be called"),
+            &CancelToken::new(),
+            &mut |_| panic!("no progress expected"),
+        );
+        assert_eq!(
+            result.unwrap_err().code(),
+            code,
+            "{:?} {size:?}",
+            spec.format
+        );
+        assert!(!path.exists() && temp_files(&path).is_empty());
+    }
+    let kind = ExportFormatKind::Jpeg2000;
+    assert!(supports_alpha(kind) && has_gray(kind));
+    assert!(supports_gray(kind, &ColorSpace::SRGB));
+    assert!(!supports_space(kind, &ColorSpace::DISPLAY_P3));
+    assert_eq!(max_side(kind), Some(65_535));
+}
