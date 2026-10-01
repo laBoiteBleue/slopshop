@@ -238,55 +238,20 @@ pub fn bounds(selection: &RasterImage) -> Option<Rect> {
 /// A polyline in document pixels.
 pub type Line = Vec<[u32; 2]>;
 
-/// The outlines of a selection over a region (see [`outlines`]).
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Outlines {
-    /// Where coverage crosses one half: the marching ants.
-    pub middle: Vec<Line>,
-    /// For a soft selection (feathered: its partly selected band is much wider than an
-    /// anti-aliased edge), where coverage leaves 0 (`outer`) and reaches 1 (`inner`): the extent
-    /// of the soft edge. `None` for a hard or anti-aliased selection.
-    pub soft: Option<(Vec<Line>, Vec<Line>)>,
-}
-
-/// Coverage above this is "touched" (the outer limit of a soft edge): 1%.
-const SOFT_LOW: u16 = 655;
-/// Coverage at or above this is "full" (the inner limit of a soft edge): 99%.
-const SOFT_HIGH: u16 = 64880;
-/// A selection is soft when its partly selected pixels are, on average, more than this many
-/// pixels across its outline (an anti-aliased edge has about one).
-const SOFT_BAND: usize = 3;
-
-/// The outlines of `selection` along the pixel edges of its pyramid level `level`, within
-/// `region` (document pixels), as polylines in document pixels: closed loops repeat their
-/// first point, outlines cut by the region are open. `None` if they would take more than
-/// `max_points` points: the caller tries a coarser level.
-pub fn outlines(
+/// The outline of `selection` (where coverage crosses one half) along the pixel edges of its
+/// pyramid level `level`, within `region` (document pixels), as polylines in document pixels:
+/// closed loops repeat their first point, outlines cut by the region are open. `None` if it
+/// would take more than `max_points` points: the caller tries a coarser level.
+pub fn outline(
     selection: &RasterImage,
     level: usize,
     region: Rect,
     max_points: usize,
-) -> Option<Outlines> {
-    let Some(area) = Area::read(selection, level, region) else {
-        return Some(Outlines::default());
-    };
-    let middle = area.trace(|v| v >= HALF, max_points)?;
-    let band = area
-        .values
-        .iter()
-        .filter(|&&v| v > SOFT_LOW && v < SOFT_HIGH)
-        .count();
-    let edges = area.crossings(HALF);
-    let soft = if edges > 0 && band > SOFT_BAND * edges {
-        let left = max_points.saturating_sub(middle.iter().map(Vec::len).sum());
-        let outer = area.trace(|v| v > SOFT_LOW, left)?;
-        let left = left.saturating_sub(outer.iter().map(Vec::len).sum());
-        let inner = area.trace(|v| v >= SOFT_HIGH, left)?;
-        Some((outer, inner))
-    } else {
-        None
-    };
-    Some(Outlines { middle, soft })
+) -> Option<Vec<Line>> {
+    match Area::read(selection, level, region) {
+        Some(area) => area.trace(|v| v >= HALF, max_points),
+        None => Some(Vec::new()),
+    }
 }
 
 /// The values of a region of a pyramid level, one pixel wider on each side to see the edges on
@@ -354,24 +319,6 @@ impl Area {
             size: selection.size(),
             cut: [x0 > 0, y0 > 0, x1 < size.width, y1 < size.height],
         })
-    }
-
-    /// How many pixel edges separate coverage below `threshold` from coverage at or above it.
-    fn crossings(&self, threshold: u16) -> usize {
-        let (w, h) = (self.w, self.h);
-        let mut count = 0;
-        for y in 0..h {
-            for x in 0..w {
-                let here = self.values[y * w + x] >= threshold;
-                if x + 1 < w && here != (self.values[y * w + x + 1] >= threshold) {
-                    count += 1;
-                }
-                if y + 1 < h && here != (self.values[(y + 1) * w + x] >= threshold) {
-                    count += 1;
-                }
-            }
-        }
-        count
     }
 
     /// The edges between pixels `inside` and the others, chained into polylines.
@@ -1461,7 +1408,7 @@ mod tests {
     fn the_outline_of_a_rectangle_is_one_closed_loop() {
         let canvas = Size::new(600, 400);
         let image = select(canvas, &rect(10.0, 20.0, 310.0, 280.0));
-        let lines = outlines(&image, 0, canvas.bounds(), 10_000).unwrap().middle;
+        let lines = outline(&image, 0, canvas.bounds(), 10_000).unwrap();
         assert_eq!(lines.len(), 1);
         let line = &lines[0];
         assert_eq!(line.first(), line.last());
@@ -1474,66 +1421,22 @@ mod tests {
     fn an_outline_cut_by_the_region_is_open_and_a_budget_is_kept() {
         let canvas = Size::new(600, 400);
         let image = select(canvas, &rect(10.0, 20.0, 310.0, 280.0));
-        let lines = outlines(&image, 0, Rect::new(0, 0, 100, 100), 10_000)
-            .unwrap()
-            .middle;
+        let lines = outline(&image, 0, Rect::new(0, 0, 100, 100), 10_000).unwrap();
         assert!(!lines.is_empty());
         assert!(lines.iter().all(|line| line.first() != line.last()));
-        assert!(outlines(&image, 0, canvas.bounds(), 2).is_none());
+        assert!(outline(&image, 0, canvas.bounds(), 2).is_none());
         // A selection to the canvas edge closes along it.
         let all = select_all(canvas).unwrap();
-        let lines = outlines(&all, 0, canvas.bounds(), 100).unwrap().middle;
+        let lines = outline(&all, 0, canvas.bounds(), 100).unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].first(), lines[0].last());
-    }
-
-    #[test]
-    fn a_feathered_selection_shows_the_extent_of_its_soft_edge() {
-        let canvas = Size::new(400, 400);
-        let shape = rect(100.0, 100.0, 300.0, 300.0);
-        let hard = select(canvas, &shape);
-        assert!(
-            outlines(&hard, 0, canvas.bounds(), 100_000)
-                .unwrap()
-                .soft
-                .is_none()
-        );
-        let smooth = select(
-            canvas,
-            &Shape::Ellipse {
-                left: 100.0,
-                top: 100.0,
-                right: 300.0,
-                bottom: 300.0,
-            },
-        );
-        assert!(
-            outlines(&smooth, 0, canvas.bounds(), 100_000)
-                .unwrap()
-                .soft
-                .is_none()
-        );
-        let edges = EdgeOptions {
-            anti_alias: true,
-            feather: 10.0,
-        };
-        let soft = select_shape(canvas, None, &shape, edges, Combine::Replace)
-            .unwrap()
-            .unwrap();
-        let found = outlines(&soft, 0, canvas.bounds(), 100_000).unwrap();
-        let (outer, inner) = found.soft.unwrap();
-        let left = |lines: &Vec<Line>| lines.iter().flatten().map(|p| p[0]).min().unwrap();
-        // About 2.3 sigma out and in from the middle at 100.
-        assert!((left(&found.middle) as i64 - 100).abs() <= 1);
-        assert!((70..=80).contains(&left(&outer)), "{}", left(&outer));
-        assert!((120..=130).contains(&left(&inner)), "{}", left(&inner));
     }
 
     #[test]
     fn the_outline_of_a_coarser_level_is_in_document_pixels() {
         let canvas = Size::new(2000, 1000);
         let image = select(canvas, &rect(400.0, 200.0, 1200.0, 800.0));
-        let lines = outlines(&image, 2, canvas.bounds(), 10_000).unwrap().middle;
+        let lines = outline(&image, 2, canvas.bounds(), 10_000).unwrap();
         assert_eq!(lines.len(), 1);
         let mut corners: Vec<[u32; 2]> = lines[0][..lines[0].len() - 1].to_vec();
         corners.sort();

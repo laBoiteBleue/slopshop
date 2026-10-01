@@ -5,6 +5,7 @@
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import { SLOTS, toolInfo, type ToolId, type ToolSlot } from "./tools";
+  import { keepFocus } from "./platform";
 
   let {
     tool,
@@ -82,6 +83,7 @@
         key: slot.key,
       })}
       aria-label={t(info.name)}
+      onmousedown={keepFocus}
       onpointerdown={(e) => onPointerDown(e, slot)}
       onpointerup={cancelPress}
       onpointerleave={cancelPress}
@@ -106,6 +108,7 @@
         class="variant"
         class:active={entry.id === tool}
         role="menuitemradio"
+        onmousedown={keepFocus}
         aria-checked={entry.id === tool}
         onclick={() => pick(entry.id)}
       >
