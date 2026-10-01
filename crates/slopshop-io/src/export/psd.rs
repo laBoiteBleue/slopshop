@@ -9,12 +9,15 @@
 //! layers (ADR 0020) are Photoshop adjustment layers with the same settings; fill layers are
 //! pixel layers covering the canvas. Pixels outside the canvas are cropped (reported). 8 and
 //! 16 bits per sample, RGB with transparency, the color space tagged with an ICC profile, RLE
-//! (PackBits) compression. Documents above PSD's 30,000 pixels per side (PSB) are refused.
+//! (PackBits) compression. Documents above PSD's 30,000 pixels per side are written as PSB
+//! (Photoshop's large document format: the same structure with wider lengths).
 //!
-//! The file is built in memory (compressed), then written through a temporary file like the
-//! other exports.
+//! Memory does not grow with the document: each band of rendered rows is compressed and
+//! spilled to a temporary file next to the destination, then copied into place when the file
+//! is assembled (written through a temporary file like the other exports).
 
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use slopshop_core::adjust::Adjustment;
@@ -31,6 +34,9 @@ use crate::icc;
 /// Largest side of a PSD file (PSB goes beyond).
 pub const MAX_SIDE: u32 = 30_000;
 
+/// Largest side of a PSB file.
+pub const PSB_MAX_SIDE: u32 = 300_000;
+
 /// Samples of a layered PSD.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PsdDepth {
@@ -45,6 +51,8 @@ pub struct PsdOptions {
     pub space: ColorSpace,
     /// Blue-noise dither for 8-bit samples.
     pub dither: bool,
+    /// Photoshop's large document format (PSB): up to [`PSB_MAX_SIDE`] pixels per side.
+    pub large: bool,
 }
 
 /// Premultiplied working-space pixels of `region` of a document (as `export_image`'s source),
@@ -66,7 +74,12 @@ pub fn export_psd(
     if size.is_empty() {
         return Err(ExportError::InvalidSpec("empty image".into()));
     }
-    if size.width > MAX_SIDE || size.height > MAX_SIDE {
+    let max_side = if options.large {
+        PSB_MAX_SIDE
+    } else {
+        MAX_SIDE
+    };
+    if size.width > max_side || size.height > max_side {
         return Err(ExportError::TooLarge {
             width: size.width,
             height: size.height,
@@ -101,6 +114,7 @@ pub fn export_psd(
         )
         .map_err(|e| ExportError::InvalidSpec(e.to_string()))
     };
+    let (spill_file, spill_handle) = TempFile::create(path)?;
     let mut writer = Writer {
         document,
         rgba: converter(ChannelLayout::Rgba)?,
@@ -113,6 +127,10 @@ pub fn export_psd(
         conversion: ConversionReport::default(),
         non_finite: 0,
         cropped: false,
+        spill: Spill {
+            out: BufWriter::new(spill_handle),
+            len: 0,
+        },
     };
     writer.rows_total = writer.count_rows(document.layers()) + u64::from(size.height);
 
@@ -120,24 +138,34 @@ pub fn export_psd(
     writer.layers(document.layers(), &mut records)?;
     // Photoshop stores the merged composite over white, and readers remove the white.
     let composite = writer.render_planes(document, size.bounds(), true)?;
-
-    let mut file = Vec::new();
-    header(&mut file, size, options.depth);
-    // Color mode data: none for RGB.
-    file.extend(0u32.to_be_bytes());
-    image_resources(&mut file, &profile);
-    layer_and_mask_info(&mut file, &records, options.depth);
-    merged_image(&mut file, &composite);
+    let mut spill = writer
+        .spill
+        .out
+        .into_inner()
+        .map_err(|e| ExportError::Io(e.into_error()))?;
 
     let (temp, handle) = TempFile::create(path)?;
-    let mut out = std::io::BufWriter::new(handle);
-    out.write_all(&file)?;
+    let mut out = BufWriter::new(handle);
+    let format = Format {
+        large: options.large,
+    };
+    let mut head = Vec::new();
+    header(&mut head, size, options.depth, format);
+    // Color mode data: none for RGB.
+    head.extend(0u32.to_be_bytes());
+    image_resources(&mut head, &profile);
+    out.write_all(&head)?;
+    layer_and_mask_info(&mut out, &records, options.depth, format, &mut spill)?;
+    merged_image(&mut out, &composite, format, &mut spill)?;
     let handle = out
         .into_inner()
         .map_err(|e| ExportError::Io(e.into_error()))?;
     handle.sync_all()?;
     drop(handle);
     temp.persist(path)?;
+    // Closed before the spill file is deleted (Windows).
+    drop(spill);
+    drop(spill_file);
 
     let mut report = ExportReport::from_conversion(&writer.conversion);
     if writer.non_finite > 0 {
@@ -149,36 +177,103 @@ pub fn export_psd(
     Ok(report)
 }
 
+/// PSD or PSB: the widths of lengths and row counts.
+#[derive(Clone, Copy)]
+struct Format {
+    large: bool,
+}
+
+impl Format {
+    /// A section or channel length: 4 bytes in PSD, 8 in PSB.
+    fn length(self, out: &mut Vec<u8>, len: u64) {
+        if self.large {
+            out.extend(len.to_be_bytes());
+        } else {
+            // PSD sizes keep lengths within 32 bits.
+            out.extend((len as u32).to_be_bytes());
+        }
+    }
+
+    fn length_bytes(self) -> u64 {
+        if self.large { 8 } else { 4 }
+    }
+
+    /// A compressed row's length: 2 bytes in PSD, 4 in PSB.
+    fn count_bytes(self) -> u64 {
+        if self.large { 4 } else { 2 }
+    }
+}
+
+/// Compressed rows waiting in a temporary file, appended band by band.
+struct Spill {
+    out: BufWriter<File>,
+    len: u64,
+}
+
+impl Spill {
+    /// Append `data`: where it is.
+    fn append(&mut self, data: &[u8]) -> Result<(u64, u64), ExportError> {
+        self.out.write_all(data)?;
+        let chunk = (self.len, data.len() as u64);
+        self.len += data.len() as u64;
+        Ok(chunk)
+    }
+}
+
 /// Compressed planes of an area: one per channel, RLE rows.
 struct Planes {
     channels: Vec<Plane>,
 }
 
+/// A compressed plane: its rows' lengths, its data in the spill file (a chunk per band).
 struct Plane {
-    /// Compressed length of each row.
-    counts: Vec<u16>,
-    data: Vec<u8>,
+    counts: Vec<u32>,
+    chunks: Vec<(u64, u64)>,
+    data_len: u64,
 }
 
 impl Plane {
     fn new() -> Self {
         Self {
             counts: Vec::new(),
-            data: Vec::new(),
+            chunks: Vec::new(),
+            data_len: 0,
         }
     }
 
     /// Length in the file: compression, row lengths, rows.
-    fn len(&self) -> usize {
-        2 + 2 * self.counts.len() + self.data.len()
+    fn len(&self, format: Format) -> u64 {
+        2 + format.count_bytes() * self.counts.len() as u64 + self.data_len
     }
 
-    fn write(&self, out: &mut Vec<u8>) {
-        out.extend(1u16.to_be_bytes());
-        for count in &self.counts {
-            out.extend(count.to_be_bytes());
+    /// The compression and the row lengths.
+    fn head(&self, format: Format) -> Vec<u8> {
+        let mut out = 1u16.to_be_bytes().to_vec();
+        self.write_counts(&mut out, format);
+        out
+    }
+
+    fn write_counts(&self, out: &mut Vec<u8>, format: Format) {
+        for &count in &self.counts {
+            if format.large {
+                out.extend(count.to_be_bytes());
+            } else {
+                // A PSD row compresses to at most 60,470 bytes (30,000 16-bit samples).
+                out.extend((count as u16).to_be_bytes());
+            }
         }
-        out.extend(&self.data);
+    }
+
+    /// Copy the rows from the spill file.
+    fn copy_data(&self, out: &mut impl Write, spill: &mut File) -> Result<(), ExportError> {
+        for &(offset, len) in &self.chunks {
+            spill.seek(SeekFrom::Start(offset))?;
+            let copied = std::io::copy(&mut (&mut *spill).take(len), out)?;
+            if copied != len {
+                return Err(ExportError::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -211,6 +306,7 @@ struct Writer<'a, 'r> {
     conversion: ConversionReport,
     non_finite: u64,
     cropped: bool,
+    spill: Spill,
 }
 
 impl Writer<'_, '_> {
@@ -411,6 +507,8 @@ impl Writer<'_, '_> {
         matte: bool,
     ) -> Result<Planes, ExportError> {
         let mut channels: Vec<Plane> = (0..4).map(|_| Plane::new()).collect();
+        // One band of each plane, compressed, before it goes to the spill file.
+        let mut bands: Vec<Vec<u8>> = vec![Vec::new(); 4];
         let width = area.width as usize;
         let mut pixels = Vec::new();
         let mut row = vec![0u8; width * 4 * self.sample_bytes];
@@ -434,16 +532,22 @@ impl Writer<'_, '_> {
                 if matte {
                     matte_white(&mut row, bytes);
                 }
-                for (c, plane) in channels.iter_mut().enumerate() {
+                for (c, (plane, band)) in channels.iter_mut().zip(&mut bands).enumerate() {
                     for (x, out) in plane_row.chunks_exact_mut(bytes).enumerate() {
                         let at = (x * 4 + c) * bytes;
                         out.copy_from_slice(&row[at..at + bytes]);
                     }
-                    let start = plane.data.len();
-                    pack_bits(&plane_row, &mut plane.data);
-                    // A row compresses to at most 60,470 bytes (30,000 16-bit samples).
-                    plane.counts.push((plane.data.len() - start) as u16);
+                    let start = band.len();
+                    pack_bits(&plane_row, band);
+                    // At most 605,000 bytes (300,000 16-bit samples).
+                    plane.counts.push((band.len() - start) as u32);
                 }
+            }
+            for (plane, band) in channels.iter_mut().zip(&mut bands) {
+                let chunk = self.spill.append(band)?;
+                plane.chunks.push(chunk);
+                plane.data_len += chunk.1;
+                band.clear();
             }
             y += rows;
             self.rows_done += u64::from(rows);
@@ -799,9 +903,10 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
     }
 }
 
-fn header(out: &mut Vec<u8>, size: Size, depth: PsdDepth) {
+fn header(out: &mut Vec<u8>, size: Size, depth: PsdDepth, format: Format) {
     out.extend(b"8BPS");
-    out.extend(1u16.to_be_bytes());
+    // Version: 1 for PSD, 2 for PSB.
+    out.extend(if format.large { 2u16 } else { 1 }.to_be_bytes());
     out.extend([0; 6]);
     // Red, green, blue and the composite's transparency.
     out.extend(4u16.to_be_bytes());
@@ -844,9 +949,9 @@ fn block(out: &mut Vec<u8>, key: &[u8; 4], data: &[u8]) {
     out.resize(out.len() + padded - data.len(), 0);
 }
 
-/// The layer info: the count (negative: the composite's first alpha channel is its
-/// transparency), the records, then every channel's data.
-fn layer_info(records: &[Record]) -> Vec<u8> {
+/// The layer info's records: the count (negative: the composite's first alpha channel is its
+/// transparency), then each record. Every channel's data follows them in the file.
+fn layer_records(records: &[Record], format: Format) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend((-(records.len() as i16)).to_be_bytes());
     for r in records {
@@ -857,8 +962,7 @@ fn layer_info(records: &[Record]) -> Vec<u8> {
         out.extend((r.channels.len() as u16).to_be_bytes());
         for (id, plane) in &r.channels {
             out.extend(id.to_be_bytes());
-            let len = plane.as_ref().map_or(2, Plane::len);
-            out.extend((len as u32).to_be_bytes());
+            format.length(&mut out, plane.as_ref().map_or(2, |p| p.len(format)));
         }
         out.extend(b"8BIM");
         out.extend(r.blend_key);
@@ -913,52 +1017,82 @@ fn layer_info(records: &[Record]) -> Vec<u8> {
         out.extend((extra.len() as u32).to_be_bytes());
         out.extend(extra);
     }
-    for r in records {
-        for (_, plane) in &r.channels {
-            match plane {
-                Some(plane) => plane.write(&mut out),
-                None => out.extend(0u16.to_be_bytes()),
-            }
-        }
-    }
-    // A multiple of 4: Photoshop aligns the global `Lr16` block so, and readers follow it.
-    out.resize(out.len().next_multiple_of(4), 0);
     out
 }
 
-/// The layer and mask information section. 16-bit documents keep their layers in an `Lr16`
-/// block, as Photoshop writes them.
-fn layer_and_mask_info(out: &mut Vec<u8>, records: &[Record], depth: PsdDepth) {
-    let info = layer_info(records);
-    let mut section = Vec::new();
+/// The layer and mask information section: the records, every channel's data (copied from the
+/// spill file), padded to a multiple of 4 (Photoshop aligns the global `Lr16` block so, and
+/// readers follow it). 16-bit documents keep their layers in an `Lr16` block, as Photoshop
+/// writes them.
+fn layer_and_mask_info(
+    out: &mut impl Write,
+    records: &[Record],
+    depth: PsdDepth,
+    format: Format,
+    spill: &mut File,
+) -> Result<(), ExportError> {
+    let head = layer_records(records, format);
+    let data: u64 = records
+        .iter()
+        .flat_map(|r| &r.channels)
+        .map(|(_, plane)| plane.as_ref().map_or(2, |p| p.len(format)))
+        .sum();
+    let info = (head.len() as u64 + data).next_multiple_of(4);
+    let padding = info - head.len() as u64 - data;
+    let wide = format.length_bytes();
+    let mut start = Vec::new();
     match depth {
         PsdDepth::U8 => {
-            section.extend((info.len() as u32).to_be_bytes());
-            section.extend(&info);
-            // Global layer mask info: none.
-            section.extend(0u32.to_be_bytes());
+            // The section: the layer info's length and the info, the global mask info (none).
+            format.length(&mut start, wide + info + 4);
+            format.length(&mut start, info);
         }
         PsdDepth::U16 => {
-            section.extend(0u32.to_be_bytes());
-            section.extend(0u32.to_be_bytes());
-            block(&mut section, b"Lr16", &info);
+            // An empty layer info, the global mask info (none), the `Lr16` block.
+            format.length(&mut start, wide + 4 + 8 + wide + info);
+            format.length(&mut start, 0);
+            start.extend(0u32.to_be_bytes());
+            start.extend(b"8BIM");
+            start.extend(b"Lr16");
+            format.length(&mut start, info);
         }
     }
-    out.extend((section.len() as u32).to_be_bytes());
-    out.extend(section);
+    out.write_all(&start)?;
+    out.write_all(&head)?;
+    for r in records {
+        for (_, plane) in &r.channels {
+            match plane {
+                Some(plane) => {
+                    out.write_all(&plane.head(format))?;
+                    plane.copy_data(out, spill)?;
+                }
+                None => out.write_all(&0u16.to_be_bytes())?,
+            }
+        }
+    }
+    out.write_all(&vec![0; padding as usize])?;
+    if depth == PsdDepth::U8 {
+        out.write_all(&0u32.to_be_bytes())?;
+    }
+    Ok(())
 }
 
 /// The merged composite: RLE, every row length of every channel, then the rows.
-fn merged_image(out: &mut Vec<u8>, composite: &Planes) {
-    out.extend(1u16.to_be_bytes());
+fn merged_image(
+    out: &mut impl Write,
+    composite: &Planes,
+    format: Format,
+    spill: &mut File,
+) -> Result<(), ExportError> {
+    let mut head = 1u16.to_be_bytes().to_vec();
     for plane in &composite.channels {
-        for count in &plane.counts {
-            out.extend(count.to_be_bytes());
-        }
+        plane.write_counts(&mut head, format);
     }
+    out.write_all(&head)?;
     for plane in &composite.channels {
-        out.extend(&plane.data);
+        plane.copy_data(out, spill)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]

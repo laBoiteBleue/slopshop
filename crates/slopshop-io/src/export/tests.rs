@@ -1362,12 +1362,17 @@ fn cpu_render(d: &Document, region: Rect, out: &mut [f32]) -> Result<u64, String
 
 #[test]
 fn layered_psd_round_trips_through_the_importer() {
-    for (depth, tolerance, transparent) in [
+    let cases = [
         (PsdDepth::U8, 0.03, false),
         (PsdDepth::U8, 0.03, true),
         (PsdDepth::U16, 0.004, false),
         (PsdDepth::U16, 0.004, true),
-    ] {
+    ];
+    // PSD, then PSB (wider lengths and row counts, read back by the same importer).
+    for (large, (depth, tolerance, transparent)) in [false, true]
+        .into_iter()
+        .flat_map(|large| cases.map(|case| (large, case)))
+    {
         let mut doc = layered_document();
         if transparent {
             // Without the opaque background, the merged composite (stored over white) has
@@ -1380,11 +1385,13 @@ fn layered_psd_round_trips_through_the_importer() {
             .apply(&mut doc)
             .unwrap();
         }
-        let path = temp_path(&format!("layered-{depth:?}-{transparent}.psd"));
+        let extension = if large { "psb" } else { "psd" };
+        let path = temp_path(&format!("layered-{depth:?}-{transparent}.{extension}"));
         let options = PsdOptions {
             depth,
             space: ColorSpace::SRGB,
             dither: false,
+            large,
         };
         let mut rows = 0;
         let report = export_psd(
@@ -1398,6 +1405,8 @@ fn layered_psd_round_trips_through_the_importer() {
         .unwrap();
         assert!(rows > 0);
         assert!(report.notices.is_empty(), "{depth:?}: {:?}", report.notices);
+        // Neither the spill file nor the temporary file is left.
+        assert!(crate::atomic::temp_files(&path).is_empty());
         let crate::Opened::Layers(opened) = crate::open_file(&path).unwrap() else {
             panic!("{depth:?}: layers expected");
         };
@@ -1514,6 +1523,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
         depth: PsdDepth::U8,
         space: ColorSpace::SRGB,
         dither: false,
+        large: false,
     };
     export_psd(
         &path,
@@ -1576,6 +1586,7 @@ fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
         depth: PsdDepth::U8,
         space: ColorSpace::SRGB,
         dither: true,
+        large: false,
     };
     let report = export_psd(
         &path,
