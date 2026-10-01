@@ -99,7 +99,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | Targa | `.tga` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB, alpha, RLE or uncompressed; Photoshop also uses `.vda`, `.icb`, `.vst`: not recognized yet |
 | Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | ✅ | done | `image`; PFM and every export in-house | export: PGM/PPM/PAM 8/16-bit sRGB, PFM 32-bit float linear |
 | Radiance | `.hdr` | ✅ | — | P2 export | `image` | RGBE, kept linear, never tone-mapped; XYZE variant not supported |
-| JPEG XL | `.jxl` | 🔎 | — | P1 | jxl-rs or jxl-oxide (pure Rust); export: own thin FFI to libjxl (BSD) | the Rust bindings of libjxl are GPL: not usable |
+| JPEG XL | `.jxl` | ✅ | — | P1 export | jxl-oxide (pure Rust); export: own thin FFI to libjxl (BSD) | first frame of animations (reported); native depth (8/16-bit, float); color from the code points or the ICC profile; CMYK refused; the Rust bindings of libjxl are GPL: not usable |
 | AVIF | `.avif` | 🔎 | — | P1 | avif-decode (rav1d) or dav1d; export: ravif / rav1e | grid AVIF needs libheif (LGPL, isolated) |
 | Camera RAW (Camera Raw formats, DNG) | `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.pef`, … | 🔎 | — | P1 | rawler (LGPL-2.1, isolated behind a feature) | a non-destructive development node, not a baked import; demosaic algorithms written clean-room (the best known ones are GPL) |
 | DICOM | `.dcm` | 🔎 | — | P1 | dicom-rs | an interpretation node (modality and VOI LUT) instead of baking the window; 12-bit JPEG needs libjpeg-turbo |

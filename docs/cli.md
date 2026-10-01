@@ -55,7 +55,8 @@ slopshop export <INPUT> <OUTPUT> [options]
 ```
 
 Opens `INPUT` (a `.slop` document, recognized by its content, or any image format the importer
-reads: PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, OpenEXR, HDR, DDS, as a
+reads: PNG, JPEG, TIFF, WebP, JPEG XL, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, OpenEXR, HDR,
+DDS, as a
 one-layer document) and writes the composited image to `OUTPUT`
 through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export.md),
 [ADR 0010](adr/0010-jpeg-webp-export.md)). A PSD or PSB keeps the layers instead (see
