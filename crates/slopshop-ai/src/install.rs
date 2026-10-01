@@ -20,6 +20,9 @@ pub struct License {
     pub url: &'static str,
     /// Whether it allows commercial use.
     pub commercial: bool,
+    /// Whether the user must accept it explicitly before the download: anything but a
+    /// permissive open-source license (ADR 0025).
+    pub accept: bool,
 }
 
 /// Where a file's bytes are at its URL.

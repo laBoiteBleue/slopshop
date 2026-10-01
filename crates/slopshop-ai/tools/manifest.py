@@ -27,19 +27,32 @@ ORT_URL = "https://github.com/microsoft/onnxruntime/releases/download/v{v}/{name
 PYPI = "https://pypi.org/pypi/{package}/{version}/json"
 HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 
+# id: (name, url, commercial use allowed, must be accepted explicitly: not permissive open source)
 LICENSES = {
-    "onnxruntime": ("MIT", "https://github.com/microsoft/onnxruntime/blob/main/LICENSE", True),
+    "onnxruntime": (
+        "MIT",
+        "https://github.com/microsoft/onnxruntime/blob/main/LICENSE",
+        True,
+        False,
+    ),
     "cuda": (
         "NVIDIA CUDA Toolkit EULA",
         "https://docs.nvidia.com/cuda/eula/index.html",
+        True,
         True,
     ),
     "cudnn": (
         "NVIDIA cuDNN Software License Agreement",
         "https://docs.nvidia.com/deeplearning/cudnn/backend/latest/reference/eula.html",
         True,
+        True,
     ),
-    "sam2": ("Apache-2.0", "https://github.com/facebookresearch/sam2/blob/main/LICENSE", True),
+    "sam2": (
+        "Apache-2.0",
+        "https://github.com/facebookresearch/sam2/blob/main/LICENSE",
+        True,
+        False,
+    ),
 }
 
 
@@ -241,10 +254,11 @@ def main():
         "use crate::install::{Component, Download, License, Source};",
         "",
     ]
-    for key, (name, url, commercial) in LICENSES.items():
+    for key, (name, url, commercial, accept) in LICENSES.items():
         out.append(
             f"const {key.upper()}: License = License {{ name: {json.dumps(name)}, "
-            f"url: {json.dumps(url)}, commercial: {str(commercial).lower()} }};"
+            f"url: {json.dumps(url)}, commercial: {str(commercial).lower()}, "
+            f"accept: {str(accept).lower()} }};"
         )
     out.append("")
     out.append("/// Every component, by id.")
