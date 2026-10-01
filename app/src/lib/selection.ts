@@ -4,6 +4,9 @@ import type { SelectionMode } from "./engine";
 /** The largest feather radius the engine accepts, in pixels (`selection::MAX_FEATHER`). */
 export const MAX_FEATHER = 250;
 
+/** The largest amount of Select > Modify's other changes (`selection::MAX_MODIFY`). */
+export const MAX_MODIFY = 500;
+
 /** The sign by the pointer of a selection tool: how the next shape combines. */
 export const MODE_BADGES: Record<SelectionMode, string> = {
   replace: "",

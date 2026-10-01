@@ -172,6 +172,9 @@ export type SelectionShape =
 /** A new layer mask: everything shown or hidden, or the selection shown or hidden. */
 export type LayerMaskKind = "revealAll" | "hideAll" | "revealSelection" | "hideSelection";
 
+/** Select > Modify's changes. */
+export type SelectionModify = "border" | "smooth" | "expand" | "contract" | "feather";
+
 /** How a new shape combines with the selection. */
 export type SelectionMode = "replace" | "add" | "subtract" | "intersect";
 
@@ -900,6 +903,9 @@ export const engine = {
    */
   addLayerMasks: (documentId: number, layerIds: number[], kind: LayerMaskKind) =>
     serial(() => invoke<DocumentView>("add_layer_masks", { documentId, layerIds, kind })),
+  /** Select > Modify: the whole selection changed by `amount` pixels. */
+  modifySelection: (documentId: number, kind: SelectionModify, amount: number) =>
+    serial(() => invoke<DocumentView>("modify_selection", { documentId, kind, amount })),
   /** Image > Crop with a selection: the canvas becomes the selection's bounds. */
   cropToSelection: (documentId: number) =>
     serial(() => invoke<DocumentView>("crop_to_selection", { documentId })),
