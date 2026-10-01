@@ -86,7 +86,9 @@ tiles of the document's power-of-two levels, kept on the GPU in half floats (lin
 space) and addressed by a hash of everything their compositing reads; a frame composites only the
 visible tiles the cache lacks, each from the layers that reach it, then presents the view from the
 cached tiles. Views needing more tiles than the cache holds are composited directly.
-`SLOPSHOP_DISPLAY_CACHE=0` turns the cache off.
+`SLOPSHOP_DISPLAY_CACHE=0` turns the cache off. Native presents are progressive: a frame
+composites a bounded amount of missing tiles, nearest the view's center first, shows the rest
+from a coarser level with few tiles, and tells the UI to present again until the view is complete.
 For export, `Renderer::render_region` runs the same compositing code on a document region at
 full resolution (level 0 always) and reads back the working-space values as premultiplied RGBA
 f32, unclipped, in chunks sized to the tile and GPU buffer limits. `export_source` wraps it as

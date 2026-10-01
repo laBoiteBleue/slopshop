@@ -60,6 +60,9 @@ pub struct FrameStats {
     /// cached. Both 0 when the frame was composited directly.
     pub tiles_composited: u32,
     pub tiles_reused: u32,
+    /// Part of the view is shown from a coarser level, its own tiles not composited yet
+    /// (progressive frames): present again to refine it.
+    pub incomplete: bool,
     /// GPU time of the compositing passes, when the adapter supports timestamp queries.
     pub gpu: Option<Duration>,
 }
@@ -482,6 +485,39 @@ impl Renderer {
         output: Size,
         out: &mut Vec<u8>,
     ) -> Result<(), RenderError> {
+        self.read_view_into(document, view, output, false, out)
+            .map(|_| ())
+    }
+
+    /// [`Self::render_view`] composited progressively, as [`Self::present_view`] does: when
+    /// tiles of the display cache are missing, some are composited and the rest is shown from a
+    /// coarser level ([`FrameStats::incomplete`]). For tests.
+    #[doc(hidden)]
+    pub fn render_view_progressive(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+    ) -> Result<(Frame, FrameStats), RenderError> {
+        let mut data = Vec::new();
+        let stats = self.read_view_into(document, view, output, true, &mut data)?;
+        let frame = Frame {
+            size: output,
+            format: OUTPUT_FORMAT,
+            data,
+        };
+        Ok((frame, stats))
+    }
+
+    /// [`Self::render_view_into`], progressive or not, with the frame's statistics.
+    fn read_view_into(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+        progressive: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<FrameStats, RenderError> {
         let byte_len = self.output_byte_len(output)?;
         let len = out.len();
         self.capture_errors(|| {
@@ -491,23 +527,29 @@ impl Renderer {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            self.composite(document, view, output, None, |encoder, pixels| {
+            let options = cache::FrameOptions {
+                timestamps: None,
+                progressive,
+            };
+            let stats = self.composite(document, view, output, options, |encoder, pixels| {
                 encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
             })?;
-            self.read_buffer_into(&readback, out)
+            self.read_buffer_into(&readback, out)?;
+            Ok(stats)
         })
         // A GPU error found after the pixels were appended: leave `out` as it was.
         .inspect_err(|_| out.truncate(len))
     }
 
-    /// Render `view` like [`Self::render_view`], without reading the pixels back, wait for the
-    /// GPU, and report what the frame cost. For benchmarks: timing the GPU waits for it, which
-    /// a frame of the app never does.
+    /// Render `view` like [`Self::render_view`] (or progressively like [`Self::present_view`]),
+    /// without reading the pixels back, wait for the GPU, and report what the frame cost. For
+    /// benchmarks: timing the GPU waits for it, which a frame of the app never does.
     pub fn profile_view(
         &self,
         document: &Document,
         view: ViewTransform,
         output: Size,
+        progressive: bool,
     ) -> Result<FrameStats, RenderError> {
         self.output_byte_len(output)?;
         self.capture_errors(|| {
@@ -534,13 +576,16 @@ impl Renderer {
                 "timestamps readback",
                 wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             );
-            let mut stats =
-                self.composite(document, view, output, queries.as_ref(), |encoder, _| {
-                    if let Some(queries) = &queries {
-                        encoder.resolve_query_set(queries, 0..2, &resolved, 0);
-                        encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
-                    }
-                })?;
+            let options = cache::FrameOptions {
+                timestamps: queries.as_ref(),
+                progressive,
+            };
+            let mut stats = self.composite(document, view, output, options, |encoder, _| {
+                if let Some(queries) = &queries {
+                    encoder.resolve_query_set(queries, 0..2, &resolved, 0);
+                    encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
+                }
+            })?;
             // Waits for the frame, timed or not.
             let mut bytes = Vec::new();
             self.read_buffer_into(&readback, &mut bytes)?;
@@ -593,14 +638,14 @@ impl Renderer {
 
     /// Composite `view` of `document` into an `output`-sized buffer of packed RGBA8 sRGB pixels
     /// (rows of `output.width` pixels), let `finish` record what to do with it (read back, copy
-    /// to a surface…), and submit. Does not wait for the GPU. With `timestamps` (2 queries), the
-    /// pass writes its start and end there.
+    /// to a surface…), and submit. Does not wait for the GPU. With `options.timestamps` (2
+    /// queries), the passes write their start and end there.
     fn composite(
         &self,
         document: &Document,
         view: ViewTransform,
         output: Size,
-        timestamps: Option<&wgpu::QuerySet>,
+        options: cache::FrameOptions<'_>,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
     ) -> Result<FrameStats, RenderError> {
         // Rejected before the caches are locked (and reset on error).
@@ -617,7 +662,7 @@ impl Renderer {
             guard
         });
         let result = self.capture_errors(|| {
-            self.composite_locked(document, view, output, timestamps, &mut cache_guard, finish)
+            self.composite_locked(document, view, output, options, &mut cache_guard, finish)
         });
         if result.is_err() {
             // Tiles may have been recorded as resident in a cache whose texture, upload or fill
@@ -633,10 +678,11 @@ impl Renderer {
         document: &Document,
         view: ViewTransform,
         output: Size,
-        timestamps: Option<&wgpu::QuerySet>,
+        options: cache::FrameOptions<'_>,
         caches: &mut GpuCaches,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
     ) -> Result<FrameStats, RenderError> {
+        let timestamps = options.timestamps;
         let byte_len = self.output_byte_len(output)?;
         // Allocated per frame for now; pooling can come once profiling says it matters.
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -655,7 +701,7 @@ impl Renderer {
 
         if self.use_display_cache {
             let cached =
-                self.composite_cached(document, view, output, &output_buffer, timestamps, caches);
+                self.composite_cached(document, view, output, &output_buffer, options, caches);
             if let Some((mut encoder, cached_stats)) = cached {
                 stats = cached_stats;
                 stats.prepare = start.elapsed();
@@ -1783,11 +1829,11 @@ mod tests {
             scale: 1.0,
         };
         let output = Size::new(600, 300);
-        let first = r.profile_view(&document, view, output).unwrap();
+        let first = r.profile_view(&document, view, output, false).unwrap();
         assert_eq!(first.layers, 1);
         // 600 × 300 pixels at level 0: 3 × 2 tiles, uploaded once.
         assert_eq!(first.tiles_uploaded, 6);
-        let again = r.profile_view(&document, view, output).unwrap();
+        let again = r.profile_view(&document, view, output, false).unwrap();
         assert_eq!(again.tiles_uploaded, 0);
         assert_eq!(again.gpu.is_some(), r.timestamp_period.is_some());
     }

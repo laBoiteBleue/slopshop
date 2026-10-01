@@ -239,27 +239,81 @@ fn display_level(scale: f64, levels: usize) -> usize {
     }
 }
 
+/// Fill work allowed per progressive frame, in [`Missing::cost`] units: about 8 ms of GPU time
+/// on a recent desktop GPU. At least one tile is filled per frame, whatever its cost.
+const FILL_BUDGET: u32 = 2048;
+/// A resampled raster (or mask) reads tens of texels per pixel: it counts as this many plain ones.
+const RESAMPLED_COST: u32 = 16;
+/// Where the view's level is not composited yet, a progressive frame shows the finest coarser
+/// level whose visible tiles are at most this many (composited at once if needed).
+const FALLBACK_TILES: u64 = 4;
+
+/// How a frame uses the display cache.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FrameOptions<'a> {
+    /// Timestamp queries (2) for the frame's passes ([`crate::FrameStats::gpu`]).
+    pub timestamps: Option<&'a wgpu::QuerySet>,
+    /// Composite at most [`FILL_BUDGET`] of missing tiles and show the rest from a coarser
+    /// level: the frame reports itself incomplete ([`crate::FrameStats::incomplete`]).
+    pub progressive: bool,
+}
+
+/// What a frame shows: the document, its steps, the visible area and the view's center.
+struct Scene<'a> {
+    document: &'a Document,
+    steps: Vec<Step<'a>>,
+    visible: Option<Area>,
+    center: [f64; 2],
+}
+
 /// A visible tile that the cache does not hold: what its fill needs.
 struct Missing<'a> {
-    /// Its place in the present table.
+    /// Which level of the frame it belongs to (0: the view's, 1: the coarser one shown where
+    /// the view's has no tile yet) and its place in that level's table.
+    level: usize,
     index: usize,
     key: ContentKey,
     view: ViewTransform,
     steps: Vec<Step<'a>>,
     plans: Vec<Option<RasterPlan<'a>>>,
+    /// Squared distance from its center to the view's, in document pixels: nearest first.
+    distance: f64,
+}
+
+impl Missing<'_> {
+    /// A rough measure of its fill's GPU work: one per step, plus the rasters it samples.
+    fn cost(&self) -> u32 {
+        let rasters: u32 = self
+            .plans
+            .iter()
+            .flatten()
+            .map(|plan| match plan.resampling() {
+                Some(_) => RESAMPLED_COST,
+                None => 1,
+            })
+            .sum();
+        (self.steps.len() as u32).saturating_add(rasters).max(1)
+    }
+}
+
+/// The visible tiles of one level of the document: their cache slots, row-major over `range`
+/// (`NO_TILE` where missing), and what the missing ones need.
+struct LevelTiles<'a> {
+    factor: f64,
+    range: slopshop_core::Rect,
+    table: Vec<u32>,
+    missing: Vec<Missing<'a>>,
 }
 
 /// The present pass of a frame: `output`-sized RGBA8 view pixels of a `doc`-sized document,
-/// written to `output_buffer`, from the cached tiles of `range` at a level of `factor` document
-/// pixels per texel, their slots in `table` (row-major).
+/// written to `output_buffer`, from the cached tiles of one level, and of a coarser one where
+/// the first has none.
 struct Present<'a> {
     doc: Size,
     view: ViewTransform,
     output: Size,
     output_buffer: &'a wgpu::Buffer,
-    range: slopshop_core::Rect,
-    factor: f64,
-    table: Vec<u32>,
+    levels: Vec<LevelTiles<'a>>,
 }
 
 /// A fill ready to be dispatched (its buffers live as long as the bind group needs them).
@@ -281,133 +335,76 @@ impl Renderer {
         view: ViewTransform,
         output: Size,
         output_buffer: &wgpu::Buffer,
-        timestamps: Option<&wgpu::QuerySet>,
+        options: FrameOptions<'_>,
         caches: &mut GpuCaches,
     ) -> Option<(wgpu::CommandEncoder, FrameStats)> {
         let mut stats = FrameStats::default();
         let doc = document.size();
-        let canvas = [0.0, 0.0, f64::from(doc.width), f64::from(doc.height)];
-        let level_sizes = RasterImage::level_sizes(doc);
-        let level = display_level(view.scale, level_sizes.len());
-        let level_size = level_sizes[level];
-        let factor = f64::from(1u32 << level);
-        let tile_span = f64::from(TILE_SIZE) * factor;
-        let visible = visible_document_rect(doc, view, output);
-        let range = match visible {
-            Some(visible) => tile_range(
-                visible,
-                factor,
-                level_size.width.div_ceil(TILE_SIZE),
-                level_size.height.div_ceil(TILE_SIZE),
+        let levels = RasterImage::level_sizes(doc).len();
+        let level = display_level(view.scale, levels);
+        let scene = Scene {
+            document,
+            steps: steps(document),
+            visible: visible_document_rect(doc, view, output),
+            center: view.output_to_document(
+                f64::from(output.width) / 2.0,
+                f64::from(output.height) / 2.0,
             ),
-            None => slopshop_core::Rect::new(0, 0, 0, 0),
         };
         let capacity = self.display_capacity;
-        if u64::from(range.width) * u64::from(range.height) > u64::from(capacity) {
-            return None;
-        }
         let display = caches
             .display
             .get_or_insert_with(|| DisplayCache::new(&self.device, capacity));
         display.slots.begin_frame();
 
-        // Every step planned at this level over the visible area, with where it can reach.
-        let steps = steps(document);
-        let plans: Vec<Option<RasterPlan<'_>>> = steps
-            .iter()
-            .flat_map(|step| {
-                step_rasters(step).map(|raster| {
-                    let (image, transform) = raster?;
-                    RasterPlan::new(image, visible?, transform, factor)
-                })
-            })
-            .collect();
-        let reaches: Vec<Option<Area>> = steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                step_reach(
-                    step,
-                    plans[2 * i].as_ref(),
-                    plans[2 * i + 1].as_ref(),
-                    canvas,
-                )
-            })
-            .collect();
-
-        // What each step contributes to the keys, once per frame.
-        let step_keys: Vec<ContentKey> = steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| {
-                step_key(
-                    step,
-                    [plans[2 * i], plans[2 * i + 1]],
-                    document.blend_space(),
-                )
-            })
-            .collect();
-
-        // Keys of the visible tiles: cached ones are used as they are.
-        let mut table = Vec::with_capacity((range.width * range.height) as usize);
-        let mut missing = Vec::new();
-        for row in range.y..range.y + range.height {
-            for col in range.x..range.x + range.width {
-                let corner = [f64::from(col) * tile_span, f64::from(row) * tile_span];
-                let area = [
-                    corner[0],
-                    corner[1],
-                    (corner[0] + tile_span).min(canvas[2]),
-                    (corner[1] + tile_span).min(canvas[3]),
-                ];
-                let kept = steps_reaching(&steps, &reaches, area);
-                let key = tile_key(
-                    doc,
-                    [level as u32, col, row],
-                    self.tile_capacity,
-                    kept.iter().map(|&i| step_keys[i]),
-                );
-                if let Some(slot) = display.slots.get(&key) {
-                    table.push(slot);
-                    stats.tiles_reused += 1;
-                    continue;
+        let mut fine = self.level_tiles(&scene, level, display, &mut stats)?;
+        let mut to_fill = Vec::new();
+        let mut coarse = None;
+        if options.progressive && !fine.missing.is_empty() {
+            // Nearest the view's center first, within the budget.
+            fine.missing
+                .sort_by(|a, b| a.distance.total_cmp(&b.distance));
+            let mut spent = 0u32;
+            let mut deferred = false;
+            fine.missing.retain(|tile| {
+                let cost = tile.cost();
+                let fits = spent == 0 || spent.saturating_add(cost) <= FILL_BUDGET;
+                if fits {
+                    spent = spent.saturating_add(cost);
+                } else {
+                    deferred = true;
                 }
-                let tile_steps = kept.iter().map(|&i| steps[i]).collect();
-                let mut tile_plans: Vec<Option<RasterPlan<'_>>> = kept
-                    .iter()
-                    .flat_map(|&i| {
-                        [2 * i, 2 * i + 1].map(|p| {
-                            plans[p]
-                                .map(|plan| RasterPlan { area, ..plan })
-                                .filter(|plan| !plan.range().is_empty())
-                        })
-                    })
-                    .collect();
-                // As a direct frame would: coarser levels rather than missing layers when the
-                // tile reads more raster tiles than their caches hold. A function of what the
-                // key holds (plans and capacities), so the key needs no more.
-                fit_tile_budget(&mut tile_plans, self.tile_capacity);
-                missing.push(Missing {
-                    index: table.len(),
-                    key,
-                    view: ViewTransform {
-                        origin: corner,
-                        scale: factor,
-                    },
-                    steps: tile_steps,
-                    plans: tile_plans,
-                });
-                table.push(NO_TILE);
+                fits
+            });
+            if deferred {
+                stats.incomplete = true;
+                // The finest coarser level with few visible tiles, shown where the view's
+                // level has none yet; its own missing tiles are composited now (once: they stay
+                // cached while the view moves within them).
+                let fallback = (level + 1..levels)
+                    .find(|&l| self.visible_tiles(&scene, l) <= FALLBACK_TILES)
+                    .unwrap_or(levels - 1);
+                if fallback > level {
+                    let mut tiles = self.level_tiles(&scene, fallback, display, &mut stats)?;
+                    for tile in &mut tiles.missing {
+                        tile.level = 1;
+                    }
+                    to_fill.append(&mut tiles.missing);
+                    coarse = Some(tiles);
+                }
             }
         }
+        to_fill.append(&mut fine.missing);
+        let mut levels_shown = vec![fine];
+        levels_shown.extend(coarse);
 
         // Fill the missing tiles, all of this frame's slots being protected from reassignment.
         let mut encoder = self.encoder();
         let mut fills = Vec::new();
-        let mut timing = timestamps;
-        if !missing.is_empty() {
+        let mut timing = options.timestamps;
+        if !to_fill.is_empty() {
             for format in GpuTileFormat::ALL {
-                let needed = missing
+                let needed = to_fill
                     .iter()
                     .flat_map(|m| m.plans.iter().flatten())
                     .any(|p| p.format == format);
@@ -419,7 +416,7 @@ impl Renderer {
                 }
             }
         }
-        for tile in missing {
+        for tile in to_fill {
             let mut slots = self.upload_all(&tile.plans, &mut caches.tiles);
             if slots.is_none() && !fills.is_empty() {
                 // The raster caches are full of this frame's tiles: run the fills recorded so
@@ -452,7 +449,7 @@ impl Renderer {
                 display.target(slot),
                 &caches.tiles,
             ));
-            table[tile.index] = slot;
+            levels_shown[tile.level].table[tile.index] = slot;
         }
         if !fills.is_empty() {
             self.record_fills(&mut encoder, &fills, timing.take(), false);
@@ -466,17 +463,141 @@ impl Renderer {
             view,
             output,
             output_buffer,
-            range,
-            factor,
-            table,
+            levels: levels_shown,
         };
         self.record_present(
             &mut encoder,
             present,
             display,
-            timestamps.map(|q| (q, timing.is_some())),
+            options.timestamps.map(|q| (q, timing.is_some())),
         );
         Some((encoder, stats))
+    }
+
+    /// How many tiles of `level` the scene's visible area covers.
+    fn visible_tiles(&self, scene: &Scene<'_>, level: usize) -> u64 {
+        let range = level_range(scene, level);
+        u64::from(range.width) * u64::from(range.height)
+    }
+
+    /// The visible tiles of `level`: those `display` holds (now used by this frame), and what
+    /// the others need. `None` when they are more than the cache holds.
+    fn level_tiles<'a>(
+        &self,
+        scene: &Scene<'a>,
+        level: usize,
+        display: &mut DisplayCache,
+        stats: &mut FrameStats,
+    ) -> Option<LevelTiles<'a>> {
+        let doc = scene.document.size();
+        let canvas = [0.0, 0.0, f64::from(doc.width), f64::from(doc.height)];
+        let factor = f64::from(1u32 << level);
+        let tile_span = f64::from(TILE_SIZE) * factor;
+        let range = level_range(scene, level);
+        if u64::from(range.width) * u64::from(range.height) > u64::from(self.display_capacity) {
+            return None;
+        }
+        let steps = &scene.steps;
+
+        // Every step planned at this level over the visible area, with where it can reach.
+        let plans: Vec<Option<RasterPlan<'a>>> = steps
+            .iter()
+            .flat_map(|step| {
+                step_rasters(step).map(|raster| {
+                    let (image, transform) = raster?;
+                    RasterPlan::new(image, scene.visible?, transform, factor)
+                })
+            })
+            .collect();
+        let reaches: Vec<Option<Area>> = steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                step_reach(
+                    step,
+                    plans[2 * i].as_ref(),
+                    plans[2 * i + 1].as_ref(),
+                    canvas,
+                )
+            })
+            .collect();
+        // What each step contributes to the keys, once per frame.
+        let step_keys: Vec<ContentKey> = steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                step_key(
+                    step,
+                    [plans[2 * i], plans[2 * i + 1]],
+                    scene.document.blend_space(),
+                )
+            })
+            .collect();
+
+        // Keys of the visible tiles: cached ones are used as they are.
+        let mut table = Vec::with_capacity((range.width * range.height) as usize);
+        let mut missing = Vec::new();
+        for row in range.y..range.y + range.height {
+            for col in range.x..range.x + range.width {
+                let corner = [f64::from(col) * tile_span, f64::from(row) * tile_span];
+                let area = [
+                    corner[0],
+                    corner[1],
+                    (corner[0] + tile_span).min(canvas[2]),
+                    (corner[1] + tile_span).min(canvas[3]),
+                ];
+                let kept = steps_reaching(steps, &reaches, area);
+                let key = tile_key(
+                    doc,
+                    [level as u32, col, row],
+                    self.tile_capacity,
+                    kept.iter().map(|&i| step_keys[i]),
+                );
+                if let Some(slot) = display.slots.get(&key) {
+                    table.push(slot);
+                    stats.tiles_reused += 1;
+                    continue;
+                }
+                let tile_steps = kept.iter().map(|&i| steps[i]).collect();
+                let mut tile_plans: Vec<Option<RasterPlan<'a>>> = kept
+                    .iter()
+                    .flat_map(|&i| {
+                        [2 * i, 2 * i + 1].map(|p| {
+                            plans[p]
+                                .map(|plan| RasterPlan { area, ..plan })
+                                .filter(|plan| !plan.range().is_empty())
+                        })
+                    })
+                    .collect();
+                // As a direct frame would: coarser levels rather than missing layers when the
+                // tile reads more raster tiles than their caches hold. A function of what the
+                // key holds (plans and capacities), so the key needs no more.
+                fit_tile_budget(&mut tile_plans, self.tile_capacity);
+                let middle = [
+                    (area[0] + area[2]) / 2.0 - scene.center[0],
+                    (area[1] + area[3]) / 2.0 - scene.center[1],
+                ];
+                missing.push(Missing {
+                    level: 0,
+                    index: table.len(),
+                    key,
+                    view: ViewTransform {
+                        origin: corner,
+                        scale: factor,
+                    },
+                    steps: tile_steps,
+                    plans: tile_plans,
+                    distance: middle[0] * middle[0] + middle[1] * middle[1],
+                });
+                table.push(NO_TILE);
+            }
+        }
+        Some(LevelTiles {
+            factor,
+            range,
+            table,
+            missing,
+        })
     }
 
     fn encoder(&self) -> wgpu::CommandEncoder {
@@ -578,9 +699,7 @@ impl Renderer {
             view,
             output,
             output_buffer,
-            range,
-            factor,
-            mut table,
+            levels,
         } = present;
         let params = self
             .device
@@ -593,10 +712,14 @@ impl Renderer {
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("present cache params"),
-                contents: &cache_params_bytes(range, factor),
+                contents: &cache_params_bytes(&levels),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        // A binding cannot be empty.
+        // The levels' tables one after the other; a binding cannot be empty.
+        let mut table: Vec<u32> = levels
+            .iter()
+            .flat_map(|l| l.table.iter().copied())
+            .collect();
         if table.is_empty() {
             table.push(NO_TILE);
         }
@@ -725,14 +848,39 @@ fn tile_key(
     hasher.finish()
 }
 
-/// Uniform block matching `CacheParams` in composite.wgsl (32 bytes).
-fn cache_params_bytes(range: slopshop_core::Rect, factor: f64) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(32);
-    for v in [range.x, range.y, range.width, range.height] {
-        bytes.extend(v.to_le_bytes());
+/// The visible tiles of `level` for `scene`.
+fn level_range(scene: &Scene<'_>, level: usize) -> slopshop_core::Rect {
+    let size = RasterImage::level_sizes(scene.document.size())[level];
+    match scene.visible {
+        Some(visible) => tile_range(
+            visible,
+            f64::from(1u32 << level),
+            size.width.div_ceil(TILE_SIZE),
+            size.height.div_ceil(TILE_SIZE),
+        ),
+        None => slopshop_core::Rect::new(0, 0, 0, 0),
     }
-    bytes.extend((factor as f32).to_le_bytes());
-    bytes.resize(32, 0);
+}
+
+/// Uniform block matching `CacheParams` in composite.wgsl (80 bytes): the levels shown (the
+/// second one where the first has no tile), their tables one after the other.
+fn cache_params_bytes(levels: &[LevelTiles<'_>]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(80);
+    let mut offset = 0u32;
+    for level in levels.iter().take(2) {
+        let r = level.range;
+        for v in [r.x, r.y, r.width, r.height] {
+            bytes.extend(v.to_le_bytes());
+        }
+        bytes.extend((level.factor as f32).to_le_bytes());
+        bytes.extend(offset.to_le_bytes());
+        bytes.resize(bytes.len() + 8, 0);
+        offset += level.table.len() as u32;
+    }
+    bytes.resize(64, 0);
+    let fallback = u32::from(levels.len() > 1);
+    bytes.extend(fallback.to_le_bytes());
+    bytes.resize(80, 0);
     bytes
 }
 

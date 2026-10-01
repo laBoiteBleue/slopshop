@@ -192,7 +192,8 @@ fn frame(r: &Renderer, document: &Document) -> FrameStats {
         origin: [0.0, 0.0],
         scale: 1.0,
     };
-    r.profile_view(document, view, document.size()).unwrap()
+    r.profile_view(document, view, document.size(), false)
+        .unwrap()
 }
 
 #[test]
@@ -282,7 +283,59 @@ fn views_needing_more_tiles_than_the_cache_holds_are_composited_directly() {
         scale: 4.0,
     };
     let stats = r
-        .profile_view(s.document(), view, Size::new(175, 125))
+        .profile_view(s.document(), view, Size::new(175, 125), false)
         .unwrap();
     assert_eq!(stats.tiles_composited, 1);
+}
+
+#[test]
+fn progressive_frames_composite_a_budget_of_tiles_and_fill_in_from_a_coarser_level() {
+    let (Some(r), Some(direct)) = (renderer(true), renderer(false)) else {
+        return;
+    };
+    // Many resampled layers covering the whole canvas: costly tiles, and a uniform result, so
+    // that the coarser level shows exactly what the view's level will.
+    let size = Size::new(2048, 1024);
+    let mut s = Session::new(Document::new(size));
+    let bg = layer(
+        &mut s,
+        LayerContent::Fill {
+            color: LinearRgba::new(0.2, 0.3, 0.4, 1.0),
+        },
+    );
+    push(&mut s, bg);
+    for _ in 0..40 {
+        let mut veil = raster(
+            &mut s,
+            image(Size::new(600, 300), |_, _| [200, 120, 40, 20]),
+        );
+        veil.transform = Affine::scale(4.0, 4.0).then(Affine::translation(-100.5, -100.25));
+        push(&mut s, veil);
+    }
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 1.0,
+    };
+    let expected = direct.render_view(s.document(), view, size).unwrap();
+
+    let (first, stats) = r.render_view_progressive(s.document(), view, size).unwrap();
+    assert!(stats.incomplete);
+    // A few of the 32 tiles, plus the coarser level's.
+    assert!(stats.tiles_composited < 16, "{stats:?}");
+    assert_frames_match(&first.data, &expected.data, "partial frame");
+
+    let mut frames = 1;
+    loop {
+        let (frame, stats) = r.render_view_progressive(s.document(), view, size).unwrap();
+        frames += 1;
+        assert!(frames < 64, "never complete");
+        if !stats.incomplete {
+            assert_frames_match(&frame.data, &expected.data, "complete frame");
+            break;
+        }
+    }
+    assert!(frames > 2, "{frames} frames");
+    // Everything cached: a frame composites nothing.
+    let stats = r.profile_view(s.document(), view, size, true).unwrap();
+    assert_eq!((stats.tiles_composited, stats.incomplete), (0, false));
 }
