@@ -5402,6 +5402,7 @@ dependencies = [
  "arboard",
  "serde",
  "serde_json",
+ "slopshop-ai",
  "slopshop-core",
  "slopshop-io",
  "slopshop-render",
