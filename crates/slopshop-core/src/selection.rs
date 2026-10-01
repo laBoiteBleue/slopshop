@@ -18,6 +18,7 @@ use crate::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType
 use crate::geom::{Rect, Size};
 use crate::raster::{RasterImage, TILE_SIZE};
 use crate::tile::TileCoord;
+use crate::transform::Affine;
 
 /// The format of every selection made here.
 pub const SELECTION_FORMAT: PixelFormat = PixelFormat {
@@ -598,6 +599,17 @@ impl Mask {
         )
     }
 
+    /// Coverage at (`x`, `y`), 0 outside the canvas.
+    fn get(&self, x: i64, y: i64) -> u16 {
+        let inside = (0..i64::from(self.size.width)).contains(&x)
+            && (0..i64::from(self.size.height)).contains(&y);
+        if inside {
+            self.at(x as isize, y as isize)
+        } else {
+            0
+        }
+    }
+
     /// Coverage at (`x`, `y`), clamped to the canvas (the edge repeats).
     fn at(&self, x: isize, y: isize) -> u16 {
         let x = x.clamp(0, self.size.width as isize - 1) as usize;
@@ -615,6 +627,12 @@ impl Mask {
 
     /// The selection image, uniform tiles shared; `None` if nothing is selected.
     fn into_image(self) -> Option<RasterImage> {
+        self.build(false)
+    }
+
+    /// The image, uniform tiles shared; with `keep_empty`, even when everything is 0 (a mask
+    /// hiding everything), else `None` then.
+    fn build(self, keep_empty: bool) -> Option<RasterImage> {
         let mut constants: HashMap<u16, Arc<[u8]>> = HashMap::new();
         let constant = |v: u16, constants: &mut HashMap<u16, Arc<[u8]>>| {
             Arc::clone(
@@ -652,7 +670,7 @@ impl Mask {
                 }
             })
             .collect();
-        if !any {
+        if !any && !keep_empty {
             return None;
         }
         // Invariant: one tile of `T²` u16 per cell of the canvas grid.
@@ -688,6 +706,95 @@ fn uniform_value(bytes: &[u8]) -> Option<u16> {
         .iter()
         .all(|b| b == first)
         .then(|| u16::from_ne_bytes(*first))
+}
+
+// --- Layer masks -------------------------------------------------------------------------------
+
+/// A layer mask of `size` pixels, everything shown (Layer > Layer Mask > Reveal All) or hidden
+/// (Hide All): one shared tile.
+pub fn uniform_mask(size: Size, shown: bool) -> Result<RasterImage, SelectionError> {
+    let mut mask = Mask::new(size)?;
+    mask.tiles.fill(Tile::Const(if shown { FULL } else { 0 }));
+    // A canvas with pixels always makes an image.
+    mask.build(true).ok_or(SelectionError::EmptyCanvas)
+}
+
+/// A layer mask from the selection (Layer > Layer Mask > Reveal Selection, Hide Selection): `size`
+/// pixels in the layer's space, which `layer_to_document` places in the document (ADR 0014), each
+/// taking the selection's coverage where it lands, or its complement with `hide`. A whole-pixel
+/// move copies the values exactly; any other transform samples them bilinearly. Uniform tiles are
+/// shared, and the work is spread over every core.
+pub fn layer_mask(
+    selection: &RasterImage,
+    size: Size,
+    layer_to_document: Affine,
+    hide: bool,
+) -> Result<RasterImage, SelectionError> {
+    if !layer_to_document.is_finite() || layer_to_document.inverse().is_none() {
+        return Err(SelectionError::InvalidShape);
+    }
+    let source = Mask::from_image(selection.size(), selection)?;
+    let mut mask = Mask::new(size)?;
+    let offset = layer_to_document.integer_translation();
+    let sample = |x: usize, y: usize| -> u16 {
+        let v = match offset {
+            Some((dx, dy)) => source.get(x as i64 + dx, y as i64 + dy),
+            None => {
+                // The pixel's center in the document, read between the selection's centers.
+                let (px, py) = layer_to_document.apply(x as f64 + 0.5, y as f64 + 0.5);
+                let (fx, fy) = (px - 0.5, py - 0.5);
+                let (x0, y0) = (fx.floor(), fy.floor());
+                let (tx, ty) = (fx - x0, fy - y0);
+                let (x0, y0) = (x0 as i64, y0 as i64);
+                let at = |x: i64, y: i64| f64::from(source.get(x, y));
+                let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+                let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+                (top * (1.0 - ty) + bottom * ty)
+                    .round()
+                    .clamp(0.0, f64::from(FULL)) as u16
+            }
+        };
+        if hide { FULL - v } else { v }
+    };
+    let rows: Vec<usize> = (0..mask.rows).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = rows.len().div_ceil(threads).max(1);
+    let columns = mask.columns;
+    let shape = &mask;
+    let sample = &sample;
+    let mut done: Vec<(usize, Vec<u16>)> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = rows
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    let mut out = Vec::new();
+                    for &row in chunk {
+                        for col in 0..columns {
+                            let (w, h) = shape.valid(col, row);
+                            let mut values = vec![0u16; T * T];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    values[y * T + x] = sample(col * T + x, row * T + y);
+                                }
+                            }
+                            pad(&mut values, w, h);
+                            out.push((row * columns + col, values));
+                        }
+                    }
+                    out
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: sampling does not panic (reads outside the selection are 0).
+            done.extend(worker.join().expect("layer mask worker panicked"));
+        }
+    });
+    for (index, values) in done {
+        mask.tiles[index] = Tile::Data(values);
+    }
+    mask.build(true).ok_or(SelectionError::EmptyCanvas)
 }
 
 // --- Rasterization -----------------------------------------------------------------------------
@@ -1430,6 +1537,47 @@ mod tests {
         let lines = outline(&all, 0, canvas.bounds(), 100).unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].first(), lines[0].last());
+    }
+
+    #[test]
+    fn layer_masks_follow_the_layer_and_can_hide_the_selection() {
+        let canvas = Size::new(600, 300);
+        let selection = select(canvas, &rect(100.0, 50.0, 200.0, 150.0));
+        // A layer moved 40 pixels right: its pixel (60, 50) is document pixel (100, 50).
+        let moved = Affine::translation(40.0, 0.0);
+        let reveal = layer_mask(&selection, Size::new(300, 200), moved, false).unwrap();
+        assert_eq!(reveal.size(), Size::new(300, 200));
+        assert_eq!(reveal.gray_at(60, 50), 1.0);
+        assert_eq!(reveal.gray_at(59, 50), 0.0);
+        assert_eq!(reveal.gray_at(159, 149), 1.0);
+        assert_eq!(reveal.gray_at(160, 149), 0.0);
+        let hide = layer_mask(&selection, Size::new(300, 200), moved, true).unwrap();
+        assert_eq!(hide.gray_at(60, 50), 0.0);
+        assert_eq!(hide.gray_at(10, 10), 1.0);
+        // A layer scaled twice: its pixel (60, 40) lands on document (120.5, 80.5) or so.
+        let scaled = Affine::scale(2.0, 2.0);
+        let resampled = layer_mask(&selection, Size::new(300, 150), scaled, false).unwrap();
+        assert_eq!(resampled.gray_at(60, 40), 1.0);
+        assert_eq!(resampled.gray_at(20, 20), 0.0);
+        // Hiding everything is still a mask.
+        let none = layer_mask(
+            &selection,
+            Size::new(10, 10),
+            Affine::translation(500.0, 0.0),
+            false,
+        )
+        .unwrap();
+        assert_eq!(none.gray_at(5, 5), 0.0);
+        assert_eq!(
+            uniform_mask(Size::new(10, 10), true).unwrap().gray_at(9, 9),
+            1.0
+        );
+        assert_eq!(
+            uniform_mask(Size::new(10, 10), false)
+                .unwrap()
+                .gray_at(0, 0),
+            0.0
+        );
     }
 
     #[test]
