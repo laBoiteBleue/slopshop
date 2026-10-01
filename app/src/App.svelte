@@ -16,6 +16,7 @@
     type DocumentView,
     type EditRequest,
     type LayerMaskKind,
+    type SelectionModify,
     type SelectionMode,
     type SelectionShape,
     type ExportFailed,
@@ -53,6 +54,8 @@
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
+  import ModifyDialog from "./lib/ModifyDialog.svelte";
+  import { MAX_FEATHER, MAX_MODIFY } from "./lib/selection";
   import LassoTool from "./lib/LassoTool.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
@@ -368,6 +371,29 @@
   function toggleQuickMask() {
     const doc = active;
     if (doc) selectionCommand((id) => engine.setQuickMask(id, !doc.quickMask));
+  }
+
+  // Select > Modify: a dialog for the amount, remembered per change for the session.
+  let modifyDialog = $state<{ kind: SelectionModify; document: number } | null>(null);
+  let modifyAmounts = $state<Record<SelectionModify, number>>({
+    border: 10,
+    smooth: 5,
+    expand: 10,
+    contract: 10,
+    feather: 10,
+  });
+
+  function openModify(kind: SelectionModify) {
+    if (active?.selectionKey != null) modifyDialog = { kind, document: active.id };
+  }
+
+  function applyModify(amount: number) {
+    const dialog = modifyDialog;
+    modifyDialog = null;
+    if (!dialog) return;
+    modifyAmounts[dialog.kind] = amount;
+    commitTransform();
+    void sync(engine.modifySelection(dialog.document, dialog.kind, amount));
   }
 
   /** Image > Crop: to the selection's bounds when there is one, else the Crop tool. */
@@ -1585,6 +1611,23 @@
           ),
           separator,
           {
+            kind: "submenu",
+            label: t("menu.select.modify"),
+            disabled: doc?.selectionKey == null,
+            items: [
+              cmd(t("menu.select.modify.border"), () => openModify("border")),
+              cmd(t("menu.select.modify.smooth"), () => openModify("smooth")),
+              cmd(t("menu.select.modify.expand"), () => openModify("expand")),
+              cmd(t("menu.select.modify.contract"), () => openModify("contract")),
+              cmd(
+                t("menu.select.modify.feather"),
+                () => openModify("feather"),
+                keys("shift", "F6"),
+              ),
+            ],
+          },
+          separator,
+          {
             ...cmd(t("menu.select.quickMask"), toggleQuickMask, "Q", !doc),
             checked: doc?.quickMask ?? false,
           },
@@ -1664,6 +1707,12 @@
         if (!e.repeat) selectSlot(slot, e.shiftKey);
         return;
       }
+    }
+    // Shift+F6: Select > Modify > Feather, as in Photoshop.
+    if (e.key === "F6" && e.shiftKey && !hasShortcutModifier(e) && !e.altKey) {
+      e.preventDefault();
+      if (!e.repeat) openModify("feather");
+      return;
     }
     // Q: Quick Mask, a letter alone like the tools.
     if (
@@ -2120,6 +2169,16 @@
     </span>
   </footer>
 </div>
+
+{#if modifyDialog && modifyDialog.document === activeId}
+  <ModifyDialog
+    kind={modifyDialog.kind}
+    value={modifyAmounts[modifyDialog.kind]}
+    max={modifyDialog.kind === "feather" ? MAX_FEATHER : MAX_MODIFY}
+    onapply={applyModify}
+    onclose={() => (modifyDialog = null)}
+  />
+{/if}
 
 {#if sizeDialog && sizeDoc}
   {#key sizeDialog}

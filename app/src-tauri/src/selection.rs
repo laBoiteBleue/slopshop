@@ -164,6 +164,31 @@ pub async fn invert_selection(
     set_selection(&state, document_id, image)
 }
 
+/// Select > Modify (`kind`: `feather`, `expand`, `contract`, `border`, `smooth`) by `amount`
+/// pixels, as one undo entry; nothing left selected deselects.
+#[tauri::command]
+pub async fn modify_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    kind: String,
+    amount: f64,
+) -> Result<DocumentView, String> {
+    let how = match kind.as_str() {
+        "feather" => selection::Modify::Feather(amount),
+        "expand" => selection::Modify::Expand(amount),
+        "contract" => selection::Modify::Contract(amount),
+        "border" => selection::Modify::Border(amount),
+        "smooth" => selection::Modify::Smooth(amount),
+        other => return Err(format!("unknown selection change {other}")),
+    };
+    let (canvas, current) = snapshot(&state, document_id)?;
+    let current = current.ok_or("nothing is selected")?;
+    let image =
+        on_worker(move || selection::modify(canvas, &current, how).map_err(|e| e.to_string()))
+            .await?;
+    set_selection(&state, document_id, image)
+}
+
 /// Select > Deselect: the selection is kept for Reselect.
 #[tauri::command]
 pub async fn deselect(
