@@ -108,6 +108,7 @@ const en = {
   "menu.select.deselect": "Deselect",
   "menu.select.reselect": "Reselect",
   "menu.select.inverse": "Inverse",
+  "menu.select.quickMask": "Edit in Quick Mask Mode",
   "menu.view.zoomIn": "Zoom In",
   "menu.view.zoomOut": "Zoom Out",
   "menu.view.fit": "Fit on Screen",

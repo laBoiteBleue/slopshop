@@ -178,6 +178,9 @@ pub struct Renderer {
     fill_bind_group_layout: wgpu::BindGroupLayout,
     present_pipeline: wgpu::ComputePipeline,
     present_bind_group_layout: wgpu::BindGroupLayout,
+    /// Quick Mask (ADR 0024): `quick_mask_main` in composite.wgsl, over a finished frame.
+    quick_mask_pipeline: wgpu::ComputePipeline,
+    quick_mask_bind_group_layout: wgpu::BindGroupLayout,
     /// Viewport frames go through the display cache (else they composite every visible layer
     /// for every pixel, as before ADR 0022). `SLOPSHOP_DISPLAY_CACHE=0` turns it off.
     use_display_cache: bool,
@@ -189,6 +192,15 @@ pub struct Renderer {
     ewa_table: wgpu::Buffer,
     /// Nanoseconds per timestamp tick, when the device can time passes ([`FrameStats::gpu`]).
     timestamp_period: Option<f32>,
+}
+
+/// What a viewport frame shows over the image: view state, never part of the document or of
+/// the display cache.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ViewOverlays {
+    /// Quick Mask (ADR 0024): the area the selection leaves out tinted red, half opaque where
+    /// nothing is selected, fading where the selection is soft. Nothing without a selection.
+    pub quick_mask: bool,
 }
 
 /// Upper bound on cached tiles per storage class.
@@ -378,6 +390,14 @@ impl Renderer {
             ],
         );
 
+        // The same bindings as `main`: the selection is sampled like a layer's mask.
+        let (quick_mask_bind_group_layout, quick_mask_pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "quick_mask_main",
+            &[&shared[..], &[uniform(0), storage(2, false)]].concat(),
+        );
+
         let max_output_bytes = required_limits
             .max_storage_buffer_binding_size
             .min(required_limits.max_buffer_size);
@@ -419,6 +439,8 @@ impl Renderer {
             fill_bind_group_layout,
             present_pipeline,
             present_bind_group_layout,
+            quick_mask_pipeline,
+            quick_mask_bind_group_layout,
             use_display_cache: std::env::var("SLOPSHOP_DISPLAY_CACHE").as_deref() != Ok("0"),
             display_capacity: cache::cache_capacity(required_limits.max_texture_array_layers),
             max_output_bytes,
@@ -451,7 +473,7 @@ impl Renderer {
         output: Size,
     ) -> Result<Frame, RenderError> {
         let mut data = Vec::new();
-        self.render_view_into(document, view, output, &mut data)?;
+        self.render_view_into(document, view, ViewOverlays::default(), output, &mut data)?;
         Ok(Frame {
             size: output,
             format: OUTPUT_FORMAT,
@@ -475,17 +497,18 @@ impl Renderer {
             })
     }
 
-    /// Like [`Self::render_view`], but appends the RGBA8 sRGB pixels to `out`. Lets callers put
-    /// a header before the pixels (or reuse an allocation) without copying the frame again.
-    /// On error, `out` is left as it was.
+    /// Like [`Self::render_view`] with `overlays` drawn over the image, but appends the RGBA8
+    /// sRGB pixels to `out`. Lets callers put a header before the pixels (or reuse an
+    /// allocation) without copying the frame again. On error, `out` is left as it was.
     pub fn render_view_into(
         &self,
         document: &Document,
         view: ViewTransform,
+        overlays: ViewOverlays,
         output: Size,
         out: &mut Vec<u8>,
     ) -> Result<(), RenderError> {
-        self.read_view_into(document, view, output, false, out)
+        self.read_view_into(document, view, overlays, output, false, out)
             .map(|_| ())
     }
 
@@ -500,7 +523,8 @@ impl Renderer {
         output: Size,
     ) -> Result<(Frame, FrameStats), RenderError> {
         let mut data = Vec::new();
-        let stats = self.read_view_into(document, view, output, true, &mut data)?;
+        let overlays = ViewOverlays::default();
+        let stats = self.read_view_into(document, view, overlays, output, true, &mut data)?;
         let frame = Frame {
             size: output,
             format: OUTPUT_FORMAT,
@@ -514,6 +538,7 @@ impl Renderer {
         &self,
         document: &Document,
         view: ViewTransform,
+        overlays: ViewOverlays,
         output: Size,
         progressive: bool,
         out: &mut Vec<u8>,
@@ -531,9 +556,16 @@ impl Renderer {
                 timestamps: None,
                 progressive,
             };
-            let stats = self.composite(document, view, output, options, |encoder, pixels| {
-                encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
-            })?;
+            let stats = self.composite(
+                document,
+                view,
+                overlays,
+                output,
+                options,
+                |encoder, pixels| {
+                    encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
+                },
+            )?;
             self.read_buffer_into(&readback, out)?;
             Ok(stats)
         })
@@ -580,12 +612,19 @@ impl Renderer {
                 timestamps: queries.as_ref(),
                 progressive,
             };
-            let mut stats = self.composite(document, view, output, options, |encoder, _| {
-                if let Some(queries) = &queries {
-                    encoder.resolve_query_set(queries, 0..2, &resolved, 0);
-                    encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
-                }
-            })?;
+            let mut stats = self.composite(
+                document,
+                view,
+                ViewOverlays::default(),
+                output,
+                options,
+                |encoder, _| {
+                    if let Some(queries) = &queries {
+                        encoder.resolve_query_set(queries, 0..2, &resolved, 0);
+                        encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
+                    }
+                },
+            )?;
             // Waits for the frame, timed or not.
             let mut bytes = Vec::new();
             self.read_buffer_into(&readback, &mut bytes)?;
@@ -644,6 +683,7 @@ impl Renderer {
         &self,
         document: &Document,
         view: ViewTransform,
+        overlays: ViewOverlays,
         output: Size,
         options: cache::FrameOptions<'_>,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
@@ -662,7 +702,15 @@ impl Renderer {
             guard
         });
         let result = self.capture_errors(|| {
-            self.composite_locked(document, view, output, options, &mut cache_guard, finish)
+            self.composite_locked(
+                document,
+                view,
+                overlays,
+                output,
+                options,
+                &mut cache_guard,
+                finish,
+            )
         });
         if result.is_err() {
             // Tiles may have been recorded as resident in a cache whose texture, upload or fill
@@ -673,10 +721,12 @@ impl Renderer {
     }
 
     /// [`Self::composite`] with the tile caches locked.
+    #[allow(clippy::too_many_arguments)]
     fn composite_locked(
         &self,
         document: &Document,
         view: ViewTransform,
+        overlays: ViewOverlays,
         output: Size,
         options: cache::FrameOptions<'_>,
         caches: &mut GpuCaches,
@@ -702,12 +752,17 @@ impl Renderer {
         if self.use_display_cache {
             let cached =
                 self.composite_cached(document, view, output, &output_buffer, options, caches);
-            if let Some((mut encoder, cached_stats)) = cached {
+            if let Some((encoder, cached_stats)) = cached {
                 stats = cached_stats;
                 stats.prepare = start.elapsed();
                 stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
-                finish(&mut encoder, &output_buffer);
-                self.queue.submit([encoder.finish()]);
+                let frame = Composited {
+                    document,
+                    view,
+                    output,
+                    pixels: &output_buffer,
+                };
+                self.finish_frame(encoder, &frame, overlays, &mut caches.tiles, finish);
                 return Ok(stats);
             }
         }
@@ -766,9 +821,110 @@ impl Renderer {
                 1,
             );
         }
-        finish(&mut encoder, &output_buffer);
-        self.queue.submit([encoder.finish()]);
+        let frame = Composited {
+            document,
+            view,
+            output,
+            pixels: &output_buffer,
+        };
+        self.finish_frame(encoder, &frame, overlays, &mut caches.tiles, finish);
         Ok(stats)
+    }
+
+    /// Draw `overlays` over a composited frame (view state: never in the display cache), let
+    /// `finish` record what to do with its pixels, and submit.
+    fn finish_frame(
+        &self,
+        mut encoder: wgpu::CommandEncoder,
+        frame: &Composited<'_>,
+        overlays: ViewOverlays,
+        tiles: &mut [Option<TileCache>; 4],
+        finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
+    ) {
+        let selection = frame.document.selection().filter(|_| overlays.quick_mask);
+        if let Some(selection) = selection {
+            // The tiles the frame reads stay resident only until it is submitted: submit it
+            // first, so that the overlay's uploads cannot replace them under it.
+            self.queue.submit([encoder.finish()]);
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("quick mask"),
+                });
+            self.record_quick_mask(&mut encoder, frame, selection.image(), tiles);
+        }
+        finish(&mut encoder, frame.pixels);
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Quick Mask (ADR 0024): the unselected area of the frame tinted red, the selection sampled
+    /// at the view's level like a layer's mask.
+    fn record_quick_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Composited<'_>,
+        selection: &RasterImage,
+        tiles: &mut [Option<TileCache>; 4],
+    ) {
+        let doc_size = frame.document.size();
+        let plan = visible_document_rect(doc_size, frame.view, frame.output).and_then(|visible| {
+            RasterPlan::new(selection, visible, Affine::IDENTITY, frame.view.scale)
+        });
+        let mut prepared = PreparedLayers {
+            count: 1,
+            bytes: Vec::new(),
+            tile_table: Vec::new(),
+        };
+        // A mask with no tile in view (or none planned) reads 0: all of the view is tinted.
+        let mut fields = LayerFields {
+            kind: KIND_FILL,
+            ..LayerFields::default()
+        };
+        if let Some(plan) = plan.filter(|plan| !plan.range().is_empty()) {
+            let capacity = self.tile_capacity[plan.format.index()];
+            let cache = tiles[plan.format.index()]
+                .get_or_insert_with(|| TileCache::new(&self.device, plan.format, capacity));
+            cache.begin_frame();
+            let slots = self.upload(&plan, cache);
+            set_mask_fields(&mut fields, &plan, &mut prepared.tile_table, slots);
+        }
+        fields.write(&mut prepared.bytes);
+        let params = params_bytes(doc_size, frame.view, frame.output, 1);
+        use wgpu::util::DeviceExt;
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quick mask params"),
+                contents: &params,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let layer_buffers = self.layer_buffers(prepared);
+        let bind_group = self.bind_group(
+            &self.quick_mask_bind_group_layout,
+            &layer_buffers,
+            self.tile_views(tiles),
+            [
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: frame.pixels.as_entire_binding(),
+                },
+            ],
+        );
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("quick mask"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.quick_mask_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(
+            frame.output.width.div_ceil(WORKGROUP_SIZE),
+            frame.output.height.div_ceil(WORKGROUP_SIZE),
+            1,
+        );
     }
 
     /// Map a `MAP_READ` buffer and append its content to `out`. This copy is required: mapped
@@ -805,6 +961,15 @@ impl Renderer {
 const LAYER_BYTES: usize = 304;
 
 /// GPU-ready description of the visible layers of one frame.
+/// A composited frame waiting for its overlays and its `finish`.
+struct Composited<'a> {
+    document: &'a Document,
+    view: ViewTransform,
+    output: Size,
+    /// The frame's packed RGBA8 sRGB pixels.
+    pixels: &'a wgpu::Buffer,
+}
+
 struct PreparedLayers {
     count: u32,
     /// `count` × [`LAYER_BYTES`].

@@ -82,11 +82,13 @@ impl Renderer {
     /// back buffer is available (at most about one display refresh), never on a readback.
     /// Progressive: when composited tiles are missing, only some are composited and the rest is
     /// shown from a coarser level ([`Presented::Partial`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn present_view(
         &self,
         presenter: &mut Presenter,
         document: &Document,
         view: ViewTransform,
+        overlays: crate::ViewOverlays,
         rect: Rect,
         surface_size: Size,
         clear: [f64; 4],
@@ -158,8 +160,13 @@ impl Renderer {
                     timestamps: None,
                     progressive: true,
                 };
-                let stats =
-                    self.composite(document, view, output, options, |encoder, pixels| {
+                let stats = self.composite(
+                    document,
+                    view,
+                    overlays,
+                    output,
+                    options,
+                    |encoder, pixels| {
                         if !covers_surface {
                             clear_pass(encoder);
                         }
@@ -189,7 +196,8 @@ impl Renderer {
                                 depth_or_array_layers: 1,
                             },
                         );
-                    })?;
+                    },
+                )?;
                 if stats.incomplete {
                     presented = Presented::Partial;
                 }

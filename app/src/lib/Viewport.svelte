@@ -33,6 +33,7 @@
   let {
     documentId,
     revision,
+    quickMask = false,
     native = false,
     onframe,
     onmovestart,
@@ -46,6 +47,8 @@
     documentId: number;
     /** Document revision; a change triggers a new frame. */
     revision: number;
+    /** Quick Mask over the image (drawn by the engine); a change triggers a new frame. */
+    quickMask?: boolean;
     /**
      * Native presentation: the engine presents to the window under this (transparent) area
      * instead of sending frames. Read once, like the document.
@@ -235,8 +238,10 @@
   }
 
   $effect(() => {
-    // Dependencies: redraw when the document content, the view or the viewport size changes.
+    // Dependencies: redraw when the document content, the view, its overlays or the viewport
+    // size changes.
     void currentRevision;
+    void quickMask;
     void viewEpoch;
     void size.width;
     void size.height;

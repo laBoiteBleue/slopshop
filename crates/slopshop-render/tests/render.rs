@@ -178,16 +178,28 @@ fn render_into_appends_after_existing_bytes() {
     let mut s = Session::new(Document::new(Size::new(4, 4)));
     add_fill(&mut s, LinearRgba::new(0.0, 1.0, 0.0, 1.0), 1.0);
     let mut out = vec![7u8; 16];
-    r.render_view_into(s.document(), identity(), Size::new(4, 4), &mut out)
-        .unwrap();
+    r.render_view_into(
+        s.document(),
+        identity(),
+        Default::default(),
+        Size::new(4, 4),
+        &mut out,
+    )
+    .unwrap();
     assert_eq!(out.len(), 16 + 4 * 4 * 4);
     assert_eq!(&out[..16], &[7u8; 16], "prefix untouched");
     assert_eq!(&out[16..20], &[0, 255, 0, 255]);
 
     let before = out.clone();
     assert!(
-        r.render_view_into(s.document(), identity(), Size::new(0, 4), &mut out)
-            .is_err()
+        r.render_view_into(
+            s.document(),
+            identity(),
+            Default::default(),
+            Size::new(0, 4),
+            &mut out
+        )
+        .is_err()
     );
     assert_eq!(out, before, "unchanged on error");
 }
@@ -827,4 +839,72 @@ fn zoomed_out_a_reduced_raster_keeps_its_color() {
         .render_view(s.document(), view, Size::new(134, 134))
         .unwrap();
     assert_close(pixel(&frame, 55, 75), [200, 100, 50, 255]);
+}
+
+/// A frame of `doc` at identity with `overlays`.
+fn render_overlays(
+    r: &Renderer,
+    doc: &Document,
+    overlays: slopshop_render::ViewOverlays,
+    output: Size,
+) -> Frame {
+    let mut data = Vec::new();
+    r.render_view_into(doc, identity(), overlays, output, &mut data)
+        .unwrap();
+    Frame {
+        size: output,
+        format: PixelFormat::RGBA8_SRGB,
+        data,
+    }
+}
+
+#[test]
+fn quick_mask_tints_what_the_selection_leaves_out() {
+    use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
+    use std::sync::Arc;
+    let quick_mask = slopshop_render::ViewOverlays { quick_mask: true };
+    for cached in [true, false] {
+        let Some(r) = renderer() else { return };
+        let r = r.with_display_cache(cached);
+        // Several tiles, the selection's edge half covering column 300.
+        let size = Size::new(600, 300);
+        let mut s = Session::new(Document::new(size));
+        add_fill(&mut s, LinearRgba::new(1.0, 1.0, 1.0, 1.0), 1.0);
+        let without = render_overlays(&r, s.document(), quick_mask, size);
+        assert_eq!(
+            pixel(&without, 450, 10),
+            [255, 255, 255, 255],
+            "no selection, no tint"
+        );
+
+        let shape = Shape::Rectangle {
+            left: 0.0,
+            top: 0.0,
+            right: 300.5,
+            bottom: 300.0,
+        };
+        let image =
+            selection::select_shape(size, None, &shape, EdgeOptions::default(), Combine::Replace)
+                .unwrap()
+                .unwrap();
+        s.perform(Edit::SetSelection {
+            selection: Selection::new(Arc::new(image)),
+        })
+        .unwrap();
+        let plain = render_overlays(&r, s.document(), Default::default(), size);
+        let masked = render_overlays(&r, s.document(), quick_mask, size);
+        assert_eq!(
+            pixel(&plain, 450, 10),
+            [255, 255, 255, 255],
+            "off by default"
+        );
+        assert_eq!(
+            pixel(&masked, 10, 10),
+            [255, 255, 255, 255],
+            "selected: untouched"
+        );
+        assert_close(pixel(&masked, 450, 290), [255, 128, 128, 255]);
+        // Half selected: half the tint.
+        assert_close(pixel(&masked, 300, 150), [255, 191, 191, 255]);
+    }
 }

@@ -160,6 +160,8 @@ export type DocumentView = {
   selectionKey: number | null;
   /** Select > Reselect has a selection to bring back. */
   canReselect: boolean;
+  /** The view shows Quick Mask (view state, not in the document or its history). */
+  quickMask: boolean;
 };
 
 /** A shape to select, in document pixels. */
@@ -889,6 +891,9 @@ export const engine = {
   reselect: (documentId: number) => serial(() => invoke<DocumentView>("reselect", { documentId })),
   invertSelection: (documentId: number) =>
     serial(() => invoke<DocumentView>("invert_selection", { documentId })),
+  /** Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. */
+  setQuickMask: (documentId: number, on: boolean) =>
+    serial(() => invoke<DocumentView>("set_quick_mask", { documentId, on })),
   /**
    * The marching ants over a region (document pixels) at `zoom` (screen pixels per document
    * pixel), sized to the view, as polylines in document pixels.

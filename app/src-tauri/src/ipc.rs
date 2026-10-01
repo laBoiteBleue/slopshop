@@ -56,6 +56,8 @@ pub struct DocumentView {
     pub selection_key: Option<u64>,
     /// Select > Reselect has a selection to bring back.
     pub can_reselect: bool,
+    /// The view shows Quick Mask (ADR 0024): view state, not part of the document.
+    pub quick_mask: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +113,7 @@ impl DocumentView {
             dirty: false,
             selection_key: doc.selection().map(|s| s.image().id().get()),
             can_reselect: false,
+            quick_mask: false,
         }
     }
 }

@@ -361,6 +361,12 @@
     void sync(engine.selectShape(doc.id, shape, mode ?? selectionMode, smooth, feather));
   }
 
+  /** Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. */
+  function toggleQuickMask() {
+    const doc = active;
+    if (doc) selectionCommand((id) => engine.setQuickMask(id, !doc.quickMask));
+  }
+
   function selectionCommand(run: (id: number) => Promise<DocumentView>) {
     const doc = active;
     if (!doc) return;
@@ -1543,6 +1549,11 @@
             !doc,
           ),
           separator,
+          {
+            ...cmd(t("menu.select.quickMask"), toggleQuickMask, "Q", !doc),
+            checked: doc?.quickMask ?? false,
+          },
+          separator,
           cmd(
             t("menu.select.allLayers"),
             () => layersPanel?.selectAllLayers(),
@@ -1617,6 +1628,18 @@
         if (!e.repeat) selectSlot(slot, e.shiftKey);
         return;
       }
+    }
+    // Q: Quick Mask, a letter alone like the tools.
+    if (
+      e.code === "KeyQ" &&
+      !hasShortcutModifier(e) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      !isTextField(e.target)
+    ) {
+      e.preventDefault();
+      if (!e.repeat) toggleQuickMask();
+      return;
     }
     // Select > Deselect, Reselect, Inverse and All (Ctrl+D, Shift+Ctrl+D, Shift+Ctrl+I, Ctrl+A),
     // by the physical key; not while typing.
@@ -1886,6 +1909,7 @@
               native={nativeCanvas}
               documentId={active.id}
               revision={active.revision}
+              quickMask={active.quickMask}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
               onmove={tool === "move" && !transforming ? onMoveDrag : undefined}
@@ -1894,7 +1918,7 @@
               {guides}
             >
               {#snippet overlay(mapping)}
-                {#if active?.selectionKey != null}
+                {#if active?.selectionKey != null && !active.quickMask}
                   <SelectionOutline
                     {mapping}
                     documentId={active.id}
