@@ -55,7 +55,9 @@ built. Contributors: propose here first.
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup) and Crop (C); the active one is highlighted, its name and key in the tooltip. An
+  startup), the marquees (M) and Crop (C); the active one is highlighted, its name and key in
+  the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
+  a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
   Hand or Zoom tool, and no view or apply buttons in the options bar (maintainer's choice,
   2026-10-01): Space+drag, the middle button, the wheel, Enter and Esc already do that with any
@@ -104,6 +106,16 @@ built. Contributors: propose here first.
   tool drops the frame. Whole pixels only, and nothing
   is deleted: cropped pixels stay outside the canvas. Image > Crop to a selection comes with
   selections.
+
+- Selections (ADR 0024): Rectangular and Elliptical Marquee (M): drag on the image, whole
+  pixels, a size readout; Shift at the press adds, Alt subtracts, both intersect, otherwise the
+  options bar's mode (new, add, subtract, intersect); during the drag Shift makes a square or a
+  circle and Alt draws from the center (once the press keys are released); a click deselects. A
+  small +, − or × next to the pointer shows how the next shape combines (maintainer's idea).
+  Options bar: the four modes, Feather (px), Anti-alias for the ellipse. Marching ants follow the
+  selection at any zoom; a feathered selection also shows where its soft edge starts and ends,
+  as two still dotted lines (maintainer's idea). Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
+  Inverse (Shift+Ctrl+I). Selecting is undoable; crop and size changes deselect.
 
 ## Proposed
 
@@ -161,8 +173,6 @@ built. Contributors: propose here first.
 
 ### Tools (when they arrive)
 
-- [ ] Tool groups in one toolbar slot (a small corner mark, a long press or right-click lists
-      them) and Shift+key to cycle a group, as in Photoshop, once a slot holds several tools.
 - [ ] The active tool and its options remembered across sessions, as in Photoshop.
 - [ ] Spring-loaded tools: holding a tool's key uses it until the key is released.
 - [ ] Brush size and hardness with [ and ], Alt+right-drag to resize on the canvas.
