@@ -80,31 +80,43 @@ impl GpuTileFormat {
 /// A stored tile as RGBA texels for its GPU format. RGBA tiles are uploaded as they are;
 /// gray tiles are expanded (gray replicated, opaque alpha added): lossless.
 pub(crate) fn gpu_texels<'a>(tile: &'a [u8], stored: PixelFormat) -> Cow<'a, [u8]> {
-    let sample = stored.sample.bytes() as usize;
-    let opaque: Vec<u8> = match stored.sample {
-        SampleType::U8 => vec![255],
-        SampleType::U16 => 65535u16.to_ne_bytes().to_vec(),
-        SampleType::F16 => f32_to_f16(1.0).to_ne_bytes().to_vec(),
-        SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
-    };
-    match stored.layout {
-        ChannelLayout::Rgba => Cow::Borrowed(tile),
-        ChannelLayout::Gray | ChannelLayout::GrayAlpha => {
-            let has_alpha = stored.layout.has_alpha();
-            let in_px = if has_alpha { 2 * sample } else { sample };
-            let mut out = Vec::with_capacity(tile.len() / in_px * 4 * sample);
-            for px in tile.chunks_exact(in_px) {
-                let gray = &px[..sample];
-                out.extend_from_slice(gray);
-                out.extend_from_slice(gray);
-                out.extend_from_slice(gray);
-                out.extend_from_slice(if has_alpha { &px[sample..] } else { &opaque });
-            }
-            Cow::Owned(out)
-        }
+    let has_alpha = match stored.layout {
+        ChannelLayout::Gray => false,
+        ChannelLayout::GrayAlpha => true,
         // Raster storage never keeps 3-channel tiles (RGB is stored as RGBA).
-        ChannelLayout::Rgb => Cow::Borrowed(tile),
+        ChannelLayout::Rgba | ChannelLayout::Rgb => return Cow::Borrowed(tile),
+    };
+    Cow::Owned(match stored.sample {
+        SampleType::U8 => expand_gray(tile, has_alpha, [255]),
+        SampleType::U16 => expand_gray(tile, has_alpha, 65535u16.to_ne_bytes()),
+        SampleType::F16 => expand_gray(tile, has_alpha, f32_to_f16(1.0).to_ne_bytes()),
+        SampleType::F32 => expand_gray(tile, has_alpha, 1.0f32.to_ne_bytes()),
+    })
+}
+
+/// Gray texels of `S` bytes per sample (with alpha after each when `has_alpha`) as RGBA: gray
+/// replicated, alpha kept or `opaque`. A fixed sample size lets every copy compile to a move:
+/// this runs for every gray tile uploaded.
+fn expand_gray<const S: usize>(tile: &[u8], has_alpha: bool, opaque: [u8; S]) -> Vec<u8> {
+    let (samples, _) = tile.as_chunks::<S>();
+    let pixels = if has_alpha {
+        samples.len() / 2
+    } else {
+        samples.len()
+    };
+    let mut out = vec![0; pixels * 4 * S];
+    let (channels, _) = out.as_chunks_mut::<S>();
+    let (texels, _) = channels.as_chunks_mut::<4>();
+    if has_alpha {
+        for (texel, &[gray, alpha]) in texels.iter_mut().zip(samples.as_chunks::<2>().0) {
+            *texel = [gray, gray, gray, alpha];
+        }
+    } else {
+        for (texel, &gray) in texels.iter_mut().zip(samples) {
+            *texel = [gray, gray, gray, opaque];
+        }
     }
+    out
 }
 
 #[derive(Debug)]
@@ -240,4 +252,38 @@ fn array_view(texture: &wgpu::Texture) -> wgpu::TextureView {
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slopshop_core::color::{AlphaMode, ColorSpace};
+
+    fn format(layout: ChannelLayout, sample: SampleType) -> PixelFormat {
+        PixelFormat {
+            layout,
+            sample,
+            color_space: ColorSpace::SRGB,
+            alpha: AlphaMode::Straight,
+        }
+    }
+
+    #[test]
+    fn gray_texels_are_expanded_exactly() {
+        let gray8 = format(ChannelLayout::Gray, SampleType::U8);
+        assert_eq!(&*gpu_texels(&[7, 9], gray8), &[7, 7, 7, 255, 9, 9, 9, 255]);
+        let gray_alpha8 = format(ChannelLayout::GrayAlpha, SampleType::U8);
+        assert_eq!(&*gpu_texels(&[7, 3], gray_alpha8), &[7, 7, 7, 3]);
+        let gray16 = format(ChannelLayout::Gray, SampleType::U16);
+        let one = 0x1234u16.to_ne_bytes();
+        let expanded: Vec<u8> = [one, one, one, 65535u16.to_ne_bytes()].concat();
+        assert_eq!(&*gpu_texels(&one, gray16), &expanded[..]);
+        let gray32 = format(ChannelLayout::GrayAlpha, SampleType::F32);
+        let (v, a) = (0.25f32.to_ne_bytes(), 0.5f32.to_ne_bytes());
+        let expanded: Vec<u8> = [v, v, v, a].concat();
+        assert_eq!(&*gpu_texels(&[v, a].concat(), gray32), &expanded[..]);
+        // RGBA tiles are uploaded as they are.
+        let rgba = format(ChannelLayout::Rgba, SampleType::U8);
+        assert!(matches!(gpu_texels(&[1, 2, 3, 4], rgba), Cow::Borrowed(_)));
+    }
 }
