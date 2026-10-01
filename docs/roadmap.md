@@ -167,7 +167,10 @@ paints on an empty layer or in a mask.
       sharing their uniform tiles; rectangles, ellipses and polygons rasterized exactly;
       replace, add, subtract, intersect; feather; inverse; outline for the marching ants;
       undoable
-- [ ] Selection tools: marquees, lassos, the Select menu, selection → mask, Crop to selection
+- [x] Rectangular and Elliptical Marquee, their options (modes, feather, anti-alias), marching
+      ants, the Select menu (All, Deselect, Reselect, Inverse), tool groups in the toolbar
+- [ ] Lasso and Polygonal Lasso
+- [ ] Selection → layer mask, Image > Crop to the selection
 - [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
