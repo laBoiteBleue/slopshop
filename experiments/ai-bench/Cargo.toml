@@ -12,14 +12,20 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 # ONNX Runtime bindings (MIT OR Apache-2.0); the prebuilt ONNX Runtime 1.28 is downloaded at
 # build time, a different build per execution provider feature below.
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native", "api-27"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "tls-native", "api-27"] }
 
 [features]
 # One GPU execution provider per build: the prebuilt binaries do not combine them.
 # DirectML (Windows; DirectML.dll ships with it).
-directml = ["ort/directml"]
+directml = ["ort/download-binaries", "ort/copy-dylibs", "ort/directml"]
 # WebGPU (Dawn: D3D12, Vulkan, Metal), experimental in ONNX Runtime.
-webgpu = ["ort/webgpu"]
+webgpu = ["ort/download-binaries", "ort/copy-dylibs", "ort/webgpu"]
+# NVIDIA: CUDA, TensorRT and TensorRT for RTX (with DirectML, the prebuilt binary that has them).
+# The NVIDIA libraries are not shipped: see README.md.
+nvidia = ["ort/download-binaries", "ort/copy-dylibs", "ort/cuda", "ort/tensorrt", "ort/nvrtx", "ort/directml"]
+# Microsoft's official ONNX Runtime GPU build, loaded at run time (ORT_DYLIB_PATH): CUDA and
+# TensorRT, with kernels for recent GPUs.
+official = ["ort/load-dynamic", "ort/cuda", "ort/tensorrt"]
 
 [profile.release]
 debug = false

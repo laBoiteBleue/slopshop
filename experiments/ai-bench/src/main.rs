@@ -154,6 +154,12 @@ enum Ep {
     DirectMl,
     #[cfg(feature = "webgpu")]
     WebGpu,
+    #[cfg(any(feature = "nvidia", feature = "official"))]
+    Cuda,
+    #[cfg(any(feature = "nvidia", feature = "official"))]
+    TensorRt,
+    #[cfg(feature = "nvidia")]
+    TensorRtRtx,
 }
 
 impl Ep {
@@ -164,6 +170,12 @@ impl Ep {
             "directml" => Some(Ep::DirectMl),
             #[cfg(feature = "webgpu")]
             "webgpu" => Some(Ep::WebGpu),
+            #[cfg(any(feature = "nvidia", feature = "official"))]
+            "cuda" => Some(Ep::Cuda),
+            #[cfg(any(feature = "nvidia", feature = "official"))]
+            "tensorrt" => Some(Ep::TensorRt),
+            #[cfg(feature = "nvidia")]
+            "tensorrt-rtx" => Some(Ep::TensorRtRtx),
             _ => None,
         }
     }
@@ -175,6 +187,12 @@ impl Ep {
             Ep::DirectMl => "DirectML",
             #[cfg(feature = "webgpu")]
             Ep::WebGpu => "WebGPU",
+            #[cfg(any(feature = "nvidia", feature = "official"))]
+            Ep::Cuda => "CUDA",
+            #[cfg(any(feature = "nvidia", feature = "official"))]
+            Ep::TensorRt => "TensorRT",
+            #[cfg(feature = "nvidia")]
+            Ep::TensorRtRtx => "TensorRT-RTX",
         }
     }
 }
@@ -183,6 +201,18 @@ fn session(path: &Path, ep: Ep, level: GraphOptimizationLevel) -> ort::Result<Se
     let builder = Session::builder()?.with_optimization_level(level)?;
     let mut builder = match ep {
         Ep::Cpu => builder,
+        #[cfg(any(feature = "nvidia", feature = "official"))]
+        Ep::Cuda => builder
+            .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])?,
+        #[cfg(any(feature = "nvidia", feature = "official"))]
+        Ep::TensorRt => builder.with_execution_providers([ort::ep::TensorRT::default()
+            .with_engine_cache(true)
+            .with_engine_cache_path(engine_cache())
+            .build()
+            .error_on_failure()])?,
+        #[cfg(feature = "nvidia")]
+        Ep::TensorRtRtx => builder
+            .with_execution_providers([ort::ep::NVRTX::default().build().error_on_failure()])?,
         #[cfg(feature = "webgpu")]
         Ep::WebGpu => builder
             .with_execution_providers([ort::ep::WebGPU::default().build().error_on_failure()])?,
@@ -194,6 +224,12 @@ fn session(path: &Path, ep: Ep, level: GraphOptimizationLevel) -> ort::Result<Se
             .with_execution_providers([ort::ep::DirectML::default().build().error_on_failure()])?,
     };
     builder.commit_from_file(path)
+}
+
+/// Where TensorRT keeps the engines it builds (minutes for big models), between runs.
+#[cfg(any(feature = "nvidia", feature = "official"))]
+fn engine_cache() -> String {
+    default_dir().join("tensorrt-cache").display().to_string()
 }
 
 /// Synthetic inputs of the right types and shapes: the values do not change the latency.
