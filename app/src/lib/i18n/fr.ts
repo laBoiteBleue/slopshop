@@ -80,6 +80,7 @@ const fr: Messages = {
   "copy.failed": "Impossible de copier les calques : {error}",
   "paste.failed": "Impossible de coller : {error}",
   "menu.edit.language": "Langue",
+  "menu.edit.preferences": "Préférences…",
   "menu.image": "Image",
   "menu.layer": "Calque",
   "menu.layer.rename": "Renommer le calque",
@@ -512,6 +513,40 @@ const fr: Messages = {
   "blendMode.saturation": "Saturation",
   "blendMode.color": "Couleur",
   "blendMode.luminosity": "Luminosité",
+  "preferences.title": "Préférences",
+  "preferences.ai": "Composants IA",
+  "preferences.ai.intro":
+    "Les fonctions d’IA tournent sur cet ordinateur. Leurs composants sont téléchargés une fois, depuis leurs éditeurs, quand une fonction en a besoin pour la première fois.",
+  "preferences.close": "Fermer",
+  "ai.unsupported": "Les fonctions d’IA ne sont pas encore disponibles sur ce système.",
+  "ai.installed": "Installé, {size}",
+  "ai.notInstalled": "Non installé, {size} à télécharger",
+  "ai.remove": "Supprimer",
+  "ai.download": "Télécharger…",
+  "ai.download.title": "Télécharger les composants IA",
+  "ai.download.intro":
+    "Les fonctions d’IA tournent sur cet ordinateur. Ces composants sont téléchargés une fois, depuis leurs éditeurs ; ensuite, elles marchent hors ligne.",
+  "ai.download.total": "À télécharger : {download} · Sur le disque : {disk}",
+  "ai.download.nonCommercial": "Non commercial",
+  "ai.download.nonCommercialNote":
+    "Une licence ci-dessus interdit l’usage commercial de ce que vous créez avec.",
+  "ai.download.accept": "J’accepte les licences ci-dessus",
+  "ai.download.start": "Télécharger",
+  "ai.download.cancel": "Annuler",
+  "ai.download.retry": "Réessayer",
+  "ai.download.progress": "{done} sur {total}",
+  "ai.error.network":
+    "Le téléchargement a échoué ({detail}). Ce qui a été téléchargé est conservé : réessayez.",
+  "ai.error.disk": "Les fichiers n’ont pas pu être écrits : {detail}",
+  "ai.error.corrupt":
+    "Un fichier téléchargé était endommagé ({detail}) et a été supprimé : réessayez.",
+  "ai.error.busy": "Un autre téléchargement est en cours.",
+  "ai.error.internal": "Erreur inattendue : {detail}",
+  "ai.component.runtimeCuda":
+    "Moteur d’IA pour cartes graphiques NVIDIA (ONNX Runtime, CUDA, cuDNN)",
+  "ai.component.runtimeCpu": "Moteur d’IA pour le processeur (ONNX Runtime)",
+  "ai.component.samBasePlus": "SAM 2.1 base+ : sélection d’objets",
+  "ai.component.samTiny": "SAM 2.1 tiny : sélection d’objets",
 };
 
 export default fr;

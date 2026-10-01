@@ -42,6 +42,7 @@
   import ExportDialog from "./lib/ExportDialog.svelte";
   import VectorImportDialog from "./lib/VectorImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
+  import PreferencesDialog from "./lib/PreferencesDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel, shortcutLetter } from "./lib/platform";
   import { formatZoom } from "./lib/format";
@@ -419,6 +420,8 @@
 
   // Select > Color Range: a panel beside the image, whose clicks sample colors.
   let colorRange = $state<ColorRangeState | null>(null);
+  /** Edit > Preferences (Ctrl+K) is open. */
+  let preferences = $state(false);
 
   function openColorRange() {
     const doc = active;
@@ -1553,6 +1556,7 @@
               run: () => setLocale(code as Locale),
             })),
           },
+          cmd(t("menu.edit.preferences"), () => (preferences = true), keys("mod", "K")),
         ],
       },
       {
@@ -1814,6 +1818,11 @@
     if (key === "s") {
       e.preventDefault();
       if (!e.repeat) saveActive(e.shiftKey);
+      return;
+    }
+    if (key === "k" && !e.shiftKey) {
+      e.preventDefault();
+      preferences = true;
       return;
     }
     if (key === "q" && !e.shiftKey) {
@@ -2259,6 +2268,10 @@
     onapply={applyModify}
     onclose={() => (modifyDialog = null)}
   />
+{/if}
+
+{#if preferences}
+  <PreferencesDialog onclose={() => (preferences = false)} />
 {/if}
 
 {#if sizeDialog && sizeDoc}

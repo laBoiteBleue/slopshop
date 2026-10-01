@@ -4,7 +4,7 @@
 // The UI never computes image content: it sends intents (edits) and displays what the engine
 // returns. Frames arrive as raw binary (ArrayBuffer), never as JSON.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export type LayerView = {
@@ -800,6 +800,33 @@ function merge(pending: ViewRequest, next: ViewRequest): ViewRequest | null {
 export const DOCUMENT_CLOSED = "document-closed";
 
 /** Every document request names its document (one per tab). */
+/** What the user asks AI for (mirrors `ai::Feature`). */
+export type AiFeature = "segmentation";
+
+/** A license an AI component comes under. */
+export type AiLicense = {
+  name: string;
+  url: string;
+  commercial: boolean;
+  /** Must be accepted explicitly before the download (not permissive open source). */
+  accept: boolean;
+};
+
+/** An AI component: a runtime or a model's files (ADR 0025). */
+export type AiComponent = {
+  /** Stable id, translated with `ai.component.<id>`. */
+  id: string;
+  downloadSize: number;
+  installedSize: number;
+  installed: boolean;
+  licenses: AiLicense[];
+};
+
+/** Why an install or a removal failed: `code` is translated with `ai.error.<code>`. */
+export type AiFailure = { code: string; detail: string };
+
+export type AiProgress = { done: number; total: number };
+
 export const engine = {
   /** Open documents, in tab order. */
   documents: () => invoke<DocumentView[]>("documents"),
@@ -986,6 +1013,23 @@ export const engine = {
     serial(() => invoke<number>("copy_layers_to_clipboard", { documentId, layerIds })),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
+  /**
+   * The AI components `feature` needs on this machine, or without a feature every one it can
+   * use (and any other still installed). `null`: AI is not offered on this platform yet.
+   */
+  aiComponents: (feature: AiFeature | null) =>
+    invoke<AiComponent[] | null>("ai_components", { feature }),
+  /** Downloads components in turn; one install at a time. Rejects with an `AiFailure`. */
+  aiInstall: (ids: string[], onProgress: (progress: AiProgress) => void) => {
+    const progress = new Channel<AiProgress>();
+    progress.onmessage = onProgress;
+    return invoke<void>("ai_install", { ids, progress });
+  },
+  /** Stops the install running; what it fetched is kept for the next attempt. */
+  aiCancelInstall: () => invoke<void>("ai_cancel_install"),
+  aiRemove: (id: string) => invoke<void>("ai_remove", { id }),
+  /** Opens one of the components' licenses in the browser. */
+  aiOpenLicense: (url: string) => invoke<void>("ai_open_license", { url }),
   perform: (documentId: number, edit: EditRequest) =>
     serial(() => invoke<DocumentView>("perform", { documentId, edit })),
   /**
