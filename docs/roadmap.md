@@ -59,8 +59,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       isolated group under one window (a Levels layer)
 - [x] FITS import (in-house): native precision, an automatic stretch as a Levels layer
 - [x] SVG import (resvg), through the Import PDF dialog made generic (Import SVG)
-- [ ] An export for every format read: DICOM, FITS, PDF, JPEG 2000, GIF, Radiance HDR, QOI,
-      ICO, farbfeld, DDS (not camera RAW, not SVG)
+- [x] Export to QOI, farbfeld, Radiance HDR, ICO, GIF (one frame, 256 colors) and DDS
+      (uncompressed); uncompressed DDS import
+- [ ] An export for every format read: DICOM, FITS, PDF, JPEG 2000 (not camera RAW, not SVG)
 - [ ] Camera RAW, basic: decoded "as shot" in a separate process (rawler is LGPL)
 - [ ] Other formats (KRA/XCF/ORA, legacy formats, a RAW development module): the format track
       closes after the items above (maintainer, 2026-10-01); open to contributors, with each
