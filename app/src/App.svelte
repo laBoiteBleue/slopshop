@@ -58,6 +58,7 @@
   import { MAX_FEATHER, MAX_MODIFY } from "./lib/selection";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
+  import ColorRangeDialog, { sampleAt, type ColorRangeState } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
@@ -415,6 +416,42 @@
     commitTransform();
     void sync(engine.modifySelection(dialog.document, dialog.kind, amount));
   }
+
+  // Select > Color Range: a panel beside the image, whose clicks sample colors.
+  let colorRange = $state<ColorRangeState | null>(null);
+
+  function openColorRange() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    colorRange = {
+      document: doc.id,
+      included: [],
+      excluded: [],
+      fuzziness: 40,
+      invert: false,
+      eyedropper: "pick",
+    };
+  }
+
+  function applyColorRange() {
+    const range = colorRange;
+    colorRange = null;
+    if (!range || (range.included.length === 0 && !range.invert)) return;
+    void sync(
+      engine.colorRange(range.document, {
+        included: $state.snapshot(range.included),
+        excluded: $state.snapshot(range.excluded),
+        fuzziness: range.fuzziness,
+        invert: range.invert,
+        layerId: null,
+      }),
+    );
+  }
+
+  $effect(() => {
+    if (colorRange && colorRange.document !== activeId) colorRange = null;
+  });
 
   /** Image > Crop: to the selection's bounds when there is one, else the Crop tool. */
   function cropImage() {
@@ -1630,6 +1667,7 @@
             !doc,
           ),
           separator,
+          cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
           {
             kind: "submenu",
             label: t("menu.select.modify"),
@@ -2050,6 +2088,17 @@
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
                   />
+                {:else if colorRange && colorRange.document === active?.id}
+                  <!-- Color Range open: a click on the image samples a color. -->
+                  <div
+                    class="sample-overlay"
+                    role="presentation"
+                    onpointerdown={(e) => {
+                      if (e.button !== 0 || mapping.hand || !colorRange) return;
+                      const [x, y] = mapping.toDocument(e.clientX, e.clientY);
+                      sampleAt(colorRange, x, y, e);
+                    }}
+                  ></div>
                 {:else if tool === "wand"}
                   <WandTool {mapping} mode={selectionMode} onpick={magicWand} />
                 {:else if tool === "lasso" || tool === "polygonalLasso"}
@@ -2191,6 +2240,16 @@
     </span>
   </footer>
 </div>
+
+{#if colorRange && colorRange.document === activeId && active}
+  <ColorRangeDialog
+    bind:range={colorRange}
+    width={active.width}
+    height={active.height}
+    onapply={applyColorRange}
+    onclose={() => (colorRange = null)}
+  />
+{/if}
 
 {#if modifyDialog && modifyDialog.document === activeId}
   <ModifyDialog
@@ -2562,6 +2621,13 @@
     min-width: 0;
     min-height: 0;
     background: var(--pasteboard);
+  }
+
+  /* Color Range open: clicks on the image sample colors. */
+  .sample-overlay {
+    position: absolute;
+    inset: 0;
+    cursor: crosshair;
   }
 
   .stage.see-through {

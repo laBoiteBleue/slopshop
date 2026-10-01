@@ -172,6 +172,16 @@ export type SelectionShape =
 /** A new layer mask: everything shown or hidden, or the selection shown or hidden. */
 export type LayerMaskKind = "revealAll" | "hideAll" | "revealSelection" | "hideSelection";
 
+/** Select > Color Range's samples (document pixels) and settings. */
+export type ColorRangeRequest = {
+  included: [number, number][];
+  excluded: [number, number][];
+  fuzziness: number;
+  invert: boolean;
+  /** Sample only this layer; null: the image as displayed. */
+  layerId: number | null;
+};
+
 /** Select > Modify's changes. */
 export type SelectionModify = "border" | "smooth" | "expand" | "contract" | "feather";
 
@@ -917,6 +927,21 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode }),
     ),
+  /** Select > Color Range's preview: width, height and 8-bit coverage per pixel. */
+  colorRangePreview: async (documentId: number, request: ColorRangeRequest, maxSide: number) => {
+    const buffer = await invoke<ArrayBuffer>("color_range_preview", {
+      documentId,
+      request,
+      maxSide,
+    });
+    const view = new DataView(buffer);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    return { width, height, gray: new Uint8Array(buffer, 8, width * height) };
+  },
+  /** Select > Color Range: the sampled colors, within the selection if any. */
+  colorRange: (documentId: number, request: ColorRangeRequest) =>
+    serial(() => invoke<DocumentView>("color_range", { documentId, request })),
   /** Select > Modify: the whole selection changed by `amount` pixels. */
   modifySelection: (documentId: number, kind: SelectionModify, amount: number) =>
     serial(() => invoke<DocumentView>("modify_selection", { documentId, kind, amount })),
