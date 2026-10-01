@@ -86,7 +86,7 @@ USAGE:
     slopshop inspect <FILE.slop> [--bench]
         Show a document file: generation, size, unused bytes, and its layers.
 
-    slopshop bench <FILE> [--size WxH] [--at X,Y] [--frames N]
+    slopshop bench <FILE> [--size WxH] [--at X,Y] [--frames N] [--direct]
         Time the viewport renderer on a .slop document, or an image file as a
         one-layer document: the same view redrawn (fit, then 100 %), a pan and a
         zoom, as the app shows them, without reading the pixels back.
@@ -94,6 +94,8 @@ USAGE:
         --at           The document point the 100 % views, the pan and the zoom
                        start from, in pixels. Default: the document center.
         --frames       Frames per scenario, 2 or more. Default: 30.
+        --direct       Composite every frame from the layers, without the display
+                       cache (ADR 0022), to compare.
 
     slopshop --help | --version
 ";

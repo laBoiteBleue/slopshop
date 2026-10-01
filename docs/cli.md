@@ -289,7 +289,7 @@ slopshop export montage.slop montage.png
 ## `slopshop bench`
 
 ```sh
-slopshop bench <FILE> [--size WxH] [--at X,Y] [--frames N]
+slopshop bench <FILE> [--size WxH] [--at X,Y] [--frames N] [--direct]
 ```
 
 Times the viewport renderer (the one the app displays with) on a `.slop` document, or an image
@@ -309,13 +309,16 @@ from the request until the GPU has finished it. Columns, in milliseconds: `first
 `median` and `p95` of the others, then the median CPU time to plan a frame and record its
 tile uploads (`prepare`) and the median GPU time of the compositing pass (`gpu`, `-` when the
 adapter cannot time passes); `layers` is the largest number of steps the shader visits per
-pixel, `tiles` the number of tiles uploaded to the GPU in the scenario.
+pixel, `tiles` the number of raster tiles uploaded to the GPU in the scenario, `composed` the
+number of display cache tiles composited in it ([ADR 0022](adr/0022-display-cache.md): a frame
+whose view is already cached composites none).
 
 | Option | Meaning |
 |---|---|
 | `--size WxH` | The viewport, in pixels. Default: `1920x1080` |
 | `--at X,Y` | The document point the 100 % views, the pan and the zoom start from, in pixels. Default: the document center |
 | `--frames N` | Frames per scenario, 2 or more. Default: 30 |
+| `--direct` | Composite every frame from the layers, without the display cache, to compare |
 
 ```sh
 cargo run --release -p slopshop-cli -- bench scan.slop --at 280,280
