@@ -395,7 +395,19 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
 /** Export file formats. */
 /** `psd` and `psb` keep the layers (export_psd in crates/slopshop-io/src/export/psd.rs). */
 export type ExportFormat =
-  "png" | "tiff" | "exr" | "jpeg" | "webp" | "avif" | "psd" | "psb" | "bmp" | "tga" | "pnm" | "pfm";
+  | "png"
+  | "tiff"
+  | "exr"
+  | "jpeg"
+  | "webp"
+  | "avif"
+  | "jxl"
+  | "psd"
+  | "psb"
+  | "bmp"
+  | "tga"
+  | "pnm"
+  | "pfm";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
@@ -408,7 +420,7 @@ export type ExportSpec = {
   sample: ExportSample;
   /** `null` for EXR, whose compression is fixed (lossless), and for JPEG. */
   compression: ExportCompression | null;
-  /** JPEG (1 to 100) and lossy WebP (0 to 100); `null` otherwise. */
+  /** JPEG (1 to 100), lossy WebP and AVIF (0 to 100); `null` otherwise. */
   quality: number | null;
   /** JPEG only; `null` for the other formats. */
   subsampling: ExportSubsampling | null;
@@ -523,6 +535,14 @@ export const EXPORT_FORMATS: Record<
   },
   avif: {
     extensions: ["avif"],
+    samples: ["u8", "u16"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: true,
+  },
+  jxl: {
+    extensions: ["jxl"],
     samples: ["u8", "u16"],
     compressions: [],
     subsamplings: [],
