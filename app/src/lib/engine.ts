@@ -393,8 +393,8 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
 }
 
 /** Export file formats. */
-/** `psd` keeps the layers (export_psd in crates/slopshop-io/src/export/psd.rs). */
-export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp" | "psd";
+/** `psd` and `psb` keep the layers (export_psd in crates/slopshop-io/src/export/psd.rs). */
+export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp" | "psd" | "psb";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
@@ -482,6 +482,14 @@ export const EXPORT_FORMATS: Record<
   },
   psd: {
     extensions: ["psd"],
+    samples: ["u8", "u16"],
+    compressions: [],
+    subsamplings: [],
+    alpha: false,
+    gray: false,
+  },
+  psb: {
+    extensions: ["psb"],
     samples: ["u8", "u16"],
     compressions: [],
     subsamplings: [],

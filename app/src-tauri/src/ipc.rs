@@ -746,6 +746,7 @@ pub enum ExportFormatId {
     Jpeg,
     Webp,
     Psd,
+    Psb,
 }
 
 impl ExportFormatId {
@@ -757,6 +758,7 @@ impl ExportFormatId {
             ExportFormatId::Jpeg => ExportFormatKind::Jpeg,
             ExportFormatId::Webp => ExportFormatKind::Webp,
             ExportFormatId::Psd => ExportFormatKind::Psd,
+            ExportFormatId::Psb => ExportFormatKind::Psb,
         }
     }
 }
@@ -886,8 +888,12 @@ impl ExportSpecDto {
                 };
                 (ExportFormatId::Webp, S::U8, Some(compression))
             }
-            ExportFormat::Psd { depth } => (
-                ExportFormatId::Psd,
+            ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => (
+                if spec.format.kind() == ExportFormatKind::Psb {
+                    ExportFormatId::Psb
+                } else {
+                    ExportFormatId::Psd
+                },
                 match depth {
                     PsdDepth::U8 => S::U8,
                     PsdDepth::U16 => S::U16,
@@ -1006,7 +1012,7 @@ impl ExportSpecDto {
                     },
                 }
             }
-            ExportFormatId::Psd => {
+            ExportFormatId::Psd | ExportFormatId::Psb => {
                 if self.compression.is_some() {
                     return Err(compression());
                 }
@@ -1014,12 +1020,15 @@ impl ExportSpecDto {
                 if !self.keep_alpha {
                     return Err(invalid("dropping alpha".to_owned()));
                 }
-                ExportFormat::Psd {
-                    depth: match self.sample {
-                        S::U8 => PsdDepth::U8,
-                        S::U16 => PsdDepth::U16,
-                        S::F16 | S::F32 => return Err(sample()),
-                    },
+                let depth = match self.sample {
+                    S::U8 => PsdDepth::U8,
+                    S::U16 => PsdDepth::U16,
+                    S::F16 | S::F32 => return Err(sample()),
+                };
+                if self.format == ExportFormatId::Psb {
+                    ExportFormat::Psb { depth }
+                } else {
+                    ExportFormat::Psd { depth }
                 }
             }
         };
@@ -1220,6 +1229,7 @@ mod tests {
             ExportFormatId::Jpeg,
             ExportFormatId::Webp,
             ExportFormatId::Psd,
+            ExportFormatId::Psb,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
