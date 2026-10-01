@@ -14,8 +14,8 @@ use slopshop_core::{
 };
 use slopshop_io::export::{
     ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TiffCompression, TiffSample,
-    WebpCompression, default_spec, export_image, export_psd, has_gray, supports_alpha,
+    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression, TiffCompression,
+    TiffSample, WebpCompression, default_spec, export_image, export_psd, has_gray, supports_alpha,
     supports_gray, supports_space,
 };
 use slopshop_render::Renderer;
@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 7] = [
+const FORMATS: [ExportFormatKind; 9] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -41,6 +41,8 @@ const FORMATS: [ExportFormatKind; 7] = [
     ExportFormatKind::Webp,
     ExportFormatKind::Psd,
     ExportFormatKind::Psb,
+    ExportFormatKind::Bmp,
+    ExportFormatKind::Tga,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -109,7 +111,10 @@ impl Depth {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
-            ExportFormatKind::Jpeg | ExportFormatKind::Webp => self == Depth::U8,
+            ExportFormatKind::Jpeg
+            | ExportFormatKind::Webp
+            | ExportFormatKind::Bmp
+            | ExportFormatKind::Tga => self == Depth::U8,
             ExportFormatKind::Psd | ExportFormatKind::Psb => self.psd().is_some(),
         }
     }
@@ -126,10 +131,11 @@ enum Compression {
     Lzw,
     Lossy,
     Lossless,
+    Rle,
 }
 
 impl Compression {
-    const ALL: [Compression; 7] = [
+    const ALL: [Compression; 8] = [
         Compression::Fast,
         Compression::Small,
         Compression::None,
@@ -137,6 +143,7 @@ impl Compression {
         Compression::Lzw,
         Compression::Lossy,
         Compression::Lossless,
+        Compression::Rle,
     ];
 
     fn name(self) -> &'static str {
@@ -148,6 +155,7 @@ impl Compression {
             Compression::Lzw => "lzw",
             Compression::Lossy => "lossy",
             Compression::Lossless => "lossless",
+            Compression::Rle => "rle",
         }
     }
 
@@ -172,15 +180,25 @@ impl Compression {
         matches!(self, Compression::Lossy | Compression::Lossless)
     }
 
+    fn tga(self) -> Option<TgaCompression> {
+        match self {
+            Compression::None => Some(TgaCompression::None),
+            Compression::Rle => Some(TgaCompression::Rle),
+            _ => None,
+        }
+    }
+
     fn supported_by(self, kind: ExportFormatKind) -> bool {
         match kind {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Webp => self.is_webp(),
+            ExportFormatKind::Tga => self.tga().is_some(),
             ExportFormatKind::Exr
             | ExportFormatKind::Jpeg
             | ExportFormatKind::Psd
-            | ExportFormatKind::Psb => false,
+            | ExportFormatKind::Psb
+            | ExportFormatKind::Bmp => false,
         }
     }
 }
@@ -385,6 +403,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 }
                 ExportFormatKind::Psd | ExportFormatKind::Psb => {
                     format!("{name} has no --compression option (it always uses RLE)")
+                }
+                ExportFormatKind::Bmp => {
+                    format!("{name} has no --compression option (it is uncompressed)")
                 }
                 _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
             }
@@ -605,6 +626,8 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "webp" => Some(ExportFormatKind::Webp),
         "psd" => Some(ExportFormatKind::Psd),
         "psb" => Some(ExportFormatKind::Psb),
+        "bmp" => Some(ExportFormatKind::Bmp),
+        "tga" => Some(ExportFormatKind::Tga),
         _ => None,
     }
 }
@@ -619,6 +642,8 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Webp => "webp",
         ExportFormatKind::Psd => "psd",
         ExportFormatKind::Psb => "psb",
+        ExportFormatKind::Bmp => "bmp",
+        ExportFormatKind::Tga => "tga",
     }
 }
 
@@ -631,6 +656,8 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Webp => "WebP",
         ExportFormatKind::Psd => "Photoshop (layered PSD)",
         ExportFormatKind::Psb => "Photoshop large document (layered PSB)",
+        ExportFormatKind::Bmp => "BMP",
+        ExportFormatKind::Tga => "Targa",
     }
 }
 
@@ -697,6 +724,13 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
         ExportFormat::Psb { depth } => ExportFormat::Psb {
             depth: args.depth.and_then(Depth::psd).unwrap_or(depth),
         },
+        ExportFormat::Bmp => ExportFormat::Bmp,
+        ExportFormat::Tga { compression } => ExportFormat::Tga {
+            compression: args
+                .compression
+                .and_then(Compression::tga)
+                .unwrap_or(compression),
+        },
     };
     if let Some(space) = args.space {
         spec.space = space;
@@ -751,7 +785,14 @@ fn describe(spec: &ExportSpec) -> String {
             },
             None,
         ),
-        ExportFormat::Jpeg { .. } => (Depth::U8, None),
+        ExportFormat::Jpeg { .. } | ExportFormat::Bmp => (Depth::U8, None),
+        ExportFormat::Tga { compression } => (
+            Depth::U8,
+            Some(match compression {
+                TgaCompression::None => Compression::None,
+                TgaCompression::Rle => Compression::Rle,
+            }),
+        ),
         ExportFormat::Webp { compression } => (
             Depth::U8,
             Some(match compression {
