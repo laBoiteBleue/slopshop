@@ -163,7 +163,12 @@ paints on an empty layer or in a mask.
 - [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move and Crop
       tools with Photoshop's keys (no Hand or Zoom tool: the wheel, Space and the middle button
       do that); the other tools come with their features
-- [ ] Selection model (as masks), marquee/lasso, selection → mask
+- [x] Selection model in the engine ([ADR 0024](adr/0024-selections.md)): 16-bit coverage masks
+      sharing their uniform tiles; rectangles, ellipses and polygons rasterized exactly;
+      replace, add, subtract, intersect; feather; inverse; outline for the marching ants;
+      undoable
+- [ ] Selection tools: marquees, lassos, the Select menu, selection → mask, Crop to selection
+- [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
 

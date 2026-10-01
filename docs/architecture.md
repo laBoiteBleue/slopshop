@@ -58,6 +58,9 @@ do not depend on each other: export receives its pixel source as a closure (see
   math that the CPU compositor uses and the GPU shader mirrors.
 - `edit`: `Edit` is the only mutation path. Edits are validated (failure leaves the document
   untouched) and return their exact inverse.
+- `selection`: the document's selection as a 16-bit coverage mask sharing its uniform tiles
+  ([ADR 0024](adr/0024-selections.md)): shapes rasterized exactly, combine modes, feather,
+  inverse, bounds, and the outline (marching ants) at a pyramid level over a region.
 - `session`: document + linear undo/redo history made of inverse edits. *Gestures* (e.g. a
   slider drag) apply edits live and are recorded as one entry (`Edit::Batch`).
 - `view`: `ViewTransform` mapping output pixels to document pixels, and `Viewport`: fit mode,

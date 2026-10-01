@@ -7,6 +7,7 @@
 //! - [`raster`]: immutable tiled pixel images with a display pyramid.
 //! - [`document`]: the document and its layers (read-only from the outside).
 //! - [`edit`]: the only way to mutate a document; every edit yields its inverse.
+//! - [`selection`]: selections as coverage masks: shapes, combining, feather, outlines.
 //! - [`session`]: a document plus its undo/redo history.
 //! - [`view`]: mapping between output (screen) pixels and document pixels.
 //! - [`transform`] and [`resample`]: layer transforms and how transformed layers are sampled.
@@ -28,6 +29,7 @@ pub mod job;
 pub mod pick;
 pub mod raster;
 pub mod resample;
+pub mod selection;
 pub mod session;
 pub mod thumbnail;
 pub mod tile;
