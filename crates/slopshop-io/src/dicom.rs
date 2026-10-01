@@ -46,33 +46,58 @@ pub(crate) fn is_dicom(head: &[u8]) -> bool {
     head.get(128..132) == Some(b"DICM")
 }
 
-/// The file as a document: the image, and above it the window as Levels (gray images); an
-/// image alone when there is nothing to adjust.
+/// The file as a document: every frame (slice), the first on top, each with the window as
+/// Levels in an isolated group of its own (gray images); a single image alone when there is
+/// nothing to adjust.
 pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
-    let scan = read(path)?;
-    let imported = finish(scan.decoded)?;
-    let Some(window) = scan.window else {
-        return Ok(Opened::Image(imported));
-    };
-    let name = path
+    let scan = read(path, true)?;
+    let stem = path
         .file_stem()
         .map_or_else(|| "DICOM".to_owned(), |s| s.to_string_lossy().into_owned());
-    adjusted::layered(name, imported, window.name, window.levels)
-}
-
-/// The image as shown: the window applied to the samples (reported as a flattened document).
-pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
-    let mut scan = read(path)?;
-    if let Some(window) = scan.window {
-        adjusted::apply_levels(&window.levels, &mut scan.decoded);
-        scan.decoded.warnings.push(ImportWarning::LayersFlattened);
+    let count = scan.frames.len();
+    if count == 1 && scan.window.is_none() {
+        let frame = scan.frames.into_iter().next().ok_or_else(no_frame)?;
+        return finish(frame).map(Opened::Image);
     }
-    Ok(scan.decoded)
+    let levels = scan.window.map(|w| (w.name, w.levels));
+    let slices = scan
+        .frames
+        .into_iter()
+        .enumerate()
+        .map(|(i, frame)| {
+            Ok(adjusted::Slice {
+                name: if count == 1 {
+                    stem.clone()
+                } else {
+                    format!("{stem} {}/{count}", i + 1)
+                },
+                imported: finish(frame)?,
+                levels: levels.clone(),
+            })
+        })
+        .collect::<Result<_, ImportError>>()?;
+    adjusted::layered(slices)
 }
 
-/// The first frame's samples, and how to show them.
+/// The first frame as shown: the window applied to the samples (reported as a flattened
+/// document; other frames reported too).
+pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
+    let scan = read(path, false)?;
+    let mut frame = scan.frames.into_iter().next().ok_or_else(no_frame)?;
+    if let Some(window) = scan.window {
+        adjusted::apply_levels(&window.levels, &mut frame);
+        frame.warnings.push(ImportWarning::LayersFlattened);
+    }
+    Ok(frame)
+}
+
+fn no_frame() -> ImportError {
+    ImportError::Decode("DICOM: no frame".into())
+}
+
+/// The frames' samples (every frame, or the first only), and how to show them.
 struct Scan {
-    decoded: Decoded,
+    frames: Vec<Decoded>,
     window: Option<Window>,
 }
 
@@ -96,7 +121,8 @@ struct Format {
     photometric: String,
 }
 
-fn read(path: &Path) -> Result<Scan, ImportError> {
+/// The first frame, or with `all` every frame.
+fn read(path: &Path, all: bool) -> Result<Scan, ImportError> {
     let object = dicom_object::open_file(path).map_err(|e| decode_error(&e))?;
     let syntax = object
         .meta()
@@ -138,51 +164,64 @@ fn read(path: &Path) -> Result<Scan, ImportError> {
             )));
         }
     };
+    let wanted = if all { frames } else { 1 };
+    // Every wanted frame, stacked: the budget of one tall image.
     check_budget(
         format.columns,
-        format.rows,
+        format.rows.saturating_mul(wanted),
         layout,
         SampleType::F32,
         channels * 4,
     )?;
 
-    let mut decoded = if JPEG_2000.contains(&syntax) {
-        let mut decoded = crate::jpeg2000::decode_bytes(&jpeg2000_frame(&object, frames)?)?;
-        if decoded.layout != layout || decoded.size != Size::new(format.columns, format.rows) {
-            return Err(ImportError::Decode(
-                "DICOM: the JPEG 2000 frame does not match the attributes".into(),
-            ));
+    let mut decoded = Vec::with_capacity(wanted as usize);
+    if JPEG_2000.contains(&syntax) {
+        for index in 0..wanted {
+            let mut frame =
+                crate::jpeg2000::decode_bytes(&jpeg2000_frame(&object, frames, index)?)?;
+            if frame.layout != layout || frame.size != Size::new(format.columns, format.rows) {
+                return Err(ImportError::Decode(
+                    "DICOM: a JPEG 2000 frame does not match the attributes".into(),
+                ));
+            }
+            frame.warnings.clear();
+            decoded.push(frame);
         }
-        decoded.warnings.clear();
-        decoded
     } else {
-        let pixels = object
-            .decode_pixel_data_frame(0)
-            .map_err(|e| decode_error(&e))?;
+        let pixels = if all {
+            object.decode_pixel_data()
+        } else {
+            object.decode_pixel_data_frame(0)
+        }
+        .map_err(|e| decode_error(&e))?;
         // Encapsulated color comes back as interleaved RGB.
         format.photometric = pixels.photometric_interpretation().to_string();
         format.planar = format.planar
             && pixels.planar_configuration() != dicom_pixeldata::PlanarConfiguration::Standard;
-        let data = pixels.frame_data(0).map_err(|e| decode_error(&e))?;
-        native(data, &format, layout)?
-    };
-    if frames > 1 {
-        decoded.warnings.push(ImportWarning::FirstFrameOnly);
+        for index in 0..wanted {
+            let data = pixels.frame_data(index).map_err(|e| decode_error(&e))?;
+            decoded.push(native(data, &format, layout)?);
+        }
+    }
+    let first = decoded.first_mut().ok_or_else(no_frame)?;
+    if !all && frames > 1 {
+        first.warnings.push(ImportWarning::FirstFrameOnly);
     }
     let window = if gray {
-        window(&object, &format, &decoded)
+        window(&object, &format, first)
     } else {
         None
     };
     let window = window.map(|(window, approximated)| {
         if approximated {
-            decoded
-                .warnings
-                .push(ImportWarning::DicomWindowApproximated);
+            first.warnings.push(ImportWarning::DicomWindowApproximated);
         }
         window
     });
-    Ok(Scan { decoded, window })
+    Ok(Scan {
+        frames: decoded,
+        window,
+    })
 }
 
 fn decode_error(e: &dyn std::fmt::Display) -> ImportError {
@@ -241,23 +280,30 @@ fn first_float(
         .filter(|v| v.is_finite())
 }
 
-/// The first frame's JPEG 2000 codestream: every fragment of a single-frame object, the first
-/// fragment of a multi-frame one (one fragment per frame).
-fn jpeg2000_frame(object: &DefaultDicomObject, frames: u32) -> Result<Vec<u8>, ImportError> {
+/// A frame's JPEG 2000 codestream: every fragment of a single-frame object, fragment `index`
+/// of a multi-frame one (one fragment per frame).
+fn jpeg2000_frame(
+    object: &DefaultDicomObject,
+    frames: u32,
+    index: u32,
+) -> Result<Vec<u8>, ImportError> {
     let fragments = object
         .get(tags::PIXEL_DATA)
         .and_then(|e| e.value().fragments())
         .ok_or_else(|| ImportError::Decode("DICOM: no encapsulated pixel data".into()))?;
-    let take = if frames > 1 { 1 } else { fragments.len() };
-    let size: usize = fragments.iter().take(take).map(Vec::len).sum();
+    let parts = if frames > 1 {
+        let fragment = fragments
+            .get(index as usize)
+            .ok_or_else(|| ImportError::Decode("DICOM: a frame is missing".into()))?;
+        std::slice::from_ref(fragment)
+    } else {
+        fragments
+    };
+    let size: usize = parts.iter().map(Vec::len).sum();
     if size as u64 > MAX_IMPORT_BYTES {
         return Err(ImportError::Decode("DICOM: frame too large".into()));
     }
-    let mut frame = Vec::with_capacity(size);
-    for fragment in fragments.iter().take(take) {
-        frame.extend_from_slice(fragment);
-    }
-    Ok(frame)
+    Ok(parts.concat())
 }
 
 /// The sample type that holds `bits`-bit samples without loss.
@@ -552,11 +598,21 @@ mod tests {
             .collect()
     }
 
-    fn scan(name: &str) -> Scan {
-        read(&fixture(name)).unwrap()
+    /// The first frame of a file, and its window.
+    struct First {
+        decoded: Decoded,
+        window: Option<Window>,
     }
 
-    fn levels_of(scan: &Scan) -> [f32; 4] {
+    fn scan(name: &str) -> First {
+        let scan = read(&fixture(name), false).unwrap();
+        First {
+            decoded: scan.frames.into_iter().next().unwrap(),
+            window: scan.window,
+        }
+    }
+
+    fn levels_of(scan: &First) -> [f32; 4] {
         match scan.window.as_ref().unwrap().levels {
             Adjustment::Levels {
                 input_black,
@@ -619,21 +675,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn opening_gives_the_image_and_its_window_as_layers() {
-        let Opened::Layers(layers) = open(&fixture("ct.dcm")).unwrap() else {
-            panic!("expected layers");
+    /// The children of an isolated group: its image, then its Levels.
+    fn slice(layer: &slopshop_core::document::Layer) -> (&str, &str) {
+        let LayerContent::Group {
+            children,
+            pass_through: false,
+        } = &layer.content
+        else {
+            panic!("{} is not an isolated group", layer.name);
         };
-        let document = layers.document;
-        assert_eq!(document.layers().len(), 2);
-        assert_eq!(document.layers()[0].name, "ct");
+        assert_eq!(children.len(), 2);
+        assert!(matches!(children[0].content, LayerContent::Raster { .. }));
         assert!(matches!(
-            document.layers()[1].content,
+            children[1].content,
             LayerContent::Adjustment {
                 adjustment: Adjustment::Levels { .. }
             }
         ));
+        (&children[0].name, &children[1].name)
+    }
+
+    #[test]
+    fn opening_gives_the_image_and_its_window_in_an_isolated_group() {
+        let Opened::Layers(layers) = open(&fixture("ct.dcm")).unwrap() else {
+            panic!("expected layers");
+        };
+        let document = layers.document;
+        assert_eq!(document.layers().len(), 1);
+        assert_eq!(document.layers()[0].name, "ct");
+        assert_eq!(slice(&document.layers()[0]), ("ct", "WL 40 / WW 400"));
         assert_eq!(document.blend_space(), BlendSpace::Perceptual);
+        assert_eq!(layers.layer_warnings.len(), document.all_layers().count());
+    }
+
+    #[test]
+    fn every_slice_is_a_group_of_its_own_the_first_on_top() {
+        let Opened::Layers(layers) = open(&fixture("frames.dcm")).unwrap() else {
+            panic!("expected layers");
+        };
+        let document = layers.document;
+        let names: Vec<_> = document.layers().iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["frames 2/2", "frames 1/2"]);
+        for layer in document.layers() {
+            slice(layer);
+        }
+        assert!(!layers.warnings.contains(&ImportWarning::FirstFrameOnly));
+        assert_eq!(layers.layer_warnings.len(), 6);
     }
 
     #[test]
@@ -737,7 +824,7 @@ mod tests {
     #[test]
     fn unsupported_files_are_refused_with_their_reason() {
         assert!(matches!(
-            read(&fixture("jpegls.dcm")),
+            read(&fixture("jpegls.dcm"), false),
             Err(ImportError::NotYetSupported("JPEG-LS DICOM"))
         ));
         let mut bytes = std::fs::read(fixture("ct.dcm")).unwrap();
@@ -746,7 +833,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("slopshop-dicom-{}-cut.dcm", std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
-        let result = read(&path);
+        let result = read(&path, true);
         std::fs::remove_file(&path).ok();
         assert!(result.is_err());
     }

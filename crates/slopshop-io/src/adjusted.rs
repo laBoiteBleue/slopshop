@@ -12,16 +12,29 @@ use slopshop_core::{BlendMode, BlendSpace, Document};
 
 use crate::{Decoded, ImportError, Imported, ImportedLayers, Opened};
 
-/// A document of `imported` (named `name`) and above it `levels` (named `levels_name`).
-pub(crate) fn layered(
-    name: String,
-    imported: Imported,
-    levels_name: String,
-    levels: Adjustment,
-) -> Result<Opened, ImportError> {
-    let size = imported.image.size();
-    let layer = |id: u64, name: String, content: LayerContent| Layer {
-        id: LayerId::from_raw(id),
+/// One image of a file, and the Levels that show it.
+pub(crate) struct Slice {
+    pub name: String,
+    pub imported: Imported,
+    /// The adjustment's layer name and the adjustment; `None` for an image shown as it is.
+    pub levels: Option<(String, Adjustment)>,
+}
+
+/// A document of `slices`, the first on top. A slice with Levels is an isolated group of its
+/// image and the Levels, so that they change that image only, wherever the group goes (another
+/// document, among other slices); one without is its image alone.
+pub(crate) fn layered(slices: Vec<Slice>) -> Result<Opened, ImportError> {
+    let size = slices
+        .first()
+        .map(|s| s.imported.image.size())
+        .ok_or_else(|| ImportError::Decode("no image".into()))?;
+    let mut next = 1u64;
+    let mut id = || {
+        next += 1;
+        LayerId::from_raw(next - 1)
+    };
+    let layer = |id: LayerId, name: String, content: LayerContent| Layer {
+        id,
         name,
         visible: true,
         opacity: 1.0,
@@ -31,26 +44,52 @@ pub(crate) fn layered(
         clipped: false,
         transform: slopshop_core::Affine::IDENTITY,
     };
-    let layers = vec![
-        layer(
-            1,
-            name,
-            LayerContent::Raster {
-                image: Arc::new(imported.image),
-            },
-        ),
-        layer(
-            2,
-            levels_name,
-            LayerContent::Adjustment { adjustment: levels },
-        ),
-    ];
-    let document = Document::restore(size, WORKING_SPACE, BlendSpace::Perceptual, layers, 3)
+    let mut warnings = Vec::new();
+    let mut layers = Vec::with_capacity(slices.len());
+    let mut count = 0;
+    // Bottom to top: the last slice first.
+    for slice in slices.into_iter().rev() {
+        for warning in slice.imported.warnings {
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
+        let image = LayerContent::Raster {
+            image: Arc::new(slice.imported.image),
+        };
+        layers.push(match slice.levels {
+            None => {
+                count += 1;
+                layer(id(), slice.name, image)
+            }
+            Some((levels_name, levels)) => {
+                count += 3;
+                let group = id();
+                let children = vec![
+                    layer(id(), slice.name.clone(), image),
+                    layer(
+                        id(),
+                        levels_name,
+                        LayerContent::Adjustment { adjustment: levels },
+                    ),
+                ];
+                layer(
+                    group,
+                    slice.name,
+                    LayerContent::Group {
+                        children,
+                        pass_through: false,
+                    },
+                )
+            }
+        });
+    }
+    let document = Document::restore(size, WORKING_SPACE, BlendSpace::Perceptual, layers, next)
         .map_err(|e| ImportError::Decode(format!("adjusted image: {e:?}")))?;
     Ok(Opened::Layers(ImportedLayers {
         document,
-        warnings: imported.warnings,
-        layer_warnings: vec![Vec::new(), Vec::new()],
+        warnings,
+        layer_warnings: vec![Vec::new(); count],
     }))
 }
 
