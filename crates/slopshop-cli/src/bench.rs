@@ -85,8 +85,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
     );
     println!(
-        "{:<20} {:>9} {:>9} {:>9} {:>9} {:>9} {:>7} {:>7} {:>9}",
-        "scenario", "first", "median", "p95", "prepare", "gpu", "layers", "tiles", "composed"
+        "{:<20} {:>9} {:>9} {:>9} {:>9} {:>9} {:>7} {:>7} {:>9} {:>8}",
+        "scenario",
+        "first",
+        "median",
+        "p95",
+        "prepare",
+        "gpu",
+        "layers",
+        "tiles",
+        "composed",
+        "partial"
     );
     for (name, views) in scenarios {
         // A fresh renderer per scenario: its first frame starts from empty caches.
@@ -97,7 +106,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         for view in views {
             let started = Instant::now();
             let stats = renderer
-                .profile_view(&document, view, output)
+                .profile_view(&document, view, output, true)
                 .map_err(|e| e.to_string())?;
             frames.push((started.elapsed(), stats));
         }
@@ -117,13 +126,14 @@ fn print_row(name: &str, frames: &[(Duration, FrameStats)]) {
     let layers = frames.iter().map(|(_, s)| s.layers).max().unwrap_or(0);
     let tiles: u64 = frames.iter().map(|(_, s)| s.tiles_uploaded).sum();
     let composited: u32 = frames.iter().map(|(_, s)| s.tiles_composited).sum();
+    let partial = frames.iter().filter(|(_, s)| s.incomplete).count();
     let gpu = if gpu.is_empty() {
         "-".to_owned()
     } else {
         format!("{:.2}", percentile(&gpu, 0.5))
     };
     println!(
-        "{name:<20} {first:>9.2} {:>9.2} {:>9.2} {:>9.2} {gpu:>9} {layers:>7} {tiles:>7} {composited:>9}",
+        "{name:<20} {first:>9.2} {:>9.2} {:>9.2} {:>9.2} {gpu:>9} {layers:>7} {tiles:>7} {composited:>9} {partial:>8}",
         percentile(&totals, 0.5),
         percentile(&totals, 0.95),
         percentile(&prepare, 0.5),

@@ -649,6 +649,9 @@ impl ViewRequest {
 pub struct PresentInfo {
     /// False when nothing was shown (window occluded, swapchain busy): present again later.
     pub presented: bool,
+    /// False when part of the view was shown from a coarser level of the display cache while
+    /// its tiles are composited (ADR 0022): present again to refine it.
+    pub complete: bool,
     pub revision: u64,
     /// 1.0 = 100%.
     pub zoom: f64,

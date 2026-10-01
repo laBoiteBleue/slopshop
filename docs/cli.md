@@ -337,7 +337,9 @@ tile uploads (`prepare`) and the median GPU time of the compositing pass (`gpu`,
 adapter cannot time passes); `layers` is the largest number of steps the shader visits per
 pixel, `tiles` the number of raster tiles uploaded to the GPU in the scenario, `composed` the
 number of display cache tiles composited in it ([ADR 0022](adr/0022-display-cache.md): a frame
-whose view is already cached composites none).
+whose view is already cached composites none), `partial` the number of frames shown partly from a
+coarser level while their tiles were composited (frames are progressive, as the app presents
+them: each composites a bounded amount of tiles).
 
 | Option | Meaning |
 |---|---|

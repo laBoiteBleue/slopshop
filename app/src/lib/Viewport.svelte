@@ -163,6 +163,9 @@
     });
     if (info.presented) {
       skippedPresents = 0;
+      // Shown partly from a coarser level while the rest is composited: refine on the next
+      // animation frame (each present composites a bounded amount, so the UI stays responsive).
+      if (!info.complete) pending = true;
     } else if (skippedPresents++ < 3) {
       pending = true;
     }

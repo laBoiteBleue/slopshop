@@ -1852,7 +1852,8 @@ async fn present_view(
                 .map_err(|e| e.to_string())?
         };
         Ok(PresentInfo {
-            presented: presented == Presented::Frame,
+            presented: presented != Presented::Skipped,
+            complete: presented != Presented::Partial,
             revision: doc.revision(),
             zoom: viewport.zoom(),
             fit: viewport.is_fit(),

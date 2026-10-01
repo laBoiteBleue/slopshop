@@ -137,19 +137,28 @@ struct ExportParams {
 // display-space values (linear sRGB) within the half-float range.
 @group(0) @binding(12) var cache_target: texture_storage_2d<rgba16float, write>;
 
-// Present: where the view's tiles of the cached level are (32 bytes; keep in sync with
-// `cache_params_bytes` in cache.rs).
-struct CacheParams {
+// Present: where the view's tiles of a cached level are (32 bytes).
+struct CacheLevel {
     // The visible tiles of the level: first column and row, and how many.
     tile_origin: vec2<u32>,
     tile_count: vec2<u32>,
     // Document pixels per texel of the level (2^level).
     level_scale: f32,
+    // Where the level's slots start in `cache_table`.
+    table_offset: u32,
+    padding: vec2<u32>,
+}
+
+// The view's level, then a coarser one shown where the first has no tile yet (progressive
+// frames) when `fallback` is 1 (80 bytes; keep in sync with `cache_params_bytes` in cache.rs).
+struct CacheParams {
+    levels: array<CacheLevel, 2>,
+    fallback: u32,
 }
 
 @group(0) @binding(13) var<uniform> cache_params: CacheParams;
 @group(0) @binding(14) var cache_tiles: texture_2d_array<f32>;
-// Cache layer of each visible tile, row-major.
+// Cache layer of each visible tile of the levels, row-major, NO_TILE where it has none yet.
 @group(0) @binding(15) var<storage, read> cache_table: array<u32>;
 
 // Linear sRGB display colors.
@@ -1270,45 +1279,56 @@ fn fill_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(cache_target, id.xy, finite(to_display(acc), false));
 }
 
-// Display cache, present: texel `texel` of the cached level, transparent where no tile is.
-fn cached_texel(texel: vec2<i32>) -> vec4<f32> {
+// Display cache, present: the cache layer holding texel `texel` of the frame's level `i`, or
+// NO_TILE.
+fn cached_slot(i: u32, texel: vec2<i32>) -> u32 {
+    let level = cache_params.levels[i];
     if any(texel < vec2<i32>(0)) {
-        return vec4<f32>(0.0);
+        return NO_TILE;
     }
     let tile = vec2<u32>(texel) / TILE_SIZE;
-    if any(tile < cache_params.tile_origin) {
-        return vec4<f32>(0.0);
+    if any(tile < level.tile_origin) {
+        return NO_TILE;
     }
-    let local = tile - cache_params.tile_origin;
-    if any(local >= cache_params.tile_count) {
-        return vec4<f32>(0.0);
+    let local = tile - level.tile_origin;
+    if any(local >= level.tile_count) {
+        return NO_TILE;
     }
-    let slot = cache_table[local.y * cache_params.tile_count.x + local.x];
-    if slot == NO_TILE {
-        return vec4<f32>(0.0);
-    }
-    return textureLoad(cache_tiles, vec2<u32>(texel) % TILE_SIZE, slot, 0);
+    return cache_table[level.table_offset + local.y * level.tile_count.x + local.x];
 }
 
-// The cached level over the document rectangle `lo`–`hi` (clipped to the document): the same
-// area filter as `sample_raster`. Edge texels hold the average of their part inside the
+// The texels of a cached level over a footprint: their weighted sum, the weight of those cached,
+// and the weight of all of them.
+struct CacheSample {
+    sum: vec4<f32>,
+    weight: f32,
+    total: f32,
+}
+
+// The frame's level `i` over the document rectangle `lo`–`hi` (clipped to the document): the
+// same area filter as `sample_raster`. Edge texels hold the average of their part inside the
 // document, and only that part is weighted.
-fn sample_cache(lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
-    let a = lo / cache_params.level_scale;
-    let b = hi / cache_params.level_scale;
+fn sample_cache(i: u32, lo: vec2<f32>, hi: vec2<f32>) -> CacheSample {
+    let scale = cache_params.levels[i].level_scale;
+    let a = lo / scale;
+    let b = hi / scale;
     let first = vec2<i32>(floor(a));
     let last = min(vec2<i32>(ceil(b)) - 1, first + (MAX_FOOTPRINT_TEXELS - 1));
-    var sum = vec4<f32>(0.0);
-    var weight = 0.0;
+    var sample = CacheSample(vec4<f32>(0.0), 0.0, 0.0);
     for (var y = first.y; y <= last.y; y++) {
         let wy = min(f32(y + 1), b.y) - max(f32(y), a.y);
         for (var x = first.x; x <= last.x; x++) {
             let w = (min(f32(x + 1), b.x) - max(f32(x), a.x)) * wy;
-            sum += cached_texel(vec2<i32>(x, y)) * w;
-            weight += w;
+            let slot = cached_slot(i, vec2<i32>(x, y));
+            if slot != NO_TILE {
+                let texel = vec2<u32>(vec2<i32>(x, y)) % TILE_SIZE;
+                sample.sum += textureLoad(cache_tiles, texel, slot, 0) * w;
+                sample.weight += w;
+            }
+            sample.total += w;
         }
     }
-    return sum / max(weight, 1e-12);
+    return sample;
 }
 
 @compute @workgroup_size(8, 8)
@@ -1319,7 +1339,16 @@ fn present_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let pixel = view_pixel(id.xy);
     var acc = vec4<f32>(0.0);
     if pixel.coverage > 0.0 {
-        acc = sample_cache(pixel.footprint.lo, pixel.footprint.hi);
+        let lo = pixel.footprint.lo;
+        let hi = pixel.footprint.hi;
+        let fine = sample_cache(0u, lo, hi);
+        acc = fine.sum / max(fine.weight, 1e-12);
+        if cache_params.fallback != 0u && fine.weight < fine.total {
+            // Not all composited at the view's level yet: the coarser level fills in.
+            let coarse = sample_cache(1u, lo, hi);
+            let filler = coarse.sum / max(coarse.weight, 1e-12);
+            acc = (fine.sum + filler * (fine.total - fine.weight)) / max(fine.total, 1e-12);
+        }
     }
     write_display(id.xy, pixel.coverage, acc);
 }

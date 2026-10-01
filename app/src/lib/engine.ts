@@ -246,6 +246,8 @@ export type DeviceRect = { x: number; y: number; width: number; height: number }
 export type PresentInfo = {
   /** False when nothing was shown (window occluded, swapchain busy): present again later. */
   presented: boolean;
+  /** False when part of the view was shown coarser while it is composited: present again. */
+  complete: boolean;
   revision: number;
   zoom: number;
   fit: boolean;

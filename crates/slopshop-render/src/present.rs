@@ -8,7 +8,7 @@
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{Document, Rect, Size};
 
-use crate::{RenderError, Renderer};
+use crate::{RenderError, Renderer, cache::FrameOptions};
 
 /// The renderer's packed RGBA8 sRGB pixels are copied into the surface as they are.
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -30,6 +30,9 @@ pub struct Presenter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presented {
     Frame,
+    /// Shown, with parts from a coarser level of the display cache while their tiles are
+    /// composited (ADR 0022): present again soon to refine them.
+    Partial,
     /// Nothing was shown (empty or occluded window, swapchain busy or outdated): present
     /// again on the next change.
     Skipped,
@@ -77,6 +80,8 @@ impl Renderer {
     /// surface to `surface_size` first if needed. The rest of the surface is cleared to `clear`
     /// (sRGB-encoded RGBA); the part of `rect` outside the surface is not drawn. Blocks until a
     /// back buffer is available (at most about one display refresh), never on a readback.
+    /// Progressive: when composited tiles are missing, only some are composited and the rest is
+    /// shown from a coarser level ([`Presented::Partial`]).
     pub fn present_view(
         &self,
         presenter: &mut Presenter,
@@ -145,40 +150,49 @@ impl Renderer {
             });
         };
 
+        let mut presented = Presented::Frame;
         match visible {
             Some(visible) => {
                 let output = padded_output(visible);
-                self.composite(document, view, output, None, |encoder, pixels| {
-                    if !covers_surface {
-                        clear_pass(encoder);
-                    }
-                    // Only the visible columns are copied; padding columns are dropped.
-                    encoder.copy_buffer_to_texture(
-                        wgpu::TexelCopyBufferInfo {
-                            buffer: pixels,
-                            layout: wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(output.width * 4),
-                                rows_per_image: Some(output.height),
+                let options = FrameOptions {
+                    timestamps: None,
+                    progressive: true,
+                };
+                let stats =
+                    self.composite(document, view, output, options, |encoder, pixels| {
+                        if !covers_surface {
+                            clear_pass(encoder);
+                        }
+                        // Only the visible columns are copied; padding columns are dropped.
+                        encoder.copy_buffer_to_texture(
+                            wgpu::TexelCopyBufferInfo {
+                                buffer: pixels,
+                                layout: wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(output.width * 4),
+                                    rows_per_image: Some(output.height),
+                                },
                             },
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &frame.texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: visible.x,
-                                y: visible.y,
-                                z: 0,
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &frame.texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d {
+                                    x: visible.x,
+                                    y: visible.y,
+                                    z: 0,
+                                },
+                                aspect: wgpu::TextureAspect::All,
                             },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: visible.width,
-                            height: visible.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                })?;
+                            wgpu::Extent3d {
+                                width: visible.width,
+                                height: visible.height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    })?;
+                if stats.incomplete {
+                    presented = Presented::Partial;
+                }
             }
             None => {
                 let mut encoder =
@@ -191,7 +205,7 @@ impl Renderer {
             }
         }
         self.queue.present(frame);
-        Ok(Presented::Frame)
+        Ok(presented)
     }
 
     /// Configure the surface for `size`. A size the device cannot handle (e.g. beyond its
