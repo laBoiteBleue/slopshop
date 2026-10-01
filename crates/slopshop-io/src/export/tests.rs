@@ -1454,6 +1454,106 @@ fn layered_psd_round_trips_through_the_importer() {
 }
 
 #[test]
+fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
+    use slopshop_core::adjust::Adjustment;
+    let mut doc = Document::new(Size::new(8, 8));
+    let written = [
+        Adjustment::BlackWhite {
+            weights: [30.0, -50.0, 120.0, 60.0, 250.0, 80.0],
+            tint: true,
+            tint_hue: 200.0,
+            tint_saturation: 35.0,
+        },
+        Adjustment::ColorBalance {
+            shadows: [-4.0, 2.0, -5.0],
+            midtones: [10.0, 4.0, -9.0],
+            highlights: [1.0, -9.0, -3.0],
+            preserve_luminosity: false,
+        },
+        Adjustment::PhotoFilter {
+            color: [0.2, 0.5, 0.9],
+            density: 60.0,
+            preserve_luminosity: true,
+        },
+        Adjustment::ChannelMixer {
+            red: [40.0, 40.0, 20.0, -5.0],
+            green: [0.0, 100.0, 0.0, 0.0],
+            blue: [10.0, 0.0, 90.0, 12.0],
+            monochrome: true,
+        },
+    ];
+    for (index, adjustment) in written.into_iter().enumerate() {
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index,
+            layer: Layer {
+                transform: slopshop_core::Affine::IDENTITY,
+                clipped: false,
+                id,
+                name: adjustment.id().into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                content: LayerContent::Adjustment { adjustment },
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let path = temp_path("many-settings.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U8,
+        space: ColorSpace::SRGB,
+        dither: false,
+    };
+    export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let crate::Opened::Layers(opened) = crate::open_file(&path).unwrap() else {
+        panic!("layers expected");
+    };
+    std::fs::remove_file(&path).ok();
+    let read: Vec<Adjustment> = opened
+        .document
+        .layers()
+        .iter()
+        .filter_map(|l| match l.content {
+            LayerContent::Adjustment { adjustment } => Some(adjustment),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(read.len(), 4);
+    // Exact, but for the filter color (Lab in hundredths) and the tint (HSB, rounded).
+    assert_eq!(read[1], written[1]);
+    assert_eq!(read[3], written[3]);
+    assert_eq!(read[0], written[0]);
+    let Adjustment::PhotoFilter {
+        color,
+        density,
+        preserve_luminosity,
+    } = read[2]
+    else {
+        panic!("{:?}", read[2]);
+    };
+    assert!(
+        color
+            .iter()
+            .zip([0.2, 0.5, 0.9])
+            .all(|(c, e)| (c - e).abs() < 1e-3),
+        "{color:?}"
+    );
+    assert_eq!((density, preserve_luminosity), (60.0, true));
+}
+
+#[test]
 fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
     let mut doc = layered_document();
     let moved = doc.layers()[1].id;
