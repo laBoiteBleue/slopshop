@@ -431,7 +431,8 @@ export type ExportFormat =
   | "dds"
   | "fits"
   | "dcm"
-  | "pdf";
+  | "pdf"
+  | "jp2";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
@@ -649,6 +650,14 @@ export const EXPORT_FORMATS: Record<
     extensions: ["pdf"],
     samples: ["u8"],
     compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: true,
+  },
+  jp2: {
+    extensions: ["jp2", "jpf"],
+    samples: ["u8", "u16"],
+    compressions: ["lossless", "lossy"],
     subsamplings: [],
     alpha: true,
     gray: true,

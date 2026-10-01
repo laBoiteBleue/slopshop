@@ -241,6 +241,7 @@ const fr: Messages = {
   "export.format.fits": "FITS",
   "export.format.dcm": "DICOM",
   "export.format.pdf": "PDF (une page)",
+  "export.format.jp2": "JPEG 2000",
   "export.depth": "Profondeur",
   "export.depth.u8": "8 bits",
   "export.depth.u16": "16 bits",
