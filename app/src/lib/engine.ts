@@ -394,11 +394,11 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
 
 /** Export file formats. */
 /** `psd` and `psb` keep the layers (export_psd in crates/slopshop-io/src/export/psd.rs). */
-export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp" | "psd" | "psb";
+export type ExportFormat = "png" | "tiff" | "exr" | "jpeg" | "webp" | "psd" | "psb" | "bmp" | "tga";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
-  "fast" | "small" | "none" | "deflate" | "lzw" | "lossy" | "lossless";
+  "fast" | "small" | "none" | "deflate" | "lzw" | "lossy" | "lossless" | "rle";
 export type ExportSubsampling = "444" | "422" | "420";
 
 /** Export settings (see ExportSpecDto in app/src-tauri/src/ipc.rs). */
@@ -494,6 +494,22 @@ export const EXPORT_FORMATS: Record<
     compressions: [],
     subsamplings: [],
     alpha: false,
+    gray: false,
+  },
+  bmp: {
+    extensions: ["bmp"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: false,
+  },
+  tga: {
+    extensions: ["tga"],
+    samples: ["u8"],
+    compressions: ["rle", "none"],
+    subsamplings: [],
+    alpha: true,
     gray: false,
   },
 };

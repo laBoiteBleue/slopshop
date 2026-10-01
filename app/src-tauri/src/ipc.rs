@@ -17,8 +17,8 @@ use slopshop_core::{
 };
 use slopshop_io::export::{
     ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TiffCompression, TiffSample,
-    WebpCompression, has_gray, supports_gray, supports_space,
+    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression, TiffCompression,
+    TiffSample, WebpCompression, has_gray, supports_gray, supports_space,
 };
 
 /// Identity of an open document (one per tab). Ids are never reused, so the UI can tell
@@ -747,6 +747,8 @@ pub enum ExportFormatId {
     Webp,
     Psd,
     Psb,
+    Bmp,
+    Tga,
 }
 
 impl ExportFormatId {
@@ -759,6 +761,8 @@ impl ExportFormatId {
             ExportFormatId::Webp => ExportFormatKind::Webp,
             ExportFormatId::Psd => ExportFormatKind::Psd,
             ExportFormatId::Psb => ExportFormatKind::Psb,
+            ExportFormatId::Bmp => ExportFormatKind::Bmp,
+            ExportFormatId::Tga => ExportFormatKind::Tga,
         }
     }
 }
@@ -785,6 +789,7 @@ pub enum ExportCompressionId {
     Lzw,
     Lossy,
     Lossless,
+    Rle,
 }
 
 /// JPEG chroma subsampling.
@@ -899,6 +904,15 @@ impl ExportSpecDto {
                     PsdDepth::U16 => S::U16,
                 },
                 None,
+            ),
+            ExportFormat::Bmp => (ExportFormatId::Bmp, S::U8, None),
+            ExportFormat::Tga { compression } => (
+                ExportFormatId::Tga,
+                S::U8,
+                Some(match compression {
+                    TgaCompression::None => C::None,
+                    TgaCompression::Rle => C::Rle,
+                }),
             ),
         };
         Self {
@@ -1029,6 +1043,21 @@ impl ExportSpecDto {
                     ExportFormat::Psb { depth }
                 } else {
                     ExportFormat::Psd { depth }
+                }
+            }
+            ExportFormatId::Bmp | ExportFormatId::Tga => {
+                if self.sample != S::U8 {
+                    return Err(sample());
+                }
+                match (self.format, self.compression) {
+                    (ExportFormatId::Bmp, None) => ExportFormat::Bmp,
+                    (ExportFormatId::Tga, Some(C::None)) => ExportFormat::Tga {
+                        compression: TgaCompression::None,
+                    },
+                    (ExportFormatId::Tga, Some(C::Rle)) => ExportFormat::Tga {
+                        compression: TgaCompression::Rle,
+                    },
+                    _ => return Err(compression()),
                 }
             }
         };
@@ -1230,6 +1259,8 @@ mod tests {
             ExportFormatId::Webp,
             ExportFormatId::Psd,
             ExportFormatId::Psb,
+            ExportFormatId::Bmp,
+            ExportFormatId::Tga,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
