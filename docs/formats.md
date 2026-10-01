@@ -146,7 +146,7 @@ Formats that are not in Photoshop's list, read by SlopShop or planned.
 | ICO | `.ico` | ✅ | — | P3 export | `image` | |
 | FITS | `.fits`, `.fit`, `.fts` | ✅ | — | — | in-house reader | astronomy; the first image (primary or IMAGE extension) at its precision, flipped upright, NAXIS3 = 3 as RGB; an automatic stretch ("STF auto") as a Levels layer; floats scaled to [0, 1] (reported); tile-compressed images not supported yet |
 | Krita, GIMP, OpenRaster | `.kra`, `.xcf`, `.ora` | 🔎 | — | P2 | in-house readers | layered: same staging as PSD; ORA also as a layered export |
-| SVG | `.svg`, `.svgz` | 🔎 | — | P2 | resvg | rasterized, re-rendered at any zoom later |
+| SVG | `.svg`, `.svgz` | ✅ | — | — | resvg (pure Rust) | rasterized as 8-bit sRGB through the Import SVG dialog (resolution or size; 96 px/inch, the intrinsic size, by default), transparent where nothing is drawn; text with the system's fonts; no export (maintainer's choice); re-rendering at any zoom later |
 | Adobe Illustrator | `.ai` | 🔎 | — | P2 | as PDF | modern `.ai` files are PDF-compatible |
 | OME-TIFF, whole-slide images, GeoTIFF | `.ome.tif`, `.svs`, … | — | — | P2 | `tiff` + own metadata parsing → OpenSlide / GDAL (optional) | pyramidal gigapixel images: a strength to aim for |
 | JPEG XR | `.jxr`, `.wdp` | — | — | — | | rare; not investigated |
