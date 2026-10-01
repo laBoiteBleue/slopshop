@@ -36,6 +36,13 @@ jxl-oxide = { version = "0.12.6", default-features = false, features = ["rayon"]
 # `image` feature (an `image` integration and moxcms) is left out: we read the components.
 # OpenJPEG declared itself unmaintained in 2026.
 hayro-jpeg2000 = { version = "0.4.0", default-features = false, features = ["simd"] }
+# PDF import: hayro (MIT OR Apache-2.0), pure Rust, `forbid(unsafe)`, the rasterizer named in
+# the formats plan (MuPDF, Poppler and Ghostscript are GPL/AGPL; PDFium would be C++). Default
+# features: the 14 standard fonts and the predefined CMaps, embedded, for files that do not
+# embed theirs. Brings the Linebender stack (vello_cpu, skrifa, kurbo), all MIT OR Apache-2.0.
+hayro = "0.7.1"
+# - its pixmaps as bytes without a copy; already in the tree through hayro.
+bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 # AVIF import: rav1d (BSD-2-Clause), the Rust port of dav1d, without its assembly (which needs
 # nasm at build time): pure Rust. Its API is dav1d's C one, called from our `avif::ffi` module
 # only. The AVIF container is read by our own code (avif-parse is MPL-2.0).

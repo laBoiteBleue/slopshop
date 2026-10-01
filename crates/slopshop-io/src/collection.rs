@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 /// Extensions of the files the importer reads, and of documents.
-const OPENABLE: [&str; 34] = [
+const OPENABLE: [&str; 35] = [
     "png", "jpg", "jpeg", "jpe", "jfif", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "pnm",
     "pbm", "pgm", "ppm", "pfm", "pam", "qoi", "ff", "exr", "hdr", "dds", "jxl", "avif", "jp2",
-    "jpf", "jpx", "j2k", "j2c", "jpc", "psd", "psb", "slop",
+    "jpf", "jpx", "j2k", "j2c", "jpc", "pdf", "psd", "psb", "slop",
 ];
 
 /// Largest entry extracted from an archive, uncompressed: well beyond any image the engine can
@@ -260,8 +260,8 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["b2.png", "b10.JPG", "doc.slop"]);
-        assert_eq!(skipped, 2, "notes.txt and a.pdf; subfolders are not listed");
+        assert_eq!(names, ["a.pdf", "b2.png", "b10.JPG", "doc.slop"]);
+        assert_eq!(skipped, 1, "notes.txt; subfolders are not listed");
         fs::remove_dir_all(&dir).ok();
     }
 
