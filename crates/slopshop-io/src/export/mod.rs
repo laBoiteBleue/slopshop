@@ -60,7 +60,9 @@ mod psd;
 mod tiff;
 mod webp;
 
-pub use self::psd::{MAX_SIDE as PSD_MAX_SIDE, PsdDepth, PsdOptions, Render, export_psd};
+pub use self::psd::{
+    MAX_SIDE as PSD_MAX_SIDE, PSB_MAX_SIDE, PsdDepth, PsdOptions, Render, export_psd,
+};
 
 use std::fmt;
 use std::path::Path;
@@ -101,6 +103,15 @@ pub enum ExportFormatKind {
     Webp,
     /// Photoshop, layered ([`export_psd`]; [`export_image`] does not write it).
     Psd,
+    /// Photoshop's large document format, layered, as PSD.
+    Psb,
+}
+
+impl ExportFormatKind {
+    /// A layered Photoshop file, written by [`export_psd`].
+    pub fn is_layered(self) -> bool {
+        matches!(self, ExportFormatKind::Psd | ExportFormatKind::Psb)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -186,6 +197,10 @@ pub enum ExportFormat {
     Psd {
         depth: PsdDepth,
     },
+    /// A layered Photoshop large document (above PSD's 30,000 pixels per side).
+    Psb {
+        depth: PsdDepth,
+    },
 }
 
 impl ExportFormat {
@@ -197,6 +212,7 @@ impl ExportFormat {
             ExportFormat::Jpeg { .. } => ExportFormatKind::Jpeg,
             ExportFormat::Webp { .. } => ExportFormatKind::Webp,
             ExportFormat::Psd { .. } => ExportFormatKind::Psd,
+            ExportFormat::Psb { .. } => ExportFormatKind::Psb,
         }
     }
 
@@ -217,7 +233,7 @@ impl ExportFormat {
                 ExrSample::F16 => SampleType::F16,
             },
             ExportFormat::Jpeg { .. } | ExportFormat::Webp { .. } => SampleType::U8,
-            ExportFormat::Psd { depth } => match depth {
+            ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => match depth {
                 PsdDepth::U8 => SampleType::U8,
                 PsdDepth::U16 => SampleType::U16,
             },
@@ -226,16 +242,19 @@ impl ExportFormat {
 }
 
 impl ExportSpec {
-    /// The options of a layered PSD export ([`export_psd`]), for a PSD spec.
+    /// The options of a layered export ([`export_psd`]), for a PSD or PSB spec.
     pub fn psd_options(&self) -> Option<PsdOptions> {
-        match self.format {
-            ExportFormat::Psd { depth } => Some(PsdOptions {
-                depth,
-                space: self.space,
-                dither: self.dither,
-            }),
-            _ => None,
-        }
+        let (depth, large) = match self.format {
+            ExportFormat::Psd { depth } => (depth, false),
+            ExportFormat::Psb { depth } => (depth, true),
+            _ => return None,
+        };
+        Some(PsdOptions {
+            depth,
+            space: self.space,
+            dither: self.dither,
+            large,
+        })
     }
 }
 
@@ -474,6 +493,7 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Jpeg => Some(jpeg::MAX_SIDE),
         ExportFormatKind::Webp => Some(webp::MAX_SIDE),
         ExportFormatKind::Psd => Some(psd::MAX_SIDE),
+        ExportFormatKind::Psb => Some(psd::PSB_MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
@@ -504,7 +524,8 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Tiff
         | ExportFormatKind::Jpeg
         | ExportFormatKind::Webp
-        | ExportFormatKind::Psd => icc_writable(),
+        | ExportFormatKind::Psd
+        | ExportFormatKind::Psb => icc_writable(),
         ExportFormatKind::Exr => {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
@@ -518,13 +539,16 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
 /// - TIFF and JPEG: curves an ICC gray profile can describe;
 /// - EXR: not yet (luminance-only files are not read back by our importer);
 /// - WebP: never (it has no gray samples);
-/// - PSD: not yet (layered files are written in RGB).
+/// - PSD and PSB: not yet (layered files are written in RGB).
 pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     let icc_writable = || icc::write_gray_trc(space).is_ok();
     match kind {
         ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
         ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
-        ExportFormatKind::Exr | ExportFormatKind::Webp | ExportFormatKind::Psd => false,
+        ExportFormatKind::Exr
+        | ExportFormatKind::Webp
+        | ExportFormatKind::Psd
+        | ExportFormatKind::Psb => false,
     }
 }
 
@@ -629,29 +653,28 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             },
             common_8_bit_space(unique_space),
         ),
-        ExportFormatKind::Psd => {
-            if rasters.iter().all(|format| format.sample == SampleType::U8) {
-                (
-                    ExportFormat::Psd {
-                        depth: PsdDepth::U8,
-                    },
-                    ColorSpace::SRGB,
-                )
+        ExportFormatKind::Psd | ExportFormatKind::Psb => {
+            let (depth, space) = if rasters.iter().all(|format| format.sample == SampleType::U8) {
+                (PsdDepth::U8, ColorSpace::SRGB)
             } else {
                 (
-                    ExportFormat::Psd {
-                        depth: PsdDepth::U16,
-                    },
+                    PsdDepth::U16,
                     unique_space.filter(taggable).unwrap_or(ColorSpace::SRGB),
                 )
-            }
+            };
+            let format = if kind == ExportFormatKind::Psb {
+                ExportFormat::Psb { depth }
+            } else {
+                ExportFormat::Psd { depth }
+            };
+            (format, space)
         }
     };
     ExportSpec {
         format,
         space,
         // A layered file keeps its layers' transparency.
-        keep_alpha: kind == ExportFormatKind::Psd
+        keep_alpha: kind.is_layered()
             || (supports_alpha(kind) && !is_structurally_opaque(document)),
         matte: WHITE_MATTE,
         // It only applies to 8-bit samples, which EXR never has.
@@ -762,7 +785,7 @@ pub fn export_image(
         )));
     }
     let kind = spec.format.kind();
-    if kind == ExportFormatKind::Psd {
+    if kind.is_layered() {
         return Err(ExportError::InvalidSpec(
             "a layered PSD is written by export_psd".to_owned(),
         ));
@@ -850,7 +873,7 @@ pub fn export_image(
             )),
         },
         // Refused above.
-        ExportFormat::Psd { .. } => {
+        ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
                 "a layered PSD is written by export_psd".to_owned(),
             ));
