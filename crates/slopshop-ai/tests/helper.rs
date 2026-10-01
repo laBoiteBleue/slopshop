@@ -43,18 +43,27 @@ fn sam_selects_the_clicked_shape() {
             }
         }
     }
+    let start = std::time::Instant::now();
+    client
+        .sam_encode(1, w as u32, h as u32, rgb.clone())
+        .expect("SAM encodes");
+    eprintln!("first encode (with loading): {:?}", start.elapsed());
+    let start = std::time::Instant::now();
     client
         .sam_encode(1, w as u32, h as u32, rgb)
         .expect("SAM encodes");
+    eprintln!("encode: {:?}", start.elapsed());
     eprintln!("provider: {}", client.provider);
     let click = Point {
         x: 320.0,
         y: 240.0,
         positive: true,
     };
+    let start = std::time::Instant::now();
     let (logits, score) = client
         .sam_decode(1, vec![click], None)
         .expect("SAM decodes");
+    eprintln!("decode: {:?}", start.elapsed());
     assert_eq!(logits.len(), MASK_SIDE * MASK_SIDE);
     let at = |x: f32, y: f32| {
         let (mx, my) = (
@@ -66,6 +75,17 @@ fn sam_selects_the_clicked_shape() {
     assert!(at(320.0, 240.0) > 0.0, "the disc's center is inside");
     assert!(at(20.0, 20.0) < 0.0, "a corner is outside");
     assert!(score > 0.5, "score {score}");
+    // Warm: the first run of a model tunes its kernels.
+    let start = std::time::Instant::now();
+    let near = Point {
+        x: 300.0,
+        y: 250.0,
+        positive: true,
+    };
+    client
+        .sam_decode(1, vec![click, near], None)
+        .expect("SAM decodes");
+    eprintln!("decode, warm: {:?}", start.elapsed());
     // Another key than the encoded image's is refused.
     assert!(client.sam_decode(2, vec![click], None).is_err());
 }
