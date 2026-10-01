@@ -93,13 +93,13 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   [ADR 0011](docs/adr/0011-gray-export.md)). Export to Photoshop PSD and PSB (8/16-bit) keeps the
   layers: groups, clipping, masks, blend modes and adjustment layers.
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
-  float, HDR): PNG, JPEG, TIFF, WebP, JPEG XL, AVIF, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR,
+  float, HDR): PNG, JPEG, TIFF, WebP, JPEG XL, AVIF, JPEG 2000, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR,
   HDR, DDS, and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
   color fills, the thirteen kinds of adjustment layers SlopShop has; other adjustments and layer
   styles are not supported yet and are reported).
   A layered file imported into a document arrives as a group.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
-  JPEG 2000, DICOM, camera RAW and more are planned
+  DICOM, camera RAW, PDF and more are planned
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
 - A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts): document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add

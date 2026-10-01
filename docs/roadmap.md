@@ -54,7 +54,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] AVIF export (rav1e without assembly): 8/10-bit, alpha, gray, HDR spaces
 - [x] JPEG XL export, lossless (zune-jpegxl): 8/16-bit, alpha, gray, every space
 - [ ] JPEG XL lossy export (needs libjxl, C++)
-- [ ] Import phases 2–6: JPEG 2000; DICOM, FITS; camera RAW; KRA/XCF/ORA,
+- [x] JPEG 2000 import (hayro-jpeg2000): JP2 and raw codestreams, native depth
+- [ ] Import phases 2–6: DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)
 - [ ] PDF import: pages rasterized at a chosen resolution, several pages like a multi-file
