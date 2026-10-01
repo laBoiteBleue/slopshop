@@ -797,6 +797,255 @@ pub fn layer_mask(
     mask.build(true).ok_or(SelectionError::EmptyCanvas)
 }
 
+// --- Modify ------------------------------------------------------------------------------------
+
+/// The largest radius or width of Select > Modify, in pixels (Feather keeps [`MAX_FEATHER`]).
+pub const MAX_MODIFY: f64 = 500.0;
+
+/// Select > Modify: a change of the whole selection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Modify {
+    /// Gaussian softening, its standard deviation in pixels (Photoshop's radius).
+    Feather(f64),
+    /// Grow the selection by this many pixels, corners rounded.
+    Expand(f64),
+    /// Shrink it by this many pixels.
+    Contract(f64),
+    /// Keep a band this wide, centered on its outline.
+    Border(f64),
+    /// Round its corners and drop its specks, about this radius.
+    Smooth(f64),
+}
+
+/// `selection` changed by `how` on a `canvas`. `None`: nothing is left selected. Expand,
+/// Contract and Border follow the exact distance to the outline (where coverage crosses one
+/// half), with anti-aliased edges; a soft selection gets a crisp edge at that distance. As in
+/// Photoshop (without "apply effect at canvas bounds"), the canvas edge does not count as an
+/// outline. Only the tiles near the outline are computed, on every core.
+pub fn modify(
+    canvas: Size,
+    selection: &RasterImage,
+    how: Modify,
+) -> Result<Option<RasterImage>, SelectionError> {
+    let (Modify::Feather(r)
+    | Modify::Expand(r)
+    | Modify::Contract(r)
+    | Modify::Border(r)
+    | Modify::Smooth(r)) = how;
+    let max = if matches!(how, Modify::Feather(_)) {
+        MAX_FEATHER
+    } else {
+        MAX_MODIFY
+    };
+    if !r.is_finite() || !(0.0..=max).contains(&r) {
+        return Err(SelectionError::InvalidShape);
+    }
+    let mask = Mask::from_image(canvas, selection)?;
+    if r == 0.0 {
+        return Ok(mask.into_image());
+    }
+    let result = match how {
+        Modify::Feather(sigma) => feather(&mask, sigma),
+        Modify::Smooth(radius) => {
+            // Blurred, then brought back to a one-pixel ramp around one half: corners round
+            // and specks narrower than the blur fade out.
+            let sigma = radius / 2.0;
+            let gain = (sigma * (2.0 * std::f64::consts::PI).sqrt()).max(1.0) as f32;
+            let mut blurred = feather(&mask, sigma);
+            for tile in &mut blurred.tiles {
+                let sharp = |v: u16| {
+                    let c = (f32::from(v) / f32::from(FULL) - 0.5) * gain + 0.5;
+                    (c.clamp(0.0, 1.0) * f32::from(FULL)).round() as u16
+                };
+                *tile = match &*tile {
+                    Tile::Const(v) => Tile::Const(sharp(*v)),
+                    other => Tile::Data(other.values().iter().map(|&v| sharp(v)).collect()),
+                };
+            }
+            blurred
+        }
+        Modify::Expand(r) => by_distance(&mask, r, move |h| r - h + 0.5),
+        Modify::Contract(r) => by_distance(&mask, r, move |h| -r - h + 0.5),
+        Modify::Border(width) => {
+            by_distance(&mask, width / 2.0, move |h| width / 2.0 - h.abs() + 0.5)
+        }
+    };
+    Ok(result.into_image())
+}
+
+/// A new mask whose coverage is `cover(h)` (clamped to `[0, 1]`), `h` being the signed
+/// distance from each pixel center to the outline of `mask` (negative inside), exact up to
+/// `reach` pixels (and beyond it only known to be farther).
+fn by_distance(mask: &Mask, reach: f64, cover: impl Fn(f64) -> f64 + Sync) -> Mask {
+    let halo = reach.ceil() as usize + 2;
+    let tiles_reach = halo.div_ceil(T);
+    let mut out = mask.clone();
+    let mut todo = Vec::new();
+    for index in 0..mask.tiles.len() {
+        let (col, row) = (index % mask.columns, index / mask.columns);
+        let mut seen: Option<bool> = None;
+        let mut mixed = false;
+        'scan: for r in row.saturating_sub(tiles_reach)..=(row + tiles_reach).min(mask.rows - 1) {
+            for c in col.saturating_sub(tiles_reach)..=(col + tiles_reach).min(mask.columns - 1) {
+                match (mask.tiles[r * mask.columns + c].constant(), seen) {
+                    (None, _) => {
+                        mixed = true;
+                        break 'scan;
+                    }
+                    (Some(v), None) => seen = Some(v >= HALF),
+                    (Some(v), Some(inside)) if (v >= HALF) != inside => {
+                        mixed = true;
+                        break 'scan;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if mixed {
+            todo.push(index);
+        } else {
+            // Far from any outline: wholly inside or outside.
+            let inside = seen.unwrap_or(false);
+            let h = if inside {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+            let v = cover(h).clamp(0.0, 1.0);
+            out.tiles[index] = Tile::Const((v * f64::from(FULL)).round() as u16);
+        }
+    }
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = todo.len().div_ceil(threads).max(1);
+    let cover = &cover;
+    let mut computed: Vec<(usize, Vec<u16>)> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = todo
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&index| (index, distance_tile(mask, index, halo, cover)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: the distance transform does not panic (reads are clamped).
+            computed.extend(worker.join().expect("selection distance worker panicked"));
+        }
+    });
+    for (index, values) in computed {
+        out.tiles[index] = Tile::Data(values);
+    }
+    out
+}
+
+/// One tile of [`by_distance`]: the distance transforms of a window of the tile plus `halo`
+/// pixels around it (the canvas edge repeating).
+fn distance_tile(
+    mask: &Mask,
+    index: usize,
+    halo: usize,
+    cover: &(impl Fn(f64) -> f64 + Sync),
+) -> Vec<u16> {
+    let (col, row) = (index % mask.columns, index / mask.columns);
+    let side = T + 2 * halo;
+    let (x0, y0) = (
+        (col * T) as isize - halo as isize,
+        (row * T) as isize - halo as isize,
+    );
+    let inside: Vec<bool> = (0..side * side)
+        .map(|i| mask.at(x0 + (i % side) as isize, y0 + (i / side) as isize) >= HALF)
+        .collect();
+    let to_inside = squared_distances(&inside, side, true);
+    let to_outside = squared_distances(&inside, side, false);
+    let mut values = vec![0u16; T * T];
+    for y in 0..T {
+        for x in 0..T {
+            let i = (y + halo) * side + x + halo;
+            // Between the centers on both sides of an edge, the outline is half a pixel away.
+            let h = if inside[i] {
+                -(to_outside[i].sqrt() - 0.5)
+            } else {
+                to_inside[i].sqrt() - 0.5
+            };
+            values[y * T + x] = (cover(h).clamp(0.0, 1.0) * f64::from(FULL)).round() as u16;
+        }
+    }
+    let (w, h) = mask.valid(col, row);
+    pad(&mut values, w, h);
+    values
+}
+
+/// The squared distance from each pixel of a `side`² window to the nearest pixel where
+/// `inside` equals `feature` (a large number where there is none): exact Euclidean distance
+/// transform, by rows then columns (Felzenszwalb and Huttenlocher).
+fn squared_distances(inside: &[bool], side: usize, feature: bool) -> Vec<f64> {
+    /// "No feature": large, yet finite so that the envelope's arithmetic stays defined.
+    const FAR: f64 = 1e20;
+    let mut grid: Vec<f64> = inside
+        .iter()
+        .map(|&v| if v == feature { 0.0 } else { FAR })
+        .collect();
+    let mut line = vec![0.0f64; side];
+    let mut result = vec![0.0f64; side];
+    let mut hull = vec![0usize; side];
+    let mut bounds = vec![0.0f64; side + 1];
+    for pass in 0..2 {
+        for i in 0..side {
+            let at = |j: usize| {
+                if pass == 0 {
+                    i * side + j
+                } else {
+                    j * side + i
+                }
+            };
+            for (j, value) in line.iter_mut().enumerate() {
+                *value = grid[at(j)];
+            }
+            transform_1d(&line, &mut result, &mut hull, &mut bounds);
+            for (j, value) in result.iter().enumerate() {
+                grid[at(j)] = *value;
+            }
+        }
+    }
+    grid
+}
+
+/// The 1D squared distance transform of `f` into `d` (lower envelope of parabolas).
+fn transform_1d(f: &[f64], d: &mut [f64], hull: &mut [usize], bounds: &mut [f64]) {
+    let n = f.len();
+    let intersect = |q: usize, p: usize| {
+        let (q2, p2) = ((q * q) as f64, (p * p) as f64);
+        ((f[q] + q2) - (f[p] + p2)) / (2.0 * (q as f64 - p as f64))
+    };
+    let mut k = 0usize;
+    hull[0] = 0;
+    bounds[0] = f64::NEG_INFINITY;
+    bounds[1] = f64::INFINITY;
+    for q in 1..n {
+        let mut s = intersect(q, hull[k]);
+        while s <= bounds[k] {
+            k -= 1;
+            s = intersect(q, hull[k]);
+        }
+        k += 1;
+        hull[k] = q;
+        bounds[k] = s;
+        bounds[k + 1] = f64::INFINITY;
+    }
+    k = 0;
+    for (q, out) in d.iter_mut().enumerate().take(n) {
+        while bounds[k + 1] < q as f64 {
+            k += 1;
+        }
+        let dq = q as f64 - hull[k] as f64;
+        *out = dq * dq + f[hull[k]];
+    }
+}
+
 // --- Rasterization -----------------------------------------------------------------------------
 
 /// The coverage of a closed polygon on a canvas: each pixel gets the exact fraction of its area
@@ -1578,6 +1827,94 @@ mod tests {
                 .gray_at(0, 0),
             0.0
         );
+    }
+
+    #[test]
+    fn expand_contract_and_border_follow_the_distance_to_the_outline() {
+        let canvas = Size::new(400, 300);
+        let square = select(canvas, &rect(100.0, 100.0, 200.0, 200.0));
+        let expanded = modify(canvas, &square, Modify::Expand(10.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(expanded.gray_at(90, 150), 1.0);
+        assert_eq!(expanded.gray_at(89, 150), 0.0);
+        assert_eq!(expanded.gray_at(209, 150), 1.0);
+        // Rounded corners: the corner of the bounds is farther than 10 pixels.
+        assert_eq!(expanded.gray_at(95, 95), 1.0);
+        assert_eq!(expanded.gray_at(91, 91), 0.0);
+
+        let contracted = modify(canvas, &square, Modify::Contract(10.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(contracted.gray_at(110, 150), 1.0);
+        assert_eq!(contracted.gray_at(109, 150), 0.0);
+        assert_eq!(contracted.gray_at(189, 189), 1.0);
+        assert_eq!(contracted.gray_at(190, 150), 0.0);
+        assert!(
+            modify(canvas, &square, Modify::Contract(60.0))
+                .unwrap()
+                .is_none()
+        );
+
+        let border = modify(canvas, &square, Modify::Border(10.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(border.gray_at(95, 150), 1.0);
+        assert_eq!(border.gray_at(104, 150), 1.0);
+        assert_eq!(border.gray_at(94, 150), 0.0);
+        assert_eq!(border.gray_at(105, 150), 0.0);
+        assert_eq!(border.gray_at(150, 150), 0.0);
+
+        // The canvas edge is not an outline: everything contracted stays everything.
+        let all = select_all(canvas).unwrap();
+        let still = modify(canvas, &all, Modify::Contract(10.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(still.gray_at(0, 0), 1.0);
+        assert!(
+            modify(canvas, &all, Modify::Border(10.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn smooth_drops_specks_and_feather_softens() {
+        let canvas = Size::new(300, 300);
+        let square = select(canvas, &rect(50.0, 50.0, 150.0, 150.0));
+        let speck = select_shape(
+            canvas,
+            Some(&square),
+            &rect(250.0, 250.0, 252.0, 252.0),
+            EdgeOptions::default(),
+            Combine::Add,
+        )
+        .unwrap()
+        .unwrap();
+        let smooth = modify(canvas, &speck, Modify::Smooth(10.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(smooth.gray_at(251, 251), 0.0, "the speck is gone");
+        assert_eq!(smooth.gray_at(100, 100), 1.0);
+        // A straight edge stays where it was, anti-aliased on its pixel.
+        assert!(smooth.gray_at(50, 100) > 0.5);
+        assert_eq!(smooth.gray_at(52, 100), 1.0);
+        assert_eq!(smooth.gray_at(48, 100), 0.0);
+        assert_eq!(smooth.gray_at(50, 50), 0.0, "a corner rounds");
+
+        let soft = modify(canvas, &square, Modify::Feather(5.0))
+            .unwrap()
+            .unwrap();
+        assert!((soft.gray_at(50, 100) - 0.5).abs() < 0.06);
+        assert_eq!(
+            modify(canvas, &square, Modify::Expand(0.0))
+                .unwrap()
+                .unwrap()
+                .gray_at(50, 50),
+            1.0
+        );
+        assert!(modify(canvas, &square, Modify::Expand(MAX_MODIFY + 1.0)).is_err());
+        assert!(modify(canvas, &square, Modify::Feather(MAX_FEATHER + 1.0)).is_err());
     }
 
     #[test]
