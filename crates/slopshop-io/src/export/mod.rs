@@ -53,10 +53,12 @@
 //! modules, refer to the encoder crates with a leading `::` (`::png`, `::tiff`, `::exr`), since
 //! the modules have the same names (`::jpeg_encoder` has another name).
 
+mod bmp;
 mod exr;
 mod jpeg;
 mod png;
 mod psd;
+mod tga;
 mod tiff;
 mod webp;
 
@@ -78,10 +80,12 @@ use slopshop_core::convert::{ConversionReport, ConvertError, ConvertOptions, Con
 use slopshop_core::document::{Document, LayerContent};
 use slopshop_core::{BlendSpace, CancelToken, Progress, Rect, Size};
 
+use self::bmp::BmpWriter;
 use self::exr::ExrWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::png::PngWriter;
+use self::tga::TgaWriter;
 use self::tiff::TiffWriter;
 pub use self::webp::MAX_SIDE as WEBP_MAX_SIDE;
 use self::webp::{WebpLosslessWriter, WebpLossyWriter};
@@ -105,6 +109,8 @@ pub enum ExportFormatKind {
     Psd,
     /// Photoshop's large document format, layered, as PSD.
     Psb,
+    Bmp,
+    Tga,
 }
 
 impl ExportFormatKind {
@@ -201,6 +207,19 @@ pub enum ExportFormat {
     Psb {
         depth: PsdDepth,
     },
+    /// 8-bit sRGB, alpha kept or not.
+    Bmp,
+    /// 8-bit sRGB, alpha kept or not.
+    Tga {
+        compression: TgaCompression,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TgaCompression {
+    None,
+    /// Run-length encoding (lossless).
+    Rle,
 }
 
 impl ExportFormat {
@@ -213,6 +232,8 @@ impl ExportFormat {
             ExportFormat::Webp { .. } => ExportFormatKind::Webp,
             ExportFormat::Psd { .. } => ExportFormatKind::Psd,
             ExportFormat::Psb { .. } => ExportFormatKind::Psb,
+            ExportFormat::Bmp => ExportFormatKind::Bmp,
+            ExportFormat::Tga { .. } => ExportFormatKind::Tga,
         }
     }
 
@@ -232,7 +253,10 @@ impl ExportFormat {
                 ExrSample::F32 => SampleType::F32,
                 ExrSample::F16 => SampleType::F16,
             },
-            ExportFormat::Jpeg { .. } | ExportFormat::Webp { .. } => SampleType::U8,
+            ExportFormat::Jpeg { .. }
+            | ExportFormat::Webp { .. }
+            | ExportFormat::Bmp
+            | ExportFormat::Tga { .. } => SampleType::U8,
             ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => match depth {
                 PsdDepth::U8 => SampleType::U8,
                 PsdDepth::U16 => SampleType::U16,
@@ -494,6 +518,8 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Webp => Some(webp::MAX_SIDE),
         ExportFormatKind::Psd => Some(psd::MAX_SIDE),
         ExportFormatKind::Psb => Some(psd::PSB_MAX_SIDE),
+        ExportFormatKind::Bmp => Some(bmp::MAX_SIDE),
+        ExportFormatKind::Tga => Some(tga::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
@@ -529,6 +555,8 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Exr => {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
+        // No color tagging: sRGB by convention (BMP's header declares it).
+        ExportFormatKind::Bmp | ExportFormatKind::Tga => *space == ColorSpace::SRGB,
     }
 }
 
@@ -548,7 +576,9 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Exr
         | ExportFormatKind::Webp
         | ExportFormatKind::Psd
-        | ExportFormatKind::Psb => false,
+        | ExportFormatKind::Psb
+        | ExportFormatKind::Bmp
+        | ExportFormatKind::Tga => false,
     }
 }
 
@@ -652,6 +682,13 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
                 compression: WebpCompression::Lossy { quality: 90 },
             },
             common_8_bit_space(unique_space),
+        ),
+        ExportFormatKind::Bmp => (ExportFormat::Bmp, ColorSpace::SRGB),
+        ExportFormatKind::Tga => (
+            ExportFormat::Tga {
+                compression: TgaCompression::Rle,
+            },
+            ColorSpace::SRGB,
         ),
         ExportFormatKind::Psd | ExportFormatKind::Psb => {
             let (depth, space) = if rasters.iter().all(|format| format.sample == SampleType::U8) {
@@ -872,6 +909,10 @@ pub fn export_image(
                 WebpLossyWriter::new(file, size, target, quality, cancel.clone())?,
             )),
         },
+        ExportFormat::Bmp => FormatWriter::Bmp(Box::new(BmpWriter::new(file, size, target)?)),
+        ExportFormat::Tga { compression } => {
+            FormatWriter::Tga(Box::new(TgaWriter::new(file, size, target, compression)?))
+        }
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -914,6 +955,8 @@ enum FormatWriter {
     Jpeg(Box<JpegWriter>),
     WebpLossless(Box<WebpLosslessWriter>),
     WebpLossy(Box<WebpLossyWriter>),
+    Bmp(Box<BmpWriter>),
+    Tga(Box<TgaWriter>),
 }
 
 impl FormatWriter {
@@ -925,6 +968,8 @@ impl FormatWriter {
             FormatWriter::Jpeg(w) => w.write_rows(first_row, rows),
             FormatWriter::WebpLossless(w) => w.write_rows(first_row, rows),
             FormatWriter::WebpLossy(w) => w.write_rows(first_row, rows),
+            FormatWriter::Bmp(w) => w.write_rows(first_row, rows),
+            FormatWriter::Tga(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -936,6 +981,8 @@ impl FormatWriter {
             FormatWriter::Jpeg(w) => (*w).finish(),
             FormatWriter::WebpLossless(w) => (*w).finish(),
             FormatWriter::WebpLossy(w) => (*w).finish(),
+            FormatWriter::Bmp(w) => (*w).finish(),
+            FormatWriter::Tga(w) => (*w).finish(),
         }
     }
 }
