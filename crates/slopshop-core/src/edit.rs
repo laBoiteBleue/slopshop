@@ -490,12 +490,15 @@ impl Edit {
     /// The edit that gives the canvas `size` and applies `by` (a map of the document's space)
     /// to every top-level layer, a group's layers with it: what Image Size, Canvas Size, Crop
     /// and Image Rotation do (ADR 0017). Pixels are never rewritten, and what falls outside the
-    /// canvas is kept.
+    /// canvas is kept. The selection is dropped, as in Photoshop (ADR 0024).
     pub fn reframe_image(doc: &Document, size: Size, by: Affine) -> Result<Edit, EditError> {
         if size.is_empty() {
             return Err(EditError::EmptyCanvas);
         }
         let mut edits = vec![Edit::SetCanvasSize { size }];
+        if doc.selection().is_some() {
+            edits.push(Edit::SetSelection { selection: None });
+        }
         for layer in doc.layers() {
             let transform = layer.transform.then(by).snapped();
             validate_transform(transform)?;

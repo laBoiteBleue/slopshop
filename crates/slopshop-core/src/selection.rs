@@ -235,156 +235,242 @@ pub fn bounds(selection: &RasterImage) -> Option<Rect> {
     (right > left).then(|| Rect::new(left, top, right - left, bottom - top))
 }
 
-/// The outline of `selection` (where coverage crosses one half) along the pixel edges of its
-/// pyramid level `level`, within `region` (document pixels), as polylines in document pixels:
-/// closed loops repeat their first point, outlines cut by the region are open. `None` if it
-/// would take more than `max_points` points: the caller tries a coarser level.
-pub fn outline(
+/// A polyline in document pixels.
+pub type Line = Vec<[u32; 2]>;
+
+/// The outlines of a selection over a region (see [`outlines`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Outlines {
+    /// Where coverage crosses one half: the marching ants.
+    pub middle: Vec<Line>,
+    /// For a soft selection (feathered: its partly selected band is much wider than an
+    /// anti-aliased edge), where coverage leaves 0 (`outer`) and reaches 1 (`inner`): the extent
+    /// of the soft edge. `None` for a hard or anti-aliased selection.
+    pub soft: Option<(Vec<Line>, Vec<Line>)>,
+}
+
+/// Coverage above this is "touched" (the outer limit of a soft edge): 1%.
+const SOFT_LOW: u16 = 655;
+/// Coverage at or above this is "full" (the inner limit of a soft edge): 99%.
+const SOFT_HIGH: u16 = 64880;
+/// A selection is soft when its partly selected pixels are, on average, more than this many
+/// pixels across its outline (an anti-aliased edge has about one).
+const SOFT_BAND: usize = 3;
+
+/// The outlines of `selection` along the pixel edges of its pyramid level `level`, within
+/// `region` (document pixels), as polylines in document pixels: closed loops repeat their
+/// first point, outlines cut by the region are open. `None` if they would take more than
+/// `max_points` points: the caller tries a coarser level.
+pub fn outlines(
     selection: &RasterImage,
     level: usize,
     region: Rect,
     max_points: usize,
-) -> Option<Vec<Vec<[u32; 2]>>> {
-    let levels = selection.levels();
-    let level = level.min(levels.len() - 1);
-    let scale = 1u32 << level;
-    let pixels = &levels[level];
-    let size = pixels.size();
-    // The region in the level's pixels, one pixel wider on each side to see the edges on it.
-    let x0 = (region.x / scale).saturating_sub(1);
-    let y0 = (region.y / scale).saturating_sub(1);
-    let x1 = (u32::try_from(region.right().div_ceil(u64::from(scale))).unwrap_or(u32::MAX))
-        .saturating_add(1)
-        .min(size.width);
-    let y1 = (u32::try_from(region.bottom().div_ceil(u64::from(scale))).unwrap_or(u32::MAX))
-        .saturating_add(1)
-        .min(size.height);
-    if x0 >= x1 || y0 >= y1 {
-        return Some(Vec::new());
-    }
-    let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
-    // Inside or not, with a border of "outside" all around when the region reaches the image
-    // edge (so the outline closes there), and "unknown" (no edges) when it was cut.
-    let mut inside = vec![false; w * h];
-    let grid = pixels.grid();
-    for row in y0 / TILE_SIZE..=(y1 - 1) / TILE_SIZE {
-        for col in x0 / TILE_SIZE..=(x1 - 1) / TILE_SIZE {
-            let Some(tile) = pixels.tile(TileCoord { col, row }) else {
-                continue;
-            };
-            debug_assert!(col < grid.columns() && row < grid.rows());
-            let constant = uniform_value(tile);
-            let values = if constant.is_none() {
-                decode(tile)
-            } else {
-                Vec::new()
-            };
-            let (tx, ty) = (col * TILE_SIZE, row * TILE_SIZE);
-            for y in ty.max(y0)..(ty + TILE_SIZE).min(y1) {
-                for x in tx.max(x0)..(tx + TILE_SIZE).min(x1) {
-                    let v = constant
-                        .unwrap_or_else(|| values[((y - ty) * TILE_SIZE + x - tx) as usize]);
-                    inside[(y - y0) as usize * w + (x - x0) as usize] = v >= HALF;
+) -> Option<Outlines> {
+    let Some(area) = Area::read(selection, level, region) else {
+        return Some(Outlines::default());
+    };
+    let middle = area.trace(|v| v >= HALF, max_points)?;
+    let band = area
+        .values
+        .iter()
+        .filter(|&&v| v > SOFT_LOW && v < SOFT_HIGH)
+        .count();
+    let edges = area.crossings(HALF);
+    let soft = if edges > 0 && band > SOFT_BAND * edges {
+        let left = max_points.saturating_sub(middle.iter().map(Vec::len).sum());
+        let outer = area.trace(|v| v > SOFT_LOW, left)?;
+        let left = left.saturating_sub(outer.iter().map(Vec::len).sum());
+        let inner = area.trace(|v| v >= SOFT_HIGH, left)?;
+        Some((outer, inner))
+    } else {
+        None
+    };
+    Some(Outlines { middle, soft })
+}
+
+/// The values of a region of a pyramid level, one pixel wider on each side to see the edges on
+/// its border.
+struct Area {
+    values: Vec<u16>,
+    w: usize,
+    h: usize,
+    x0: u32,
+    y0: u32,
+    scale: u32,
+    size: Size,
+    /// The region stops short of the image on that side (left, top, right, bottom): nothing is
+    /// known beyond it, so no edge is drawn there; otherwise the image edge closes the outline.
+    cut: [bool; 4],
+}
+
+impl Area {
+    fn read(selection: &RasterImage, level: usize, region: Rect) -> Option<Self> {
+        let levels = selection.levels();
+        let level = level.min(levels.len() - 1);
+        let scale = 1u32 << level;
+        let pixels = &levels[level];
+        let size = pixels.size();
+        let x0 = (region.x / scale).saturating_sub(1);
+        let y0 = (region.y / scale).saturating_sub(1);
+        let x1 = (u32::try_from(region.right().div_ceil(u64::from(scale))).unwrap_or(u32::MAX))
+            .saturating_add(1)
+            .min(size.width);
+        let y1 = (u32::try_from(region.bottom().div_ceil(u64::from(scale))).unwrap_or(u32::MAX))
+            .saturating_add(1)
+            .min(size.height);
+        if x0 >= x1 || y0 >= y1 {
+            return None;
+        }
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut values = vec![0u16; w * h];
+        for row in y0 / TILE_SIZE..=(y1 - 1) / TILE_SIZE {
+            for col in x0 / TILE_SIZE..=(x1 - 1) / TILE_SIZE {
+                let Some(tile) = pixels.tile(TileCoord { col, row }) else {
+                    continue;
+                };
+                let constant = uniform_value(tile);
+                let decoded = if constant.is_none() {
+                    decode(tile)
+                } else {
+                    Vec::new()
+                };
+                let (tx, ty) = (col * TILE_SIZE, row * TILE_SIZE);
+                for y in ty.max(y0)..(ty + TILE_SIZE).min(y1) {
+                    for x in tx.max(x0)..(tx + TILE_SIZE).min(x1) {
+                        values[(y - y0) as usize * w + (x - x0) as usize] = constant
+                            .unwrap_or_else(|| decoded[((y - ty) * TILE_SIZE + x - tx) as usize]);
+                    }
                 }
             }
         }
-    }
-    let cut_left = x0 > 0;
-    let cut_top = y0 > 0;
-    let cut_right = x1 < size.width;
-    let cut_bottom = y1 < size.height;
-    let at = |x: isize, y: isize| -> Option<bool> {
-        if x < 0 {
-            return (!cut_left).then_some(false);
-        }
-        if y < 0 {
-            return (!cut_top).then_some(false);
-        }
-        if x >= w as isize {
-            return (!cut_right).then_some(false);
-        }
-        if y >= h as isize {
-            return (!cut_bottom).then_some(false);
-        }
-        Some(inside[y as usize * w + x as usize])
-    };
-
-    // Directed edges with the inside on their right (y down), between vertices of the level's
-    // pixel grid, relative to (x0, y0).
-    let mut edges: Vec<([u32; 2], [u32; 2])> = Vec::new();
-    for y in 0..=h as isize {
-        for x in 0..=w as isize {
-            // Horizontal edge on line y, from x to x + 1: between (x, y - 1) and (x, y).
-            if x < w as isize
-                && let (Some(above), Some(below)) = (at(x, y - 1), at(x, y))
-                && above != below
-            {
-                let (a, b) = ([x as u32, y as u32], [x as u32 + 1, y as u32]);
-                edges.push(if below { (a, b) } else { (b, a) });
-            }
-            // Vertical edge on line x, from y to y + 1: between (x - 1, y) and (x, y).
-            if y < h as isize
-                && let (Some(left), Some(right)) = (at(x - 1, y), at(x, y))
-                && left != right
-            {
-                let (a, b) = ([x as u32, y as u32], [x as u32, y as u32 + 1]);
-                edges.push(if left { (a, b) } else { (b, a) });
-            }
-        }
+        Some(Self {
+            values,
+            w,
+            h,
+            x0,
+            y0,
+            scale,
+            size: selection.size(),
+            cut: [x0 > 0, y0 > 0, x1 < size.width, y1 < size.height],
+        })
     }
 
-    let mut outgoing: HashMap<[u32; 2], Vec<usize>> = HashMap::with_capacity(edges.len());
-    let mut incoming: HashMap<[u32; 2], usize> = HashMap::with_capacity(edges.len());
-    for (i, (a, b)) in edges.iter().enumerate() {
-        outgoing.entry(*a).or_default().push(i);
-        *incoming.entry(*b).or_default() += 1;
-    }
-    let mut used = vec![false; edges.len()];
-    let mut lines = Vec::new();
-    let mut points = 0usize;
-    let to_document = |p: [u32; 2]| {
-        [
-            ((p[0] + x0) * scale).min(selection.size().width),
-            ((p[1] + y0) * scale).min(selection.size().height),
-        ]
-    };
-    let trace = |start: usize, used: &mut [bool]| -> Vec<[u32; 2]> {
-        let mut line = vec![edges[start].0];
-        let mut current = start;
-        loop {
-            used[current] = true;
-            let (_, end) = edges[current];
-            line.push(end);
-            let next = outgoing
-                .get(&end)
-                .and_then(|list| list.iter().copied().find(|&e| !used[e]));
-            match next {
-                Some(e) => current = e,
-                None => break,
+    /// How many pixel edges separate coverage below `threshold` from coverage at or above it.
+    fn crossings(&self, threshold: u16) -> usize {
+        let (w, h) = (self.w, self.h);
+        let mut count = 0;
+        for y in 0..h {
+            for x in 0..w {
+                let here = self.values[y * w + x] >= threshold;
+                if x + 1 < w && here != (self.values[y * w + x + 1] >= threshold) {
+                    count += 1;
+                }
+                if y + 1 < h && here != (self.values[(y + 1) * w + x] >= threshold) {
+                    count += 1;
+                }
             }
         }
-        simplify(&mut line);
-        line.into_iter().map(to_document).collect()
-    };
-    // Open outlines first (cut by the region): they start where nothing comes in.
-    for i in 0..edges.len() {
-        if !used[i] && !incoming.contains_key(&edges[i].0) {
-            let line = trace(i, &mut used);
-            points += line.len();
-            lines.push(line);
-        }
+        count
     }
-    for i in 0..edges.len() {
-        if !used[i] {
-            let line = trace(i, &mut used);
-            points += line.len();
-            lines.push(line);
+
+    /// The edges between pixels `inside` and the others, chained into polylines.
+    fn trace(&self, inside: impl Fn(u16) -> bool, max_points: usize) -> Option<Vec<Line>> {
+        let (w, h) = (self.w, self.h);
+        let [cut_left, cut_top, cut_right, cut_bottom] = self.cut;
+        let at = |x: isize, y: isize| -> Option<bool> {
+            if x < 0 {
+                return (!cut_left).then_some(false);
+            }
+            if y < 0 {
+                return (!cut_top).then_some(false);
+            }
+            if x >= w as isize {
+                return (!cut_right).then_some(false);
+            }
+            if y >= h as isize {
+                return (!cut_bottom).then_some(false);
+            }
+            Some(inside(self.values[y as usize * w + x as usize]))
+        };
+
+        // Directed edges with the inside on their right (y down), between vertices of the
+        // pixel grid of the level, relative to (x0, y0).
+        let mut edges: Vec<([u32; 2], [u32; 2])> = Vec::new();
+        for y in 0..=h as isize {
+            for x in 0..=w as isize {
+                // Horizontal edge on line y, from x to x + 1: between (x, y - 1) and (x, y).
+                if x < w as isize
+                    && let (Some(above), Some(below)) = (at(x, y - 1), at(x, y))
+                    && above != below
+                {
+                    let (a, b) = ([x as u32, y as u32], [x as u32 + 1, y as u32]);
+                    edges.push(if below { (a, b) } else { (b, a) });
+                }
+                // Vertical edge on line x, from y to y + 1: between (x - 1, y) and (x, y).
+                if y < h as isize
+                    && let (Some(left), Some(right)) = (at(x - 1, y), at(x, y))
+                    && left != right
+                {
+                    let (a, b) = ([x as u32, y as u32], [x as u32, y as u32 + 1]);
+                    edges.push(if left { (a, b) } else { (b, a) });
+                }
+            }
         }
-        if points > max_points {
-            return None;
+
+        let mut outgoing: HashMap<[u32; 2], Vec<usize>> = HashMap::with_capacity(edges.len());
+        let mut incoming: HashMap<[u32; 2], usize> = HashMap::with_capacity(edges.len());
+        for (i, (a, b)) in edges.iter().enumerate() {
+            outgoing.entry(*a).or_default().push(i);
+            *incoming.entry(*b).or_default() += 1;
         }
+        let mut used = vec![false; edges.len()];
+        let mut lines = Vec::new();
+        let mut points = 0usize;
+        let to_document = |p: [u32; 2]| {
+            [
+                ((p[0] + self.x0) * self.scale).min(self.size.width),
+                ((p[1] + self.y0) * self.scale).min(self.size.height),
+            ]
+        };
+        let trace = |start: usize, used: &mut [bool]| -> Line {
+            let mut line = vec![edges[start].0];
+            let mut current = start;
+            loop {
+                used[current] = true;
+                let (_, end) = edges[current];
+                line.push(end);
+                let next = outgoing
+                    .get(&end)
+                    .and_then(|list| list.iter().copied().find(|&e| !used[e]));
+                match next {
+                    Some(e) => current = e,
+                    None => break,
+                }
+            }
+            simplify(&mut line);
+            line.into_iter().map(to_document).collect()
+        };
+        // Open outlines first (cut by the region): they start where nothing comes in.
+        for i in 0..edges.len() {
+            if !used[i] && !incoming.contains_key(&edges[i].0) {
+                let line = trace(i, &mut used);
+                points += line.len();
+                lines.push(line);
+            }
+        }
+        for i in 0..edges.len() {
+            if !used[i] {
+                let line = trace(i, &mut used);
+                points += line.len();
+                lines.push(line);
+            }
+            if points > max_points {
+                return None;
+            }
+        }
+        (points <= max_points).then_some(lines)
     }
-    (points <= max_points).then_some(lines)
 }
 
 /// Drop the points in the middle of straight runs.
@@ -1352,10 +1438,30 @@ mod tests {
     }
 
     #[test]
+    fn reframing_the_image_deselects_and_undo_brings_the_selection_back() {
+        use crate::document::Document;
+        use crate::edit::Edit;
+        let canvas = Size::new(64, 64);
+        let mut doc = Document::new(canvas);
+        let selection =
+            Selection::new(Arc::new(select(canvas, &rect(0.0, 0.0, 9.0, 9.0)))).unwrap();
+        Edit::SetSelection {
+            selection: Some(selection.clone()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let crop = Edit::crop(&doc, [0, 0, 32, 32]).unwrap();
+        let undo = crop.apply(&mut doc).unwrap();
+        assert!(doc.selection().is_none());
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.selection(), Some(&selection));
+    }
+
+    #[test]
     fn the_outline_of_a_rectangle_is_one_closed_loop() {
         let canvas = Size::new(600, 400);
         let image = select(canvas, &rect(10.0, 20.0, 310.0, 280.0));
-        let lines = outline(&image, 0, canvas.bounds(), 10_000).unwrap();
+        let lines = outlines(&image, 0, canvas.bounds(), 10_000).unwrap().middle;
         assert_eq!(lines.len(), 1);
         let line = &lines[0];
         assert_eq!(line.first(), line.last());
@@ -1368,22 +1474,66 @@ mod tests {
     fn an_outline_cut_by_the_region_is_open_and_a_budget_is_kept() {
         let canvas = Size::new(600, 400);
         let image = select(canvas, &rect(10.0, 20.0, 310.0, 280.0));
-        let lines = outline(&image, 0, Rect::new(0, 0, 100, 100), 10_000).unwrap();
+        let lines = outlines(&image, 0, Rect::new(0, 0, 100, 100), 10_000)
+            .unwrap()
+            .middle;
         assert!(!lines.is_empty());
         assert!(lines.iter().all(|line| line.first() != line.last()));
-        assert!(outline(&image, 0, canvas.bounds(), 2).is_none());
+        assert!(outlines(&image, 0, canvas.bounds(), 2).is_none());
         // A selection to the canvas edge closes along it.
         let all = select_all(canvas).unwrap();
-        let lines = outline(&all, 0, canvas.bounds(), 100).unwrap();
+        let lines = outlines(&all, 0, canvas.bounds(), 100).unwrap().middle;
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].first(), lines[0].last());
+    }
+
+    #[test]
+    fn a_feathered_selection_shows_the_extent_of_its_soft_edge() {
+        let canvas = Size::new(400, 400);
+        let shape = rect(100.0, 100.0, 300.0, 300.0);
+        let hard = select(canvas, &shape);
+        assert!(
+            outlines(&hard, 0, canvas.bounds(), 100_000)
+                .unwrap()
+                .soft
+                .is_none()
+        );
+        let smooth = select(
+            canvas,
+            &Shape::Ellipse {
+                left: 100.0,
+                top: 100.0,
+                right: 300.0,
+                bottom: 300.0,
+            },
+        );
+        assert!(
+            outlines(&smooth, 0, canvas.bounds(), 100_000)
+                .unwrap()
+                .soft
+                .is_none()
+        );
+        let edges = EdgeOptions {
+            anti_alias: true,
+            feather: 10.0,
+        };
+        let soft = select_shape(canvas, None, &shape, edges, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let found = outlines(&soft, 0, canvas.bounds(), 100_000).unwrap();
+        let (outer, inner) = found.soft.unwrap();
+        let left = |lines: &Vec<Line>| lines.iter().flatten().map(|p| p[0]).min().unwrap();
+        // About 2.3 sigma out and in from the middle at 100.
+        assert!((left(&found.middle) as i64 - 100).abs() <= 1);
+        assert!((70..=80).contains(&left(&outer)), "{}", left(&outer));
+        assert!((120..=130).contains(&left(&inner)), "{}", left(&inner));
     }
 
     #[test]
     fn the_outline_of_a_coarser_level_is_in_document_pixels() {
         let canvas = Size::new(2000, 1000);
         let image = select(canvas, &rect(400.0, 200.0, 1200.0, 800.0));
-        let lines = outline(&image, 2, canvas.bounds(), 10_000).unwrap();
+        let lines = outlines(&image, 2, canvas.bounds(), 10_000).unwrap().middle;
         assert_eq!(lines.len(), 1);
         let mut corners: Vec<[u32; 2]> = lines[0][..lines[0].len() - 1].to_vec();
         corners.sort();
