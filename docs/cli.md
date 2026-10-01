@@ -16,7 +16,7 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 |---|---|
 | [`slopshop gpu`](#slopshop-gpu) | Show the GPU adapter the engine would use |
 | [`slopshop render`](#slopshop-render) | Render a built-in demo document to a PNG file |
-| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM, QOI, farbfeld, Radiance HDR, ICO, GIF, DDS, FITS, DICOM, PDF or a layered PSD or PSB |
+| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM, QOI, farbfeld, Radiance HDR, ICO, GIF, DDS, FITS, DICOM, PDF, JPEG 2000 or a layered PSD or PSB |
 | [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
 | [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
 | [`slopshop bench`](#slopshop-bench) | Time the viewport renderer on a document (redraw, pan, zoom) |
@@ -75,16 +75,16 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 
 | Option | Values | Meaning |
 |---|---|---|
-| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm`, `qoi`, `ff`, `hdr`, `ico`, `gif`, `dds`, `fits`, `dcm`, `pdf` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, `.qoi`, `.ff` (farbfeld), `.hdr` (Radiance), `.ico`, `.gif`, `.dds`, `.fits`, `.fit`, `.fts`, `.dcm`, `.dicom`, `.pdf`, any case) |
+| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm`, `qoi`, `ff`, `hdr`, `ico`, `gif`, `dds`, `fits`, `dcm`, `pdf`, `jp2` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, `.qoi`, `.ff` (farbfeld), `.hdr` (Radiance), `.ico`, `.gif`, `.dds`, `.fits`, `.fit`, `.fts`, `.dcm`, `.dicom`, `.pdf`, `.jp2`, `.jpf`, any case) |
 | `--depth` | `u8`, `u16`, `f16`, `f32` | Sample type: 8/16-bit integers, 16/32-bit floats (see the table below for each format). The color space stays the default one unless `--space` is given |
 | `--space` | see [Color spaces](#color-spaces) | Color space of the file. Always tagged in the file |
-| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm, PFM, farbfeld, Radiance HDR, DDS, FITS and DICOM are uncompressed; JPEG XL, QOI, ICO and PDF (Flate) are always lossless; GIF uses LZW, after reduction to 256 colors |
-| `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP, AVIF) | Quality of lossy compression |
+| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP, JPEG 2000); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm, PFM, farbfeld, Radiance HDR, DDS, FITS and DICOM are uncompressed; JPEG XL, QOI, ICO and PDF (Flate) are always lossless; GIF uses LZW, after reduction to 256 colors |
+| `--quality` | `1` to `100` (JPEG, JPEG 2000), `0` to `100` (lossy WebP, AVIF) | Quality of lossy compression. For JPEG 2000 it makes the file lossy |
 | `--subsampling` | `444`, `422`, `420` | JPEG only: chroma subsampling. `444` keeps full color resolution, `420` gives the smallest files |
 | `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG, PFM, Radiance HDR, FITS and DICOM never have alpha; a layered PSD or PSB always keeps it |
 | `--matte` | `RRGGBB` or `#RRGGBB` | Color transparency is flattened over when there is no alpha, as sRGB hex. Default: `ffffff` (white) |
 | `--no-dither` | | No dither for 8-bit samples (dither reduces banding; it is on by default) |
-| `--gray` | | Gray samples (PNG, TIFF, JPEG, Netpbm, PFM, AVIF, JPEG XL, FITS, DICOM and PDF): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
+| `--gray` | | Gray samples (PNG, TIFF, JPEG, Netpbm, PFM, AVIF, JPEG XL, FITS, DICOM, PDF and JPEG 2000): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
 | `--color` | | Color samples, even for a gray document |
 | `--scale` | a factor, e.g. `4` or `0.25` | Resample the whole image by this factor first, like Image Size: sides are rounded, and layers are resampled with the quality filter of transformed layers ([ADR 0018](adr/0018-resampling.md)) |
 | `--page` | a page number, from 1 | PDF input: the page to export. Default: `1` (the others are reported) |
@@ -191,6 +191,17 @@ DICOM (flattened over the matte). Gray when the document is gray, else RGB:
 
 FITS and DICOM stream their rows; PDF streams its color samples.
 
+### JPEG 2000
+
+`jp2` writes a JP2 file (openjp2, the Rust port of OpenJPEG), 8 or 16-bit (16-bit by default
+when a visible raster is deeper than 8-bit), gray or RGB, with alpha unless the document is
+opaque, in sRGB only (the file's enumerated sRGB or greyscale; no ICC profile yet). Lossless by
+default (the reversible 5/3 wavelet); `--compression lossy` or a `--quality` (1 to 100, 90 by
+default) uses the irreversible 9/7 wavelet at a compression ratio of 2^((100 − quality) / 12.5):
+about 1:1 at 100, 16:1 at 50, 240:1 at 1. The whole image is held while it is encoded, as
+32-bit samples: at most 65 535 pixels per side and 268 million samples (pixels × channels).
+The file is encoded in the system's temporary directory, then copied to `OUTPUT`.
+
 ### Layered PSD and PSB
 
 A `.psd` output keeps the document's structure, for Photoshop and the other editors that read
@@ -234,8 +245,8 @@ a gray image or a neutral fill, with one image at least: its gray samples are th
 Which spaces each format can store *and tag* so that it reads back as the same space:
 
 - **PNG**: all of them (sRGB chunk, cICP chunk, or ICC profile).
-- **BMP**, **Targa**, **Netpbm**, **farbfeld**, **ICO**, **GIF**, **DDS**, **FITS** and
-  **DICOM**: `srgb` only.
+- **BMP**, **Targa**, **Netpbm**, **farbfeld**, **ICO**, **GIF**, **DDS**, **FITS**,
+  **DICOM** and **JPEG 2000**: `srgb` only.
   **PFM** and **Radiance HDR**: `linear-srgb` only. **QOI**: `srgb` and `linear-srgb`.
 - **AVIF**: all but `adobe-rgb` and `prophoto` (H.273 code points).
 - **JPEG XL**: all of them (its color encodings).

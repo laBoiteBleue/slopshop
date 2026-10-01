@@ -30,7 +30,7 @@ USAGE:
 
     slopshop export <INPUT> <OUTPUT>
                     [--format png|tiff|exr|jpeg|webp|psd|psb|bmp|tga|pnm|pfm|avif|jxl|qoi|ff|
-                              hdr|ico|gif|dds|fits|dcm|pdf]
+                              hdr|ico|gif|dds|fits|dcm|pdf|jp2]
                     [--depth u8|u16|f16|f32] [--space ID]
                     [--compression fast|small|none|deflate|lzw|lossy|lossless|rle]
                     [--quality 0-100] [--subsampling 444|422|420]
@@ -43,26 +43,29 @@ USAGE:
         --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
                        .jpg, .jpeg, .webp, .psd, .psb, .bmp, .tga, .pnm, .ppm, .pgm,
                        .pam, .pfm, .avif, .jxl, .qoi, .ff, .hdr, .ico, .gif, .dds,
-                       .fits, .fit, .fts, .dcm, .dicom, .pdf). PSD and PSB keep the
-                       layers (groups, masks, blend modes, adjustment layers); PSB goes
-                       beyond PSD's 30,000 pixels per side.
+                       .fits, .fit, .fts, .dcm, .dicom, .pdf, .jp2, .jpf). PSD and PSB
+                       keep the layers (groups, masks, blend modes, adjustment layers);
+                       PSB goes beyond PSD's 30,000 pixels per side.
         --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG and
                        WebP: u8. PSD and PSB: u8, u16. BMP and TGA: u8. PNM: u8,
                        u16. PFM: f32. AVIF: u8, u16 (written at 10 bits). JPEG XL:
                        u8, u16 (lossless). QOI, ICO, GIF and DDS: u8. farbfeld: u16.
                        Radiance HDR: f32. FITS: u8, u16, f32. DICOM: u8, u16. PDF: u8.
+                       JPEG 2000: u8, u16.
                        The color space stays the default one unless --space is given.
         --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
                        linear-rec2020, rec2100-pq, rec2100-hlg. TIFF, JPEG, WebP and
                        PDF: all but PQ and HLG. OpenEXR: linear-srgb, linear-rec2020.
-                       BMP, TGA, PNM, farbfeld, ICO, GIF, DDS, FITS and DICOM: srgb.
+                       BMP, TGA, PNM, farbfeld, ICO, GIF, DDS, FITS, DICOM and JPEG
+                       2000: srgb.
                        PFM and Radiance HDR: linear-srgb. QOI: srgb, linear-srgb.
                        AVIF: all but adobe-rgb and prophoto. JPEG XL: all of them.
         --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
                        lossless ZIP, no option. JPEG: see --quality, --subsampling.
                        WebP: lossy (default), lossless. TGA: rle (default), none.
-        --quality      JPEG 1 to 100, lossy WebP and AVIF 0 to 100. Default: 90 (AVIF:
-                       80).
+                       JPEG 2000: lossless (default), lossy.
+        --quality      JPEG 1 to 100, lossy WebP and AVIF 0 to 100, JPEG 2000 1 to 100
+                       (makes it lossy). Default: 90 (AVIF: 80).
         --subsampling  JPEG chroma subsampling: 444 (full color), 422, 420 (smallest).
                        Default: 444.
         --no-alpha     Drop the alpha channel: the image is flattened over the matte.
@@ -72,9 +75,9 @@ USAGE:
                        as sRGB RRGGBB. Default: ffffff (white).
         --no-dither    No dither for 8-bit samples.
         --gray         Gray samples (PNG, TIFF, JPEG, PNM, PFM, AVIF, JPEG XL, FITS,
-                       DICOM, PDF): the luminance of the image in the file's color
-                       space; colors are reported. Default for gray documents (gray
-                       images, neutral fills).
+                       DICOM, PDF, JPEG 2000): the luminance of the image in the file's
+                       color space; colors are reported. Default for gray documents
+                       (gray images, neutral fills).
         --color        Color samples, even for a gray document.
         --scale        Resample the whole image by FACTOR first (e.g. 4 or 0.25), like
                        Image Size: the quality resampling of transformed layers.
