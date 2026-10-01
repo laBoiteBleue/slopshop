@@ -8,7 +8,7 @@
 //!   (sRGB for integer data, linear sRGB primaries for float data) when the file has none;
 //! - EXIF orientation is applied (a lossless transform);
 //! - what cannot be represented faithfully yet is refused with a clear error (CMYK, LUT-based
-//!   color, exotic samples, formats not supported yet such as HEIC, RAW or PDF) or
+//!   color, exotic samples, formats not supported yet such as HEIC or RAW) or
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
 mod atomic;
@@ -20,6 +20,7 @@ mod jpeg2000;
 mod jxl;
 mod lab;
 mod orient;
+pub mod pdf;
 mod pfm;
 mod psd;
 pub mod slop;
@@ -84,6 +85,9 @@ pub enum ImportWarning {
     /// Mask density and feather, and vector masks beside a pixel mask, are not supported yet:
     /// they were left out.
     MasksSimplified,
+    /// Some content of a PDF page could not be rendered (an unsupported font or an image that
+    /// failed to decode): it is missing from the page.
+    PdfContentSkipped,
 }
 
 impl ImportWarning {
@@ -104,6 +108,7 @@ impl ImportWarning {
             ImportWarning::LayersRasterized => "layersRasterized",
             ImportWarning::PixelsOutsideCanvas => "pixelsOutsideCanvas",
             ImportWarning::MasksSimplified => "masksSimplified",
+            ImportWarning::PdfContentSkipped => "pdfContentSkipped",
         }
     }
 }
@@ -277,6 +282,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if jpeg2000::is_jpeg2000(&head) {
         drop(file);
         jpeg2000::decode(path)?
+    } else if pdf::is_pdf(&head) {
+        drop(file);
+        pdf::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -637,7 +645,7 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
     if let Some(error) = heif_brand(head) {
         return Some(error);
     }
-    let signatures: [(&[u8], &'static str); 2] = [(b"%PDF", "PDF"), (b"SIMPLE  =", "FITS")];
+    let signatures: [(&[u8], &'static str); 1] = [(b"SIMPLE  =", "FITS")];
     if let Some((_, name)) = signatures.iter().find(|(sig, _)| head.starts_with(sig)) {
         return Some(ImportError::NotYetSupported(name));
     }
@@ -1038,7 +1046,7 @@ mod tests {
     fn recognized_formats_that_are_not_supported_yet() {
         let cases: [(&str, Vec<u8>, &str); 6] = [
             ("photo.heic", b"\0\0\0\x18ftypheic\0\0\0\0".to_vec(), "heic"),
-            ("scan.pdf", b"%PDF-1.7".to_vec(), "notYetSupported"),
+            ("drawing.svg", b"<svg".to_vec(), "notYetSupported"),
             ("scan.fits", b"SIMPLE  =".to_vec(), "notYetSupported"),
             // A CMYK Photoshop document (header only): refused until the engine has CMYK.
             (
