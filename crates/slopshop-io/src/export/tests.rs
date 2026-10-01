@@ -1965,3 +1965,118 @@ fn gray_and_hdr_avif_are_declared() {
         &ColorSpace::REC2100_HLG
     ));
 }
+
+fn jxl_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool, gray: bool) -> ExportSpec {
+    ExportSpec {
+        format: ExportFormat::Jxl { depth },
+        space,
+        keep_alpha,
+        matte: WHITE_MATTE,
+        dither: false,
+        gray,
+        blend_space: BlendSpace::default(),
+    }
+}
+
+/// Export `doc` to JPEG XL with `spec`, and read it back with our importer.
+fn jxl_round_trip(name: &str, doc: &Document, spec: &ExportSpec) -> crate::Imported {
+    let path = temp_path(&format!("{name}.jxl"));
+    let report = export(doc, &path, spec).unwrap();
+    assert_eq!(report, ExportReport::default(), "{name}");
+    assert!(temp_files(&path).is_empty());
+    let back = open_image(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    back
+}
+
+#[test]
+fn jxl_round_trips_are_lossless_at_8_and_16_bits_with_alpha() {
+    let size = Size::new(70, 45);
+    let cases = [
+        (ChannelLayout::Rgb, SampleType::U8),
+        (ChannelLayout::Rgba, SampleType::U16),
+        (ChannelLayout::Gray, SampleType::U8),
+        (ChannelLayout::GrayAlpha, SampleType::U16),
+    ];
+    for (layout, sample) in cases {
+        let image = pattern_raster(size, layout, sample, ColorSpace::SRGB, |x, y, c| {
+            let v = (x * 97 + y * 31 + c as u32 * 7_000) % 65_536;
+            let alpha = matches!(layout, ChannelLayout::Rgba | ChannelLayout::GrayAlpha)
+                && c + 1 == layout.channels() as usize;
+            // Opaque enough everywhere: colors under alpha 0 are not kept, by design.
+            let v = if alpha { 30_000 + v % 30_000 } else { v };
+            if sample == SampleType::U8 {
+                (v % 256) as u16
+            } else {
+                v as u16
+            }
+        });
+        let doc = raster_document(image);
+        let gray = layout.is_gray();
+        let alpha = matches!(layout, ChannelLayout::Rgba | ChannelLayout::GrayAlpha);
+        let depth = if sample == SampleType::U8 {
+            PngDepth::U8
+        } else {
+            PngDepth::U16
+        };
+        let back = jxl_round_trip(
+            &format!("{layout:?}"),
+            &doc,
+            &jxl_spec(depth, ColorSpace::SRGB, alpha, gray),
+        );
+        let format = back.image.format();
+        // 16-bit gray with alpha is written in color (an encoder limitation).
+        let expected = if layout == ChannelLayout::GrayAlpha && sample == SampleType::U16 {
+            ChannelLayout::Rgba
+        } else {
+            layout
+        };
+        assert_eq!(
+            (format.layout, format.sample),
+            (expected, sample),
+            "{layout:?}"
+        );
+        assert_eq!(format.color_space, ColorSpace::SRGB, "{layout:?}");
+        assert!(
+            composite_u16(&raster_document(back.image)) == composite_u16(&doc),
+            "{layout:?} is not lossless"
+        );
+    }
+}
+
+#[test]
+fn jxl_declares_wide_custom_and_hdr_spaces() {
+    let size = Size::new(24, 16);
+    for space in [
+        ColorSpace::DISPLAY_P3,
+        ColorSpace::REC2100_PQ,
+        ColorSpace::ADOBE_RGB,
+        ColorSpace::PROPHOTO,
+        ColorSpace::LINEAR_REC2020,
+    ] {
+        let image = pattern_raster(
+            size,
+            ChannelLayout::Rgb,
+            SampleType::U16,
+            space,
+            |x, y, c| ((x * 2_000 + y * 900 + c as u32 * 10_000) % 65_536) as u16,
+        );
+        let doc = raster_document(image);
+        let back = jxl_round_trip("space", &doc, &jxl_spec(PngDepth::U16, space, false, false));
+        let got = back.image.format().color_space;
+        let close =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        let (p, q) = (got.primaries, space.primaries);
+        assert!(
+            close(p.red, q.red)
+                && close(p.green, q.green)
+                && close(p.blue, q.blue)
+                && close(p.white, q.white),
+            "{space:?} came back as {got:?}"
+        );
+        assert!(
+            composite_u16(&raster_document(back.image)) == composite_u16(&doc),
+            "{space:?} is not lossless"
+        );
+    }
+}
