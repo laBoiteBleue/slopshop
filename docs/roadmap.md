@@ -170,7 +170,7 @@ paints on an empty layer or in a mask.
 - [x] Rectangular and Elliptical Marquee, their options (modes, feather, anti-alias), marching
       ants, the Select menu (All, Deselect, Reselect, Inverse), tool groups in the toolbar
 - [x] Quick Mask (Q): a view overlay drawn by the GPU after compositing, never cached
-- [ ] Lasso and Polygonal Lasso
+- [x] Lasso and Polygonal Lasso
 - [ ] Selection → layer mask, Image > Crop to the selection
 - [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
