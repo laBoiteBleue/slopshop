@@ -35,6 +35,14 @@ pub(crate) fn is_pdf(head: &[u8]) -> bool {
     head.starts_with(b"%PDF")
 }
 
+/// Whether the file at `path` is a PDF (by its content).
+pub fn is_pdf_file(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(4);
+    std::fs::File::open(path)?.take(4).read_to_end(&mut head)?;
+    Ok(is_pdf(&head))
+}
+
 /// The first page at [`DEFAULT_DPI`], reporting the others.
 pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
     let file = PdfFile::open(path)?;

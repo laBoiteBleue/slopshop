@@ -56,8 +56,8 @@ slopshop export <INPUT> <OUTPUT> [options]
 
 Opens `INPUT` (a `.slop` document, recognized by its content, or any image format the importer
 reads: PNG, JPEG, TIFF, WebP, JPEG XL, AVIF, JPEG 2000, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, OpenEXR, HDR,
-DDS, as a
-one-layer document) and writes the composited image to `OUTPUT`
+DDS, PDF, as a
+one-layer document; a PDF gives one page, rasterized: see `--page` and `--dpi`) and writes the composited image to `OUTPUT`
 through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export.md),
 [ADR 0010](adr/0010-jpeg-webp-export.md)). A PSD or PSB keeps the layers instead (see
 [Layered PSD and PSB](#layered-psd-and-psb)):
@@ -85,6 +85,8 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 | `--gray` | | Gray samples (PNG, TIFF and JPEG): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
 | `--color` | | Color samples, even for a gray document |
 | `--scale` | a factor, e.g. `4` or `0.25` | Resample the whole image by this factor first, like Image Size: sides are rounded, and layers are resampled with the quality filter of transformed layers ([ADR 0018](adr/0018-resampling.md)) |
+| `--page` | a page number, from 1 | PDF input: the page to export. Default: `1` (the others are reported) |
+| `--dpi` | `1` to `10000` | PDF input: the resolution the page is rasterized at, as 8-bit sRGB, transparent where the page draws nothing. Default: `300` |
 | `--cpu` | | Composite on the CPU instead of the GPU |
 | `--bench` | | Also print timings (open, GPU init, export, throughput, time in the pixel source) and the number of bands |
 
