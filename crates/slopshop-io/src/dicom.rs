@@ -19,15 +19,13 @@ use std::path::Path;
 use dicom_dictionary_std::tags;
 use dicom_object::{DefaultDicomObject, InMemDicomObject};
 use dicom_pixeldata::PixelDecoder;
+use slopshop_core::Size;
 use slopshop_core::adjust::Adjustment;
-use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, SampleType, WORKING_SPACE};
-use slopshop_core::document::{Layer, LayerContent, LayerId};
-use slopshop_core::{BlendMode, BlendSpace, Document, Size};
+use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, SampleType};
 
 use crate::orient::Orientation;
 use crate::{
-    Decoded, ImportError, ImportWarning, ImportedLayers, MAX_IMPORT_BYTES, Opened, check_budget,
-    finish,
+    Decoded, ImportError, ImportWarning, MAX_IMPORT_BYTES, Opened, adjusted, check_budget, finish,
 };
 
 /// Transfer syntaxes read by the JPEG 2000 decoder (JPEG 2000 and High-Throughput JPEG 2000).
@@ -59,48 +57,14 @@ pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
     let name = path
         .file_stem()
         .map_or_else(|| "DICOM".to_owned(), |s| s.to_string_lossy().into_owned());
-    let size = imported.image.size();
-    let layer = |id: u64, name: String, content: LayerContent| Layer {
-        id: LayerId::from_raw(id),
-        name,
-        visible: true,
-        opacity: 1.0,
-        blend_mode: BlendMode::Normal,
-        content,
-        mask: None,
-        clipped: false,
-        transform: slopshop_core::Affine::IDENTITY,
-    };
-    let layers = vec![
-        layer(
-            1,
-            name,
-            LayerContent::Raster {
-                image: std::sync::Arc::new(imported.image),
-            },
-        ),
-        layer(
-            2,
-            window.name,
-            LayerContent::Adjustment {
-                adjustment: window.levels,
-            },
-        ),
-    ];
-    let document = Document::restore(size, WORKING_SPACE, BlendSpace::Perceptual, layers, 3)
-        .map_err(|e| ImportError::Decode(format!("DICOM: {e:?}")))?;
-    Ok(Opened::Layers(ImportedLayers {
-        document,
-        warnings: imported.warnings,
-        layer_warnings: vec![Vec::new(), Vec::new()],
-    }))
+    adjusted::layered(name, imported, window.name, window.levels)
 }
 
 /// The image as shown: the window applied to the samples (reported as a flattened document).
 pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
     let mut scan = read(path)?;
     if let Some(window) = scan.window {
-        apply(&window.levels, &mut scan.decoded);
+        adjusted::apply_levels(&window.levels, &mut scan.decoded);
         scan.decoded.warnings.push(ImportWarning::LayersFlattened);
     }
     Ok(scan.decoded)
@@ -498,7 +462,7 @@ fn window(
         }
         // Deeper ones: from the darkest to the lightest sample.
         _ => {
-            let (low, high) = extremes(decoded)?;
+            let (low, high) = adjusted::extremes(decoded)?;
             (low, high, "WL / WW auto".to_owned(), has_lut)
         }
     };
@@ -514,31 +478,6 @@ fn number(v: f64) -> String {
     } else {
         format!("{rounded}")
     }
-}
-
-/// The darkest and the lightest encoded value of a gray image.
-fn extremes(decoded: &Decoded) -> Option<(f64, f64)> {
-    let values: Box<dyn Iterator<Item = f64>> = match decoded.sample {
-        SampleType::U8 => Box::new(decoded.pixels.iter().map(|&v| f64::from(v) / 255.0)),
-        SampleType::U16 => Box::new(
-            decoded
-                .pixels
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|b| f64::from(u16::from_ne_bytes(*b)) / 65535.0),
-        ),
-        SampleType::F16 | SampleType::F32 => Box::new(
-            decoded
-                .pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f64::from(f32::from_ne_bytes(*b))),
-        ),
-    };
-    let (low, high) = values.fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
-    (low <= high).then_some((low, high))
 }
 
 /// Levels mapping encoded `from` to black and `to` to white (the reverse if `inverted`), linearly.
@@ -575,44 +514,11 @@ fn levels(from: f64, to: f64, inverted: bool) -> Option<Adjustment> {
     })
 }
 
-/// Apply Levels to a gray image's samples (the flattened image), as the compositor does.
-fn apply(levels: &Adjustment, decoded: &mut Decoded) {
-    let Adjustment::Levels {
-        input_black,
-        input_white,
-        output_black,
-        output_white,
-        ..
-    } = *levels
-    else {
-        return;
-    };
-    let (ib, iw) = (f64::from(input_black), f64::from(input_white));
-    let (ob, ow) = (f64::from(output_black), f64::from(output_white));
-    let map = |v: f64| ob + ((v - ib) / (iw - ib)).clamp(0.0, 1.0) * (ow - ob);
-    match decoded.sample {
-        SampleType::U8 => {
-            for v in &mut decoded.pixels {
-                *v = (map(f64::from(*v) / 255.0) * 255.0).round() as u8;
-            }
-        }
-        SampleType::U16 => {
-            for b in decoded.pixels.as_chunks_mut::<2>().0 {
-                let v = map(f64::from(u16::from_ne_bytes(*b)) / 65535.0);
-                *b = ((v * 65535.0).round() as u16).to_ne_bytes();
-            }
-        }
-        SampleType::F16 | SampleType::F32 => {
-            for b in decoded.pixels.as_chunks_mut::<4>().0 {
-                *b = (map(f64::from(f32::from_ne_bytes(*b))) as f32).to_ne_bytes();
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slopshop_core::BlendSpace;
+    use slopshop_core::document::LayerContent;
 
     fn fixture(name: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

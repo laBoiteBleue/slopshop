@@ -11,11 +11,13 @@
 //!   color, exotic samples, formats not supported yet such as HEIC or RAW) or
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
+mod adjusted;
 mod atomic;
 mod avif;
 pub mod collection;
 mod dicom;
 pub mod export;
+mod fits;
 mod icc;
 mod jpeg2000;
 mod jxl;
@@ -92,6 +94,8 @@ pub enum ImportWarning {
     /// The DICOM display window is a sigmoid or a lookup table, or is invalid: it was read as a
     /// linear window, the closest one.
     DicomWindowApproximated,
+    /// FITS float samples were scaled from their own range to [0, 1].
+    FitsValuesScaled,
 }
 
 impl ImportWarning {
@@ -114,6 +118,7 @@ impl ImportWarning {
             ImportWarning::MasksSimplified => "masksSimplified",
             ImportWarning::PdfContentSkipped => "pdfContentSkipped",
             ImportWarning::DicomWindowApproximated => "dicomWindowApproximated",
+            ImportWarning::FitsValuesScaled => "fitsValuesScaled",
         }
     }
 }
@@ -259,6 +264,9 @@ pub fn open_file(path: &Path) -> Result<Opened, ImportError> {
     if dicom::is_dicom(&head) {
         return dicom::open(path);
     }
+    if fits::is_fits(&head) {
+        return fits::open(path);
+    }
     open_image(path).map(Opened::Image)
 }
 
@@ -296,6 +304,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if dicom::is_dicom(&head) {
         drop(file);
         dicom::decode(path)?
+    } else if fits::is_fits(&head) {
+        drop(file);
+        fits::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -655,10 +666,6 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
     }
     if let Some(error) = heif_brand(head) {
         return Some(error);
-    }
-    let signatures: [(&[u8], &'static str); 1] = [(b"SIMPLE  =", "FITS")];
-    if let Some((_, name)) = signatures.iter().find(|(sig, _)| head.starts_with(sig)) {
-        return Some(ImportError::NotYetSupported(name));
     }
     let by_extension = match extension.as_str() {
         "svg" | "svgz" => Some("SVG"),
@@ -1055,7 +1062,7 @@ mod tests {
         let cases: [(&str, Vec<u8>, &str); 6] = [
             ("photo.heic", b"\0\0\0\x18ftypheic\0\0\0\0".to_vec(), "heic"),
             ("drawing.svg", b"<svg".to_vec(), "notYetSupported"),
-            ("scan.fits", b"SIMPLE  =".to_vec(), "notYetSupported"),
+            ("art.xcf", b"gimp xcf ".to_vec(), "notYetSupported"),
             // A CMYK Photoshop document (header only): refused until the engine has CMYK.
             (
                 "print.psd",
