@@ -247,6 +247,10 @@ struct Args {
     bench: bool,
     /// `--scale`: resample the whole image by this factor first (Image Size, ADR 0018).
     scale: Option<f64>,
+    /// `--page`: the page of a PDF input, from 1.
+    page: Option<usize>,
+    /// `--dpi`: the resolution a PDF input is rendered at.
+    dpi: Option<f32>,
 }
 
 /// Where the pixels came from.
@@ -354,6 +358,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let (mut no_alpha, mut no_dither, mut cpu, mut bench) = (false, false, false, false);
     let mut gray = None;
     let mut scale = None;
+    let (mut page, mut dpi) = (None, None);
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -378,6 +383,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--cpu" => cpu = true,
             "--bench" => bench = true,
             "--scale" => scale = Some(parse_scale(value()?)?),
+            "--page" => page = Some(parse_page(value()?)?),
+            "--dpi" => dpi = Some(parse_dpi(value()?)?),
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
             }
@@ -514,7 +521,23 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         cpu,
         bench,
         scale,
+        page,
+        dpi,
     })
+}
+
+fn parse_page(s: &str) -> Result<usize, String> {
+    match s.parse::<usize>() {
+        Ok(v) if v >= 1 => Ok(v),
+        _ => Err(format!("invalid --page `{s}` (a page number, from 1)")),
+    }
+}
+
+fn parse_dpi(s: &str) -> Result<f32, String> {
+    match s.parse::<f32>() {
+        Ok(v) if v.is_finite() && (1.0..=10_000.0).contains(&v) => Ok(v),
+        _ => Err(format!("invalid --dpi `{s}` (1 to 10000)")),
+    }
 }
 
 fn parse_scale(s: &str) -> Result<f64, String> {
@@ -924,6 +947,27 @@ fn export(args: &Args) -> Result<Outcome, String> {
         let (document, _) =
             slopshop_io::slop::SlopFile::open(&args.input).map_err(|e| cannot_open(&e))?;
         (document, Vec::new())
+    } else if args.page.is_some() || args.dpi.is_some() {
+        if !slopshop_io::pdf::is_pdf_file(&args.input).map_err(|e| cannot_open(&e))? {
+            return Err("--page and --dpi apply to PDF files only".to_owned());
+        }
+        let pdf = slopshop_io::pdf::PdfFile::open(&args.input).map_err(|e| cannot_open(&e))?;
+        let page = args.page.unwrap_or(1);
+        if page > pdf.page_count() {
+            return Err(format!(
+                "--page {page}: {} has {} page(s)",
+                args.input.display(),
+                pdf.page_count()
+            ));
+        }
+        let imported = pdf
+            .render(page - 1, args.dpi.unwrap_or(slopshop_io::pdf::DEFAULT_DPI))
+            .map_err(|e| cannot_open(&e))?;
+        let warnings = imported.warnings.iter().map(|w| w.id()).collect();
+        (
+            single_layer_document(imported.image, &layer_name(&args.input))?,
+            warnings,
+        )
     } else {
         let imported = slopshop_io::open_image(&args.input).map_err(|e| cannot_open(&e))?;
         let warnings = imported.warnings.iter().map(|w| w.id()).collect();
@@ -1114,8 +1158,14 @@ mod tests {
                 cpu: true,
                 bench: true,
                 scale: Some(0.5),
+                page: None,
+                dpi: None,
             }
         );
+        let pdf = parse(&["doc.pdf", "out.png", "--page", "3", "--dpi", "150"]).unwrap();
+        assert_eq!((pdf.page, pdf.dpi), (Some(3), Some(150.0)));
+        assert!(parse(&["doc.pdf", "out.png", "--page", "0"]).is_err());
+        assert!(parse(&["doc.pdf", "out.png", "--dpi", "0"]).is_err());
         assert!(parse(&["in.png", "out.png", "--scale", "0"]).is_err());
         let args = parse(&["in.png", "out.tif"]).unwrap();
         assert_eq!(args.format, ExportFormatKind::Tiff);
