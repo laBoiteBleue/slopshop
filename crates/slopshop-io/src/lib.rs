@@ -8,7 +8,7 @@
 //!   (sRGB for integer data, linear sRGB primaries for float data) when the file has none;
 //! - EXIF orientation is applied (a lossless transform);
 //! - what cannot be represented faithfully yet is refused with a clear error (CMYK, LUT-based
-//!   color, exotic samples, formats not supported yet such as HEIC, RAW or JPEG 2000) or
+//!   color, exotic samples, formats not supported yet such as HEIC, RAW or PDF) or
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
 mod atomic;
@@ -16,6 +16,7 @@ mod avif;
 pub mod collection;
 pub mod export;
 mod icc;
+mod jpeg2000;
 mod jxl;
 mod lab;
 mod orient;
@@ -273,6 +274,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if avif::is_avif(&head) {
         drop(file);
         avif::decode(path)?
+    } else if jpeg2000::is_jpeg2000(&head) {
+        drop(file);
+        jpeg2000::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -633,12 +637,7 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
     if let Some(error) = heif_brand(head) {
         return Some(error);
     }
-    let signatures: [(&[u8], &'static str); 4] = [
-        (b"\0\0\0\x0cjP  \r\n\x87\n", "JPEG 2000"),
-        (&[0xFF, 0x4F, 0xFF, 0x51], "JPEG 2000"),
-        (b"%PDF", "PDF"),
-        (b"SIMPLE  =", "FITS"),
-    ];
+    let signatures: [(&[u8], &'static str); 2] = [(b"%PDF", "PDF"), (b"SIMPLE  =", "FITS")];
     if let Some((_, name)) = signatures.iter().find(|(sig, _)| head.starts_with(sig)) {
         return Some(ImportError::NotYetSupported(name));
     }
@@ -1040,7 +1039,7 @@ mod tests {
         let cases: [(&str, Vec<u8>, &str); 6] = [
             ("photo.heic", b"\0\0\0\x18ftypheic\0\0\0\0".to_vec(), "heic"),
             ("scan.pdf", b"%PDF-1.7".to_vec(), "notYetSupported"),
-            ("scan.j2k", vec![0xFF, 0x4F, 0xFF, 0x51], "notYetSupported"),
+            ("scan.fits", b"SIMPLE  =".to_vec(), "notYetSupported"),
             // A CMYK Photoshop document (header only): refused until the engine has CMYK.
             (
                 "print.psd",

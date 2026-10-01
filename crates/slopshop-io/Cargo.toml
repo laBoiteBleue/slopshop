@@ -31,6 +31,11 @@ exr = { workspace = true }
 # color encoding and ICC profile; the Rust bindings of libjxl are GPL (ADR 0006). `rayon` is
 # already in the tree through `image`.
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["rayon"] }
+# JPEG 2000 import: hayro-jpeg2000 (MIT OR Apache-2.0), pure Rust, `forbid(unsafe)`; its `simd`
+# feature (fearless_simd, MIT OR Apache-2.0) speeds up the wavelet and color transforms. Its
+# `image` feature (an `image` integration and moxcms) is left out: we read the components.
+# OpenJPEG declared itself unmaintained in 2026.
+hayro-jpeg2000 = { version = "0.4.0", default-features = false, features = ["simd"] }
 # AVIF import: rav1d (BSD-2-Clause), the Rust port of dav1d, without its assembly (which needs
 # nasm at build time): pure Rust. Its API is dav1d's C one, called from our `avif::ffi` module
 # only. The AVIF container is read by our own code (avif-parse is MPL-2.0).
