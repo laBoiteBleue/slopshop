@@ -14,9 +14,9 @@ use slopshop_core::{
 };
 use slopshop_io::export::{
     AvifDepth, ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
-    JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression, TiffCompression,
-    TiffSample, WebpCompression, default_spec, export_image, export_psd, has_gray, supports_alpha,
-    supports_gray, supports_space,
+    Jpeg2000Compression, JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression,
+    TiffCompression, TiffSample, WebpCompression, default_spec, export_image, export_psd, has_gray,
+    supports_alpha, supports_gray, supports_space,
 };
 use slopshop_render::Renderer;
 
@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 22] = [
+const FORMATS: [ExportFormatKind; 23] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -56,6 +56,7 @@ const FORMATS: [ExportFormatKind; 22] = [
     ExportFormatKind::Fits,
     ExportFormatKind::Dicom,
     ExportFormatKind::Pdf,
+    ExportFormatKind::Jpeg2000,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -133,7 +134,8 @@ impl Depth {
             ExportFormatKind::Png
             | ExportFormatKind::Pnm
             | ExportFormatKind::Jxl
-            | ExportFormatKind::Dicom => self.png().is_some(),
+            | ExportFormatKind::Dicom
+            | ExportFormatKind::Jpeg2000 => self.png().is_some(),
             ExportFormatKind::Tiff | ExportFormatKind::Fits => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
             ExportFormatKind::Pfm | ExportFormatKind::Hdr => self == Depth::F32,
@@ -209,7 +211,8 @@ impl Compression {
         }
     }
 
-    fn is_webp(self) -> bool {
+    /// WebP's and JPEG 2000's.
+    fn is_lossy_or_lossless(self) -> bool {
         matches!(self, Compression::Lossy | Compression::Lossless)
     }
 
@@ -225,7 +228,7 @@ impl Compression {
         match kind {
             ExportFormatKind::Png => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
-            ExportFormatKind::Webp => self.is_webp(),
+            ExportFormatKind::Webp | ExportFormatKind::Jpeg2000 => self.is_lossy_or_lossless(),
             ExportFormatKind::Tga => self.tga().is_some(),
             ExportFormatKind::Exr
             | ExportFormatKind::Jpeg
@@ -497,9 +500,18 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 return Err("--quality is not available for lossless WebP".to_owned());
             }
             ExportFormatKind::Webp | ExportFormatKind::Avif => {}
+            // A quality makes JPEG 2000 lossy.
+            ExportFormatKind::Jpeg2000 if lossless => {
+                return Err("--quality is not available for lossless JPEG 2000".to_owned());
+            }
+            ExportFormatKind::Jpeg2000 if quality == 0 => {
+                return Err("--quality 0 is not available for JPEG 2000 (1 to 100)".to_owned());
+            }
+            ExportFormatKind::Jpeg2000 => {}
             _ => {
                 return Err(format!(
-                    "--quality is not available for {name} (JPEG, lossy WebP and AVIF only)"
+                    "--quality is not available for {name} (JPEG, lossy WebP, AVIF and lossy \
+                     JPEG 2000 only)"
                 ));
             }
         }
@@ -726,6 +738,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "fits" | "fit" | "fts" => Some(ExportFormatKind::Fits),
         "dcm" | "dicom" => Some(ExportFormatKind::Dicom),
         "pdf" => Some(ExportFormatKind::Pdf),
+        "jp2" | "jpf" => Some(ExportFormatKind::Jpeg2000),
         _ => None,
     }
 }
@@ -755,6 +768,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Fits => "fits",
         ExportFormatKind::Dicom => "dcm",
         ExportFormatKind::Pdf => "pdf",
+        ExportFormatKind::Jpeg2000 => "jp2",
     }
 }
 
@@ -782,6 +796,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Fits => "FITS",
         ExportFormatKind::Dicom => "DICOM",
         ExportFormatKind::Pdf => "PDF",
+        ExportFormatKind::Jpeg2000 => "JPEG 2000",
     }
 }
 
@@ -865,6 +880,19 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
         },
         ExportFormat::Dicom { depth } => ExportFormat::Dicom {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
+        },
+        ExportFormat::Jpeg2000 { depth, compression } => ExportFormat::Jpeg2000 {
+            depth: args.depth.and_then(Depth::png).unwrap_or(depth),
+            // Lossy when asked, or when a quality is given.
+            compression: match (args.compression, args.quality) {
+                (Some(Compression::Lossless), _) => Jpeg2000Compression::Lossless,
+                (Some(Compression::Lossy), quality) | (_, quality @ Some(_)) => {
+                    Jpeg2000Compression::Lossy {
+                        quality: quality.unwrap_or(90),
+                    }
+                }
+                _ => compression,
+            },
         },
         ExportFormat::Jxl { depth } => ExportFormat::Jxl {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
@@ -980,6 +1008,16 @@ fn describe(spec: &ExportSpec) -> String {
                 WebpCompression::Lossless => Compression::Lossless,
             }),
         ),
+        ExportFormat::Jpeg2000 { depth, compression } => (
+            match depth {
+                PngDepth::U8 => Depth::U8,
+                PngDepth::U16 => Depth::U16,
+            },
+            Some(match compression {
+                Jpeg2000Compression::Lossy { .. } => Compression::Lossy,
+                Jpeg2000Compression::Lossless => Compression::Lossless,
+            }),
+        ),
         ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => (
             match depth {
                 PsdDepth::U8 => Depth::U8,
@@ -1010,7 +1048,11 @@ fn describe(spec: &ExportSpec) -> String {
     if let ExportFormat::Webp {
         compression: WebpCompression::Lossy { quality },
     }
-    | ExportFormat::Avif { quality, .. } = spec.format
+    | ExportFormat::Avif { quality, .. }
+    | ExportFormat::Jpeg2000 {
+        compression: Jpeg2000Compression::Lossy { quality },
+        ..
+    } = spec.format
     {
         text += &format!(" --quality {quality}");
     }
@@ -1384,6 +1426,50 @@ mod tests {
     }
 
     #[test]
+    fn jpeg2000_is_recognized_with_its_options() {
+        for name in ["out.jp2", "out.JPF"] {
+            let args = parse(&["in.png", name]).unwrap();
+            assert_eq!(args.format, ExportFormatKind::Jpeg2000, "{name}");
+        }
+        assert_eq!(parse_format("jp2").unwrap(), ExportFormatKind::Jpeg2000);
+        let error = |args: &[&str]| parse(args).unwrap_err();
+        assert_eq!(
+            error(&["in.png", "out.jp2", "--depth", "f32"]),
+            "--depth f32 is not available for JPEG 2000 (valid: u8, u16)"
+        );
+        assert!(error(&["in.png", "out.jp2", "--compression", "lzw"]).contains("valid: lossy"));
+        assert!(error(&["in.png", "out.jp2", "--quality", "0"]).contains("1 to 100"));
+        assert!(
+            error(&[
+                "in.png",
+                "out.jp2",
+                "--compression",
+                "lossless",
+                "--quality",
+                "50"
+            ])
+            .contains("lossless JPEG 2000")
+        );
+        assert!(error(&["in.png", "out.jp2", "--space", "display-p3"]).contains("valid: srgb"));
+
+        let document = Document::new(Size::new(4, 4));
+        let spec = |args: &[&str]| describe(&export_spec(&parse(args).unwrap(), &document));
+        assert_eq!(
+            spec(&["in.png", "out.jp2"]),
+            "--format jp2 --depth u8 --space srgb --compression lossless"
+        );
+        // A quality alone makes it lossy; lossy alone takes 90.
+        assert_eq!(
+            spec(&["in.png", "out.jp2", "--quality", "40", "--depth", "u16"]),
+            "--format jp2 --depth u16 --space srgb --compression lossy --quality 40"
+        );
+        assert_eq!(
+            spec(&["in.png", "out.jp2", "--compression", "lossy"]),
+            "--format jp2 --depth u8 --space srgb --compression lossy --quality 90"
+        );
+    }
+
+    #[test]
     fn rejects_malformed_command_lines() {
         let error = |args: &[&str]| parse(args).unwrap_err();
         assert!(error(&["in.png"]).contains("got 1 path"));
@@ -1689,9 +1775,10 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    /// FITS and DICOM flatten (no alpha) and read back at the same size; PDF keeps alpha.
+    /// FITS and DICOM flatten (no alpha) and read back at the same size; PDF and JPEG 2000 keep
+    /// alpha.
     #[test]
-    fn exports_fits_dicom_and_pdf_and_reads_them_back() {
+    fn exports_fits_dicom_pdf_and_jpeg2000_and_reads_them_back() {
         let dir = temp_dir("documents");
         let size = Size::new(70, 300);
         let input = dir.join("in.png");
@@ -1700,13 +1787,18 @@ mod tests {
             ("out.fits", &["alphaFlattened"][..]),
             ("out.dcm", &["alphaFlattened"][..]),
             ("out.pdf", &[][..]),
+            ("out.jp2", &[][..]),
         ] {
             let output = dir.join(name);
             let args = [input.to_str().unwrap(), output.to_str().unwrap(), "--cpu"];
             let outcome = export(&parse(&args).unwrap()).unwrap();
             let ids: Vec<_> = outcome.report.notices.iter().map(|n| n.id()).collect();
             assert_eq!(ids, notices, "{name}");
-            assert_eq!(outcome.spec.keep_alpha, name == "out.pdf", "{name}");
+            assert_eq!(
+                outcome.spec.keep_alpha,
+                matches!(name, "out.pdf" | "out.jp2"),
+                "{name}"
+            );
             let reimported = slopshop_io::open_image(&output).unwrap();
             assert_eq!(
                 reimported.image.format().color_space,
