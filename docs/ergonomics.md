@@ -55,13 +55,11 @@ built. Contributors: propose here first.
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), Crop (C), Hand (H), Zoom (Z); the active one is highlighted, its name and key in the
-  tooltip. An options bar under the menu bar shows the active tool's icon and settings. Hand: a
-  drag pans (as Space+drag and the middle button do with any tool); a double-click on its
-  button fits the image on screen. Zoom: a click zooms in about the pointer, Alt+click out; the
-  options bar picks zoom in or out (Alt inverts it), and has 100% and Fit on Screen, like the
-  Hand tool's; a double-click on its button shows 100%. While a crop frame or a Free Transform
-  box waits on the image, the options bar has Cancel and Commit buttons at its right end.
+  startup) and Crop (C); the active one is highlighted, its name and key in the tooltip. An
+  options bar under the menu bar shows the active tool's icon and its own settings only. No
+  Hand or Zoom tool, and no view or apply buttons in the options bar (maintainer's choice,
+  2026-10-01): Space+drag, the middle button, the wheel, Enter and Esc already do that with any
+  tool. Next to the zoom slider in the status bar, two icon buttons: 100% and Fit on Screen.
 - Move tool: drag moves the selected
   layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag. The pointer stays
   the normal arrow over the image (no move cross). Auto-Select (options bar, on by default):

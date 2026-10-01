@@ -205,11 +205,6 @@
     if (apply) onapply(frame);
   }
 
-  /** Apply the frame as it is (the options bar's button). */
-  export function apply() {
-    onapply(frame);
-  }
-
   function isTextField(target: EventTarget | null): boolean {
     return (
       target instanceof HTMLTextAreaElement ||

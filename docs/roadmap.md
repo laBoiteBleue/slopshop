@@ -160,8 +160,9 @@ respects the selection from the start. Painting follows Photoshop's model: a str
 layer's tiles copy-on-write and undo keeps the old tiles by reference; non-destructive work
 paints on an empty layer or in a mask.
 
-- [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move, Crop, Hand
-      and Zoom tools with Photoshop's keys; the other tools come with their features
+- [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move and Crop
+      tools with Photoshop's keys (no Hand or Zoom tool: the wheel, Space and the middle button
+      do that); the other tools come with their features
 - [ ] Selection model (as masks), marquee/lasso, selection → mask
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
