@@ -4,6 +4,7 @@
   // applies live, one undo entry per drag; Reset puts the neutral values back.
   import { ADJUSTMENT_PARAMS, type AdjustmentId, type EditRequest, type LayerView } from "./engine";
   import { hexToSrgb, srgbToHex } from "./color";
+  import CurvesEditor from "./CurvesEditor.svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
 
@@ -116,6 +117,7 @@
       { kind: "check", index: 12, label: "adjustment.channelMixer.monochrome" },
     ],
     invert: [],
+    curves: [],
     posterize: [slider(0, "adjustment.posterize.levels", 2, 255)],
     threshold: [slider(0, "adjustment.threshold.level", 1, 255, { scale: 255 })],
   };
@@ -158,6 +160,7 @@
     photoFilter: padded([236 / 255, 138 / 255, 0, 25, 1]),
     channelMixer: padded([100, 0, 0, 0, 0, 100, 0, 0, 0, 0, 100, 0, 0]),
     invert: padded([]),
+    curves: padded([]),
     posterize: padded([4]),
     threshold: padded([128 / 255]),
   };
@@ -203,6 +206,16 @@
     return { kind: "setAdjustment", id: layer.id, adjustment: adjustment.id, values: next };
   }
 
+  /** Curves: the edit with these points (composite, red, green, blue). */
+  function curvesRequest(curves: number[][][]): EditRequest {
+    return { kind: "setAdjustment", id: layer.id, adjustment: "curves", values: [], curves };
+  }
+
+  const IDENTITY_CURVES = [0, 1, 2, 3].map(() => [
+    [0, 0],
+    [255, 255],
+  ]);
+
   /** Show `next` and apply it live (part of a gesture). */
   function live(next: Values) {
     dragging = true;
@@ -240,7 +253,8 @@
   }
 
   function reset() {
-    if (adjustment) apply([...DEFAULTS[adjustment.id]]);
+    if (adjustment?.id === "curves") onedit(documentId, curvesRequest(IDENTITY_CURVES));
+    else if (adjustment) apply([...DEFAULTS[adjustment.id]]);
   }
 
   const shown = (f: Slider) => {
@@ -256,14 +270,23 @@
     <div class="tabs"><span class="tab active">{t("properties.title")}</span></div>
     <div class="title">
       <span>{t(`adjustment.${adjustment.id}`)}</span>
-      {#if fields.length > 0}
+      {#if fields.length > 0 || adjustment.curves}
         <button type="button" class="reset" onclick={reset}>{t("properties.reset")}</button>
       {/if}
     </div>
-    {#if fields.length === 0}
+    {#if fields.length === 0 && !adjustment.curves}
       <p class="empty">{t("properties.noSettings")}</p>
     {/if}
     <div class="fields">
+      {#if adjustment.curves && adjustment.curveSamples}
+        <CurvesEditor
+          curves={adjustment.curves}
+          samples={adjustment.curveSamples}
+          onlive={(curves) => onlive(documentId, curvesRequest(curves))}
+          onend={() => ongestureend(documentId)}
+          onapply={(curves) => onedit(documentId, curvesRequest(curves))}
+        />
+      {/if}
       {#if selector && !selectorHidden}
         <label class="label" for="property-selector">{t(selector.label)}</label>
         <select id="property-selector" class="selector" bind:value={chosen}>
