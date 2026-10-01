@@ -7,6 +7,7 @@
 //! Threading: every command is `async` (so it never runs on the main/UI thread) and heavy work
 //! (GPU, decoding) runs in `spawn_blocking` or a worker thread.
 
+mod ai;
 mod export;
 mod ipc;
 mod selection;
@@ -385,6 +386,8 @@ struct AppState {
     layer_clipboard: Mutex<Option<CopiedLayers>>,
     /// The file the Import PDF / SVG dialog shows (see the `vector` module).
     vector: Arc<vector::VectorCache>,
+    /// AI components being installed (see the `ai` module).
+    ai: ai::AiState,
 }
 
 impl AppState {
@@ -404,6 +407,7 @@ impl AppState {
             exports: ExportJobs::default(),
             layer_clipboard: Mutex::new(None),
             vector: Arc::default(),
+            ai: ai::AiState::default(),
         }
     }
 
@@ -2064,6 +2068,11 @@ pub fn run() {
             presenter_mode,
             present_view,
             reveal_in_folder,
+            ai::ai_components,
+            ai::ai_install,
+            ai::ai_cancel_install,
+            ai::ai_remove,
+            ai::ai_open_license,
             layer_thumbnail,
             add_mask_from_transparency,
             selection::select_shape,
