@@ -1,20 +1,43 @@
 <script lang="ts">
   // The options bar (ADR 0013): the settings of the active tool, under the menu bar. Only what
   // belongs to the tool: view and apply/cancel commands live in the menus and on the keys.
-  import Icon from "./Icon.svelte";
+  import type { SelectionMode } from "./engine";
+  import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
-  import { TOOLS, type ToolId } from "./tools";
+  import type { MessageKey } from "./i18n/en";
+  import { MAX_FEATHER } from "./selection";
+  import { isSelectionTool, toolInfo, type ToolId } from "./tools";
 
   let {
     tool,
     autoSelect = $bindable(),
+    selectionMode = $bindable(),
+    feather = $bindable(),
+    antiAlias = $bindable(),
   }: {
     tool: ToolId;
     /** Move tool: a drag takes the layer under the pointer (Ctrl inverts it). */
     autoSelect: boolean;
+    /** Selection tools: how a new shape combines with the selection (keys override it). */
+    selectionMode: SelectionMode;
+    /** Selection tools: Gaussian softening of the edge, in pixels. */
+    feather: number;
+    /** Elliptical Marquee: smooth edges. */
+    antiAlias: boolean;
   } = $props();
 
-  const current = $derived(TOOLS.find((entry) => entry.id === tool) ?? TOOLS[0]);
+  const current = $derived(toolInfo(tool));
+
+  const MODES: { mode: SelectionMode; icon: IconName; label: MessageKey }[] = [
+    { mode: "replace", icon: "selectionReplace", label: "options.mode.replace" },
+    { mode: "add", icon: "selectionAdd", label: "options.mode.add" },
+    { mode: "subtract", icon: "selectionSubtract", label: "options.mode.subtract" },
+    { mode: "intersect", icon: "selectionIntersect", label: "options.mode.intersect" },
+  ];
+
+  function setFeather(value: number) {
+    feather = Number.isFinite(value) ? Math.min(Math.max(value, 0), MAX_FEATHER) : 0;
+  }
 </script>
 
 <div class="options" role="toolbar" aria-label={t("options.label")}>
@@ -28,6 +51,38 @@
       <input type="checkbox" bind:checked={autoSelect} />
       {t("options.autoSelect")}
     </label>
+  {:else if isSelectionTool(tool)}
+    {#each MODES as entry (entry.mode)}
+      <button
+        class="icon-btn"
+        class:on={selectionMode === entry.mode}
+        aria-pressed={selectionMode === entry.mode}
+        title={t(entry.label)}
+        aria-label={t(entry.label)}
+        onclick={() => (selectionMode = entry.mode)}
+      >
+        <Icon name={entry.icon} />
+      </button>
+    {/each}
+    <span class="divider"></span>
+    <label class="option">
+      {t("options.feather")}
+      <input
+        type="number"
+        min="0"
+        max={MAX_FEATHER}
+        step="1"
+        value={feather}
+        onchange={(e) => setFeather(e.currentTarget.valueAsNumber)}
+      />
+      px
+    </label>
+    {#if tool === "ellipse"}
+      <label class="option">
+        <input type="checkbox" bind:checked={antiAlias} />
+        {t("options.antiAlias")}
+      </label>
+    {/if}
   {/if}
 </div>
 
@@ -62,7 +117,16 @@
     gap: 4px;
   }
 
-  .option input {
+  .option input[type="checkbox"] {
     margin: 0;
+  }
+
+  .option input[type="number"] {
+    width: 52px;
+  }
+
+  .icon-btn.on {
+    background: var(--selected);
+    color: var(--text);
   }
 </style>

@@ -9,6 +9,7 @@
 
 mod export;
 mod ipc;
+mod selection;
 mod vector;
 
 use std::collections::HashMap;
@@ -117,6 +118,8 @@ struct OpenDocument {
     saved_revision: u64,
     /// A save of this document is running.
     saving: bool,
+    /// The selection Select > Deselect removed last, for Select > Reselect.
+    last_selection: Option<slopshop_core::selection::Selection>,
 }
 
 impl OpenDocument {
@@ -132,7 +135,17 @@ impl OpenDocument {
             path: None,
             saved_revision,
             saving: false,
+            last_selection: None,
         }
+    }
+
+    /// The selection Reselect would bring back: the last one deselected, while nothing is
+    /// selected and it still fits the canvas.
+    fn reselectable(&self) -> Option<&slopshop_core::selection::Selection> {
+        let doc = self.session.document();
+        self.last_selection
+            .as_ref()
+            .filter(|s| doc.selection().is_none() && s.image().size() == doc.size())
     }
 
     /// Changed since it was opened, created or last saved.
@@ -157,6 +170,7 @@ impl OpenDocument {
         let mut view = DocumentView::new(&self.session, &self.meta, self.warnings());
         view.path = self.path.as_ref().map(|p| p.display().to_string());
         view.dirty = self.dirty();
+        view.can_reselect = self.reselectable().is_some();
         view
     }
 }
@@ -2047,6 +2061,12 @@ pub fn run() {
             reveal_in_folder,
             layer_thumbnail,
             add_mask_from_transparency,
+            selection::select_shape,
+            selection::select_all,
+            selection::invert_selection,
+            selection::deselect,
+            selection::reselect,
+            selection::selection_outline,
             layer_at,
             move_snap_targets,
             paste,

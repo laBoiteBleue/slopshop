@@ -51,6 +51,11 @@ pub struct DocumentView {
     pub path: Option<String>,
     /// Changed since it was opened, created or last saved.
     pub dirty: bool,
+    /// Identity of the selection's mask (ADR 0024): a new value means a new outline; `None`
+    /// when nothing is selected.
+    pub selection_key: Option<u64>,
+    /// Select > Reselect has a selection to bring back.
+    pub can_reselect: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +109,8 @@ impl DocumentView {
             warnings,
             path: None,
             dirty: false,
+            selection_key: doc.selection().map(|s| s.image().id().get()),
+            can_reselect: false,
         }
     }
 }
