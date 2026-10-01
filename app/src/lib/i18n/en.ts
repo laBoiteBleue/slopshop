@@ -192,6 +192,8 @@ const en = {
   "export.format.psb": "Photoshop large document (PSB, layers)",
   "export.format.bmp": "BMP",
   "export.format.tga": "Targa",
+  "export.format.pnm": "Netpbm (PGM, PPM, PAM)",
+  "export.format.pfm": "Portable Float Map",
   "export.depth": "Bit depth",
   "export.depth.u8": "8-bit",
   "export.depth.u16": "16-bit",

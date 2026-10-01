@@ -749,6 +749,8 @@ pub enum ExportFormatId {
     Psb,
     Bmp,
     Tga,
+    Pnm,
+    Pfm,
 }
 
 impl ExportFormatId {
@@ -763,6 +765,8 @@ impl ExportFormatId {
             ExportFormatId::Psb => ExportFormatKind::Psb,
             ExportFormatId::Bmp => ExportFormatKind::Bmp,
             ExportFormatId::Tga => ExportFormatKind::Tga,
+            ExportFormatId::Pnm => ExportFormatKind::Pnm,
+            ExportFormatId::Pfm => ExportFormatKind::Pfm,
         }
     }
 }
@@ -906,6 +910,15 @@ impl ExportSpecDto {
                 None,
             ),
             ExportFormat::Bmp => (ExportFormatId::Bmp, S::U8, None),
+            ExportFormat::Pnm { depth } => (
+                ExportFormatId::Pnm,
+                match depth {
+                    PngDepth::U8 => S::U8,
+                    PngDepth::U16 => S::U16,
+                },
+                None,
+            ),
+            ExportFormat::Pfm => (ExportFormatId::Pfm, S::F32, None),
             ExportFormat::Tga { compression } => (
                 ExportFormatId::Tga,
                 S::U8,
@@ -1044,6 +1057,27 @@ impl ExportSpecDto {
                 } else {
                     ExportFormat::Psd { depth }
                 }
+            }
+            ExportFormatId::Pnm => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                ExportFormat::Pnm {
+                    depth: match self.sample {
+                        S::U8 => PngDepth::U8,
+                        S::U16 => PngDepth::U16,
+                        S::F16 | S::F32 => return Err(sample()),
+                    },
+                }
+            }
+            ExportFormatId::Pfm => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                if self.sample != S::F32 {
+                    return Err(sample());
+                }
+                ExportFormat::Pfm
             }
             ExportFormatId::Bmp | ExportFormatId::Tga => {
                 if self.sample != S::U8 {
@@ -1261,6 +1295,8 @@ mod tests {
             ExportFormatId::Psb,
             ExportFormatId::Bmp,
             ExportFormatId::Tga,
+            ExportFormatId::Pnm,
+            ExportFormatId::Pfm,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
