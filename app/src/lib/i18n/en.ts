@@ -189,6 +189,7 @@ const en = {
   "export.format.jpeg": "JPEG",
   "export.format.webp": "WebP",
   "export.format.psd": "Photoshop (layers)",
+  "export.format.psb": "Photoshop large document (PSB, layers)",
   "export.depth": "Bit depth",
   "export.depth.u8": "8-bit",
   "export.depth.u16": "16-bit",
