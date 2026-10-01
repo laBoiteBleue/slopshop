@@ -903,6 +903,20 @@ export const engine = {
    */
   addLayerMasks: (documentId: number, layerIds: number[], kind: LayerMaskKind) =>
     serial(() => invoke<DocumentView>("add_layer_masks", { documentId, layerIds, kind })),
+  /**
+   * The Magic Wand at document pixel (x, y): colors within `tolerance` (0–255) of it, connected
+   * or not; it samples the composited document, or only `layerId`'s layer.
+   */
+  magicWand: (
+    documentId: number,
+    at: { x: number; y: number },
+    options: { tolerance: number; contiguous: boolean; antiAlias: boolean },
+    layerId: number | null,
+    mode: SelectionMode,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode }),
+    ),
   /** Select > Modify: the whole selection changed by `amount` pixels. */
   modifySelection: (documentId: number, kind: SelectionModify, amount: number) =>
     serial(() => invoke<DocumentView>("modify_selection", { documentId, kind, amount })),

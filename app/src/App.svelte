@@ -57,6 +57,7 @@
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY } from "./lib/selection";
   import LassoTool from "./lib/LassoTool.svelte";
+  import WandTool from "./lib/WandTool.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
@@ -357,6 +358,25 @@
   let selectionMode = $state<SelectionMode>("replace");
   let feather = $state(0);
   let antiAlias = $state(true);
+  /** The Magic Wand's options (Photoshop's defaults). */
+  let wand = $state({ tolerance: 32, contiguous: true, sampleAll: false });
+
+  function magicWand(x: number, y: number, mode: SelectionMode | null) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    // The active layer, unless every layer is sampled (or none is active).
+    const layer = wand.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
+    void sync(
+      engine.magicWand(
+        doc.id,
+        { x, y },
+        { tolerance: wand.tolerance, contiguous: wand.contiguous, antiAlias },
+        layer,
+        mode ?? selectionMode,
+      ),
+    );
+  }
 
   function selectShape(shape: SelectionShape, mode: SelectionMode | null) {
     const doc = active;
@@ -1886,7 +1906,7 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
-  <OptionsBar {tool} bind:autoSelect bind:selectionMode bind:feather bind:antiAlias />
+  <OptionsBar {tool} bind:autoSelect bind:selectionMode bind:feather bind:antiAlias bind:wand />
 
   <main
     class:has-panel={active !== null}
@@ -2030,6 +2050,8 @@
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
                   />
+                {:else if tool === "wand"}
+                  <WandTool {mapping} mode={selectionMode} onpick={magicWand} />
                 {:else if tool === "lasso" || tool === "polygonalLasso"}
                   <LassoTool
                     {mapping}
