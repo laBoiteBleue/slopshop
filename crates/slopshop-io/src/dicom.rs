@@ -20,7 +20,7 @@ use dicom_dictionary_std::tags;
 use dicom_object::{DefaultDicomObject, InMemDicomObject};
 use dicom_pixeldata::PixelDecoder;
 use slopshop_core::adjust::Adjustment;
-use slopshop_core::color::{AlphaMode, ChannelLayout, SampleType, WORKING_SPACE};
+use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, SampleType, WORKING_SPACE};
 use slopshop_core::document::{Layer, LayerContent, LayerId};
 use slopshop_core::{BlendMode, BlendSpace, Document, Size};
 
@@ -403,7 +403,9 @@ fn native(data: &[u8], format: &Format, layout: ChannelLayout) -> Result<Decoded
         sample,
         alpha: AlphaMode::Straight,
         icc: None,
-        space: None,
+        // Stored values are display values (the window maps them linearly): encoded, float
+        // samples too, which the engine would otherwise read as linear light.
+        space: Some(ColorSpace::SRGB),
         orientation: Orientation::Normal,
         pixels,
         warnings: Vec::new(),
@@ -767,6 +769,33 @@ mod tests {
         let [ib, iw, ..] = levels_of(&scan);
         assert_eq!(ib, 0.0);
         assert!((iw - 64000.0 / 65535.0).abs() < 1e-6, "{iw}");
+    }
+
+    #[test]
+    fn deep_samples_are_float_and_read_as_display_values() {
+        let format = Format {
+            rows: 1,
+            columns: 2,
+            samples: 1,
+            bits_allocated: 32,
+            bits_stored: 32,
+            high_bit: 31,
+            signed: false,
+            planar: false,
+            photometric: "MONOCHROME2".into(),
+        };
+        let data = [0u32, u32::MAX].map(u32::to_le_bytes).concat();
+        let decoded = native(&data, &format, ChannelLayout::Gray).unwrap();
+        assert_eq!(decoded.sample, SampleType::F32);
+        assert_eq!(decoded.space, Some(ColorSpace::SRGB));
+        let values: Vec<f32> = decoded
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
+            .collect();
+        assert_eq!(values, [0.0, 1.0]);
     }
 
     #[test]
