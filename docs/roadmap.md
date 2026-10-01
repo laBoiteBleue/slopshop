@@ -55,7 +55,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] JPEG XL export, lossless (zune-jpegxl): 8/16-bit, alpha, gray, every space
 - [ ] JPEG XL lossy export (needs libjxl, C++)
 - [x] JPEG 2000 import (hayro-jpeg2000): JP2 and raw codestreams, native depth
-- [x] DICOM import (dicom-rs): native precision, the display window as a Levels layer
+- [x] DICOM import (dicom-rs): native precision, every slice of a file or a series in one
+      isolated group under one window (a Levels layer)
 - [x] FITS import (in-house): native precision, an automatic stretch as a Levels layer
 - [ ] SVG import (resvg)
 - [ ] An export for every format read: DICOM, FITS, PDF, JPEG 2000, GIF, Radiance HDR, QOI,
