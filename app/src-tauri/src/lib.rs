@@ -2377,11 +2377,12 @@ mod tests {
         let view = DocumentView::new(&s, &meta(), Vec::new());
         assert_eq!(view.layers.len(), 2);
         let group = &view.layers[1];
-        assert_eq!((group.kind, group.pass_through), ("group", true));
+        // New groups are isolated.
+        assert_eq!((group.kind, group.pass_through), ("group", false));
         assert_eq!(group.children.len(), 2);
         let g = group.id;
 
-        // A new group inside, then the bottom layer moved into it; pass-through off.
+        // A new group inside, then the bottom layer moved into it; pass-through on.
         apply(
             &mut s,
             format!(r#"{{"kind":"addGroup","name":"inner","parent":{g},"index":2}}"#),
@@ -2403,7 +2404,7 @@ mod tests {
         );
         apply(
             &mut s,
-            format!(r#"{{"kind":"setGroupPassThrough","id":{g},"passThrough":false}}"#),
+            format!(r#"{{"kind":"setGroupPassThrough","id":{g},"passThrough":true}}"#),
         );
         apply(
             &mut s,
@@ -2420,7 +2421,7 @@ mod tests {
         );
         let view = DocumentView::new(&s, &meta(), Vec::new());
         assert_eq!(view.layers.len(), 1);
-        assert!(!view.layers[0].pass_through);
+        assert!(view.layers[0].pass_through);
         assert_eq!(view.layers[0].children[2].children[0].id, ids[0]);
 
         apply(&mut s, format!(r#"{{"kind":"ungroup","id":{g}}}"#));

@@ -582,7 +582,9 @@ impl EditRequest {
     }
 }
 
-/// A new empty group, passing through as in Photoshop, with a fresh id.
+/// A new empty group, isolated (blend mode Normal), with a fresh id: an adjustment inside
+/// changes the group only. Photoshop passes through by default; the maintainer chose isolation,
+/// Pass Through stays one choice away in the blend modes.
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
         transform: slopshop_core::Affine::IDENTITY,
@@ -595,7 +597,7 @@ fn new_group(session: &mut Session, name: String) -> Layer {
         mask: None,
         content: LayerContent::Group {
             children: Vec::new(),
-            pass_through: true,
+            pass_through: false,
         },
     }
 }
