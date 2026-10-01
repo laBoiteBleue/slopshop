@@ -65,7 +65,8 @@ do not depend on each other: export receives its pixel source as a closure (see
   visible. View state is never part of the undo history.
 - Export support ([ADR 0008](adr/0008-export.md)): `composite`, the CPU reference compositor
   (full resolution, unclipped; the GPU's test oracle and fallback), whose `steps` flatten the
-  visible layer tree into one pass with a stack of accumulators, shared with the GPU shader
+  visible layer tree into one pass with a stack of accumulators (leaving out layers hidden by an
+  opaque layer above them), shared with the GPU shader
   ([ADR 0015](adr/0015-layer-groups.md)); `convert`, the only
   conversion from the working space to a file's pixel format (matrix, luminance for gray
   targets, alpha, range, transfer, exact quantization, blue-noise dither from `blue_noise`),
@@ -77,7 +78,7 @@ do not depend on each other: export receives its pixel source as a closure (see
 A wgpu compute pipeline composites visible layers in linear light (premultiplied alpha) over a
 checkerboard and encodes sRGB for display, for exactly the output-sized area. Raster layers are
 sampled from a GPU tile cache (texture array, LRU) at the pyramid level matching the zoom; only
-visible tiles are uploaded. Transformed layers are resampled like the CPU does (zoomed in, at
+visible tiles are uploaded, and layers without any are left out of the frame. Transformed layers are resampled like the CPU does (zoomed in, at
 document pixels, so the view shows what export writes). The display
 encoding is a *view transform*; the document is never converted. Headless: no surface needed.
 For export, `Renderer::render_region` runs the same compositing code on a document region at
