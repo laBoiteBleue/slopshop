@@ -440,10 +440,13 @@ fn build_manifest(
                 // At least five values: what readers of schema 0.7 expect.
                 let used = adjustment.param_count().max(5);
                 let values = &adjustment.params()[..used];
-                (
-                    NODE_ADJUSTMENT,
-                    json!({ "adjustment": adjustment.id(), "values": values }),
-                )
+                let mut params = json!({ "adjustment": adjustment.id(), "values": values });
+                // Schema 0.9: Curves' points, composite, red, green, blue.
+                if let Some(curves) = adjustment.curves() {
+                    let points: Vec<&[[u8; 2]]> = curves.iter().map(|c| c.points()).collect();
+                    params["curves"] = json!(points);
+                }
+                (NODE_ADJUSTMENT, params)
             }
         };
         let mut params = match params {

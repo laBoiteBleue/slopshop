@@ -1481,6 +1481,13 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
             blue: [10.0, 0.0, 90.0, 12.0],
             monochrome: true,
         },
+        Adjustment::Curves {
+            rgb: slopshop_core::curve::Curve::new(&[[0, 10], [90, 130], [255, 250]]).unwrap(),
+            red: slopshop_core::curve::Curve::IDENTITY,
+            green: slopshop_core::curve::Curve::new(&[[30, 0], [255, 255]]).unwrap(),
+            blue: slopshop_core::curve::Curve::new(&[[0, 0], [64, 40], [192, 220], [255, 255]])
+                .unwrap(),
+        },
     ];
     for (index, adjustment) in written.into_iter().enumerate() {
         let id = doc.allocate_layer_id();
@@ -1530,7 +1537,8 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
             _ => None,
         })
         .collect();
-    assert_eq!(read.len(), 4);
+    assert_eq!(read.len(), 5);
+    assert_eq!(read[4], written[4]);
     // Exact, but for the filter color (Lab in hundredths) and the tint (HSB, rounded).
     assert_eq!(read[1], written[1]);
     assert_eq!(read[3], written[3]);

@@ -390,8 +390,11 @@ pub(super) fn read_node(
                 .filter(|v| v.len() <= PARAM_COUNT)
                 .ok_or_else(|| corrupt("adjustment node without its values"))?;
             // An adjustment this version does not know comes from a newer SlopShop.
-            let adjustment = slopshop_core::adjust::Adjustment::from_params(id, &values)
+            let mut adjustment = slopshop_core::adjust::Adjustment::from_params(id, &values)
                 .ok_or_else(|| FileError::UnknownNodeType(format!("adjustment {id}")))?;
+            if adjustment.curves().is_some() {
+                adjustment = node_curves(node)?;
+            }
             LayerContent::Adjustment { adjustment }
         }
         _ => return Err(FileError::UnknownNodeType(versioned())),
@@ -438,6 +441,43 @@ fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
         return Err(corrupt("invalid transform"));
     }
     Ok(transform)
+}
+
+/// Curves' points (schema 0.9): four lists of `[input, output]` on 0–255 (composite, red,
+/// green, blue), each 2 to 16 points with increasing inputs.
+fn node_curves(node: &NodeDto) -> Result<slopshop_core::adjust::Adjustment, FileError> {
+    use slopshop_core::curve::Curve;
+    let invalid = || corrupt("curves adjustment without valid curves");
+    let lists = node
+        .params
+        .get("curves")
+        .and_then(Value::as_array)
+        .filter(|lists| lists.len() == 4)
+        .ok_or_else(invalid)?;
+    let mut curves = [Curve::IDENTITY; 4];
+    for (curve, list) in curves.iter_mut().zip(lists) {
+        let points = list
+            .as_array()
+            .and_then(|points| {
+                points
+                    .iter()
+                    .map(|p| {
+                        let pair = p.as_array().filter(|pair| pair.len() == 2)?;
+                        let byte = |v: &Value| v.as_u64().and_then(|v| u8::try_from(v).ok());
+                        Some([byte(&pair[0])?, byte(&pair[1])?])
+                    })
+                    .collect::<Option<Vec<[u8; 2]>>>()
+            })
+            .ok_or_else(invalid)?;
+        *curve = Curve::new(&points).ok_or_else(invalid)?;
+    }
+    let [rgb, red, green, blue] = curves;
+    Ok(slopshop_core::adjust::Adjustment::Curves {
+        rgb,
+        red,
+        green,
+        blue,
+    })
 }
 
 /// A node's blend mode. Version 1 had none: normal. A mode this version does not know comes

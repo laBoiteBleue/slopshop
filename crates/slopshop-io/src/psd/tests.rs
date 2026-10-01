@@ -1064,10 +1064,10 @@ fn adjustment_layers_are_imported_with_their_settings() {
         adjustment("Invert 1", b"nvrt", Vec::new()),
         adjustment("Posterize 1", b"post", be16(&[4, 0])),
         adjustment("Threshold 1", b"thrs", be16(&[128, 0])),
-        adjustment("Curves 1", b"curv", vec![0; 8]),
+        adjustment("Selective Color 1", b"selc", vec![0; 8]),
     ];
     let opened = open_layers("adjustments.psd", &doc);
-    // Colorize and Curves are not reproduced yet.
+    // Colorize and Selective Color are not reproduced yet.
     assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
     let adjustments: Vec<(String, Adjustment)> = opened
         .document
@@ -1218,6 +1218,14 @@ fn adjustments_of_many_settings_are_imported() {
     let mut phfl = be16(&[2, 7, 6706, 3200, 12000, 0]);
     phfl.extend(25u32.to_be_bytes());
     phfl.push(1);
+    // Curves, as Photoshop writes them (psd-tools' sample): the composite curve only, points
+    // as (output, input), then the same in a `Crv ` block.
+    let mut curv = vec![0, 0, 1, 0, 0, 0, 1];
+    let points = be16(&[3, 5, 0, 102, 131, 236, 248]);
+    curv.extend(&points);
+    curv.extend(b"Crv ");
+    curv.extend(be16(&[4, 0, 1, 0]));
+    curv.extend(&points);
     // Channel Mixer: four records (red, green, blue, unused).
     let mut mixr = be16(&[1, 0]);
     mixr.extend(be16(&[80, 30, -10, 0, 5]));
@@ -1239,6 +1247,7 @@ fn adjustments_of_many_settings_are_imported() {
         adjustment("Color Balance 1", b"blnc", blnc),
         adjustment("Photo Filter 1", b"phfl", phfl),
         adjustment("Channel Mixer 1", b"mixr", mixr),
+        adjustment("Curves 1", b"curv", curv),
     ];
     let opened = open_layers("more-adjustments.psd", &doc);
     let found: Vec<Adjustment> = opened
@@ -1250,7 +1259,7 @@ fn adjustments_of_many_settings_are_imported() {
             _ => None,
         })
         .collect();
-    assert_eq!(found.len(), 4);
+    assert_eq!(found.len(), 5);
     assert_eq!(
         found[0],
         Adjustment::BlackWhite {
@@ -1296,10 +1305,20 @@ fn adjustments_of_many_settings_are_imported() {
             monochrome: false,
         }
     );
+    use slopshop_core::curve::Curve;
+    assert_eq!(
+        found[4],
+        Adjustment::Curves {
+            rgb: Curve::new(&[[0, 5], [131, 102], [248, 236]]).unwrap(),
+            red: Curve::IDENTITY,
+            green: Curve::IDENTITY,
+            blue: Curve::IDENTITY,
+        }
+    );
     // Only the tint is approximated.
     let approximated: Vec<bool> = opened.layer_warnings[1..]
         .iter()
         .map(|w| w.contains(&ImportWarning::AdjustmentsApproximated))
         .collect();
-    assert_eq!(approximated, [true, false, false, false]);
+    assert_eq!(approximated, [true, false, false, false, false]);
 }
