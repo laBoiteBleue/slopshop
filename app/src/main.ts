@@ -2,6 +2,7 @@ import { mount } from "svelte";
 import "./app.css";
 import App from "./App.svelte";
 import { hasShortcutModifier, isMac } from "./lib/platform";
+import { installRipple } from "./lib/ripple";
 
 // Desktop app, not a web page (see CLAUDE.md).
 
@@ -44,6 +45,8 @@ if (!import.meta.env.DEV) {
     { capture: true },
   );
 }
+
+installRipple();
 
 const target = document.getElementById("app");
 if (!target) throw new Error("missing #app element");

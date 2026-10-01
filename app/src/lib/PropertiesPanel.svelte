@@ -271,7 +271,7 @@
     <div class="title">
       <span>{t(`adjustment.${adjustment.id}`)}</span>
       {#if fields.length > 0 || adjustment.curves}
-        <button type="button" class="reset" onclick={reset}>{t("properties.reset")}</button>
+        <button type="button" class="btn small" onclick={reset}>{t("properties.reset")}</button>
       {/if}
     </div>
     {#if fields.length === 0 && !adjustment.curves}
@@ -382,10 +382,6 @@
     justify-content: space-between;
     padding: 6px 8px 2px;
     font-weight: 600;
-  }
-
-  .reset {
-    font-weight: normal;
   }
 
   .empty {

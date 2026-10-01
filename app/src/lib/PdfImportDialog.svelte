@@ -176,8 +176,12 @@
         </div>
         <div class="selection">
           <span>{t("pdfDialog.selected", { count: picked.length, total: sizes.length })}</span>
-          <button type="button" onclick={() => selectAll(true)}>{t("pdfDialog.all")}</button>
-          <button type="button" onclick={() => selectAll(false)}>{t("pdfDialog.none")}</button>
+          <button type="button" class="btn small" onclick={() => selectAll(true)}>
+            {t("pdfDialog.all")}
+          </button>
+          <button type="button" class="btn small" onclick={() => selectAll(false)}>
+            {t("pdfDialog.none")}
+          </button>
         </div>
       </section>
       <section class="fields">
@@ -215,8 +219,8 @@
       </section>
     </div>
     <footer>
-      <button type="button" onclick={onclose}>{t("pdfDialog.cancel")}</button>
-      <button type="submit" class="primary" disabled={!valid}>{t("pdfDialog.ok")}</button>
+      <button type="button" class="btn" onclick={onclose}>{t("pdfDialog.cancel")}</button>
+      <button type="submit" class="btn primary" disabled={!valid}>{t("pdfDialog.ok")}</button>
     </footer>
   </form>
 </dialog>
@@ -373,9 +377,5 @@
     gap: 6px;
     padding: 8px 10px;
     border-top: 1px solid var(--border-dark);
-  }
-
-  footer button {
-    min-width: 76px;
   }
 </style>
