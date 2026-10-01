@@ -61,13 +61,14 @@ pub struct PageSize {
 }
 
 impl PageSize {
-    /// The size in pixels at `dpi`, as the page is rendered.
+    /// The size in pixels at `dpi`, as the page is rendered: rounded, so that a resolution
+    /// computed from a size in pixels gives that size back.
     pub fn pixels(self, dpi: f32) -> (u32, u32) {
         let scale = dpi / POINTS_PER_INCH;
         // Float-to-integer `as` saturates.
         (
-            (self.width * scale).floor() as u32,
-            (self.height * scale).floor() as u32,
+            (self.width * scale).round() as u32,
+            (self.height * scale).round() as u32,
         )
     }
 }
@@ -270,6 +271,14 @@ mod tests {
             ]
         );
         assert_eq!(sizes[0].pixels(300.0), (300, 150));
+        // A resolution computed from a width gives that width back.
+        let a4 = PageSize {
+            width: 595.0,
+            height: 842.0,
+        };
+        for width in [1000, 1234, 2480, 4999] {
+            assert_eq!(a4.pixels(width as f32 * 72.0 / 595.0).0, width);
+        }
     }
 
     #[test]
