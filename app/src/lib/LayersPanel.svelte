@@ -15,6 +15,7 @@
   import type { MenuItem } from "./MenuBar.svelte";
   import LayerThumbnail from "./LayerThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
+  import { shortcutLetter } from "./platform";
 
   let {
     doc,
@@ -441,21 +442,33 @@
       return;
     }
     // Alt+Ctrl+G clips the selected layers to the layers below them, or releases them.
-    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && e.code === "KeyG" && !e.repeat) {
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.altKey &&
+      !e.shiftKey &&
+      shortcutLetter(e) === "g" &&
+      !e.repeat
+    ) {
       if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
       e.preventDefault();
       toggleClippingSelected();
       return;
     }
     // Ctrl+J duplicates the selected layers, as in Photoshop.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === "KeyJ" && !e.repeat) {
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      shortcutLetter(e) === "j" &&
+      !e.repeat
+    ) {
       if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
       e.preventDefault();
       duplicateSelected();
       return;
     }
     // Ctrl+G groups the selected layers, Shift+Ctrl+G ungroups, as in Photoshop.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyG" && !e.repeat) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && shortcutLetter(e) === "g" && !e.repeat) {
       if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
       e.preventDefault();
       if (e.shiftKey) ungroupSelected();
@@ -463,7 +476,7 @@
       return;
     }
     // Alt+Ctrl+A: select all layers, as in Photoshop.
-    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && e.code === "KeyA") {
+    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && shortcutLetter(e) === "a") {
       if (isTextField(e.target)) return;
       e.preventDefault();
       selectAllLayers();

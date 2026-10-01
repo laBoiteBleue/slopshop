@@ -40,7 +40,7 @@
   import VectorImportDialog from "./lib/VectorImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
-  import { hasShortcutModifier, isWindows, modifierLabel } from "./lib/platform";
+  import { hasShortcutModifier, isWindows, modifierLabel, shortcutLetter } from "./lib/platform";
   import { formatZoom } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
@@ -49,7 +49,7 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
-  import { slotForKey, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
+  import { slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
@@ -1610,19 +1610,20 @@
       cycleTabs(e.shiftKey ? -1 : 1);
       return;
     }
-    // Alt+Ctrl: Image Size (I) and Canvas Size (C), by the physical key (Alt changes the
-    // character on some layouts).
+    // Alt+Ctrl: Image Size (I) and Canvas Size (C), by the letter (see `shortcutLetter`: AltGr
+    // may type another character, then the physical key counts).
     if (hasShortcutModifier(e) && e.altKey && !e.shiftKey && !isTextField(e.target)) {
-      if (e.code === "KeyI" || e.code === "KeyC") {
+      const letter = shortcutLetter(e);
+      if (letter === "i" || letter === "c") {
         e.preventDefault();
-        if (!e.repeat) openSizeDialog(e.code === "KeyI" ? "image" : "canvas");
+        if (!e.repeat) openSizeDialog(letter === "i" ? "image" : "canvas");
         return;
       }
     }
     // The tools: a letter alone (V, M, C), Shift+letter for the next variant, as in Photoshop;
     // not while typing.
     if (!hasShortcutModifier(e) && !e.altKey && !isTextField(e.target)) {
-      const slot = slotForKey(e.code);
+      const slot = slotForLetter(shortcutLetter(e));
       if (slot) {
         e.preventDefault();
         if (!e.repeat) selectSlot(slot, e.shiftKey);
@@ -1631,7 +1632,7 @@
     }
     // Q: Quick Mask, a letter alone like the tools.
     if (
-      e.code === "KeyQ" &&
+      shortcutLetter(e) === "q" &&
       !hasShortcutModifier(e) &&
       !e.altKey &&
       !e.shiftKey &&
@@ -1641,17 +1642,17 @@
       if (!e.repeat) toggleQuickMask();
       return;
     }
-    // Select > Deselect, Reselect, Inverse and All (Ctrl+D, Shift+Ctrl+D, Shift+Ctrl+I, Ctrl+A),
-    // by the physical key; not while typing.
+    // Select > Deselect, Reselect, Inverse and All (Ctrl+D, Shift+Ctrl+D, Shift+Ctrl+I, Ctrl+A);
+    // not while typing.
     if (hasShortcutModifier(e) && !e.altKey && !isTextField(e.target) && active) {
       const command =
-        e.code === "KeyD"
+        shortcutLetter(e) === "d"
           ? e.shiftKey
             ? engine.reselect
             : engine.deselect
-          : e.code === "KeyI" && e.shiftKey
+          : shortcutLetter(e) === "i" && e.shiftKey
             ? engine.invertSelection
-            : e.code === "KeyA" && !e.shiftKey
+            : shortcutLetter(e) === "a" && !e.shiftKey
               ? engine.selectAll
               : null;
       if (command) {
@@ -1661,14 +1662,14 @@
       }
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
-    const key = e.key.toLowerCase();
-    // Also the physical key, like the zoom digits: layouts differ.
-    if (e.shiftKey && (key === "e" || e.code === "KeyE")) {
+    // Letters as typed on Latin layouts (AZERTY too), see `shortcutLetter`.
+    const key = shortcutLetter(e) ?? e.key.toLowerCase();
+    if (e.shiftKey && key === "e") {
       e.preventDefault();
       if (!e.repeat && active) void chooseSaveAs(active, "images");
       return;
     }
-    if (key === "s" || e.code === "KeyS") {
+    if (key === "s") {
       e.preventDefault();
       if (!e.repeat) saveActive(e.shiftKey);
       return;
@@ -1678,7 +1679,7 @@
       if (!e.repeat) quitApp();
       return;
     }
-    if (key === "o" || e.code === "KeyO") {
+    if (key === "o") {
       e.preventDefault();
       if (!e.shiftKey) void openWithDialog();
       else if (active && !e.repeat) void openWithDialog(active.id);
@@ -1697,17 +1698,17 @@
     }
     // Text fields keep their own undo and paste.
     if (e.target instanceof HTMLInputElement && ["text", "number"].includes(e.target.type)) return;
-    if ((key === "v" || e.code === "KeyV") && !e.shiftKey) {
+    if (key === "v" && !e.shiftKey) {
       e.preventDefault();
       if (!e.repeat) void paste(false);
       return;
     }
-    if ((key === "c" || e.code === "KeyC" || key === "x" || e.code === "KeyX") && !e.shiftKey) {
+    if ((key === "c" || key === "x") && !e.shiftKey) {
       e.preventDefault();
-      if (!e.repeat) void copyLayers(key === "x" || e.code === "KeyX");
+      if (!e.repeat) void copyLayers(key === "x");
       return;
     }
-    if ((key === "t" || e.code === "KeyT") && !e.shiftKey) {
+    if (key === "t" && !e.shiftKey) {
       e.preventDefault();
       if (!e.repeat) {
         if (transforming) commitTransform();
