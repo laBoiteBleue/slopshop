@@ -177,7 +177,8 @@ paints on an empty layer or in a mask.
       corners), Feather (Shift+F6)
 - [x] Magic Wand (W): tolerance, contiguous or not, anti-alias, the active layer or every layer;
       tile by tile with a bounded cache (50 MP: about 1 s)
-- [ ] Select > Color Range
+- [x] Select > Color Range: eyedroppers (sample, add, subtract) on the image or a live
+      preview, Fuzziness, Invert, within the selection if any
 - [ ] Quick Selection with SAM 2.1 (brush strokes as prompts), with the AI selection
 - [ ] AI selection (click, box, subject, text), after choosing the inference runtime
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
