@@ -15,6 +15,8 @@ struct Args {
     output: Size,
     at: Option<[f64; 2]>,
     frames: usize,
+    /// Composite every frame directly, without the display cache.
+    direct: bool,
 }
 
 pub fn run(args: &[String]) -> Result<(), String> {
@@ -72,18 +74,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let renderer = Renderer::new().map_err(|e| e.to_string())?;
     println!(
-        "GPU: {}, output {}x{}, {n} frames per scenario, pixels not read back",
+        "GPU: {}, output {}x{}, {n} frames per scenario, pixels not read back, {}",
         renderer.adapter_summary().name,
         output.width,
-        output.height
+        output.height,
+        if args.direct {
+            "composited directly"
+        } else {
+            "through the display cache"
+        }
     );
     println!(
-        "{:<20} {:>9} {:>9} {:>9} {:>9} {:>9} {:>7} {:>7}",
-        "scenario", "first", "median", "p95", "prepare", "gpu", "layers", "tiles"
+        "{:<20} {:>9} {:>9} {:>9} {:>9} {:>9} {:>7} {:>7} {:>9}",
+        "scenario", "first", "median", "p95", "prepare", "gpu", "layers", "tiles", "composed"
     );
     for (name, views) in scenarios {
-        // A fresh renderer per scenario: its first frame starts from an empty tile cache.
-        let renderer = Renderer::new().map_err(|e| e.to_string())?;
+        // A fresh renderer per scenario: its first frame starts from empty caches.
+        let renderer = Renderer::new()
+            .map_err(|e| e.to_string())?
+            .with_display_cache(!args.direct);
         let mut frames: Vec<(Duration, FrameStats)> = Vec::with_capacity(views.len());
         for view in views {
             let started = Instant::now();
@@ -107,13 +116,14 @@ fn print_row(name: &str, frames: &[(Duration, FrameStats)]) {
     let gpu: Vec<f64> = rest.iter().filter_map(|(_, s)| s.gpu.map(ms)).collect();
     let layers = frames.iter().map(|(_, s)| s.layers).max().unwrap_or(0);
     let tiles: u64 = frames.iter().map(|(_, s)| s.tiles_uploaded).sum();
+    let composited: u32 = frames.iter().map(|(_, s)| s.tiles_composited).sum();
     let gpu = if gpu.is_empty() {
         "-".to_owned()
     } else {
         format!("{:.2}", percentile(&gpu, 0.5))
     };
     println!(
-        "{name:<20} {first:>9.2} {:>9.2} {:>9.2} {:>9.2} {gpu:>9} {layers:>7} {tiles:>7}",
+        "{name:<20} {first:>9.2} {:>9.2} {:>9.2} {:>9.2} {gpu:>9} {layers:>7} {tiles:>7} {composited:>9}",
         percentile(&totals, 0.5),
         percentile(&totals, 0.95),
         percentile(&prepare, 0.5),
@@ -144,6 +154,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut output = Size::new(1920, 1080);
     let mut at = None;
     let mut frames = 30;
+    let mut direct = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || it.next().ok_or(format!("missing value for {arg}"));
@@ -158,6 +169,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     .filter(|&n| n >= 2)
                     .ok_or(format!("invalid frame count `{v}`, expected 2 or more"))?;
             }
+            "--direct" => direct = true,
             other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
             path if input.is_none() => input = Some(PathBuf::from(path)),
             extra => return Err(format!("unexpected argument `{extra}`")),
@@ -168,6 +180,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         output,
         at,
         frames,
+        direct,
     })
 }
 
@@ -196,9 +209,10 @@ mod tests {
     #[test]
     fn parses_options() {
         let args = parse_args(&strings(&[
-            "a.slop", "--size", "800x600", "--at", "10,20.5", "--frames", "5",
+            "a.slop", "--size", "800x600", "--at", "10,20.5", "--frames", "5", "--direct",
         ]))
         .unwrap();
+        assert!(args.direct);
         assert_eq!(args.input, PathBuf::from("a.slop"));
         assert_eq!(args.output, Size::new(800, 600));
         assert_eq!(args.at, Some([10.0, 20.5]));
