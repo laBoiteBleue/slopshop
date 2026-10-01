@@ -447,6 +447,35 @@ Readings:
   [NVIDIA](https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/installing-tensorrt-rtx/installing.html)).
   How SlopShop could fetch it for its users (redistribution terms, account) is for the ADR.
 
+### NVIDIA execution providers (2026-10-01)
+
+Setup without any account: an isolated Python environment holding NVIDIA's wheels from PyPI
+(`nvidia-cuda-runtime` with cuBLAS, `nvidia-cudnn-cu13`, `tensorrt_rtx_cu13_libs` 1.6), no
+system CUDA install.
+- **`ort`'s prebuilt CUDA build has no kernels for the RTX 50 series** (Blackwell, sm_120):
+  "no kernel image is available for execution on the device".
+- **`ort`'s prebuilt TensorRT-RTX provider is linked against `nvinfer_10.dll`**, while NVIDIA's
+  current TensorRT for RTX (1.6) ships `tensorrt_rtx_1_6.dll`; loading 1.6 under the old name
+  crashes (ABI). TensorRT-RTX therefore needs NVIDIA's standalone plugin EP, built from source.
+- **Microsoft's official ONNX Runtime 1.28 CUDA 13 build works** (365 MB zip, MIT, loaded at run
+  time with `load-dynamic`). Warm p50 on the RTX 5070 Ti:
+
+| Model | Stage | CUDA p50 (p95) | VRAM growth |
+|---|---|---|---|
+| SAM 2.1 tiny fp32 / small fp16 / base+ fp16 | image encoder | 22 / 17 / 30 ms | 1.3–2.4 GB |
+| SAM 2.1 | decoder, one click | 3.6–3.7 ms | 0.26 GB |
+| BiRefNet lite / full fp16 | 1024² | 120 / 200 ms | 7.5 / 8.5 GB |
+| SAM 3 | image encoder | 224 ms (733) | 12.9 GB |
+| SAM 3 | text encoder | 5.6 ms | 2.2 GB |
+| SAM 3 | decoder | 59 ms | 5.8 GB |
+| Grounding DINO tiny fp16 | text → boxes | not measured (synthetic inputs rejected; real tokens needed) | |
+
+- **SAM 3's text selection runs on the GPU**: about 0.3 s for a new image, then 65 ms per prompt.
+  Its memory growth (and BiRefNet's) includes ONNX Runtime's arena, which grows by powers of two;
+  `arena_extend_strategy = kSameAsRequested` and fp16 exports are to be tried before judging.
+- The product would ship Microsoft's build in the `slopshop-ai` helper, with NVIDIA's runtime
+  libraries fetched on demand (cuDNN alone is about 900 MB unpacked).
+
 ## 8. Open questions for the maintainer
 
 1. **Weight license policy** (extends ADR 0006 to model weights):

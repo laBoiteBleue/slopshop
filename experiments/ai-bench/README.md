@@ -13,3 +13,18 @@ cargo run --release --features directml -- --ep directml --ep cpu [--only sam2.1
 Models go to `%LOCALAPPDATA%/slopshop/bench-models` (or `~/.cache/slopshop/bench-models`);
 delete that folder to free the space. Licenses: SAM 2.1, Grounding DINO Apache-2.0; BiRefNet
 MIT; SAM 3 under the SAM License (its LICENSE file is fetched with it).
+
+## NVIDIA (CUDA) on recent GPUs
+
+`ort`'s prebuilt CUDA build has no kernels for the RTX 50 series; Microsoft's official build does.
+Without any account or system CUDA install:
+
+```sh
+python -m venv %LOCALAPPDATA%/slopshop/bench-env
+%LOCALAPPDATA%/slopshop/bench-env/Scripts/python -m pip install nvidia-cuda-runtime nvidia-cudnn-cu13
+# onnxruntime-win-x64-gpu_cuda13-1.28.0.zip from github.com/microsoft/onnxruntime/releases, unzipped there
+cargo build --release --features official --target-dir target/official
+# ORT_DYLIB_PATH = .../onnxruntime-win-x64-gpu_cuda13-1.28.0/lib/onnxruntime.dll
+# PATH += that lib folder, site-packages/nvidia/cu13/bin/x86_64, site-packages/nvidia/cudnn/bin
+target/official/release/ai-bench --ep cuda
+```
