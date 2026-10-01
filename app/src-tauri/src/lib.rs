@@ -362,6 +362,9 @@ struct AppState {
     surface_size: Mutex<Option<Size>>,
     /// Exports running (see the `export` module).
     exports: ExportJobs,
+    /// Layers copied with Edit > Copy (Ctrl+C), pasted by Edit > Paste when the system
+    /// clipboard holds no files and no image.
+    layer_clipboard: Mutex<Option<CopiedLayers>>,
     /// The file the Import PDF / SVG dialog shows (see the `vector` module).
     vector: Arc<vector::VectorCache>,
 }
@@ -381,6 +384,7 @@ impl AppState {
             presenter: Mutex::new(None),
             surface_size: Mutex::new(None),
             exports: ExportJobs::default(),
+            layer_clipboard: Mutex::new(None),
             vector: Arc::default(),
         }
     }
@@ -1252,6 +1256,113 @@ fn read_clipboard() -> Result<ClipboardContent, String> {
     }
 }
 
+/// Layers copied from a document: shared pixels, so copying costs nothing.
+#[derive(Clone)]
+struct CopiedLayers {
+    /// The outermost copied layers (a group with its content), bottom to top.
+    layers: Vec<Layer>,
+    /// Their warnings, depth first as `Layer::subtree` walks them.
+    warnings: Vec<Vec<&'static str>>,
+    /// The source document's blend space and size (a new document from them gets the same).
+    space: BlendSpace,
+    size: Size,
+}
+
+/// Edit > Copy (Ctrl+C) on layers: `layer_ids` of `document_id` (a group with its content) are
+/// kept for Paste, in place of what was copied before. The system clipboard is emptied, so that
+/// the next Paste brings these layers rather than an older image. Returns how many were copied.
+#[tauri::command]
+async fn copy_layers_to_clipboard(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_ids: Vec<u64>,
+) -> Result<usize, String> {
+    let copied = {
+        let mut documents = state.documents()?;
+        let from = documents.get_mut(document_id)?;
+        let document = from.session.document();
+        let ids: Vec<LayerId> = layer_ids.into_iter().map(LayerId::from_raw).collect();
+        let layers: Vec<Layer> = document
+            .outermost(&ids)
+            .into_iter()
+            .filter_map(|id| document.layer(id).cloned())
+            .collect();
+        if layers.is_empty() {
+            return Err("no layers to copy".to_owned());
+        }
+        let warnings = layers
+            .iter()
+            .flat_map(|layer| layer.subtree())
+            .map(|layer| {
+                from.layer_warnings
+                    .get(&layer.id)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        CopiedLayers {
+            layers,
+            warnings,
+            space: document.blend_space(),
+            size: document.size(),
+        }
+    };
+    let count = copied.layers.len();
+    *state
+        .layer_clipboard
+        .lock()
+        .map_err(|_| "clipboard state is poisoned".to_owned())? = Some(copied);
+    // Best effort: a clipboard another application holds open stays as it is.
+    tauri::async_runtime::spawn_blocking(|| {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.clear();
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+/// Copied layers pasted on top of `document_id` (one undo entry), or as a new document named
+/// `name` of the source's size and blend space.
+fn paste_layers(
+    state: &AppState,
+    copied: CopiedLayers,
+    document_id: Option<u64>,
+    name: &str,
+) -> Result<DocumentView, String> {
+    match document_id {
+        Some(document_id) => state.documents().and_then(|mut documents| {
+            let target = documents.get_mut(document_id)?;
+            insert_layer_copies(target, &copied.layers, copied.space, copied.warnings, None)
+        }),
+        None => {
+            let next = copied
+                .layers
+                .iter()
+                .flat_map(|layer| layer.subtree())
+                .map(|layer| layer.id.get())
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let document = Document::restore(
+                copied.size,
+                slopshop_core::color::WORKING_SPACE,
+                copied.space,
+                copied.layers,
+                next,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+            state.add_document_with(
+                Session::new(document),
+                Some(name.to_owned()),
+                copied.warnings,
+                None,
+            )
+        }
+    }
+}
+
 /// The outcome of `paste`.
 #[derive(Debug, Serialize)]
 #[serde(
@@ -1267,12 +1378,18 @@ enum Pasted {
         document: DocumentView,
         new_tab: bool,
     },
+    /// Layers copied in SlopShop, in `document` (a new tab when `new_tab`).
+    Layers {
+        document: DocumentView,
+        new_tab: bool,
+    },
     /// Neither files nor an image.
     Nothing,
 }
 
 /// Paste: copied files open as dropped files would (layers of `document_id`, or new tabs), a
-/// copied image becomes a layer named `name` of `document_id`, or a new tab named `name`.
+/// copied image becomes a layer named `name` of `document_id`, or a new tab named `name`;
+/// without either, layers copied in SlopShop are pasted the same way.
 #[tauri::command]
 async fn paste(app: AppHandle, document_id: Option<u64>, name: String) -> Result<Pasted, String> {
     let content = tauri::async_runtime::spawn_blocking(read_clipboard)
@@ -1295,7 +1412,22 @@ async fn paste(app: AppHandle, document_id: Option<u64>, name: String) -> Result
                 new_tab: document_id.is_none(),
             })
         }
-        ClipboardContent::Nothing => Ok(Pasted::Nothing),
+        ClipboardContent::Nothing => {
+            let state = app.state::<AppState>();
+            let copied = state
+                .layer_clipboard
+                .lock()
+                .map_err(|_| "clipboard state is poisoned".to_owned())?
+                .clone();
+            let Some(copied) = copied else {
+                return Ok(Pasted::Nothing);
+            };
+            let document = paste_layers(&state, copied, document_id, &name)?;
+            Ok(Pasted::Layers {
+                document,
+                new_tab: document_id.is_none(),
+            })
+        }
     }
 }
 
@@ -1917,6 +2049,7 @@ pub fn run() {
             layer_at,
             move_snap_targets,
             paste,
+            copy_layers_to_clipboard,
             save_document,
             quit,
             export::export_defaults,
@@ -2123,6 +2256,40 @@ mod tests {
         .unwrap();
         assert_ne!(tab.id, doc.id);
         assert_eq!((tab.width, tab.height), (3, 2));
+        assert_eq!(tab.name.as_deref(), Some("Pasted"));
+    }
+
+    #[test]
+    fn copied_layers_paste_on_top_or_as_a_new_document() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let copied = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap().session.document();
+            CopiedLayers {
+                layers: document.layers().to_vec(),
+                warnings: vec![Vec::new(); document.all_layers().count()],
+                space: document.blend_space(),
+                size: document.size(),
+            }
+        };
+        let count = copied.layers.len();
+        // On top of a document: one more copy of each, one undo step.
+        let view = paste_layers(&state, copied.clone(), Some(doc.id), "Pasted").unwrap();
+        assert_eq!(view.layers.len(), 2 * count);
+        {
+            let mut documents = state.documents().unwrap();
+            let session = &mut documents.get_mut(doc.id).unwrap().session;
+            session.undo().unwrap();
+            assert_eq!(session.document().layers().len(), count);
+        }
+        // As a new document of the same size.
+        let tab = paste_layers(&state, copied, None, "Pasted").unwrap();
+        assert_ne!(tab.id, doc.id);
+        assert_eq!((tab.width, tab.height), (doc.width, doc.height));
+        assert_eq!(tab.layers.len(), count);
         assert_eq!(tab.name.as_deref(), Some("Pasted"));
     }
 

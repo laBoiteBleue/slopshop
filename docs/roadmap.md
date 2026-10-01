@@ -95,6 +95,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       blend mode apply to every selected layer, as one undo entry
 - [x] Paste (Ctrl+V): a copied image becomes a layer (or a new tab), copied files open like
       dropped ones
+- [x] Copy, Cut and Paste layers (Ctrl+C, Ctrl+X, Ctrl+V): on top of any document, or as a new
+      one (Paste as New Document); the pixels are shared, so copying costs nothing
 - [ ] Drop images from a web page (browsers drag URLs or virtual files, not file paths)
 
 ## Phase 2 — Non-destructive core
