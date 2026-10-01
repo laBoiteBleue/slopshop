@@ -9,7 +9,7 @@ use slopshop_io::pdf::PdfFile;
 use tauri::ipc::Response;
 use tauri::{AppHandle, State};
 
-use crate::{AppState, InsertionOrder, OpenTarget, Turn, open_path};
+use crate::{AppState, InsertionOrder, OpenTarget, Source, Turn, open_path};
 
 /// Largest thumbnail side the dialog may ask for, in pixels.
 const MAX_THUMBNAIL_SIDE: u32 = 512;
@@ -149,7 +149,7 @@ pub(crate) async fn open_pdf_pages(
                     index: turn_index,
                 };
                 // The outcome is reported by the open's own events.
-                let _ = open_path(&app, &path, Some(&page), target, Some(&turn));
+                let _ = open_path(&app, &path, Source::Page(&page), target, Some(&turn));
             })
         })
         .collect();
