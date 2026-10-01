@@ -5,10 +5,13 @@
 // (ADR 0012; see `blend_layer`). Raster tiles are sampled in their source encoding and converted here: transfer
 // function decode, then a 3×3 matrix to the working space.
 //
-// Two entry points share that code:
+// Entry points sharing that code:
 // - `main`, the viewport: the result is converted to the display space (linear sRGB),
 //   composited over a transparency checkerboard and encoded to sRGB 8-bit. Clipping only happens
 //   at that last step: it is a *view transform*, the document is never converted.
+// - `fill_main` and `present_main`, the viewport through the display cache (ADR 0022): the first
+//   composites one tile of a document level into the cache, converted to the display space, the
+//   second shows the view from the cached tiles, like `main` does from the layers.
 // - `export_main`, export (ADR 0008): the working-space values themselves, as f32, one level-0
 //   texel per output pixel, finite values never clamped. Non-finite values are replaced (see
 //   `finite` and `saturated`) and counted in `export_non_finite`, like the CPU reference
@@ -129,6 +132,25 @@ struct ExportParams {
 // Non-finite values replaced in the dispatch, as a 64-bit count: low word, then high word.
 // Cleared before each dispatch.
 @group(0) @binding(10) var<storage, read_write> export_non_finite: array<atomic<u32>, 2>;
+
+// Display cache (ADR 0022). Fill: the cache layer a tile is composited into, premultiplied
+// display-space values (linear sRGB) within the half-float range.
+@group(0) @binding(12) var cache_target: texture_storage_2d<rgba16float, write>;
+
+// Present: where the view's tiles of the cached level are (32 bytes; keep in sync with
+// `cache_params_bytes` in cache.rs).
+struct CacheParams {
+    // The visible tiles of the level: first column and row, and how many.
+    tile_origin: vec2<u32>,
+    tile_count: vec2<u32>,
+    // Document pixels per texel of the level (2^level).
+    level_scale: f32,
+}
+
+@group(0) @binding(13) var<uniform> cache_params: CacheParams;
+@group(0) @binding(14) var cache_tiles: texture_2d_array<f32>;
+// Cache layer of each visible tile, row-major.
+@group(0) @binding(15) var<storage, read> cache_table: array<u32>;
 
 // Linear sRGB display colors.
 const PASTEBOARD = vec3<f32>(0.0144, 0.0144, 0.0168);
@@ -1165,17 +1187,19 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
     return acc;
 }
 
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.out_size.x || id.y >= params.out_size.y {
-        return;
-    }
+// Where output pixel `id` of a view (`params`) samples the document.
+struct ViewPixel {
+    footprint: Footprint,
+    // The share of the pixel inside the document.
+    coverage: f32,
+}
 
-    // The output pixel's footprint in the document, clipped to the document: layers are averaged
-    // over the part inside it, and the document is blended with the pasteboard by the share of
-    // the pixel it covers. Edge pixels are then antialiased against the pasteboard, never
-    // against the checkerboard (whose squares would make the edges shimmer while navigating).
-    let corner = params.origin + vec2<f32>(id.xy) * params.scale;
+// The output pixel's footprint in the document, clipped to the document: layers are averaged
+// over the part inside it, and the document is blended with the pasteboard by the share of the
+// pixel it covers. Edge pixels are then antialiased against the pasteboard, never against the
+// checkerboard (whose squares would make the edges shimmer while navigating).
+fn view_pixel(id: vec2<u32>) -> ViewPixel {
+    let corner = params.origin + vec2<f32>(id) * params.scale;
     let doc = vec2<f32>(params.doc_size);
     let lo = max(corner, vec2<f32>(0.0));
     let hi = min(corner + params.scale, doc);
@@ -1183,28 +1207,121 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let coverage = (inside.x * inside.y) / (params.scale * params.scale);
 
     // Zoomed in, resampled layers show document pixels, like export (ADR 0018).
-    let pixel_center = params.origin + (vec2<f32>(id.xy) + 0.5) * params.scale;
+    let pixel_center = params.origin + (vec2<f32>(id) + 0.5) * params.scale;
     let center = select(pixel_center, floor(pixel_center) + 0.5, params.scale <= 1.0);
+    return ViewPixel(Footprint(lo, hi, vec2<i32>(0), false, center), coverage);
+}
 
+// A premultiplied working-space color in the display space (a linear map, so it commutes with
+// premultiplied "over" and with area filtering).
+fn to_display(acc: vec4<f32>) -> vec4<f32> {
+    let rgb = vec3<f32>(
+        dot(params.display0.xyz, acc.rgb),
+        dot(params.display1.xyz, acc.rgb),
+        dot(params.display2.xyz, acc.rgb),
+    );
+    return vec4<f32>(rgb, acc.a);
+}
+
+// Write output pixel `id`: the document's premultiplied display-space color `display` over the
+// checkerboard, blended with the pasteboard by `coverage`.
+fn write_display(id: vec2<u32>, coverage: f32, display: vec4<f32>) {
     var color = PASTEBOARD;
     if coverage > 0.0 {
-        var uncounted = 0u;
-        let footprint = Footprint(lo, hi, vec2<i32>(0), false, center);
-        let acc = composite(footprint, params.layer_count, &uncounted);
-        // Working space → display (a linear map, so it commutes with premultiplied "over").
-        let display = vec3<f32>(
-            dot(params.display0.xyz, acc.rgb),
-            dot(params.display1.xyz, acc.rgb),
-            dot(params.display2.xyz, acc.rgb),
-        );
         let checker = ((id.x / CHECKER_SIZE) + (id.y / CHECKER_SIZE)) % 2u;
         let background = select(CHECKER_DARK, CHECKER_LIGHT, checker == 0u);
-        color = mix(PASTEBOARD, display + background * (1.0 - acc.a), min(coverage, 1.0));
+        color = mix(PASTEBOARD, display.rgb + background * (1.0 - display.a), min(coverage, 1.0));
     }
 
     // Clipping only happens here, at the display boundary.
     let encoded = srgb_encode(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)));
     output[id.y * params.out_size.x + id.x] = pack4x8unorm(vec4<f32>(encoded, 1.0));
+}
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.out_size.x || id.y >= params.out_size.y {
+        return;
+    }
+    let pixel = view_pixel(id.xy);
+    var acc = vec4<f32>(0.0);
+    if pixel.coverage > 0.0 {
+        var uncounted = 0u;
+        acc = composite(pixel.footprint, params.layer_count, &uncounted);
+    }
+    write_display(id.xy, pixel.coverage, to_display(acc));
+}
+
+// Display cache, fill: texel `id` of one tile of a document level, the view `params` being that
+// tile (`origin` its document corner, `scale` 2^level, `out_size` the tile). The same footprint
+// and compositing as `main`; texels beyond the document are transparent.
+@compute @workgroup_size(8, 8)
+fn fill_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.out_size.x || id.y >= params.out_size.y {
+        return;
+    }
+    let pixel = view_pixel(id.xy);
+    var acc = vec4<f32>(0.0);
+    if pixel.coverage > 0.0 {
+        var uncounted = 0u;
+        acc = composite(pixel.footprint, params.layer_count, &uncounted);
+    }
+    // Half floats, whose range is far beyond what the display shows (it clamps to 0–1).
+    textureStore(cache_target, id.xy, finite(to_display(acc), false));
+}
+
+// Display cache, present: texel `texel` of the cached level, transparent where no tile is.
+fn cached_texel(texel: vec2<i32>) -> vec4<f32> {
+    if any(texel < vec2<i32>(0)) {
+        return vec4<f32>(0.0);
+    }
+    let tile = vec2<u32>(texel) / TILE_SIZE;
+    if any(tile < cache_params.tile_origin) {
+        return vec4<f32>(0.0);
+    }
+    let local = tile - cache_params.tile_origin;
+    if any(local >= cache_params.tile_count) {
+        return vec4<f32>(0.0);
+    }
+    let slot = cache_table[local.y * cache_params.tile_count.x + local.x];
+    if slot == NO_TILE {
+        return vec4<f32>(0.0);
+    }
+    return textureLoad(cache_tiles, vec2<u32>(texel) % TILE_SIZE, slot, 0);
+}
+
+// The cached level over the document rectangle `lo`–`hi` (clipped to the document): the same
+// area filter as `sample_raster`. Edge texels hold the average of their part inside the
+// document, and only that part is weighted.
+fn sample_cache(lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+    let a = lo / cache_params.level_scale;
+    let b = hi / cache_params.level_scale;
+    let first = vec2<i32>(floor(a));
+    let last = min(vec2<i32>(ceil(b)) - 1, first + (MAX_FOOTPRINT_TEXELS - 1));
+    var sum = vec4<f32>(0.0);
+    var weight = 0.0;
+    for (var y = first.y; y <= last.y; y++) {
+        let wy = min(f32(y + 1), b.y) - max(f32(y), a.y);
+        for (var x = first.x; x <= last.x; x++) {
+            let w = (min(f32(x + 1), b.x) - max(f32(x), a.x)) * wy;
+            sum += cached_texel(vec2<i32>(x, y)) * w;
+            weight += w;
+        }
+    }
+    return sum / max(weight, 1e-12);
+}
+
+@compute @workgroup_size(8, 8)
+fn present_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.out_size.x || id.y >= params.out_size.y {
+        return;
+    }
+    let pixel = view_pixel(id.xy);
+    var acc = vec4<f32>(0.0);
+    if pixel.coverage > 0.0 {
+        acc = sample_cache(pixel.footprint.lo, pixel.footprint.hi);
+    }
+    write_display(id.xy, pixel.coverage, acc);
 }
 
 // Export: premultiplied working-space RGBA of a document region at full resolution. Every raster

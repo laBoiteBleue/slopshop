@@ -28,14 +28,22 @@ usable headless; `unsafe` and new dependencies need a decision.
 1. **The renderer keeps a cache of composited document tiles**, 256 × 256 texels, at the
    power-of-two levels of the document pyramid (level *L*: one texel = 2^*L* × 2^*L* document
    pixels, layers sampled at their level *L* as today). Stored on the GPU as **premultiplied
-   linear working-space RGBA16Float** in texture arrays, under a VRAM budget, least recently used
-   tiles evicted first. Nothing is cached on the CPU.
+   linear RGBA16Float in the display space** (linear sRGB today) in texture arrays, under a VRAM
+   budget, least recently used tiles evicted first. Nothing is cached on the CPU.
+   (Implementation note, 2026-10-01: the decision first said *working space*. Clamping
+   working-space values to the half-float range changes how extreme values look once converted
+   to the display, e.g. −inf in one channel no longer shows as black; after the display matrix,
+   a value beyond ±65504 clips on the display exactly as before. The display transform is linear,
+   so filtering cached tiles is still filtering the composite, and it is part of the key.)
 
 2. **A tile's key is its content, not its position in time**: (level, column, row, a 128-bit
    hash of everything the shader reads for that tile). The hash covers the document's blend
    space and the encoded fields of every step that can change the tile (the same bytes uploaded
    to the shader, tile slots excluded), with the ids of the images and masks it samples
-   (immutable, ADR 0005). A tile is valid exactly when its key is found: **there is no
+   (immutable, ADR 0005), the display transform and the raster tile budget (which may coarsen
+   the levels read). Each step is hashed once per frame, each tile combines the hashes of its
+   steps: a frame whose tiles are cached costs well under a millisecond of CPU time even with
+   hundreds of layers. A tile is valid exactly when its key is found: **there is no
    invalidation to get right** — any edit, undo or redo changes the steps of the tiles it
    touches and only those. Undoing reuses the tiles of the previous state while they are still
    in the cache. Completeness of the hash is by construction (it hashes what the GPU receives),

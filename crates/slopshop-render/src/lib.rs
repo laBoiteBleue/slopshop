@@ -11,13 +11,14 @@
 //! All methods block the calling thread (GPU submission and readback): call them from worker
 //! threads, never from a UI thread.
 
+mod cache;
 pub mod present;
 mod region;
 mod tiles;
 
 pub use region::{export_renderer, export_source};
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -55,8 +56,22 @@ pub struct FrameStats {
     pub layers: u32,
     /// Raster tiles uploaded to the GPU (cache misses).
     pub tiles_uploaded: u64,
-    /// GPU time of the compositing pass, when the adapter supports timestamp queries.
+    /// Display cache (ADR 0022): visible tiles composited for this frame, and those it found
+    /// cached. Both 0 when the frame was composited directly.
+    pub tiles_composited: u32,
+    pub tiles_reused: u32,
+    /// GPU time of the compositing passes, when the adapter supports timestamp queries.
     pub gpu: Option<Duration>,
+}
+
+/// The GPU caches of viewport frames, locked together.
+#[derive(Debug, Default)]
+struct GpuCaches {
+    /// Raster tiles, one cache per storage class ([`GpuTileFormat`]), created on first use:
+    /// documents without raster layers of a class need no tile memory for it.
+    tiles: [Option<TileCache>; 4],
+    /// Composited tiles (ADR 0022), created on first use.
+    display: Option<cache::DisplayCache>,
 }
 
 #[derive(Debug)]
@@ -155,9 +170,16 @@ pub struct Renderer {
     max_output_bytes: u64,
     /// Largest dispatch along one axis, in pixels.
     max_dispatch_pixels: u32,
-    /// One cache per storage class ([`GpuTileFormat`]), created on first use: documents
-    /// without raster layers of a class need no tile memory for it.
-    tile_caches: Mutex<[Option<TileCache>; 4]>,
+    /// Display cache (ADR 0022): `fill_main` and `present_main` in composite.wgsl.
+    fill_pipeline: wgpu::ComputePipeline,
+    fill_bind_group_layout: wgpu::BindGroupLayout,
+    present_pipeline: wgpu::ComputePipeline,
+    present_bind_group_layout: wgpu::BindGroupLayout,
+    /// Viewport frames go through the display cache (else they composite every visible layer
+    /// for every pixel, as before ADR 0022). `SLOPSHOP_DISPLAY_CACHE=0` turns it off.
+    use_display_cache: bool,
+    display_capacity: u32,
+    caches: Mutex<GpuCaches>,
     tile_capacity: [u32; 4],
     placeholder_tiles: [wgpu::TextureView; 4],
     /// The resampling kernel table (ADR 0018, `resample::weight_table`), as a uniform block.
@@ -309,6 +331,49 @@ impl Renderer {
             ]
             .concat(),
         );
+        let (fill_bind_group_layout, fill_pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "fill_main",
+            &[
+                &shared[..],
+                &[
+                    uniform(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: cache::CACHE_FORMAT,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            ]
+            .concat(),
+        );
+        let (present_bind_group_layout, present_pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "present_main",
+            &[
+                uniform(0),
+                storage(2, false),
+                uniform(13),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                storage(15, true),
+            ],
+        );
 
         let max_output_bytes = required_limits
             .max_storage_buffer_binding_size
@@ -347,9 +412,15 @@ impl Renderer {
             bind_group_layout,
             export_pipeline,
             export_bind_group_layout,
+            fill_pipeline,
+            fill_bind_group_layout,
+            present_pipeline,
+            present_bind_group_layout,
+            use_display_cache: std::env::var("SLOPSHOP_DISPLAY_CACHE").as_deref() != Ok("0"),
+            display_capacity: cache::cache_capacity(required_limits.max_texture_array_layers),
             max_output_bytes,
             max_dispatch_pixels,
-            tile_caches: Mutex::new([None, None, None, None]),
+            caches: Mutex::new(GpuCaches::default()),
             tile_capacity,
             placeholder_tiles,
             ewa_table,
@@ -537,21 +608,21 @@ impl Renderer {
 
         // The cache lock is held until the GPU work is submitted: tiles resident for this frame
         // must not be evicted before.
-        let mut cache_guard = self.tile_caches.lock().unwrap_or_else(|poisoned| {
+        let mut cache_guard = self.caches.lock().unwrap_or_else(|poisoned| {
             // A panic while the caches were locked may have left them inconsistent: start
             // afresh rather than failing every later frame.
             let mut guard = poisoned.into_inner();
-            *guard = [None, None, None, None];
-            self.tile_caches.clear_poison();
+            *guard = GpuCaches::default();
+            self.caches.clear_poison();
             guard
         });
         let result = self.capture_errors(|| {
             self.composite_locked(document, view, output, timestamps, &mut cache_guard, finish)
         });
         if result.is_err() {
-            // Tiles may have been recorded as resident in a cache whose texture or upload
+            // Tiles may have been recorded as resident in a cache whose texture, upload or fill
             // failed: rebuild the caches on the next frame.
-            *cache_guard = [None, None, None, None];
+            *cache_guard = GpuCaches::default();
         }
         result
     }
@@ -563,23 +634,42 @@ impl Renderer {
         view: ViewTransform,
         output: Size,
         timestamps: Option<&wgpu::QuerySet>,
-        cache_guard: &mut [Option<TileCache>; 4],
+        caches: &mut GpuCaches,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
     ) -> Result<FrameStats, RenderError> {
         let byte_len = self.output_byte_len(output)?;
+        // Allocated per frame for now; pooling can come once profiling says it matters.
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("composite output"),
+            size: byte_len,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         let start = Instant::now();
-        let uploads = |caches: &[Option<TileCache>; 4]| -> u64 {
-            caches.iter().flatten().map(TileCache::uploads).sum()
+        let uploads = |caches: &GpuCaches| -> u64 {
+            caches.tiles.iter().flatten().map(TileCache::uploads).sum()
         };
-        let uploaded_before = uploads(cache_guard);
-        let layers = self.prepare_layers(document, view, output, cache_guard);
-        let stats = FrameStats {
-            prepare: start.elapsed(),
-            layers: layers.count,
-            // A cache created by this frame starts from zero.
-            tiles_uploaded: uploads(cache_guard).saturating_sub(uploaded_before),
-            gpu: None,
-        };
+        // A cache created by this frame starts from zero.
+        let uploaded_before = uploads(caches);
+        let mut stats = FrameStats::default();
+
+        if self.use_display_cache {
+            let cached =
+                self.composite_cached(document, view, output, &output_buffer, timestamps, caches);
+            if let Some((mut encoder, cached_stats)) = cached {
+                stats = cached_stats;
+                stats.prepare = start.elapsed();
+                stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
+                finish(&mut encoder, &output_buffer);
+                self.queue.submit([encoder.finish()]);
+                return Ok(stats);
+            }
+        }
+
+        let layers = self.prepare_layers(document, view, output, &mut caches.tiles);
+        stats.prepare = start.elapsed();
+        stats.layers = layers.count;
+        stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
         let params = params_bytes(document.size(), view, output, layers.count);
 
         use wgpu::util::DeviceExt;
@@ -591,18 +681,11 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let layer_buffers = self.layer_buffers(layers);
-        // Allocated per frame for now; pooling can come once profiling says it matters.
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("composite output"),
-            size: byte_len,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
 
         let bind_group = self.bind_group(
             &self.bind_group_layout,
             &layer_buffers,
-            self.tile_views(cache_guard),
+            self.tile_views(&caches.tiles),
             [
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1074,6 +1157,26 @@ struct LayerBuffers {
 }
 
 impl Renderer {
+    /// Make the planned tiles resident; returns their cache slots (row-major), `None` when the
+    /// cache has no slot left for this frame.
+    fn try_upload(&self, plan: &RasterPlan<'_>, cache: &mut TileCache) -> Option<Vec<u32>> {
+        let level = &plan.image.levels()[plan.level];
+        let stored = plan.image.stored_format();
+        plan.keys()
+            .map(|key| {
+                let coord = TileCoord {
+                    col: key.col,
+                    row: key.row,
+                };
+                match level.tile(coord) {
+                    Some(tile) => cache.ensure(&self.queue, key, || gpu_texels(tile, stored)),
+                    // Not stored: transparent.
+                    None => Some(NO_TILE),
+                }
+            })
+            .collect()
+    }
+
     /// Make the planned tiles resident; returns their cache slots (row-major).
     fn upload(&self, plan: &RasterPlan<'_>, cache: &mut TileCache) -> Vec<u32> {
         let level = &plan.image.levels()[plan.level];
@@ -1097,12 +1200,30 @@ impl Renderer {
     #[doc(hidden)]
     pub fn with_tile_capacity(mut self, capacity: u32) -> Self {
         self.tile_capacity = self.tile_capacity.map(|c| capacity.clamp(1, c.max(1)));
-        self.tile_caches = Mutex::new([None, None, None, None]);
+        self.caches = Mutex::new(GpuCaches::default());
+        self
+    }
+
+    /// Composite viewport frames through the display cache (ADR 0022) or directly. For tests
+    /// and comparisons; resets the caches.
+    #[doc(hidden)]
+    pub fn with_display_cache(mut self, enabled: bool) -> Self {
+        self.use_display_cache = enabled;
+        self.caches = Mutex::new(GpuCaches::default());
+        self
+    }
+
+    /// Limit the display cache to `capacity` tiles (at least 1). For tests; resets the caches.
+    #[doc(hidden)]
+    pub fn with_display_cache_capacity(mut self, capacity: u32) -> Self {
+        self.display_capacity = capacity.clamp(1, self.display_capacity);
+        self.caches = Mutex::new(GpuCaches::default());
         self
     }
 }
 
 /// How one visible raster layer is sampled in a frame.
+#[derive(Clone, Copy)]
 struct RasterPlan<'a> {
     image: &'a RasterImage,
     format: GpuTileFormat,
@@ -1212,25 +1333,33 @@ impl<'a> RasterPlan<'a> {
 /// sharing an image at the same level count once.
 fn fit_tile_budget(plans: &mut [Option<RasterPlan<'_>>], capacity: [u32; 4]) {
     for format in GpuTileFormat::ALL {
-        loop {
-            let needed: HashSet<TileKey> = plans
-                .iter()
-                .flatten()
-                .filter(|p| p.format == format)
-                .flat_map(RasterPlan::keys)
-                .collect();
-            if needed.len() <= capacity[format.index()] as usize {
-                break;
+        // How many plans read each tile: the distinct tiles are its keys. Updated for the plan
+        // coarsened at each step, not recounted.
+        let mut readers: HashMap<TileKey, u32> = HashMap::new();
+        for plan in plans.iter().flatten().filter(|p| p.format == format) {
+            for key in plan.keys() {
+                *readers.entry(key).or_default() += 1;
             }
+        }
+        while readers.len() > capacity[format.index()] as usize {
             let largest = plans
                 .iter_mut()
                 .flatten()
                 .filter(|plan| plan.format == format && plan.can_coarsen())
                 .max_by_key(|plan| plan.range().width * plan.range().height);
-            match largest {
-                Some(plan) => plan.level += 1,
-                // All at their coarsest level: the upload order decides what is left out.
-                None => break,
+            // All at their coarsest level: the upload order decides what is left out.
+            let Some(plan) = largest else { break };
+            for key in plan.keys() {
+                if let Some(n) = readers.get_mut(&key) {
+                    *n -= 1;
+                    if *n == 0 {
+                        readers.remove(&key);
+                    }
+                }
+            }
+            plan.level += 1;
+            for key in plan.keys() {
+                *readers.entry(key).or_default() += 1;
             }
         }
     }
@@ -1496,12 +1625,16 @@ fn params_bytes(doc: Size, view: ViewTransform, output: Size, layer_count: u32) 
     for v in [output.width, output.height, doc.width, doc.height] {
         bytes.extend(v.to_le_bytes());
     }
-    // The display is sRGB for now (8-bit frames); HDR display comes with ADR 0002's surface.
-    let display = matrix_rows(&WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB));
-    for v in display.iter().flatten() {
+    for v in display_matrix().iter().flatten() {
         bytes.extend(v.to_le_bytes());
     }
     bytes
+}
+
+/// Working space → display, rows of a 3×3 matrix. The display is sRGB for now (8-bit frames);
+/// HDR display comes with ADR 0002's surface.
+fn display_matrix() -> [[f32; 4]; 3] {
+    matrix_rows(&WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB))
 }
 
 #[cfg(test)]
@@ -1571,13 +1704,13 @@ mod tests {
         let document = Document::new(Size::new(64, 32));
         let before = view(&r, &document).unwrap();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = r.tile_caches.lock();
+            let _guard = r.caches.lock();
             panic!("in a frame");
         }));
         assert!(panicked.is_err());
-        assert!(r.tile_caches.is_poisoned());
+        assert!(r.caches.is_poisoned());
         assert_eq!(view(&r, &document).unwrap().data, before.data);
-        assert!(!r.tile_caches.is_poisoned());
+        assert!(!r.caches.is_poisoned());
     }
 
     #[test]
@@ -1609,9 +1742,10 @@ mod tests {
         .expect("a valid layer");
         let output = Size::new(64, 64);
         let encoded = |origin: [f64; 2]| {
-            let mut caches = r.tile_caches.lock().expect("not poisoned");
+            let mut caches = r.caches.lock().expect("not poisoned");
             let view = ViewTransform { origin, scale: 1.0 };
-            r.prepare_layers(&document, view, output, &mut caches).count
+            r.prepare_layers(&document, view, output, &mut caches.tiles)
+                .count
         };
         assert_eq!(encoded([0.0, 0.0]), 1);
         assert_eq!(encoded([512.0, 512.0]), 0);

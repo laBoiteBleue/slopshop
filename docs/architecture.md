@@ -81,6 +81,12 @@ sampled from a GPU tile cache (texture array, LRU) at the pyramid level matching
 visible tiles are uploaded, and layers without any are left out of the frame. Transformed layers are resampled like the CPU does (zoomed in, at
 document pixels, so the view shows what export writes). The display
 encoding is a *view transform*; the document is never converted. Headless: no surface needed.
+Viewport frames go through a display cache ([ADR 0022](adr/0022-display-cache.md)): composited
+tiles of the document's power-of-two levels, kept on the GPU in half floats (linear display
+space) and addressed by a hash of everything their compositing reads; a frame composites only the
+visible tiles the cache lacks, each from the layers that reach it, then presents the view from the
+cached tiles. Views needing more tiles than the cache holds are composited directly.
+`SLOPSHOP_DISPLAY_CACHE=0` turns the cache off.
 For export, `Renderer::render_region` runs the same compositing code on a document region at
 full resolution (level 0 always) and reads back the working-space values as premultiplied RGBA
 f32, unclipped, in chunks sized to the tile and GPU buffer limits. `export_source` wraps it as
