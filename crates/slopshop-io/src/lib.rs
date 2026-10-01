@@ -253,6 +253,22 @@ pub(crate) struct Decoded {
     warnings: Vec<ImportWarning>,
 }
 
+/// Whether the file at `path` is a DICOM file (by its content).
+pub fn is_dicom_file(path: &Path) -> std::io::Result<bool> {
+    let mut head = Vec::with_capacity(132);
+    File::open(path)?.take(132).read_to_end(&mut head)?;
+    Ok(dicom::is_dicom(&head))
+}
+
+/// DICOM files opened together (a series): one document, every slice in one group under one
+/// window, ordered by Instance Number; files that cannot be read are returned with their error.
+/// Blocking and CPU-heavy: call it off the UI thread.
+pub fn open_dicom_series(
+    paths: &[std::path::PathBuf],
+) -> Result<(Opened, Vec<(std::path::PathBuf, ImportError)>), ImportError> {
+    dicom::open_series(paths)
+}
+
 /// Decode a file: a layered document (Photoshop) as its layers when the engine can hold them,
 /// anything else as [`open_image`] does. Blocking and CPU-heavy: call it off the UI thread.
 pub fn open_file(path: &Path) -> Result<Opened, ImportError> {

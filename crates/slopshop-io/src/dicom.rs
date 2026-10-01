@@ -14,7 +14,7 @@
 //! dicom-pixeldata; JPEG 2000 through our JPEG 2000 decoder. JPEG-LS, big-endian files and
 //! palette color are refused.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dicom_dictionary_std::tags;
 use dicom_object::{DefaultDicomObject, InMemDicomObject};
@@ -75,6 +75,97 @@ pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
     adjusted::layered(stem, images, scan.window.map(|w| (w.name, w.levels)))
 }
 
+/// DICOM files opened together (a series, often one slice per file): every slice of every file
+/// in one document shaped like one file's (one isolated group, the first slice on top, the
+/// first file's window above them all), ordered by Instance Number, then by name. Files that
+/// cannot be read are left out and returned with their error; it fails when none can be read.
+pub(crate) fn open_series(
+    paths: &[PathBuf],
+) -> Result<(Opened, Vec<(PathBuf, ImportError)>), ImportError> {
+    // Read in parallel, a few files per thread.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = paths.len().div_ceil(threads).max(1);
+    let read: Vec<(&PathBuf, Result<Scan, ImportError>)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = paths
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|path| {
+                            // A decoder panic fails its file, not the series.
+                            let result = std::panic::catch_unwind(|| read(path, true))
+                                .unwrap_or_else(|_| Err(decode_error(&"decoder panicked")));
+                            (path, result)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            // Panics are caught per file: a worker always returns.
+            .flat_map(|worker| worker.join().unwrap_or_default())
+            .collect()
+    });
+    let mut failures = Vec::new();
+    let mut scans = Vec::new();
+    for (path, result) in read {
+        match result {
+            Ok(scan) => scans.push((path, scan)),
+            Err(error) => failures.push((path.clone(), error)),
+        }
+    }
+    let name = |path: &Path| {
+        path.file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+    };
+    scans.sort_by(|(a, x), (b, y)| {
+        x.instance
+            .cmp(&y.instance)
+            .then_with(|| crate::collection::natural_cmp(&name(a), &name(b)))
+    });
+    let Some((first, _)) = scans.first() else {
+        return Err(failures
+            .into_iter()
+            .next()
+            .map_or_else(|| decode_error(&"no file"), |(_, e)| e));
+    };
+    // The series is named after its folder.
+    let group = first
+        .parent()
+        .and_then(Path::file_name)
+        .map_or_else(|| "DICOM".to_owned(), |n| n.to_string_lossy().into_owned());
+    let mut images = Vec::new();
+    let mut levels = None;
+    let mut bytes = 0u64;
+    for (path, scan) in scans {
+        let stem = path
+            .file_stem()
+            .map_or_else(|| "DICOM".to_owned(), |s| s.to_string_lossy().into_owned());
+        if levels.is_none() {
+            levels = scan.window.map(|w| (w.name, w.levels));
+        }
+        let count = scan.frames.len();
+        for (i, frame) in scan.frames.into_iter().enumerate() {
+            bytes += frame.pixels.len() as u64;
+            if bytes > MAX_IMPORT_BYTES {
+                return Err(ImportError::TooLarge {
+                    width: frame.size.width,
+                    height: frame.size.height,
+                });
+            }
+            let name = if count == 1 {
+                stem.clone()
+            } else {
+                format!("{stem} {}/{count}", i + 1)
+            };
+            images.push((name, finish(frame)?));
+        }
+    }
+    Ok((adjusted::layered(group, images, levels)?, failures))
+}
+
 /// The first frame as shown: the window applied to the samples (reported as a flattened
 /// document; other frames reported too).
 pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
@@ -95,6 +186,8 @@ fn no_frame() -> ImportError {
 struct Scan {
     frames: Vec<Decoded>,
     window: Option<Window>,
+    /// Instance Number, to order the files of a series.
+    instance: Option<i64>,
 }
 
 /// The display window of a gray image, as a Levels adjustment.
@@ -217,6 +310,7 @@ fn read(path: &Path, all: bool) -> Result<Scan, ImportError> {
     Ok(Scan {
         frames: decoded,
         window,
+        instance: int(&object, tags::INSTANCE_NUMBER),
     })
 }
 
@@ -700,7 +794,11 @@ mod tests {
         let document = layers.document;
         assert_eq!(
             group(&document),
-            ("ct".into(), vec!["WL 40 / WW 400".into(), "ct".into()], true)
+            (
+                "ct".into(),
+                vec!["WL 40 / WW 400".into(), "ct".into()],
+                true
+            )
         );
         assert_eq!(document.blend_space(), BlendSpace::Perceptual);
         assert_eq!(layers.layer_warnings.len(), document.all_layers().count());
@@ -725,6 +823,37 @@ mod tests {
         );
         assert!(!layers.warnings.contains(&ImportWarning::FirstFrameOnly));
         assert_eq!(layers.layer_warnings.len(), 4);
+    }
+
+    #[test]
+    fn files_opened_together_are_one_series_in_instance_order() {
+        let dir = std::env::temp_dir().join(format!("slopshop-series-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = std::fs::read(fixture("ct.dcm")).unwrap();
+        let paths: Vec<PathBuf> = ["b.dcm", "a.dcm"]
+            .iter()
+            .map(|name| {
+                let path = dir.join(name);
+                std::fs::write(&path, &bytes).unwrap();
+                path
+            })
+            .collect();
+        let broken = dir.join("broken.dcm");
+        std::fs::write(&broken, &bytes[..300]).unwrap();
+        let mut all = paths.clone();
+        all.push(broken.clone());
+        let (opened, failures) = open_series(&all).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let Opened::Layers(layers) = opened else {
+            panic!("expected layers");
+        };
+        let (name, children, levels) = group(&layers.document);
+        assert!(name.starts_with("slopshop-series-"));
+        // Same instance number: by name, the first on top.
+        assert_eq!(children, ["WL 40 / WW 400", "a", "b"]);
+        assert!(levels);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, broken);
     }
 
     #[test]

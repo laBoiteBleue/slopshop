@@ -71,9 +71,14 @@ pub(crate) fn layered(
             pass_through: false,
         },
     );
-    let document =
-        Document::restore(size, WORKING_SPACE, BlendSpace::Perceptual, vec![group], next)
-            .map_err(|e| ImportError::Decode(format!("adjusted image: {e:?}")))?;
+    let document = Document::restore(
+        size,
+        WORKING_SPACE,
+        BlendSpace::Perceptual,
+        vec![group],
+        next,
+    )
+    .map_err(|e| ImportError::Decode(format!("adjusted image: {e:?}")))?;
     Ok(Opened::Layers(ImportedLayers {
         document,
         warnings,

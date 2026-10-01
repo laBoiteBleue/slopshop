@@ -577,25 +577,44 @@ impl Drop for Turn<'_> {
     }
 }
 
-/// Decode `path` (or `page` of it, a PDF) and put it into `target`, after the earlier opens of
+/// What an open reads, besides its path.
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    /// The file, whatever it holds.
+    File,
+    /// One page of a PDF, at a resolution.
+    Page(&'a pdf::PdfPage),
+    /// DICOM files opened together (a series, the path being the first): one document.
+    Series(&'a [PathBuf]),
+}
+
+/// Decode `path` (as `source` says) and put it into `target`, after the earlier opens of
 /// `turn`'s batch if any. Blocking and heavy: worker threads only. Reports progress and outcome
 /// through events, whoever started the open.
 fn open_path(
     app: &AppHandle,
     path: &Path,
-    page: Option<&pdf::PdfPage>,
+    source: Source<'_>,
     target: OpenTarget,
     turn: Option<&Turn<'_>>,
 ) -> Result<DocumentView, String> {
     let state = app.state::<AppState>();
     let id = state.next_open_id.fetch_add(1, Ordering::Relaxed);
-    let (name, layer) = match page {
-        Some(page) => (page.name(&file_name(path)), page.name(&layer_name(path))),
-        None => (file_name(path), layer_name(path)),
+    let (name, layer) = match source {
+        Source::File => (file_name(path), layer_name(path)),
+        Source::Page(page) => (page.name(&file_name(path)), page.name(&layer_name(path))),
+        // A series is named after its folder.
+        Source::Series(_) => {
+            let folder = path.parent().map_or_else(|| file_name(path), file_name);
+            (folder.clone(), folder)
+        }
     };
+    // Files of a series that could not be read, reported once the series is open.
+    let mut skipped = Vec::new();
     // SlopShop documents are recognized by their content: in a new tab, or their layers added
     // on top of the target document.
-    let is_document = page.is_none() && slopshop_io::slop::is_slop_file(path).unwrap_or(false);
+    let is_document =
+        matches!(source, Source::File) && slopshop_io::slop::is_slop_file(path).unwrap_or(false);
     let opening = Opening {
         id,
         name: name.clone(),
@@ -650,13 +669,21 @@ fn open_path(
         }
         let decoded = if target_gone {
             Err((CODE_DOCUMENT_CLOSED, DOCUMENT_CLOSED.to_owned()))
-        } else if let Some(page) = page {
-            page.file
-                .render(page.index, page.dpi)
-                .map(slopshop_io::Opened::Image)
-                .map_err(|e| (e.code(), e.to_string()))
         } else {
-            slopshop_io::open_file(path).map_err(|e| (e.code(), e.to_string()))
+            match source {
+                Source::File => slopshop_io::open_file(path),
+                Source::Page(page) => page
+                    .file
+                    .render(page.index, page.dpi)
+                    .map(slopshop_io::Opened::Image),
+                Source::Series(paths) => {
+                    slopshop_io::open_dicom_series(paths).map(|(opened, failures)| {
+                        skipped = failures;
+                        opened
+                    })
+                }
+            }
+            .map_err(|e| (e.code(), e.to_string()))
         };
         decoded.and_then(|opened| {
             if let Some(turn) = turn {
@@ -685,6 +712,18 @@ fn open_path(
     // Leave the "in progress" list before announcing the outcome, so that a UI catching up
     // after the event cannot see this open as still running.
     drop(guard);
+    for (path, error) in skipped {
+        report_failure(
+            app,
+            &state,
+            OpenFailed {
+                id: state.next_open_id.fetch_add(1, Ordering::Relaxed),
+                name: file_name(&path),
+                code: error.code(),
+                detail: error.to_string(),
+            },
+        );
+    }
     match &result {
         Ok(document) => emit(
             app,
@@ -695,22 +734,16 @@ fn open_path(
                 document: document.clone(),
             },
         ),
-        Err((code, detail)) => {
-            let failed = OpenFailed {
+        Err((code, detail)) => report_failure(
+            app,
+            &state,
+            OpenFailed {
                 id,
                 name,
                 code,
                 detail: detail.clone(),
-            };
-            // A target tab closed by the user is not a failure worth replaying later.
-            let closed = *code == CODE_DOCUMENT_CLOSED;
-            if let (false, Ok(mut failures)) = (closed, state.failures.lock()) {
-                failures.push(failed.clone());
-                let excess = failures.len().saturating_sub(KEPT_FAILURES);
-                failures.drain(..excess);
-            }
-            emit(app, EVENT_OPEN_FAILED, &failed);
-        }
+            },
+        ),
     }
     result.map_err(|(code, detail)| {
         if code == CODE_DOCUMENT_CLOSED {
@@ -719,6 +752,18 @@ fn open_path(
             detail
         }
     })
+}
+
+/// Announce a failed open, and keep it for a UI that subscribes late.
+fn report_failure(app: &AppHandle, state: &AppState, failed: OpenFailed) {
+    // A target tab closed by the user is not a failure worth replaying later.
+    let closed = failed.code == CODE_DOCUMENT_CLOSED;
+    if let (false, Ok(mut failures)) = (closed, state.failures.lock()) {
+        failures.push(failed.clone());
+        let excess = failures.len().saturating_sub(KEPT_FAILURES);
+        failures.drain(..excess);
+    }
+    emit(app, EVENT_OPEN_FAILED, &failed);
 }
 
 /// Put a decoded image into its target: a new tab, or a new top layer (undoable).
@@ -1034,11 +1079,20 @@ async fn open_images(
     paths: Vec<PathBuf>,
     document_id: Option<u64>,
 ) -> Result<OpenSummary, String> {
-    let (paths, summary, archives) = tauri::async_runtime::spawn_blocking(move || {
+    let (paths, series, summary, archives) = tauri::async_runtime::spawn_blocking(move || {
         let mut summary = OpenSummary::default();
         let mut archives = Vec::new();
         let paths = expand_paths(paths, &mut summary, &mut archives);
-        (paths, summary, archives)
+        // Several DICOM files together are a series: one document (the maintainer's choice).
+        let (series, others): (Vec<PathBuf>, Vec<PathBuf>) = paths
+            .into_iter()
+            .partition(|path| slopshop_io::is_dicom_file(path).unwrap_or(false));
+        let (series, paths) = if series.len() > 1 {
+            (series, others)
+        } else {
+            (Vec::new(), series.into_iter().chain(others).collect())
+        };
+        (paths, series, summary, archives)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -1047,7 +1101,8 @@ async fn open_images(
         None => OpenTarget::NewTab,
     };
     let order = Arc::new(InsertionOrder::default());
-    let opens: Vec<_> = paths
+    let count = paths.len();
+    let mut opens: Vec<_> = paths
         .into_iter()
         .enumerate()
         .map(|(index, path)| {
@@ -1058,10 +1113,20 @@ async fn open_images(
                     index,
                 };
                 // The outcome is reported by the open's own events.
-                let _ = open_path(&app, &path, None, target, Some(&turn));
+                let _ = open_path(&app, &path, Source::File, target, Some(&turn));
             })
         })
         .collect();
+    if let Some(first) = series.first().cloned() {
+        let (app, order) = (app.clone(), order.clone());
+        opens.push(tauri::async_runtime::spawn_blocking(move || {
+            let turn = Turn {
+                order: &order,
+                index: count,
+            };
+            let _ = open_path(&app, &first, Source::Series(&series), target, Some(&turn));
+        }));
+    }
     for open in opens {
         open.await.map_err(|e| e.to_string())?;
     }
@@ -1783,7 +1848,7 @@ pub fn run() {
                 }
                 for path in startup_files() {
                     let start = Instant::now();
-                    match open_path(&handle, &path, None, OpenTarget::NewTab, None) {
+                    match open_path(&handle, &path, Source::File, OpenTarget::NewTab, None) {
                         Ok(_) => eprintln!(
                             "opened {} in {:.1} s",
                             path.display(),
