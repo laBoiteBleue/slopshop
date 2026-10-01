@@ -122,6 +122,11 @@ built. Contributors: propose here first.
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
   the ants). Painting in Quick Mask comes with the brushes. Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
   Inverse (Shift+Ctrl+I). Selecting is undoable; crop and size changes deselect.
+- Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
+  layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
+  Selection also in the layers' right-click menu); a mask from the selection deselects, as in
+  Photoshop. Image > Crop crops to the selection's bounds when there is one (otherwise it picks
+  the Crop tool).
 
 ## Proposed
 
