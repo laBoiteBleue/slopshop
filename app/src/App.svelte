@@ -15,6 +15,8 @@
     onOpenEvents,
     type DocumentView,
     type EditRequest,
+    type SelectionMode,
+    type SelectionShape,
     type ExportFailed,
     type ExportFinished,
     type ExportFormat,
@@ -47,7 +49,9 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
-  import { toolForKey, type ToolId } from "./lib/tools";
+  import { slotForKey, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
+  import MarqueeTool from "./lib/MarqueeTool.svelte";
+  import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import CropBox from "./lib/CropBox.svelte";
@@ -325,11 +329,43 @@
 
   // The tools (ADR 0013): the toolbar's active tool decides what a left press on the image does.
   let tool = $state<ToolId>("move");
+  /** The variant each toolbar slot shows (the one used last), by slot key. */
+  let toolChoices = $state<Record<string, ToolId>>({});
 
   function selectTool(id: ToolId) {
     // Free Transform's box and the crop frame would both take the pointer.
     if (id === "crop") commitTransform();
     tool = id;
+    toolChoices[slotOf(id).key] = id;
+  }
+
+  /** A tool's key: the slot's tool used last, or with Shift the next variant (Photoshop). */
+  function selectSlot(slot: ToolSlot, next: boolean) {
+    const shown = toolChoices[slot.key] ?? slot.tools[0].id;
+    if (!next || slot.tools.length < 2) return selectTool(shown);
+    const index = slot.tools.findIndex((entry) => entry.id === shown);
+    selectTool(slot.tools[(index + 1) % slot.tools.length].id);
+  }
+
+  // Selections (ADR 0024): the marquees draw shapes that the engine turns into masks.
+  let selectionMode = $state<SelectionMode>("replace");
+  let feather = $state(0);
+  let antiAlias = $state(true);
+
+  function selectShape(shape: SelectionShape, mode: SelectionMode | null) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    // Rectangles on whole pixels have no partial pixels to smooth.
+    const smooth = shape.kind !== "rectangle" && antiAlias;
+    void sync(engine.selectShape(doc.id, shape, mode ?? selectionMode, smooth, feather));
+  }
+
+  function selectionCommand(run: (id: number) => Promise<DocumentView>) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    void sync(run(doc.id));
   }
 
   // The Move tool (ADR 0017): a left drag on the image moves the selected layers live, in whole
@@ -1483,6 +1519,31 @@
         label: t("menu.select"),
         items: [
           cmd(
+            t("menu.select.all"),
+            () => selectionCommand(engine.selectAll),
+            keys("mod", "A"),
+            !doc,
+          ),
+          cmd(
+            t("menu.select.deselect"),
+            () => selectionCommand(engine.deselect),
+            keys("mod", "D"),
+            doc?.selectionKey == null,
+          ),
+          cmd(
+            t("menu.select.reselect"),
+            () => selectionCommand(engine.reselect),
+            keys("shift", "mod", "D"),
+            !doc?.canReselect,
+          ),
+          cmd(
+            t("menu.select.inverse"),
+            () => selectionCommand(engine.invertSelection),
+            keys("shift", "mod", "I"),
+            !doc,
+          ),
+          separator,
+          cmd(
             t("menu.select.allLayers"),
             () => layersPanel?.selectAllLayers(),
             keys("alt", "mod", "A"),
@@ -1547,12 +1608,32 @@
         return;
       }
     }
-    // The tools: a letter alone (V, C), as in Photoshop; not while typing.
+    // The tools: a letter alone (V, M, C), Shift+letter for the next variant, as in Photoshop;
+    // not while typing.
     if (!hasShortcutModifier(e) && !e.altKey && !isTextField(e.target)) {
-      const picked = toolForKey(e.code);
-      if (picked) {
+      const slot = slotForKey(e.code);
+      if (slot) {
         e.preventDefault();
-        if (!e.repeat) selectTool(picked);
+        if (!e.repeat) selectSlot(slot, e.shiftKey);
+        return;
+      }
+    }
+    // Select > Deselect, Reselect, Inverse and All (Ctrl+D, Shift+Ctrl+D, Shift+Ctrl+I, Ctrl+A),
+    // by the physical key; not while typing.
+    if (hasShortcutModifier(e) && !e.altKey && !isTextField(e.target) && active) {
+      const command =
+        e.code === "KeyD"
+          ? e.shiftKey
+            ? engine.reselect
+            : engine.deselect
+          : e.code === "KeyI" && e.shiftKey
+            ? engine.invertSelection
+            : e.code === "KeyA" && !e.shiftKey
+              ? engine.selectAll
+              : null;
+      if (command) {
+        e.preventDefault();
+        if (!e.repeat) selectionCommand(command);
         return;
       }
     }
@@ -1697,7 +1778,7 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
-  <OptionsBar {tool} bind:autoSelect />
+  <OptionsBar {tool} bind:autoSelect bind:selectionMode bind:feather bind:antiAlias />
 
   <main
     class:has-panel={active !== null}
@@ -1707,7 +1788,7 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
-    <Toolbar {tool} onselect={selectTool} />
+    <Toolbar {tool} choices={toolChoices} onselect={selectTool} />
     <section class="workspace">
       <div
         class="tabbar"
@@ -1807,12 +1888,21 @@
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
-              onmove={transforming || cropping ? undefined : onMoveDrag}
+              onmove={tool === "move" && !transforming ? onMoveDrag : undefined}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
               {guides}
             >
               {#snippet overlay(mapping)}
+                {#if active?.selectionKey != null}
+                  <SelectionOutline
+                    {mapping}
+                    documentId={active.id}
+                    selectionKey={active.selectionKey}
+                    width={active.width}
+                    height={active.height}
+                  />
+                {/if}
                 {#if cropping && cropping.document === active?.id}
                   <CropBox
                     {mapping}
@@ -1829,6 +1919,14 @@
                     onchange={onTransformChange}
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
+                  />
+                {:else if tool === "marquee" || tool === "ellipse"}
+                  <MarqueeTool
+                    {mapping}
+                    kind={tool === "marquee" ? "rectangle" : "ellipse"}
+                    mode={selectionMode}
+                    onselect={selectShape}
+                    ondeselect={() => selectionCommand(engine.deselect)}
                   />
                 {/if}
               {/snippet}

@@ -156,6 +156,29 @@ export type DocumentView = {
   path: string | null;
   /** Changed since it was opened, created or last saved. */
   dirty: boolean;
+  /** Identity of the selection (ADR 0024): a new value, a new outline; null: nothing selected. */
+  selectionKey: number | null;
+  /** Select > Reselect has a selection to bring back. */
+  canReselect: boolean;
+};
+
+/** A shape to select, in document pixels. */
+export type SelectionShape =
+  | { kind: "rectangle" | "ellipse"; left: number; top: number; right: number; bottom: number }
+  | { kind: "polygon"; points: [number, number][] };
+
+/** How a new shape combines with the selection. */
+export type SelectionMode = "replace" | "add" | "subtract" | "intersect";
+
+/** Polylines in document pixels: `[x0, y0, x1, y1, …]` each. */
+export type Polylines = Uint32Array[];
+
+/** The outlines of the selection over a region. */
+export type SelectionOutline = {
+  /** Where coverage crosses one half: the marching ants. */
+  middle: Polylines;
+  /** A soft (feathered) selection: where its soft edge starts and ends. */
+  soft: { outer: Polylines; inner: Polylines } | null;
 };
 
 export type EditRequest =
@@ -857,6 +880,52 @@ export const engine = {
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
   addMaskFromTransparency: (documentId: number, layerId: number) =>
     serial(() => invoke<DocumentView>("add_mask_from_transparency", { documentId, layerId })),
+  /** Select `shape` combined with the selection by `mode` (ADR 0024); feather in pixels. */
+  selectShape: (
+    documentId: number,
+    shape: SelectionShape,
+    mode: SelectionMode,
+    antiAlias: boolean,
+    feather: number,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("select_shape", { documentId, shape, mode, antiAlias, feather }),
+    ),
+  selectAll: (documentId: number) =>
+    serial(() => invoke<DocumentView>("select_all", { documentId })),
+  deselect: (documentId: number) => serial(() => invoke<DocumentView>("deselect", { documentId })),
+  reselect: (documentId: number) => serial(() => invoke<DocumentView>("reselect", { documentId })),
+  invertSelection: (documentId: number) =>
+    serial(() => invoke<DocumentView>("invert_selection", { documentId })),
+  /**
+   * The marching ants over a region (document pixels) at `zoom` (screen pixels per document
+   * pixel), sized to the view, as polylines in document pixels.
+   */
+  selectionOutline: async (
+    documentId: number,
+    region: { x: number; y: number; width: number; height: number },
+    zoom: number,
+  ): Promise<SelectionOutline> => {
+    const buffer = await invoke<ArrayBuffer>("selection_outline", { documentId, ...region, zoom });
+    const words = new Uint32Array(buffer);
+    let at = 0;
+    const sets: Polylines[] = [];
+    const count = words[at++] ?? 0;
+    for (let s = 0; s < count; s++) {
+      const lines: Polylines = [];
+      const n = words[at++];
+      for (let i = 0; i < n; i++) {
+        const points = words[at++];
+        lines.push(words.subarray(at, at + 2 * points));
+        at += 2 * points;
+      }
+      sets.push(lines);
+    }
+    return {
+      middle: sets[0] ?? [],
+      soft: sets.length === 3 ? { outer: sets[1], inner: sets[2] } : null,
+    };
+  },
   /**
    * Paste the clipboard: copied files open like dropped ones (layers of `documentId`, or new
    * tabs; outcomes arrive as `open-*` events), a copied image becomes a layer named `name` of

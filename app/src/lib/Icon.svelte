@@ -14,9 +14,17 @@
     // Tools.
     move: "M12 3v18 M3 12h18 M9 6l3-3 3 3 M9 18l3 3 3-3 M6 9l-3 3 3 3 M18 9l3 3-3 3",
     crop: "M7 2v15h15 M2 7h15v15",
+    marquee: "M4 4h3 M10 4h4 M17 4h3v3 M20 10v4 M20 17v3h-3 M14 20h-4 M7 20H4v-3 M4 14v-4 M4 7V4",
+    ellipse:
+      "M20.42 13.18A8.5 8.5 0 0 1 18.79 17.12 M17.12 18.79A8.5 8.5 0 0 1 13.18 20.42 M10.82 20.42A8.5 8.5 0 0 1 6.88 18.79 M5.21 17.12A8.5 8.5 0 0 1 3.58 13.18 M3.58 10.82A8.5 8.5 0 0 1 5.21 6.88 M6.88 5.21A8.5 8.5 0 0 1 10.82 3.58 M13.18 3.58A8.5 8.5 0 0 1 17.12 5.21 M18.79 6.88A8.5 8.5 0 0 1 20.42 10.82",
+    // Selection modes.
+    selectionReplace: "M5 5h14v14H5Z",
+    selectionAdd: "M3 3h12v12H3Z M18 14v8 M14 18h8",
+    selectionSubtract: "M3 3h12v12H3Z M14 18h8",
+    selectionIntersect: "M3 3h12v12H3Z M9 9h12v12H9Z",
     // View.
     fitScreen: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
-    actualPixels: "M5 8l2.5-2v12 M12 10v.01 M12 14v.01 M16 8l2.5-2v12",
+    actualPixels: "M4.5 8.5l3-2.5v12 M12 9v1.5 M12 14v1.5 M16.5 8.5l3-2.5v12",
   } as const;
 
   export type IconName = keyof typeof paths;
