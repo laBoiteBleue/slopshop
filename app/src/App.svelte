@@ -44,7 +44,7 @@
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import PropertiesPanel from "./lib/PropertiesPanel.svelte";
-  import Viewport, { type FrameStats, type PointerTool } from "./lib/Viewport.svelte";
+  import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { toolForKey, type ToolId } from "./lib/tools";
@@ -325,8 +325,6 @@
 
   // The tools (ADR 0013): the toolbar's active tool decides what a left press on the image does.
   let tool = $state<ToolId>("move");
-  /** The Zoom tool's option: a click zooms out (Alt inverts it). */
-  let zoomOut = $state(false);
 
   function selectTool(id: ToolId) {
     // Free Transform's box and the crop frame would both take the pointer.
@@ -444,11 +442,6 @@
   };
   let transforming = $state<Transforming | null>(null);
 
-  /** What a left press on the image does; `null` while an overlay takes it (crop frame, transform box). */
-  const pointerTool: PointerTool = $derived(
-    tool === "hand" ? "hand" : tool === "crop" || transforming ? null : tool,
-  );
-
   async function startFreeTransform() {
     const doc = active;
     if (!doc || transforming) return;
@@ -539,7 +532,6 @@
   // new canvas, and Esc starts it over. What the frame snaps to is fetched when it opens.
   type Cropping = { document: number; width: number; height: number; targets: Bounds[] };
   let cropping = $state<Cropping | null>(null);
-  let cropBox = $state<CropBox | null>(null);
   /** Bumped by each frame requested: only the latest one opens. */
   let cropRequest = 0;
   /** A crop being applied: the next frame waits for the new canvas. */
@@ -597,17 +589,6 @@
       height: frame.bottom - frame.top,
     }).finally(() => (cropApplying = false));
   }
-
-  /** The options bar's apply and cancel buttons, for the crop frame or the transform box. */
-  const pending = $derived.by(() => {
-    if (cropping && cropping.document === activeId) {
-      return { commit: () => cropBox?.apply(), cancel: () => (cropping = null) };
-    }
-    if (transforming && transforming.document === activeId) {
-      return { commit: commitTransform, cancel: cancelTransform };
-    }
-    return null;
-  });
 
   function rotateImage(turn: ImageTurn) {
     if (active) void edit(active.id, { kind: "rotateImage", turn });
@@ -1566,7 +1547,7 @@
         return;
       }
     }
-    // The tools: a letter alone (V, C, H, Z), as in Photoshop; not while typing.
+    // The tools: a letter alone (V, C), as in Photoshop; not while typing.
     if (!hasShortcutModifier(e) && !e.altKey && !isTextField(e.target)) {
       const picked = toolForKey(e.code);
       if (picked) {
@@ -1716,15 +1697,7 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
-  <OptionsBar
-    {tool}
-    bind:autoSelect
-    bind:zoomOut
-    hasDocument={active !== null}
-    {pending}
-    onactualsize={() => void viewport?.zoomTo(1)}
-    onfit={() => void viewport?.fit()}
-  />
+  <OptionsBar {tool} bind:autoSelect />
 
   <main
     class:has-panel={active !== null}
@@ -1734,14 +1707,7 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
-    <Toolbar
-      {tool}
-      onselect={selectTool}
-      ondoubleclick={(picked) => {
-        if (picked === "hand") void viewport?.fit();
-        else if (picked === "zoom") void viewport?.zoomTo(1);
-      }}
-    />
+    <Toolbar {tool} onselect={selectTool} />
     <section class="workspace">
       <div
         class="tabbar"
@@ -1840,10 +1806,8 @@
               documentId={active.id}
               revision={active.revision}
               onframe={(stats) => (frame = stats)}
-              tool={pointerTool}
-              {zoomOut}
               onmovestart={onMoveStart}
-              onmove={onMoveDrag}
+              onmove={transforming || cropping ? undefined : onMoveDrag}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
               {guides}
@@ -1851,7 +1815,6 @@
               {#snippet overlay(mapping)}
                 {#if cropping && cropping.document === active?.id}
                   <CropBox
-                    bind:this={cropBox}
                     {mapping}
                     canvas={canvasBounds(active)}
                     targets={snapping ? cropping.targets : []}
@@ -1948,6 +1911,7 @@
         hint={t("view.hint", { mod: modifierLabel })}
         onzoom={(zoom) => viewport?.zoomTo(zoom) ?? Promise.resolve()}
         onstep={(zoomIn) => void viewport?.stepZoom(zoomIn)}
+        onfit={() => void viewport?.fit()}
       />
     {/if}
     {#if active}

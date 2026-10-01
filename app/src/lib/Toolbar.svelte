@@ -1,7 +1,6 @@
 <script lang="ts">
   // The toolbar (ADR 0013): a vertical strip on the left, one button per tool in Photoshop's
-  // order. As in Photoshop, a double-click on the Hand tool fits the image on screen and one on
-  // the Zoom tool shows it at 100%.
+  // order.
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import { TOOLS, type ToolId } from "./tools";
@@ -9,11 +8,9 @@
   let {
     tool,
     onselect,
-    ondoubleclick,
   }: {
     tool: ToolId;
     onselect: (tool: ToolId) => void;
-    ondoubleclick: (tool: ToolId) => void;
   } = $props();
 </script>
 
@@ -26,7 +23,6 @@
       title={t("tools.tooltip", { name: t(entry.name), key: entry.key })}
       aria-label={t(entry.name)}
       onclick={() => onselect(entry.id)}
-      ondblclick={() => ondoubleclick(entry.id)}
     >
       <Icon name={entry.icon} size={18} />
     </button>

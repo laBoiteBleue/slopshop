@@ -2,12 +2,14 @@
   import { MAX_ZOOM, MIN_ZOOM } from "./engine";
   import { formatZoom } from "./format";
   import { t } from "./i18n/index.svelte";
+  import Icon from "./Icon.svelte";
 
   let {
     zoom,
     hint,
     onzoom,
     onstep,
+    onfit,
   }: {
     /** Current zoom (1 = 100%), or null before the first frame. */
     zoom: number | null;
@@ -17,6 +19,8 @@
     onzoom: (zoom: number) => Promise<void>;
     /** Step to the next zoom preset, like the keyboard shortcuts. */
     onstep: (zoomIn: boolean) => void;
+    /** Show the whole image (View > Fit on Screen). */
+    onfit: () => void;
   } = $props();
 
   // Logarithmic: equal distances are equal zoom ratios, over the engine's whole zoom range.
@@ -95,6 +99,24 @@
     onchange={release}
     onkeydown={onKeyDown}
   />
+  <button
+    class="icon-btn"
+    disabled={zoom === null}
+    title={t("menu.view.actualSize")}
+    aria-label={t("menu.view.actualSize")}
+    onclick={() => void onzoom(1)}
+  >
+    <Icon name="actualPixels" size={14} />
+  </button>
+  <button
+    class="icon-btn"
+    disabled={zoom === null}
+    title={t("menu.view.fit")}
+    aria-label={t("menu.view.fit")}
+    onclick={onfit}
+  >
+    <Icon name="fitScreen" size={14} />
+  </button>
 </div>
 
 <style>
@@ -117,5 +139,11 @@
 
   input {
     width: 88px;
+  }
+
+  /* Fits the status bar. */
+  .icon-btn {
+    width: 18px;
+    height: 18px;
   }
 </style>
