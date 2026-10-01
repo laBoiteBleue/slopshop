@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 19] = [
+const FORMATS: [ExportFormatKind; 22] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -53,6 +53,9 @@ const FORMATS: [ExportFormatKind; 19] = [
     ExportFormatKind::Ico,
     ExportFormatKind::Gif,
     ExportFormatKind::Dds,
+    ExportFormatKind::Fits,
+    ExportFormatKind::Dicom,
+    ExportFormatKind::Pdf,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -127,10 +130,11 @@ impl Depth {
 
     fn supported_by(self, kind: ExportFormatKind) -> bool {
         match kind {
-            ExportFormatKind::Png | ExportFormatKind::Pnm | ExportFormatKind::Jxl => {
-                self.png().is_some()
-            }
-            ExportFormatKind::Tiff => self.tiff().is_some(),
+            ExportFormatKind::Png
+            | ExportFormatKind::Pnm
+            | ExportFormatKind::Jxl
+            | ExportFormatKind::Dicom => self.png().is_some(),
+            ExportFormatKind::Tiff | ExportFormatKind::Fits => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
             ExportFormatKind::Pfm | ExportFormatKind::Hdr => self == Depth::F32,
             ExportFormatKind::Farbfeld => self == Depth::U16,
@@ -142,7 +146,8 @@ impl Depth {
             | ExportFormatKind::Qoi
             | ExportFormatKind::Ico
             | ExportFormatKind::Gif
-            | ExportFormatKind::Dds => self == Depth::U8,
+            | ExportFormatKind::Dds
+            | ExportFormatKind::Pdf => self == Depth::U8,
             ExportFormatKind::Psd | ExportFormatKind::Psb => self.psd().is_some(),
         }
     }
@@ -236,7 +241,10 @@ impl Compression {
             | ExportFormatKind::Hdr
             | ExportFormatKind::Ico
             | ExportFormatKind::Gif
-            | ExportFormatKind::Dds => false,
+            | ExportFormatKind::Dds
+            | ExportFormatKind::Fits
+            | ExportFormatKind::Dicom
+            | ExportFormatKind::Pdf => false,
         }
     }
 }
@@ -454,10 +462,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 | ExportFormatKind::Pfm
                 | ExportFormatKind::Farbfeld
                 | ExportFormatKind::Hdr
-                | ExportFormatKind::Dds => {
+                | ExportFormatKind::Dds
+                | ExportFormatKind::Fits
+                | ExportFormatKind::Dicom => {
                     format!("{name} has no --compression option (it is uncompressed)")
                 }
-                ExportFormatKind::Jxl | ExportFormatKind::Qoi | ExportFormatKind::Ico => {
+                ExportFormatKind::Jxl
+                | ExportFormatKind::Qoi
+                | ExportFormatKind::Ico
+                | ExportFormatKind::Pdf => {
                     format!("{name} has no --compression option (it is always lossless)")
                 }
                 ExportFormatKind::Gif => format!(
@@ -710,6 +723,9 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "ico" => Some(ExportFormatKind::Ico),
         "gif" => Some(ExportFormatKind::Gif),
         "dds" => Some(ExportFormatKind::Dds),
+        "fits" | "fit" | "fts" => Some(ExportFormatKind::Fits),
+        "dcm" | "dicom" => Some(ExportFormatKind::Dicom),
+        "pdf" => Some(ExportFormatKind::Pdf),
         _ => None,
     }
 }
@@ -736,6 +752,9 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Ico => "ico",
         ExportFormatKind::Gif => "gif",
         ExportFormatKind::Dds => "dds",
+        ExportFormatKind::Fits => "fits",
+        ExportFormatKind::Dicom => "dcm",
+        ExportFormatKind::Pdf => "pdf",
     }
 }
 
@@ -760,6 +779,9 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Ico => "ICO (Windows icon)",
         ExportFormatKind::Gif => "GIF",
         ExportFormatKind::Dds => "DDS",
+        ExportFormatKind::Fits => "FITS",
+        ExportFormatKind::Dicom => "DICOM",
+        ExportFormatKind::Pdf => "PDF",
     }
 }
 
@@ -837,6 +859,13 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
         ExportFormat::Ico => ExportFormat::Ico,
         ExportFormat::Gif => ExportFormat::Gif,
         ExportFormat::Dds => ExportFormat::Dds,
+        ExportFormat::Pdf => ExportFormat::Pdf,
+        ExportFormat::Fits { sample } => ExportFormat::Fits {
+            sample: args.depth.and_then(Depth::tiff).unwrap_or(sample),
+        },
+        ExportFormat::Dicom { depth } => ExportFormat::Dicom {
+            depth: args.depth.and_then(Depth::png).unwrap_or(depth),
+        },
         ExportFormat::Jxl { depth } => ExportFormat::Jxl {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
         },
@@ -909,9 +938,20 @@ fn describe(spec: &ExportSpec) -> String {
         | ExportFormat::Qoi
         | ExportFormat::Ico
         | ExportFormat::Gif
-        | ExportFormat::Dds => (Depth::U8, None),
+        | ExportFormat::Dds
+        | ExportFormat::Pdf => (Depth::U8, None),
+        ExportFormat::Fits { sample } => (
+            match sample {
+                TiffSample::U8 => Depth::U8,
+                TiffSample::U16 => Depth::U16,
+                TiffSample::F32 => Depth::F32,
+            },
+            None,
+        ),
         ExportFormat::Farbfeld => (Depth::U16, None),
-        ExportFormat::Pnm { depth } | ExportFormat::Jxl { depth } => (
+        ExportFormat::Pnm { depth }
+        | ExportFormat::Jxl { depth }
+        | ExportFormat::Dicom { depth } => (
             match depth {
                 PngDepth::U8 => Depth::U8,
                 PngDepth::U16 => Depth::U16,
@@ -1291,6 +1331,59 @@ mod tests {
     }
 
     #[test]
+    fn document_formats_are_recognized_with_their_options() {
+        for (name, kind) in [
+            ("out.fits", ExportFormatKind::Fits),
+            ("out.FIT", ExportFormatKind::Fits),
+            ("out.fts", ExportFormatKind::Fits),
+            ("out.dcm", ExportFormatKind::Dicom),
+            ("out.dicom", ExportFormatKind::Dicom),
+            ("out.pdf", ExportFormatKind::Pdf),
+        ] {
+            assert_eq!(parse(&["in.png", name]).unwrap().format, kind, "{name}");
+            let id = format_id(kind);
+            assert_eq!(parse_format(id).unwrap(), kind, "{id}");
+        }
+        let error = |args: &[&str]| parse(args).unwrap_err();
+        assert_eq!(
+            error(&["in.png", "out.fits", "--depth", "f16"]),
+            "--depth f16 is not available for FITS (valid: u8, u16, f32)"
+        );
+        assert_eq!(
+            error(&["in.png", "out.dcm", "--depth", "f32"]),
+            "--depth f32 is not available for DICOM (valid: u8, u16)"
+        );
+        assert_eq!(
+            error(&["in.png", "out.pdf", "--depth", "u16"]),
+            "--depth u16 is not available for PDF (valid: u8)"
+        );
+        assert!(
+            error(&["in.png", "out.pdf", "--compression", "none"]).contains("no --compression")
+        );
+        assert!(error(&["in.png", "out.fits", "--space", "linear-srgb"]).contains("valid: srgb"));
+        assert!(error(&["in.png", "out.dcm", "--space", "display-p3"]).contains("valid: srgb"));
+        assert!(parse(&["in.png", "out.pdf", "--space", "display-p3", "--gray"]).is_ok());
+        assert!(parse(&["in.png", "out.fits", "--gray", "--depth", "f32"]).is_ok());
+
+        let document = Document::new(Size::new(4, 4));
+        let fits = export_spec(&parse(&["in.png", "out.fits"]).unwrap(), &document);
+        assert_eq!(
+            describe(&fits),
+            "--format fits --depth u8 --space srgb --matte ffffff"
+        );
+        let dicom = export_spec(
+            &parse(&["in.png", "out.dcm", "--depth", "u16"]).unwrap(),
+            &document,
+        );
+        assert_eq!(
+            describe(&dicom),
+            "--format dcm --depth u16 --space srgb --matte ffffff"
+        );
+        let pdf = export_spec(&parse(&["in.png", "out.pdf"]).unwrap(), &document);
+        assert_eq!(describe(&pdf), "--format pdf --depth u8 --space srgb");
+    }
+
+    #[test]
     fn rejects_malformed_command_lines() {
         let error = |args: &[&str]| parse(args).unwrap_err();
         assert!(error(&["in.png"]).contains("got 1 path"));
@@ -1591,6 +1684,38 @@ mod tests {
                 let actual = composite(&single_layer_document(reimported.image, name).unwrap());
                 let difference = max_difference(&expected, &actual);
                 assert!(difference <= tolerance, "{name}: {difference}");
+            }
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FITS and DICOM flatten (no alpha) and read back at the same size; PDF keeps alpha.
+    #[test]
+    fn exports_fits_dicom_and_pdf_and_reads_them_back() {
+        let dir = temp_dir("documents");
+        let size = Size::new(70, 300);
+        let input = dir.join("in.png");
+        write_test_png(&input, size);
+        for (name, notices) in [
+            ("out.fits", &["alphaFlattened"][..]),
+            ("out.dcm", &["alphaFlattened"][..]),
+            ("out.pdf", &[][..]),
+        ] {
+            let output = dir.join(name);
+            let args = [input.to_str().unwrap(), output.to_str().unwrap(), "--cpu"];
+            let outcome = export(&parse(&args).unwrap()).unwrap();
+            let ids: Vec<_> = outcome.report.notices.iter().map(|n| n.id()).collect();
+            assert_eq!(ids, notices, "{name}");
+            assert_eq!(outcome.spec.keep_alpha, name == "out.pdf", "{name}");
+            let reimported = slopshop_io::open_image(&output).unwrap();
+            assert_eq!(
+                reimported.image.format().color_space,
+                outcome.spec.space,
+                "{name}"
+            );
+            if name != "out.pdf" {
+                // A PDF page is rendered at 300 dpi by default.
+                assert_eq!(reimported.image.size(), size, "{name}");
             }
         }
         fs::remove_dir_all(&dir).ok();
