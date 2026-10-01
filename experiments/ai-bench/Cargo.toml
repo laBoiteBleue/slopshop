@@ -1,0 +1,21 @@
+[package]
+name = "ai-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Experiment: latency and VRAM of segmentation models through ONNX Runtime (not part of SlopShop)"
+license = "MIT OR Apache-2.0"
+
+# Outside SlopShop's workspace: built on its own, never by CI, until an ADR decides.
+[workspace]
+
+[dependencies]
+# ONNX Runtime bindings (MIT OR Apache-2.0); the prebuilt ONNX Runtime 1.28 is downloaded at
+# build time. DirectML on Windows (DirectML.dll ships with it).
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native", "api-27"] }
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native", "api-27", "directml"] }
+
+[profile.release]
+debug = false
