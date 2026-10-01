@@ -45,6 +45,7 @@ const en = {
   "vectorDialog.titlePdf": "Import PDF",
   "vectorDialog.titleSvg": "Import SVG",
   "vectorDialog.size": "Size",
+  "vectorDialog.background": "Background",
   "vectorDialog.pages": "Pages",
   "vectorDialog.page": "Page {number}",
   "vectorDialog.all": "All",

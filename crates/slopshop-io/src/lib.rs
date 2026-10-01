@@ -285,6 +285,9 @@ pub fn open_file(path: &Path) -> Result<Opened, ImportError> {
     if fits::is_fits(&head) {
         return fits::open(path);
     }
+    if pdf::is_pdf(&head) {
+        return pdf::open(path);
+    }
     open_image(path).map(Opened::Image)
 }
 

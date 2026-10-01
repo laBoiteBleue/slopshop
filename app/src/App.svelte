@@ -716,7 +716,13 @@
       }
       const failuresBefore = openFailureCount;
       try {
-        await engine.openVectorPages(path, choice.pages, choice.dpi, documentId);
+        await engine.openVectorPages(
+          path,
+          choice.pages,
+          choice.dpi,
+          documentId,
+          t("vectorDialog.background"),
+        );
       } catch (e) {
         if (openFailureCount === failuresBefore) showError(String(e));
       }

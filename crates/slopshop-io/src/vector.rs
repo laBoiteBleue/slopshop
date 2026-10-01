@@ -5,9 +5,12 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+use slopshop_core::color::LinearRgba;
+use slopshop_core::document::LayerContent;
+
 use crate::pdf::{self, PdfFile};
 use crate::svg::{self, SvgFile};
-use crate::{ImportError, Imported};
+use crate::{ImportError, Imported, Opened, adjusted};
 
 /// Lengths in points: 72 per inch.
 pub const POINTS_PER_INCH: f32 = 72.0;
@@ -112,6 +115,56 @@ impl VectorFile {
     }
 }
 
+impl VectorFile {
+    /// `pages` (from 0) at `dpi` as one document named after `stem`, the maintainer's layout:
+    /// for a PDF, one isolated group of the pages (the first on top, named "stem 3/12") over a
+    /// white fill named `background`; an SVG is its drawing alone. Pages render in parallel.
+    pub fn open_pages(
+        &self,
+        stem: &str,
+        pages: &[usize],
+        dpi: f32,
+        background: &str,
+    ) -> Result<Opened, ImportError> {
+        if let Self::Svg(file) = self {
+            return file.render(dpi).map(Opened::Image);
+        }
+        let count = self.page_count();
+        let rendered: Vec<Result<Imported, ImportError>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = pages
+                .iter()
+                .map(|&page| scope.spawn(move || self.render(page, dpi)))
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| {
+                    worker.join().unwrap_or_else(|_| {
+                        Err(ImportError::Decode("PDF renderer panicked".into()))
+                    })
+                })
+                .collect()
+        });
+        let mut images = Vec::with_capacity(pages.len());
+        for (&page, imported) in pages.iter().zip(rendered) {
+            let name = if count == 1 {
+                stem.to_owned()
+            } else {
+                format!("{stem} {}/{count}", page + 1)
+            };
+            images.push((name, imported?));
+        }
+        let white = LayerContent::Fill {
+            color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+        };
+        adjusted::grouped(
+            stem.to_owned(),
+            images,
+            None,
+            Some((background.to_owned(), white)),
+        )
+    }
+}
+
 fn no_page(index: usize) -> ImportError {
     ImportError::Decode(format!("there is no page {}", index + 1))
 }
@@ -119,6 +172,35 @@ fn no_page(index: usize) -> ImportError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_pages_open_as_one_group_over_a_white_background() {
+        let pdf = VectorFile::open(&fixture("pdf/pages.pdf"))
+            .unwrap()
+            .unwrap();
+        let Opened::Layers(layers) = pdf
+            .open_pages("pages", &[0, 2], 72.0, "Background")
+            .unwrap()
+        else {
+            panic!("expected layers");
+        };
+        let document = layers.document;
+        assert_eq!(document.layers().len(), 1);
+        let group = &document.layers()[0];
+        let LayerContent::Group {
+            children,
+            pass_through: false,
+        } = &group.content
+        else {
+            panic!("expected an isolated group");
+        };
+        let names: Vec<&str> = children.iter().rev().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["pages 1/3", "pages 3/3", "Background"]);
+        assert!(matches!(children[0].content, LayerContent::Fill { .. }));
+        // The canvas fits the largest page: 72 × 36 and 200 × 50 points at 72 dpi.
+        assert_eq!(document.size(), slopshop_core::Size::new(200, 50));
+        assert_eq!(layers.layer_warnings.len(), 4);
+    }
 
     fn fixture(path: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -138,6 +220,10 @@ mod tests {
         assert_eq!((svg.kind(), svg.page_count()), ("svg", 1));
         assert_eq!(svg.default_dpi(), 96.0);
         assert!(svg.render(1, 96.0).is_err());
+        assert!(matches!(
+            svg.open_pages("shapes", &[0], 96.0, "Background"),
+            Ok(Opened::Image(_))
+        ));
         assert!(
             VectorFile::open(&fixture("jxl/rgb8.jxl"))
                 .unwrap()
