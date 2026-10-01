@@ -57,6 +57,7 @@ mod bmp;
 mod exr;
 mod jpeg;
 mod png;
+mod pnm;
 mod psd;
 mod tga;
 mod tiff;
@@ -85,6 +86,7 @@ use self::exr::ExrWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::png::PngWriter;
+use self::pnm::{PfmWriter, PnmWriter};
 use self::tga::TgaWriter;
 use self::tiff::TiffWriter;
 pub use self::webp::MAX_SIDE as WEBP_MAX_SIDE;
@@ -111,6 +113,10 @@ pub enum ExportFormatKind {
     Psb,
     Bmp,
     Tga,
+    /// Netpbm: PGM, PPM, or PAM with alpha.
+    Pnm,
+    /// Netpbm's float format.
+    Pfm,
 }
 
 impl ExportFormatKind {
@@ -213,6 +219,12 @@ pub enum ExportFormat {
     Tga {
         compression: TgaCompression,
     },
+    /// 8/16-bit sRGB: PGM (gray), PPM (RGB) or PAM (with alpha).
+    Pnm {
+        depth: PngDepth,
+    },
+    /// 32-bit float, linear sRGB primaries, gray or RGB, no alpha.
+    Pfm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -234,16 +246,19 @@ impl ExportFormat {
             ExportFormat::Psb { .. } => ExportFormatKind::Psb,
             ExportFormat::Bmp => ExportFormatKind::Bmp,
             ExportFormat::Tga { .. } => ExportFormatKind::Tga,
+            ExportFormat::Pnm { .. } => ExportFormatKind::Pnm,
+            ExportFormat::Pfm => ExportFormatKind::Pfm,
         }
     }
 
     /// Type of the samples written to the file.
     pub fn sample_type(&self) -> SampleType {
         match self {
-            ExportFormat::Png { depth, .. } => match depth {
+            ExportFormat::Png { depth, .. } | ExportFormat::Pnm { depth } => match depth {
                 PngDepth::U8 => SampleType::U8,
                 PngDepth::U16 => SampleType::U16,
             },
+            ExportFormat::Pfm => SampleType::F32,
             ExportFormat::Tiff { sample, .. } => match sample {
                 TiffSample::U8 => SampleType::U8,
                 TiffSample::U16 => SampleType::U16,
@@ -520,6 +535,7 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Psb => Some(psd::PSB_MAX_SIDE),
         ExportFormatKind::Bmp => Some(bmp::MAX_SIDE),
         ExportFormatKind::Tga => Some(tga::MAX_SIDE),
+        ExportFormatKind::Pnm | ExportFormatKind::Pfm => None,
         ExportFormatKind::Tiff => None,
     }
 }
@@ -527,7 +543,7 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
 /// Whether a file of this format can store an alpha channel (JPEG cannot: its exports are
 /// always flattened over the matte).
 pub fn supports_alpha(kind: ExportFormatKind) -> bool {
-    kind != ExportFormatKind::Jpeg
+    !matches!(kind, ExportFormatKind::Jpeg | ExportFormatKind::Pfm)
 }
 
 /// Whether a file of this format can store `space` and declare it, so that it reads back as
@@ -556,7 +572,11 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
             space.transfer == TransferFunction::Linear && space.primaries.is_valid()
         }
         // No color tagging: sRGB by convention (BMP's header declares it).
-        ExportFormatKind::Bmp | ExportFormatKind::Tga => *space == ColorSpace::SRGB,
+        ExportFormatKind::Bmp | ExportFormatKind::Tga | ExportFormatKind::Pnm => {
+            *space == ColorSpace::SRGB
+        }
+        // Float samples, linear, by convention.
+        ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
     }
 }
 
@@ -573,6 +593,9 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
     match kind {
         ExportFormatKind::Png => *space == ColorSpace::SRGB || icc_writable(),
         ExportFormatKind::Tiff | ExportFormatKind::Jpeg => icc_writable(),
+        // By convention: the sRGB curve, or linear for floats.
+        ExportFormatKind::Pnm => *space == ColorSpace::SRGB,
+        ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
         ExportFormatKind::Exr
         | ExportFormatKind::Webp
         | ExportFormatKind::Psd
@@ -586,7 +609,11 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
 pub fn has_gray(kind: ExportFormatKind) -> bool {
     matches!(
         kind,
-        ExportFormatKind::Png | ExportFormatKind::Tiff | ExportFormatKind::Jpeg
+        ExportFormatKind::Png
+            | ExportFormatKind::Tiff
+            | ExportFormatKind::Jpeg
+            | ExportFormatKind::Pnm
+            | ExportFormatKind::Pfm
     )
 }
 
@@ -684,6 +711,15 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             common_8_bit_space(unique_space),
         ),
         ExportFormatKind::Bmp => (ExportFormat::Bmp, ColorSpace::SRGB),
+        ExportFormatKind::Pnm => {
+            let depth = if rasters.iter().all(|format| format.sample == SampleType::U8) {
+                PngDepth::U8
+            } else {
+                PngDepth::U16
+            };
+            (ExportFormat::Pnm { depth }, ColorSpace::SRGB)
+        }
+        ExportFormatKind::Pfm => (ExportFormat::Pfm, ColorSpace::LINEAR_SRGB),
         ExportFormatKind::Tga => (
             ExportFormat::Tga {
                 compression: TgaCompression::Rle,
@@ -856,7 +892,10 @@ pub fn export_image(
         target,
         ConvertOptions {
             dither: spec.dither,
-            big_endian: spec.format.kind() == ExportFormatKind::Png,
+            big_endian: matches!(
+                spec.format.kind(),
+                ExportFormatKind::Png | ExportFormatKind::Pnm
+            ),
             matte: spec.matte,
             blend_space: spec.blend_space,
         },
@@ -910,6 +949,10 @@ pub fn export_image(
             )),
         },
         ExportFormat::Bmp => FormatWriter::Bmp(Box::new(BmpWriter::new(file, size, target)?)),
+        ExportFormat::Pnm { .. } => {
+            FormatWriter::Pnm(Box::new(PnmWriter::new(file, size, target)?))
+        }
+        ExportFormat::Pfm => FormatWriter::Pfm(Box::new(PfmWriter::new(file, size, target)?)),
         ExportFormat::Tga { compression } => {
             FormatWriter::Tga(Box::new(TgaWriter::new(file, size, target, compression)?))
         }
@@ -957,6 +1000,8 @@ enum FormatWriter {
     WebpLossy(Box<WebpLossyWriter>),
     Bmp(Box<BmpWriter>),
     Tga(Box<TgaWriter>),
+    Pnm(Box<PnmWriter>),
+    Pfm(Box<PfmWriter>),
 }
 
 impl FormatWriter {
@@ -970,6 +1015,8 @@ impl FormatWriter {
             FormatWriter::WebpLossy(w) => w.write_rows(first_row, rows),
             FormatWriter::Bmp(w) => w.write_rows(first_row, rows),
             FormatWriter::Tga(w) => w.write_rows(first_row, rows),
+            FormatWriter::Pnm(w) => w.write_rows(first_row, rows),
+            FormatWriter::Pfm(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -983,6 +1030,8 @@ impl FormatWriter {
             FormatWriter::WebpLossy(w) => (*w).finish(),
             FormatWriter::Bmp(w) => (*w).finish(),
             FormatWriter::Tga(w) => (*w).finish(),
+            FormatWriter::Pnm(w) => (*w).finish(),
+            FormatWriter::Pfm(w) => (*w).finish(),
         }
     }
 }
