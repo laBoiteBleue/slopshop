@@ -169,6 +169,9 @@ export type SelectionShape =
   | { kind: "rectangle" | "ellipse"; left: number; top: number; right: number; bottom: number }
   | { kind: "polygon"; points: [number, number][] };
 
+/** A new layer mask: everything shown or hidden, or the selection shown or hidden. */
+export type LayerMaskKind = "revealAll" | "hideAll" | "revealSelection" | "hideSelection";
+
 /** How a new shape combines with the selection. */
 export type SelectionMode = "replace" | "add" | "subtract" | "intersect";
 
@@ -891,6 +894,15 @@ export const engine = {
   reselect: (documentId: number) => serial(() => invoke<DocumentView>("reselect", { documentId })),
   invertSelection: (documentId: number) =>
     serial(() => invoke<DocumentView>("invert_selection", { documentId })),
+  /**
+   * Layer > Layer Mask: Reveal All, Hide All, Reveal Selection or Hide Selection on the layers
+   * without a mask among `layerIds`, as one undo entry (a mask from the selection deselects).
+   */
+  addLayerMasks: (documentId: number, layerIds: number[], kind: LayerMaskKind) =>
+    serial(() => invoke<DocumentView>("add_layer_masks", { documentId, layerIds, kind })),
+  /** Image > Crop with a selection: the canvas becomes the selection's bounds. */
+  cropToSelection: (documentId: number) =>
+    serial(() => invoke<DocumentView>("crop_to_selection", { documentId })),
   /** Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. */
   setQuickMask: (documentId: number, on: boolean) =>
     serial(() => invoke<DocumentView>("set_quick_mask", { documentId, on })),
