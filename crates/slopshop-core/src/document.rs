@@ -248,6 +248,9 @@ pub struct Document {
     blend_space: BlendSpace,
     /// Bottom to top.
     layers: Vec<Layer>,
+    /// What the next operation applies to (ADR 0024): a gray coverage mask at the origin;
+    /// `None` when nothing is selected. Not saved with the document.
+    selection: Option<crate::selection::Selection>,
     next_layer_id: u64,
     revision: u64,
 }
@@ -261,6 +264,7 @@ impl Document {
             working_space: WORKING_SPACE,
             blend_space: BlendSpace::default(),
             layers: Vec::new(),
+            selection: None,
             next_layer_id: 1,
             revision: 0,
         }
@@ -288,6 +292,7 @@ impl Document {
             working_space,
             blend_space,
             layers,
+            selection: None,
             next_layer_id,
             revision: 0,
         })
@@ -309,6 +314,11 @@ impl Document {
     /// Where layers are blended.
     pub fn blend_space(&self) -> BlendSpace {
         self.blend_space
+    }
+
+    /// The selection (ADR 0024), `None` when nothing is selected.
+    pub fn selection(&self) -> Option<&crate::selection::Selection> {
+        self.selection.as_ref()
     }
 
     /// The top-level layers, bottom to top (groups hold the others).
@@ -421,6 +431,13 @@ impl Document {
 
     pub(crate) fn set_blend_space(&mut self, space: BlendSpace) -> BlendSpace {
         std::mem::replace(&mut self.blend_space, space)
+    }
+
+    pub(crate) fn set_selection(
+        &mut self,
+        selection: Option<crate::selection::Selection>,
+    ) -> Option<crate::selection::Selection> {
+        std::mem::replace(&mut self.selection, selection)
     }
 
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {

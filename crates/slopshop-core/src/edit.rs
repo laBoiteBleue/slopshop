@@ -92,6 +92,10 @@ pub enum Edit {
         id: LayerId,
         pass_through: bool,
     },
+    /// Select (`Some`) or deselect (`None`), ADR 0024.
+    SetSelection {
+        selection: Option<crate::selection::Selection>,
+    },
     /// Several edits applied in order as a single unit: all of them or none.
     Batch(Vec<Edit>),
 }
@@ -224,6 +228,9 @@ impl Edit {
             }
             Edit::SetBlendSpace { space } => Edit::SetBlendSpace {
                 space: doc.set_blend_space(space),
+            },
+            Edit::SetSelection { selection } => Edit::SetSelection {
+                selection: doc.set_selection(selection),
             },
             Edit::SetCanvasSize { size } => {
                 if size.is_empty() {
