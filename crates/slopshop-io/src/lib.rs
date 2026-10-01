@@ -12,6 +12,7 @@
 //!   imported with a warning (first page/frame only, approximated tone curve).
 
 mod atomic;
+mod avif;
 pub mod collection;
 pub mod export;
 mod icc;
@@ -269,6 +270,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if jxl::is_jxl(&head) {
         drop(file);
         jxl::decode(path)?
+    } else if avif::is_avif(&head) {
+        drop(file);
+        avif::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -672,8 +676,9 @@ fn heif_brand(head: &[u8]) -> Option<ImportError> {
         )
         .collect();
     let any = |names: &[&[u8; 4]]| brands.iter().any(|b| names.iter().any(|n| *b == *n));
+    // AVIF is read (`avif`); it also names the generic HEIF brands.
     if any(&[b"avif", b"avis"]) {
-        return Some(ImportError::NotYetSupported("AVIF"));
+        return None;
     }
     let heic = [
         b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs",
@@ -1034,11 +1039,7 @@ mod tests {
     fn recognized_formats_that_are_not_supported_yet() {
         let cases: [(&str, Vec<u8>, &str); 6] = [
             ("photo.heic", b"\0\0\0\x18ftypheic\0\0\0\0".to_vec(), "heic"),
-            (
-                "photo.avif",
-                b"\0\0\0\x18ftypavif\0\0\0\0".to_vec(),
-                "notYetSupported",
-            ),
+            ("scan.pdf", b"%PDF-1.7".to_vec(), "notYetSupported"),
             ("scan.j2k", vec![0xFF, 0x4F, 0xFF, 0x51], "notYetSupported"),
             // A CMYK Photoshop document (header only): refused until the engine has CMYK.
             (
@@ -1244,12 +1245,9 @@ mod tests {
             }
             v
         };
+        assert!(heif_brand(&ftyp(b"mif1", &[b"mif1", b"avif", b"miaf"])).is_none());
+        assert!(heif_brand(&ftyp(b"avis", &[])).is_none());
         let cases = [
-            (
-                ftyp(b"mif1", &[b"mif1", b"avif", b"miaf"]),
-                "notYetSupported",
-            ),
-            (ftyp(b"avis", &[]), "notYetSupported"),
             (ftyp(b"hevs", &[]), "heic"),
             (ftyp(b"mif1", &[b"mif1", b"heic"]), "heic"),
             (ftyp(b"msf1", &[b"hevm"]), "heic"),
