@@ -9,9 +9,15 @@
     toDocument: (clientX: number, clientY: number) => [number, number];
     /** Document pixels per CSS pixel. */
     docPerCss: number;
-    /** Space is held: a drag pans (the hand tool), overlays let it through. */
+    /** A drag pans (the Hand tool, or Space held): overlays let it through. */
     hand: boolean;
   };
+
+  /**
+   * What a left press on the image does: move layers, pan, zoom, or nothing (`null`: an overlay
+   * such as the crop frame handles the pointer).
+   */
+  export type PointerTool = "move" | "hand" | "zoom" | null;
 
   export type FrameStats = {
     /** 1 = 100%. */
@@ -34,6 +40,8 @@
     documentId,
     revision,
     native = false,
+    tool = "move",
+    zoomOut = false,
     onframe,
     onmovestart,
     onmove,
@@ -51,6 +59,9 @@
      * instead of sending frames. Read once, like the document.
      */
     native?: boolean;
+    tool?: PointerTool;
+    /** The Zoom tool zooms out on a click (Alt inverts it). */
+    zoomOut?: boolean;
     onframe?: (stats: FrameStats) => void;
     /**
      * The Move tool (ADR 0017): a left drag on the image starts at document point (`x`, `y`)
@@ -424,8 +435,12 @@
     };
   });
 
-  // Hand tool: drag with the middle button, or hold Space and drag.
+  // Hand tool: drag with the middle button, or hold Space and drag, or pick the tool.
   let spaceHeld = $state(false);
+  /** Alt held: the Zoom tool zooms the other way. */
+  let altHeld = $state(false);
+  const hand = $derived(spaceHeld || tool === "hand");
+  const zoomingOut = $derived(zoomOut !== altHeld);
   let panning = $state<{ pointerId: number; x: number; y: number } | null>(null);
 
   function isTextField(target: EventTarget | null): boolean {
@@ -439,9 +454,15 @@
   let moving = $state<{ pointerId: number; x: number; y: number } | null>(null);
 
   function onPointerDown(e: PointerEvent) {
-    const hand = e.button === 1 || (e.button === 0 && spaceHeld);
-    if (!hand) {
-      if (e.button === 0 && onmove) {
+    const pans = e.button === 1 || (e.button === 0 && hand);
+    if (!pans) {
+      if (e.button === 0 && tool === "zoom") {
+        // Zoom tool: a click steps to the next zoom preset about the pointer (Alt: out).
+        remainingLogZoom = 0;
+        void changeView({ kind: "step", zoomIn: zoomOut === e.altKey, ...devicePoint(e) });
+        return;
+      }
+      if (e.button === 0 && tool === "move") {
         container.setPointerCapture(e.pointerId);
         moving = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
         const [x, y] = toDocument(e.clientX, e.clientY);
@@ -507,7 +528,7 @@
         ];
       },
       docPerCss: dpr / view.zoom,
-      hand: spaceHeld,
+      hand,
     };
   });
 
@@ -520,6 +541,7 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    altHeld = e.altKey;
     if (isTextField(e.target)) return;
     if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // Space would otherwise press the focused button or scroll.
@@ -548,6 +570,7 @@
   }
 
   function onWindowKeyup(e: KeyboardEvent) {
+    altHeld = e.altKey;
     if (e.key === " ") spaceHeld = false;
   }
 </script>
@@ -557,6 +580,7 @@
   onkeyup={onWindowKeyup}
   onblur={() => {
     spaceHeld = false;
+    altHeld = false;
     panning = null;
     if (moving) {
       moving = null;
@@ -568,7 +592,9 @@
 <div
   class="viewport"
   class:native={presentsNatively}
-  class:hand={spaceHeld}
+  class:hand
+  class:zoom-in={tool === "zoom" && !hand && !zoomingOut}
+  class:zoom-out={tool === "zoom" && !hand && zoomingOut}
   class:panning={panning !== null}
   bind:this={container}
   role="presentation"
@@ -578,7 +604,7 @@
   onpointercancel={endPan}
   onauxclick={(e) => e.preventDefault()}
   ondblclick={(e) => {
-    if (e.button === 0 && onmove && !spaceHeld) ondoubleclick?.();
+    if (e.button === 0 && tool === "move" && !hand) ondoubleclick?.();
   }}
 >
   <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
@@ -626,6 +652,14 @@
 
   .viewport.panning {
     cursor: grabbing;
+  }
+
+  .viewport.zoom-in {
+    cursor: zoom-in;
+  }
+
+  .viewport.zoom-out {
+    cursor: zoom-out;
   }
 
   canvas {
