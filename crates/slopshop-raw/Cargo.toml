@@ -1,0 +1,20 @@
+[package]
+name = "slopshop-raw"
+description = "SlopShop's camera RAW helper: a separate process that decodes RAW files with rawler (LGPL-2.1) and develops them as shot (ADR 0023)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# Color matrices (Rec.2020 primaries, inverse), dependency-free.
+slopshop-core.workspace = true
+# Camera RAW decoding (hundreds of cameras, DNG): LGPL-2.1, so it lives in this separate,
+# replaceable executable only, never in the editor's own binaries (ADR 0006, 0022). Default
+# features: none are optional except its CLI and inspector.
+rawler = { version = "0.8.0", default-features = false }
+
+[lints]
+workspace = true

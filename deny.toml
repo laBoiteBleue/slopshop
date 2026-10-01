@@ -33,6 +33,9 @@ exceptions = [
     # jpeg-encoder is (MIT OR Apache-2.0) AND IJG: the IJG license only asks for an
     # acknowledgement in the documentation (ADR 0010). Allowed for this crate only.
     { allow = ["IJG"], crate = "jpeg-encoder" },
+    # rawler (camera RAW decoding) is LGPL-2.1: used only by slopshop-raw, a separate and
+    # replaceable executable the editor runs for each RAW import (ADR 0006, ADR 0023).
+    { allow = ["LGPL-2.1"], crate = "rawler" },
 ]
 
 [bans]

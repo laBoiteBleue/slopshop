@@ -27,6 +27,7 @@ mod orient;
 pub mod pdf;
 mod pfm;
 mod psd;
+mod raw;
 pub mod slop;
 mod svg;
 mod tiff_import;
@@ -303,7 +304,11 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     if let Some(error) = not_supported_yet(&head, path) {
         return Err(error);
     }
-    let decoded = if is_tiff(&head) {
+    // Camera RAW files are often TIFF containers: their extension is checked before the content.
+    let decoded = if raw::is_raw(path) {
+        drop(file);
+        raw::decode(path)?
+    } else if is_tiff(&head) {
         tiff_import::decode(file)?
     } else if psd::is_psd(&head) {
         drop(file);
@@ -684,14 +689,6 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    // Camera RAW files are often TIFF containers: check the extension before the content.
-    const RAW: [&str; 24] = [
-        "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "rwl", "pef",
-        "srw", "dng", "3fr", "fff", "iiq", "x3f", "erf", "kdc", "dcr", "mrw", "mos",
-    ];
-    if RAW.contains(&extension.as_str()) {
-        return Some(ImportError::NotYetSupported("camera RAW"));
-    }
     if let Some(error) = heif_brand(head) {
         return Some(error);
     }
@@ -1101,7 +1098,7 @@ mod tests {
                 .concat(),
                 "notYetSupported",
             ),
-            ("shot.cr2", b"II*\0\x10\0\0\0CR".to_vec(), "notYetSupported"),
+            ("art.ora", b"PK".to_vec(), "notYetSupported"),
             ("art.kra", b"PK".to_vec(), "notYetSupported"),
         ];
         for (name, bytes, code) in cases {

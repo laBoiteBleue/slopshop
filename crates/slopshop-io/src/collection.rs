@@ -25,11 +25,13 @@ const OPENABLE: [&str; 42] = [
 /// hold, well below what would fill a disk by mistake.
 const MAX_ENTRY_BYTES: u64 = 64 << 30;
 
-/// Whether a file of this name is one SlopShop opens (by extension, any case).
+/// Whether a file of this name is one SlopShop opens (by extension, any case): camera RAW
+/// files included.
 pub fn is_openable(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| OPENABLE.contains(&e.to_ascii_lowercase().as_str()))
+        || crate::raw::is_raw(path)
 }
 
 /// Whether a file is a zip archive (by extension, any case).
