@@ -54,11 +54,19 @@ built. Contributors: propose here first.
   Duplicate (Ctrl+J); right-click menu; drag layers onto another tab to copy them there, with a
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
-- Move tool (the default action on the image, until the tools palette): drag moves the selected
+- Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
+  startup), Crop (C), Hand (H), Zoom (Z); the active one is highlighted, its name and key in the
+  tooltip. An options bar under the menu bar shows the active tool's icon and settings. Hand: a
+  drag pans (as Space+drag and the middle button do with any tool); a double-click on its
+  button fits the image on screen. Zoom: a click zooms in about the pointer, Alt+click out; the
+  options bar picks zoom in or out (Alt inverts it), and has 100% and Fit on Screen, like the
+  Hand tool's; a double-click on its button shows 100%. While a crop frame or a Free Transform
+  box waits on the image, the options bar has Cancel and Commit buttons at its right end.
+- Move tool: drag moves the selected
   layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag. The pointer stays
-  the normal arrow over the image (no move cross). Auto-Select:
+  the normal arrow over the image (no move cross). Auto-Select (options bar, on by default):
   the drag takes the layer whose pixels are under the pointer (inside a group, the layer itself;
-  a layer already selected keeps the whole selection moving; Ctrl held: no auto-select). Snap:
+  a layer already selected keeps the whole selection moving); Ctrl held inverts it. Snap:
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
   turns it off.
@@ -93,7 +101,9 @@ built. Contributors: propose here first.
   shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
   a corner keeps the proportions), outside to draw a new one; edges snap to the canvas, the
   layers and their sizes, with magenta guides (Ctrl: freely). A readout shows the size. Enter,
-  a double-click inside or a click outside applies; Esc cancels. Whole pixels only, and nothing
+  a double-click inside or a click outside applies; Esc starts the frame over. As in Photoshop,
+  the tool stays active: a new frame starts on the cropped canvas (and follows an undo); another
+  tool drops the frame. Whole pixels only, and nothing
   is deleted: cropped pixels stay outside the canvas. Image > Crop to a selection comes with
   selections.
 
@@ -153,6 +163,8 @@ built. Contributors: propose here first.
 
 ### Tools (when they arrive)
 
-- [ ] Tools palette on the left in Photoshop's order, with its single-key shortcuts (V, M, L, W,
-      B, E…) and Shift+key to cycle a tool group; options bar under the menu bar.
+- [ ] Tool groups in one toolbar slot (a small corner mark, a long press or right-click lists
+      them) and Shift+key to cycle a group, as in Photoshop, once a slot holds several tools.
+- [ ] The active tool and its options remembered across sessions, as in Photoshop.
+- [ ] Spring-loaded tools: holding a tool's key uses it until the key is released.
 - [ ] Brush size and hardness with [ and ], Alt+right-drag to resize on the canvas.

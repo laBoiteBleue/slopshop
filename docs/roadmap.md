@@ -155,10 +155,16 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 
 ## Phase 3 — Selection and painting
 
+Order (maintainer, 2026-10-01): the tools, then selections, then painting, so that the brush
+respects the selection from the start. Painting follows Photoshop's model: a stroke rewrites the
+layer's tiles copy-on-write and undo keeps the old tiles by reference; non-destructive work
+paints on an empty layer or in a mask.
+
+- [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move, Crop, Hand
+      and Zoom tools with Photoshop's keys; the other tools come with their features
 - [ ] Selection model (as masks), marquee/lasso, selection → mask
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
-- [ ] Tool system and options bar
 
 ## Phase 4 — Very large images
 
