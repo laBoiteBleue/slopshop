@@ -428,7 +428,10 @@ export type ExportFormat =
   | "hdr"
   | "ico"
   | "gif"
-  | "dds";
+  | "dds"
+  | "fits"
+  | "dcm"
+  | "pdf";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
@@ -625,6 +628,30 @@ export const EXPORT_FORMATS: Record<
     subsamplings: [],
     alpha: true,
     gray: false,
+  },
+  fits: {
+    extensions: ["fits", "fit", "fts"],
+    samples: ["u8", "u16", "f32"],
+    compressions: [],
+    subsamplings: [],
+    alpha: false,
+    gray: true,
+  },
+  dcm: {
+    extensions: ["dcm", "dicom"],
+    samples: ["u8", "u16"],
+    compressions: [],
+    subsamplings: [],
+    alpha: false,
+    gray: true,
+  },
+  pdf: {
+    extensions: ["pdf"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: true,
   },
 };
 

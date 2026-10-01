@@ -762,6 +762,10 @@ pub enum ExportFormatId {
     Ico,
     Gif,
     Dds,
+    Fits,
+    #[serde(rename = "dcm")]
+    Dicom,
+    Pdf,
 }
 
 impl ExportFormatId {
@@ -786,6 +790,9 @@ impl ExportFormatId {
             ExportFormatId::Ico => ExportFormatKind::Ico,
             ExportFormatId::Gif => ExportFormatKind::Gif,
             ExportFormatId::Dds => ExportFormatKind::Dds,
+            ExportFormatId::Fits => ExportFormatKind::Fits,
+            ExportFormatId::Dicom => ExportFormatKind::Dicom,
+            ExportFormatId::Pdf => ExportFormatKind::Pdf,
         }
     }
 }
@@ -944,6 +951,24 @@ impl ExportSpecDto {
             ExportFormat::Ico => (ExportFormatId::Ico, S::U8, None),
             ExportFormat::Gif => (ExportFormatId::Gif, S::U8, None),
             ExportFormat::Dds => (ExportFormatId::Dds, S::U8, None),
+            ExportFormat::Pdf => (ExportFormatId::Pdf, S::U8, None),
+            ExportFormat::Fits { sample } => (
+                ExportFormatId::Fits,
+                match sample {
+                    TiffSample::U8 => S::U8,
+                    TiffSample::U16 => S::U16,
+                    TiffSample::F32 => S::F32,
+                },
+                None,
+            ),
+            ExportFormat::Dicom { depth } => (
+                ExportFormatId::Dicom,
+                match depth {
+                    PngDepth::U8 => S::U8,
+                    PngDepth::U16 => S::U16,
+                },
+                None,
+            ),
             ExportFormat::Jxl { depth } => (
                 ExportFormatId::Jxl,
                 match depth {
@@ -1124,6 +1149,31 @@ impl ExportSpecDto {
                     },
                 }
             }
+            ExportFormatId::Fits => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                ExportFormat::Fits {
+                    sample: match self.sample {
+                        S::U8 => TiffSample::U8,
+                        S::U16 => TiffSample::U16,
+                        S::F32 => TiffSample::F32,
+                        S::F16 => return Err(sample()),
+                    },
+                }
+            }
+            ExportFormatId::Dicom => {
+                if self.compression.is_some() {
+                    return Err(compression());
+                }
+                ExportFormat::Dicom {
+                    depth: match self.sample {
+                        S::U8 => PngDepth::U8,
+                        S::U16 => PngDepth::U16,
+                        S::F16 | S::F32 => return Err(sample()),
+                    },
+                }
+            }
             ExportFormatId::Avif => {
                 if self.compression.is_some() {
                     return Err(compression());
@@ -1143,7 +1193,8 @@ impl ExportSpecDto {
             | ExportFormatId::Hdr
             | ExportFormatId::Ico
             | ExportFormatId::Gif
-            | ExportFormatId::Dds => {
+            | ExportFormatId::Dds
+            | ExportFormatId::Pdf => {
                 if self.compression.is_some() {
                     return Err(compression());
                 }
@@ -1155,6 +1206,7 @@ impl ExportSpecDto {
                     ExportFormatId::Ico => (ExportFormat::Ico, S::U8),
                     ExportFormatId::Gif => (ExportFormat::Gif, S::U8),
                     ExportFormatId::Dds => (ExportFormat::Dds, S::U8),
+                    ExportFormatId::Pdf => (ExportFormat::Pdf, S::U8),
                     ExportFormatId::Pfm => (ExportFormat::Pfm, S::F32),
                     other => return Err(invalid(format!("{other:?} settings"))),
                 };
@@ -1389,6 +1441,9 @@ mod tests {
             ExportFormatId::Ico,
             ExportFormatId::Gif,
             ExportFormatId::Dds,
+            ExportFormatId::Fits,
+            ExportFormatId::Dicom,
+            ExportFormatId::Pdf,
         ] {
             let spec = default_spec(format.kind(), &document);
             let dto = ExportSpecDto::new(&spec);
@@ -1399,6 +1454,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ExportFormatId::Farbfeld).unwrap(),
             r#""ff""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ExportFormatId::Dicom).unwrap(),
+            r#""dcm""#
         );
         let tiff = ExportSpec {
             format: ExportFormat::Tiff {
@@ -1521,6 +1580,47 @@ mod tests {
             }),
             Err("unsupportedSpace"),
             "Radiance HDR is linear only"
+        );
+        let fits = |sample| {
+            move |d: &mut ExportSpecDto| {
+                d.format = ExportFormatId::Fits;
+                d.sample = sample;
+                d.compression = None;
+                d.keep_alpha = false;
+                d.gray = true;
+            }
+        };
+        assert_eq!(with(&fits(S::F32)), Ok(()), "float FITS");
+        assert_eq!(with(&fits(S::F16)), invalid, "half-float FITS");
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Dicom;
+                d.sample = S::F32;
+                d.compression = None;
+                d.keep_alpha = false;
+            }),
+            invalid,
+            "float DICOM"
+        );
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Pdf;
+                d.sample = S::U8;
+                d.compression = None;
+                d.gray = true;
+                d.space = "display-p3".to_owned();
+            }),
+            Ok(()),
+            "gray PDF"
+        );
+        assert_eq!(
+            with(&|d| {
+                d.format = ExportFormatId::Pdf;
+                d.sample = S::U16;
+                d.compression = None;
+            }),
+            invalid,
+            "16-bit PDF"
         );
         assert_eq!(with(&|d| d.gray = true), Ok(()), "gray PNG");
         assert_eq!(
