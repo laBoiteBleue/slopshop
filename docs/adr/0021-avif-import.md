@@ -37,3 +37,7 @@ allowed by `deny.toml`). rav1d's API is dav1d's C one: calling it needs `unsafe`
 - The container reader is ours to maintain; grids are implemented, but only the single-image
   files written by libheif were available as test files.
 - Image sequences (animated AVIF) give their still image, reported.
+- Export follows the same rule: rav1e (BSD-2-Clause) without its assembly encodes the AV1
+  frames, in parallel tiles, and avif-serialize (BSD-3-Clause) writes the container with the
+  color description we choose (ravif, built on both, only writes sRGB). rav1e has no lossless
+  mode: AVIF export is lossy only.
