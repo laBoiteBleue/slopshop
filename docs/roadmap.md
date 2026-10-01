@@ -51,6 +51,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] PSB export (above 30,000 px per side), streamed: memory does not grow with the document
 - [x] JPEG XL import (jxl-oxide)
 - [x] AVIF import (rav1d without assembly, [ADR 0021](adr/0021-avif-import.md))
+- [x] AVIF export (rav1e without assembly): 8/10-bit, alpha, gray, HDR spaces
 - [ ] Import phases 2–6: JPEG 2000; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)
