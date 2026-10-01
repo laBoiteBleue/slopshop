@@ -13,7 +13,7 @@ use slopshop_core::{
     BlendMode, CancelToken, Document, Edit, Layer, LayerContent, RasterImage, Rect, Size,
 };
 use slopshop_io::export::{
-    ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
+    AvifDepth, ExportFormat, ExportFormatKind, ExportNotice, ExportReport, ExportSpec, ExrSample,
     JpegSubsampling, PngCompression, PngDepth, PsdDepth, TgaCompression, TiffCompression,
     TiffSample, WebpCompression, default_spec, export_image, export_psd, has_gray, supports_alpha,
     supports_gray, supports_space,
@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 11] = [
+const FORMATS: [ExportFormatKind; 12] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -45,6 +45,7 @@ const FORMATS: [ExportFormatKind; 11] = [
     ExportFormatKind::Tga,
     ExportFormatKind::Pnm,
     ExportFormatKind::Pfm,
+    ExportFormatKind::Avif,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -100,6 +101,15 @@ impl Depth {
         }
     }
 
+    /// AVIF: `u16` writes 10-bit samples.
+    fn avif(self) -> Option<AvifDepth> {
+        match self {
+            Depth::U8 => Some(AvifDepth::U8),
+            Depth::U16 => Some(AvifDepth::U10),
+            Depth::F16 | Depth::F32 => None,
+        }
+    }
+
     fn psd(self) -> Option<PsdDepth> {
         match self {
             Depth::U8 => Some(PsdDepth::U8),
@@ -114,6 +124,7 @@ impl Depth {
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
             ExportFormatKind::Pfm => self == Depth::F32,
+            ExportFormatKind::Avif => self.avif().is_some(),
             ExportFormatKind::Jpeg
             | ExportFormatKind::Webp
             | ExportFormatKind::Bmp
@@ -203,7 +214,8 @@ impl Compression {
             | ExportFormatKind::Psb
             | ExportFormatKind::Bmp
             | ExportFormatKind::Pnm
-            | ExportFormatKind::Pfm => false,
+            | ExportFormatKind::Pfm
+            | ExportFormatKind::Avif => false,
         }
     }
 }
@@ -217,7 +229,7 @@ struct Args {
     depth: Option<Depth>,
     space: Option<ColorSpace>,
     compression: Option<Compression>,
-    /// `--quality`: JPEG 1 to 100, lossy WebP 0 to 100.
+    /// `--quality`: JPEG 1 to 100, lossy WebP and AVIF 0 to 100.
     quality: Option<u8>,
     /// `--subsampling` (JPEG).
     subsampling: Option<JpegSubsampling>,
@@ -432,10 +444,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             ExportFormatKind::Webp if lossless => {
                 return Err("--quality is not available for lossless WebP".to_owned());
             }
-            ExportFormatKind::Webp => {}
+            ExportFormatKind::Webp | ExportFormatKind::Avif => {}
             _ => {
                 return Err(format!(
-                    "--quality is not available for {name} (JPEG and lossy WebP only)"
+                    "--quality is not available for {name} (JPEG, lossy WebP and AVIF only)"
                 ));
             }
         }
@@ -635,6 +647,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "tga" => Some(ExportFormatKind::Tga),
         "pnm" | "ppm" | "pgm" | "pam" => Some(ExportFormatKind::Pnm),
         "pfm" => Some(ExportFormatKind::Pfm),
+        "avif" => Some(ExportFormatKind::Avif),
         _ => None,
     }
 }
@@ -653,6 +666,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Tga => "tga",
         ExportFormatKind::Pnm => "pnm",
         ExportFormatKind::Pfm => "pfm",
+        ExportFormatKind::Avif => "avif",
     }
 }
 
@@ -669,6 +683,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Tga => "Targa",
         ExportFormatKind::Pnm => "Netpbm (PGM, PPM, PAM)",
         ExportFormatKind::Pfm => "Portable Float Map",
+        ExportFormatKind::Avif => "AVIF",
     }
 }
 
@@ -740,6 +755,10 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
         },
         ExportFormat::Pfm => ExportFormat::Pfm,
+        ExportFormat::Avif { depth, quality } => ExportFormat::Avif {
+            depth: args.depth.and_then(Depth::avif).unwrap_or(depth),
+            quality: args.quality.unwrap_or(quality),
+        },
         ExportFormat::Tga { compression } => ExportFormat::Tga {
             compression: args
                 .compression
@@ -809,6 +828,13 @@ fn describe(spec: &ExportSpec) -> String {
             None,
         ),
         ExportFormat::Pfm => (Depth::F32, None),
+        ExportFormat::Avif { depth, .. } => (
+            match depth {
+                AvifDepth::U8 => Depth::U8,
+                AvifDepth::U10 => Depth::U16,
+            },
+            None,
+        ),
         ExportFormat::Tga { compression } => (
             Depth::U8,
             Some(match compression {
@@ -852,7 +878,8 @@ fn describe(spec: &ExportSpec) -> String {
     }
     if let ExportFormat::Webp {
         compression: WebpCompression::Lossy { quality },
-    } = spec.format
+    }
+    | ExportFormat::Avif { quality, .. } = spec.format
     {
         text += &format!(" --quality {quality}");
     }
