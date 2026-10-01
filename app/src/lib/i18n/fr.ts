@@ -158,6 +158,8 @@ const fr: Messages = {
     "Une partie du contenu de la page PDF n'a pas pu être dessinée (police ou image non prise en charge)",
   "open.warning.dicomWindowApproximated":
     "La fenêtre d'affichage DICOM (sigmoïde ou table) a été approchée par une fenêtre linéaire",
+  "open.warning.fitsValuesScaled":
+    "Les valeurs flottantes FITS ont été ramenées de leur plage à 0–1",
   "open.warning.colorInfoUnsupported":
     "Informations de couleur du fichier pas encore prises en charge : couleurs lues en sRGB",
 

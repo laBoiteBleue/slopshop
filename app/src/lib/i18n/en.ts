@@ -157,6 +157,7 @@ const en = {
     "Some content of the PDF page could not be drawn (an unsupported font or image)",
   "open.warning.dicomWindowApproximated":
     "The DICOM display window (sigmoid or lookup table) was approximated by a linear window",
+  "open.warning.fitsValuesScaled": "The FITS float values were scaled from their range to 0–1",
   "open.warning.colorInfoUnsupported":
     "The file's color information is not supported yet: colors read as sRGB",
 
