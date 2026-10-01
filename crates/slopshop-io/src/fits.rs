@@ -41,11 +41,11 @@ pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
         .map_or_else(|| "FITS".to_owned(), |s| s.to_string_lossy().into_owned());
     match levels {
         // An isolated group: the stretch changes this image only.
-        Some(levels) => adjusted::layered(vec![adjusted::Slice {
-            name,
-            imported,
-            levels: Some(("STF auto".to_owned(), levels)),
-        }]),
+        Some(levels) => adjusted::layered(
+            name.clone(),
+            vec![(name, imported)],
+            Some(("STF auto".to_owned(), levels)),
+        ),
         None => Ok(Opened::Image(imported)),
     }
 }

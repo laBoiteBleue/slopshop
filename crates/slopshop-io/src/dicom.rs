@@ -46,9 +46,9 @@ pub(crate) fn is_dicom(head: &[u8]) -> bool {
     head.get(128..132) == Some(b"DICM")
 }
 
-/// The file as a document: every frame (slice), the first on top, each with the window as
-/// Levels in an isolated group of its own (gray images); a single image alone when there is
-/// nothing to adjust.
+/// The file as a document: one isolated group of every frame (slice), the first on top, and
+/// above them the window as one Levels for all (gray images); a single image alone when there
+/// is nothing to adjust.
 pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
     let scan = read(path, true)?;
     let stem = path
@@ -59,24 +59,20 @@ pub(crate) fn open(path: &Path) -> Result<Opened, ImportError> {
         let frame = scan.frames.into_iter().next().ok_or_else(no_frame)?;
         return finish(frame).map(Opened::Image);
     }
-    let levels = scan.window.map(|w| (w.name, w.levels));
-    let slices = scan
+    let images = scan
         .frames
         .into_iter()
         .enumerate()
         .map(|(i, frame)| {
-            Ok(adjusted::Slice {
-                name: if count == 1 {
-                    stem.clone()
-                } else {
-                    format!("{stem} {}/{count}", i + 1)
-                },
-                imported: finish(frame)?,
-                levels: levels.clone(),
-            })
+            let name = if count == 1 {
+                stem.clone()
+            } else {
+                format!("{stem} {}/{count}", i + 1)
+            };
+            Ok((name, finish(frame)?))
         })
         .collect::<Result<_, ImportError>>()?;
-    adjusted::layered(slices)
+    adjusted::layered(stem, images, scan.window.map(|w| (w.name, w.levels)))
 }
 
 /// The first frame as shown: the window applied to the samples (reported as a flattened
@@ -675,8 +671,10 @@ mod tests {
         }
     }
 
-    /// The children of an isolated group: its image, then its Levels.
-    fn slice(layer: &slopshop_core::document::Layer) -> (&str, &str) {
+    /// The names of an isolated group's children, top first, and whether the top one is Levels.
+    fn group(document: &slopshop_core::Document) -> (String, Vec<String>, bool) {
+        assert_eq!(document.layers().len(), 1);
+        let layer = &document.layers()[0];
         let LayerContent::Group {
             children,
             pass_through: false,
@@ -684,15 +682,14 @@ mod tests {
         else {
             panic!("{} is not an isolated group", layer.name);
         };
-        assert_eq!(children.len(), 2);
-        assert!(matches!(children[0].content, LayerContent::Raster { .. }));
-        assert!(matches!(
-            children[1].content,
-            LayerContent::Adjustment {
+        let levels = matches!(
+            children.last().map(|c| &c.content),
+            Some(LayerContent::Adjustment {
                 adjustment: Adjustment::Levels { .. }
-            }
-        ));
-        (&children[0].name, &children[1].name)
+            })
+        );
+        let names = children.iter().rev().map(|c| c.name.clone()).collect();
+        (layer.name.clone(), names, levels)
     }
 
     #[test]
@@ -701,26 +698,33 @@ mod tests {
             panic!("expected layers");
         };
         let document = layers.document;
-        assert_eq!(document.layers().len(), 1);
-        assert_eq!(document.layers()[0].name, "ct");
-        assert_eq!(slice(&document.layers()[0]), ("ct", "WL 40 / WW 400"));
+        assert_eq!(
+            group(&document),
+            ("ct".into(), vec!["WL 40 / WW 400".into(), "ct".into()], true)
+        );
         assert_eq!(document.blend_space(), BlendSpace::Perceptual);
         assert_eq!(layers.layer_warnings.len(), document.all_layers().count());
     }
 
     #[test]
-    fn every_slice_is_a_group_of_its_own_the_first_on_top() {
+    fn every_slice_shares_one_window_above_them_the_first_on_top() {
         let Opened::Layers(layers) = open(&fixture("frames.dcm")).unwrap() else {
             panic!("expected layers");
         };
-        let document = layers.document;
-        let names: Vec<_> = document.layers().iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["frames 2/2", "frames 1/2"]);
-        for layer in document.layers() {
-            slice(layer);
-        }
+        assert_eq!(
+            group(&layers.document),
+            (
+                "frames".into(),
+                vec![
+                    "WL 32000 / WW 64000".into(),
+                    "frames 1/2".into(),
+                    "frames 2/2".into()
+                ],
+                true
+            )
+        );
         assert!(!layers.warnings.contains(&ImportWarning::FirstFrameOnly));
-        assert_eq!(layers.layer_warnings.len(), 6);
+        assert_eq!(layers.layer_warnings.len(), 4);
     }
 
     #[test]
