@@ -4,7 +4,8 @@
    * or documents (same content key) is fetched once. Oldest entries go first beyond the limit.
    */
   const cache = new Map<string, ImageData>();
-  const CACHE_LIMIT = 256;
+  /** Enough for a stack of hundreds of slices (a thumbnail is a few tens of kilobytes). */
+  const CACHE_LIMIT = 1024;
 
   function remember(key: string, image: ImageData) {
     cache.delete(key);
@@ -39,6 +40,23 @@
   let isImage = $derived(mask || layer.kind === "raster");
 
   let canvas = $state<HTMLCanvasElement | null>(null);
+  /** Whether the row has been scrolled into view: thumbnails are rendered only then. */
+  let seen = $state(false);
+
+  $effect(() => {
+    if (!canvas || seen) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          seen = true;
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  });
   /** The thumbnail's pixel size, for its aspect ratio in the box. */
   let shape = $state<{ width: number; height: number } | null>(null);
 
@@ -51,7 +69,7 @@
   }
 
   $effect(() => {
-    if (!isImage || key === null || !canvas) return;
+    if (!isImage || key === null || !canvas || !seen) return;
     // Device pixels, so that the thumbnail stays sharp on high-density screens.
     const maxSide = Math.round(size * window.devicePixelRatio);
     // Masks are shown raw, layers as light: never the same thumbnail for one image.
