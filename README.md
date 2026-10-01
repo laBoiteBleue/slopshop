@@ -94,12 +94,12 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   layers: groups, clipping, masks, blend modes and adjustment layers.
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, JPEG XL, AVIF, JPEG 2000, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR,
-  HDR, DDS, DICOM (the display window as a Levels layer), PDF pages (rasterized at a chosen resolution, picked in an Import PDF dialog), and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
+  HDR, DDS, DICOM and FITS (the display window or an automatic stretch as a Levels layer), PDF pages (rasterized at a chosen resolution, picked in an Import PDF dialog), and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
   color fills, the thirteen kinds of adjustment layers SlopShop has; other adjustments and layer
   styles are not supported yet and are reported).
   A layered file imported into a document arrives as a group.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
-  FITS, camera RAW and more are planned
+  SVG and a basic camera RAW import are next; Krita/GIMP files and more are open to contributors
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
 - A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts): document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add

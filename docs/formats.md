@@ -15,6 +15,11 @@ licenses and pitfalls per format in [research/universal-import.md](research/univ
 the user is told the format is not supported yet) · ⛔ blocked (license or patents, see notes) ·
 — not planned.
 
+**Status (2026-10-01).** The maintainer closes the format work after SVG import, an export for
+every format read (except camera RAW and SVG) and a basic camera RAW import: every common,
+professional, scientific and medical format is then supported. What is still 🔎 or — below is
+open to contributors, with its approach already researched.
+
 **Priorities.**
 - **P0**: the next format work. PSD/PSB, because Photoshop users need to bring their files.
 - **P1**: widely used formats, or formats central to SlopShop's goals (very large, high bit
@@ -139,7 +144,7 @@ Formats that are not in Photoshop's list, read by SlopShop or planned.
 | farbfeld | `.ff` | ✅ | — | P3 export | `image` | |
 | DDS | `.dds` | ✅ | — | — | `image` | DXT1/3/5; BC4–7 and float via `dds` later |
 | ICO | `.ico` | ✅ | — | P3 export | `image` | |
-| FITS | `.fits`, `.fit` | 🔎 | — | P1 | fitsrs → CFITSIO (optional) | astronomy; stretch node, like DICOM's interpretation |
+| FITS | `.fits`, `.fit`, `.fts` | ✅ | — | — | in-house reader | astronomy; the first image (primary or IMAGE extension) at its precision, flipped upright, NAXIS3 = 3 as RGB; an automatic stretch ("STF auto") as a Levels layer; floats scaled to [0, 1] (reported); tile-compressed images not supported yet |
 | Krita, GIMP, OpenRaster | `.kra`, `.xcf`, `.ora` | 🔎 | — | P2 | in-house readers | layered: same staging as PSD; ORA also as a layered export |
 | SVG | `.svg`, `.svgz` | 🔎 | — | P2 | resvg | rasterized, re-rendered at any zoom later |
 | Adobe Illustrator | `.ai` | 🔎 | — | P2 | as PDF | modern `.ai` files are PDF-compatible |

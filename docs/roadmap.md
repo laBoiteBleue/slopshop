@@ -56,9 +56,14 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [ ] JPEG XL lossy export (needs libjxl, C++)
 - [x] JPEG 2000 import (hayro-jpeg2000): JP2 and raw codestreams, native depth
 - [x] DICOM import (dicom-rs): native precision, the display window as a Levels layer
-- [ ] Import phases 2–6: FITS; camera RAW; KRA/XCF/ORA,
-      SVG; optional native backends. Every Photoshop format, with its priority and
-      approach: [formats.md](formats.md)
+- [x] FITS import (in-house): native precision, an automatic stretch as a Levels layer
+- [ ] SVG import (resvg)
+- [ ] An export for every format read: DICOM, FITS, PDF, JPEG 2000, GIF, Radiance HDR, QOI,
+      ICO, farbfeld, DDS (not camera RAW, not SVG)
+- [ ] Camera RAW, basic: decoded "as shot" in a separate process (rawler is LGPL)
+- [ ] Other formats (KRA/XCF/ORA, legacy formats, a RAW development module): the format track
+      closes after the items above (maintainer, 2026-10-01); open to contributors, with each
+      format's priority and approach in [formats.md](formats.md)
 - [x] PDF import: the Import PDF dialog (pages as thumbnails, resolution or size), pages
       rasterized as 8-bit sRGB, several pages like a multi-file open
       ([formats plan](formats.md#pdf-p1))
