@@ -120,6 +120,10 @@ built. Contributors: propose here first.
   displayed 8-bit values, 32 by default), connected to the clicked one (Contiguous) or anywhere;
   it samples the active layer, or the image as displayed with Sample All Layers (unchecked by
   default, as in Photoshop); Anti-alias softens its edge by about a pixel.
+  Select > Color Range: a panel beside the image (not modal): click colors on the image or on its
+  preview (Shift adds one, Alt takes one away, or the three eyedroppers), Fuzziness 0–200,
+  Invert; the preview shows the selection it would make, live; Enter applies, Esc cancels; a
+  current selection limits it, as in Photoshop.
   Options bar: the four modes, Feather (px), Anti-alias for the ellipse and the lassos. Marching ants follow the
   selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Edit in Quick
   Mask Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
