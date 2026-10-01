@@ -148,7 +148,7 @@ impl Renderer {
         match visible {
             Some(visible) => {
                 let output = padded_output(visible);
-                self.composite(document, view, output, |encoder, pixels| {
+                self.composite(document, view, output, None, |encoder, pixels| {
                     if !covers_surface {
                         clear_pass(encoder);
                     }

@@ -133,6 +133,8 @@ pub(crate) struct TileCache {
     slots: HashMap<TileKey, Slot>,
     free: Vec<u32>,
     frame: u64,
+    /// Tiles uploaded since the cache was created (misses).
+    uploads: u64,
 }
 
 impl TileCache {
@@ -146,11 +148,17 @@ impl TileCache {
             slots: HashMap::new(),
             free: (0..capacity).rev().collect(),
             frame: 0,
+            uploads: 0,
         }
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
+    }
+
+    /// Tiles uploaded since the cache was created (misses), for frame statistics.
+    pub fn uploads(&self) -> u64 {
+        self.uploads
     }
 
     /// Start a frame: tiles used by earlier frames become candidates for eviction.
@@ -205,6 +213,7 @@ impl TileCache {
                 last_used: self.frame,
             },
         );
+        self.uploads += 1;
         Some(index)
     }
 

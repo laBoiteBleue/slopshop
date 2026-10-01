@@ -20,6 +20,7 @@ pub use region::{export_renderer, export_source};
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
 use slopshop_core::color::{
@@ -43,6 +44,19 @@ pub struct Frame {
     pub size: Size,
     pub format: PixelFormat,
     pub data: Vec<u8>,
+}
+
+/// What a viewport frame cost ([`Renderer::profile_view`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FrameStats {
+    /// CPU time to plan the frame (steps, pyramid levels) and record its tile uploads.
+    pub prepare: Duration,
+    /// Steps encoded for the shader, which visits each of them for every pixel.
+    pub layers: u32,
+    /// Raster tiles uploaded to the GPU (cache misses).
+    pub tiles_uploaded: u64,
+    /// GPU time of the compositing pass, when the adapter supports timestamp queries.
+    pub gpu: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -148,6 +162,8 @@ pub struct Renderer {
     placeholder_tiles: [wgpu::TextureView; 4],
     /// The resampling kernel table (ADR 0018, `resample::weight_table`), as a uniform block.
     ewa_table: wgpu::Buffer,
+    /// Nanoseconds per timestamp tick, when the device can time passes ([`FrameStats::gpu`]).
+    timestamp_period: Option<f32>,
 }
 
 /// Upper bound on cached tiles per storage class.
@@ -229,9 +245,11 @@ impl Renderer {
             max_texture_array_layers: adapter_limits.max_texture_array_layers,
             ..wgpu::Limits::downlevel_defaults()
         };
+        // Timestamp queries, where available, only time passes when profiling.
+        let timestamps = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("slopshop"),
-            required_features: wgpu::Features::empty(),
+            required_features: timestamps,
             required_limits: required_limits.clone(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::MemoryUsage,
@@ -318,6 +336,7 @@ impl Renderer {
                 .min(required_limits.max_texture_array_layers)
                 .max(1)
         });
+        let timestamp_period = (!timestamps.is_empty()).then(|| queue.get_timestamp_period());
         Ok(Self {
             instance,
             adapter_info: adapter.get_info(),
@@ -334,6 +353,7 @@ impl Renderer {
             tile_capacity,
             placeholder_tiles,
             ewa_table,
+            timestamp_period,
         })
     }
 
@@ -400,13 +420,73 @@ impl Renderer {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            self.composite(document, view, output, |encoder, pixels| {
+            self.composite(document, view, output, None, |encoder, pixels| {
                 encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
             })?;
             self.read_buffer_into(&readback, out)
         })
         // A GPU error found after the pixels were appended: leave `out` as it was.
         .inspect_err(|_| out.truncate(len))
+    }
+
+    /// Render `view` like [`Self::render_view`], without reading the pixels back, wait for the
+    /// GPU, and report what the frame cost. For benchmarks: timing the GPU waits for it, which
+    /// a frame of the app never does.
+    pub fn profile_view(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+    ) -> Result<FrameStats, RenderError> {
+        self.output_byte_len(output)?;
+        self.capture_errors(|| {
+            let queries = self.timestamp_period.map(|_| {
+                self.device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("composite timestamps"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 2,
+                })
+            });
+            let buffer = |label, usage| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: 16,
+                    usage,
+                    mapped_at_creation: false,
+                })
+            };
+            let resolved = buffer(
+                "timestamps resolved",
+                wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            );
+            let readback = buffer(
+                "timestamps readback",
+                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            );
+            let mut stats =
+                self.composite(document, view, output, queries.as_ref(), |encoder, _| {
+                    if let Some(queries) = &queries {
+                        encoder.resolve_query_set(queries, 0..2, &resolved, 0);
+                        encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
+                    }
+                })?;
+            // Waits for the frame, timed or not.
+            let mut bytes = Vec::new();
+            self.read_buffer_into(&readback, &mut bytes)?;
+            if let Some(period) = self.timestamp_period {
+                let tick = |at: usize| {
+                    bytes
+                        .get(at..at + 8)
+                        .and_then(|b| b.try_into().ok())
+                        .map_or(0, u64::from_le_bytes)
+                };
+                let ticks = tick(8).saturating_sub(tick(0));
+                stats.gpu = Some(Duration::from_secs_f64(
+                    ticks as f64 * f64::from(period) * 1e-9,
+                ));
+            }
+            Ok(stats)
+        })
     }
 
     /// Run `f`, capturing the GPU errors it causes on this thread (out of memory, validation,
@@ -442,15 +522,18 @@ impl Renderer {
 
     /// Composite `view` of `document` into an `output`-sized buffer of packed RGBA8 sRGB pixels
     /// (rows of `output.width` pixels), let `finish` record what to do with it (read back, copy
-    /// to a surface…), and submit. Does not wait for the GPU.
+    /// to a surface…), and submit. Does not wait for the GPU. With `timestamps` (2 queries), the
+    /// pass writes its start and end there.
     fn composite(
         &self,
         document: &Document,
         view: ViewTransform,
         output: Size,
+        timestamps: Option<&wgpu::QuerySet>,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
-    ) -> Result<(), RenderError> {
-        let byte_len = self.output_byte_len(output)?;
+    ) -> Result<FrameStats, RenderError> {
+        // Rejected before the caches are locked (and reset on error).
+        self.output_byte_len(output)?;
 
         // The cache lock is held until the GPU work is submitted: tiles resident for this frame
         // must not be evicted before.
@@ -463,7 +546,7 @@ impl Renderer {
             guard
         });
         let result = self.capture_errors(|| {
-            self.composite_locked(document, view, output, byte_len, &mut cache_guard, finish)
+            self.composite_locked(document, view, output, timestamps, &mut cache_guard, finish)
         });
         if result.is_err() {
             // Tiles may have been recorded as resident in a cache whose texture or upload
@@ -479,11 +562,24 @@ impl Renderer {
         document: &Document,
         view: ViewTransform,
         output: Size,
-        byte_len: u64,
+        timestamps: Option<&wgpu::QuerySet>,
         cache_guard: &mut [Option<TileCache>; 4],
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
-    ) -> Result<(), RenderError> {
+    ) -> Result<FrameStats, RenderError> {
+        let byte_len = self.output_byte_len(output)?;
+        let start = Instant::now();
+        let uploads = |caches: &[Option<TileCache>; 4]| -> u64 {
+            caches.iter().flatten().map(TileCache::uploads).sum()
+        };
+        let uploaded_before = uploads(cache_guard);
         let layers = self.prepare_layers(document, view, output, cache_guard);
+        let stats = FrameStats {
+            prepare: start.elapsed(),
+            layers: layers.count,
+            // A cache created by this frame starts from zero.
+            tiles_uploaded: uploads(cache_guard).saturating_sub(uploaded_before),
+            gpu: None,
+        };
         let params = params_bytes(document.size(), view, output, layers.count);
 
         use wgpu::util::DeviceExt;
@@ -527,7 +623,11 @@ impl Renderer {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("composite"),
-                timestamp_writes: None,
+                timestamp_writes: timestamps.map(|query_set| wgpu::ComputePassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -539,7 +639,7 @@ impl Renderer {
         }
         finish(&mut encoder, &output_buffer);
         self.queue.submit([encoder.finish()]);
-        Ok(())
+        Ok(stats)
     }
 
     /// Map a `MAP_READ` buffer and append its content to `out`. This copy is required: mapped
@@ -1515,5 +1615,46 @@ mod tests {
         };
         assert_eq!(encoded([0.0, 0.0]), 1);
         assert_eq!(encoded([512.0, 512.0]), 0);
+    }
+
+    #[test]
+    fn profiled_frames_report_their_layers_and_uploads() {
+        let Some(r) = renderer() else { return };
+        let mut document = Document::new(Size::new(600, 300));
+        let format = slopshop_core::color::PixelFormat::RGBA8_SRGB;
+        let image = RasterImage::from_pixels(Size::new(600, 300), format, &[90; 600 * 300 * 4])
+            .expect("600 × 300 RGBA8 pixels");
+        let layer = Layer {
+            transform: Affine::IDENTITY,
+            clipped: false,
+            id: document.allocate_layer_id(),
+            name: "image".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            content: LayerContent::Raster {
+                image: image.into(),
+            },
+        };
+        slopshop_core::Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut document)
+        .expect("a valid layer");
+        let view = ViewTransform {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+        let output = Size::new(600, 300);
+        let first = r.profile_view(&document, view, output).unwrap();
+        assert_eq!(first.layers, 1);
+        // 600 × 300 pixels at level 0: 3 × 2 tiles, uploaded once.
+        assert_eq!(first.tiles_uploaded, 6);
+        let again = r.profile_view(&document, view, output).unwrap();
+        assert_eq!(again.tiles_uploaded, 0);
+        assert_eq!(again.gpu.is_some(), r.timestamp_period.is_some());
     }
 }
