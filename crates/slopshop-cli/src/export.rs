@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 13] = [
+const FORMATS: [ExportFormatKind; 19] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -47,6 +47,12 @@ const FORMATS: [ExportFormatKind; 13] = [
     ExportFormatKind::Pfm,
     ExportFormatKind::Avif,
     ExportFormatKind::Jxl,
+    ExportFormatKind::Qoi,
+    ExportFormatKind::Farbfeld,
+    ExportFormatKind::Hdr,
+    ExportFormatKind::Ico,
+    ExportFormatKind::Gif,
+    ExportFormatKind::Dds,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -126,12 +132,17 @@ impl Depth {
             }
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
-            ExportFormatKind::Pfm => self == Depth::F32,
+            ExportFormatKind::Pfm | ExportFormatKind::Hdr => self == Depth::F32,
+            ExportFormatKind::Farbfeld => self == Depth::U16,
             ExportFormatKind::Avif => self.avif().is_some(),
             ExportFormatKind::Jpeg
             | ExportFormatKind::Webp
             | ExportFormatKind::Bmp
-            | ExportFormatKind::Tga => self == Depth::U8,
+            | ExportFormatKind::Tga
+            | ExportFormatKind::Qoi
+            | ExportFormatKind::Ico
+            | ExportFormatKind::Gif
+            | ExportFormatKind::Dds => self == Depth::U8,
             ExportFormatKind::Psd | ExportFormatKind::Psb => self.psd().is_some(),
         }
     }
@@ -219,7 +230,13 @@ impl Compression {
             | ExportFormatKind::Pnm
             | ExportFormatKind::Pfm
             | ExportFormatKind::Avif
-            | ExportFormatKind::Jxl => false,
+            | ExportFormatKind::Jxl
+            | ExportFormatKind::Qoi
+            | ExportFormatKind::Farbfeld
+            | ExportFormatKind::Hdr
+            | ExportFormatKind::Ico
+            | ExportFormatKind::Gif
+            | ExportFormatKind::Dds => false,
         }
     }
 }
@@ -317,7 +334,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         match notice.count() {
             Some(count) => {
                 let unit = match notice {
-                    ExportNotice::AlphaFlattened(_) => "pixels",
+                    ExportNotice::AlphaFlattened(_) | ExportNotice::ColorsQuantized(_) => "pixels",
                     _ => "samples",
                 };
                 println!("report: {} ({count} {unit})", notice.id());
@@ -432,12 +449,20 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 ExportFormatKind::Psd | ExportFormatKind::Psb => {
                     format!("{name} has no --compression option (it always uses RLE)")
                 }
-                ExportFormatKind::Bmp | ExportFormatKind::Pnm | ExportFormatKind::Pfm => {
+                ExportFormatKind::Bmp
+                | ExportFormatKind::Pnm
+                | ExportFormatKind::Pfm
+                | ExportFormatKind::Farbfeld
+                | ExportFormatKind::Hdr
+                | ExportFormatKind::Dds => {
                     format!("{name} has no --compression option (it is uncompressed)")
                 }
-                ExportFormatKind::Jxl => {
+                ExportFormatKind::Jxl | ExportFormatKind::Qoi | ExportFormatKind::Ico => {
                     format!("{name} has no --compression option (it is always lossless)")
                 }
+                ExportFormatKind::Gif => format!(
+                    "{name} has no --compression option (LZW, after reduction to 256 colors)"
+                ),
                 _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
             }
         } else {
@@ -679,6 +704,12 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "pfm" => Some(ExportFormatKind::Pfm),
         "avif" => Some(ExportFormatKind::Avif),
         "jxl" => Some(ExportFormatKind::Jxl),
+        "qoi" => Some(ExportFormatKind::Qoi),
+        "ff" => Some(ExportFormatKind::Farbfeld),
+        "hdr" => Some(ExportFormatKind::Hdr),
+        "ico" => Some(ExportFormatKind::Ico),
+        "gif" => Some(ExportFormatKind::Gif),
+        "dds" => Some(ExportFormatKind::Dds),
         _ => None,
     }
 }
@@ -699,6 +730,12 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Pfm => "pfm",
         ExportFormatKind::Avif => "avif",
         ExportFormatKind::Jxl => "jxl",
+        ExportFormatKind::Qoi => "qoi",
+        ExportFormatKind::Farbfeld => "ff",
+        ExportFormatKind::Hdr => "hdr",
+        ExportFormatKind::Ico => "ico",
+        ExportFormatKind::Gif => "gif",
+        ExportFormatKind::Dds => "dds",
     }
 }
 
@@ -717,6 +754,12 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Pfm => "Portable Float Map",
         ExportFormatKind::Avif => "AVIF",
         ExportFormatKind::Jxl => "JPEG XL (lossless)",
+        ExportFormatKind::Qoi => "QOI",
+        ExportFormatKind::Farbfeld => "farbfeld",
+        ExportFormatKind::Hdr => "Radiance HDR",
+        ExportFormatKind::Ico => "ICO (Windows icon)",
+        ExportFormatKind::Gif => "GIF",
+        ExportFormatKind::Dds => "DDS",
     }
 }
 
@@ -788,6 +831,12 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
         },
         ExportFormat::Pfm => ExportFormat::Pfm,
+        ExportFormat::Qoi => ExportFormat::Qoi,
+        ExportFormat::Farbfeld => ExportFormat::Farbfeld,
+        ExportFormat::Hdr => ExportFormat::Hdr,
+        ExportFormat::Ico => ExportFormat::Ico,
+        ExportFormat::Gif => ExportFormat::Gif,
+        ExportFormat::Dds => ExportFormat::Dds,
         ExportFormat::Jxl { depth } => ExportFormat::Jxl {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
         },
@@ -855,7 +904,13 @@ fn describe(spec: &ExportSpec) -> String {
             },
             None,
         ),
-        ExportFormat::Jpeg { .. } | ExportFormat::Bmp => (Depth::U8, None),
+        ExportFormat::Jpeg { .. }
+        | ExportFormat::Bmp
+        | ExportFormat::Qoi
+        | ExportFormat::Ico
+        | ExportFormat::Gif
+        | ExportFormat::Dds => (Depth::U8, None),
+        ExportFormat::Farbfeld => (Depth::U16, None),
         ExportFormat::Pnm { depth } | ExportFormat::Jxl { depth } => (
             match depth {
                 PngDepth::U8 => Depth::U8,
@@ -863,7 +918,7 @@ fn describe(spec: &ExportSpec) -> String {
             },
             None,
         ),
-        ExportFormat::Pfm => (Depth::F32, None),
+        ExportFormat::Pfm | ExportFormat::Hdr => (Depth::F32, None),
         ExportFormat::Avif { depth, .. } => (
             match depth {
                 AvifDepth::U8 => Depth::U8,
@@ -1197,15 +1252,54 @@ mod tests {
     }
 
     #[test]
+    fn simple_formats_are_recognized_with_their_options() {
+        for (name, kind) in [
+            ("out.qoi", ExportFormatKind::Qoi),
+            ("out.FF", ExportFormatKind::Farbfeld),
+            ("out.hdr", ExportFormatKind::Hdr),
+            ("out.ico", ExportFormatKind::Ico),
+            ("out.gif", ExportFormatKind::Gif),
+            ("out.dds", ExportFormatKind::Dds),
+        ] {
+            assert_eq!(parse(&["in.png", name]).unwrap().format, kind, "{name}");
+            let id = format_id(kind);
+            assert_eq!(parse_format(id).unwrap(), kind, "{id}");
+        }
+        let error = |args: &[&str]| parse(args).unwrap_err();
+        assert_eq!(
+            error(&["in.png", "out.gif", "--depth", "u16"]),
+            "--depth u16 is not available for GIF (valid: u8)"
+        );
+        assert_eq!(
+            error(&["in.png", "out.ff", "--depth", "u8"]),
+            "--depth u8 is not available for farbfeld (valid: u16)"
+        );
+        assert!(error(&["in.png", "out.gif", "--compression", "lzw"]).contains("no --compression"));
+        assert!(error(&["in.png", "out.ico", "--gray"]).contains("--gray is not available"));
+        assert!(error(&["in.png", "out.dds", "--space", "linear-srgb"]).contains("valid: srgb"));
+        assert!(error(&["in.png", "out.hdr", "--space", "srgb"]).contains("valid: linear-srgb"));
+        assert!(parse(&["in.png", "out.qoi", "--space", "linear-srgb"]).is_ok());
+
+        let document = Document::new(Size::new(4, 4));
+        let hdr = export_spec(&parse(&["in.png", "out.hdr"]).unwrap(), &document);
+        assert_eq!(
+            describe(&hdr),
+            "--format hdr --depth f32 --space linear-srgb --matte ffffff"
+        );
+        let ff = export_spec(&parse(&["in.png", "out.ff"]).unwrap(), &document);
+        assert_eq!(describe(&ff), "--format ff --depth u16 --space srgb");
+    }
+
+    #[test]
     fn rejects_malformed_command_lines() {
         let error = |args: &[&str]| parse(args).unwrap_err();
         assert!(error(&["in.png"]).contains("got 1 path"));
         assert!(error(&["a.png", "b.png", "c.png"]).contains("got 3 path"));
-        assert!(error(&["in.png", "out.gif"]).contains("--format"));
+        assert!(error(&["in.png", "out.svg"]).contains("--format"));
         assert!(error(&["in.png", "out"]).contains("--format"));
         assert!(error(&["in.png", "out.png", "--depth"]).contains("missing value"));
         assert!(error(&["in.png", "out.png", "--depth", "u12"]).contains("invalid depth"));
-        assert!(error(&["in.png", "out.png", "--format", "gif"]).contains("invalid format"));
+        assert!(error(&["in.png", "out.png", "--format", "svg"]).contains("invalid format"));
         assert!(error(&["in.png", "out.png", "--space", "cmyk"]).contains("unknown color space"));
         assert!(error(&["in.png", "out.png", "--compression", "zip"]).contains("invalid"));
         assert!(error(&["in.png", "out.png", "--alpha"]).contains("unknown option `--alpha`"));
@@ -1454,6 +1548,50 @@ mod tests {
             let actual = composite(&single_layer_document(reimported.image, name).unwrap());
             let difference = max_difference(&expected, &actual);
             assert!(difference <= tolerance, "{name}: {difference}");
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// QOI, farbfeld, DDS and ICO keep 8-bit sources exactly (farbfeld at 16 bits), Radiance
+    /// HDR within RGBE precision (flattened), GIF with its palette.
+    #[test]
+    fn exports_the_simple_formats_and_reads_them_back() {
+        let dir = temp_dir("simple");
+        // ICO: at most 256 pixels per side.
+        let (size, icon_size) = (Size::new(70, 300), Size::new(70, 200));
+        let (input, icon) = (dir.join("in.png"), dir.join("icon.png"));
+        write_test_png(&input, size);
+        write_test_png(&icon, icon_size);
+        // (output, notices, largest difference allowed, if compared)
+        let cases: [(&str, &[&str], Option<f32>); 6] = [
+            ("out.qoi", &[], Some(0.0)),
+            ("out.ff", &[], Some(1e-4)),
+            ("out.dds", &[], Some(0.0)),
+            ("out.hdr", &["alphaFlattened"], None),
+            ("out.gif", &["colorsQuantized"], None),
+            ("out.ico", &[], Some(0.0)),
+        ];
+        for (name, notices, tolerance) in cases {
+            let input = if name == "out.ico" { &icon } else { &input };
+            let original = slopshop_io::open_image(input).unwrap();
+            let expected = composite(&single_layer_document(original.image, "in").unwrap());
+            let output = dir.join(name);
+            let args = [input.to_str().unwrap(), output.to_str().unwrap(), "--cpu"];
+            let outcome = export(&parse(&args).unwrap()).unwrap();
+            let ids: Vec<_> = outcome.report.notices.iter().map(|n| n.id()).collect();
+            assert_eq!(ids, notices, "{name}");
+            let reimported = slopshop_io::open_image(&output).unwrap();
+            assert_eq!(reimported.image.size(), outcome.size, "{name}");
+            assert_eq!(
+                reimported.image.format().color_space,
+                outcome.spec.space,
+                "{name}"
+            );
+            if let Some(tolerance) = tolerance {
+                let actual = composite(&single_layer_document(reimported.image, name).unwrap());
+                let difference = max_difference(&expected, &actual);
+                assert!(difference <= tolerance, "{name}: {difference}");
+            }
         }
         fs::remove_dir_all(&dir).ok();
     }

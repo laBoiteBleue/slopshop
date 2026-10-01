@@ -16,7 +16,7 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 |---|---|
 | [`slopshop gpu`](#slopshop-gpu) | Show the GPU adapter the engine would use |
 | [`slopshop render`](#slopshop-render) | Render a built-in demo document to a PNG file |
-| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM or a layered PSD or PSB |
+| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM, QOI, farbfeld, Radiance HDR, ICO, GIF, DDS or a layered PSD or PSB |
 | [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
 | [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
 | `slopshop --help`, `slopshop -h` | Print the usage |
@@ -73,13 +73,13 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 
 | Option | Values | Meaning |
 |---|---|---|
-| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, any case) |
+| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm`, `qoi`, `ff`, `hdr`, `ico`, `gif`, `dds` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, `.qoi`, `.ff` (farbfeld), `.hdr` (Radiance), `.ico`, `.gif`, `.dds`, any case) |
 | `--depth` | `u8`, `u16`, `f16`, `f32` | Sample type: 8/16-bit integers, 16/32-bit floats (see the table below for each format). The color space stays the default one unless `--space` is given |
 | `--space` | see [Color spaces](#color-spaces) | Color space of the file. Always tagged in the file |
-| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm and PFM are uncompressed; JPEG XL is always lossless |
+| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm, PFM, farbfeld, Radiance HDR and DDS are uncompressed; JPEG XL, QOI and ICO are always lossless; GIF uses LZW, after reduction to 256 colors |
 | `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP, AVIF) | Quality of lossy compression |
 | `--subsampling` | `444`, `422`, `420` | JPEG only: chroma subsampling. `444` keeps full color resolution, `420` gives the smallest files |
-| `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG never has alpha; a layered PSD or PSB always keeps it |
+| `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG, PFM and Radiance HDR never have alpha; a layered PSD or PSB always keeps it |
 | `--matte` | `RRGGBB` or `#RRGGBB` | Color transparency is flattened over when there is no alpha, as sRGB hex. Default: `ffffff` (white) |
 | `--no-dither` | | No dither for 8-bit samples (dither reduces banding; it is on by default) |
 | `--gray` | | Gray samples (PNG, TIFF and JPEG): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
@@ -142,6 +142,29 @@ held while it is encoded (at most 65 535 pixels per side); a 4000 × 2000 16-bit
 the extension. `pfm` writes 32-bit float samples in linear sRGB, gray (`Pf`) or RGB (`PF`),
 without alpha. Neither can declare another space.
 
+### QOI, farbfeld, Radiance HDR, ICO, GIF and DDS
+
+None of them has a compression or quality option, nor gray samples; each has one depth:
+
+- `qoi`: 8-bit, lossless, with alpha unless the document is opaque; sRGB, or linear sRGB with
+  `--space linear-srgb` (the header's color space byte). At most 400 million pixels, as QOI
+  readers require.
+- `ff` (farbfeld): 16-bit sRGB, always RGBA (opaque when alpha is dropped), uncompressed.
+- `hdr` (Radiance): RGBE (8-bit mantissas sharing an exponent) in linear sRGB, no alpha,
+  uncompressed scanlines. Negative values are clipped and reported (`clippedLow`).
+- `ico`: one 8-bit sRGB PNG image in the icon container (Windows Vista and later), with alpha
+  unless the document is opaque; at most 256 pixels per side (`--scale` first for larger
+  documents).
+- `gif`: one frame, sRGB, at most 256 colors. Pixels under half opacity become transparent,
+  the others opaque. When the image has more colors, a palette is learned (NeuQuant) and each
+  pixel takes its nearest color, without dithering yet; every pixel not written exactly is
+  counted (`colorsQuantized`). The whole image is held while the palette is built: at most
+  65 535 pixels per side and 268 million pixels.
+- `dds`: one uncompressed 8-bit sRGB surface, 32-bit BGRA (24-bit BGR without alpha), no mip
+  levels. Block compression (BC1 to BC7) is not written.
+
+All but ICO and GIF stream their rows: memory does not grow with the image.
+
 ### Layered PSD and PSB
 
 A `.psd` output keeps the document's structure, for Photoshop and the other editors that read
@@ -185,7 +208,8 @@ a gray image or a neutral fill, with one image at least: its gray samples are th
 Which spaces each format can store *and tag* so that it reads back as the same space:
 
 - **PNG**: all of them (sRGB chunk, cICP chunk, or ICC profile).
-- **BMP**, **Targa** and **Netpbm**: `srgb` only. **PFM**: `linear-srgb` only.
+- **BMP**, **Targa**, **Netpbm**, **farbfeld**, **ICO**, **GIF** and **DDS**: `srgb` only.
+  **PFM** and **Radiance HDR**: `linear-srgb` only. **QOI**: `srgb` and `linear-srgb`.
 - **AVIF**: all but `adobe-rgb` and `prophoto` (H.273 code points).
 - **JPEG XL**: all of them (its color encodings).
 - **TIFF**, **JPEG**, **WebP**, **PSD** and **PSB**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
@@ -221,6 +245,7 @@ report: clippedHigh (1234 samples)
 | `precisionReduced` | The samples are 16-bit floats, less precise than the image |
 | `bigTiff` | The file was written as BigTIFF (over 4 GiB): some older software cannot read it |
 | `alphaFlattened` | Partly transparent pixels were flattened over the matte (count in pixels) |
+| `colorsQuantized` | Pixels were changed to fit GIF's palette (at most 256 colors) or its on/off transparency (count in pixels) |
 | `pixelsOutsideCanvas` | Parts of layers were outside the canvas: the layered PSD or PSB keeps only what is inside |
 
 ### Examples
