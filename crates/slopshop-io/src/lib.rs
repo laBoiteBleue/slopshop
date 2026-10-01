@@ -17,6 +17,7 @@ pub mod export;
 mod icc;
 mod lab;
 mod orient;
+mod pfm;
 mod psd;
 pub mod slop;
 mod tiff_import;
@@ -261,6 +262,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if psd::is_psd(&head) {
         drop(file);
         psd::decode(path)?
+    } else if pfm::is_pfm(&head) {
+        drop(file);
+        pfm::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
