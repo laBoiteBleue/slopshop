@@ -91,7 +91,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR, HDR, DDS,
   and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
-  color fills, the twelve kinds of adjustment layers SlopShop has; other adjustments and layer
+  color fills, the thirteen kinds of adjustment layers SlopShop has; other adjustments and layer
   styles are not supported yet and are reported).
   A layered file imported into a document arrives as a group.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
@@ -100,7 +100,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
 - A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts): document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
   fill, thumbnails, visibility, live opacity, Photoshop's blend modes, layer masks, rename, drag to reorder, delete; several layers at once with Ctrl/Shift+click; groups as folders, Ctrl+G; duplicate with Ctrl+J; a right-click menu; layers dragged to another tab are copied there; clipping masks with Alt+Ctrl+G or Alt+click; the Move tool: drag the layers on the image, or nudge
-  them with the arrows; it picks the layer under the pointer and snaps to the canvas and to the other layers with smart guides; Free Transform (Ctrl+T) scales, rotates and moves layers non-destructively with high-quality resampling, and Edit > Transform turns and flips them exactly; Image Size, Canvas Size, Image Rotation and the Crop tool, all without cutting or rewriting pixels; adjustment layers: Brightness/Contrast, Levels, Exposure, Vibrance, Hue/Saturation, Color Balance, Black & White, Photo Filter, Channel Mixer, Invert, Posterize and Threshold, with a Properties panel) with
+  them with the arrows; it picks the layer under the pointer and snaps to the canvas and to the other layers with smart guides; Free Transform (Ctrl+T) scales, rotates and moves layers non-destructively with high-quality resampling, and Edit > Transform turns and flips them exactly; Image Size, Canvas Size, Image Rotation and the Crop tool, all without cutting or rewriting pixels; adjustment layers: Brightness/Contrast, Levels, Curves (with a curve editor), Exposure, Vibrance, Hue/Saturation, Color Balance, Black & White, Photo Filter, Channel Mixer, Invert, Posterize and Threshold, with a Properties panel) with
   perceptual or linear blending per document, images dropped on the canvas
   become layers, paste (Ctrl+V) of copied images and files, folders and zip archives opened like several files, export with progress and cancel, undo/redo, English and French interface.
 - Saving documents with their layers in SlopShop's own `.slop` format: lossless, in the

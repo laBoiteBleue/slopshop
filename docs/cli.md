@@ -114,8 +114,8 @@ PSD layers:
 - pixel layers with their position, opacity, blend mode, visibility and clipping; groups (pass
   through or isolated); layer masks (disabled ones too); fill layers, as pixels;
 - adjustment layers as Photoshop adjustment layers (Hue/Saturation, Levels,
-  Brightness/Contrast, Exposure, Vibrance, Color Balance, Black & White, Photo Filter,
-  Channel Mixer, Invert, Posterize, Threshold);
+  Brightness/Contrast, Curves, Exposure, Vibrance, Color Balance, Black & White, Photo
+  Filter, Channel Mixer, Invert, Posterize, Threshold);
 - a merged composite for readers that do not read layers, and the ICC profile of `--space`.
 
 Every layer is rendered on its own at its pixel size, so transformed (rotated, scaled) layers

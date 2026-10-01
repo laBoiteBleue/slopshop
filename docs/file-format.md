@@ -268,7 +268,10 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     red, green and blue output rows (red, green and blue weights, then the constant, in %),
     monochrome (flag) (channel mixer). Flags are 0 or 1. Schema 0.7 writes five numbers, the
     unused ones 0; from 0.8, at least five (so that 0.7 readers still read the first eight
-    adjustments) and at most 16, missing ones read as 0.
+    adjustments) and at most 16, missing ones read as 0. From schema 0.9, `curves` has no
+    values of its own but `params.curves`: four lists (composite, red, green, blue) of 2 to 16
+    points `[input, output]`, integers 0–255 with strictly increasing inputs; the curve through
+    them is a natural cubic spline, flat outside its points.
     Parameters out of range make the file invalid; an unknown adjustment comes from a newer
     SlopShop. No `inputs`.
   - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills and adjustments.

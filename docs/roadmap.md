@@ -116,7 +116,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] PSD import of adjustment layers: the eight reproduced ones become adjustment layers
 - [x] Black & White, Color Balance, Photo Filter, Channel Mixer (up to 16 parameters, `.slop` 0.8)
 - [x] PSD import and export of these four
-- [ ] Curves (with a curve editor)
+- [x] Curves (with a curve editor), `.slop` 0.9, PSD import and export
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
       `.slop` 0.4
