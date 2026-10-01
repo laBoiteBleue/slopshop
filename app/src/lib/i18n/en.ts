@@ -120,6 +120,8 @@ const en = {
   "tools.crop": "Crop Tool",
   "tools.marquee": "Rectangular Marquee Tool",
   "tools.ellipse": "Elliptical Marquee Tool",
+  "tools.lasso": "Lasso Tool",
+  "tools.polygonalLasso": "Polygonal Lasso Tool",
   "tools.variants": "{name} ({key}) — right-click or hold for the other tools",
   "options.label": "Tool options",
   "options.autoSelect": "Auto-Select",

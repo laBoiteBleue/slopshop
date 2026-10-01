@@ -51,6 +51,7 @@
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
+  import LassoTool from "./lib/LassoTool.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
@@ -1945,6 +1946,14 @@
                     onchange={onTransformChange}
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
+                  />
+                {:else if tool === "lasso" || tool === "polygonalLasso"}
+                  <LassoTool
+                    {mapping}
+                    polygonal={tool === "polygonalLasso"}
+                    mode={selectionMode}
+                    onselect={selectShape}
+                    ondeselect={() => selectionCommand(engine.deselect)}
                   />
                 {:else if tool === "marquee" || tool === "ellipse"}
                   <MarqueeTool

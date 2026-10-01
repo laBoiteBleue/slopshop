@@ -7,7 +7,7 @@
   // small +, − or × next to the pointer tells how the next shape combines.
   import type { SelectionMode, SelectionShape } from "./engine";
   import { t } from "./i18n/index.svelte";
-  import { modeFromKeys } from "./selection";
+  import { MODE_BADGES, modeFromKeys } from "./selection";
   import type { ViewMapping } from "./Viewport.svelte";
 
   let {
@@ -50,14 +50,8 @@
   let keys = $state({ shiftKey: false, altKey: false });
   let element: SVGSVGElement;
 
-  const BADGES: Record<SelectionMode, string> = {
-    replace: "",
-    add: "+",
-    subtract: "−",
-    intersect: "×",
-  };
   /** The mode of the drag (fixed at the press), or the one a press would take now. */
-  const badge = $derived(BADGES[drag ? (drag.mode ?? mode) : (modeFromKeys(keys) ?? mode)]);
+  const badge = $derived(MODE_BADGES[drag ? (drag.mode ?? mode) : (modeFromKeys(keys) ?? mode)]);
 
   function track(e: PointerEvent | KeyboardEvent) {
     keys = { shiftKey: e.shiftKey, altKey: e.altKey };

@@ -4,6 +4,14 @@ import type { SelectionMode } from "./engine";
 /** The largest feather radius the engine accepts, in pixels (`selection::MAX_FEATHER`). */
 export const MAX_FEATHER = 250;
 
+/** The sign by the pointer of a selection tool: how the next shape combines. */
+export const MODE_BADGES: Record<SelectionMode, string> = {
+  replace: "",
+  add: "+",
+  subtract: "−",
+  intersect: "×",
+};
+
 /**
  * The mode a press asks for with its keys, as in Photoshop: Shift adds, Alt subtracts, both
  * intersect; `null` without them (the options bar's mode applies).

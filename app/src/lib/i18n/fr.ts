@@ -120,6 +120,8 @@ const fr: Messages = {
   "tools.crop": "Outil Recadrage",
   "tools.marquee": "Outil Rectangle de sélection",
   "tools.ellipse": "Outil Ellipse de sélection",
+  "tools.lasso": "Outil Lasso",
+  "tools.polygonalLasso": "Outil Lasso polygonal",
   "tools.variants": "{name} ({key}) — clic droit ou appui long pour les autres outils",
   "options.label": "Options de l'outil",
   "options.autoSelect": "Sélection automatique",
