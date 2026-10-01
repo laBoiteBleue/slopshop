@@ -422,7 +422,13 @@ export type ExportFormat =
   | "bmp"
   | "tga"
   | "pnm"
-  | "pfm";
+  | "pfm"
+  | "qoi"
+  | "ff"
+  | "hdr"
+  | "ico"
+  | "gif"
+  | "dds";
 /** Sample types of exported files: 8/16-bit integers, 16/32-bit floats. */
 export type ExportSample = "u8" | "u16" | "f16" | "f32";
 export type ExportCompression =
@@ -572,6 +578,54 @@ export const EXPORT_FORMATS: Record<
     alpha: false,
     gray: true,
   },
+  qoi: {
+    extensions: ["qoi"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: false,
+  },
+  ff: {
+    extensions: ["ff"],
+    samples: ["u16"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: false,
+  },
+  hdr: {
+    extensions: ["hdr"],
+    samples: ["f32"],
+    compressions: [],
+    subsamplings: [],
+    alpha: false,
+    gray: false,
+  },
+  ico: {
+    extensions: ["ico"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: false,
+  },
+  gif: {
+    extensions: ["gif"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: false,
+  },
+  dds: {
+    extensions: ["dds"],
+    samples: ["u8"],
+    compressions: [],
+    subsamplings: [],
+    alpha: true,
+    gray: false,
+  },
 };
 
 /** The quality a lossy compression starts at, when it is chosen in the dialog. */
@@ -591,7 +645,8 @@ export type ExportNoticeId =
   | "bigTiff"
   | "pixelsOutsideCanvas"
   | "alphaFlattened"
-  | "colorDiscarded";
+  | "colorDiscarded"
+  | "colorsQuantized";
 
 /** A report entry, translated with the `export.report.<id>` keys. */
 export type ExportNotice = { id: ExportNoticeId; count: number | null };
