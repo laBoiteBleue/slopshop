@@ -104,11 +104,11 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | **Photoshop** | `.psd`, `.pdd` | ✅ layers | ✅ layers | **P0** | in-house reader (see above) | groups, clipping and thirteen kinds of adjustment layers kept; other adjustments and styles reported; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | ✅ layers | ✅ layers | **P0** | same reader and writer (64-bit lengths) | up to 300,000 px per side |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
-| PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export |
+| PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export; APNG frames as layers (see GIF) |
 | TIFF | `.tif`, `.tiff` | ✅ | ✅ | done | `tiff` | CMYK and Lab refused; BigTIFF export |
 | OpenEXR | `.exr` | ✅ | ✅ | done | `exr` | deep data not supported; gray export pending (needs a luminance-only reader) |
-| WebP | `.webp` | ✅ | ✅ | done | `image-webp`, libwebp (lossy export) | |
-| GIF | `.gif` | ✅ (first frame) | ✅ one frame | P2 animation | `gif`; export palette: `color_quant` (NeuQuant) | animation import needs frame support in the model. Export: sRGB, at most 256 colors (exact when the image has no more, else a learned palette, without dithering yet), transparency on or off; changed pixels reported |
+| WebP | `.webp` | ✅ | ✅ | done | `image-webp`, libwebp (lossy export) | animated: frames as layers (see GIF) |
+| GIF | `.gif` | ✅ frames | ✅ one frame | — | `gif`; export palette: `color_quant` (NeuQuant) | an animation opens as one isolated group, one layer per frame (the first on top and the only one shown), each frame as the animation shows it; timing not kept; flattened opens give the first frame. Export: sRGB, at most 256 colors (exact when the image has no more, else a learned palette, without dithering yet), transparency on or off; changed pixels reported |
 | BMP | `.bmp` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB (V5 header), alpha; embedded V5 ICC not read yet; `.dib` not recognized yet |
 | Targa | `.tga` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB, alpha, RLE or uncompressed; Photoshop also uses `.vda`, `.icb`, `.vst`: not recognized yet |
 | Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | ✅ | done | `image`; PFM and every export in-house | export: PGM/PPM/PAM 8/16-bit sRGB, PFM 32-bit float linear |
