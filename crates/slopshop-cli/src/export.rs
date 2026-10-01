@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 12] = [
+const FORMATS: [ExportFormatKind; 13] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -46,6 +46,7 @@ const FORMATS: [ExportFormatKind; 12] = [
     ExportFormatKind::Pnm,
     ExportFormatKind::Pfm,
     ExportFormatKind::Avif,
+    ExportFormatKind::Jxl,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -120,7 +121,9 @@ impl Depth {
 
     fn supported_by(self, kind: ExportFormatKind) -> bool {
         match kind {
-            ExportFormatKind::Png | ExportFormatKind::Pnm => self.png().is_some(),
+            ExportFormatKind::Png | ExportFormatKind::Pnm | ExportFormatKind::Jxl => {
+                self.png().is_some()
+            }
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
             ExportFormatKind::Pfm => self == Depth::F32,
@@ -215,7 +218,8 @@ impl Compression {
             | ExportFormatKind::Bmp
             | ExportFormatKind::Pnm
             | ExportFormatKind::Pfm
-            | ExportFormatKind::Avif => false,
+            | ExportFormatKind::Avif
+            | ExportFormatKind::Jxl => false,
         }
     }
 }
@@ -423,6 +427,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 }
                 ExportFormatKind::Bmp | ExportFormatKind::Pnm | ExportFormatKind::Pfm => {
                     format!("{name} has no --compression option (it is uncompressed)")
+                }
+                ExportFormatKind::Jxl => {
+                    format!("{name} has no --compression option (it is always lossless)")
                 }
                 _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
             }
@@ -648,6 +655,7 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "pnm" | "ppm" | "pgm" | "pam" => Some(ExportFormatKind::Pnm),
         "pfm" => Some(ExportFormatKind::Pfm),
         "avif" => Some(ExportFormatKind::Avif),
+        "jxl" => Some(ExportFormatKind::Jxl),
         _ => None,
     }
 }
@@ -667,6 +675,7 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Pnm => "pnm",
         ExportFormatKind::Pfm => "pfm",
         ExportFormatKind::Avif => "avif",
+        ExportFormatKind::Jxl => "jxl",
     }
 }
 
@@ -684,6 +693,7 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Pnm => "Netpbm (PGM, PPM, PAM)",
         ExportFormatKind::Pfm => "Portable Float Map",
         ExportFormatKind::Avif => "AVIF",
+        ExportFormatKind::Jxl => "JPEG XL (lossless)",
     }
 }
 
@@ -755,6 +765,9 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
             depth: args.depth.and_then(Depth::png).unwrap_or(depth),
         },
         ExportFormat::Pfm => ExportFormat::Pfm,
+        ExportFormat::Jxl { depth } => ExportFormat::Jxl {
+            depth: args.depth.and_then(Depth::png).unwrap_or(depth),
+        },
         ExportFormat::Avif { depth, quality } => ExportFormat::Avif {
             depth: args.depth.and_then(Depth::avif).unwrap_or(depth),
             quality: args.quality.unwrap_or(quality),
@@ -820,7 +833,7 @@ fn describe(spec: &ExportSpec) -> String {
             None,
         ),
         ExportFormat::Jpeg { .. } | ExportFormat::Bmp => (Depth::U8, None),
-        ExportFormat::Pnm { depth } => (
+        ExportFormat::Pnm { depth } | ExportFormat::Jxl { depth } => (
             match depth {
                 PngDepth::U8 => Depth::U8,
                 PngDepth::U16 => Depth::U16,

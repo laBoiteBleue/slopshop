@@ -16,7 +16,7 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 |---|---|
 | [`slopshop gpu`](#slopshop-gpu) | Show the GPU adapter the engine would use |
 | [`slopshop render`](#slopshop-render) | Render a built-in demo document to a PNG file |
-| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, BMP, Targa, Netpbm, PFM or a layered PSD or PSB |
+| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM or a layered PSD or PSB |
 | [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
 | [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
 | `slopshop --help`, `slopshop -h` | Print the usage |
@@ -73,10 +73,10 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 
 | Option | Values | Meaning |
 |---|---|---|
-| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, any case) |
+| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, any case) |
 | `--depth` | `u8`, `u16`, `f16`, `f32` | Sample type: 8/16-bit integers, 16/32-bit floats (see the table below for each format). The color space stays the default one unless `--space` is given |
 | `--space` | see [Color spaces](#color-spaces) | Color space of the file. Always tagged in the file |
-| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm and PFM are uncompressed |
+| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm and PFM are uncompressed; JPEG XL is always lossless |
 | `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP, AVIF) | Quality of lossy compression |
 | `--subsampling` | `444`, `422`, `420` | JPEG only: chroma subsampling. `444` keeps full color resolution, `420` gives the smallest files |
 | `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG never has alpha; a layered PSD or PSB always keeps it |
@@ -123,6 +123,15 @@ are available, Adobe RGB and ProPhoto are not. Always lossy: the encoder (rav1e,
 without its assembly, [ADR 0021](adr/0021-avif-import.md)) has no lossless mode yet. The whole
 image is held while it is encoded (at most 16 384 pixels per side); a 4000 × 2000 photo takes
 about 4 s on the maintainer's machine (32 threads).
+
+### JPEG XL
+
+Lossless, 8 or 16-bit (16-bit by default when a visible raster is deeper than 8-bit), gray or
+color, with alpha unless the document is opaque. Every color space of `--space` can be declared
+(enumerated or as custom primaries and gamma, without an ICC profile). The encoder (zune-jpegxl,
+pure Rust) has no lossy mode, and writes 16-bit gray with alpha in color. The whole image is
+held while it is encoded (at most 65 535 pixels per side); a 4000 × 2000 16-bit photo takes
+0.2 s and makes a file about 30 % smaller than PNG.
 
 ### Netpbm and PFM
 
@@ -176,6 +185,7 @@ Which spaces each format can store *and tag* so that it reads back as the same s
 - **PNG**: all of them (sRGB chunk, cICP chunk, or ICC profile).
 - **BMP**, **Targa** and **Netpbm**: `srgb` only. **PFM**: `linear-srgb` only.
 - **AVIF**: all but `adobe-rgb` and `prophoto` (H.273 code points).
+- **JPEG XL**: all of them (its color encodings).
 - **TIFF**, **JPEG**, **WebP**, **PSD** and **PSB**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
 - **OpenEXR**: `linear-srgb` and `linear-rec2020` (EXR samples are linear; the primaries go in
   the `chromaticities` attribute).
