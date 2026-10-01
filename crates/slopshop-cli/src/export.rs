@@ -33,7 +33,7 @@ const SPACES: [ColorSpace; 9] = [
     ColorSpace::REC2100_HLG,
 ];
 
-const FORMATS: [ExportFormatKind; 9] = [
+const FORMATS: [ExportFormatKind; 11] = [
     ExportFormatKind::Png,
     ExportFormatKind::Tiff,
     ExportFormatKind::Exr,
@@ -43,6 +43,8 @@ const FORMATS: [ExportFormatKind; 9] = [
     ExportFormatKind::Psb,
     ExportFormatKind::Bmp,
     ExportFormatKind::Tga,
+    ExportFormatKind::Pnm,
+    ExportFormatKind::Pfm,
 ];
 
 /// `--subsampling`, as it spells each value.
@@ -108,9 +110,10 @@ impl Depth {
 
     fn supported_by(self, kind: ExportFormatKind) -> bool {
         match kind {
-            ExportFormatKind::Png => self.png().is_some(),
+            ExportFormatKind::Png | ExportFormatKind::Pnm => self.png().is_some(),
             ExportFormatKind::Tiff => self.tiff().is_some(),
             ExportFormatKind::Exr => self.exr().is_some(),
+            ExportFormatKind::Pfm => self == Depth::F32,
             ExportFormatKind::Jpeg
             | ExportFormatKind::Webp
             | ExportFormatKind::Bmp
@@ -198,7 +201,9 @@ impl Compression {
             | ExportFormatKind::Jpeg
             | ExportFormatKind::Psd
             | ExportFormatKind::Psb
-            | ExportFormatKind::Bmp => false,
+            | ExportFormatKind::Bmp
+            | ExportFormatKind::Pnm
+            | ExportFormatKind::Pfm => false,
         }
     }
 }
@@ -404,7 +409,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 ExportFormatKind::Psd | ExportFormatKind::Psb => {
                     format!("{name} has no --compression option (it always uses RLE)")
                 }
-                ExportFormatKind::Bmp => {
+                ExportFormatKind::Bmp | ExportFormatKind::Pnm | ExportFormatKind::Pfm => {
                     format!("{name} has no --compression option (it is uncompressed)")
                 }
                 _ => format!("{name} has no --compression option (it always uses lossless ZIP)"),
@@ -628,6 +633,8 @@ fn format_of(path: &Path) -> Option<ExportFormatKind> {
         "psb" => Some(ExportFormatKind::Psb),
         "bmp" => Some(ExportFormatKind::Bmp),
         "tga" => Some(ExportFormatKind::Tga),
+        "pnm" | "ppm" | "pgm" | "pam" => Some(ExportFormatKind::Pnm),
+        "pfm" => Some(ExportFormatKind::Pfm),
         _ => None,
     }
 }
@@ -644,6 +651,8 @@ fn format_id(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Psb => "psb",
         ExportFormatKind::Bmp => "bmp",
         ExportFormatKind::Tga => "tga",
+        ExportFormatKind::Pnm => "pnm",
+        ExportFormatKind::Pfm => "pfm",
     }
 }
 
@@ -658,6 +667,8 @@ fn format_name(kind: ExportFormatKind) -> &'static str {
         ExportFormatKind::Psb => "Photoshop large document (layered PSB)",
         ExportFormatKind::Bmp => "BMP",
         ExportFormatKind::Tga => "Targa",
+        ExportFormatKind::Pnm => "Netpbm (PGM, PPM, PAM)",
+        ExportFormatKind::Pfm => "Portable Float Map",
     }
 }
 
@@ -725,6 +736,10 @@ fn export_spec(args: &Args, document: &Document) -> ExportSpec {
             depth: args.depth.and_then(Depth::psd).unwrap_or(depth),
         },
         ExportFormat::Bmp => ExportFormat::Bmp,
+        ExportFormat::Pnm { depth } => ExportFormat::Pnm {
+            depth: args.depth.and_then(Depth::png).unwrap_or(depth),
+        },
+        ExportFormat::Pfm => ExportFormat::Pfm,
         ExportFormat::Tga { compression } => ExportFormat::Tga {
             compression: args
                 .compression
@@ -786,6 +801,14 @@ fn describe(spec: &ExportSpec) -> String {
             None,
         ),
         ExportFormat::Jpeg { .. } | ExportFormat::Bmp => (Depth::U8, None),
+        ExportFormat::Pnm { depth } => (
+            match depth {
+                PngDepth::U8 => Depth::U8,
+                PngDepth::U16 => Depth::U16,
+            },
+            None,
+        ),
+        ExportFormat::Pfm => (Depth::F32, None),
         ExportFormat::Tga { compression } => (
             Depth::U8,
             Some(match compression {
