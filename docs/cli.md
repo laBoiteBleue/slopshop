@@ -19,6 +19,7 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 | [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM or a layered PSD or PSB |
 | [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
 | [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
+| [`slopshop bench`](#slopshop-bench) | Time the viewport renderer on a document (redraw, pan, zoom) |
 | `slopshop --help`, `slopshop -h` | Print the usage |
 | `slopshop --version`, `slopshop -V` | Print the version |
 
@@ -283,4 +284,39 @@ opening took.
 slopshop save background.tif overlay.png --out montage.slop
 slopshop inspect montage.slop
 slopshop export montage.slop montage.png
+```
+
+## `slopshop bench`
+
+```sh
+slopshop bench <FILE> [--size WxH] [--at X,Y] [--frames N]
+```
+
+Times the viewport renderer (the one the app displays with) on a `.slop` document, or an image
+file opened as a one-layer document, to compare display performance before and after a change.
+Use a release build: debug timings mean little. Four scenarios run, each on a fresh renderer
+(its first frame starts with an empty GPU tile cache):
+
+| Scenario | Views |
+|---|---|
+| `redraw, fit` | The document fitted in the viewport, drawn again and again (what any change costs today) |
+| `redraw, 100 %` | The same at 100 %, centered on `--at` |
+| `pan, 100 %` | At 100 %, moving right by a sixteenth of the viewport per frame from `--at` |
+| `zoom, fit to 800 %` | From the fitted zoom to 800 % about `--at`, in equal ratios |
+
+Pixels are not read back (the app on Windows presents them on the GPU): each frame is timed
+from the request until the GPU has finished it. Columns, in milliseconds: `first` frame,
+`median` and `p95` of the others, then the median CPU time to plan a frame and record its
+tile uploads (`prepare`) and the median GPU time of the compositing pass (`gpu`, `-` when the
+adapter cannot time passes); `layers` is the largest number of steps the shader visits per
+pixel, `tiles` the number of tiles uploaded to the GPU in the scenario.
+
+| Option | Meaning |
+|---|---|
+| `--size WxH` | The viewport, in pixels. Default: `1920x1080` |
+| `--at X,Y` | The document point the 100 % views, the pan and the zoom start from, in pixels. Default: the document center |
+| `--frames N` | Frames per scenario, 2 or more. Default: 30 |
+
+```sh
+cargo run --release -p slopshop-cli -- bench scan.slop --at 280,280
 ```
