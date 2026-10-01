@@ -26,8 +26,8 @@ use slopshop_core::{
     RasterImage, Rect, Session, Size,
 };
 use slopshop_io::slop::SlopFile;
-use slopshop_render::Renderer;
 use slopshop_render::present::{Presented, Presenter};
+use slopshop_render::{Renderer, ViewOverlays};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -120,6 +120,8 @@ struct OpenDocument {
     saving: bool,
     /// The selection Select > Deselect removed last, for Select > Reselect.
     last_selection: Option<slopshop_core::selection::Selection>,
+    /// What the view shows over the image (Quick Mask): view state, like the viewport.
+    overlays: ViewOverlays,
 }
 
 impl OpenDocument {
@@ -136,6 +138,7 @@ impl OpenDocument {
             saved_revision,
             saving: false,
             last_selection: None,
+            overlays: ViewOverlays::default(),
         }
     }
 
@@ -171,6 +174,7 @@ impl OpenDocument {
         view.path = self.path.as_ref().map(|p| p.display().to_string());
         view.dirty = self.dirty();
         view.can_reselect = self.reselectable().is_some();
+        view.quick_mask = self.overlays.quick_mask;
         view
     }
 }
@@ -1770,7 +1774,7 @@ async fn render_view(
 
         // Snapshot the document and its view together, then release the lock while the GPU
         // works. Cheap: raster pixels are shared, never copied.
-        let (doc, viewport) = {
+        let (doc, viewport, overlays) = {
             let mut documents = state.documents()?;
             documents.output = Some(output);
             let document = documents.get_mut(document_id)?;
@@ -1778,7 +1782,7 @@ async fn render_view(
             if document.viewport.output() != output {
                 document.viewport.resize(doc.size(), output);
             }
-            (doc, document.viewport)
+            (doc, document.viewport, document.overlays)
         };
 
         let mut bytes = Vec::with_capacity(FRAME_HEADER_LEN + pixel_bytes);
@@ -1787,7 +1791,7 @@ async fn render_view(
         bytes.resize(FRAME_HEADER_LEN, 0);
         let start = Instant::now();
         renderer
-            .render_view_into(&doc, viewport.transform(), output, &mut bytes)
+            .render_view_into(&doc, viewport.transform(), overlays, output, &mut bytes)
             .map_err(|e| e.to_string())?;
         let header = FrameHeader {
             size: output,
@@ -1833,7 +1837,7 @@ async fn present_view(
         }
         let renderer = state.renderer()?;
         let output = Size::new(width, height);
-        let (doc, viewport) = {
+        let (doc, viewport, overlays) = {
             let mut documents = state.documents()?;
             documents.output = Some(output);
             let document = documents.get_mut(document_id)?;
@@ -1841,7 +1845,7 @@ async fn present_view(
             if !output.is_empty() && document.viewport.output() != output {
                 document.viewport.resize(doc.size(), output);
             }
-            (doc, document.viewport)
+            (doc, document.viewport, document.overlays)
         };
         let surface_size = state.surface_size(&app)?;
 
@@ -1859,6 +1863,7 @@ async fn present_view(
                     presenter,
                     &doc,
                     viewport.transform(),
+                    overlays,
                     Rect::new(x, y, width, height),
                     surface_size,
                     PASTEBOARD_SRGB,
@@ -2066,6 +2071,7 @@ pub fn run() {
             selection::invert_selection,
             selection::deselect,
             selection::reselect,
+            selection::set_quick_mask,
             selection::selection_outline,
             layer_at,
             move_snap_targets,

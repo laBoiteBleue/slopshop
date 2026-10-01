@@ -1279,6 +1279,32 @@ fn fill_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(cache_target, id.xy, finite(to_display(acc), false));
 }
 
+// Quick Mask (ADR 0024): Photoshop's red, half opaque over what the selection leaves out.
+const QUICK_MASK_COLOR = vec3<f32>(1.0, 0.0, 0.0);
+const QUICK_MASK_OPACITY = 0.5;
+
+// Quick Mask over the finished frame in `output`: `layers[0]` carries the selection as its mask.
+// Tinted in the encoded display space, as Photoshop draws it; the pasteboard is left alone.
+@compute @workgroup_size(8, 8)
+fn quick_mask_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.out_size.x || id.y >= params.out_size.y {
+        return;
+    }
+    let pixel = view_pixel(id.xy);
+    if pixel.coverage <= 0.0 {
+        return;
+    }
+    var selected = 0.0;
+    let layer = layers[0];
+    if (layer.flags & FLAG_MASK) != 0u {
+        selected = mask_coverage(layer, pixel.footprint, Resampled(vec4<f32>(0.0), 0.0, 0u));
+    }
+    let amount = QUICK_MASK_OPACITY * (1.0 - selected) * min(pixel.coverage, 1.0);
+    let index = id.y * params.out_size.x + id.x;
+    let color = unpack4x8unorm(output[index]);
+    output[index] = pack4x8unorm(vec4<f32>(mix(color.rgb, QUICK_MASK_COLOR, amount), 1.0));
+}
+
 // Display cache, present: the cache layer holding texel `texel` of the frame's level `i`, or
 // NO_TILE.
 fn cached_slot(i: u32, texel: vec2<i32>) -> u32 {

@@ -203,6 +203,20 @@ pub async fn reselect(
     Ok(document.view())
 }
 
+/// Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. View
+/// state: not an edit, not in the history.
+#[tauri::command]
+pub async fn set_quick_mask(
+    state: State<'_, AppState>,
+    document_id: u64,
+    on: bool,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    document.overlays.quick_mask = on;
+    Ok(document.view())
+}
+
 /// Most points an outline sends: beyond it, a coarser level is used.
 const MAX_OUTLINE_POINTS: usize = 60_000;
 

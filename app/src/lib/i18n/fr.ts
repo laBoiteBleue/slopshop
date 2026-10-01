@@ -108,6 +108,7 @@ const fr: Messages = {
   "menu.select.deselect": "Désélectionner",
   "menu.select.reselect": "Resélectionner",
   "menu.select.inverse": "Intervertir",
+  "menu.select.quickMask": "Modifier en mode Masque",
   "menu.view.zoomIn": "Zoom avant",
   "menu.view.zoomOut": "Zoom arrière",
   "menu.view.fit": "Taille écran",
