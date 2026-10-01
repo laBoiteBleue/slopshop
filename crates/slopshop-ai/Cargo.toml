@@ -1,0 +1,39 @@
+[package]
+name = "slopshop-ai"
+description = "SlopShop's AI helper (ADR 0025): the protocol and client (library), and the slopshop-ai executable that runs the models through ONNX Runtime (feature `helper`)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "slopshop-ai"
+path = "src/main.rs"
+required-features = ["helper"]
+
+[features]
+# The executable: ONNX Runtime, loaded at run time from a library the app downloads (never
+# linked, never shipped with the editor). The library side (protocol, client) needs nothing.
+helper = ["dep:ort"]
+
+[dependencies]
+# ONNX Runtime bindings (MIT OR Apache-2.0), only in the helper. `load-dynamic`: nothing is
+# linked or downloaded at build time; the runtime library is opened from a path at start. The
+# execution provider features only declare their options; the loaded library decides which
+# providers exist. Release candidate: the 2.0 API is the one maintained (ADR 0025).
+ort = { version = "=2.0.0-rc.13", default-features = false, optional = true, features = [
+    "std",
+    "load-dynamic",
+    "api-27",
+    "cuda",
+    "directml",
+] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "helper"
+required-features = ["helper"]

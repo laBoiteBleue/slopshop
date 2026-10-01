@@ -6,6 +6,7 @@ members = [
     "crates/slopshop-io",
     "crates/slopshop-cli",
     "crates/slopshop-raw",
+    "crates/slopshop-ai",
     "app/src-tauri",
 ]
 
