@@ -97,7 +97,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 | GIF | `.gif` | ✅ (first frame) | — | P2 export | `gif` | animation import needs frame support in the model |
 | BMP | `.bmp` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB (V5 header), alpha; embedded V5 ICC not read yet; `.dib` not recognized yet |
 | Targa | `.tga` | ✅ | ✅ | done | `image` / in-house writer | export: 8-bit sRGB, alpha, RLE or uncompressed; Photoshop also uses `.vda`, `.icb`, `.vst`: not recognized yet |
-| Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | — | P2 export | `image`, zune-ppm (PFM) | |
+| Portable Bit Map | `.pbm`, `.pgm`, `.ppm`, `.pnm`, `.pfm`, `.pam` | ✅ | ✅ | done | `image`; PFM and every export in-house | export: PGM/PPM/PAM 8/16-bit sRGB, PFM 32-bit float linear |
 | Radiance | `.hdr` | ✅ | — | P2 export | `image` | RGBE, kept linear, never tone-mapped; XYZE variant not supported |
 | JPEG XL | `.jxl` | 🔎 | — | P1 | jxl-rs or jxl-oxide (pure Rust); export: own thin FFI to libjxl (BSD) | the Rust bindings of libjxl are GPL: not usable |
 | AVIF | `.avif` | 🔎 | — | P1 | avif-decode (rav1d) or dav1d; export: ravif / rav1e | grid AVIF needs libheif (LGPL, isolated) |
