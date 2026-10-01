@@ -1376,6 +1376,129 @@ fn soften(mask: &Mask) -> Mask {
     out
 }
 
+// --- Color Range -------------------------------------------------------------------------------
+
+/// The largest fuzziness of Color Range (Photoshop's).
+pub const MAX_FUZZINESS: f32 = 200.0;
+
+/// What Select > Color Range selects: the colors of the sampled pixels and those within
+/// `fuzziness` of them, partly selected as they get farther; minus the colors of the
+/// `excluded` samples (Photoshop's subtracting eyedropper); inverted on request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorRange {
+    /// Colors as displayed (whole 8-bit sRGB values, straight alpha): see [`sample_colors`].
+    pub included: Vec<[f32; 4]>,
+    pub excluded: Vec<[f32; 4]>,
+    /// 0–200: how far from a sampled color a color is still selected, in 8-bit steps.
+    pub fuzziness: f32,
+    pub invert: bool,
+}
+
+impl ColorRange {
+    /// How much `color` (as displayed) is selected, in `[0, 1]`: 1 on a sampled color, falling
+    /// linearly to 0 at `fuzziness` (the largest difference over red, green, blue and alpha).
+    pub fn coverage(&self, color: [f32; 4]) -> f32 {
+        let near = |samples: &[[f32; 4]]| {
+            samples
+                .iter()
+                .map(|s| {
+                    let d = (0..4)
+                        .map(|c| (color[c] - s[c]).abs())
+                        .fold(0.0f32, f32::max);
+                    if self.fuzziness <= 0.0 {
+                        if d < 0.5 { 1.0 } else { 0.0 }
+                    } else {
+                        (1.0 - d / self.fuzziness).clamp(0.0, 1.0)
+                    }
+                })
+                .fold(0.0f32, f32::max)
+        };
+        let value = near(&self.included) * (1.0 - near(&self.excluded));
+        if self.invert { 1.0 - value } else { value }
+    }
+}
+
+/// The colors of `source` at `points` (document pixels), as displayed: whole 8-bit sRGB values,
+/// straight alpha. Points outside the canvas are skipped.
+pub fn sample_colors(source: &crate::document::Document, points: &[(u32, u32)]) -> Vec<[f32; 4]> {
+    let size = source.size();
+    let Ok(mask) = Mask::new(size) else {
+        return Vec::new();
+    };
+    let sampler = WandSampler::new(source);
+    let mut tiles: HashMap<(usize, usize), Vec<[f32; 4]>> = HashMap::new();
+    points
+        .iter()
+        .filter(|&&(x, y)| x < size.width && y < size.height)
+        .map(|&(x, y)| {
+            let (col, row) = (x as usize / T, y as usize / T);
+            let tile = tiles
+                .entry((col, row))
+                .or_insert_with(|| sampler.tile(col, row, &mask));
+            tile[(y as usize % T) * T + x as usize % T]
+        })
+        .collect()
+}
+
+/// Select > Color Range on `source` (the composited document, or one holding only the layer to
+/// sample): every pixel, by its color, as [`ColorRange::coverage`] says. As in Photoshop, a
+/// current selection limits it: the result is within it. Tiles are composited and compared on
+/// every core.
+pub fn color_range(
+    source: &crate::document::Document,
+    current: Option<&RasterImage>,
+    range: &ColorRange,
+) -> Result<Option<RasterImage>, SelectionError> {
+    if !range.fuzziness.is_finite() || !(0.0..=MAX_FUZZINESS).contains(&range.fuzziness) {
+        return Err(SelectionError::InvalidShape);
+    }
+    let canvas = source.size();
+    let mut mask = Mask::new(canvas)?;
+    let sampler = WandSampler::new(source);
+    let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = tiles.len().div_ceil(threads).max(1);
+    let (shape, sampler) = (&mask, &sampler);
+    let mut done: Vec<(usize, Tile)> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = tiles
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&index| {
+                            let (col, row) = (index % shape.columns, index / shape.columns);
+                            let pixels = sampler.tile(col, row, shape);
+                            let (w, h) = shape.valid(col, row);
+                            let mut values = vec![0u16; T * T];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let c = range.coverage(pixels[y * T + x]);
+                                    values[y * T + x] = (c * f32::from(FULL)).round() as u16;
+                                }
+                            }
+                            pad(&mut values, w, h);
+                            (index, Tile::Data(values))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: comparing colors does not panic.
+            done.extend(worker.join().expect("color range worker panicked"));
+        }
+    });
+    for (index, tile) in done {
+        mask.tiles[index] = tile;
+    }
+    match current {
+        Some(current) => finish(canvas, Some(current), mask, Combine::Intersect),
+        None => Ok(mask.into_image()),
+    }
+}
+
 // --- Rasterization -----------------------------------------------------------------------------
 
 /// The coverage of a closed polygon on a canvas: each pixel gets the exact fraction of its area
@@ -2346,6 +2469,53 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn color_range_selects_sampled_colors_with_fuzziness() {
+        let doc = wand_document();
+        let red = sample_colors(&doc, &[(100, 150)]);
+        assert_eq!(red, vec![[255.0, 0.0, 0.0, 255.0]]);
+        let range = ColorRange {
+            included: red.clone(),
+            excluded: Vec::new(),
+            fuzziness: 40.0,
+            invert: false,
+        };
+        // Every red pixel, the square inside the blue too; the nearby red strip partly.
+        let image = color_range(&doc, None, &range).unwrap().unwrap();
+        assert_eq!(image.gray_at(100, 150), 1.0);
+        assert_eq!(image.gray_at(460, 120), 1.0);
+        assert_eq!(image.gray_at(400, 250), 0.0);
+        let strip = image.gray_at(100, 10);
+        assert!(strip > 0.7 && strip < 0.8, "{strip}");
+        // Excluding the strip's color, and inverting.
+        let strip_color = sample_colors(&doc, &[(100, 10)]);
+        let narrower = ColorRange {
+            excluded: strip_color,
+            fuzziness: 4.0,
+            ..range.clone()
+        };
+        let image = color_range(&doc, None, &narrower).unwrap().unwrap();
+        assert_eq!(image.gray_at(100, 10), 0.0);
+        let inverted = ColorRange {
+            invert: true,
+            ..range.clone()
+        };
+        let image = color_range(&doc, None, &inverted).unwrap().unwrap();
+        assert_eq!(image.gray_at(400, 250), 1.0);
+        assert_eq!(image.gray_at(100, 150), 0.0);
+        // Within the current selection only.
+        let left = select(Size::new(600, 300), &rect(0.0, 0.0, 200.0, 300.0));
+        let image = color_range(&doc, Some(&left), &range).unwrap().unwrap();
+        assert_eq!(image.gray_at(100, 150), 1.0);
+        assert_eq!(image.gray_at(250, 150), 0.0);
+        assert_eq!(image.gray_at(460, 120), 0.0);
+        let bad = ColorRange {
+            fuzziness: 300.0,
+            ..range
+        };
+        assert!(color_range(&doc, None, &bad).is_err());
     }
 
     #[test]
