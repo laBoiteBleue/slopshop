@@ -6,7 +6,7 @@
 import type { IconName } from "./Icon.svelte";
 import type { MessageKey } from "./i18n/en";
 
-export type ToolId = "move" | "marquee" | "ellipse" | "crop";
+export type ToolId = "move" | "marquee" | "ellipse" | "lasso" | "polygonalLasso" | "crop";
 
 export type Tool = {
   id: ToolId;
@@ -30,6 +30,13 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "ellipse", icon: "ellipse", name: "tools.ellipse" },
     ],
   },
+  {
+    key: "L",
+    tools: [
+      { id: "lasso", icon: "lasso", name: "tools.lasso" },
+      { id: "polygonalLasso", icon: "polygonalLasso", name: "tools.polygonalLasso" },
+    ],
+  },
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
 ];
 
@@ -50,5 +57,5 @@ export function slotForLetter(letter: string | null): ToolSlot | null {
 
 /** The tools that draw a selection. */
 export function isSelectionTool(id: ToolId): boolean {
-  return id === "marquee" || id === "ellipse";
+  return id === "marquee" || id === "ellipse" || id === "lasso" || id === "polygonalLasso";
 }

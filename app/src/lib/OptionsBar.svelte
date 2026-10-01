@@ -23,7 +23,7 @@
     selectionMode: SelectionMode;
     /** Selection tools: Gaussian softening of the edge, in pixels. */
     feather: number;
-    /** Elliptical Marquee: smooth edges. */
+    /** Elliptical Marquee and lassos: smooth edges. */
     antiAlias: boolean;
   } = $props();
 
@@ -81,7 +81,7 @@
       />
       px
     </label>
-    {#if tool === "ellipse"}
+    {#if tool !== "marquee"}
       <label class="option">
         <input type="checkbox" bind:checked={antiAlias} />
         {t("options.antiAlias")}
