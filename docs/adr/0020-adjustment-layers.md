@@ -31,8 +31,11 @@ node model the document is heading to (ADR 0009).
    tinted), Color Balance (GIMP's model: shifts weighted by lightness ranges, HSL lightness
    optionally kept), Photo Filter (a multiplication in linear light, luminance optionally
    kept) and Channel Mixer. Up to 16 parameters each (flags as 0 or 1): on the GPU they use
-   layer fields an adjustment has no other use for. Curves (with an editor) and others follow
-   on the same model.
+   layer fields an adjustment has no other use for. Then Curves: up to 16 points per curve on
+   Photoshop's 0–255 scale (composite, red, green, blue; each channel's curve, then the
+   composite), a natural cubic spline through them, applied through 1024-entry lookup tables
+   that both compositors interpolate the same way (on the GPU, appended to the tile table,
+   so no new binding). Others follow on the same model.
 5. **Blend mode**: normal only for now; the others (luminosity, color…) come later.
 6. **Both compositors**: a step of the shared step list (`Step::Adjust`), computed identically
    by the CPU reference and the GPU (tested against each other).
