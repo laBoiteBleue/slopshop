@@ -6,7 +6,8 @@ provider. Not part of SlopShop: outside the Cargo workspace, never built by CI. 
 
 ```sh
 python fetch_models.py            # 5.5 GB of pinned models, SHA-256 checked, no account needed
-cargo run --release -- --ep directml --ep cpu [--only sam2.1-tiny] [--runs 20] [--opt basic]
+cargo run --release --features directml -- --ep directml --ep cpu [--only sam2.1-tiny] [--runs 20]
+# WebGPU instead of DirectML (one GPU provider per build): --features webgpu, --ep webgpu
 ```
 
 Models go to `%LOCALAPPDATA%/slopshop/bench-models` (or `~/.cache/slopshop/bench-models`);

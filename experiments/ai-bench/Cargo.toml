@@ -11,11 +11,15 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # ONNX Runtime bindings (MIT OR Apache-2.0); the prebuilt ONNX Runtime 1.28 is downloaded at
-# build time. DirectML on Windows (DirectML.dll ships with it).
+# build time, a different build per execution provider feature below.
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native", "api-27"] }
 
-[target.'cfg(windows)'.dependencies]
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native", "api-27", "directml"] }
+[features]
+# One GPU execution provider per build: the prebuilt binaries do not combine them.
+# DirectML (Windows; DirectML.dll ships with it).
+directml = ["ort/directml"]
+# WebGPU (Dawn: D3D12, Vulkan, Metal), experimental in ONNX Runtime.
+webgpu = ["ort/webgpu"]
 
 [profile.release]
 debug = false
