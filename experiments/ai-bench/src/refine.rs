@@ -32,6 +32,8 @@ pub struct Options {
     pub boxed: Option<[f32; 4]>,
     /// The top-left corner of the full-resolution crop, as fractions.
     pub crop: (f32, f32),
+    /// ViTMatte's undecided band: pixels on each side of the coarse contour, at its 1024² input.
+    pub trimap_band: usize,
     /// Guided filter radius and regularization (on luminance in [0, 1]).
     pub radius: usize,
     pub eps: f32,
@@ -369,6 +371,95 @@ pub fn run(models: &Path, ep: Ep, o: &Options) -> Result<(), String> {
         ms(t)
     );
     view(&learned, "birefnet")?;
+
+    // ViTMatte-S, guided by a trimap from the coarse mask: it mattes whatever is selected.
+    let t = Instant::now();
+    let path = models.join("Xenova/vitmatte-small-composition-1k/onnx/model.onnx");
+    let mut vitmatte = session(&path, ep, level).map_err(|e| e.to_string())?;
+    let input_name = vitmatte.inputs()[0].name().to_owned();
+    let output_name = vitmatte.outputs()[0].name().to_owned();
+    let mut pixels = vec![0f32; 4 * plane];
+    for (i, p) in input.pixels().enumerate() {
+        for c in 0..3 {
+            pixels[c * plane + i] = (f32::from(p[c]) / 255.0 - 0.5) / 0.5;
+        }
+    }
+    let side = SIDE as usize;
+    // The trimap: a band of fixed width on both sides of the coarse mask's half-way contour is
+    // left for the model to decide; beyond it, sure inside or outside. (Thresholds on the
+    // probability leave almost no sure region where the coarse mask is soft, and the model then
+    // chooses the foreground itself.)
+    let inside: Vec<bool> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (i % side, i / side);
+            let (px, py) = (
+                (cx + x * 800 / side).min(wu - 1),
+                (cy + y * 800 / side).min(hu - 1),
+            );
+            coarse[py * wu + px] >= 0.5
+        })
+        .collect();
+    let band = o.trimap_band.max(1);
+    let mut sat = vec![0u32; (side + 1) * (side + 1)];
+    for y in 0..side {
+        let mut row = 0;
+        for x in 0..side {
+            row += u32::from(inside[y * side + x]);
+            sat[(y + 1) * (side + 1) + x + 1] = sat[y * (side + 1) + x + 1] + row;
+        }
+    }
+    let mut unknown = vec![false; side * side];
+    for y in 0..side {
+        let (ya, yb) = (y.saturating_sub(band), (y + band + 1).min(side));
+        for x in 0..side {
+            let (xa, xb) = (x.saturating_sub(band), (x + band + 1).min(side));
+            let count = sat[yb * (side + 1) + xb] + sat[ya * (side + 1) + xa]
+                - sat[ya * (side + 1) + xb]
+                - sat[yb * (side + 1) + xa];
+            let area = ((xb - xa) * (yb - ya)) as u32;
+            unknown[y * side + x] = count > 0 && count < area;
+            pixels[3 * plane + y * side + x] = if unknown[y * side + x] {
+                128.0 / 255.0
+            } else if inside[y * side + x] {
+                1.0
+            } else {
+                0.0
+            };
+        }
+    }
+    let tensor =
+        Tensor::from_array(([1usize, 4, side, side], pixels)).map_err(|e| e.to_string())?;
+    vitmatte
+        .run(ort::inputs![input_name.as_str() => tensor.view()])
+        .map_err(|e| e.to_string())?;
+    let t_run = Instant::now();
+    let out = vitmatte
+        .run(ort::inputs![input_name.as_str() => tensor.view()])
+        .map_err(|e| e.to_string())?;
+    let run_ms = ms(t_run);
+    let alphas = out[output_name.as_str()]
+        .try_extract_array::<f32>()
+        .map_err(|e| e.to_string())?;
+    let mut matted = refined.clone();
+    for y in 0..800usize.min(hu - cy) {
+        for x in 0..800usize.min(wu - cx) {
+            let k = (cy + y) * wu + cx + x;
+            let (sx, sy) = (x * side / 800, y * side / 800);
+            matted[k] = if unknown[sy * side + sx] {
+                alphas[[0, 0, sy, sx]].clamp(0.0, 1.0)
+            } else if inside[sy * side + sx] {
+                1.0
+            } else {
+                0.0
+            };
+        }
+    }
+    drop(out);
+    println!(
+        "ViTMatte-S ({input_name} -> {output_name}) on one 800² crop: {run_ms:.0} ms warm ({:.0} ms with loading)",
+        ms(t)
+    );
+    view(&matted, "vitmatte")?;
     println!("crops in {}", o.out.display());
     Ok(())
 }

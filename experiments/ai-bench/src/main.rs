@@ -441,6 +441,7 @@ fn refine_main(dir: PathBuf) {
         crop: (0.1, 0.35),
         radius: 8,
         eps: 1e-3,
+        trimap_band: 24,
         out: dir.join("refine-out"),
     };
     while let Some(arg) = args.next() {
@@ -464,6 +465,7 @@ fn refine_main(dir: PathBuf) {
                     value().parse().unwrap_or(0.35),
                 )
             }
+            "--band" => options.trimap_band = value().parse().unwrap_or(24),
             "--radius" => options.radius = value().parse().unwrap_or(8),
             "--eps" => options.eps = value().parse().unwrap_or(1e-3),
             "--out" => options.out = PathBuf::from(value()),

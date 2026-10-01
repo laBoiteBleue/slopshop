@@ -517,6 +517,32 @@ picked a third region), and only inside the uncertain band. This avoids gross er
 no hair detail when the selection is not salient: a **mask- or trimap-guided, class-agnostic
 matting model** is the principled refinement (candidates and licenses under review).
 
+### Mask-guided matting: ViTMatte-S (2026-10-01)
+
+Candidates reviewed for a class-agnostic refinement guided by the selection: ViTMatte (code MIT,
+weights Apache-2.0, ONNX `Xenova/vitmatte-small-composition-1k`, 104 MB), MEMatte (MIT, no
+ONNX), Matting Anything (tied to SAM 1), CascadePSP / SegRefiner (binary output, poor on fur),
+DiffMatte (10 diffusion steps); excluded as non-commercial: MGMatting, ZIM, SAM2Matting, Matte
+Anything, MatAnyone. **Caveat for the maintainer: almost every matting model, ViTMatte included,
+is trained on Adobe Composition-1k or Distinctions-646, whose terms are research-only; whether
+that reaches the published weights is legally unsettled.**
+
+ViTMatte-S on the cat photo, a trimap made from the coarse SAM mask (sure inside, sure outside,
+and a band to decide), 1024² per crop: **52 ms per crop** on CUDA (BiRefNet: 160 ms).
+- **Fence selected**: correct (BiRefNet matted the cat): the rail is kept, the cat excluded, the
+  edge follows the fur; hairs lying over the rail stay with the rail.
+- **Cat selected**: close to BiRefNet when the undecided band is wide enough for the long hairs;
+  a narrow band cuts them and leaves a light halo.
+- **The trimap decides everything**: thresholds on the coarse probability leave no sure region
+  where the coarse mask is soft (the model then picks the foreground itself, wrongly); a band of
+  fixed width around the half-way contour is safe but cuts long hairs. The band should follow
+  the coarse mask's uncertainty (wider in fur): to tune.
+
+Direction: **SAM 2.1 (coarse, any object) → trimap from its mask → ViTMatte on the band's tiles
+(class-agnostic, 52 ms per tile)**, with BiRefNet as an option for "Select Subject" where it is
+sharper. Before the ADR: band width, seams between tiles, cost on 100+ MP, and the training-data
+license question.
+
 ## 8. Open questions for the maintainer
 
 1. **Weight license policy** (extends ADR 0006 to model weights):
