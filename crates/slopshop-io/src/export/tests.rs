@@ -1692,3 +1692,100 @@ fn bmp_and_tga_round_trip_bit_exact() {
         &ColorSpace::LINEAR_SRGB
     ));
 }
+
+#[test]
+fn netpbm_round_trips_are_exact() {
+    let (w, h) = (ODD_SIZE.width, ODD_SIZE.height);
+    let gray16 = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_fn(w, h, |x, y| {
+        image::Luma([(x * 211 + y * 97) as u16])
+    });
+    let rgba8 = image::RgbaImage::from_fn(w, h, |x, y| {
+        image::Rgba([x as u8, (y * 3) as u8, (x ^ y) as u8, 1 + (x % 250) as u8])
+    });
+    let rgb16 = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(w, h, |x, y| {
+        image::Rgb([
+            (x * 200) as u16,
+            (y * 120) as u16,
+            ((x * y) % 65_536) as u16,
+        ])
+    });
+    let cases: [(image::DynamicImage, PngDepth, bool, bool, &str); 3] = [
+        (gray16.into(), PngDepth::U16, true, false, "pgm"),
+        (rgba8.into(), PngDepth::U8, false, true, "pam"),
+        (rgb16.into(), PngDepth::U16, false, false, "ppm"),
+    ];
+    for (input, depth, gray, keep_alpha, extension) in cases {
+        let source = temp_path(&format!("netpbm-{extension}-in.png"));
+        input.save(&source).unwrap();
+        let doc = raster_document(open_image(&source).unwrap().image);
+        std::fs::remove_file(&source).ok();
+        let spec = ExportSpec {
+            format: ExportFormat::Pnm { depth },
+            space: ColorSpace::SRGB,
+            keep_alpha,
+            matte: WHITE_MATTE,
+            dither: true,
+            gray,
+            blend_space: BlendSpace::default(),
+        };
+        let path = temp_path(&format!("netpbm.{extension}"));
+        export(&doc, &path, &spec).unwrap();
+        let output = image::ImageReader::open(&path)
+            .unwrap()
+            .with_guessed_format()
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert_eq!(output.color(), input.color(), "{extension}");
+        assert!(output == input, "{extension} is not exact");
+        assert_eq!(
+            open_image(&path).unwrap().image.format().color_space,
+            ColorSpace::SRGB
+        );
+        std::fs::remove_file(&path).ok();
+    }
+}
+
+#[test]
+fn pfm_round_trips_float_values_bottom_to_top() {
+    let size = Size::new(37, 300);
+    let format = float_rgb_linear();
+    let values: Vec<f32> = (0..size.pixel_count() as usize * 3)
+        .map(|i| i as f32 * 0.37 - 900.0)
+        .collect();
+    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let image = RasterImage::from_pixels(size, format, &bytes).unwrap();
+    let doc = raster_document(image);
+    let spec = default_spec(ExportFormatKind::Pfm, &doc);
+    assert_eq!(spec.format, ExportFormat::Pfm);
+    assert!(!spec.keep_alpha);
+    let path = temp_path("float.pfm");
+    let report = export(&doc, &path, &spec).unwrap();
+    assert_eq!(report, ExportReport::default());
+    let back = open_image(&path).unwrap().image;
+    std::fs::remove_file(&path).ok();
+    assert_eq!(back.format().color_space, ColorSpace::LINEAR_SRGB);
+    assert_eq!(back.format().sample, SampleType::F32);
+    // The first pixel of the last row: rows come back in order.
+    let tile = back.levels()[0]
+        .tile(slopshop_core::tile::TileCoord { col: 0, row: 1 })
+        .unwrap();
+    let bpp = back.stored_format().bytes_per_pixel() as usize;
+    let at = (299 - 256) * 256 * bpp;
+    let v = f32::from_ne_bytes(tile[at..at + 4].try_into().unwrap());
+    // Through the working space and back: float rounding only.
+    let expected = values[299 * 37 * 3];
+    assert!(
+        (v - expected).abs() <= expected.abs() * 1e-5,
+        "{v} {expected}"
+    );
+}
+
+fn float_rgb_linear() -> PixelFormat {
+    PixelFormat {
+        layout: ChannelLayout::Rgb,
+        sample: SampleType::F32,
+        color_space: ColorSpace::LINEAR_SRGB,
+        alpha: AlphaMode::Straight,
+    }
+}
