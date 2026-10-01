@@ -53,6 +53,7 @@
 //! modules, refer to the encoder crates with a leading `::` (`::png`, `::tiff`, `::exr`), since
 //! the modules have the same names (`::jpeg_encoder` has another name).
 
+mod avif;
 mod bmp;
 mod exr;
 mod jpeg;
@@ -81,6 +82,8 @@ use slopshop_core::convert::{ConversionReport, ConvertError, ConvertOptions, Con
 use slopshop_core::document::{Document, LayerContent};
 use slopshop_core::{BlendSpace, CancelToken, Progress, Rect, Size};
 
+use self::avif::AvifWriter;
+pub use self::avif::MAX_SIDE as AVIF_MAX_SIDE;
 use self::bmp::BmpWriter;
 use self::exr::ExrWriter;
 use self::jpeg::JpegWriter;
@@ -117,6 +120,7 @@ pub enum ExportFormatKind {
     Pnm,
     /// Netpbm's float format.
     Pfm,
+    Avif,
 }
 
 impl ExportFormatKind {
@@ -225,6 +229,19 @@ pub enum ExportFormat {
     },
     /// 32-bit float, linear sRGB primaries, gray or RGB, no alpha.
     Pfm,
+    /// AV1 still image, lossy (rav1e has no lossless mode): 8-bit, or 10-bit from 16-bit
+    /// samples, quality 0 to 100.
+    Avif {
+        depth: AvifDepth,
+        quality: u8,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AvifDepth {
+    U8,
+    /// 10 bits per sample, from 16-bit samples.
+    U10,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -248,6 +265,7 @@ impl ExportFormat {
             ExportFormat::Tga { .. } => ExportFormatKind::Tga,
             ExportFormat::Pnm { .. } => ExportFormatKind::Pnm,
             ExportFormat::Pfm => ExportFormatKind::Pfm,
+            ExportFormat::Avif { .. } => ExportFormatKind::Avif,
         }
     }
 
@@ -259,6 +277,10 @@ impl ExportFormat {
                 PngDepth::U16 => SampleType::U16,
             },
             ExportFormat::Pfm => SampleType::F32,
+            ExportFormat::Avif { depth, .. } => match depth {
+                AvifDepth::U8 => SampleType::U8,
+                AvifDepth::U10 => SampleType::U16,
+            },
             ExportFormat::Tiff { sample, .. } => match sample {
                 TiffSample::U8 => SampleType::U8,
                 TiffSample::U16 => SampleType::U16,
@@ -536,6 +558,7 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Bmp => Some(bmp::MAX_SIDE),
         ExportFormatKind::Tga => Some(tga::MAX_SIDE),
         ExportFormatKind::Pnm | ExportFormatKind::Pfm => None,
+        ExportFormatKind::Avif => Some(avif::MAX_SIDE),
         ExportFormatKind::Tiff => None,
     }
 }
@@ -577,6 +600,8 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         }
         // Float samples, linear, by convention.
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
+        // H.273 code points (`colr` and the AV1 header): the spaces cICP names, HDR included.
+        ExportFormatKind::Avif => avif::avif_code(space).is_some(),
     }
 }
 
@@ -596,6 +621,8 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         // By convention: the sRGB curve, or linear for floats.
         ExportFormatKind::Pnm => *space == ColorSpace::SRGB,
         ExportFormatKind::Pfm => *space == ColorSpace::LINEAR_SRGB,
+        // Monochrome AV1, its transfer declared with the code points.
+        ExportFormatKind::Avif => avif::avif_code(space).is_some(),
         ExportFormatKind::Exr
         | ExportFormatKind::Webp
         | ExportFormatKind::Psd
@@ -614,6 +641,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
             | ExportFormatKind::Jpeg
             | ExportFormatKind::Pnm
             | ExportFormatKind::Pfm
+            | ExportFormatKind::Avif
     )
 }
 
@@ -720,6 +748,21 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
             (ExportFormat::Pnm { depth }, ColorSpace::SRGB)
         }
         ExportFormatKind::Pfm => (ExportFormat::Pfm, ColorSpace::LINEAR_SRGB),
+        ExportFormatKind::Avif => {
+            let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
+            let declarable = |space: &ColorSpace| avif::avif_code(space).is_some();
+            // 8-bit: a source space with a curve (linear light needs more bits), else sRGB.
+            let space = unique_space
+                .filter(|s| declarable(s) && (deep || s.transfer != TransferFunction::Linear))
+                .unwrap_or(ColorSpace::SRGB);
+            (
+                ExportFormat::Avif {
+                    depth: if deep { AvifDepth::U10 } else { AvifDepth::U8 },
+                    quality: 80,
+                },
+                space,
+            )
+        }
         ExportFormatKind::Tga => (
             ExportFormat::Tga {
                 compression: TgaCompression::Rle,
@@ -953,6 +996,13 @@ pub fn export_image(
             FormatWriter::Pnm(Box::new(PnmWriter::new(file, size, target)?))
         }
         ExportFormat::Pfm => FormatWriter::Pfm(Box::new(PfmWriter::new(file, size, target)?)),
+        ExportFormat::Avif { quality, .. } => FormatWriter::Avif(Box::new(AvifWriter::new(
+            file,
+            size,
+            target,
+            quality,
+            cancel.clone(),
+        )?)),
         ExportFormat::Tga { compression } => {
             FormatWriter::Tga(Box::new(TgaWriter::new(file, size, target, compression)?))
         }
@@ -1002,6 +1052,7 @@ enum FormatWriter {
     Tga(Box<TgaWriter>),
     Pnm(Box<PnmWriter>),
     Pfm(Box<PfmWriter>),
+    Avif(Box<AvifWriter>),
 }
 
 impl FormatWriter {
@@ -1017,6 +1068,7 @@ impl FormatWriter {
             FormatWriter::Tga(w) => w.write_rows(first_row, rows),
             FormatWriter::Pnm(w) => w.write_rows(first_row, rows),
             FormatWriter::Pfm(w) => w.write_rows(first_row, rows),
+            FormatWriter::Avif(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1032,6 +1084,7 @@ impl FormatWriter {
             FormatWriter::Tga(w) => (*w).finish(),
             FormatWriter::Pnm(w) => (*w).finish(),
             FormatWriter::Pfm(w) => (*w).finish(),
+            FormatWriter::Avif(w) => (*w).finish(),
         }
     }
 }

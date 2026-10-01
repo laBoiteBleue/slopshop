@@ -4459,6 +4459,7 @@ version = "0.1.0"
 name = "slopshop-io"
 version = "0.1.0"
 dependencies = [
+ "avif-serialize",
  "blake3",
  "exr",
  "flate2",
@@ -4471,6 +4472,7 @@ dependencies = [
  "libwebp-sys",
  "png 0.18.1",
  "rav1d",
+ "rav1e",
  "serde",
  "serde_json",
  "slopshop-core",
