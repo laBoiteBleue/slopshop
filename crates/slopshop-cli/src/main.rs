@@ -28,7 +28,9 @@ USAGE:
         output of --size, to a PNG file.
         Defaults: --size 1024x768 --doc 12000x8000 --out slopshop.png
 
-    slopshop export <INPUT> <OUTPUT> [--format png|tiff|exr|jpeg|webp|psd|psb|bmp|tga|pnm|pfm|avif|jxl]
+    slopshop export <INPUT> <OUTPUT>
+                    [--format png|tiff|exr|jpeg|webp|psd|psb|bmp|tga|pnm|pfm|avif|jxl|qoi|ff|
+                              hdr|ico|gif|dds]
                     [--depth u8|u16|f16|f32] [--space ID]
                     [--compression fast|small|none|deflate|lzw|lossy|lossless|rle]
                     [--quality 0-100] [--subsampling 444|422|420]
@@ -40,18 +42,20 @@ USAGE:
         and the export report.
         --format       Default: from the OUTPUT extension (.png, .tif, .tiff, .exr,
                        .jpg, .jpeg, .webp, .psd, .psb, .bmp, .tga, .pnm, .ppm, .pgm,
-                       .pam, .pfm, .avif, .jxl). PSD and PSB keep the
-                       layers (groups, masks, blend modes, adjustment layers); PSB
-                       goes beyond PSD's 30,000 pixels per side.
+                       .pam, .pfm, .avif, .jxl, .qoi, .ff, .hdr, .ico, .gif, .dds). PSD
+                       and PSB keep the layers (groups, masks, blend modes, adjustment
+                       layers); PSB goes beyond PSD's 30,000 pixels per side.
         --depth        PNG: u8, u16. TIFF: u8, u16, f32. OpenEXR: f16, f32. JPEG and
                        WebP: u8. PSD and PSB: u8, u16. BMP and TGA: u8. PNM: u8,
                        u16. PFM: f32. AVIF: u8, u16 (written at 10 bits). JPEG XL:
-                       u8, u16 (lossless).
+                       u8, u16 (lossless). QOI, ICO, GIF and DDS: u8. farbfeld: u16.
+                       Radiance HDR: f32.
                        The color space stays the default one unless --space is given.
         --space        srgb, linear-srgb, display-p3, adobe-rgb, prophoto, rec2020,
                        linear-rec2020, rec2100-pq, rec2100-hlg. TIFF, JPEG and WebP:
                        all but PQ and HLG. OpenEXR: linear-srgb, linear-rec2020.
-                       BMP, TGA and PNM: srgb. PFM: linear-srgb. AVIF: all but
+                       BMP, TGA, PNM, farbfeld, ICO, GIF and DDS: srgb. PFM and
+                       Radiance HDR: linear-srgb. QOI: srgb, linear-srgb. AVIF: all but
                        adobe-rgb and prophoto. JPEG XL: all of them.
         --compression  PNG: fast, small. TIFF: none, deflate, lzw. OpenEXR: always
                        lossless ZIP, no option. JPEG: see --quality, --subsampling.
@@ -61,7 +65,7 @@ USAGE:
         --subsampling  JPEG chroma subsampling: 444 (full color), 422, 420 (smallest).
                        Default: 444.
         --no-alpha     Drop the alpha channel: the image is flattened over the matte.
-                       JPEG has no alpha: it is always flattened.
+                       JPEG, PFM and Radiance HDR have no alpha: always flattened.
         --matte        The color transparency is flattened over when alpha is dropped,
                        as sRGB RRGGBB. Default: ffffff (white).
         --no-dither    No dither for 8-bit samples.
