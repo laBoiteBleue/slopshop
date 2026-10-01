@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use slopshop_core::color::{ChannelLayout, PixelFormat, SampleType, f32_to_f16};
 use slopshop_core::raster::{ImageId, TILE_SIZE};
@@ -125,14 +126,75 @@ struct Slot {
     last_used: u64,
 }
 
+/// The layers of a texture array assigned to keys, the least recently used reassigned first.
+/// Slots used by the current frame are never reassigned within it: the GPU work recorded for
+/// the frame still reads them.
+#[derive(Debug)]
+pub(crate) struct Slots<K> {
+    slots: HashMap<K, Slot>,
+    free: Vec<u32>,
+    frame: u64,
+}
+
+impl<K: Copy + Eq + Hash> Slots<K> {
+    pub fn new(capacity: u32) -> Self {
+        Self {
+            slots: HashMap::new(),
+            free: (0..capacity).rev().collect(),
+            frame: 0,
+        }
+    }
+
+    /// Start a frame: slots used by earlier frames become candidates for reassignment.
+    pub fn begin_frame(&mut self) {
+        self.frame += 1;
+    }
+
+    /// The slot holding `key`, now used by this frame.
+    pub fn get(&mut self, key: &K) -> Option<u32> {
+        let slot = self.slots.get_mut(key)?;
+        slot.last_used = self.frame;
+        Some(slot.index)
+    }
+
+    /// A slot for `key`, which holds none: a free one, or the least recently used one not used
+    /// by this frame. `None` when every slot is used by this frame.
+    pub fn insert(&mut self, key: K) -> Option<u32> {
+        let index = match self.free.pop() {
+            Some(index) => index,
+            None => {
+                let (&old, _) = self
+                    .slots
+                    .iter()
+                    .filter(|(_, slot)| slot.last_used != self.frame)
+                    .min_by_key(|(_, slot)| slot.last_used)?;
+                self.slots.remove(&old)?.index
+            }
+        };
+        self.slots.insert(
+            key,
+            Slot {
+                index,
+                last_used: self.frame,
+            },
+        );
+        Some(index)
+    }
+
+    /// Forget `key`: its slot becomes free.
+    pub fn remove(&mut self, key: &K) {
+        if let Some(slot) = self.slots.remove(key) {
+            self.free.push(slot.index);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct TileCache {
     format: GpuTileFormat,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    slots: HashMap<TileKey, Slot>,
-    free: Vec<u32>,
-    frame: u64,
+    slots: Slots<TileKey>,
     /// Tiles uploaded since the cache was created (misses).
     uploads: u64,
 }
@@ -145,9 +207,7 @@ impl TileCache {
             format,
             texture,
             view,
-            slots: HashMap::new(),
-            free: (0..capacity).rev().collect(),
-            frame: 0,
+            slots: Slots::new(capacity),
             uploads: 0,
         }
     }
@@ -163,7 +223,7 @@ impl TileCache {
 
     /// Start a frame: tiles used by earlier frames become candidates for eviction.
     pub fn begin_frame(&mut self) {
-        self.frame += 1;
+        self.slots.begin_frame();
     }
 
     /// Slot holding `key` for this frame, uploading `texels` (called only on a miss; RGBA
@@ -175,14 +235,10 @@ impl TileCache {
         key: TileKey,
         texels: impl FnOnce() -> Cow<'a, [u8]>,
     ) -> Option<u32> {
-        if let Some(slot) = self.slots.get_mut(&key) {
-            slot.last_used = self.frame;
-            return Some(slot.index);
+        if let Some(index) = self.slots.get(&key) {
+            return Some(index);
         }
-        let index = match self.free.pop() {
-            Some(index) => index,
-            None => self.evict()?,
-        };
+        let index = self.slots.insert(key)?;
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
@@ -206,25 +262,8 @@ impl TileCache {
                 depth_or_array_layers: 1,
             },
         );
-        self.slots.insert(
-            key,
-            Slot {
-                index,
-                last_used: self.frame,
-            },
-        );
         self.uploads += 1;
         Some(index)
-    }
-
-    /// Free the least recently used slot not used by the current frame.
-    fn evict(&mut self) -> Option<u32> {
-        let (&key, _) = self
-            .slots
-            .iter()
-            .filter(|(_, slot)| slot.last_used != self.frame)
-            .min_by_key(|(_, slot)| slot.last_used)?;
-        self.slots.remove(&key).map(|slot| slot.index)
     }
 }
 
