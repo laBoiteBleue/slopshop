@@ -194,6 +194,7 @@ const fr: Messages = {
   "export.format.exr": "OpenEXR",
   "export.format.jpeg": "JPEG",
   "export.format.webp": "WebP",
+  "export.format.avif": "AVIF",
   "export.format.psd": "Photoshop (calques)",
   "export.format.psb": "Photoshop grand format (PSB, calques)",
   "export.format.bmp": "BMP",
