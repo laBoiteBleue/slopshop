@@ -176,6 +176,15 @@ an error, disappear after a few seconds). "Show in folder" reveals a finished fi
 `reveal_in_folder` (tauri-plugin-opener, not exposed to JavaScript). Closing the main window while jobs run cancels them and waits,
 off the main thread and a few seconds at most, for them to remove their temporary files.
 
+AI components (`src-tauri/src/ai.rs`, ADR 0025): `ai_components` lists what a feature needs on
+this machine (the CUDA runtime when NVIDIA's driver is installed, else the CPU one; the models
+made for it) or, for Edit > Preferences, everything this machine can use; `ai_install`
+downloads on a worker with progress over a channel, one install at a time, cancelled by
+`ai_cancel_install`; `ai_remove` deletes; `ai_open_license` opens only a manifest's license.
+The UI asks first: sizes, licenses, and an explicit acceptance of the ones that are not
+permissive open source. Files go to `<local app data>/ai`. AI is offered on Windows x64 only so
+far (no runtime for other systems in the manifest yet).
+
 ## Export data flow
 
 [ADR 0008](adr/0008-export.md). Export reads the document (no edit) and streams it:
