@@ -599,12 +599,15 @@ impl Renderer {
         // Plan the pyramid level of every raster layer together, so that all visible tiles
         // fit in the cache: coarser levels rather than missing layers.
         // Two plans per step: its raster, then its enabled mask (ADR 0014), planned together.
+        // None for a raster without visible tiles: nothing of it to sample in this view, so the
+        // shader does not visit it for every pixel.
         let mut plans: Vec<Option<RasterPlan<'_>>> = steps
             .iter()
             .flat_map(|step| {
                 step_rasters(step).map(|raster| {
                     let (image, transform) = raster?;
                     RasterPlan::new(image, visible_doc?, transform, view.scale)
+                        .filter(|plan| !plan.range().is_empty())
                 })
             })
             .collect();
@@ -1475,5 +1478,42 @@ mod tests {
         assert!(r.tile_caches.is_poisoned());
         assert_eq!(view(&r, &document).unwrap().data, before.data);
         assert!(!r.tile_caches.is_poisoned());
+    }
+
+    #[test]
+    fn rasters_outside_the_view_are_not_encoded() {
+        let Some(r) = renderer() else { return };
+        let mut document = Document::new(Size::new(1024, 1024));
+        let format = slopshop_core::color::PixelFormat::RGBA8_SRGB;
+        let image = RasterImage::from_pixels(Size::new(16, 16), format, &[200; 16 * 16 * 4])
+            .expect("16 × 16 RGBA8 pixels");
+        let layer = Layer {
+            transform: Affine::translation(8.0, 8.0),
+            clipped: false,
+            id: document.allocate_layer_id(),
+            name: "image".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            content: LayerContent::Raster {
+                image: image.into(),
+            },
+        };
+        slopshop_core::Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut document)
+        .expect("a valid layer");
+        let output = Size::new(64, 64);
+        let encoded = |origin: [f64; 2]| {
+            let mut caches = r.tile_caches.lock().expect("not poisoned");
+            let view = ViewTransform { origin, scale: 1.0 };
+            r.prepare_layers(&document, view, output, &mut caches).count
+        };
+        assert_eq!(encoded([0.0, 0.0]), 1);
+        assert_eq!(encoded([512.0, 512.0]), 0);
     }
 }
