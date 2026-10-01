@@ -100,7 +100,9 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   styles are not supported yet and are reported).
   A layered file imported into a document arrives as a group.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
-  A basic camera RAW import is next; Krita/GIMP files and more are open to contributors
+  Camera RAW files (DNG and the cameras rawler knows) open developed as shot, in linear float
+  ([ADR 0023](docs/adr/0023-camera-raw-helper.md)); Krita/GIMP files and more are open to
+  contributors
   ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
 - A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts): document tabs (reorder, rename, drop a tab on the canvas
   to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
