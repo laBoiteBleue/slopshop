@@ -55,9 +55,12 @@
 
 mod avif;
 mod bmp;
+mod dds;
 mod exr;
 mod farbfeld;
+mod gif;
 mod hdr;
+mod ico;
 mod jpeg;
 mod jxl;
 mod png;
@@ -89,9 +92,12 @@ use slopshop_core::{BlendSpace, CancelToken, Progress, Rect, Size};
 use self::avif::AvifWriter;
 pub use self::avif::MAX_SIDE as AVIF_MAX_SIDE;
 use self::bmp::BmpWriter;
+use self::dds::DdsWriter;
 use self::exr::ExrWriter;
 use self::farbfeld::FarbfeldWriter;
+use self::gif::GifWriter;
 use self::hdr::HdrWriter;
+use self::ico::IcoWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
 use self::jxl::JxlWriter;
@@ -135,6 +141,9 @@ pub enum ExportFormatKind {
     Farbfeld,
     /// Radiance RGBE.
     Hdr,
+    Ico,
+    Gif,
+    Dds,
 }
 
 impl ExportFormatKind {
@@ -259,6 +268,12 @@ pub enum ExportFormat {
     Farbfeld,
     /// Radiance RGBE (8-bit mantissas, shared exponent), linear sRGB primaries, no alpha.
     Hdr,
+    /// One 8-bit sRGB PNG image in an icon container, at most 256 pixels per side.
+    Ico,
+    /// One frame of at most 256 colors (quantized), sRGB, transparency on or off.
+    Gif,
+    /// An uncompressed 8-bit sRGB surface (BGRA, or BGR without alpha).
+    Dds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -294,6 +309,9 @@ impl ExportFormat {
             ExportFormat::Qoi => ExportFormatKind::Qoi,
             ExportFormat::Farbfeld => ExportFormatKind::Farbfeld,
             ExportFormat::Hdr => ExportFormatKind::Hdr,
+            ExportFormat::Ico => ExportFormatKind::Ico,
+            ExportFormat::Gif => ExportFormatKind::Gif,
+            ExportFormat::Dds => ExportFormatKind::Dds,
         }
     }
 
@@ -325,7 +343,10 @@ impl ExportFormat {
             | ExportFormat::Webp { .. }
             | ExportFormat::Bmp
             | ExportFormat::Tga { .. }
-            | ExportFormat::Qoi => SampleType::U8,
+            | ExportFormat::Qoi
+            | ExportFormat::Ico
+            | ExportFormat::Gif
+            | ExportFormat::Dds => SampleType::U8,
             ExportFormat::Psd { depth } | ExportFormat::Psb { depth } => match depth {
                 PsdDepth::U8 => SampleType::U8,
                 PsdDepth::U16 => SampleType::U16,
@@ -404,7 +425,8 @@ impl ExportSpec {
 }
 
 /// Something the user should know about what the export did. Counts are in samples, except
-/// [`ExportNotice::AlphaFlattened`] and [`ExportNotice::ColorDiscarded`] (pixels).
+/// [`ExportNotice::AlphaFlattened`], [`ExportNotice::ColorDiscarded`] and
+/// [`ExportNotice::ColorsQuantized`] (pixels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportNotice {
     /// Values above the format's range were clipped.
@@ -426,6 +448,10 @@ pub enum ExportNotice {
     ColorDiscarded(u64),
     /// Parts of layers lay outside the canvas: the layered file keeps only what is inside.
     PixelsOutsideCanvas,
+    /// Pixels were changed to fit an indexed format (GIF): their color replaced by the nearest
+    /// one of the palette (at most 256 colors), or their transparency made on or off. Counted
+    /// in pixels.
+    ColorsQuantized(u64),
 }
 
 impl ExportNotice {
@@ -441,6 +467,7 @@ impl ExportNotice {
             ExportNotice::AlphaFlattened(_) => "alphaFlattened",
             ExportNotice::ColorDiscarded(_) => "colorDiscarded",
             ExportNotice::PixelsOutsideCanvas => "pixelsOutsideCanvas",
+            ExportNotice::ColorsQuantized(_) => "colorsQuantized",
         }
     }
 
@@ -452,7 +479,8 @@ impl ExportNotice {
             | ExportNotice::NonFinite(n)
             | ExportNotice::HalfOverflow(n)
             | ExportNotice::AlphaFlattened(n)
-            | ExportNotice::ColorDiscarded(n) => *n = n.saturating_add(more),
+            | ExportNotice::ColorDiscarded(n)
+            | ExportNotice::ColorsQuantized(n) => *n = n.saturating_add(more),
             ExportNotice::PrecisionReduced
             | ExportNotice::BigTiff
             | ExportNotice::PixelsOutsideCanvas => {}
@@ -467,7 +495,8 @@ impl ExportNotice {
             | ExportNotice::NonFinite(n)
             | ExportNotice::HalfOverflow(n)
             | ExportNotice::AlphaFlattened(n)
-            | ExportNotice::ColorDiscarded(n) => Some(n),
+            | ExportNotice::ColorDiscarded(n)
+            | ExportNotice::ColorsQuantized(n) => Some(n),
             ExportNotice::PrecisionReduced
             | ExportNotice::BigTiff
             | ExportNotice::PixelsOutsideCanvas => None,
@@ -607,12 +636,16 @@ pub fn max_side(kind: ExportFormatKind) -> Option<u32> {
         ExportFormatKind::Psb => Some(psd::PSB_MAX_SIDE),
         ExportFormatKind::Bmp => Some(bmp::MAX_SIDE),
         ExportFormatKind::Tga => Some(tga::MAX_SIDE),
+        ExportFormatKind::Ico => Some(ico::MAX_SIDE),
+        // GIF also bounds the pixel count (`gif::MAX_PIXELS`: the image is held in memory).
+        ExportFormatKind::Gif => Some(gif::MAX_SIDE),
         // QOI also bounds the pixel count (`qoi::MAX_PIXELS`, checked by its writer).
         ExportFormatKind::Pnm
         | ExportFormatKind::Pfm
         | ExportFormatKind::Qoi
         | ExportFormatKind::Farbfeld
-        | ExportFormatKind::Hdr => None,
+        | ExportFormatKind::Hdr
+        | ExportFormatKind::Dds => None,
         ExportFormatKind::Avif => Some(avif::MAX_SIDE),
         ExportFormatKind::Jxl => Some(jxl::MAX_SIDE),
         ExportFormatKind::Tiff => None,
@@ -657,7 +690,10 @@ pub fn supports_space(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         ExportFormatKind::Bmp
         | ExportFormatKind::Tga
         | ExportFormatKind::Pnm
-        | ExportFormatKind::Farbfeld => *space == ColorSpace::SRGB,
+        | ExportFormatKind::Farbfeld
+        | ExportFormatKind::Ico
+        | ExportFormatKind::Gif
+        | ExportFormatKind::Dds => *space == ColorSpace::SRGB,
         // Float samples, linear, by convention.
         ExportFormatKind::Pfm | ExportFormatKind::Hdr => *space == ColorSpace::LINEAR_SRGB,
         // The header's color space byte: sRGB, or "all channels linear".
@@ -696,7 +732,10 @@ pub fn supports_gray(kind: ExportFormatKind, space: &ColorSpace) -> bool {
         | ExportFormatKind::Tga
         | ExportFormatKind::Qoi
         | ExportFormatKind::Farbfeld
-        | ExportFormatKind::Hdr => false,
+        | ExportFormatKind::Hdr
+        | ExportFormatKind::Ico
+        | ExportFormatKind::Gif
+        | ExportFormatKind::Dds => false,
     }
 }
 
@@ -820,6 +859,9 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         ExportFormatKind::Qoi => (ExportFormat::Qoi, ColorSpace::SRGB),
         ExportFormatKind::Farbfeld => (ExportFormat::Farbfeld, ColorSpace::SRGB),
         ExportFormatKind::Hdr => (ExportFormat::Hdr, ColorSpace::LINEAR_SRGB),
+        ExportFormatKind::Ico => (ExportFormat::Ico, ColorSpace::SRGB),
+        ExportFormatKind::Gif => (ExportFormat::Gif, ColorSpace::SRGB),
+        ExportFormatKind::Dds => (ExportFormat::Dds, ColorSpace::SRGB),
         ExportFormatKind::Jxl => {
             let deep = rasters.iter().any(|format| format.sample != SampleType::U8);
             // 8-bit: a source space with a curve (linear light needs more bits), else sRGB.
@@ -1098,6 +1140,9 @@ pub fn export_image(
             FormatWriter::Farbfeld(Box::new(FarbfeldWriter::new(file, size, target)?))
         }
         ExportFormat::Hdr => FormatWriter::Hdr(Box::new(HdrWriter::new(file, size, target)?)),
+        ExportFormat::Ico => FormatWriter::Ico(Box::new(IcoWriter::new(file, size, target)?)),
+        ExportFormat::Gif => FormatWriter::Gif(Box::new(GifWriter::new(file, size, target)?)),
+        ExportFormat::Dds => FormatWriter::Dds(Box::new(DdsWriter::new(file, size, target)?)),
         // Refused above.
         ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
             return Err(ExportError::InvalidSpec(
@@ -1151,6 +1196,9 @@ enum FormatWriter {
     Qoi(Box<QoiWriter>),
     Farbfeld(Box<FarbfeldWriter>),
     Hdr(Box<HdrWriter>),
+    Ico(Box<IcoWriter>),
+    Gif(Box<GifWriter>),
+    Dds(Box<DdsWriter>),
 }
 
 impl FormatWriter {
@@ -1171,6 +1219,9 @@ impl FormatWriter {
             FormatWriter::Qoi(w) => w.write_rows(first_row, rows),
             FormatWriter::Farbfeld(w) => w.write_rows(first_row, rows),
             FormatWriter::Hdr(w) => w.write_rows(first_row, rows),
+            FormatWriter::Ico(w) => w.write_rows(first_row, rows),
+            FormatWriter::Gif(w) => w.write_rows(first_row, rows),
+            FormatWriter::Dds(w) => w.write_rows(first_row, rows),
         }
     }
 
@@ -1191,6 +1242,9 @@ impl FormatWriter {
             FormatWriter::Qoi(w) => (*w).finish(),
             FormatWriter::Farbfeld(w) => (*w).finish(),
             FormatWriter::Hdr(w) => (*w).finish(),
+            FormatWriter::Ico(w) => (*w).finish(),
+            FormatWriter::Gif(w) => (*w).finish(),
+            FormatWriter::Dds(w) => (*w).finish(),
         }
     }
 }

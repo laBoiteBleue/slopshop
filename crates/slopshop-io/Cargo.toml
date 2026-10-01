@@ -20,8 +20,12 @@ half = "2"
 # through `image`, with the same features.
 # - PNG color chunks (cICP, sRGB, gAMA, cHRM).
 png = { workspace = true }
-# - GIF frame count without decoding the frames.
+# - GIF frame count without decoding the frames. Also GIF export (one frame, LZW).
 gif = { workspace = true }
+# GIF export: the palette of images with more than 256 colors (NeuQuant). Already in the tree
+# through `gif` and `image` (same version); `gif`'s own RGBA helper panics on bad input and
+# cannot skip transparent pixels when learning the palette.
+color_quant = "1.1.0"
 # - JPEG component color space, to refuse CMYK instead of converting it silently.
 zune-jpeg = { workspace = true }
 # - OpenEXR chromaticities (the primaries of the file). Default features: `rayon`, which

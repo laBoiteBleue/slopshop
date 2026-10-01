@@ -5049,6 +5049,7 @@ dependencies = [
  "avif-serialize",
  "blake3",
  "bytemuck",
+ "color_quant",
  "dicom-core",
  "dicom-dictionary-std",
  "dicom-object",

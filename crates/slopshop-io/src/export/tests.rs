@@ -2306,6 +2306,9 @@ fn simple_formats_refuse_what_they_cannot_store() {
         ExportFormatKind::Qoi,
         ExportFormatKind::Farbfeld,
         ExportFormatKind::Hdr,
+        ExportFormatKind::Ico,
+        ExportFormatKind::Gif,
+        ExportFormatKind::Dds,
     ] {
         assert!(!has_gray(kind), "{kind:?}");
         assert!(!supports_gray(kind, &ColorSpace::SRGB), "{kind:?}");
@@ -2315,4 +2318,176 @@ fn simple_formats_refuse_what_they_cannot_store() {
         &ColorSpace::LINEAR_SRGB
     ));
     assert!(!supports_alpha(ExportFormatKind::Hdr));
+}
+
+#[test]
+fn icon_gif_and_dds_limits() {
+    assert_eq!(max_side(ExportFormatKind::Ico), Some(256));
+    assert_eq!(max_side(ExportFormatKind::Gif), Some(65_535));
+    assert_eq!(max_side(ExportFormatKind::Dds), None);
+    let path = temp_path("refused.gif");
+    let cases = [
+        (ExportFormat::Ico, Size::new(257, 16), "tooLarge"),
+        (ExportFormat::Gif, Size::new(65_536, 1), "tooLarge"),
+        // Within GIF's sides, beyond what is held in memory.
+        (ExportFormat::Gif, Size::new(65_535, 65_535), "tooLarge"),
+    ];
+    for (format, size, code) in cases {
+        let result = export_image(
+            &path,
+            size,
+            &simple_spec(format, ColorSpace::SRGB, true),
+            |_, _| panic!("the source must not be called"),
+            &CancelToken::new(),
+            &mut |_| panic!("no progress expected"),
+        );
+        assert_eq!(result.unwrap_err().code(), code, "{format:?} {size:?}");
+        assert!(!path.exists() && temp_files(&path).is_empty());
+    }
+    for kind in [
+        ExportFormatKind::Ico,
+        ExportFormatKind::Gif,
+        ExportFormatKind::Dds,
+    ] {
+        assert!(supports_alpha(kind), "{kind:?}");
+        assert!(supports_space(kind, &ColorSpace::SRGB), "{kind:?}");
+        assert!(!supports_space(kind, &ColorSpace::LINEAR_SRGB), "{kind:?}");
+    }
+}
+
+#[test]
+fn ico_round_trips_bit_exact_up_to_256_pixels() {
+    // 256 is stored as 0 in the directory entry.
+    let (w, h) = (256, 200);
+    let rgba = image::RgbaImage::from_fn(w, h, |x, y| {
+        image::Rgba([
+            x as u8,
+            (y * 3) as u8,
+            (x ^ y) as u8,
+            1 + ((x * 7 + y) % 255) as u8,
+        ])
+    });
+    let spec = simple_spec(ExportFormat::Ico, ColorSpace::SRGB, true);
+    let output = simple_round_trip("icon.ico", &rgba.clone().into(), &spec);
+    assert!(output.to_rgba8() == rgba, "ICO is not bit-exact");
+    // Without alpha: opaque.
+    let rgb = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([x as u8, y as u8, 7]));
+    let spec = simple_spec(ExportFormat::Ico, ColorSpace::SRGB, false);
+    let output = simple_round_trip("opaque.ico", &rgb.clone().into(), &spec);
+    assert!(output.to_rgb8() == rgb, "opaque ICO is not bit-exact");
+    assert!(output.to_rgba8().pixels().all(|p| p[3] == 255));
+}
+
+#[test]
+fn dds_round_trips_bit_exact_through_our_importer() {
+    for (layout, keep_alpha) in [(ChannelLayout::Rgb, false), (ChannelLayout::Rgba, true)] {
+        let image = pattern_raster(
+            ODD_SIZE,
+            layout,
+            SampleType::U8,
+            ColorSpace::SRGB,
+            |x, y, c| {
+                let v = (x * 5 + y * 3 + c as u32 * 40) % 255;
+                // Alpha above 0: the color under alpha 0 is not kept, by design.
+                (v + u32::from(c == 3)) as u16
+            },
+        );
+        let doc = raster_document(image);
+        let spec = simple_spec(ExportFormat::Dds, ColorSpace::SRGB, keep_alpha);
+        let path = temp_path(&format!("texture-{keep_alpha}.dds"));
+        assert_eq!(export(&doc, &path, &spec).unwrap(), ExportReport::default());
+        let back = open_image(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(back.warnings.is_empty());
+        let format = back.image.format();
+        assert_eq!(
+            (format.layout, format.color_space),
+            (layout, ColorSpace::SRGB)
+        );
+        assert!(
+            composite_u16(&raster_document(back.image)) == composite_u16(&doc),
+            "{layout:?} is not bit-exact"
+        );
+    }
+}
+
+/// Export `input` (imported from a PNG) to GIF; the GIF decoded by the `image` crate, and the
+/// report.
+fn gif_round_trip(
+    name: &str,
+    input: &image::RgbaImage,
+    keep_alpha: bool,
+) -> (image::RgbaImage, ExportReport) {
+    let source = temp_path(&format!("{name}-in.png"));
+    input.save(&source).unwrap();
+    let doc = raster_document(open_image(&source).unwrap().image);
+    std::fs::remove_file(&source).ok();
+    let path = temp_path(name);
+    let spec = simple_spec(ExportFormat::Gif, ColorSpace::SRGB, keep_alpha);
+    let report = export(&doc, &path, &spec).unwrap();
+    assert!(temp_files(&path).is_empty());
+    let output = image::open(&path).unwrap().to_rgba8();
+    assert_eq!(
+        open_image(&path).unwrap().image.format().color_space,
+        ColorSpace::SRGB
+    );
+    std::fs::remove_file(&path).ok();
+    (output, report)
+}
+
+#[test]
+fn gif_keeps_up_to_256_colors_exactly() {
+    let (w, h) = (ODD_SIZE.width, ODD_SIZE.height);
+    // 255 colors and transparency (whose index is the 256th).
+    let color = |i: u32| [(i * 37) as u8, (i * 11) as u8, i as u8];
+    let input = image::RgbaImage::from_fn(w, h, |x, y| {
+        if (x + y) % 7 == 0 {
+            image::Rgba([9, 9, 9, 0])
+        } else {
+            let [r, g, b] = color((x / 3 + y * 5) % 255);
+            image::Rgba([r, g, b, 255])
+        }
+    });
+    let (output, report) = gif_round_trip("few.gif", &input, true);
+    assert_eq!(report, ExportReport::default());
+    for (got, want) in output.pixels().zip(input.pixels()) {
+        if want[3] == 0 {
+            assert_eq!(got[3], 0);
+        } else {
+            assert_eq!(got, want);
+        }
+    }
+    // 256 colors without transparency.
+    let input = image::RgbaImage::from_fn(w, h, |x, y| {
+        let [r, g, b] = color((x + y * 3) % 256);
+        image::Rgba([r, g, b, 255])
+    });
+    let (output, report) = gif_round_trip("opaque.gif", &input, false);
+    assert_eq!(report, ExportReport::default());
+    assert!(output == input, "256 colors are not exact");
+}
+
+#[test]
+fn gif_quantizes_many_colors_and_reports_it() {
+    let (w, h) = (ODD_SIZE.width, ODD_SIZE.height);
+    let input = image::RgbaImage::from_fn(w, h, |x, y| {
+        // A smooth gradient of thousands of colors; a column half transparent.
+        let alpha = if x == 0 { 200 } else { 255 };
+        image::Rgba([(x * 255 / w) as u8, (y * 255 / h) as u8, 128, alpha])
+    });
+    let (output, report) = gif_round_trip("many.gif", &input, true);
+    let [ExportNotice::ColorsQuantized(changed)] = report.notices[..] else {
+        panic!("{report:?}");
+    };
+    assert!(changed > 0 && changed <= u64::from(w * h), "{changed}");
+    let mut error = 0u64;
+    for (got, want) in output.pixels().zip(input.pixels()) {
+        // Alpha 200 is opaque in a GIF.
+        assert_eq!(got[3], 255);
+        error += (0..3)
+            .map(|c| u64::from(got[c].abs_diff(want[c])))
+            .sum::<u64>();
+    }
+    let mean = error as f64 / f64::from(w * h * 3);
+    assert!(mean < 4.0, "mean error {mean}");
 }
