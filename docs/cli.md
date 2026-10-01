@@ -16,7 +16,7 @@ error, prefixed with `error:`. The exit code is 0 on success, 1 on any error.
 |---|---|
 | [`slopshop gpu`](#slopshop-gpu) | Show the GPU adapter the engine would use |
 | [`slopshop render`](#slopshop-render) | Render a built-in demo document to a PNG file |
-| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM, QOI, farbfeld, Radiance HDR, ICO, GIF, DDS or a layered PSD or PSB |
+| [`slopshop export`](#slopshop-export) | Open an image or a document and export it to PNG, TIFF, OpenEXR, JPEG, WebP, AVIF, JPEG XL, BMP, Targa, Netpbm, PFM, QOI, farbfeld, Radiance HDR, ICO, GIF, DDS, FITS, DICOM, PDF or a layered PSD or PSB |
 | [`slopshop save`](#slopshop-save) | Save images as one `.slop` document, one layer each |
 | [`slopshop inspect`](#slopshop-inspect) | Show a `.slop` document: file state and layers |
 | [`slopshop bench`](#slopshop-bench) | Time the viewport renderer on a document (redraw, pan, zoom) |
@@ -75,16 +75,16 @@ through the export pipeline, exactly as the app does ([ADR 0008](adr/0008-export
 
 | Option | Values | Meaning |
 |---|---|---|
-| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm`, `qoi`, `ff`, `hdr`, `ico`, `gif`, `dds` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, `.qoi`, `.ff` (farbfeld), `.hdr` (Radiance), `.ico`, `.gif`, `.dds`, any case) |
+| `--format` | `png`, `tiff`, `exr`, `jpeg`, `webp`, `avif`, `jxl`, `psd`, `psb`, `bmp`, `tga`, `pnm`, `pfm`, `qoi`, `ff`, `hdr`, `ico`, `gif`, `dds`, `fits`, `dcm`, `pdf` | File format. Default: from the extension of `OUTPUT` (`.png`, `.tif`, `.tiff`, `.exr`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.jxl`, `.psd`, `.psb`, `.bmp`, `.tga`, `.pnm`, `.ppm`, `.pgm`, `.pam`, `.pfm`, `.qoi`, `.ff` (farbfeld), `.hdr` (Radiance), `.ico`, `.gif`, `.dds`, `.fits`, `.fit`, `.fts`, `.dcm`, `.dicom`, `.pdf`, any case) |
 | `--depth` | `u8`, `u16`, `f16`, `f32` | Sample type: 8/16-bit integers, 16/32-bit floats (see the table below for each format). The color space stays the default one unless `--space` is given |
 | `--space` | see [Color spaces](#color-spaces) | Color space of the file. Always tagged in the file |
-| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm, PFM, farbfeld, Radiance HDR and DDS are uncompressed; JPEG XL, QOI and ICO are always lossless; GIF uses LZW, after reduction to 256 colors |
+| `--compression` | `fast`, `small` (PNG); `none`, `deflate`, `lzw` (TIFF); `lossy`, `lossless` (WebP); `rle`, `none` (TGA) | PNG, TIFF and TGA are always lossless. OpenEXR always uses lossless ZIP; JPEG uses `--quality` and `--subsampling`; BMP, Netpbm, PFM, farbfeld, Radiance HDR, DDS, FITS and DICOM are uncompressed; JPEG XL, QOI, ICO and PDF (Flate) are always lossless; GIF uses LZW, after reduction to 256 colors |
 | `--quality` | `1` to `100` (JPEG), `0` to `100` (lossy WebP, AVIF) | Quality of lossy compression |
 | `--subsampling` | `444`, `422`, `420` | JPEG only: chroma subsampling. `444` keeps full color resolution, `420` gives the smallest files |
-| `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG, PFM and Radiance HDR never have alpha; a layered PSD or PSB always keeps it |
+| `--no-alpha` | | Drop the alpha channel: transparency is flattened over the matte. JPEG, PFM, Radiance HDR, FITS and DICOM never have alpha; a layered PSD or PSB always keeps it |
 | `--matte` | `RRGGBB` or `#RRGGBB` | Color transparency is flattened over when there is no alpha, as sRGB hex. Default: `ffffff` (white) |
 | `--no-dither` | | No dither for 8-bit samples (dither reduces banding; it is on by default) |
-| `--gray` | | Gray samples (PNG, TIFF and JPEG): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
+| `--gray` | | Gray samples (PNG, TIFF, JPEG, Netpbm, PFM, AVIF, JPEG XL, FITS, DICOM and PDF): each pixel becomes the luminance of its color in the file's color space. Pixels that had color are counted in the report. Default for gray documents |
 | `--color` | | Color samples, even for a gray document |
 | `--scale` | a factor, e.g. `4` or `0.25` | Resample the whole image by this factor first, like Image Size: sides are rounded, and layers are resampled with the quality filter of transformed layers ([ADR 0018](adr/0018-resampling.md)) |
 | `--page` | a page number, from 1 | PDF input: the page to export. Default: `1` (the others are reported) |
@@ -167,6 +167,30 @@ None of them has a compression or quality option, nor gray samples; each has one
 
 All but ICO and GIF stream their rows: memory does not grow with the image.
 
+### FITS, DICOM and PDF
+
+Formats SlopShop opens as documents, written back as one image, without alpha for FITS and
+DICOM (flattened over the matte). Gray when the document is gray, else RGB:
+
+- `fits`: one image in the primary HDU (gray, or RGB as three planes), 8-bit, 16-bit
+  (`BZERO` 32768, the unsigned convention) or 32-bit float (`--depth f32`), big-endian, bottom
+  row first. FITS declares no color: the samples are display values, sRGB-encoded (`srgb`
+  only), as SlopShop reads them back. 16-bit by default when a visible raster is deeper than
+  8-bit, else 8-bit.
+- `dcm` (DICOM): a Secondary Capture image (modality OT), MONOCHROME2 or RGB, 8 or 16-bit
+  (the same default as FITS), uncompressed, with new study, series and instance UIDs and empty
+  patient attributes. 16-bit gray images carry the window of their whole range, so that
+  viewers show them as the document did. `srgb` only (display values); at most 65 535 pixels
+  per side and 4 GiB of samples.
+- `pdf`: one page holding the image, 8-bit, Flate-compressed, color-managed with the ICC
+  profile of `--space` (all spaces but `rec2100-pq` and `rec2100-hlg`; the source space by
+  default if it is sRGB, Display P3 or Adobe RGB, else sRGB), with alpha (a soft mask) unless
+  the document is opaque. The page measures one point per pixel (72 pixels per inch); beyond
+  200 inches (14 400 pixels, Acrobat's largest page) it is scaled down to that size, every
+  pixel kept. The alpha mask is compressed in memory while the image streams.
+
+FITS and DICOM stream their rows; PDF streams its color samples.
+
 ### Layered PSD and PSB
 
 A `.psd` output keeps the document's structure, for Photoshop and the other editors that read
@@ -210,16 +234,17 @@ a gray image or a neutral fill, with one image at least: its gray samples are th
 Which spaces each format can store *and tag* so that it reads back as the same space:
 
 - **PNG**: all of them (sRGB chunk, cICP chunk, or ICC profile).
-- **BMP**, **Targa**, **Netpbm**, **farbfeld**, **ICO**, **GIF** and **DDS**: `srgb` only.
+- **BMP**, **Targa**, **Netpbm**, **farbfeld**, **ICO**, **GIF**, **DDS**, **FITS** and
+  **DICOM**: `srgb` only.
   **PFM** and **Radiance HDR**: `linear-srgb` only. **QOI**: `srgb` and `linear-srgb`.
 - **AVIF**: all but `adobe-rgb` and `prophoto` (H.273 code points).
 - **JPEG XL**: all of them (its color encodings).
-- **TIFF**, **JPEG**, **WebP**, **PSD** and **PSB**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
+- **TIFF**, **JPEG**, **WebP**, **PSD**, **PSB** and **PDF**: all but `rec2100-pq` and `rec2100-hlg` (ICC profile).
 - **OpenEXR**: `linear-srgb` and `linear-rec2020` (EXR samples are linear; the primaries go in
   the `chromaticities` attribute).
 
 Gray files keep only the tone curve of the space (and its primaries define the luminance): PNG
-tags them with the sRGB chunk or an ICC gray profile, TIFF and JPEG with an ICC gray profile, so
+tags them with the sRGB chunk or an ICC gray profile, TIFF, JPEG and PDF with an ICC gray profile, so
 `rec2100-pq` and `rec2100-hlg` are not available for gray.
 
 ### Output
