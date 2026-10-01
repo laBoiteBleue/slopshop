@@ -161,25 +161,7 @@ pub async fn magic_wand(
         let mut documents = state.documents()?;
         let doc = documents.get_mut(document_id)?.session.document();
         let current = doc.selection().map(|s| Arc::clone(s.image()));
-        let source = match layer_id {
-            None => doc.clone(),
-            Some(raw) => {
-                let id = LayerId::from_raw(raw);
-                let mut layer = doc.layer(id).ok_or("unknown layer")?.clone();
-                // Alone, at the top level: placed by its own transform and its groups'.
-                layer.transform = layer.transform.then(doc.parent_transform(id));
-                layer.clipped = false;
-                slopshop_core::Document::restore(
-                    doc.size(),
-                    doc.working_space(),
-                    doc.blend_space(),
-                    vec![layer],
-                    doc.next_layer_id(),
-                )
-                .map_err(|e| e.to_string())?
-            }
-        };
-        (source, current)
+        (sampled_document(doc, layer_id)?, current)
     };
     let options = selection::WandOptions {
         tolerance,
@@ -189,6 +171,135 @@ pub async fn magic_wand(
     let image = on_worker(move || {
         selection::magic_wand(&source, current.as_deref(), (x, y), options, combine)
             .map_err(|e| e.to_string())
+    })
+    .await?;
+    set_selection(&state, document_id, image)
+}
+
+/// The document to sample: the composited document, or with `layer_id` a document holding
+/// only that layer, placed as in the document.
+fn sampled_document(
+    doc: &slopshop_core::Document,
+    layer_id: Option<u64>,
+) -> Result<slopshop_core::Document, String> {
+    let Some(raw) = layer_id else {
+        return Ok(doc.clone());
+    };
+    let id = LayerId::from_raw(raw);
+    let mut layer = doc.layer(id).ok_or("unknown layer")?.clone();
+    // Alone, at the top level: placed by its own transform and its groups'.
+    layer.transform = layer.transform.then(doc.parent_transform(id));
+    layer.clipped = false;
+    slopshop_core::Document::restore(
+        doc.size(),
+        doc.working_space(),
+        doc.blend_space(),
+        vec![layer],
+        doc.next_layer_id(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Select > Color Range's samples and settings, from the dialog.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorRangeRequest {
+    /// Document pixels whose colors are selected, and those whose colors are taken away.
+    included: Vec<[u32; 2]>,
+    excluded: Vec<[u32; 2]>,
+    fuzziness: f32,
+    invert: bool,
+    layer_id: Option<u64>,
+}
+
+impl ColorRangeRequest {
+    /// The source to sample and the range, its sampled colors read from the source.
+    fn resolve(
+        &self,
+        doc: &slopshop_core::Document,
+    ) -> Result<(slopshop_core::Document, selection::ColorRange), String> {
+        let source = sampled_document(doc, self.layer_id)?;
+        let points = |p: &[[u32; 2]]| p.iter().map(|[x, y]| (*x, *y)).collect::<Vec<_>>();
+        let range = selection::ColorRange {
+            included: selection::sample_colors(&source, &points(&self.included)),
+            excluded: selection::sample_colors(&source, &points(&self.excluded)),
+            fuzziness: self.fuzziness,
+            invert: self.invert,
+        };
+        Ok((source, range))
+    }
+}
+
+/// Select > Color Range's preview: the selection it would make, computed on the document as
+/// shown fitted in `max_side` pixels (rendered by the GPU, so instant whatever the size): raw
+/// binary, width and height (`u32` little-endian), then one 8-bit gray value per pixel.
+#[tauri::command]
+pub async fn color_range_preview(
+    app: tauri::AppHandle,
+    document_id: u64,
+    request: ColorRangeRequest,
+    max_side: u32,
+) -> Result<Response, String> {
+    use tauri::Manager;
+    let (doc, current) = {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document().clone();
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        (doc, current)
+    };
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        let (source, range) = request.resolve(&doc)?;
+        let size = source.size();
+        let side = max_side.clamp(16, 1024);
+        let scale = (f64::from(size.width.max(size.height)) / f64::from(side)).max(1.0);
+        let output = Size::new(
+            (f64::from(size.width) / scale).ceil().max(1.0) as u32,
+            (f64::from(size.height) / scale).ceil().max(1.0) as u32,
+        );
+        let view = slopshop_core::view::ViewTransform {
+            origin: [0.0, 0.0],
+            scale,
+        };
+        let frame = state
+            .renderer()?
+            .render_view(&source, view, output)
+            .map_err(|e| e.to_string())?;
+        let mut bytes = Vec::with_capacity(8 + (output.width * output.height) as usize);
+        bytes.extend_from_slice(&output.width.to_le_bytes());
+        bytes.extend_from_slice(&output.height.to_le_bytes());
+        for (i, px) in frame.data.as_chunks::<4>().0.iter().enumerate() {
+            let color = [f32::from(px[0]), f32::from(px[1]), f32::from(px[2]), 255.0];
+            let mut c = range.coverage(color);
+            if let Some(selection) = &current {
+                let x = ((i as u32 % output.width) as f64 * scale) as u32;
+                let y = ((i as u32 / output.width) as f64 * scale) as u32;
+                c *= selection.gray_at(x, y);
+            }
+            bytes.push((c * 255.0).round() as u8);
+        }
+        Ok(Response::new(bytes))
+    })
+    .await
+}
+
+/// Select > Color Range: the colors of the samples, within the current selection if any.
+#[tauri::command]
+pub async fn color_range(
+    state: State<'_, AppState>,
+    document_id: u64,
+    request: ColorRangeRequest,
+) -> Result<DocumentView, String> {
+    let (doc, current) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document().clone();
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        (doc, current)
+    };
+    let image = on_worker(move || {
+        let (source, range) = request.resolve(&doc)?;
+        selection::color_range(&source, current.as_deref(), &range).map_err(|e| e.to_string())
     })
     .await?;
     set_selection(&state, document_id, image)
