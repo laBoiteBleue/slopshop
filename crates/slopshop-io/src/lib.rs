@@ -15,6 +15,7 @@ mod atomic;
 pub mod collection;
 pub mod export;
 mod icc;
+mod jxl;
 mod lab;
 mod orient;
 mod pfm;
@@ -265,6 +266,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
     } else if pfm::is_pfm(&head) {
         drop(file);
         pfm::decode(path)?
+    } else if jxl::is_jxl(&head) {
+        drop(file);
+        jxl::decode(path)?
     } else {
         drop(file);
         decode_generic(path, &head)?
@@ -510,16 +514,31 @@ fn exr_color(
 
 /// ITU-T H.273 code points (PNG cICP chunk) as a color space, for RGB full-range data.
 fn cicp_space(cicp: &png::CodingIndependentCodePoints) -> Option<ColorSpace> {
-    if cicp.matrix_coefficients != 0 || !cicp.is_video_full_range_image {
+    cicp_code_space(
+        cicp.color_primaries,
+        cicp.transfer_function,
+        cicp.matrix_coefficients,
+        cicp.is_video_full_range_image,
+    )
+}
+
+/// ITU-T H.273 code points as a color space, for RGB (matrix 0) full-range data.
+pub(crate) fn cicp_code_space(
+    primaries: u8,
+    transfer: u8,
+    matrix: u8,
+    full_range: bool,
+) -> Option<ColorSpace> {
+    if matrix != 0 || !full_range {
         return None;
     }
-    let primaries = match cicp.color_primaries {
+    let primaries = match primaries {
         1 => RgbPrimaries::REC709,
         9 => RgbPrimaries::REC2020,
         12 => RgbPrimaries::DISPLAY_P3,
         _ => return None,
     };
-    let transfer = match cicp.transfer_function {
+    let transfer = match transfer {
         1 | 6 | 14 | 15 => TransferFunction::Rec709,
         4 => TransferFunction::Gamma(2.2),
         5 => TransferFunction::Gamma(2.8),
@@ -610,9 +629,7 @@ fn not_supported_yet(head: &[u8], path: &Path) -> Option<ImportError> {
     if let Some(error) = heif_brand(head) {
         return Some(error);
     }
-    let signatures: [(&[u8], &'static str); 6] = [
-        (&[0xFF, 0x0A], "JPEG XL"),
-        (b"\0\0\0\x0cJXL \r\n\x87\n", "JPEG XL"),
+    let signatures: [(&[u8], &'static str); 4] = [
         (b"\0\0\0\x0cjP  \r\n\x87\n", "JPEG 2000"),
         (&[0xFF, 0x4F, 0xFF, 0x51], "JPEG 2000"),
         (b"%PDF", "PDF"),
@@ -1022,7 +1039,7 @@ mod tests {
                 b"\0\0\0\x18ftypavif\0\0\0\0".to_vec(),
                 "notYetSupported",
             ),
-            ("scan.jxl", vec![0xFF, 0x0A, 0, 0], "notYetSupported"),
+            ("scan.j2k", vec![0xFF, 0x4F, 0xFF, 0x51], "notYetSupported"),
             // A CMYK Photoshop document (header only): refused until the engine has CMYK.
             (
                 "print.psd",
