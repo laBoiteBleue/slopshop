@@ -23,6 +23,10 @@ built. Contributors: propose here first.
    feedback, heavy work off the UI thread, the window and the app remember their state.
 6. **Few dialogs.** A dialog only when a choice is needed (export options); otherwise act, show a
    short notice, and make it undoable.
+7. **Modern controls** (maintainer's choice, 2026-10-01). Buttons in the spirit of Material UI,
+   normal case: the main action contained (accent, soft shadow), the others text buttons, icon
+   buttons with a round hover, a ripple on press. Dense rows (layers, tabs, menus) keep the
+   editor's compact style.
 
 ## Done
 
