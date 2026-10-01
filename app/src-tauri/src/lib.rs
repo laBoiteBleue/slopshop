@@ -9,6 +9,7 @@
 
 mod export;
 mod ipc;
+mod pdf;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -361,6 +362,8 @@ struct AppState {
     surface_size: Mutex<Option<Size>>,
     /// Exports running (see the `export` module).
     exports: ExportJobs,
+    /// The PDF the PDF Import dialog shows (see the `pdf` module).
+    pdf: Arc<pdf::PdfCache>,
 }
 
 impl AppState {
@@ -378,6 +381,7 @@ impl AppState {
             presenter: Mutex::new(None),
             surface_size: Mutex::new(None),
             exports: ExportJobs::default(),
+            pdf: Arc::default(),
         }
     }
 
@@ -573,21 +577,25 @@ impl Drop for Turn<'_> {
     }
 }
 
-/// Decode `path` and put it into `target`, after the earlier opens of `turn`'s batch if any.
-/// Blocking and heavy: worker threads only. Reports progress and outcome through events,
-/// whoever started the open.
+/// Decode `path` (or `page` of it, a PDF) and put it into `target`, after the earlier opens of
+/// `turn`'s batch if any. Blocking and heavy: worker threads only. Reports progress and outcome
+/// through events, whoever started the open.
 fn open_path(
     app: &AppHandle,
     path: &Path,
+    page: Option<&pdf::PdfPage>,
     target: OpenTarget,
     turn: Option<&Turn<'_>>,
 ) -> Result<DocumentView, String> {
     let state = app.state::<AppState>();
     let id = state.next_open_id.fetch_add(1, Ordering::Relaxed);
-    let name = file_name(path);
+    let (name, layer) = match page {
+        Some(page) => (page.name(&file_name(path)), page.name(&layer_name(path))),
+        None => (file_name(path), layer_name(path)),
+    };
     // SlopShop documents are recognized by their content: in a new tab, or their layers added
     // on top of the target document.
-    let is_document = slopshop_io::slop::is_slop_file(path).unwrap_or(false);
+    let is_document = page.is_none() && slopshop_io::slop::is_slop_file(path).unwrap_or(false);
     let opening = Opening {
         id,
         name: name.clone(),
@@ -642,6 +650,11 @@ fn open_path(
         }
         let decoded = if target_gone {
             Err((CODE_DOCUMENT_CLOSED, DOCUMENT_CLOSED.to_owned()))
+        } else if let Some(page) = page {
+            page.file
+                .render(page.index, page.dpi)
+                .map(slopshop_io::Opened::Image)
+                .map_err(|e| (e.code(), e.to_string()))
         } else {
             slopshop_io::open_file(path).map_err(|e| (e.code(), e.to_string()))
         };
@@ -651,7 +664,7 @@ fn open_path(
             }
             let inserted = match opened {
                 slopshop_io::Opened::Image(imported) => {
-                    insert_imported(&state, path, &name, imported, target)
+                    insert_imported(&state, &name, &layer, imported, target)
                 }
                 slopshop_io::Opened::Layers(layers) => {
                     insert_layers(&state, path, &name, layers, target)
@@ -711,20 +724,13 @@ fn open_path(
 /// Put a decoded image into its target: a new tab, or a new top layer (undoable).
 fn insert_imported(
     state: &AppState,
-    path: &Path,
     name: &str,
+    layer_name: &str,
     imported: slopshop_io::Imported,
     target: OpenTarget,
 ) -> Result<DocumentView, String> {
     let warnings: Vec<_> = imported.warnings.iter().map(|w| w.id()).collect();
-    insert_image(
-        state,
-        name,
-        &layer_name(path),
-        imported.image,
-        warnings,
-        target,
-    )
+    insert_image(state, name, layer_name, imported.image, warnings, target)
 }
 
 /// Put a layered file (Photoshop) into its target: a new tab, or its layers on top of the
@@ -1052,7 +1058,7 @@ async fn open_images(
                     index,
                 };
                 // The outcome is reported by the open's own events.
-                let _ = open_path(&app, &path, target, Some(&turn));
+                let _ = open_path(&app, &path, None, target, Some(&turn));
             })
         })
         .collect();
@@ -1777,7 +1783,7 @@ pub fn run() {
                 }
                 for path in startup_files() {
                     let start = Instant::now();
-                    match open_path(&handle, &path, OpenTarget::NewTab, None) {
+                    match open_path(&handle, &path, None, OpenTarget::NewTab, None) {
                         Ok(_) => eprintln!(
                             "opened {} in {:.1} s",
                             path.display(),
@@ -1824,6 +1830,10 @@ pub fn run() {
             openings,
             open_failures,
             open_images,
+            pdf::pdf_pages,
+            pdf::pdf_thumbnail,
+            pdf::close_pdf,
+            pdf::open_pdf_pages,
             perform,
             perform_live,
             end_gesture,

@@ -42,6 +42,24 @@ const en = {
   "sizeDialog.anchor": "Anchor",
   "sizeDialog.ok": "OK",
   "sizeDialog.cancel": "Cancel",
+  "pdfDialog.title": "Import PDF",
+  "pdfDialog.pages": "Pages",
+  "pdfDialog.page": "Page {number}",
+  "pdfDialog.all": "All",
+  "pdfDialog.none": "None",
+  "pdfDialog.selected": "{count} of {total} selected",
+  "pdfDialog.resolution": "Resolution",
+  "pdfDialog.ppi": "pixels/inch",
+  "pdfDialog.sizeOf": "Size of page {number}",
+  "pdfDialog.width": "Width",
+  "pdfDialog.height": "Height",
+  "pdfDialog.px": "px",
+  "pdfDialog.mode": "Mode",
+  "pdfDialog.modeValue": "RGB, 8 bits (sRGB), transparent background",
+  "pdfDialog.noPage": "Select at least one page",
+  "pdfDialog.tooLarge": "Too large: at most {max} pixels per side",
+  "pdfDialog.ok": "OK",
+  "pdfDialog.cancel": "Cancel",
   "menu.edit.freeTransform": "Free Transform",
   "menu.edit.transform": "Transform",
   "menu.edit.transform.rotate180": "Rotate 180°",
@@ -135,6 +153,8 @@ const en = {
   "open.warning.pixelsOutsideCanvas": "Parts of layers outside the canvas were cropped",
   "open.warning.masksSimplified":
     "Mask density and feather, and vector masks combined with a pixel mask, are not supported yet: they were left out",
+  "open.warning.pdfContentSkipped":
+    "Some content of the PDF page could not be drawn (an unsupported font or image)",
   "open.warning.colorInfoUnsupported":
     "The file's color information is not supported yet: colors read as sRGB",
 
