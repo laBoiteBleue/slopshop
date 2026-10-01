@@ -2777,3 +2777,143 @@ fn dicom_refuses_alpha_other_spaces_and_large_images() {
     assert!(supports_gray(kind, &ColorSpace::SRGB));
     assert_eq!(max_side(kind), Some(65_535));
 }
+
+/// Check a PDF's cross-reference table (readers rebuild a broken one silently): `startxref`
+/// points at it, and each entry at its object.
+fn check_xref(bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes);
+    let tail = &text[text.rfind("startxref\n").unwrap() + 10..];
+    let xref: usize = tail.lines().next().unwrap().parse().unwrap();
+    assert!(bytes[xref..].starts_with(b"xref\n0 "));
+    let table = String::from_utf8_lossy(&bytes[xref..]);
+    let mut lines = table.lines().skip(1);
+    let count: usize = lines.next().unwrap()[2..].parse().unwrap();
+    assert_eq!(lines.next(), Some("0000000000 65535 f "));
+    for number in 1..count {
+        let entry = lines.next().unwrap();
+        assert_eq!(entry.len(), 19, "{entry:?}");
+        let offset: usize = entry[..10].parse().unwrap();
+        let expected = format!("{number} 0 obj\n");
+        assert!(bytes[offset..].starts_with(expected.as_bytes()), "{number}");
+    }
+    assert!(table.contains(&format!("/Size {count} ")));
+}
+
+/// The largest difference between two composites, in 8-bit steps.
+fn worst_difference(a: &Document, b: &Document) -> f32 {
+    composite_all(a)
+        .iter()
+        .zip(composite_all(b))
+        .map(|(x, y)| (x - y).abs() * 255.0)
+        .fold(0.0, f32::max)
+}
+
+#[test]
+fn pdf_pages_render_back_as_the_image() {
+    use ChannelLayout::{Gray, GrayAlpha, Rgb, Rgba};
+    let size = Size::new(301, 263);
+    for layout in [Rgb, Rgba, Gray, GrayAlpha] {
+        let channels = layout.channels() as usize;
+        let image = pattern_raster(size, layout, SampleType::U8, ColorSpace::SRGB, |x, y, c| {
+            if layout.has_alpha() && c == channels - 1 {
+                // Opaque, transparent and partly transparent areas.
+                (if x < 100 {
+                    255
+                } else if x < 120 {
+                    0
+                } else {
+                    40 + y % 200
+                }) as u16
+            } else {
+                ((x * 3 + y * 5 + c as u32 * 60) % 256) as u16
+            }
+        });
+        let doc = raster_document(image);
+        let spec = default_spec(ExportFormatKind::Pdf, &doc);
+        assert_eq!(spec.format, ExportFormat::Pdf);
+        assert_eq!(
+            (spec.space, spec.keep_alpha, spec.gray),
+            (ColorSpace::SRGB, layout.has_alpha(), layout.is_gray())
+        );
+        let path = temp_path(&format!("{layout:?}.pdf"));
+        assert_eq!(export(&doc, &path, &spec).unwrap(), ExportReport::default());
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.starts_with("%PDF-1.7") && text.ends_with("%%EOF\n"));
+        assert!(text.contains("/ICCBased"));
+        assert_eq!(text.contains("/SMask"), layout.has_alpha());
+        check_xref(&bytes);
+        // The image stream's length, written after it.
+        let find = |needle: &[u8]| {
+            bytes
+                .windows(needle.len())
+                .position(|w| w == needle)
+                .unwrap()
+        };
+        let start = find(b"/Length 8 0 R >>\nstream\n") + 24;
+        let at = find(b"\n8 0 obj\n") + 9;
+        let length = String::from_utf8_lossy(&bytes[at..at + 20]);
+        let length: usize = length.lines().next().unwrap().parse().unwrap();
+        assert!(bytes[start + length..].starts_with(b"\nendstream\nendobj\n8 0 obj"));
+
+        // One point per pixel: at 72 dpi, the page is the image, pixel for pixel.
+        let file = crate::pdf::PdfFile::open(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let page = file.page_sizes()[0];
+        assert_eq!((page.width, page.height), (301.0, 263.0));
+        let rendered = file.render(0, 72.0).unwrap();
+        assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
+        assert_eq!(rendered.image.size(), size);
+        let worst = worst_difference(&raster_document(rendered.image), &doc);
+        assert!(worst <= 1.5, "{layout:?}: {worst}");
+    }
+}
+
+#[test]
+fn pdf_declares_the_space_and_bounds_its_page() {
+    // Display P3 kept for an 8-bit source in it. The renderer converts it to sRGB: colors
+    // within the sRGB gamut come back as they were.
+    let pattern = |space| {
+        raster_document(pattern_raster(
+            Size::new(64, 32),
+            ChannelLayout::Rgb,
+            SampleType::U8,
+            space,
+            |x, y, c| (100 + (x * 4 + y * 3 + c as u32 * 23) % 60) as u16,
+        ))
+    };
+    let doc = pattern(ColorSpace::DISPLAY_P3);
+    let spec = default_spec(ExportFormatKind::Pdf, &doc);
+    assert_eq!(spec.space, ColorSpace::DISPLAY_P3);
+    let path = temp_path("p3.pdf");
+    export(&doc, &path, &spec).unwrap();
+    let rendered = crate::pdf::PdfFile::open(&path)
+        .unwrap()
+        .render(0, 72.0)
+        .unwrap();
+    std::fs::remove_file(&path).ok();
+    let rendered = raster_document(rendered.image);
+    let worst = worst_difference(&rendered, &doc);
+    assert!(worst <= 1.5, "Display P3: {worst}");
+    // Not the same values read as sRGB: the profile was applied.
+    let as_srgb = worst_difference(&rendered, &pattern(ColorSpace::SRGB));
+    assert!(as_srgb > 5.0, "{as_srgb}");
+
+    // Beyond 200 inches, the page is scaled down; the image keeps its pixels.
+    let wide = fill_document(Size::new(20_000, 2), LinearRgba::new(0.2, 0.4, 0.6, 1.0));
+    let path = temp_path("wide.pdf");
+    export(&wide, &path, &default_spec(ExportFormatKind::Pdf, &wide)).unwrap();
+    let file = crate::pdf::PdfFile::open(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    let page = file.page_sizes()[0];
+    assert_eq!((page.width, page.height), (14_400.0, 1.44));
+    assert!(String::from_utf8_lossy(&bytes).contains("/Width 20000 /Height 2 "));
+
+    let kind = ExportFormatKind::Pdf;
+    assert!(supports_alpha(kind) && has_gray(kind));
+    assert!(supports_space(kind, &ColorSpace::ADOBE_RGB));
+    assert!(!supports_space(kind, &ColorSpace::REC2100_PQ));
+    assert!(supports_gray(kind, &ColorSpace::SRGB));
+    assert_eq!(max_side(kind), None);
+}
