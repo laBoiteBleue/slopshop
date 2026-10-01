@@ -65,9 +65,9 @@ pub enum Adjustment {
         highlights: [f32; 3],
         preserve_luminosity: bool,
     },
-    /// A colored filter in front of the lens, in linear light: the color is multiplied by
-    /// `color` (sRGB-encoded, in `[0, 1]`) with `density` (0…100), optionally keeping the
-    /// luminance.
+    /// A colored filter in front of the lens, in linear light with sRGB primaries (as in an
+    /// sRGB document): the color is multiplied by `color` (sRGB-encoded, in `[0, 1]`) with
+    /// `density` (0…100), optionally keeping the luminance.
     PhotoFilter {
         color: [f32; 3],
         density: f32,
@@ -565,15 +565,25 @@ impl Adjustment {
                 density,
                 preserve_luminosity,
             } => {
+                let (to_srgb, from_srgb) = &*SRGB_MATRICES;
+                let c = mat_vec(to_srgb, c);
                 let filter = filter_color(color);
                 let d = f64::from(density) / 100.0;
                 let mut out = [0, 1, 2].map(|i| c[i] + (c[i] * filter[i] - c[i]) * d);
-                let y = |c: [f64; 3]| (0..3).map(|i| WORKING_LUMA[i] * c[i]).sum::<f64>();
+                let y = |c: [f64; 3]| (0..3).map(|i| SRGB_LUMA[i] * c[i]).sum::<f64>();
                 let (before, after) = (y(c), y(out));
                 if preserve_luminosity && after > 0.0 {
                     out = out.map(|v| v * before / after);
+                    // Above white, toward gray at the same luminance rather than clipped later
+                    // (as the W3C Color mode does); HDR luminances are left as they are.
+                    let max = out[0].max(out[1]).max(out[2]);
+                    // (White's luminance may round a little above 1.)
+                    if max > 1.0 && before <= 1.0 + 1e-6 {
+                        let top = before.max(1.0);
+                        out = out.map(|v| before + (v - before) * (top - before) / (max - before));
+                    }
                 }
-                out
+                mat_vec(from_srgb, out)
             }
             Adjustment::ChannelMixer {
                 red,
@@ -598,15 +608,20 @@ impl Adjustment {
 /// The luminance weights of Threshold (Rec. 601, on the adjusted values, as Photoshop).
 pub const LUMA: [f64; 3] = [0.299, 0.587, 0.114];
 
-/// The luminance (`Y`) of each primary of the working space (linear Rec.2020).
-pub const WORKING_LUMA: [f64; 3] = [0.2627, 0.6780, 0.0593];
+/// The luminance (`Y`) of each sRGB primary.
+pub const SRGB_LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
 
-/// A Photo Filter color (sRGB-encoded) as linear working-space values, what it multiplies.
+/// Working space → linear sRGB, and back (Photo Filter's primaries).
+static SRGB_MATRICES: LazyLock<(Mat3, Mat3)> = LazyLock::new(|| {
+    (
+        WORKING_SPACE.matrix_to(&ColorSpace::LINEAR_SRGB),
+        ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE),
+    )
+});
+
+/// A Photo Filter color (sRGB-encoded) as the linear sRGB values it multiplies.
 pub fn filter_color(color: [f32; 3]) -> [f64; 3] {
-    static SRGB_TO_WORKING: LazyLock<Mat3> =
-        LazyLock::new(|| ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE));
-    let linear = color.map(|v| f64::from(TransferFunction::Srgb.decode(v)));
-    mat_vec(&SRGB_TO_WORKING, linear)
+    color.map(|v| f64::from(TransferFunction::Srgb.decode(v)))
 }
 
 /// Black & White's gray: the smallest component, plus what the two others add, weighted by
@@ -931,12 +946,27 @@ mod tests {
         };
         assert!(full(false).is_linear());
         let white = [1.0; 3];
-        // sRGB red is inside Rec.2020: the filter keeps that color only.
-        let red = filter_color([1.0, 0.0, 0.0]);
+        // A red filter over white leaves sRGB red.
+        let red = mat_vec(&SRGB_MATRICES.1, [1.0, 0.0, 0.0]);
         assert!(close(full(false).apply(white), red));
-        let kept = full(true).apply(white);
-        let y = |c: [f64; 3]| (0..3).map(|i| WORKING_LUMA[i] * c[i]).sum::<f64>();
-        assert!((y(kept) - 1.0).abs() < 1e-9);
+        let (to_srgb, _) = &*SRGB_MATRICES;
+        let y = |c: [f64; 3]| {
+            let s = mat_vec(to_srgb, c);
+            (0..3).map(|i| SRGB_LUMA[i] * s[i]).sum::<f64>()
+        };
+        // Keeping the luminance never goes above white: white stays white, a light color keeps
+        // its luminance within range.
+        assert!(close(full(true).apply(white), white));
+        let light = [0.9, 0.8, 0.7];
+        let kept = full(true).apply(light);
+        assert!((y(kept) - y(light)).abs() < 1e-9);
+        // Within sRGB, as a filter over an sRGB color should be.
+        let s = mat_vec(to_srgb, kept);
+        assert!(
+            s.iter().all(|&v| (-1e-9..=1.0 + 1e-9).contains(&v)),
+            "{s:?}"
+        );
+        assert!(s[0] > s[2]);
         let none = Adjustment::PhotoFilter {
             color: [1.0, 0.0, 0.0],
             density: 0.0,
@@ -946,9 +976,9 @@ mod tests {
     }
 
     #[test]
-    fn working_luma_is_the_y_of_the_working_primaries() {
-        let y = WORKING_SPACE.primaries.to_xyz()[1];
-        for (a, b) in y.iter().zip(WORKING_LUMA) {
+    fn srgb_luma_is_the_y_of_the_srgb_primaries() {
+        let y = ColorSpace::SRGB.primaries.to_xyz()[1];
+        for (a, b) in y.iter().zip(SRGB_LUMA) {
             assert!((a - b).abs() < 1e-4, "{y:?}");
         }
     }

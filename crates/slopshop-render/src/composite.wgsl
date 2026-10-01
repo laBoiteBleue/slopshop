@@ -779,7 +779,7 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 
 // Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
 // `format` is the adjustment (Adjustment::index); its 16 parameters are `color`, `transfer`,
-// `transfer2` and `m0` (p0 to p3), Photo Filter's color already in the working space.
+// `transfer2` and `m0` (p0 to p3), Photo Filter's color already linear (sRGB primaries).
 const ADJUST_EXPOSURE: u32 = 0u;
 const ADJUST_HUE_SATURATION: u32 = 1u;
 const ADJUST_LEVELS: u32 = 2u;
@@ -960,14 +960,21 @@ fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<
             return out;
         }
         case ADJUST_PHOTO_FILTER: {
-            // The working-space color, the density, the preserve flag. In linear light.
-            var out = c + (c * p.xyz - c) * (p.w / 100.0);
-            let before = dot(WORKING_LUMA, c);
-            let after = dot(WORKING_LUMA, out);
+            // The linear sRGB color, the density, the preserve flag. In linear light, sRGB
+            // primaries (the perceptual blend space's matrices).
+            let s = vec3<f32>(dot(TO_BLEND0, c), dot(TO_BLEND1, c), dot(TO_BLEND2, c));
+            var out = s + (s * p.xyz - s) * (p.w / 100.0);
+            let before = dot(SRGB_LUMA, s);
+            let after = dot(SRGB_LUMA, out);
             if p1.x != 0.0 && after > 0.0 {
                 out = out * (before / after);
+                // Above white, toward gray at the same luminance (as the W3C Color mode).
+                let hi = max(out.r, max(out.g, out.b));
+                if hi > 1.0 && before <= 1.0 + 1e-5 {
+                    out = before + (out - before) * (max(before, 1.0) - before) / (hi - before);
+                }
             }
-            return out;
+            return vec3<f32>(dot(FROM_BLEND0, out), dot(FROM_BLEND1, out), dot(FROM_BLEND2, out));
         }
         case ADJUST_CHANNEL_MIXER: {
             // Rows of red, green and blue (weights and constant, in %), the monochrome flag.
