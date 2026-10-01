@@ -1612,3 +1612,83 @@ fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
         Err(ExportError::TooLarge { .. })
     ));
 }
+
+#[test]
+fn bmp_and_tga_round_trip_bit_exact() {
+    let (w, h) = (ODD_SIZE.width, ODD_SIZE.height);
+    let rgb = image::RgbImage::from_fn(w, h, |x, y| {
+        // Flat runs (for RLE) and detail.
+        let v = if x < 60 { 40 } else { (x * 7 + y) as u8 };
+        image::Rgb([v, (y * 3) as u8, (x ^ y) as u8])
+    });
+    let rgba = image::RgbaImage::from_fn(w, h, |x, y| {
+        image::Rgba([
+            (x * 5 + y) as u8,
+            (y * 11) as u8,
+            (x + 2 * y) as u8,
+            1 + ((x * 13 + y * 7) % 255) as u8,
+        ])
+    });
+    let formats = [
+        (ExportFormat::Bmp, "bmp"),
+        (
+            ExportFormat::Tga {
+                compression: TgaCompression::None,
+            },
+            "tga",
+        ),
+        (
+            ExportFormat::Tga {
+                compression: TgaCompression::Rle,
+            },
+            "tga",
+        ),
+    ];
+    for (i, (format, extension)) in formats.into_iter().enumerate() {
+        for keep_alpha in [false, true] {
+            let input: image::DynamicImage = if keep_alpha {
+                rgba.clone().into()
+            } else {
+                rgb.clone().into()
+            };
+            let source = temp_path(&format!("simple-{i}-{keep_alpha}-in.png"));
+            input.save(&source).unwrap();
+            let doc = raster_document(open_image(&source).unwrap().image);
+            std::fs::remove_file(&source).ok();
+            let spec = ExportSpec {
+                format,
+                space: ColorSpace::SRGB,
+                keep_alpha,
+                matte: WHITE_MATTE,
+                dither: true,
+                gray: false,
+                blend_space: BlendSpace::default(),
+            };
+            let path = temp_path(&format!("simple-{i}-{keep_alpha}.{extension}"));
+            let report = export(&doc, &path, &spec).unwrap();
+            assert_eq!(report, ExportReport::default());
+            assert!(temp_files(&path).is_empty());
+            let what = format!("{format:?} alpha {keep_alpha}");
+            let output = image::open(&path).unwrap();
+            if keep_alpha {
+                assert!(output.to_rgba8() == rgba, "{what} is not bit-exact");
+            } else {
+                assert!(!output.color().has_alpha(), "{what}");
+                assert!(output.to_rgb8() == rgb, "{what} is not bit-exact");
+            }
+            // Our importer reads it, as sRGB.
+            let back = open_image(&path).unwrap();
+            assert_eq!(back.image.format().color_space, ColorSpace::SRGB, "{what}");
+            std::fs::remove_file(&path).ok();
+        }
+    }
+    // Other spaces cannot be declared.
+    assert!(!supports_space(
+        ExportFormatKind::Tga,
+        &ColorSpace::DISPLAY_P3
+    ));
+    assert!(!supports_space(
+        ExportFormatKind::Bmp,
+        &ColorSpace::LINEAR_SRGB
+    ));
+}
