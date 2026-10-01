@@ -81,7 +81,8 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
 - A headless wgpu renderer that composites a view of the document in linear light.
 - A `slopshop` CLI (GPU info, headless render to PNG, export, `.slop` documents).
 - Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float), OpenEXR (32/16-bit float), JPEG
-  and WebP (lossy or lossless), AVIF (8/10-bit, HDR included), BMP and Targa (8-bit sRGB),
+  and WebP (lossy or lossless), AVIF (8/10-bit, HDR included), lossless JPEG XL (8/16-bit), BMP
+  and Targa (8-bit sRGB),
   Netpbm (8/16-bit) and PFM (32-bit
   float) at full resolution, streamed in
   bands (WebP excepted: it holds

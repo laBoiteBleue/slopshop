@@ -52,6 +52,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] JPEG XL import (jxl-oxide)
 - [x] AVIF import (rav1d without assembly, [ADR 0021](adr/0021-avif-import.md))
 - [x] AVIF export (rav1e without assembly): 8/10-bit, alpha, gray, HDR spaces
+- [x] JPEG XL export, lossless (zune-jpegxl): 8/16-bit, alpha, gray, every space
+- [ ] JPEG XL lossy export (needs libjxl, C++)
 - [ ] Import phases 2–6: JPEG 2000; DICOM, FITS; camera RAW; KRA/XCF/ORA,
       SVG, PDF; optional native backends. Every Photoshop format, with its priority and
       approach: [formats.md](formats.md)
