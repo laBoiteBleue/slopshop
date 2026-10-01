@@ -582,8 +582,8 @@ impl Drop for Turn<'_> {
 enum Source<'a> {
     /// The file, whatever it holds.
     File,
-    /// One page of a PDF or an SVG, at a resolution.
-    Page(&'a vector::VectorPage),
+    /// Pages of a PDF or an SVG, at a resolution: one document.
+    Pages(&'a vector::VectorPages),
     /// DICOM files opened together (a series, the path being the first): one document.
     Series(&'a [PathBuf]),
 }
@@ -602,7 +602,7 @@ fn open_path(
     let id = state.next_open_id.fetch_add(1, Ordering::Relaxed);
     let (name, layer) = match source {
         Source::File => (file_name(path), layer_name(path)),
-        Source::Page(page) => (page.name(&file_name(path)), page.name(&layer_name(path))),
+        Source::Pages(_) => (file_name(path), layer_name(path)),
         // A series is named after its folder.
         Source::Series(_) => {
             let folder = path.parent().map_or_else(|| file_name(path), file_name);
@@ -672,10 +672,11 @@ fn open_path(
         } else {
             match source {
                 Source::File => slopshop_io::open_file(path),
-                Source::Page(page) => page
-                    .file
-                    .render(page.index, page.dpi)
-                    .map(slopshop_io::Opened::Image),
+                Source::Pages(pages) => {
+                    pages
+                        .file
+                        .open_pages(&layer, &pages.pages, pages.dpi, &pages.background)
+                }
                 Source::Series(paths) => {
                     slopshop_io::open_dicom_series(paths).map(|(opened, failures)| {
                         skipped = failures;

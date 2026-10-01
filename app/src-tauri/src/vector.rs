@@ -1,6 +1,6 @@
 //! Import PDF and Import SVG dialogs: the pages of a vector file (sizes, thumbnails), then the
-//! chosen ones opened at the chosen resolution, like several files (tabs, or layers of a
-//! document).
+//! chosen ones opened at the chosen resolution as one document (a new tab, or a group added to
+//! a document): a PDF's pages in one group over a white background, an SVG's drawing alone.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,7 @@ use slopshop_io::vector::VectorFile;
 use tauri::ipc::Response;
 use tauri::{AppHandle, State};
 
-use crate::{AppState, InsertionOrder, OpenTarget, Source, Turn, open_path};
+use crate::{AppState, OpenTarget, Source, open_path};
 
 /// Largest thumbnail side the dialog may ask for, in pixels.
 const MAX_THUMBNAIL_SIDE: u32 = 512;
@@ -47,23 +47,14 @@ impl VectorCache {
     }
 }
 
-/// One page of a vector file, opened at a chosen resolution.
-#[derive(Clone)]
-pub(crate) struct VectorPage {
+/// Pages of a vector file, opened at a chosen resolution as one document.
+pub(crate) struct VectorPages {
     pub(crate) file: Arc<VectorFile>,
-    /// From 0.
-    pub(crate) index: usize,
+    /// From 0, in page order.
+    pub(crate) pages: Vec<usize>,
     pub(crate) dpi: f32,
-}
-
-impl VectorPage {
-    /// "doc.pdf 3/12" for the tab, "doc 3/12" for the layer; no number for a single page.
-    pub(crate) fn name(&self, base: &str) -> String {
-        match self.file.page_count() {
-            1 => base.to_owned(),
-            count => format!("{base} {}/{count}", self.index + 1),
-        }
-    }
+    /// The white background layer's name, localized by the UI.
+    pub(crate) background: String,
 }
 
 /// A page's size in points (1/72 inch), rotation applied.
@@ -133,9 +124,10 @@ pub(crate) fn close_vector(state: State<'_, AppState>, path: PathBuf) {
     state.vector.forget(&path);
 }
 
-/// Open `pages` (from 0) of the PDF or SVG at `path` at `dpi`, rendered in parallel: each in a new
-/// tab, or each as a new top layer of `document_id`, in the order given. Outcomes arrive as
-/// `open-*` events, like [`open_images`](crate::open_images).
+/// Open `pages` (from 0) of the PDF or SVG at `path` at `dpi` as one document (the
+/// maintainer's layout: never one tab per page): a new tab, or with `document_id` a group on top
+/// of that document. The outcome arrives as `open-*` events, like
+/// [`open_images`](crate::open_images).
 #[tauri::command]
 pub(crate) async fn open_vector_pages(
     app: AppHandle,
@@ -144,6 +136,7 @@ pub(crate) async fn open_vector_pages(
     pages: Vec<usize>,
     dpi: f32,
     document_id: Option<u64>,
+    background: String,
 ) -> Result<(), String> {
     let file = blocking_get(&state, path.clone()).await?;
     state.vector.forget(&path);
@@ -151,31 +144,18 @@ pub(crate) async fn open_vector_pages(
         Some(document_id) => OpenTarget::Layer { document_id },
         None => OpenTarget::NewTab,
     };
-    let order = Arc::new(InsertionOrder::default());
-    let opens: Vec<_> = pages
-        .into_iter()
-        .enumerate()
-        .map(|(turn_index, index)| {
-            let (app, order, path) = (app.clone(), order.clone(), path.clone());
-            let page = VectorPage {
-                file: Arc::clone(&file),
-                index,
-                dpi,
-            };
-            tauri::async_runtime::spawn_blocking(move || {
-                let turn = Turn {
-                    order: &order,
-                    index: turn_index,
-                };
-                // The outcome is reported by the open's own events.
-                let _ = open_path(&app, &path, Source::Page(&page), target, Some(&turn));
-            })
-        })
-        .collect();
-    for open in opens {
-        open.await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let pages = VectorPages {
+        file,
+        pages,
+        dpi,
+        background,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        // The outcome is reported by the open's own events.
+        let _ = open_path(&app, &path, Source::Pages(&pages), target, None);
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 async fn blocking_get(

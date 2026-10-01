@@ -717,12 +717,17 @@ export const engine = {
   /** The import dialog was cancelled. */
   closeVector: (path: string) => invoke<void>("close_vector", { path }),
   /**
-   * Open pages (from 0) of a PDF or an SVG rendered at `dpi`, in parallel: each in a new tab
-   * or, with a `documentId`, each as a new top layer of that document, in the order given.
-   * Outcomes arrive as `open-*` events, like `openImages`.
+   * Open pages (from 0) of a PDF or an SVG rendered at `dpi` as one document: a new tab or,
+   * with a `documentId`, a group on top of that document. A PDF's pages are one group over a
+   * white fill named `background`. The outcome arrives as `open-*` events, like `openImages`.
    */
-  openVectorPages: (path: string, pages: number[], dpi: number, documentId: number | null) =>
-    invoke<void>("open_vector_pages", { path, pages, dpi, documentId }),
+  openVectorPages: (
+    path: string,
+    pages: number[],
+    dpi: number,
+    documentId: number | null,
+    background: string,
+  ) => invoke<void>("open_vector_pages", { path, pages, dpi, documentId, background }),
   /**
    * Save a document to its `.slop` file (incremental), or to `path` (Save As: a new compact
    * file the document continues with). Rejects with a `SaveFailed`. Queued after the edits

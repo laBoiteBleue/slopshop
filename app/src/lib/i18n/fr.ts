@@ -45,6 +45,7 @@ const fr: Messages = {
   "vectorDialog.titlePdf": "Importer un PDF",
   "vectorDialog.titleSvg": "Importer un SVG",
   "vectorDialog.size": "Taille",
+  "vectorDialog.background": "Arrière-plan",
   "vectorDialog.pages": "Pages",
   "vectorDialog.page": "Page {number}",
   "vectorDialog.all": "Toutes",

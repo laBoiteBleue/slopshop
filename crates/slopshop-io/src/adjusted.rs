@@ -1,7 +1,7 @@
-//! Images whose display needs an interpretation (DICOM windows, FITS stretches): the samples as
-//! they are, and a Levels adjustment layer above them in a perceptual document, where Levels
-//! maps the encoded samples (declared as display values) as the file means it. Nothing is cut;
-//! flattening applies the Levels to the samples.
+//! Files that open as one isolated group of images (the maintainer's layout): DICOM slices and
+//! FITS images under the Levels that show them (a window, a stretch: Levels maps the encoded
+//! samples, declared as display values, as the file means it; nothing is cut; flattening applies
+//! it to the samples), PDF pages over a white background.
 
 use std::sync::Arc;
 
@@ -20,9 +20,22 @@ pub(crate) fn layered(
     images: Vec<(String, Imported)>,
     levels: Option<(String, Adjustment)>,
 ) -> Result<Opened, ImportError> {
+    let above = levels.map(|(name, adjustment)| (name, LayerContent::Adjustment { adjustment }));
+    grouped(name, images, above, None)
+}
+
+/// A document of one isolated group named `name`: `below` (named), `images` (named, the first on
+/// top), then `above` (named). The canvas fits the largest image.
+pub(crate) fn grouped(
+    name: String,
+    images: Vec<(String, Imported)>,
+    above: Option<(String, LayerContent)>,
+    below: Option<(String, LayerContent)>,
+) -> Result<Opened, ImportError> {
     let size = images
-        .first()
+        .iter()
         .map(|(_, imported)| imported.image.size())
+        .reduce(|a, b| slopshop_core::Size::new(a.width.max(b.width), a.height.max(b.height)))
         .ok_or_else(|| ImportError::Decode("no image".into()))?;
     let layer = |id: u64, name: String, content: LayerContent| Layer {
         id: LayerId::from_raw(id),
@@ -36,8 +49,12 @@ pub(crate) fn layered(
         transform: slopshop_core::Affine::IDENTITY,
     };
     let mut warnings = Vec::new();
-    let mut children = Vec::with_capacity(images.len() + 1);
+    let mut children = Vec::with_capacity(images.len() + 2);
     let mut next = 2u64;
+    if let Some((below_name, content)) = below {
+        children.push(layer(next, below_name, content));
+        next += 1;
+    }
     // Bottom to top: the last image first.
     for (image_name, imported) in images.into_iter().rev() {
         for warning in imported.warnings {
@@ -54,12 +71,8 @@ pub(crate) fn layered(
         ));
         next += 1;
     }
-    if let Some((levels_name, adjustment)) = levels {
-        children.push(layer(
-            next,
-            levels_name,
-            LayerContent::Adjustment { adjustment },
-        ));
+    if let Some((above_name, content)) = above {
+        children.push(layer(next, above_name, content));
         next += 1;
     }
     let count = children.len() + 1;

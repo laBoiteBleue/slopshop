@@ -36,13 +36,36 @@ pub(crate) fn is_pdf(head: &[u8]) -> bool {
 }
 
 /// The first page at [`DEFAULT_DPI`], reporting the others.
+/// Flattened: the first page over white, like the document [`open`] gives.
 pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
     let file = PdfFile::open(path)?;
     let mut decoded = file.decode(0, DEFAULT_DPI)?;
+    // Premultiplied over opaque white: each channel gains what alpha leaves.
+    for pixel in decoded.pixels.as_chunks_mut::<4>().0 {
+        let rest = 255 - pixel[3];
+        for channel in &mut pixel[..3] {
+            *channel = channel.saturating_add(rest);
+        }
+        pixel[3] = 255;
+    }
     if file.page_count() > 1 {
         decoded.warnings.insert(0, ImportWarning::FirstPageOnly);
     }
     Ok(decoded)
+}
+
+/// The first page at [`DEFAULT_DPI`] as the import dialog would open it: in a group over a white
+/// background (named "Background": no dialog, no localized name), the others reported.
+pub(crate) fn open(path: &Path) -> Result<crate::Opened, ImportError> {
+    let file = crate::vector::VectorFile::Pdf(PdfFile::open(path)?);
+    let stem = path
+        .file_stem()
+        .map_or_else(|| "PDF".to_owned(), |s| s.to_string_lossy().into_owned());
+    let mut opened = file.open_pages(&stem, &[0], DEFAULT_DPI, "Background")?;
+    if let (crate::Opened::Layers(layers), true) = (&mut opened, file.page_count() > 1) {
+        layers.warnings.insert(0, ImportWarning::FirstPageOnly);
+    }
+    Ok(opened)
 }
 
 /// A PDF file read for import. Pages are rendered on demand; it can be shared between threads
@@ -292,6 +315,20 @@ mod tests {
         let imported = crate::open_image(&fixture()).unwrap();
         assert_eq!(imported.image.size(), Size::new(300, 150));
         assert_eq!(imported.warnings, [ImportWarning::FirstPageOnly]);
+        let crate::Opened::Layers(layers) = crate::open_file(&fixture()).unwrap() else {
+            panic!("expected layers");
+        };
+        assert_eq!(layers.warnings, [ImportWarning::FirstPageOnly]);
+        assert_eq!(layers.document.size(), Size::new(300, 150));
+    }
+
+    #[test]
+    fn the_flattened_page_is_on_white() {
+        let decoded = decode(&fixture()).unwrap();
+        // Left half red, right half empty: white once flattened.
+        let pixel = |x: usize| &decoded.pixels[x * 4..x * 4 + 4];
+        assert_eq!(pixel(10), [255, 0, 0, 255]);
+        assert_eq!(pixel(290), [255, 255, 255, 255]);
     }
 
     #[test]
