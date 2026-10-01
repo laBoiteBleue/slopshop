@@ -55,7 +55,7 @@ built. Contributors: propose here first.
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M) and Crop (C); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L) and Crop (C); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -112,7 +112,11 @@ built. Contributors: propose here first.
   options bar's mode (new, add, subtract, intersect); during the drag Shift makes a square or a
   circle and Alt draws from the center (once the press keys are released); a click deselects. A
   small +, − or × next to the pointer shows how the next shape combines (maintainer's idea).
-  Options bar: the four modes, Feather (px), Anti-alias for the ellipse. Marching ants follow the
+  Lasso (L): drag to draw freehand, the release closes the outline. Polygonal Lasso (Shift+L):
+  a click per corner, the line to the pointer by steps of 45° with Shift; a click on the first
+  corner (a small circle tells), a double-click or Enter closes it, Backspace removes the last
+  corner, Esc drops it. Same keys, badge and click-to-deselect as the marquees.
+  Options bar: the four modes, Feather (px), Anti-alias for the ellipse and the lassos. Marching ants follow the
   selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Edit in Quick
   Mask Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
