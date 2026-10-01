@@ -31,6 +31,10 @@ exr = { workspace = true }
 # color encoding and ICC profile; the Rust bindings of libjxl are GPL (ADR 0006). `rayon` is
 # already in the tree through `image`.
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["rayon"] }
+# AVIF import: rav1d (BSD-2-Clause), the Rust port of dav1d, without its assembly (which needs
+# nasm at build time): pure Rust. Its API is dav1d's C one, called from our `avif::ffi` module
+# only. The AVIF container is read by our own code (avif-parse is MPL-2.0).
+rav1d = { version = "1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 # TIFF export compresses its own strips (tiff's streaming encoder ignores compression, and its
 # codecs are private) with the codecs tiff uses internally, already in the tree through it:
 # - LZW;
