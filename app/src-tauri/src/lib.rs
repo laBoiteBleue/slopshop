@@ -2168,6 +2168,7 @@ pub fn run() {
             selection::quick_select,
             paint::paint_stroke,
             paint::fill_selection,
+            paint::sample_color,
             selection::color_range_preview,
             selection::color_range,
             selection::selection_outline,
@@ -2643,6 +2644,44 @@ mod tests {
         document.session.undo().unwrap();
         document.session.undo().unwrap();
         assert!(document.session.document().selection().is_none());
+    }
+
+    #[test]
+    fn the_eyedropper_samples_the_colors_shown() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let edit: crate::ipc::EditRequest =
+                serde_json::from_str(r#"{"kind":"addEmptyLayer","name":"Layer 1","index":1}"#)
+                    .unwrap();
+            let edit = edit.into_edit(&mut document.session).unwrap();
+            document.session.perform(edit).unwrap();
+            document.session.document().layers()[1].id
+        };
+        paint::paint(
+            &state,
+            doc.id,
+            dab(layer, paint::PaintTarget::Layer, Some([1.0, 0.0, 0.0])),
+        )
+        .unwrap();
+        let mut documents = state.documents().unwrap();
+        let shown = documents.get_mut(doc.id).unwrap().session.document();
+        // The red paint over the white background, the background elsewhere.
+        assert_eq!(paint::sample_color_at(shown, 50.5, 50.5), Some([255, 0, 0]));
+        assert_eq!(paint::sample_color_at(shown, 150.0, 150.0), Some([255; 3]));
+        assert_eq!(paint::sample_color_at(shown, -1.0, 10.0), None);
+        assert_eq!(paint::sample_color_at(shown, 1e12, 10.0), None);
+        assert_eq!(paint::sample_color_at(shown, f64::NAN, 10.0), None);
+        // Nothing shown: no color.
+        let clear =
+            RasterImage::from_pixels(Size::new(4, 4), PixelFormat::RGBA8_SRGB, &[0; 4 * 4 * 4])
+                .unwrap();
+        let session = image_session(clear, "clear");
+        assert_eq!(paint::sample_color_at(session.document(), 1.0, 1.0), None);
     }
 
     #[test]
