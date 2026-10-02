@@ -94,8 +94,13 @@
   let frame = $state<FrameStats | null>(null);
   /** Viewport of the active tab. */
   let viewport = $state<Viewport | null>(null);
-  /** Layers panel of the active tab (the Layer menu acts on its selection). */
-  let layersPanel = $state<LayersPanel | null>(null);
+  let layersPanelInstance = $state<LayersPanel | null>(null);
+  /**
+   * Layers panel of the active tab (the Layer menu acts on its selection). None without a tab:
+   * the instance bound stays set for a moment after its tab closes, and asking it for its
+   * selection would read the closed document (the menus did, and the update stopped there).
+   */
+  let layersPanel = $derived(active ? layersPanelInstance : null);
   /** The active layer when it is an adjustment layer: the Properties panel shows it. */
   let selectedAdjustment = $derived.by(() => {
     const layer = layersPanel?.selectedLayer() ?? null;
@@ -2764,7 +2769,7 @@
       <div class="sidebar">
         {#key active.id}
           <LayersPanel
-            bind:this={layersPanel}
+            bind:this={layersPanelInstance}
             doc={active}
             onedit={edit}
             onlive={live}
