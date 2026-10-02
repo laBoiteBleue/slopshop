@@ -5,13 +5,10 @@ import { t } from "./i18n/index.svelte";
 import type { MessageKey } from "./i18n/en";
 
 const NAMES: Record<string, MessageKey> = {
-  "runtime-cuda": "ai.component.runtimeCuda",
-  "runtime-cpu": "ai.component.runtimeCpu",
+  "runtime-directml": "ai.component.runtimeDirectml",
   "sam2.1-base-plus": "ai.component.samBasePlus",
-  "sam2.1-tiny": "ai.component.samTiny",
   "vitmatte-small": "ai.component.vitmatte",
   birefnet: "ai.component.birefnet",
-  "birefnet-lite": "ai.component.birefnetLite",
 };
 
 /** A component's name; its id if this version of the UI does not know it. */

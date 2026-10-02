@@ -22,14 +22,13 @@ install = ["dep:ureq", "dep:sha2", "dep:flate2"]
 
 [dependencies]
 # ONNX Runtime bindings (MIT OR Apache-2.0), only in the helper. `load-dynamic`: nothing is
-# linked or downloaded at build time; the runtime library is opened from a path at start. The
-# execution provider features only declare their options; the loaded library decides which
-# providers exist. Release candidate: the 2.0 API is the one maintained (ADR 0025).
+# linked or downloaded at build time; the runtime library is opened from a path at start.
+# `api-24`: ONNX Runtime 1.24, the last DirectML release (ADR 0025). Release candidate: the 2.0
+# API is the one maintained.
 ort = { version = "=2.0.0-rc.13", default-features = false, optional = true, features = [
     "std",
     "load-dynamic",
-    "api-27",
-    "cuda",
+    "api-24",
     "directml",
 ] }
 # HTTPS client for the installer (MIT OR Apache-2.0): blocking (downloads run on their own

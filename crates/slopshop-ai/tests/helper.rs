@@ -2,7 +2,7 @@
 //! Needs ONNX Runtime and the models, so it runs only when they are given:
 //! `SLOPSHOP_AI_RUNTIME` (the ONNX Runtime library), `SLOPSHOP_AI_MODELS` (the models folder,
 //! as `experiments/ai-bench/fetch_models.py` lays it out), and optionally `SLOPSHOP_AI_PROVIDER`
-//! and `SLOPSHOP_AI_LIBRARY_PATHS` (NVIDIA's libraries, `;`- or `:`-separated). Skipped
+//! and `SLOPSHOP_AI_LIBRARY_PATHS` (the runtime's libraries, `;`- or `:`-separated). Skipped
 //! otherwise (CI has neither).
 
 use std::path::{Path, PathBuf};
