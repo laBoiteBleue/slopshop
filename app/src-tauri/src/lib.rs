@@ -2130,7 +2130,7 @@ pub fn run() {
             selection::magic_wand,
             selection::quick_select,
             paint::paint_stroke,
-            paint::clear_selection,
+            paint::fill_selection,
             selection::color_range_preview,
             selection::color_range,
             selection::selection_outline,
