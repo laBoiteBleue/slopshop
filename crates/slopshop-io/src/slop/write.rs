@@ -178,6 +178,19 @@ fn write_generation(
 ) -> Result<Written, FileError> {
     let mut pos = start;
 
+    // The hashes of the tiles of the images already known, by tile allocation: a new image
+    // sharing tiles with them (a painted image and its original, ADR 0027) hashes only its own.
+    let mut known: HashMap<usize, Hash> = HashMap::new();
+    for image in rasters(document) {
+        if let Some(record) = state.images.get(&image.id()) {
+            for (level, (_, hashes)) in image.levels().iter().zip(&record.levels) {
+                for (tile, hash) in level.tiles().iter().zip(hashes) {
+                    known.insert(tile.as_ptr() as usize, *hash);
+                }
+            }
+        }
+    }
+
     // Every image once, hashed unless already known.
     let mut images: Vec<(&Arc<RasterImage>, Arc<ImageRecord>)> = Vec::new();
     for image in rasters(document) {
@@ -187,7 +200,7 @@ fn write_generation(
         let record = match state.images.get(&image.id()) {
             Some(record) => record.clone(),
             None => {
-                let record = Arc::new(hash_image(image));
+                let record = Arc::new(hash_image(image, &known));
                 state.images.insert(image.id(), record.clone());
                 record
             }
@@ -380,13 +393,19 @@ fn tile_encoding(image: &RasterImage) -> Encoding {
 }
 
 /// Hash every tile of every level (in parallel), and derive the tables and the image key.
-fn hash_image(image: &RasterImage) -> ImageRecord {
+/// The record of `image`, its tiles hashed unless `known` (by tile address) has them.
+fn hash_image(image: &RasterImage, known: &HashMap<usize, Hash>) -> ImageRecord {
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let levels: Vec<(Hash, Vec<Hash>)> = image
         .levels()
         .iter()
         .map(|level| {
-            let hashes = parallel_map(level.tiles(), threads, |tile| Hash::of(tile));
+            let hashes = parallel_map(level.tiles(), threads, |tile| {
+                known
+                    .get(&(tile.as_ptr() as usize))
+                    .copied()
+                    .unwrap_or_else(|| Hash::of(tile))
+            });
             let table: Vec<u8> = hashes.iter().flat_map(|h| h.0).collect();
             (Hash::of(&table), hashes)
         })
