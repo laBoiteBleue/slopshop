@@ -34,6 +34,9 @@ pub enum Source {
     Stored { offset: u64 },
     /// Deflated in a zip archive: `compressed` bytes from `offset`.
     Deflated { offset: u64, compressed: u64 },
+    /// The file `entry` of a gzip-compressed tar archive of `archive` bytes (ONNX Runtime's
+    /// macOS and Linux releases): the whole archive is fetched (it cannot be read in ranges).
+    TarGz { archive: u64, entry: &'static str },
 }
 
 /// One installed file.
@@ -56,6 +59,7 @@ impl Download {
             Source::File => (0, self.size),
             Source::Stored { offset } => (offset, self.size),
             Source::Deflated { offset, compressed } => (offset, compressed),
+            Source::TarGz { archive, .. } => (0, archive),
         }
     }
 
@@ -283,14 +287,20 @@ fn fetch_part(
 fn verify_into_place(file: &Download, part: &Path, target: &Path) -> Result<(), InstallError> {
     let input = BufReader::with_capacity(1 << 20, File::open(part)?);
     let (written, digest, from) = match file.source {
-        Source::Deflated { .. } => {
+        Source::Deflated { .. } | Source::TarGz { .. } => {
             let tmp = inflating(target);
             let mut out = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
-            let result = copy_hashing(
-                flate2::read::DeflateDecoder::new(input),
-                &mut out,
-                file.size,
-            );
+            let result = match file.source {
+                Source::TarGz { entry, .. } => {
+                    tar_entry(flate2::read::GzDecoder::new(input), entry)
+                        .and_then(|reader| copy_hashing(reader, &mut out, file.size))
+                }
+                _ => copy_hashing(
+                    flate2::read::DeflateDecoder::new(input),
+                    &mut out,
+                    file.size,
+                ),
+            };
             let flushed = out.flush();
             drop(out);
             match (result, flushed) {
@@ -353,6 +363,67 @@ fn copy_hashing(input: impl Read, out: &mut impl Write, limit: u64) -> io::Resul
         .map(|b| format!("{b:02x}"))
         .collect();
     Ok((written, digest))
+}
+
+/// The file `entry` of a tar stream (ustar, with GNU long names and pax paths), positioned at its
+/// bytes; `InvalidData` if the archive does not hold it.
+fn tar_entry<R: Read>(mut tar: R, entry: &str) -> io::Result<io::Take<R>> {
+    let wanted = entry.trim_start_matches("./");
+    let mut long_name: Option<String> = None;
+    let mut header = [0u8; 512];
+    loop {
+        tar.read_exact(&mut header)?;
+        if header.iter().all(|&b| b == 0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{entry} not in the archive"),
+            ));
+        }
+        let field = |range: std::ops::Range<usize>| {
+            let bytes = &header[range];
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end]).into_owned()
+        };
+        let size = if header[124] & 0x80 != 0 {
+            // Base-256 for large sizes.
+            header[125..136]
+                .iter()
+                .fold(0u64, |n, &b| (n << 8) | u64::from(b))
+        } else {
+            u64::from_str_radix(field(124..136).trim(), 8)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "a tar size"))?
+        };
+        let kind = header[156];
+        let mut name = match long_name.take() {
+            Some(name) => name,
+            None if &header[257..262] == b"ustar" && header[345] != 0 => {
+                format!("{}/{}", field(345..500), field(0..100))
+            }
+            None => field(0..100),
+        };
+        let padded = size.div_ceil(512) * 512;
+        match kind {
+            // A GNU long name or a pax header names the next entry.
+            b'L' | b'x' => {
+                let mut data = vec![0u8; padded as usize];
+                tar.read_exact(&mut data)?;
+                let text = String::from_utf8_lossy(&data[..size as usize]).into_owned();
+                long_name = if kind == b'L' {
+                    Some(text.trim_end_matches('\0').to_owned())
+                } else {
+                    text.lines()
+                        .find_map(|line| line.split_once(" path=").map(|(_, p)| p.to_owned()))
+                };
+                continue;
+            }
+            _ => {}
+        }
+        name = name.trim_start_matches("./").to_owned();
+        if name == wanted && (kind == b'0' || kind == 0) {
+            return Ok(tar.take(size));
+        }
+        io::copy(&mut (&mut tar).take(padded), &mut io::sink())?;
+    }
 }
 
 fn partial(target: &Path) -> PathBuf {
@@ -614,6 +685,72 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    /// A tar header for `name` (ustar), `size` bytes of type `kind`.
+    fn tar_header(name: &str, size: usize, kind: u8) -> Vec<u8> {
+        let mut h = vec![0u8; 512];
+        h[..name.len()].copy_from_slice(name.as_bytes());
+        h[100..107].copy_from_slice(b"0000644");
+        h[124..135].copy_from_slice(format!("{size:011o}").as_bytes());
+        h[156] = kind;
+        h[257..263].copy_from_slice(b"ustar\0");
+        h[148..156].copy_from_slice(b"        ");
+        let sum: u32 = h.iter().map(|&b| u32::from(b)).sum();
+        h[148..155].copy_from_slice(format!("{sum:06o}\0").as_bytes());
+        h
+    }
+
+    fn padded(mut data: Vec<u8>) -> Vec<u8> {
+        data.resize(data.len().div_ceil(512) * 512, 0);
+        data
+    }
+
+    #[test]
+    fn installs_a_file_of_a_tar_gz() {
+        let other = vec![7u8; 1000];
+        let payload: Vec<u8> = (0..70_000u32).map(|i| (i * 31 % 251) as u8).collect();
+        let long = format!("./{}/lib/libonnxruntime.so.1.30.0", "x".repeat(120));
+        let mut tar = tar_header("./readme", other.len(), b'0');
+        tar.extend(padded(other));
+        tar.extend(tar_header("././@LongLink", long.len() + 1, b'L'));
+        tar.extend(padded(format!("{long}\0").into_bytes()));
+        tar.extend(tar_header("truncated", payload.len(), b'0'));
+        tar.extend(padded(payload.clone()));
+        tar.extend(vec![0u8; 1024]);
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&tar).unwrap();
+        let archive = gz.finish().unwrap();
+        let entry: &'static str = Box::leak(long.into_boxed_str());
+        let files: &'static [Download] = Box::leak(Box::new([Download {
+            path: "runtime/cpu/libonnxruntime.so",
+            url: "archive",
+            source: Source::TarGz {
+                archive: archive.len() as u64,
+                entry,
+            },
+            size: payload.len() as u64,
+            sha256: Box::leak(sha(&payload).into_boxed_str()),
+        }]));
+        let component = Component {
+            id: "tgz",
+            licenses: &[],
+            files,
+        };
+        let root = folder("tgz");
+        install_with(
+            &component,
+            &root,
+            &mut |_, start, length| {
+                Ok(Box::new(Cursor::new(
+                    archive[start as usize..(start + length) as usize].to_vec(),
+                )))
+            },
+            &mut |_| true,
+        )
+        .unwrap();
+        assert_eq!(fs::read(root.join(files[0].path)).unwrap(), payload);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn the_manifest_is_consistent() {
         let mut ids = std::collections::HashSet::new();
@@ -636,6 +773,12 @@ mod tests {
                 assert!(!file.path.contains(".."), "{}", file.path);
             }
         }
-        assert!(component("runtime-directml").is_some());
+        for id in [
+            "runtime-directml",
+            "runtime-coreml-macos-arm64",
+            "runtime-cpu-linux-x64",
+        ] {
+            assert!(component(id).is_some(), "{id}");
+        }
     }
 }
