@@ -8,6 +8,8 @@
   import { MAX_BRUSH, MAX_FEATHER } from "./selection";
   import { isSelectionTool, toolInfo, type ToolId } from "./tools";
   import { keepFocus } from "./platform";
+  import SliderField from "./SliderField.svelte";
+  import BrushPicker from "./BrushPicker.svelte";
 
   let {
     tool,
@@ -50,11 +52,6 @@
   /** The painting tool's options, edited in place. */
   const paint = $derived(tool === "eraser" ? eraser : tool === "brush" ? brush : null);
 
-  /** A percentage typed into a share. */
-  function setShare(options: PaintOptions, key: "hardness" | "opacity" | "flow", v: number) {
-    if (Number.isFinite(v)) options[key] = Math.min(Math.max(Math.round(v), 0), 100) / 100;
-  }
-
   const current = $derived(toolInfo(tool));
 
   const MODES: { mode: SelectionMode; icon: IconName; label: MessageKey }[] = [
@@ -63,11 +60,6 @@
     { mode: "subtract", icon: "selectionSubtract", label: "options.mode.subtract" },
     { mode: "intersect", icon: "selectionIntersect", label: "options.mode.intersect" },
   ];
-
-  /** Typed values apply at once (the next shape uses them, even while the field has focus). */
-  function setFeather(value: number) {
-    if (Number.isFinite(value)) feather = Math.min(Math.max(value, 0), MAX_FEATHER);
-  }
 </script>
 
 <div class="options" role="toolbar" aria-label={t("options.label")}>
@@ -82,38 +74,26 @@
       {t("options.autoSelect")}
     </label>
   {:else if paint}
-    <label class="option">
-      {t("options.brushSize")}
-      <input
-        type="number"
-        min="1"
-        max={MAX_BRUSH}
-        step="1"
-        value={paint.size}
-        oninput={(e) => {
-          const v = e.currentTarget.valueAsNumber;
-          if (Number.isFinite(v) && paint)
-            paint.size = Math.min(Math.max(Math.round(v), 1), MAX_BRUSH);
-        }}
-        onchange={(e) => paint && (e.currentTarget.valueAsNumber = paint.size)}
-      />
-      px
-    </label>
-    {#each [["hardness", "options.hardness"], ["opacity", "options.opacity"], ["flow", "options.flow"]] as const as [key, label] (key)}
-      <label class="option">
-        {t(label)}
-        <input
-          type="number"
-          min="0"
-          max="100"
-          step="1"
-          value={Math.round(paint[key] * 100)}
-          oninput={(e) => paint && setShare(paint, key, e.currentTarget.valueAsNumber)}
-          onchange={(e) => paint && (e.currentTarget.valueAsNumber = Math.round(paint[key] * 100))}
-        />
-        %
-      </label>
-    {/each}
+    <BrushPicker bind:size={paint.size} bind:hardness={paint.hardness} />
+    <span class="divider"></span>
+    <SliderField
+      label={t("options.opacity")}
+      bind:value={paint.opacity}
+      min={0}
+      max={100}
+      unit="%"
+      factor={100}
+      width={44}
+    />
+    <SliderField
+      label={t("options.flow")}
+      bind:value={paint.flow}
+      min={0}
+      max={100}
+      unit="%"
+      factor={100}
+      width={44}
+    />
     <span class="divider"></span>
     <label class="option" title={t("options.pressureSize.hint")}>
       <input type="checkbox" bind:checked={paint.pressureSize} />
@@ -140,22 +120,14 @@
     {/each}
     <span class="divider"></span>
     {#if tool === "quickSelection"}
-      <label class="option">
-        {t("options.brushSize")}
-        <input
-          type="number"
-          min="1"
-          max={MAX_BRUSH}
-          step="1"
-          value={quick.size}
-          oninput={(e) => {
-            const v = e.currentTarget.valueAsNumber;
-            if (Number.isFinite(v)) quick.size = Math.min(Math.max(Math.round(v), 1), MAX_BRUSH);
-          }}
-          onchange={(e) => (e.currentTarget.valueAsNumber = quick.size)}
-        />
-        px
-      </label>
+      <SliderField
+        label={t("options.brushSize")}
+        bind:value={quick.size}
+        min={1}
+        max={MAX_BRUSH}
+        unit="px"
+        log
+      />
       <label class="option">
         <input type="checkbox" bind:checked={quick.sampleAll} />
         {t("options.sampleAll")}
@@ -170,21 +142,7 @@
         {t("options.refineEdge")}
       </label>
     {:else if tool === "wand"}
-      <label class="option">
-        {t("options.tolerance")}
-        <input
-          type="number"
-          min="0"
-          max="255"
-          step="1"
-          value={wand.tolerance}
-          oninput={(e) => {
-            const v = e.currentTarget.valueAsNumber;
-            if (Number.isFinite(v)) wand.tolerance = Math.min(Math.max(v, 0), 255);
-          }}
-          onchange={(e) => (e.currentTarget.valueAsNumber = wand.tolerance)}
-        />
-      </label>
+      <SliderField label={t("options.tolerance")} bind:value={wand.tolerance} min={0} max={255} />
       <label class="option">
         <input type="checkbox" bind:checked={antiAlias} />
         {t("options.antiAlias")}
@@ -198,19 +156,13 @@
         {t("options.sampleAll")}
       </label>
     {:else}
-      <label class="option">
-        {t("options.feather")}
-        <input
-          type="number"
-          min="0"
-          max={MAX_FEATHER}
-          step="1"
-          value={feather}
-          oninput={(e) => setFeather(e.currentTarget.valueAsNumber)}
-          onchange={(e) => (e.currentTarget.valueAsNumber = feather)}
-        />
-        px
-      </label>
+      <SliderField
+        label={t("options.feather")}
+        bind:value={feather}
+        min={0}
+        max={MAX_FEATHER}
+        unit="px"
+      />
       {#if tool !== "marquee"}
         <label class="option">
           <input type="checkbox" bind:checked={antiAlias} />
@@ -254,10 +206,6 @@
 
   .option input[type="checkbox"] {
     margin: 0;
-  }
-
-  .option input[type="number"] {
-    width: 52px;
   }
 
   .icon-btn.on {
