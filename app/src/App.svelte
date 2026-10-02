@@ -61,7 +61,7 @@
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
-  import FillChoiceDialog from "./lib/FillChoiceDialog.svelte";
+  import FillChoiceDialog, { type FillContents } from "./lib/FillChoiceDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -481,12 +481,22 @@
     fillChoice = { documentId: doc.id, layerId: layer.id };
   }
 
-  /** The choice made: erase (alpha only) or fill with one of the colors (ADR 0027). */
-  function applyFillChoice(choice: "erase" | "foreground" | "background") {
+  /** Photoshop's fixed fill colors: Black, 50% Gray and White (sRGB). */
+  const FILL_COLORS = { black: "#000000", gray: "#808080", white: "#ffffff" };
+
+  /** The choice made: erase (alpha only) or fill with a color (ADR 0027). */
+  function applyFillChoice(contents: FillContents) {
     const target = fillChoice;
     fillChoice = null;
     if (!target) return;
-    const color = choice === "erase" ? null : hexToSrgb(colors[choice]);
+    const color =
+      contents === "erase"
+        ? null
+        : hexToSrgb(
+            contents === "foreground" || contents === "background"
+              ? colors[contents]
+              : FILL_COLORS[contents],
+          );
     void sync(engine.fillSelection(target.documentId, target.layerId, color));
   }
 
@@ -2882,12 +2892,7 @@
 {/if}
 
 {#if fillChoice}
-  <FillChoiceDialog
-    foreground={colors.foreground}
-    background={colors.background}
-    onchoose={applyFillChoice}
-    onclose={() => (fillChoice = null)}
-  />
+  <FillChoiceDialog onchoose={applyFillChoice} onclose={() => (fillChoice = null)} />
 {/if}
 {#if modifyDialog && modifyDialog.document === activeId}
   <ModifyDialog

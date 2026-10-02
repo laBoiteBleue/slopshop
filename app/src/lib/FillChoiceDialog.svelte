@@ -1,86 +1,93 @@
-<script lang="ts">
-  // Delete with a selection (ADR 0027): what becomes of the selected pixels of the active layer,
-  // as Photoshop's Fill dialog asks. Erase lowers their alpha only; the fills paint the
-  // foreground or the background color. Either is paint, which Layer > Delete Paint removes.
-  // 1, 2 and 3 pick a choice from the keyboard; Enter takes the focused one, Esc cancels.
-  import { onMount } from "svelte";
-  import { t } from "./i18n/index.svelte";
+<script lang="ts" module>
   import type { MessageKey } from "./i18n/en";
 
-  type Choice = "erase" | "foreground" | "background";
+  /** What the selected pixels become: transparent (erased), or a fill with a color. */
+  export type FillContents = "erase" | "foreground" | "background" | "black" | "gray" | "white";
+
+  const CONTENTS: { value: FillContents; label: MessageKey }[] = [
+    { value: "erase", label: "fillChoice.erase" },
+    { value: "foreground", label: "fillChoice.foreground" },
+    { value: "background", label: "fillChoice.background" },
+    { value: "black", label: "fillChoice.black" },
+    { value: "gray", label: "fillChoice.gray" },
+    { value: "white", label: "fillChoice.white" },
+  ];
+
+  /** As Photoshop's Fill dialog, the last contents chosen come back (for the session). */
+  let lastContents: FillContents = "erase";
+</script>
+
+<script lang="ts">
+  // Delete with a selection (ADR 0027): what becomes of the selected pixels of the active layer,
+  // laid out as Photoshop's Fill dialog (Contents, OK and Cancel on the right). Erase lowers their
+  // alpha only; the fills paint a color. Either is paint, which Layer > Delete Paint removes.
+  // Enter applies, Esc cancels.
+  import { onMount } from "svelte";
+  import { t } from "./i18n/index.svelte";
 
   let {
-    foreground,
-    background,
     onchoose,
     onclose,
   }: {
-    /** The colors, `#rrggbb` sRGB. */
-    foreground: string;
-    background: string;
-    onchoose: (choice: Choice) => void;
+    onchoose: (contents: FillContents) => void;
     onclose: () => void;
   } = $props();
 
-  const CHOICES: { choice: Choice; label: MessageKey }[] = [
-    { choice: "erase", label: "fillChoice.erase" },
-    { choice: "foreground", label: "fillChoice.foreground" },
-    { choice: "background", label: "fillChoice.background" },
-  ];
-
+  let contents = $state(lastContents);
   let dialog: HTMLDialogElement;
+  let form: HTMLFormElement;
 
   onMount(() => {
     dialog.showModal();
-    // Modal: the app's shortcuts must not act behind the dialog; 1–3 choose.
+    // Modal: the app's shortcuts must not act behind the dialog. Enter on the closed list
+    // applies, as in Photoshop (a select does not submit its form by itself).
     const keys = (e: KeyboardEvent) => {
       e.stopPropagation();
-      const index = ["1", "2", "3"].indexOf(e.key);
-      if (index >= 0 && !e.repeat) {
+      if (e.key === "Enter" && e.target instanceof HTMLSelectElement) {
         e.preventDefault();
-        onchoose(CHOICES[index].choice);
+        form.requestSubmit();
       }
     };
     window.addEventListener("keydown", keys, true);
     return () => window.removeEventListener("keydown", keys, true);
   });
+
+  function submit(e: SubmitEvent) {
+    e.preventDefault();
+    lastContents = contents;
+    onchoose(contents);
+  }
 </script>
 
 <dialog
   bind:this={dialog}
-  aria-labelledby="fill-choice-title"
+  aria-labelledby="fill-title"
   oncancel={(e) => {
     e.preventDefault();
     onclose();
   }}
 >
-  <header id="fill-choice-title">{t("fillChoice.title")}</header>
-  <div class="choices">
-    {#each CHOICES as entry, index (entry.choice)}
+  <header id="fill-title">{t("fillChoice.title")}</header>
+  <form bind:this={form} onsubmit={submit}>
+    <div class="fields">
+      <label for="fill-contents">{t("fillChoice.contents")}</label>
       <!-- svelte-ignore a11y_autofocus -->
-      <button class="choice" autofocus={index === 0} onclick={() => onchoose(entry.choice)}>
-        <span
-          class="swatch"
-          class:transparent={entry.choice === "erase"}
-          style:background={entry.choice === "foreground"
-            ? foreground
-            : entry.choice === "background"
-              ? background
-              : undefined}
-        ></span>
-        <span class="label">{t(entry.label)}</span>
-        <span class="key">{index + 1}</span>
-      </button>
-    {/each}
-  </div>
-  <footer>
-    <button type="button" class="btn" onclick={onclose}>{t("sizeDialog.cancel")}</button>
-  </footer>
+      <select id="fill-contents" bind:value={contents} autofocus>
+        {#each CONTENTS as entry (entry.value)}
+          <option value={entry.value}>{t(entry.label)}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="buttons">
+      <button type="submit" class="btn primary">{t("sizeDialog.ok")}</button>
+      <button type="button" class="btn" onclick={onclose}>{t("sizeDialog.cancel")}</button>
+    </div>
+  </form>
 </dialog>
 
 <style>
   dialog {
-    width: 300px;
+    width: 360px;
     padding: 0;
     border: 1px solid var(--border-dark);
     border-radius: 4px;
@@ -100,55 +107,37 @@
     font-weight: 600;
   }
 
-  .choices {
+  /* Photoshop's layout: the settings on the left, OK and Cancel stacked on the right. */
+  form {
     display: grid;
-    gap: 4px;
-    padding: 10px;
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    padding: 14px;
   }
 
-  .choice {
-    display: flex;
+  .fields {
+    display: grid;
+    grid-template-columns: auto 1fr;
     align-items: center;
-    gap: 10px;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--border-dark);
-    border-radius: 3px;
-    background: var(--chrome);
-    color: var(--text);
-    text-align: left;
+    align-self: start;
+    gap: 8px;
   }
 
-  .choice:hover,
-  .choice:focus-visible {
-    background: var(--selected);
-    outline: none;
-  }
-
-  .swatch {
-    flex: none;
-    width: 18px;
-    height: 18px;
-    border: 1px solid var(--border-dark);
-  }
-
-  /* Transparency, as the canvas shows it. */
-  .swatch.transparent {
-    background: repeating-conic-gradient(#bbb 0 25%, #fff 0 50%) 0 0 / 8px 8px;
-  }
-
-  .label {
-    flex: 1;
-  }
-
-  .key {
+  label {
     color: var(--text-muted);
   }
 
-  footer {
-    display: flex;
-    justify-content: flex-end;
-    padding: 8px 10px;
-    border-top: 1px solid var(--border-dark);
+  select {
+    min-width: 0;
+  }
+
+  .buttons {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+  }
+
+  .buttons .btn {
+    min-width: 80px;
   }
 </style>
