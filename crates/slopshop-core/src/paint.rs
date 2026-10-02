@@ -17,7 +17,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace, Blender};
-use crate::color::{IDENTITY, LinearRgba, Mat3, WORKING_SPACE, mat_vec};
+use crate::color::{ChannelLayout, IDENTITY, LinearRgba, Mat3, WORKING_SPACE, mat_vec};
 use crate::geom::Size;
 use crate::raster::{
     Codec, RasterError, RasterImage, TILE_SIZE, bands, pad_tile, parallel_for_each,
@@ -99,6 +99,19 @@ pub enum Paint {
     Color(LinearRgba),
     /// Lower the alpha: the Eraser.
     Erase,
+    /// Move a coverage (a layer mask or the selection, gray without alpha) towards this value
+    /// in `[0, 1]`: white shows or selects, black hides. The Brush paints the gray of its color
+    /// ([`gray_of_srgb`]) and the Eraser 0 (ADR 0027).
+    Gray(f32),
+}
+
+/// The gray a color paints in a mask or in Quick Mask, in `[0, 1]`: the sRGB encoding of its
+/// luminance, so that a gray paints its own value (128 paints 50 %), as in Photoshop. `rgb` is
+/// sRGB-encoded in `[0, 1]`.
+pub fn gray_of_srgb(rgb: [f32; 3]) -> f32 {
+    let [r, g, b] = rgb.map(|v| f64::from(crate::color::srgb_decode(v.clamp(0.0, 1.0))));
+    let [wr, wg, wb] = crate::color::ColorSpace::SRGB.primaries.to_xyz()[1];
+    crate::color::srgb_encode((wr * r + wg * g + wb * b) as f32).clamp(0.0, 1.0)
 }
 
 /// A pointer position in document pixels (pixel centers at `.5`) and the pen's pressure in
@@ -117,6 +130,8 @@ pub enum PaintError {
     InvalidColor,
     /// The layer's transform cannot be inverted.
     InvalidTransform,
+    /// [`Paint::Gray`] on an image that is not a coverage (gray without alpha).
+    NotACoverage,
     Raster(RasterError),
 }
 
@@ -126,6 +141,7 @@ impl fmt::Display for PaintError {
             PaintError::InvalidBrush => write!(f, "brush parameters out of range"),
             PaintError::InvalidColor => write!(f, "paint color components must be finite"),
             PaintError::InvalidTransform => write!(f, "the layer's transform is not invertible"),
+            PaintError::NotACoverage => write!(f, "only a mask or a selection is painted in gray"),
             PaintError::Raster(e) => write!(f, "{e}"),
         }
     }
@@ -235,6 +251,14 @@ impl Stroke {
             && ![c.r, c.g, c.b].iter().all(|v| v.is_finite())
         {
             return Err(PaintError::InvalidColor);
+        }
+        if let Paint::Gray(value) = paint {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(PaintError::InvalidColor);
+            }
+            if base.format().layout != ChannelLayout::Gray {
+                return Err(PaintError::NotACoverage);
+            }
         }
         let to_image = to_document.inverse().ok_or(PaintError::InvalidTransform)?;
         let base = match (paint, base.with_alpha()) {
@@ -564,6 +588,12 @@ impl Stroke {
             }
         }
         let codec = &self.codec;
+        if let Paint::Gray(value) = self.paint {
+            // Source-over of an opaque gray on the coverage.
+            let (gray, _) = codec.read_mapped(px, &mut |v| v);
+            codec.write([gray[0] + (value - gray[0]) * amount; 3], 1.0, px);
+            return;
+        }
         if self.paint == Paint::Erase && codec.scale_alpha(px, 1.0 - amount) {
             // Only the alpha changes: the colors stay as they were (ADR 0027).
             return;
@@ -587,6 +617,8 @@ impl Stroke {
                     *v *= 1.0 - amount;
                 }
             }
+            // Painted above.
+            Paint::Gray(_) => return,
         }
         let rgb = [dst[0], dst[1], dst[2]];
         let rgb = if self.base.format().layout.is_gray() {
@@ -993,6 +1025,88 @@ mod tests {
         // sRGB green's luminance (0.7152) encoded: 220.
         let v = pixel(&image, 16, 16)[0];
         assert!((219..=221).contains(&v), "{v}");
+    }
+
+    /// A uniform 16-bit coverage of `value`, as masks and selections are.
+    fn coverage(size: Size, value: u16) -> Arc<RasterImage> {
+        filled(
+            size,
+            crate::selection::SELECTION_FORMAT,
+            &value.to_ne_bytes(),
+        )
+    }
+
+    fn coverage_at(image: &RasterImage, x: u32, y: u32) -> u16 {
+        let bytes = pixel(image, x, y);
+        u16::from_ne_bytes([bytes[0], bytes[1]])
+    }
+
+    #[test]
+    fn masks_and_selections_are_painted_towards_a_gray() {
+        let brush = Brush {
+            diameter: 20.0,
+            ..Brush::default()
+        };
+        // Black hides where the dab reaches, nothing else changes.
+        let mut s = stroke(
+            coverage(Size::new(64, 64), u16::MAX),
+            brush,
+            Paint::Gray(0.0),
+        );
+        s.add(&[sample(32.5, 32.5)]);
+        let image = s.finish().unwrap().unwrap();
+        assert_eq!(coverage_at(&image, 32, 32), 0);
+        let edge = coverage_at(&image, 42, 32);
+        assert!((32_000..33_600).contains(&edge), "{edge}");
+        assert_eq!(coverage_at(&image, 43, 32), u16::MAX);
+        // A gray paints its own value.
+        let mut s = stroke(coverage(Size::new(64, 64), 0), brush, Paint::Gray(0.5));
+        s.add(&[sample(32.5, 32.5)]);
+        let image = s.finish().unwrap().unwrap();
+        assert_eq!(coverage_at(&image, 32, 32), 32_768);
+        assert_eq!(coverage_at(&image, 0, 0), 0);
+    }
+
+    #[test]
+    fn gray_paints_coverages_only() {
+        let base = transparent(Size::new(8, 8));
+        let refused = |base: Arc<RasterImage>, paint| {
+            Stroke::new(
+                base,
+                Affine::IDENTITY,
+                None,
+                BlendSpace::Perceptual,
+                Brush::default(),
+                paint,
+            )
+            .err()
+        };
+        assert_eq!(
+            refused(base, Paint::Gray(1.0)),
+            Some(PaintError::NotACoverage)
+        );
+        let mask = coverage(Size::new(8, 8), 0);
+        assert_eq!(
+            refused(Arc::clone(&mask), Paint::Gray(1.5)),
+            Some(PaintError::InvalidColor)
+        );
+        assert_eq!(
+            refused(mask, Paint::Gray(f32::NAN)),
+            Some(PaintError::InvalidColor)
+        );
+    }
+
+    #[test]
+    fn a_color_paints_the_gray_of_its_luminance() {
+        assert_eq!(gray_of_srgb([0.0; 3]), 0.0);
+        assert!((gray_of_srgb([1.0; 3]) - 1.0).abs() < 1e-5);
+        assert!((gray_of_srgb([0.5; 3]) - 0.5).abs() < 1e-5);
+        let (r, g, b) = (
+            gray_of_srgb([1.0, 0.0, 0.0]),
+            gray_of_srgb([0.0, 1.0, 0.0]),
+            gray_of_srgb([0.0, 0.0, 1.0]),
+        );
+        assert!(g > r && r > b, "{r} {g} {b}");
     }
 
     #[test]
