@@ -184,7 +184,9 @@ and its click or box (`ai_object_select`) only decode, in milliseconds. Quick Se
 (`ai_segment`) keeps the prompts of a session (its strokes) and the selection before it. The
 mask becomes a selection through `selection::select_logits` (specks and pinholes dropped).
 Select > Subject (`ai_select_subject`) has BiRefNet find the main subject on the whole document
-(1024² logits) and goes through the same path. Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
+(1024² logits) and goes through the same path. Select > Semantic… (`ai_select_semantic`) has SAM 3 find every
+instance of what a text names (tokenized by `clip`, CLIP's BPE; the helper keeps the image
+encoded for the next text, about 70 ms per text on an RTX 5070 Ti) and does the same. Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
 along the outline with `selection::plan_refinement` (at most 48; a longer outline is seen
 coarser), renders each at full resolution, has ViTMatte matte it with a trimap that leaves a
 band around the outline undecided, and writes the matte into that band only.

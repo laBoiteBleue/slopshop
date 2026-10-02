@@ -115,6 +115,7 @@ const en = {
   "menu.select.inverse": "Inverse",
   "menu.select.colorRange": "Color Range…",
   "menu.select.subject": "Subject",
+  "menu.select.semantic": "Semantic…",
   "colorRange.title": "Color Range",
   "colorRange.fuzziness": "Fuzziness:",
   "colorRange.invert": "Invert",
@@ -547,6 +548,12 @@ const en = {
   "ai.component.birefnetLite": "BiRefNet lite: select the subject",
   "ai.error.start": "The AI engine could not start: {detail}",
   "ai.error.model": "The AI model failed: {detail}",
+  "semantic.title": "Semantic Selection",
+  "semantic.label": "What to select:",
+  "semantic.hint":
+    "In English, like “sky”, “red car” or “person with a hat”: every one in the image is selected.",
+  "ai.error.notFound": "Nothing matching “{detail}” was found.",
+  "ai.component.sam3": "SAM 3: select by a text",
 } satisfies Record<string, string>;
 
 export default en;

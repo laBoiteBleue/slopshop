@@ -186,7 +186,7 @@ paints on an empty layer or in a mask.
 - [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
       AI tools, and Select > Refine Edges… for any selection
 - [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
-- [ ] Select > Semantic (SAM 3)
+- [x] Select > Semantic… (SAM 3): every instance of what an English noun phrase names
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
 

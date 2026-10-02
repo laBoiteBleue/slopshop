@@ -47,6 +47,7 @@
   import VectorImportDialog from "./lib/VectorImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
   import PreferencesDialog from "./lib/PreferencesDialog.svelte";
+  import SemanticDialog from "./lib/SemanticDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
   import { hasShortcutModifier, isWindows, modifierLabel, shortcutLetter } from "./lib/platform";
   import { formatZoom } from "./lib/format";
@@ -454,7 +455,10 @@
       const failure = e as Partial<AiFailure> | null;
       if (failure?.code === "notInstalled") {
         // The detail names the feature whose components are missing.
-        const feature: AiFeature = failure.detail === "subject" ? "subject" : "segmentation";
+        const feature: AiFeature =
+          failure.detail === "subject" || failure.detail === "semantic"
+            ? failure.detail
+            : "segmentation";
         const components = await engine.aiComponents(feature);
         if (components) {
           return await new Promise((resolve) => {
@@ -501,6 +505,22 @@
     commitTransform();
     quickSession = null;
     void runAi(() => engine.aiSelectSubject(doc.id, aiLayer(), "replace", quick.objectRefine));
+  }
+
+  /** Select > Semantic…: the dialog's text, remembered for the session. */
+  let semantic = $state<{ document: number } | null>(null);
+  let semanticText = $state("");
+
+  function selectSemantic(text: string) {
+    const dialog = semantic;
+    semantic = null;
+    if (!dialog) return;
+    semanticText = text;
+    commitTransform();
+    quickSession = null;
+    void runAi(() =>
+      engine.aiSelectSemantic(dialog.document, text, aiLayer(), "replace", quick.objectRefine),
+    );
   }
 
   /** Object Selection: the object at a point, or in a box (document pixels). */
@@ -1879,6 +1899,14 @@
           separator,
           cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
           cmd(t("menu.select.subject"), selectSubject, undefined, !doc),
+          cmd(
+            t("menu.select.semantic"),
+            () => {
+              if (active) semantic = { document: active.id };
+            },
+            undefined,
+            !doc,
+          ),
           {
             kind: "submenu",
             label: t("menu.select.modify"),
@@ -2525,6 +2553,10 @@
 
 {#if preferences}
   <PreferencesDialog onclose={() => (preferences = false)} />
+{/if}
+
+{#if semantic && semantic.document === activeId}
+  <SemanticDialog value={semanticText} onapply={selectSemantic} onclose={() => (semantic = null)} />
 {/if}
 
 {#if aiDownload}

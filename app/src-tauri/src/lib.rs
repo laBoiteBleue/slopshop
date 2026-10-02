@@ -2082,6 +2082,7 @@ pub fn run() {
             segment::ai_object_select,
             segment::ai_refine_selection,
             segment::ai_select_subject,
+            segment::ai_select_semantic,
             layer_thumbnail,
             add_mask_from_transparency,
             selection::select_shape,

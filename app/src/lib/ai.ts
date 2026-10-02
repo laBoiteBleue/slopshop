@@ -11,6 +11,7 @@ const NAMES: Record<string, MessageKey> = {
   "sam2.1-tiny": "ai.component.samTiny",
   "vitmatte-small": "ai.component.vitmatte",
   birefnet: "ai.component.birefnet",
+  sam3: "ai.component.sam3",
   "birefnet-lite": "ai.component.birefnetLite",
 };
 
@@ -25,6 +26,7 @@ const FAILURES: Record<string, MessageKey> = {
   disk: "ai.error.disk",
   corrupt: "ai.error.corrupt",
   busy: "ai.error.busy",
+  notFound: "ai.error.notFound",
   start: "ai.error.start",
   model: "ai.error.model",
   unsupported: "ai.unsupported",

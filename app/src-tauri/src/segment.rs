@@ -122,6 +122,7 @@ fn require(root: &Path, feature: Feature) -> Result<(), AiFailure> {
             let name = match feature {
                 Feature::Segmentation => "segmentation",
                 Feature::Subject => "subject",
+                Feature::Semantic => "semantic",
             };
             return Err(AiFailure::new("notInstalled", name));
         }
@@ -600,6 +601,39 @@ pub(crate) async fn ai_refine_selection(
     .map_err(internal)?
 }
 
+/// The whole document (only `layer_id`, if given) as 8-bit RGB, at most [`SAM_SIDE`] pixels on
+/// a side, rendered by the GPU.
+fn whole(
+    state: &AppState,
+    doc: &Document,
+    layer_id: Option<u64>,
+) -> Result<(Size, Vec<u8>), AiFailure> {
+    let canvas = doc.size();
+    let source = selection::sampled_document(doc, layer_id).map_err(internal)?;
+    let scale = (f64::from(canvas.width.max(canvas.height)) / SAM_SIDE).max(1.0);
+    let output = Size::new(
+        (f64::from(canvas.width) / scale).ceil().max(1.0) as u32,
+        (f64::from(canvas.height) / scale).ceil().max(1.0) as u32,
+    );
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale,
+    };
+    let frame = state
+        .renderer()
+        .map_err(internal)?
+        .render_view(&source, view, output)
+        .map_err(internal)?;
+    let rgb = frame
+        .data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    Ok((output, rgb))
+}
+
 /// Select > Subject: BiRefNet's mask of the image's main subject (the whole document, at most
 /// 1024 pixels on a side), refined at full resolution when `refine` is set, combined with the
 /// selection by `mode`, as one undo entry.
@@ -618,28 +652,7 @@ pub(crate) async fn ai_select_subject(
         require(&root, Feature::Subject)?;
         let canvas = doc.size();
         let region = Rect::new(0, 0, canvas.width, canvas.height);
-        let source = selection::sampled_document(&doc, layer_id).map_err(internal)?;
-        let scale = (f64::from(canvas.width.max(canvas.height)) / SAM_SIDE).max(1.0);
-        let output = Size::new(
-            (f64::from(canvas.width) / scale).ceil().max(1.0) as u32,
-            (f64::from(canvas.height) / scale).ceil().max(1.0) as u32,
-        );
-        let view = ViewTransform {
-            origin: [0.0, 0.0],
-            scale,
-        };
-        let frame = state
-            .renderer()
-            .map_err(internal)?
-            .render_view(&source, view, output)
-            .map_err(internal)?;
-        let rgb: Vec<u8> = frame
-            .data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2]])
-            .collect();
+        let (output, rgb) = whole(&state, &doc, layer_id)?;
         let mut session = lock(&state)?;
         let client = session.client(&root)?;
         let logits = match client.subject(output.width, output.height, rgb) {
@@ -660,6 +673,68 @@ pub(crate) async fn ai_select_subject(
         )?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: an image encoded from this revision stays valid.
+        if let Some(encoded) = session.encoded.as_mut()
+            && encoded.document_id == document_id
+            && encoded.revision == doc.revision()
+        {
+            encoded.revision = view.revision;
+        }
+        Ok(view)
+    })
+    .await
+    .map_err(internal)?
+}
+
+/// Select > Semantic: SAM 3's mask of every instance of what `text` names (an English noun
+/// phrase) in the whole document, refined at full resolution when `refine` is set, combined
+/// with the selection by `mode`, as one undo entry. Nothing found: `notFound`.
+#[tauri::command]
+pub(crate) async fn ai_select_semantic(
+    app: AppHandle,
+    document_id: u64,
+    text: String,
+    layer_id: Option<u64>,
+    mode: String,
+    refine: bool,
+) -> Result<DocumentView, AiFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let combine = selection::combine(&mode).map_err(internal)?;
+        let (root, doc) = prepare(&app, document_id)?;
+        require(&root, Feature::Semantic)?;
+        let canvas = doc.size();
+        let region = Rect::new(0, 0, canvas.width, canvas.height);
+        let (output, rgb) = whole(&state, &doc, layer_id)?;
+        // The image's identity, so that the helper encodes it once for several texts.
+        let key = document_id
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add(doc.revision().rotate_left(20))
+            .wrapping_add(layer_id.map_or(0, |id| id.rotate_left(40) + 1));
+        let mut session = lock(&state)?;
+        let client = session.client(&root)?;
+        let (count, probabilities) =
+            match client.semantic(key, output.width, output.height, rgb, &text) {
+                Ok(found) => found,
+                Err(e) => return Err(session.failed(e)),
+            };
+        if count == 0 {
+            return Err(AiFailure::new("notFound", &text));
+        }
+        // Probabilities as logits for the selection: positive above one half.
+        let logits: Vec<f32> = probabilities.iter().map(|p| p - 0.5).collect();
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        let image = session.selection(
+            &state,
+            &root,
+            &doc,
+            layer_id,
+            &logits,
+            region,
+            current.as_deref(),
+            combine,
+            refine,
+        )?;
+        let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         if let Some(encoded) = session.encoded.as_mut()
             && encoded.document_id == document_id
             && encoded.revision == doc.revision()

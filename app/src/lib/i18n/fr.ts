@@ -115,6 +115,7 @@ const fr: Messages = {
   "menu.select.inverse": "Intervertir",
   "menu.select.colorRange": "Plage de couleurs…",
   "menu.select.subject": "Sujet",
+  "menu.select.semantic": "Sémantique…",
   "colorRange.title": "Plage de couleurs",
   "colorRange.fuzziness": "Tolérance :",
   "colorRange.invert": "Inverser",
@@ -562,6 +563,12 @@ const fr: Messages = {
   "ai.component.birefnetLite": "BiRefNet lite : sélection du sujet",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",
+  "semantic.title": "Sélection sémantique",
+  "semantic.label": "Que sélectionner :",
+  "semantic.hint":
+    "En anglais, comme « sky », « red car » ou « person with a hat » : chaque occurrence dans l’image est sélectionnée.",
+  "ai.error.notFound": "Rien ne correspond à « {detail} ».",
+  "ai.component.sam3": "SAM 3 : sélection par un texte",
 };
 
 export default fr;

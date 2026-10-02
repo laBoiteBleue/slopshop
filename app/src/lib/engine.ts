@@ -801,7 +801,7 @@ export const DOCUMENT_CLOSED = "document-closed";
 
 /** Every document request names its document (one per tab). */
 /** What the user asks AI for (mirrors `ai::Feature`). */
-export type AiFeature = "segmentation" | "subject";
+export type AiFeature = "segmentation" | "subject" | "semantic";
 
 /** A license an AI component comes under. */
 export type AiLicense = {
@@ -1091,6 +1091,17 @@ export const engine = {
     refine: boolean,
   ) =>
     serial(() => invoke<DocumentView>("ai_select_subject", { documentId, layerId, mode, refine })),
+  /** Select > Semantic: every instance of what `text` names (SAM 3), as one undo entry. */
+  aiSelectSemantic: (
+    documentId: number,
+    text: string,
+    layerId: number | null,
+    mode: SelectionMode,
+    refine: boolean,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("ai_select_semantic", { documentId, text, layerId, mode, refine }),
+    ),
   /** Select > Refine Edge: the selection's edge matted within `radius` pixels (ViTMatte). */
   aiRefineSelection: (documentId: number, radius: number, layerId: number | null) =>
     serial(() => invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId })),

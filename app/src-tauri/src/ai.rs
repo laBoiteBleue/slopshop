@@ -56,6 +56,7 @@ impl Runtime {
             (Self::Cpu, Feature::Segmentation) => "sam2.1-tiny",
             (Self::Cuda, Feature::Subject) => "birefnet",
             (Self::Cpu, Feature::Subject) => "birefnet-lite",
+            (_, Feature::Semantic) => "sam3",
         };
         [runtime, model, "vitmatte-small"]
     }
@@ -69,9 +70,11 @@ pub(crate) enum Feature {
     Segmentation,
     /// The main subject of the image (BiRefNet): Select > Subject.
     Subject,
+    /// What a text names (SAM 3): Select > Semantic.
+    Semantic,
 }
 
-const FEATURES: [Feature; 2] = [Feature::Segmentation, Feature::Subject];
+const FEATURES: [Feature; 3] = [Feature::Segmentation, Feature::Subject, Feature::Semantic];
 
 /// Installs running, one at a time, and their cancellation.
 #[derive(Default)]
