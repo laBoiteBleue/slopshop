@@ -4,11 +4,15 @@
 //! thumbnail (a few thousand texels at most, whatever the image size), box-averaged in linear
 //! light with premultiplied alpha, then converted like an 8-bit sRGB export: straight alpha,
 //! exact quantization, no dither. It is a display view: the image is never changed.
+//!
+//! A layer's thumbnail shows the bounds of its visible pixels (those whose alpha is above 0),
+//! the maintainer's choice, like Photoshop's "Layer Bounds" thumbnails: a small layer, or a
+//! layer with a little paint, fills its thumbnail. A mask's shows the whole mask.
 
 use crate::blend::BlendSpace;
 use crate::color::{PixelFormat, WORKING_SPACE, mat_vec};
 use crate::convert::{ConversionReport, ConvertOptions, Converter, WHITE_MATTE};
-use crate::geom::Size;
+use crate::geom::{Rect, Size};
 use crate::raster::{Codec, RasterImage, TILE_SIZE};
 use crate::tile::TileCoord;
 
@@ -19,10 +23,14 @@ pub struct Thumbnail {
     pub pixels: Vec<u8>,
 }
 
-/// `image` fitted in `max_side`×`max_side` pixels, keeping its aspect ratio; never enlarged.
-/// `max_side` 0 is treated as 1.
+/// The bounds of `image`'s visible pixels (the whole image when none is visible) fitted in
+/// `max_side`×`max_side` pixels, keeping their aspect ratio; never enlarged. `max_side` 0 is
+/// treated as 1.
 pub fn raster_thumbnail(image: &RasterImage, max_side: u32) -> Thumbnail {
-    thumbnail_as(image, max_side, PixelFormat::RGBA8_SRGB)
+    let area = image
+        .content_bounds()
+        .unwrap_or_else(|| image.size().bounds());
+    thumbnail_as(image, area, max_side, PixelFormat::RGBA8_SRGB)
 }
 
 /// A mask's thumbnail (ADR 0014): its coverage values shown as they are (50% coverage is code
@@ -32,12 +40,13 @@ pub fn mask_thumbnail(mask: &RasterImage, max_side: u32) -> Thumbnail {
         color_space: crate::color::ColorSpace::LINEAR_SRGB,
         ..PixelFormat::RGBA8_SRGB
     };
-    thumbnail_as(mask, max_side, raw)
+    thumbnail_as(mask, mask.size().bounds(), max_side, raw)
 }
 
-fn thumbnail_as(image: &RasterImage, max_side: u32, target: PixelFormat) -> Thumbnail {
+/// `area` (level-0 pixels, not empty) of `image` fitted in `max_side`.
+fn thumbnail_as(image: &RasterImage, area: Rect, max_side: u32, target: PixelFormat) -> Thumbnail {
     let max_side = max_side.max(1);
-    let full = image.size();
+    let full = Size::new(area.width.max(1), area.height.max(1));
     let longest = full.width.max(full.height);
     let scale = (f64::from(max_side) / f64::from(longest)).min(1.0);
     let size = Size::new(
@@ -45,14 +54,33 @@ fn thumbnail_as(image: &RasterImage, max_side: u32, target: PixelFormat) -> Thum
         ((f64::from(full.height) * scale).round() as u32).max(1),
     );
 
-    // The coarsest level at least as large as the thumbnail in both directions.
+    // The coarsest level where the area is still at least as large as the thumbnail in both
+    // directions, and the area in that level's texels.
     let levels = image.levels();
-    let level = levels
-        .iter()
+    let in_level = |index: usize| {
+        let factor = 1u64 << index;
+        let x0 = (u64::from(area.x) / factor) as u32;
+        let y0 = (u64::from(area.y) / factor) as u32;
+        let x1 = area.right().div_ceil(factor) as u32;
+        let y1 = area.bottom().div_ceil(factor) as u32;
+        let size = levels[index].size();
+        (
+            x0,
+            y0,
+            x1.min(size.width).max(x0 + 1),
+            y1.min(size.height).max(y0 + 1),
+        )
+    };
+    let index = (0..levels.len())
         .rev()
-        .find(|l| l.size().width >= size.width && l.size().height >= size.height)
-        .unwrap_or(&levels[0]);
-    let source = level.size();
+        .find(|&i| {
+            let (x0, y0, x1, y1) = in_level(i);
+            x1 - x0 >= size.width && y1 - y0 >= size.height
+        })
+        .unwrap_or(0);
+    let level = &levels[index];
+    let (ox, oy, ex, ey) = in_level(index);
+    let source = Size::new(ex - ox, ey - oy);
     let codec = Codec::new(image.stored_format());
     let matrix = image.matrix_to(&WORKING_SPACE);
 
@@ -88,7 +116,7 @@ fn thumbnail_as(image: &RasterImage, max_side: u32, target: PixelFormat) -> Thum
             let mut sum = [0.0f64; 4];
             for y in y0..y1 {
                 for x in x0..x1 {
-                    for (s, v) in sum.iter_mut().zip(texel(x, y)) {
+                    for (s, v) in sum.iter_mut().zip(texel(ox + x, oy + y)) {
                         *s += v;
                     }
                 }
@@ -226,5 +254,34 @@ mod tests {
         let mask = RasterImage::from_pixels(Size::new(2, 1), gray, &[128, 255]).unwrap();
         let t = mask_thumbnail(&mask, 16);
         assert_eq!(t.pixels, [128, 128, 128, 255, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_layer_thumbnail_shows_its_visible_pixels_only() {
+        // Transparent but for a red 20 × 10 block at (300, 150), in a 400 × 200 image.
+        let image = rgba8(Size::new(400, 200), |x, y| {
+            if (300..320).contains(&x) && (150..160).contains(&y) {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 0, 0]
+            }
+        });
+        let thumb = raster_thumbnail(&image, 64);
+        assert_eq!(thumb.size, Size::new(20, 10), "never enlarged");
+        assert!(thumb.pixels.chunks_exact(4).all(|p| p == [255, 0, 0, 255]));
+        // Nothing visible: the whole image.
+        let empty = rgba8(Size::new(400, 200), |_, _| [0, 0, 0, 0]);
+        assert_eq!(raster_thumbnail(&empty, 64).size, Size::new(64, 32));
+        // Large images read a coarse level of the area.
+        let big = rgba8(Size::new(2000, 1000), |x, _| {
+            if x >= 1000 {
+                [0, 0, 255, 255]
+            } else {
+                [0, 0, 0, 0]
+            }
+        });
+        let thumb = raster_thumbnail(&big, 50);
+        assert_eq!(thumb.size, Size::new(50, 50));
+        assert!(thumb.pixels.chunks_exact(4).all(|p| p == [0, 0, 255, 255]));
     }
 }
