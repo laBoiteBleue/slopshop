@@ -101,6 +101,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       dropped ones
 - [x] Copy, Cut and Paste layers (Ctrl+C, Ctrl+X, Ctrl+V): on top of any document, or as a new
       one (Paste as New Document); the pixels are shared, so copying costs nothing
+- [x] File > New, as Photoshop's New dialog: a name, presets, the size and its orientation, the
+      background contents (white, black, the background color, transparent)
 - [ ] Drop images from a web page (browsers drag URLs or virtual files, not file paths)
 
 ## Phase 2 — Non-destructive core
@@ -130,7 +132,6 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
   gained about 2% of error against originals reduced 4× and enlarged back: edges are crisper,
   no detail comes back, and textures turn patchy at full strength. Enlargements that recover
   detail belong to the AI track (AI upscaling).
-- [ ] Image > Crop to the selection, with selections
 - [x] Adjustment layers, engine ([ADR 0020](adr/0020-adjustment-layers.md)): Exposure,
       Hue/Saturation and Levels, applied to what is below (opacity, mask, clipping, groups),
       CPU and GPU, `.slop` 0.7
@@ -191,14 +192,17 @@ removable as a whole; undo keeps the old tiles by reference.
 - [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
       AI tools, and Select > Refine Edges… for any selection
 - [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
-- [ ] Select > Semantic (SAM 3)
+- Dropped (2026-10-02): Select > Semantic (SAM 3), objects named by a text prompt. A click with
+  Object Selection is simpler.
 - [x] Painting decided ([ADR 0027](adr/0027-painting.md)): strokes on the CPU as a coverage,
       shown by the GPU; paint kept apart from the original, Delete Paint
-- [ ] Brush engine in the core (diameter, hardness, spacing, flow, opacity, pressure), the
+- [x] Brush engine in the core (diameter, hardness, spacing, flow, opacity, pressure), the
       painted image and its undo by tile reference, a benchmark
-- [ ] Tiles keyed by identity in the GPU cache and the `.slop` writer; painted images in `.slop`
-- [ ] Brush (B) and Eraser (E) in the app: options bar, colors and picker, pen pressure, brush
+- [x] Tiles keyed by identity in the GPU cache and the `.slop` writer; painted images in `.slop`
+- [x] Brush (B) and Eraser (E) in the app: options bar, colors and picker, pen pressure, brush
       outline, new empty layer (Shift+Ctrl+N), Delete Paint and the painted-layer mark
+- [x] Delete with a selection, as Photoshop's Fill dialog: transparency, the foreground or
+      background color, black, 50% gray or white, as paint
 
 ## Phase 4 — Very large images
 
