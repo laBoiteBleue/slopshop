@@ -31,6 +31,8 @@ export type LayerView = {
   clipped: boolean;
   /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
   transform: [number, number, number, number, number, number];
+  /** Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it. */
+  painted: boolean;
   /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
   /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). Curves:
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
@@ -193,6 +195,10 @@ export type SelectionOutline = Uint32Array[];
 
 export type EditRequest =
   | { kind: "addFillLayer"; name: string; color: [number, number, number, number] }
+  /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
+  | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
+  /** Layer > Delete Paint: the layers' (and their masks') originals show again. */
+  | { kind: "deletePaint"; ids: number[] }
   | { kind: "removeLayer"; id: number }
   | { kind: "setLayerVisible"; id: number; visible: boolean }
   | { kind: "setLayerOpacity"; id: number; opacity: number }
@@ -829,6 +835,33 @@ export type AiFailure = { code: string; detail: string };
 
 export type AiProgress = { done: number; total: number };
 
+/** The options bar's brush (see `paint::BrushRequest`): shares between 0 and 1. */
+export type BrushRequest = {
+  /** Diameter, document pixels. */
+  size: number;
+  hardness: number;
+  /** Distance between dabs, as a share of the diameter. */
+  spacing: number;
+  flow: number;
+  opacity: number;
+  pressureSize: boolean;
+  pressureOpacity: boolean;
+};
+
+/** A batch of a Brush or Eraser stroke (see `paint::PaintRequest`). */
+export type PaintRequest = {
+  /** Batches of one stroke share its id. */
+  stroke: number;
+  layerId: number;
+  brush: BrushRequest;
+  /** The Brush's color, sRGB-encoded RGB in [0, 1]; null for the Eraser. */
+  color: [number, number, number] | null;
+  /** Pointer samples since the last batch: `[x, y, pressure]`, document pixels. */
+  samples: [number, number, number][];
+  /** The last batch: the stroke is committed (one undo entry). */
+  end: boolean;
+};
+
 /** A Quick Selection stroke, sent again while painted (see `selection::QuickRequest`). */
 export type QuickRequest = {
   /** Requests of one stroke share its image and the selection before it. */
@@ -1106,6 +1139,15 @@ export const engine = {
     ),
   /** Cancels an AI request: it stops at its next step, changing nothing (code `cancelled`). */
   aiCancel: (task: number) => invoke<void>("ai_cancel", { task }),
+  /**
+   * Paint a batch of a stroke (ADR 0027): shown at once, the view redraws; resolves to the
+   * document once the stroke is committed, else `null`.
+   */
+  paintStroke: (documentId: number, request: PaintRequest) =>
+    serial(() => invoke<DocumentView | null>("paint_stroke", { documentId, request })),
+  /** Edit > Clear: the selected part of a raster layer erased, as paint (ADR 0027). */
+  clearSelection: (documentId: number, layerId: number) =>
+    serial(() => invoke<DocumentView>("clear_selection", { documentId, layerId })),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),

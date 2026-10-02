@@ -22,6 +22,7 @@
     onedit,
     onlive,
     ongestureend,
+    onclear,
     contextMenu = [],
     emptyContextMenu = [],
     onlayerdrag,
@@ -45,6 +46,8 @@
      * document reflects the whole gesture.
      */
     ongestureend: (documentId: number) => Promise<void>;
+    /** Delete with a selection: the selected pixels of the active layer are erased instead. */
+    onclear?: () => void;
   } = $props();
 
   // The panel shows one document for its whole life (it is keyed by document). Capture its id:
@@ -337,6 +340,36 @@
     menuAt = { x: e.clientX, y: e.clientY, empty: true };
   }
 
+  /**
+   * A new empty layer to paint on, above the active layer (in its group) or at the top,
+   * selected (Layer > New > Layer, Shift+Ctrl+N, ADR 0027).
+   */
+  export function newLayer() {
+    const n = allLayers.filter((l) => l.kind === "raster").length + 1;
+    const name = t("layers.defaultLayerName", { n });
+    const parent = selected ? (parents.get(selected.id) ?? null) : null;
+    const index = selected
+      ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
+      : doc.layers.length;
+    const before = new Set(allLayers.map((l) => l.id));
+    void edit({ kind: "addEmptyLayer", name, parent, index }).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
+  }
+
+  /** The selected layers, or layers inside them, carry paint (Layer > Delete Paint). */
+  export function selectionPainted(): boolean {
+    const painted = (layer: LayerView): boolean => layer.painted || layer.children.some(painted);
+    return selection.some(painted);
+  }
+
+  /** Layer > Delete Paint: the selected layers' originals (pixels and masks) show again. */
+  export function deletePaintSelected() {
+    if (!selectionPainted()) return;
+    void edit({ kind: "deletePaint", ids: selection.map((l) => l.id) });
+  }
+
   /** A new empty group above the active layer, or at the top. */
   export function newGroup() {
     const n = allLayers.filter((l) => l.kind === "group").length + 1;
@@ -508,7 +541,9 @@
       if (isTextField(e.target) || renaming !== null || drag?.active) return;
       if (document.querySelector("dialog[open]")) return;
       e.preventDefault();
-      deleteSelected();
+      // With a selection, Photoshop erases the selected pixels (Edit > Clear).
+      if (doc.selectionKey != null && onclear) onclear();
+      else deleteSelected();
       return;
     }
     if (e.key !== "F2" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -978,6 +1013,11 @@
           >
             {layer.name}
           </button>
+          {#if layer.painted}
+            <span class="painted" title={t("layers.painted")}>
+              <Icon name="brush" size={12} />
+            </span>
+          {/if}
         {/if}
       </li>
     {:else}
@@ -1261,5 +1301,14 @@
     padding: 0;
     border: 1px solid var(--border-strong);
     background: none;
+  }
+
+  /* Paint on the layer (ADR 0027): its original is kept, Delete Paint brings it back. */
+  .painted {
+    display: grid;
+    place-items: center;
+    flex: none;
+    margin-right: 4px;
+    color: var(--text-muted);
   }
 </style>

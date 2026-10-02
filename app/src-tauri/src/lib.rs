@@ -10,6 +10,7 @@
 mod ai;
 mod export;
 mod ipc;
+mod paint;
 mod segment;
 mod selection;
 mod vector;
@@ -124,6 +125,8 @@ struct OpenDocument {
     last_selection: Option<slopshop_core::selection::Selection>,
     /// What the view shows over the image (Quick Mask): view state, like the viewport.
     overlays: ViewOverlays,
+    /// A paint stroke under way, shown in place of its layer's pixels (view state too).
+    paint_preview: Option<paint::PaintPreview>,
 }
 
 impl OpenDocument {
@@ -141,7 +144,20 @@ impl OpenDocument {
             saving: false,
             last_selection: None,
             overlays: ViewOverlays::default(),
+            paint_preview: None,
         }
+    }
+
+    /// The document as the view shows it, with the paint stroke under way if any, and the
+    /// document's revision (the preview is not a revision). Cheap: raster pixels are shared,
+    /// never copied.
+    fn snapshot(&self) -> (slopshop_core::Document, u64) {
+        let mut doc = self.session.document().clone();
+        let revision = doc.revision();
+        if let Some(preview) = &self.paint_preview {
+            preview.apply_to(&mut doc);
+        }
+        (doc, revision)
     }
 
     /// The selection Reselect would bring back: the last one deselected, while nothing is
@@ -393,6 +409,8 @@ struct AppState {
     segment: segment::SegmentState,
     /// The Quick Selection stroke under way (see the `selection` module).
     quick: selection::QuickState,
+    /// The paint stroke under way (see the `paint` module).
+    paint: paint::PaintState,
 }
 
 impl AppState {
@@ -415,6 +433,7 @@ impl AppState {
             ai: ai::AiState::default(),
             segment: segment::SegmentState::default(),
             quick: selection::QuickState::default(),
+            paint: paint::PaintState::default(),
         }
     }
 
@@ -1787,15 +1806,15 @@ async fn render_view(
 
         // Snapshot the document and its view together, then release the lock while the GPU
         // works. Cheap: raster pixels are shared, never copied.
-        let (doc, viewport, overlays) = {
+        let (doc, revision, viewport, overlays) = {
             let mut documents = state.documents()?;
             documents.output = Some(output);
             let document = documents.get_mut(document_id)?;
-            let doc = document.session.document().clone();
+            let (doc, revision) = document.snapshot();
             if document.viewport.output() != output {
                 document.viewport.resize(doc.size(), output);
             }
-            (doc, document.viewport, document.overlays)
+            (doc, revision, document.viewport, document.overlays)
         };
 
         let mut bytes = Vec::with_capacity(FRAME_HEADER_LEN + pixel_bytes);
@@ -1809,7 +1828,7 @@ async fn render_view(
         let header = FrameHeader {
             size: output,
             fit: viewport.is_fit(),
-            revision: doc.revision(),
+            revision,
             zoom: viewport.zoom(),
             render_ms: start.elapsed().as_secs_f32() * 1000.0,
             document_id,
@@ -1850,15 +1869,15 @@ async fn present_view(
         }
         let renderer = state.renderer()?;
         let output = Size::new(width, height);
-        let (doc, viewport, overlays) = {
+        let (doc, revision, viewport, overlays) = {
             let mut documents = state.documents()?;
             documents.output = Some(output);
             let document = documents.get_mut(document_id)?;
-            let doc = document.session.document().clone();
+            let (doc, revision) = document.snapshot();
             if !output.is_empty() && document.viewport.output() != output {
                 document.viewport.resize(doc.size(), output);
             }
-            (doc, document.viewport, document.overlays)
+            (doc, revision, document.viewport, document.overlays)
         };
         let surface_size = state.surface_size(&app)?;
 
@@ -1886,7 +1905,7 @@ async fn present_view(
         Ok(PresentInfo {
             presented: presented != Presented::Skipped,
             complete: presented != Presented::Partial,
-            revision: doc.revision(),
+            revision,
             zoom: viewport.zoom(),
             origin: viewport.transform().origin,
             fit: viewport.is_fit(),
@@ -2110,6 +2129,8 @@ pub fn run() {
             selection::modify_selection,
             selection::magic_wand,
             selection::quick_select,
+            paint::paint_stroke,
+            paint::clear_selection,
             selection::color_range_preview,
             selection::color_range,
             selection::selection_outline,
@@ -2293,6 +2314,161 @@ mod tests {
         .unwrap();
         let view = DocumentView::new(&s, &meta(), Vec::new());
         assert!(view.layers.last().unwrap().mask.is_none());
+    }
+
+    #[test]
+    fn a_paint_stroke_shows_while_painted_and_commits_once() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let edit: crate::ipc::EditRequest =
+                serde_json::from_str(r#"{"kind":"addEmptyLayer","name":"Layer 1","index":0}"#)
+                    .unwrap();
+            let edit = edit.into_edit(&mut document.session).unwrap();
+            document.session.perform(edit).unwrap();
+        }
+        let (layer, revision) = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let layer = document.session.document().layers()[0].id.get();
+            (layer, document.session.document().revision())
+        };
+        let batch = |samples: Vec<[f64; 3]>, end: bool| paint::PaintRequest {
+            stroke: 7,
+            layer_id: layer,
+            brush: paint::BrushRequest {
+                size: 40.0,
+                hardness: 1.0,
+                spacing: 0.25,
+                flow: 1.0,
+                opacity: 1.0,
+                pressure_size: true,
+                pressure_opacity: false,
+            },
+            color: Some([1.0, 0.0, 0.0]),
+            samples,
+            end,
+        };
+        // While painted: shown in the view, not in the document.
+        let live = paint::paint(&state, doc.id, batch(vec![[50.0, 50.0, 1.0]], false)).unwrap();
+        assert!(live.is_none());
+        {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            assert_eq!(document.session.document().revision(), revision);
+            let (shown, shown_revision) = document.snapshot();
+            assert_eq!(shown_revision, revision);
+            assert!(shown.layers()[0].is_painted());
+            assert!(!document.session.document().layers()[0].is_painted());
+        }
+        // The end commits the stroke: one undo entry, the preview gone.
+        let view = paint::paint(&state, doc.id, batch(vec![[120.0, 80.0, 0.5]], true))
+            .unwrap()
+            .unwrap();
+        assert!(view.layers[0].painted);
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        assert!(document.paint_preview.is_none());
+        assert!(document.session.document().layers()[0].is_painted());
+        document.session.undo().unwrap();
+        assert!(!document.session.document().layers()[0].is_painted());
+    }
+
+    #[test]
+    fn a_stroke_outside_a_small_layer_grows_it_and_undo_restores_it() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        // A 100 × 100 opaque layer placed at (1000, 1000), on top.
+        let small = Arc::new(
+            RasterImage::from_pixels(
+                Size::new(100, 100),
+                PixelFormat::RGBA8_SRGB,
+                &[200; 100 * 100 * 4],
+            )
+            .unwrap(),
+        );
+        let id = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let id = document.session.allocate_layer_id();
+            let index = document.session.document().layers().len();
+            let layer = Layer {
+                id,
+                name: "small".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::translation(1000.0, 1000.0),
+                content: LayerContent::raster(Arc::clone(&small)),
+            };
+            document
+                .session
+                .perform(Edit::InsertLayer {
+                    parent: None,
+                    index,
+                    layer,
+                })
+                .unwrap();
+            id
+        };
+        let request = paint::PaintRequest {
+            stroke: 1,
+            layer_id: id.get(),
+            brush: paint::BrushRequest {
+                size: 20.0,
+                hardness: 1.0,
+                spacing: 0.25,
+                flow: 1.0,
+                opacity: 1.0,
+                pressure_size: false,
+                pressure_opacity: false,
+            },
+            color: Some([1.0, 0.0, 0.0]),
+            samples: vec![[100.0, 100.0, 1.0]],
+            end: true,
+        };
+        let view = paint::paint(&state, doc.id, request).unwrap().unwrap();
+        assert!(view.layers.last().unwrap().painted);
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let layer = document.session.document().layer(id).unwrap().clone();
+        let LayerContent::Raster { image, original } = &layer.content else {
+            panic!("a raster layer");
+        };
+        // Grown to the canvas by whole tiles; its old pixels where they were.
+        let doc_point = |x: f64, y: f64| layer.transform.inverse().unwrap().apply(x, y);
+        let (x, y) = doc_point(100.5, 100.5);
+        assert!(
+            image.alpha_at(x as u32, y as u32) > 0.99,
+            "painted at (100, 100)"
+        );
+        let (x, y) = doc_point(1050.5, 1050.5);
+        let alpha = image.alpha_at(x as u32, y as u32);
+        // Its alpha: 200 / 255.
+        assert!(
+            (alpha - 200.0 / 255.0).abs() < 1e-3,
+            "the old pixels kept: {alpha} at {x}, {y}"
+        );
+        assert_eq!(original.as_ref().unwrap().size(), image.size());
+        // One undo entry brings the small layer back as it was.
+        document.session.undo().unwrap();
+        let layer = document.session.document().layer(id).unwrap();
+        assert_eq!(
+            layer.transform,
+            slopshop_core::Affine::translation(1000.0, 1000.0)
+        );
+        assert!(
+            matches!(&layer.content, LayerContent::Raster { image, original: None }
+            if Arc::ptr_eq(image, &small))
+        );
     }
 
     #[test]

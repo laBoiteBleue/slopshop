@@ -17,6 +17,8 @@
     antiAlias = $bindable(),
     wand = $bindable(),
     quick = $bindable(),
+    brush = $bindable(),
+    eraser = $bindable(),
   }: {
     tool: ToolId;
     /** Move tool: a drag takes the layer under the pointer (Ctrl inverts it). */
@@ -31,7 +33,27 @@
     wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
     /** Object and Quick Selection: the brush diameter (document pixels); every layer or the active one. */
     quick: { size: number; sampleAll: boolean; objectRefine: boolean };
+    /** Brush and Eraser (ADR 0027): size in document pixels, the rest as shares in [0, 1]. */
+    brush: PaintOptions;
+    eraser: PaintOptions;
   } = $props();
+
+  type PaintOptions = {
+    size: number;
+    hardness: number;
+    opacity: number;
+    flow: number;
+    pressureSize: boolean;
+    pressureOpacity: boolean;
+  };
+
+  /** The painting tool's options, edited in place. */
+  const paint = $derived(tool === "eraser" ? eraser : tool === "brush" ? brush : null);
+
+  /** A percentage typed into a share. */
+  function setShare(options: PaintOptions, key: "hardness" | "opacity" | "flow", v: number) {
+    if (Number.isFinite(v)) options[key] = Math.min(Math.max(Math.round(v), 0), 100) / 100;
+  }
 
   const current = $derived(toolInfo(tool));
 
@@ -58,6 +80,48 @@
     <label class="option">
       <input type="checkbox" bind:checked={autoSelect} />
       {t("options.autoSelect")}
+    </label>
+  {:else if paint}
+    <label class="option">
+      {t("options.brushSize")}
+      <input
+        type="number"
+        min="1"
+        max={MAX_BRUSH}
+        step="1"
+        value={paint.size}
+        oninput={(e) => {
+          const v = e.currentTarget.valueAsNumber;
+          if (Number.isFinite(v) && paint)
+            paint.size = Math.min(Math.max(Math.round(v), 1), MAX_BRUSH);
+        }}
+        onchange={(e) => paint && (e.currentTarget.valueAsNumber = paint.size)}
+      />
+      px
+    </label>
+    {#each [["hardness", "options.hardness"], ["opacity", "options.opacity"], ["flow", "options.flow"]] as const as [key, label] (key)}
+      <label class="option">
+        {t(label)}
+        <input
+          type="number"
+          min="0"
+          max="100"
+          step="1"
+          value={Math.round(paint[key] * 100)}
+          oninput={(e) => paint && setShare(paint, key, e.currentTarget.valueAsNumber)}
+          onchange={(e) => paint && (e.currentTarget.valueAsNumber = Math.round(paint[key] * 100))}
+        />
+        %
+      </label>
+    {/each}
+    <span class="divider"></span>
+    <label class="option" title={t("options.pressureSize.hint")}>
+      <input type="checkbox" bind:checked={paint.pressureSize} />
+      {t("options.pressureSize")}
+    </label>
+    <label class="option" title={t("options.pressureOpacity.hint")}>
+      <input type="checkbox" bind:checked={paint.pressureOpacity} />
+      {t("options.pressureOpacity")}
     </label>
   {:else if isSelectionTool(tool)}
     <!-- Quick Selection has no intersection, as in Photoshop. -->

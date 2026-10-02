@@ -15,7 +15,9 @@ export type ToolId =
   | "objectSelection"
   | "quickSelection"
   | "wand"
-  | "crop";
+  | "crop"
+  | "brush"
+  | "eraser";
 
 export type Tool = {
   id: ToolId;
@@ -55,6 +57,8 @@ export const SLOTS: readonly ToolSlot[] = [
     ],
   },
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
+  { key: "B", tools: [{ id: "brush", icon: "brush", name: "tools.brush" }] },
+  { key: "E", tools: [{ id: "eraser", icon: "eraser", name: "tools.eraser" }] },
 ];
 
 export const TOOLS: readonly Tool[] = SLOTS.flatMap((slot) => slot.tools);
@@ -70,6 +74,11 @@ export function slotOf(id: ToolId): ToolSlot {
 /** The slot a letter picks (see `shortcutLetter`), if any. */
 export function slotForLetter(letter: string | null): ToolSlot | null {
   return SLOTS.find((slot) => slot.key.toLowerCase() === letter) ?? null;
+}
+
+/** The tools that paint (ADR 0027). */
+export function isPaintTool(id: ToolId): id is "brush" | "eraser" {
+  return id === "brush" || id === "eraser";
 }
 
 /** The tools that draw a selection. */
