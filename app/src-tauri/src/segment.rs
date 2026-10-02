@@ -110,9 +110,12 @@ pub(crate) fn ai_cancel(app: AppHandle, task: u64) {
 const SAM_SIDE: f64 = 1024.0;
 
 /// Refine Edge: the side of the windows ViTMatte mattes, and how many at most (a longer
-/// outline is matted coarser).
-const MATTE_SIDE: u32 = 1024;
-const MAX_MATTE_WINDOWS: usize = 48;
+/// outline is matted coarser). Its time follows the pixels it is given (about a megapixel a
+/// second for ViTMatte-B on an RTX 4090 Laptop with DirectML): on a 24 MP portrait, 34 windows
+/// of 512 seen at half resolution took 8.4 s against 21.7 s for 34 windows of 1024 at full
+/// resolution, with hair strands alike at 100 %.
+const MATTE_SIDE: u32 = 512;
+const MAX_MATTE_WINDOWS: usize = 40;
 
 /// The helper and the image it has encoded.
 #[derive(Default)]
