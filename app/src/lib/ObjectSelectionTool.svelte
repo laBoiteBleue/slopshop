@@ -9,10 +9,12 @@
 </script>
 
 <script lang="ts">
-  // Object Selection (W, ADR 0025), as in Photoshop: the object under the pointer lights up
-  // (SAM's coarse mask, decoded in milliseconds on the image it has already seen); a click
+  // Object Selection (W, ADR 0025), as in Photoshop: the object under the pointer lights up,
+  // tinted and outlined (SAM's coarse mask, decoded in milliseconds on the image it has already
+  // seen, its outline smoothed); a click
   // selects it; a drag draws a box and selects the object in it. Shift, Alt or both add,
   // subtract or intersect, shown by a badge by the pointer.
+  import { outline } from "./contour";
   import type { SelectionMode } from "./engine";
   import { MODE_BADGES, modeFromKeys } from "./selection";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -94,7 +96,7 @@
       rgba[i * 4] = 59;
       rgba[i * 4 + 1] = 142;
       rgba[i * 4 + 2] = 234;
-      rgba[i * 4 + 3] = 110;
+      rgba[i * 4 + 3] = 80;
     }
     canvas.getContext("2d")?.putImageData(new ImageData(rgba, hover.side, hover.side), 0, 0);
   });
@@ -106,6 +108,24 @@
     const [left, top] = mapping.toViewport(x, y);
     const [right, bottom] = mapping.toViewport(x + w, y + h);
     return { left, top, width: right - left, height: bottom - top };
+  });
+
+  /** The highlight's outline, an SVG path in viewport pixels. */
+  const edge = $derived.by(() => {
+    const hover = hovered;
+    const at = placement;
+    if (!hover || !at) return "";
+    const [sx, sy] = [at.width / hover.side, at.height / hover.side];
+    return outline(hover.mask, hover.side)
+      .map(
+        (loop) =>
+          "M" +
+          loop
+            .map(([x, y]) => `${(at.left + x * sx).toFixed(1)} ${(at.top + y * sy).toFixed(1)}`)
+            .join("L") +
+          "Z",
+      )
+      .join("");
   });
 
   function track(e: PointerEvent | KeyboardEvent) {
@@ -186,6 +206,10 @@
     hovered = null;
   }}
 >
+  {#if hovered && edge && !drag && !busy}
+    <path class="edge under" d={edge} />
+    <path class="edge" d={edge} />
+  {/if}
   {#if drag}
     <rect
       class="box"
@@ -222,6 +246,20 @@
   /* Space held: the viewport pans. */
   .object.hand {
     pointer-events: none;
+  }
+
+  .edge {
+    fill: none;
+    stroke: #4da3ff;
+    stroke-width: 2px;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+
+  .edge.under {
+    stroke: #000000;
+    stroke-opacity: 0.45;
+    stroke-width: 4px;
   }
 
   .box {
