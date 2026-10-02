@@ -49,6 +49,7 @@ fn sam_selects_the_clicked_shape() {
         .expect("SAM encodes");
     eprintln!("first encode (with loading): {:?}", start.elapsed());
     let start = std::time::Instant::now();
+    let rgb_again = rgb.clone();
     client
         .sam_encode(1, w as u32, h as u32, rgb)
         .expect("SAM encodes");
@@ -86,6 +87,38 @@ fn sam_selects_the_clicked_shape() {
         .sam_decode(1, vec![click, near], None)
         .expect("SAM decodes");
     eprintln!("decode, warm: {:?}", start.elapsed());
+    // ViTMatte on the disc's edge: a trimap undecided on a ring around it.
+    if Path::new(&models)
+        .join("Xenova/vitmatte-small-composition-1k/onnx/model.onnx")
+        .is_file()
+    {
+        let trimap: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let (dx, dy) = ((i % w) as f32 - 320.0, (i / w) as f32 - 240.0);
+                let r = (dx * dx + dy * dy).sqrt();
+                if r < 100.0 {
+                    255
+                } else if r > 140.0 {
+                    0
+                } else {
+                    128
+                }
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        let alpha = client
+            .matte(w as u32, h as u32, rgb_again.clone(), trimap)
+            .expect("ViTMatte mattes");
+        eprintln!("matte (with loading): {:?}", start.elapsed());
+        assert_eq!(alpha.len(), w * h);
+        let at = |x: usize, y: usize| f32::from(alpha[y * w + x]) / 65535.0;
+        assert!(
+            at(320 + 110, 240) > 0.8,
+            "inside the disc's edge: {}",
+            at(430, 240)
+        );
+        assert!(at(320 + 130, 240) < 0.2, "outside it: {}", at(450, 240));
+    }
     // Another key than the encoded image's is refused.
     assert!(client.sam_decode(2, vec![click], None).is_err());
 }
