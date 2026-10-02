@@ -110,7 +110,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Layer masks: from a layer's transparency, enabled or disabled, deleted
       ([ADR 0014](adr/0014-layer-masks.md)); thumbnails in the layers panel
 - [x] Dissolve blend mode (a noise fixed by document position, identical on CPU and GPU)
-- [ ] Painting in masks (with the brushes of Phase 3)
+- [ ] Painting in masks and in Quick Mask (with the brushes of Phase 3, ADR 0027)
 - [x] Non-destructive transforms, step 1 ([ADR 0017](adr/0017-non-destructive-transforms.md)): a
       transform per layer (a group's applies inside it), whole-pixel moves rendered exactly,
       the Move tool (drag on the image, arrows, Shift+arrows), `.slop` 0.6
@@ -159,9 +159,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 ## Phase 3 — Selection and painting
 
 Order (maintainer, 2026-10-01): the tools, then selections, then painting, so that the brush
-respects the selection from the start. Painting follows Photoshop's model: a stroke rewrites the
-layer's tiles copy-on-write and undo keeps the old tiles by reference; non-destructive work
-paints on an empty layer or in a mask.
+respects the selection from the start. Painting ([ADR 0027](adr/0027-painting.md)) never writes
+a layer's original pixels or mask: the paint is a painted image sharing the untouched tiles,
+removable as a whole; undo keeps the old tiles by reference.
 
 - [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move and Crop
       tools with Photoshop's keys (no Hand or Zoom tool: the wheel, Space and the middle button
@@ -192,8 +192,13 @@ paints on an empty layer or in a mask.
       AI tools, and Select > Refine Edges… for any selection
 - [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
 - [ ] Select > Semantic (SAM 3)
-- [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
-- [ ] Undo of pixel edits by tile reference (no whole-layer copies)
+- [x] Painting decided ([ADR 0027](adr/0027-painting.md)): strokes on the CPU as a coverage,
+      shown by the GPU; paint kept apart from the original, Delete Paint
+- [ ] Brush engine in the core (diameter, hardness, spacing, flow, opacity, pressure), the
+      painted image and its undo by tile reference, a benchmark
+- [ ] Tiles keyed by identity in the GPU cache and the `.slop` writer; painted images in `.slop`
+- [ ] Brush (B) and Eraser (E) in the app: options bar, colors and picker, pen pressure, brush
+      outline, new empty layer (Shift+Ctrl+N), Delete Paint and the painted-layer mark
 
 ## Phase 4 — Very large images
 

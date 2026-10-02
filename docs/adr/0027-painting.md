@@ -1,8 +1,8 @@
 # 0027 — Painting: brush strokes on tiles
 
-Status: proposed (2026-10-02; maintainer's choices: strokes computed on the CPU and shown by the
+Status: accepted (2026-10-02; maintainer's choices: strokes computed on the CPU and shown by the
 GPU, new paint layers in 8-bit sRGB, pen pressure from the first version, paint kept apart from
-the layer's original pixels and removable as a whole).
+the layer's original pixels and mask and removable as a whole, the Eraser acting on alpha).
 
 ## Context
 
@@ -49,7 +49,9 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
    unchanged. A painted layer has a **mark in the layers panel** (a brush icon next to its
    name, a new empty layer included once painted). **Layer > Delete Paint** (also in the
    layers' right-click menu) removes it: the original comes back exactly. The original is never
-   written.
+   written. **A mask is painted the same way**: `LayerMask` keeps its image and, once painted,
+   its painted image, shown in its place; the mark covers both, and Delete Paint removes the
+   paint of the pixels and of the mask together.
 5. **Every frame of a stroke is a real image**: the tiles whose coverage changed since the last
    frame are recomputed into a new image that shares every other tile with the layer's current
    pixels (painted, or original). The renderer displays it in place of the layer's (a preview,
@@ -65,9 +67,9 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
    uploaded once. Composited display tiles (ADR 0022) are recomposited where the painted layer
    reaches, as after any edit of it; narrowing that to the changed tiles is a later
    optimization.
-7. **Where it paints**: the active raster layer's painted image; its mask when the mask is the
-   target (gray, black hides, white shows; with mask editing), the mask itself being user data
-   rewritten like Photoshop's; the selection in Quick Mask. A transformed layer (ADR 0017) is painted in its own pixel grid: each pixel's
+7. **Where it paints**: the active raster layer's painted image; its mask's painted image when
+   the mask is the target (gray: white shows, black hides; the Brush paints the gray of its
+   color, the Eraser hides, as it lowers alpha); the selection in Quick Mask. A transformed layer (ADR 0017) is painted in its own pixel grid: each pixel's
    center is mapped to the document through the layer's whole transform (groups included), so
    a dab stays round on the canvas whatever the scale or rotation. A stroke paints within the
    layer's bounds; growing a layer to follow the brush is future work. Fill and adjustment
@@ -81,7 +83,8 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
    luminance, as in Photoshop's Grayscale mode). The paint color is converted to the layer's
    space, explicitly; values outside an 8- or 16-bit layer's range are clipped by that format.
 10. **Colors**: a foreground and a background color (D: defaults, X: swap) with a color picker,
-   chosen in sRGB for now and kept as working-space colors; the Eraser removes alpha.
+    chosen in sRGB for now and kept as working-space colors. The Eraser acts on alpha: the
+   layer's, or the mask's coverage.
 11. **Input**: pointer events with pressure (Windows Ink pen, mouse at full pressure), their
     coalesced samples sent to the engine in batches at the display's rate (small JSON, never
     pixels); the stroke runs on a worker thread, never on the UI thread; the brush outline is
@@ -116,7 +119,7 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
   benchmark); a frame recomputes and uploads only the tiles that changed.
 - History memory grows with the tiles changed by strokes; limits and a history panel are
   roadmap items.
-- `.slop` gains a compatible addition: the raster node's optional painted image (a new node
+- `.slop` gains a compatible addition: the optional painted images of a raster and of a mask (a new node
   version, so that an older SlopShop reports a newer file instead of dropping the paint). Shared
   tiles are stored once (the file addresses tiles by content). PSD export writes the painted
   pixels; PSD import has no paint.
