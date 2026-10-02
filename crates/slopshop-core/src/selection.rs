@@ -3144,6 +3144,7 @@ mod tests {
                 opacity: 1.0,
                 blend_mode: crate::blend::BlendMode::Normal,
                 content: LayerContent::Raster {
+                    original: None,
                     image: Arc::new(image),
                 },
                 mask: None,

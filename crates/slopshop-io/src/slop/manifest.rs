@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 9;
+pub(crate) const SCHEMA_MINOR: u32 = 10;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -36,12 +36,16 @@ pub(crate) const NODE_ADJUSTMENT: &str = "slopshop.adjustment";
 pub(crate) const NODE_VERSION: u32 = 3;
 /// Version of the nodes with `clipped` (schema 0.5, ADR 0016): only clipped nodes are written at
 /// this version, so that versions without clipping refuse them instead of drawing them
-/// unclipped. The newest node version this code reads.
+/// unclipped.
 pub(crate) const NODE_VERSION_CLIPPED: u32 = 4;
 /// Version of the nodes with a `transform` (schema 0.6, ADR 0017), written only for nodes that
 /// are not at the identity: readers without transforms refuse them instead of misplacing them.
-/// The newest node version this code reads.
 pub(crate) const NODE_VERSION_TRANSFORMED: u32 = 5;
+/// Version of the nodes that carry paint (schema 0.10, ADR 0027): `params.original` (a raster's
+/// unpainted image, `params.image` being its painted one) and `params.mask.original` likewise.
+/// Written only for painted nodes: readers without paint refuse them instead of dropping the
+/// original. The newest node version this code reads.
+pub(crate) const NODE_VERSION_PAINTED: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

@@ -48,8 +48,13 @@ pub enum LayerContent {
     /// A uniform color over the whole canvas, in the document working space.
     Fill { color: LinearRgba },
     /// Source pixels, placed at the document origin. The image is immutable and shared:
-    /// cloning the layer (snapshots, undo) never copies pixels.
-    Raster { image: Arc<RasterImage> },
+    /// cloning the layer (snapshots, undo) never copies pixels. `image` is what the layer shows:
+    /// once painted (ADR 0027), its painted pixels, and `original` keeps the pixels it had
+    /// before any paint, never written (same size; it shares the tiles no stroke touched).
+    Raster {
+        image: Arc<RasterImage>,
+        original: Option<Arc<RasterImage>>,
+    },
     /// Other layers, bottom to top (ADR 0015). A pass-through group lets its children blend
     /// directly onto what is below it, then fades that result by its opacity and mask; an
     /// isolated one composites them on their own and blends the result like one layer, with its
@@ -69,7 +74,16 @@ impl PartialEq for LayerContent {
         match (self, other) {
             (Self::Fill { color: a }, Self::Fill { color: b }) => a == b,
             // Immutable images: same allocation, same content.
-            (Self::Raster { image: a }, Self::Raster { image: b }) => Arc::ptr_eq(a, b),
+            (
+                Self::Raster {
+                    image: a,
+                    original: c,
+                },
+                Self::Raster {
+                    image: b,
+                    original: d,
+                },
+            ) => Arc::ptr_eq(a, b) && same_image(c, d),
             (
                 Self::Group {
                     children: a,
@@ -82,6 +96,25 @@ impl PartialEq for LayerContent {
             ) => p == q && a == b,
             (Self::Adjustment { adjustment: a }, Self::Adjustment { adjustment: b }) => a == b,
             _ => false,
+        }
+    }
+}
+
+/// Whether two optional images are the same allocation (immutable images: same content).
+fn same_image(a: &Option<Arc<RasterImage>>, b: &Option<Arc<RasterImage>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+impl LayerContent {
+    /// Raster content showing `image`, not painted.
+    pub fn raster(image: Arc<RasterImage>) -> Self {
+        Self::Raster {
+            image,
+            original: None,
         }
     }
 }
@@ -117,6 +150,9 @@ pub struct LayerMask {
     /// Made from the layer's transparency: while the mask exists (enabled or not), the layer's
     /// own alpha is ignored, as Photoshop moves transparency into the mask.
     pub replaces_alpha: bool,
+    /// Once the mask is painted (ADR 0027), `image` holds the painted coverage and this the
+    /// coverage it had before any paint, never written.
+    pub original: Option<Arc<RasterImage>>,
 }
 
 impl PartialEq for LayerMask {
@@ -125,6 +161,7 @@ impl PartialEq for LayerMask {
         Arc::ptr_eq(&self.image, &other.image)
             && self.enabled == other.enabled
             && self.replaces_alpha == other.replaces_alpha
+            && same_image(&self.original, &other.original)
     }
 }
 
@@ -139,6 +176,17 @@ impl Layer {
 
     pub fn is_group(&self) -> bool {
         matches!(self.content, LayerContent::Group { .. })
+    }
+
+    /// Whether the layer's pixels or its mask carry paint (ADR 0027): what Delete Paint removes.
+    pub fn is_painted(&self) -> bool {
+        matches!(
+            self.content,
+            LayerContent::Raster {
+                original: Some(_),
+                ..
+            }
+        ) || self.mask.as_ref().is_some_and(|m| m.original.is_some())
     }
 
     /// Groups on the deepest path through this layer, itself included: 0 for a layer that is
@@ -228,6 +276,7 @@ impl LayerMask {
     /// layer's own alpha. `None` when the image has no alpha.
     pub fn from_transparency(image: &RasterImage) -> Option<Self> {
         Some(Self {
+            original: None,
             image: Arc::new(image.alpha_mask()?),
             enabled: true,
             replaces_alpha: true,
@@ -486,9 +535,20 @@ fn validate_restored(
             return Err(RestoreError::InvalidAdjustment(id));
         }
         if let Some(mask) = &layer.mask
-            && !LayerMask::is_valid_image(&mask.image)
+            && (!LayerMask::is_valid_image(&mask.image)
+                || mask.original.as_ref().is_some_and(|o| {
+                    !LayerMask::is_valid_image(o) || o.size() != mask.image.size()
+                }))
         {
             return Err(RestoreError::InvalidMask(id));
+        }
+        if let LayerContent::Raster {
+            image,
+            original: Some(original),
+        } = &layer.content
+            && original.size() != image.size()
+        {
+            return Err(RestoreError::InvalidPaint(id));
         }
         if let Some(children) = layer.children() {
             if depth + 1 > MAX_GROUP_DEPTH {
@@ -523,6 +583,8 @@ pub enum RestoreError {
     TooDeep(LayerId),
     /// A transform that is not finite and invertible (ADR 0018).
     InvalidTransform(LayerId),
+    /// Painted pixels of another size than the original (ADR 0027).
+    InvalidPaint(LayerId),
 }
 
 impl fmt::Display for RestoreError {
@@ -543,6 +605,9 @@ impl fmt::Display for RestoreError {
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
             RestoreError::InvalidTransform(id) => {
                 write!(f, "{id} has a transform that is not finite and invertible")
+            }
+            RestoreError::InvalidPaint(id) => {
+                write!(f, "{id} has paint of another size than its pixels")
             }
             RestoreError::TooDeep(id) => {
                 write!(f, "{id} is nested deeper than {MAX_GROUP_DEPTH} groups")

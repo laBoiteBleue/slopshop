@@ -1300,6 +1300,7 @@ fn build_layer(
 
     Ok(Built {
         content: LayerContent::Raster {
+            original: None,
             image: Arc::new(image),
         },
         mask: build_mask(record, raw, context)?,
@@ -1396,6 +1397,7 @@ fn build_mask(
             let image =
                 RasterImage::from_placed(context.canvas, format, visible, &pixels, &background)?;
             Some(LayerMask {
+                original: None,
                 image: Arc::new(image),
                 enabled: !mask.disabled,
                 replaces_alpha: false,

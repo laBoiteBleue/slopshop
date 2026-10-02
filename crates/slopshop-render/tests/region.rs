@@ -59,6 +59,7 @@ fn image(size: Size, format: PixelFormat, pixel: impl Fn(u32, u32) -> Vec<u8>) -
 
 fn raster(image: &Arc<RasterImage>) -> LayerContent {
     LayerContent::Raster {
+        original: None,
         image: image.clone(),
     }
 }
@@ -733,6 +734,7 @@ fn masks_match_the_cpu_reference() {
                 mask
             } else {
                 slopshop_core::LayerMask {
+                    original: None,
                     image: custom.clone(),
                     enabled,
                     replaces_alpha: false,
@@ -746,6 +748,7 @@ fn masks_match_the_cpu_reference() {
             s.perform(Edit::SetLayerMask {
                 id: fill,
                 mask: Some(slopshop_core::LayerMask {
+                    original: None,
                     image: custom.clone(),
                     enabled: true,
                     replaces_alpha: false,
@@ -828,6 +831,7 @@ fn gpu_groups_match_the_cpu_reference_compositor() {
         s.perform(Edit::SetLayerMask {
             id: faded,
             mask: Some(slopshop_core::LayerMask {
+                original: None,
                 image: mask,
                 enabled: true,
                 replaces_alpha: false,
@@ -1010,6 +1014,7 @@ fn gpu_moved_layers_match_the_cpu_reference_compositor() {
         s.perform(Edit::SetLayerMask {
             id: folder,
             mask: Some(slopshop_core::LayerMask {
+                original: None,
                 image: mask,
                 enabled: true,
                 replaces_alpha: false,
@@ -1131,6 +1136,7 @@ fn gpu_resampled_layers_match_the_cpu_reference_compositor() {
         s.perform(Edit::SetLayerMask {
             id: folder,
             mask: Some(slopshop_core::LayerMask {
+                original: None,
                 image: ramp,
                 enabled: true,
                 replaces_alpha: false,
@@ -1251,6 +1257,7 @@ fn gpu_adjustment_layers_match_the_cpu_reference_compositor() {
         s.perform(Edit::SetLayerMask {
             id: exposure,
             mask: Some(slopshop_core::LayerMask {
+                original: None,
                 image: ramp,
                 enabled: true,
                 replaces_alpha: false,

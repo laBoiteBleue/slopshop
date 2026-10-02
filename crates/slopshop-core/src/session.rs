@@ -446,6 +446,7 @@ mod tests {
                     blend_mode: BlendMode::Normal,
                     mask: None,
                     content: LayerContent::Raster {
+                        original: None,
                         image: image.clone(),
                     },
                 },
@@ -464,7 +465,7 @@ mod tests {
         assert!(!ids.contains(&existing) && ids[0] != ids[1]);
         // Properties kept, pixels shared.
         assert!(!layers[2].visible && layers[2].opacity == 0.5);
-        let LayerContent::Raster { image: copied } = &layers[2].content else {
+        let LayerContent::Raster { image: copied, .. } = &layers[2].content else {
             panic!("raster expected");
         };
         assert!(Arc::ptr_eq(copied, &image));

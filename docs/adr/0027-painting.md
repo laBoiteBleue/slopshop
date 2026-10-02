@@ -41,8 +41,9 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
    Recomputing from the original pixel and the coverage means dabs never re-quantize what
    earlier dabs wrote, and the stroke's opacity is a true cap.
 4. **A raster layer keeps its original image and, once painted, its painted image**:
-   `LayerContent::Raster { image, painted: Option<Arc<RasterImage>> }`. The painted image is the
-   original with every stroke applied, in the same format, size and grid; it shares every tile
+   `LayerContent::Raster { image, original: Option<Arc<RasterImage>> }`, where `image` is what the
+   layer shows (the painted image once painted) and `original` the pixels it had before any
+   paint. The painted image is the original with every stroke applied, in the same format, size and grid; it shares every tile
    no stroke touched (and the pyramid tiles above them), so it costs only the painted tiles. The
    layer shows its painted image when it has one: compositing, export and thumbnails read it in
    place of the original, and the layer's transform, mask, opacity and mode apply to it

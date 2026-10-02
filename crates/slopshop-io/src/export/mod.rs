@@ -848,7 +848,7 @@ pub fn has_gray(kind: ExportFormatKind) -> bool {
 pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
     let rasters: Vec<PixelFormat> = contributing(document)
         .filter_map(|layer| match &layer.content {
-            LayerContent::Raster { image } => Some(image.format()),
+            LayerContent::Raster { image, .. } => Some(image.format()),
             _ => None,
         })
         .collect();
@@ -1036,7 +1036,7 @@ fn is_structurally_gray(document: &Document) -> bool {
     let mut raster = false;
     // Groups blend gray into gray: only the layers inside them matter.
     let neutral = contributing(document).all(|layer| match &layer.content {
-        LayerContent::Raster { image } => {
+        LayerContent::Raster { image, .. } => {
             raster = true;
             image.format().layout.is_gray()
         }
@@ -1090,7 +1090,7 @@ fn is_structurally_opaque(document: &Document) -> bool {
     }
     match &bottom.content {
         LayerContent::Fill { color } => color.a >= 1.0,
-        LayerContent::Raster { image } => {
+        LayerContent::Raster { image, .. } => {
             // Placed by a whole-pixel translation (ADR 0017): it must cover the canvas.
             let Some((x, y)) = transform.integer_translation() else {
                 return false;

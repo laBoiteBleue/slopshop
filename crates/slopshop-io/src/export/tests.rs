@@ -44,7 +44,14 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
 fn raster_document(image: RasterImage) -> Document {
     let mut doc = Document::new(image.size());
     let image = Arc::new(image);
-    push_layer(&mut doc, LayerContent::Raster { image }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image,
+            original: None,
+        },
+        1.0,
+    );
     doc
 }
 
@@ -548,7 +555,14 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         alpha: AlphaMode::Straight,
     };
     let image = Arc::new(RasterImage::from_pixels(doc.size(), format, &bytes).unwrap());
-    push_layer(&mut doc, LayerContent::Raster { image }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image,
+            original: None,
+        },
+        1.0,
+    );
     let path = temp_path("non-finite.exr");
     let spec = ExportSpec {
         format: ExportFormat::Exr {
@@ -759,7 +773,14 @@ fn default_specs_follow_the_sources() {
     // Mixed sources: no unique space.
     let mut doc = raster_document(raster(size, Rgb, SampleType::U8, ColorSpace::SRGB));
     let p3 = Arc::new(raster(size, Rgba, SampleType::F32, ColorSpace::DISPLAY_P3));
-    push_layer(&mut doc, LayerContent::Raster { image: p3 }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image: p3,
+            original: None,
+        },
+        1.0,
+    );
     let tiff = default_spec(Tiff, &doc);
     assert_eq!(
         (tiff.format.sample_type(), tiff.space),
@@ -768,7 +789,14 @@ fn default_specs_follow_the_sources() {
     assert_eq!(default_spec(Png, &doc).space, ColorSpace::SRGB);
     let mut doc = raster_document(raster(size, Rgb, SampleType::U8, ColorSpace::SRGB));
     let wide = Arc::new(raster(size, Rgba, SampleType::U16, ColorSpace::ADOBE_RGB));
-    push_layer(&mut doc, LayerContent::Raster { image: wide }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image: wide,
+            original: None,
+        },
+        1.0,
+    );
     let tiff = default_spec(Tiff, &doc);
     assert_eq!(
         (tiff.format.sample_type(), tiff.space),
@@ -813,7 +841,14 @@ fn alpha_is_dropped_only_for_structurally_opaque_documents() {
     assert!(keeps_alpha(&raster_document(rgba)));
     let mut doc = Document::new(Size::new(8, 4));
     let small = Arc::new(raster(size, Rgb, SampleType::U8, ColorSpace::SRGB));
-    push_layer(&mut doc, LayerContent::Raster { image: small }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image: small,
+            original: None,
+        },
+        1.0,
+    );
     assert!(keeps_alpha(&doc));
 }
 
@@ -862,6 +897,7 @@ fn flattening_over_the_matte_equals_a_fill_below() {
         push_layer(
             &mut flattened_doc,
             LayerContent::Raster {
+                original: None,
                 image: image.clone(),
             },
             1.0,
@@ -873,7 +909,14 @@ fn flattening_over_the_matte_equals_a_fill_below() {
 
         let mut fill_doc = document();
         push_layer(&mut fill_doc, LayerContent::Fill { color: matte }, 1.0);
-        push_layer(&mut fill_doc, LayerContent::Raster { image }, 1.0);
+        push_layer(
+            &mut fill_doc,
+            LayerContent::Raster {
+                image,
+                original: None,
+            },
+            1.0,
+        );
         let fill_path = temp_path("matte-fill.png");
         assert_eq!(
             export(&fill_doc, &fill_path, &spec).unwrap(),
@@ -1124,7 +1167,14 @@ fn gray_documents_export_as_gray_by_default() {
         SampleType::U16,
         ColorSpace::SRGB,
     ));
-    push_layer(&mut doc, LayerContent::Raster { image: gray }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image: gray,
+            original: None,
+        },
+        1.0,
+    );
     for kind in [Png, Tiff, Jpeg] {
         let spec = default_spec(kind, &doc);
         assert!(spec.gray, "{kind:?}");
@@ -1147,7 +1197,14 @@ fn gray_documents_export_as_gray_by_default() {
         SampleType::U8,
         ColorSpace::SRGB,
     ));
-    push_layer(&mut doc, LayerContent::Raster { image: rgb }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image: rgb,
+            original: None,
+        },
+        1.0,
+    );
     assert!(!default_spec(Png, &doc).gray);
 }
 
@@ -1210,6 +1267,7 @@ fn layered_document() -> Document {
         None,
         "Background",
         LayerContent::Raster {
+            original: None,
             image: rgba(64, 48, &|x, y| [(x * 4) as u8, (y * 5) as u8, 120, 255]),
         },
     );
@@ -1218,6 +1276,7 @@ fn layered_document() -> Document {
         None,
         "Moved \u{e9}toile",
         LayerContent::Raster {
+            original: None,
             image: rgba(20, 16, &|x, y| {
                 [200, (x * 12) as u8, (y * 15) as u8, ((x + y) * 8) as u8]
             }),
@@ -1265,6 +1324,7 @@ fn layered_document() -> Document {
         Edit::SetLayerMask {
             id: group,
             mask: Some(LayerMask {
+                original: None,
                 image: gray_mask(64, 48),
                 enabled: true,
                 replaces_alpha: false,
@@ -1276,6 +1336,7 @@ fn layered_document() -> Document {
         Some(group),
         "Inside",
         LayerContent::Raster {
+            original: None,
             image: rgba(30, 20, &|x, _| {
                 [30, 90, (x * 8) as u8, if x < 20 { 255 } else { 0 }]
             }),
@@ -1302,6 +1363,7 @@ fn layered_document() -> Document {
         None,
         "Hidden",
         LayerContent::Raster {
+            original: None,
             image: rgba(8, 8, &|_, _| [255, 255, 255, 255]),
         },
     );
@@ -2501,14 +2563,21 @@ fn opened_samples(path: &Path) -> (Document, PixelFormat) {
             .document
             .all_layers()
             .find_map(|layer| match &layer.content {
-                LayerContent::Raster { image } => Some(Arc::clone(image)),
+                LayerContent::Raster { image, .. } => Some(Arc::clone(image)),
                 _ => None,
             })
             .expect("an image layer"),
     };
     let format = image.format();
     let mut doc = Document::new(image.size());
-    push_layer(&mut doc, LayerContent::Raster { image }, 1.0);
+    push_layer(
+        &mut doc,
+        LayerContent::Raster {
+            image,
+            original: None,
+        },
+        1.0,
+    );
     (doc, format)
 }
 
