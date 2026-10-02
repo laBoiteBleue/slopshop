@@ -57,6 +57,15 @@ pub struct RasterLevel {
 }
 
 impl RasterLevel {
+    /// The same level, its tiles shared.
+    fn shared(&self) -> Self {
+        Self {
+            size: self.size,
+            grid: self.grid,
+            tiles: self.tiles.clone(),
+        }
+    }
+
     pub fn size(&self) -> Size {
         self.size
     }
@@ -127,6 +136,8 @@ pub enum RasterError {
         rect: Rect,
         size: Size,
     },
+    /// [`RasterImage::with_tiles`]: a tile outside the grid.
+    TileOutside(TileCoord),
 }
 
 impl std::fmt::Display for RasterError {
@@ -161,6 +172,9 @@ impl std::fmt::Display for RasterError {
                 "rectangle {rect:?} does not fit in {}×{}",
                 size.width, size.height
             ),
+            RasterError::TileOutside(coord) => {
+                write!(f, "tile {}, {} is outside the image", coord.col, coord.row)
+            }
         }
     }
 }
@@ -524,6 +538,186 @@ impl RasterImage {
         })
     }
 
+    /// This image with some level-0 tiles replaced (`TILE_SIZE²` pixels each in the stored
+    /// format, edge tiles padded by repeating their last row and column): every other tile is
+    /// shared, and only the pyramid tiles above the replaced ones are recomputed, exactly as
+    /// [`Self::from_level0_tiles`] computes them. The frames of a painting stroke (ADR 0027).
+    pub fn with_tiles(&self, replaced: Vec<(TileCoord, Arc<[u8]>)>) -> Result<Self, RasterError> {
+        let t = TILE_SIZE;
+        self.with_changed_tiles(
+            replaced
+                .into_iter()
+                .map(|(coord, tile)| (coord, tile, [0, 0, t, t]))
+                .collect(),
+        )
+    }
+
+    /// [`Self::with_tiles`] where only the pixels `[x0, y0, x1, y1)` of each replaced tile
+    /// differ from this image's (padding aside): only the pyramid pixels above them are
+    /// recomputed. The result is the same.
+    pub fn with_changed_tiles(
+        &self,
+        replaced: Vec<(TileCoord, Arc<[u8]>, [u32; 4])>,
+    ) -> Result<Self, RasterError> {
+        let stored = Codec::new(self.stored_format());
+        let tile_len = Self::tile_bytes(self.format);
+        let mut levels: Vec<RasterLevel> = self.levels.iter().map(RasterLevel::shared).collect();
+        let (columns, rows) = (levels[0].grid.columns(), levels[0].grid.rows());
+        // The changed areas, in the pixels of the level being rebuilt.
+        let mut areas: Vec<[u32; 4]> = Vec::with_capacity(replaced.len());
+        for (coord, tile, [ax0, ay0, ax1, ay1]) in replaced {
+            if coord.col >= columns || coord.row >= rows {
+                return Err(RasterError::TileOutside(coord));
+            }
+            if tile.len() != tile_len {
+                return Err(RasterError::TileLengthMismatch {
+                    level: 0,
+                    index: (coord.row * columns + coord.col) as usize,
+                    expected: tile_len,
+                    actual: tile.len(),
+                });
+            }
+            levels[0].tiles[(coord.row * columns + coord.col) as usize] = tile;
+            let (x, y) = (coord.col * TILE_SIZE, coord.row * TILE_SIZE);
+            let size = levels[0].size;
+            let area = [
+                x + ax0.min(TILE_SIZE),
+                y + ay0.min(TILE_SIZE),
+                (x + ax1.min(TILE_SIZE)).min(size.width),
+                (y + ay1.min(TILE_SIZE)).min(size.height),
+            ];
+            if area[0] < area[2] && area[1] < area[3] {
+                areas.push(area);
+            }
+        }
+        for level in 1..levels.len() {
+            let (finer, coarser) = levels.split_at_mut(level);
+            let (finer, coarser) = (&finer[level - 1], &mut coarser[0]);
+            let size = coarser.size;
+            // Each coarse pixel averages a 2×2 block: halve, rounding outwards.
+            for area in &mut areas {
+                *area = [
+                    area[0] / 2,
+                    area[1] / 2,
+                    area[2].div_ceil(2).min(size.width),
+                    area[3].div_ceil(2).min(size.height),
+                ];
+            }
+            // By coarse tile, the box of its pixels to recompute (padding included when it
+            // reaches the level's last column or row).
+            let mut boxes: std::collections::BTreeMap<(u32, u32), [usize; 4]> =
+                std::collections::BTreeMap::new();
+            for &[x0, y0, x1, y1] in &areas {
+                for row in y0 / TILE_SIZE..y1.div_ceil(TILE_SIZE) {
+                    for col in x0 / TILE_SIZE..x1.div_ceil(TILE_SIZE) {
+                        let (tx, ty) = (col * TILE_SIZE, row * TILE_SIZE);
+                        let local = |lo: u32, hi: u32, origin: u32, end: u32| {
+                            let first = lo.max(origin) - origin;
+                            let last = if hi >= end {
+                                TILE_SIZE
+                            } else {
+                                hi.min(origin + TILE_SIZE) - origin
+                            };
+                            (first as usize, last as usize)
+                        };
+                        let (bx0, bx1) = local(x0, x1, tx, size.width);
+                        let (by0, by1) = local(y0, y1, ty, size.height);
+                        boxes
+                            .entry((row, col))
+                            .and_modify(|b| {
+                                *b = [b[0].min(bx0), b[1].min(by0), b[2].max(bx1), b[3].max(by1)]
+                            })
+                            .or_insert([bx0, by0, bx1, by1]);
+                    }
+                }
+            }
+            let columns = coarser.grid.columns();
+            let boxes: Vec<((u32, u32), [usize; 4])> = boxes.into_iter().collect();
+            let mut tiles: Vec<Vec<u8>> = boxes
+                .iter()
+                .map(|&((row, col), _)| coarser.tiles[(row * columns + col) as usize].to_vec())
+                .collect();
+            let spans: Vec<(usize, usize)> = boxes.iter().map(|(_, a)| (a[1], a[3])).collect();
+            let row_bytes = TILE_SIZE as usize * stored.bytes_per_pixel;
+            let mut work = bands(&mut tiles, &spans, row_bytes);
+            parallel_for_each(&mut work, |band| {
+                let ((row, col), area) = boxes[band.tile];
+                let last = band.first_row + band.rows.len() / row_bytes;
+                coarse_pixels(
+                    finer,
+                    size,
+                    col as usize,
+                    row as usize,
+                    &stored,
+                    band.rows,
+                    band.first_row,
+                    [area[0], band.first_row, area[2], last],
+                );
+            });
+            for (((row, col), _), tile) in boxes.into_iter().zip(tiles) {
+                coarser.tiles[(row * columns + col) as usize] = Arc::from(tile);
+            }
+        }
+        let average = average_of(&levels[levels.len() - 1], &stored);
+        Ok(Self {
+            id: ImageId::next(),
+            format: self.format,
+            levels,
+            average,
+            content_bounds: OnceLock::new(),
+        })
+    }
+
+    /// This image with an alpha channel, every pixel opaque, or `None` when it has one already.
+    /// RGB images already store one, so their tiles are shared; gray images are converted to
+    /// gray and alpha (a shared tile once). Lossless: what the Eraser needs (ADR 0027).
+    pub fn with_alpha(&self) -> Option<Result<Self, RasterError>> {
+        let layout = match self.format.layout {
+            ChannelLayout::Rgb => ChannelLayout::Rgba,
+            ChannelLayout::Gray => ChannelLayout::GrayAlpha,
+            _ => return None,
+        };
+        let format = PixelFormat {
+            layout,
+            ..self.format
+        };
+        if self.format.layout == ChannelLayout::Rgb {
+            return Some(Ok(Self {
+                id: ImageId::next(),
+                format,
+                levels: self.levels.iter().map(RasterLevel::shared).collect(),
+                average: self.average,
+                content_bounds: OnceLock::new(),
+            }));
+        }
+        let (from, to) = (
+            Codec::new(self.stored_format()),
+            Codec::new(stored_format(format)),
+        );
+        let (fb, tb) = (from.bytes_per_pixel, to.bytes_per_pixel);
+        let opaque = to.opaque();
+        let mut converted: std::collections::HashMap<*const u8, Arc<[u8]>> =
+            std::collections::HashMap::new();
+        let tiles = self.levels[0]
+            .tiles
+            .iter()
+            .map(|tile| {
+                converted
+                    .entry(tile.as_ptr())
+                    .or_insert_with(|| {
+                        let mut out = vec![0u8; tile.len() / fb * tb];
+                        for (src, dst) in tile.chunks_exact(fb).zip(out.chunks_exact_mut(tb)) {
+                            dst[..fb].copy_from_slice(src);
+                            dst[fb..].copy_from_slice(&opaque);
+                        }
+                        Arc::from(out)
+                    })
+                    .clone()
+            })
+            .collect();
+        Some(Self::from_level0_tiles(self.size(), format, tiles))
+    }
+
     /// Pyramid levels, finest first. Never empty.
     pub fn levels(&self) -> &[RasterLevel] {
         &self.levels
@@ -771,7 +965,7 @@ impl Codec {
 
     /// Write a linear premultiplied pixel (gray uses the first component), in the same alpha
     /// convention as the source (see [`Self::read`]).
-    fn write(&self, color: [f32; 3], alpha: f32, out: &mut [u8]) {
+    pub(crate) fn write(&self, color: [f32; 3], alpha: f32, out: &mut [u8]) {
         for (c, &value) in color.iter().enumerate().take(self.color_channels) {
             let encoded = if self.premultiplied && self.transfer.is_linear() {
                 value
@@ -814,6 +1008,68 @@ impl Codec {
             SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
         }
     }
+}
+
+/// `f` on every item, on every core (each thread taking a contiguous share); its results in
+/// order.
+pub(crate) fn parallel_for_each<T: Send, R: Send>(
+    items: &mut [T],
+    f: impl Fn(&mut T) -> R + Sync,
+) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    if items.len() <= 1 || threads == 1 {
+        return items.iter_mut().map(f).collect();
+    }
+    let per_thread = items.len().div_ceil(threads);
+    let f = &f;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = items
+            .chunks_mut(per_thread)
+            .map(|chunk| scope.spawn(move || chunk.iter_mut().map(f).collect::<Vec<R>>()))
+            .collect();
+        workers
+            .into_iter()
+            // Invariant: `f` does not panic; if it does, that bug is raised again here.
+            .flat_map(|worker| worker.join().expect("worker panicked"))
+            .collect()
+    })
+}
+
+/// Rows of one tile's buffer, from `first_row` on, for one thread to compute.
+pub(crate) struct Band<'a> {
+    /// Index of the tile in the buffers given to [`bands`].
+    pub tile: usize,
+    pub first_row: usize,
+    pub rows: &'a mut [u8],
+}
+
+/// Rows per band: enough work per thread, enough bands to keep every core busy.
+const BAND_ROWS: usize = 16;
+
+/// The rows `[y0, y1)` of each tile buffer (`spans[i]` for `tiles[i]`), cut into bands that
+/// can be computed in parallel.
+pub(crate) fn bands<'a>(
+    tiles: &'a mut [Vec<u8>],
+    spans: &[(usize, usize)],
+    row_bytes: usize,
+) -> Vec<Band<'a>> {
+    let mut out = Vec::new();
+    for (tile, (buffer, &(y0, y1))) in tiles.iter_mut().zip(spans).enumerate() {
+        let mut rest = &mut buffer[y0 * row_bytes..y1 * row_bytes];
+        let mut first_row = y0;
+        while !rest.is_empty() {
+            let n = BAND_ROWS.min(rest.len() / row_bytes);
+            let (rows, tail) = std::mem::take(&mut rest).split_at_mut(n * row_bytes);
+            out.push(Band {
+                tile,
+                first_row,
+                rows,
+            });
+            rest = tail;
+            first_row += n;
+        }
+    }
+    out
 }
 
 /// Float values as read for averaging and display: NaN → 0, everything else clamped to
@@ -966,12 +1222,7 @@ fn placed_tiles(
 fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
     let size = Size::new(finer.size.width.div_ceil(2), finer.size.height.div_ceil(2));
     let grid = tile_grid(size);
-    let t = TILE_SIZE as usize;
-    let bpp = stored.bytes_per_pixel;
-    let (fw, fh) = (finer.size.width as usize, finer.size.height as usize);
-    let (w, h) = (size.width as usize, size.height as usize);
     let columns = grid.columns() as usize;
-    let finer_columns = finer.grid.columns() as usize;
     let mut tiles: Vec<Arc<[u8]>> = Vec::with_capacity(grid.tile_count() as usize);
     let count = grid.tile_count() as usize;
     let shared = shared_coarse_tiles(finer, columns, count, stored);
@@ -989,28 +1240,7 @@ fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
                             if let Some(tile) = &shared[index] {
                                 return Arc::clone(tile);
                             }
-                            let (col, row) = (index % columns, index / columns);
-                            let mut tile = vec![0u8; t * t * bpp];
-                            for (i, dst) in tile.chunks_exact_mut(bpp).enumerate() {
-                                // Padding: the last valid pixel of the level.
-                                let x = (col * t + i % t).min(w - 1);
-                                let y = (row * t + i / t).min(h - 1);
-                                let mut color = [0.0f32; 3];
-                                let mut alpha = 0.0f32;
-                                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                                    let fx = (x * 2 + dx).min(fw - 1);
-                                    let fy = (y * 2 + dy).min(fh - 1);
-                                    let source = &finer.tiles[(fy / t) * finer_columns + fx / t];
-                                    let at = ((fy % t) * t + fx % t) * bpp;
-                                    let (c, a) = stored.read(&source[at..]);
-                                    for k in 0..3 {
-                                        color[k] += c[k];
-                                    }
-                                    alpha += a;
-                                }
-                                stored.write(color.map(|c| c / 4.0), alpha / 4.0, dst);
-                            }
-                            Arc::from(tile)
+                            coarse_tile(finer, size, index % columns, index / columns, stored)
                         })
                         .collect::<Vec<Arc<[u8]>>>()
                 })
@@ -1025,6 +1255,63 @@ fn downsample_level(finer: &RasterLevel, stored: &Codec) -> RasterLevel {
         tiles.extend(part);
     }
     RasterLevel { size, grid, tiles }
+}
+
+/// Tile (`col`, `row`) of the level of `size` above `finer`: each pixel averages its 2×2 block
+/// of `finer` in linear light (premultiplied), padded like [`tile_level`] pads.
+fn coarse_tile(
+    finer: &RasterLevel,
+    size: Size,
+    col: usize,
+    row: usize,
+    stored: &Codec,
+) -> Arc<[u8]> {
+    let t = TILE_SIZE as usize;
+    let mut tile = vec![0u8; t * t * stored.bytes_per_pixel];
+    coarse_pixels(finer, size, col, row, stored, &mut tile, 0, [0, 0, t, t]);
+    Arc::from(tile)
+}
+
+/// The pixels `[x0, y0, x1, y1)` of [`coarse_tile`], written into `rows`: the tile's rows from
+/// `first_row` on.
+#[allow(clippy::too_many_arguments)]
+fn coarse_pixels(
+    finer: &RasterLevel,
+    size: Size,
+    col: usize,
+    row: usize,
+    stored: &Codec,
+    rows: &mut [u8],
+    first_row: usize,
+    [x0, y0, x1, y1]: [usize; 4],
+) {
+    let t = TILE_SIZE as usize;
+    let bpp = stored.bytes_per_pixel;
+    let (fw, fh) = (finer.size.width as usize, finer.size.height as usize);
+    let (w, h) = (size.width as usize, size.height as usize);
+    let finer_columns = finer.grid.columns() as usize;
+    for ty in y0..y1 {
+        for tx in x0..x1 {
+            let dst = &mut rows[((ty - first_row) * t + tx) * bpp..][..bpp];
+            // Padding: the last valid pixel of the level.
+            let x = (col * t + tx).min(w - 1);
+            let y = (row * t + ty).min(h - 1);
+            let mut color = [0.0f32; 3];
+            let mut alpha = 0.0f32;
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let fx = (x * 2 + dx).min(fw - 1);
+                let fy = (y * 2 + dy).min(fh - 1);
+                let source = &finer.tiles[(fy / t) * finer_columns + fx / t];
+                let at = ((fy % t) * t + fx % t) * bpp;
+                let (c, a) = stored.read(&source[at..]);
+                for k in 0..3 {
+                    color[k] += c[k];
+                }
+                alpha += a;
+            }
+            stored.write(color.map(|c| c / 4.0), alpha / 4.0, dst);
+        }
+    }
 }
 
 /// Coarse tiles of the next level that need no computing, by index: a coarse tile whose finer
@@ -1328,6 +1615,132 @@ mod tests {
                         .map(f32::to_bits),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn replaced_tiles_rebuild_only_the_pyramid_above_them() {
+        let size = Size::new(1100, 530);
+        for (i, format) in formats().into_iter().enumerate() {
+            let len = size.pixel_count() as usize * format.bytes_per_pixel() as usize;
+            let original = RasterImage::from_pixels(size, format, &noise(len, i as u64)).unwrap();
+            let other = RasterImage::from_pixels(size, format, &noise(len, 99)).unwrap();
+            let coords = [TileCoord { col: 0, row: 0 }, TileCoord { col: 4, row: 2 }];
+            let replaced = coords
+                .iter()
+                .map(|&c| (c, Arc::clone(other.levels()[0].tile(c).unwrap())))
+                .collect();
+            let painted = original.with_tiles(replaced).unwrap();
+            let mut level0 = original.levels()[0].tiles().to_vec();
+            for c in coords {
+                level0[(c.row * 5 + c.col) as usize] =
+                    Arc::clone(other.levels()[0].tile(c).unwrap());
+            }
+            let reference = RasterImage::from_level0_tiles(size, format, level0).unwrap();
+            for (level, (a, b)) in all_tiles(&reference)
+                .iter()
+                .zip(&all_tiles(&painted))
+                .enumerate()
+            {
+                assert!(
+                    a.iter().zip(b).all(|(x, y)| x[..] == y[..]),
+                    "{format:?}: level {level} differs"
+                );
+            }
+            // Untouched tiles are shared, at every level.
+            let shared = |level: usize, index: usize| {
+                Arc::ptr_eq(
+                    &original.levels()[level].tiles()[index],
+                    &painted.levels()[level].tiles()[index],
+                )
+            };
+            assert!(shared(0, 1) && !shared(0, 0));
+            assert!(shared(1, 2) && !shared(1, 0));
+            assert_ne!(original.id(), painted.id());
+        }
+        let rgba = format(ChannelLayout::Rgba, SampleType::U8, ColorSpace::SRGB);
+        let image = RasterImage::from_pixels(size, rgba, &noise(1100 * 530 * 4, 1)).unwrap();
+        let tile = Arc::clone(
+            image.levels()[0]
+                .tile(TileCoord { col: 0, row: 0 })
+                .unwrap(),
+        );
+        assert_eq!(
+            image
+                .with_tiles(vec![(TileCoord { col: 5, row: 0 }, Arc::clone(&tile))])
+                .err(),
+            Some(RasterError::TileOutside(TileCoord { col: 5, row: 0 }))
+        );
+        assert!(matches!(
+            image.with_tiles(vec![(TileCoord { col: 0, row: 0 }, Arc::from(&tile[1..]))]),
+            Err(RasterError::TileLengthMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn changed_areas_rebuild_the_same_pyramid() {
+        // Odd sizes, so that areas reach the padding of every level.
+        let size = Size::new(1100, 531);
+        let rgba = format(ChannelLayout::Rgba, SampleType::U16, ColorSpace::SRGB);
+        let len = size.pixel_count() as usize * 8;
+        let original = RasterImage::from_pixels(size, rgba, &noise(len, 3)).unwrap();
+        let other = RasterImage::from_pixels(size, rgba, &noise(len, 4)).unwrap();
+        // Tiles whose pixels outside an area are the original's.
+        let cases = [
+            (TileCoord { col: 1, row: 0 }, [10, 20, 200, 90]),
+            (TileCoord { col: 4, row: 2 }, [0, 0, 76, 19]),
+            (TileCoord { col: 4, row: 1 }, [70, 250, 256, 256]),
+        ];
+        let bpp = 8;
+        let mixed: Vec<(TileCoord, Arc<[u8]>, [u32; 4])> = cases
+            .iter()
+            .map(|&(coord, [x0, y0, x1, y1])| {
+                let mut tile = original.levels()[0].tile(coord).unwrap().to_vec();
+                let new = other.levels()[0].tile(coord).unwrap();
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let i = ((y * TILE_SIZE + x) * bpp) as usize;
+                        tile[i..i + bpp as usize].copy_from_slice(&new[i..i + bpp as usize]);
+                    }
+                }
+                (coord, Arc::from(tile), [x0, y0, x1, y1])
+            })
+            .collect();
+        let whole = original
+            .with_tiles(mixed.iter().map(|(c, t, _)| (*c, Arc::clone(t))).collect())
+            .unwrap();
+        let partial = original.with_changed_tiles(mixed).unwrap();
+        for (level, (a, b)) in all_tiles(&whole)
+            .iter()
+            .zip(&all_tiles(&partial))
+            .enumerate()
+        {
+            for (index, (x, y)) in a.iter().zip(b).enumerate() {
+                assert!(x[..] == y[..], "level {level}, tile {index} differs");
+            }
+        }
+    }
+
+    #[test]
+    fn alpha_is_added_without_changing_pixels() {
+        let size = Size::new(300, 260);
+        let rgb = format(ChannelLayout::Rgb, SampleType::U8, ColorSpace::SRGB);
+        let image = RasterImage::from_pixels(size, rgb, &noise(300 * 260 * 3, 5)).unwrap();
+        let with = image.with_alpha().unwrap().unwrap();
+        assert_eq!(with.format().layout, ChannelLayout::Rgba);
+        assert!(Arc::ptr_eq(
+            &image.levels()[1].tiles()[0],
+            &with.levels()[1].tiles()[0]
+        ));
+        assert!(with.with_alpha().is_none());
+
+        let gray = format(ChannelLayout::Gray, SampleType::U16, ColorSpace::SRGB);
+        let image = RasterImage::from_pixels(size, gray, &noise(300 * 260 * 2, 6)).unwrap();
+        let with = image.with_alpha().unwrap().unwrap();
+        assert_eq!(with.format().layout, ChannelLayout::GrayAlpha);
+        for (x, y) in [(0, 0), (299, 259), (17, 140)] {
+            assert_eq!(with.gray_at(x, y), image.gray_at(x, y));
+            assert_eq!(with.alpha_at(x, y), 1.0);
         }
     }
 
