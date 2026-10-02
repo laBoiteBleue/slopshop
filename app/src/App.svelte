@@ -414,6 +414,24 @@
   let aiHoverBlocked = false;
   /** A Quick Selection stroke is being turned into a selection. */
   let quickBusy = $state(false);
+  /**
+   * The Quick Selection stroke under way: one request at a time, the latest stroke so far
+   * waiting meanwhile (a stroke's end is never dropped).
+   */
+  let quickRun: {
+    id: number;
+    documentId: number;
+    mode: SelectionMode;
+    region: [number, number, number, number];
+    layer: number | null;
+    /** A request is in flight. */
+    sending: boolean;
+    waiting: { points: [number, number][]; live: boolean } | null;
+    /** Some request was sent: the document shows the stroke. */
+    shown: boolean;
+    cancelled: boolean;
+  } | null = null;
+  let nextQuickStroke = 1;
   /** The components to download before AI can run, and what to do once they are there. */
   let aiDownload = $state<{ components: AiComponent[]; then: () => void } | null>(null);
 
@@ -530,37 +548,98 @@
   }
 
   /**
-   * Quick Selection (ADR 0026): the region of similar colors a stroke paints over. As in
-   * Photoshop, the first stroke of a new selection switches the tool to adding, and a click
-   * outside the image deselects.
+   * Quick Selection (ADR 0026): the region of similar colors a stroke paints over, shown while
+   * it is painted (each request replaces the previous one's selection; the stroke's end makes
+   * one undo entry). As in Photoshop, the first stroke of a new selection switches the tool to
+   * adding, a click outside the image deselects, and Esc drops the stroke under way.
    */
   function quickStroke(
     stroke: [number, number][],
     keyMode: SelectionMode | null,
     view: [number, number, number, number],
+    phase: "move" | "end" | "cancel",
   ) {
     const doc = active;
-    if (!doc || stroke.length === 0 || quickBusy) return;
-    commitTransform();
-    if (stroke.every(([x, y]) => outsideCanvas(doc, x, y))) {
-      if (stroke.length === 1 && keyMode === null && doc.selectionKey != null) {
-        selectionCommand(engine.deselect);
+    if (!doc) return;
+    let run = quickRun;
+    if (phase === "cancel") {
+      if (run) {
+        run.cancelled = true;
+        run.waiting = null;
+        if (!run.sending) finishQuick(run);
       }
       return;
     }
-    const chosen = keyMode ?? selectionMode;
-    const mode = chosen === "intersect" ? "replace" : chosen;
-    if (keyMode === null && mode === "replace") selectionMode = "add";
+    if (!run || run.documentId !== doc.id) {
+      commitTransform();
+      const chosen = keyMode ?? selectionMode;
+      run = quickRun = {
+        id: nextQuickStroke++,
+        documentId: doc.id,
+        mode: chosen === "intersect" ? "replace" : chosen,
+        region: aiRegion(doc, view),
+        layer: aiLayer(),
+        sending: false,
+        waiting: null,
+        shown: false,
+        cancelled: false,
+      };
+    }
+    const inside = stroke.filter(([x, y]) => !outsideCanvas(doc, x, y));
+    if (inside.length === 0) {
+      if (phase === "end") {
+        // A click outside the image deselects (with keys, it does nothing).
+        if (!run.shown && stroke.length === 1 && keyMode === null && doc.selectionKey != null) {
+          selectionCommand(engine.deselect);
+        }
+        if (!run.shown) quickRun = null;
+        else sendQuick(run, { points: stroke, live: false });
+      }
+      return;
+    }
+    if (phase === "end" && run.mode === "replace" && keyMode === null) selectionMode = "add";
+    sendQuick(run, { points: stroke, live: phase !== "end" });
+  }
+
+  /** Sends the stroke so far, or keeps it for when the request in flight returns. */
+  function sendQuick(
+    run: NonNullable<typeof quickRun>,
+    next: { points: [number, number][]; live: boolean },
+  ) {
+    if (run.cancelled) return;
+    if (run.sending) {
+      // The latest stroke so far replaces a waiting one; never a waiting end.
+      if (!run.waiting || run.waiting.live) run.waiting = next;
+      return;
+    }
+    run.sending = true;
+    run.shown = true;
     quickBusy = true;
     void sync(
-      engine.quickSelect(doc.id, {
-        points: stroke,
+      engine.quickSelect(run.documentId, {
+        stroke: run.id,
+        points: next.points,
         radius: quick.size / 2,
-        region: aiRegion(doc, view),
-        layerId: aiLayer(),
-        mode,
+        region: run.region,
+        layerId: run.layer,
+        mode: run.mode,
+        live: next.live,
       }),
-    ).finally(() => (quickBusy = false));
+    ).finally(() => {
+      run.sending = false;
+      const waiting = run.waiting;
+      run.waiting = null;
+      if (run.cancelled) finishQuick(run);
+      else if (waiting) sendQuick(run, waiting);
+      else if (!next.live) finishQuick(run);
+    });
+  }
+
+  /** The stroke is over: dropped (its selection reverted) if it was cancelled. */
+  function finishQuick(run: NonNullable<typeof quickRun>) {
+    if (quickRun === run) quickRun = null;
+    quickBusy = false;
+    if (run.cancelled && run.shown) void cancelGesture(run.documentId);
   }
 
   function selectShape(shape: SelectionShape, mode: SelectionMode | null) {

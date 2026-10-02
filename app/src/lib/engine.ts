@@ -827,8 +827,10 @@ export type AiFailure = { code: string; detail: string };
 
 export type AiProgress = { done: number; total: number };
 
-/** A Quick Selection stroke (see `selection::QuickRequest`). */
+/** A Quick Selection stroke, sent again while painted (see `selection::QuickRequest`). */
 export type QuickRequest = {
+  /** Requests of one stroke share its image and the selection before it. */
+  stroke: number;
   /** The brush's path and radius, document pixels. */
   points: [number, number][];
   radius: number;
@@ -838,6 +840,8 @@ export type QuickRequest = {
   layerId: number | null;
   /** `replace` (a new selection), `add` or `subtract`. */
   mode: SelectionMode;
+  /** The stroke goes on (shown, replaced by the next request); else done: one undo entry. */
+  live: boolean;
 };
 
 export const engine = {
@@ -1091,7 +1095,7 @@ export const engine = {
   /** Select > Refine Edge: the selection's edge matted within `radius` pixels (ViTMatte). */
   aiRefineSelection: (documentId: number, radius: number, layerId: number | null) =>
     serial(() => invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId })),
-  /** Quick Selection: the model's mask for the session's prompts, as one undo entry. */
+  /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),
   perform: (documentId: number, edit: EditRequest) =>

@@ -391,6 +391,8 @@ struct AppState {
     ai: ai::AiState,
     /// The AI helper and what it has encoded (see the `segment` module).
     segment: segment::SegmentState,
+    /// The Quick Selection stroke under way (see the `selection` module).
+    quick: selection::QuickState,
 }
 
 impl AppState {
@@ -412,6 +414,7 @@ impl AppState {
             vector: Arc::default(),
             ai: ai::AiState::default(),
             segment: segment::SegmentState::default(),
+            quick: selection::QuickState::default(),
         }
     }
 

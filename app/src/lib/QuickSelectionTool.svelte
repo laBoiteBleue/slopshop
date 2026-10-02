@@ -1,9 +1,10 @@
 <script lang="ts">
   // Quick Selection (W, ADR 0026): paint over an area and the selection grows to the similar
-  // colors around the stroke, up to the image's edges, as in Photoshop; the next strokes add to
-  // it, with Alt they take parts away. A stroke becomes points along it (one per half brush). As
-  // with the other selection tools, Shift and Alt are shown by a badge by the pointer. The
-  // brush is in document pixels, like Photoshop's.
+  // colors around the stroke, up to the image's edges, while it is painted, as in Photoshop;
+  // the next strokes add to it, with Alt they take parts away; Esc drops the stroke under way.
+  // A stroke becomes points along it (one per half brush). As with the other selection tools,
+  // Shift and Alt are shown by a badge by the pointer. The brush is in document pixels, like
+  // Photoshop's.
   import type { SelectionMode } from "./engine";
   import { MODE_BADGES, modeFromKeys } from "./selection";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -23,13 +24,15 @@
     /** The last stroke is still being turned into a selection. */
     busy: boolean;
     /**
-     * A stroke: its points (document pixels), the mode the keys asked for (or null), and the
+     * The stroke so far (`move`: it goes on), done (`end`) or dropped with Esc (`cancel`): its
+     * points (document pixels), the mode the keys asked for at its start (or null), and the
      * document region in view `[x, y, width, height]` (unclamped).
      */
     onstroke: (
       points: [number, number][],
       mode: SelectionMode | null,
       view: [number, number, number, number],
+      phase: "move" | "end" | "cancel",
     ) => void;
   } = $props();
 
@@ -51,13 +54,22 @@
     return [e.clientX - box.left, e.clientY - box.top];
   }
 
+  /** The document area in view `[x, y, width, height]`. */
+  function view(): [number, number, number, number] {
+    const box = element.getBoundingClientRect();
+    const [left, top] = mapping.toDocument(box.left, box.top);
+    const [right, bottom] = mapping.toDocument(box.right, box.bottom);
+    return [left, top, right - left, bottom - top];
+  }
+
   function down(e: PointerEvent) {
-    if (e.button !== 0 || mapping.hand || busy) return;
+    if (e.button !== 0 || mapping.hand) return;
     e.preventDefault();
     if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
     element.setPointerCapture(e.pointerId);
     strokeMode = modeFromKeys(e);
     stroke = { screen: [local(e)], points: [mapping.toDocument(e.clientX, e.clientY)] };
+    onstroke([...stroke.points], strokeMode, view(), "move");
   }
 
   function move(e: PointerEvent) {
@@ -70,21 +82,31 @@
     const point = mapping.toDocument(e.clientX, e.clientY);
     const last = stroke.points[stroke.points.length - 1];
     const spacing = Math.max(size / 2, 4 * mapping.docPerCss);
-    if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= spacing) stroke.points.push(point);
+    if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= spacing) {
+      stroke.points.push(point);
+      onstroke([...stroke.points], strokeMode, view(), "move");
+    }
   }
 
   function up(e: PointerEvent) {
     if (!stroke) return;
     const points = stroke.points;
     stroke = null;
-    const box = element.getBoundingClientRect();
-    const [left, top] = mapping.toDocument(box.left, box.top);
-    const [right, bottom] = mapping.toDocument(box.right, box.bottom);
-    onstroke(points, strokeMode ?? modeFromKeys(e), [left, top, right - left, bottom - top]);
+    onstroke(points, strokeMode ?? modeFromKeys(e), view(), "end");
+  }
+
+  function onkeydown(e: KeyboardEvent) {
+    track(e);
+    if (e.key === "Escape" && stroke) {
+      e.preventDefault();
+      e.stopPropagation();
+      stroke = null;
+      onstroke([], strokeMode, view(), "cancel");
+    }
   }
 </script>
 
-<svelte:window onkeydown={track} onkeyup={track} />
+<svelte:window {onkeydown} onkeyup={track} />
 
 <svg
   class="quick"
