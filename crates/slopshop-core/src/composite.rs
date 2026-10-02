@@ -584,6 +584,27 @@ pub fn composite_region(
     region: Rect,
     out: &mut [f32],
 ) -> Result<CompositeReport, CompositeError> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    composite_region_on(document, region, out, threads)
+}
+
+/// [`composite_region`] on the calling thread alone: for small regions composited by callers
+/// that already spread their regions over every core (starting threads for each of them costs
+/// more than the compositing).
+pub fn composite_region_serial(
+    document: &Document,
+    region: Rect,
+    out: &mut [f32],
+) -> Result<CompositeReport, CompositeError> {
+    composite_region_on(document, region, out, 1)
+}
+
+fn composite_region_on(
+    document: &Document,
+    region: Rect,
+    out: &mut [f32],
+    threads: usize,
+) -> Result<CompositeReport, CompositeError> {
     let size = document.size();
     if region.right() > u64::from(size.width) || region.bottom() > u64::from(size.height) {
         return Err(CompositeError::RegionOutOfBounds { region, size });
@@ -640,28 +661,34 @@ pub fn composite_region(
 
     let width = region.width as usize;
     let row_len = width * 4;
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let rows_per_chunk = (region.height as usize).div_ceil(threads).max(1);
+    let rows_per_chunk = (region.height as usize).div_ceil(threads.max(1)).max(1);
     let chunks: Vec<&mut [f32]> = out.chunks_mut(rows_per_chunk * row_len).collect();
     let mut reports = vec![CompositeReport::default(); chunks.len()];
-    std::thread::scope(|scope| {
-        for (chunk_index, (chunk, report)) in chunks.into_iter().zip(&mut reports).enumerate() {
-            let (ops, blender) = (&ops, &blender);
-            scope.spawn(move || {
-                let mut acc = vec![[0.0f64; 4]; width];
-                // One accumulator per open group, reused from row to row.
-                let mut stack = Vec::new();
-                for (i, row) in chunk.chunks_exact_mut(row_len).enumerate() {
-                    // Fits: the row is inside the region, whose bottom fits the document.
-                    let y = region.y + (chunk_index * rows_per_chunk + i) as u32;
-                    composite_row(ops, blender, region.x, y, &mut acc, &mut stack, report);
-                    for (value, &v) in row.iter_mut().zip(acc.iter().flatten()) {
-                        *value = saturate(v, report);
-                    }
-                }
-            });
+    let (ops, blender) = (&ops, &blender);
+    let run = move |chunk_index: usize, chunk: &mut [f32], report: &mut CompositeReport| {
+        let mut acc = vec![[0.0f64; 4]; width];
+        // One accumulator per open group, reused from row to row.
+        let mut stack = Vec::new();
+        for (i, row) in chunk.chunks_exact_mut(row_len).enumerate() {
+            // Fits: the row is inside the region, whose bottom fits the document.
+            let y = region.y + (chunk_index * rows_per_chunk + i) as u32;
+            composite_row(ops, blender, region.x, y, &mut acc, &mut stack, report);
+            for (value, &v) in row.iter_mut().zip(acc.iter().flatten()) {
+                *value = saturate(v, report);
+            }
         }
-    });
+    };
+    if chunks.len() == 1 {
+        for (chunk, report) in chunks.into_iter().zip(&mut reports) {
+            run(0, chunk, report);
+        }
+    } else {
+        std::thread::scope(|scope| {
+            for (chunk_index, (chunk, report)) in chunks.into_iter().zip(&mut reports).enumerate() {
+                scope.spawn(move || run(chunk_index, chunk, report));
+            }
+        });
+    }
     Ok(CompositeReport {
         non_finite: reports.iter().map(|r| r.non_finite).sum(),
     })
@@ -1184,6 +1211,34 @@ mod tests {
             }
             assert_eq!(px[3], 1.0);
         }
+    }
+
+    #[test]
+    fn serial_compositing_matches_the_parallel_one() {
+        let mut doc = linear_document(Size::new(37, 29));
+        add(&mut doc, fill(0.2, 0.4, 0.6, 0.8), 1.0, true);
+        let pixels: Vec<[f32; 4]> = (0..20 * 20)
+            .map(|i| {
+                [
+                    (i % 7) as f32 / 7.0,
+                    (i % 11) as f32 / 11.0,
+                    0.5,
+                    (i % 3) as f32 / 2.0,
+                ]
+            })
+            .collect();
+        add(
+            &mut doc,
+            float_raster(Size::new(20, 20), &pixels),
+            0.7,
+            true,
+        );
+        let region = Rect::new(3, 2, 30, 25);
+        let mut parallel = vec![0f32; 30 * 25 * 4];
+        let mut serial = vec![0f32; 30 * 25 * 4];
+        composite_region(&doc, region, &mut parallel).unwrap();
+        composite_region_serial(&doc, region, &mut serial).unwrap();
+        assert_eq!(parallel, serial);
     }
 
     #[test]
