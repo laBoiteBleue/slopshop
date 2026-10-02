@@ -114,6 +114,7 @@ const en = {
   "menu.select.reselect": "Reselect",
   "menu.select.inverse": "Inverse",
   "menu.select.colorRange": "Color Range…",
+  "menu.select.subject": "Subject",
   "colorRange.title": "Color Range",
   "colorRange.fuzziness": "Fuzziness:",
   "colorRange.invert": "Invert",
@@ -542,6 +543,8 @@ const en = {
   "ai.component.samBasePlus": "SAM 2.1 base+: object selection",
   "ai.component.samTiny": "SAM 2.1 tiny: object selection",
   "ai.component.vitmatte": "ViTMatte-S: edges at full resolution (hair, fur)",
+  "ai.component.birefnet": "BiRefNet: select the subject",
+  "ai.component.birefnetLite": "BiRefNet lite: select the subject",
   "ai.error.start": "The AI engine could not start: {detail}",
   "ai.error.model": "The AI model failed: {detail}",
 } satisfies Record<string, string>;

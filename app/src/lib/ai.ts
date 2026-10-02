@@ -10,6 +10,8 @@ const NAMES: Record<string, MessageKey> = {
   "sam2.1-base-plus": "ai.component.samBasePlus",
   "sam2.1-tiny": "ai.component.samTiny",
   "vitmatte-small": "ai.component.vitmatte",
+  birefnet: "ai.component.birefnet",
+  "birefnet-lite": "ai.component.birefnetLite",
 };
 
 /** A component's name; its id if this version of the UI does not know it. */

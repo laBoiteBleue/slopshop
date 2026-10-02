@@ -114,6 +114,7 @@ const fr: Messages = {
   "menu.select.reselect": "Resélectionner",
   "menu.select.inverse": "Intervertir",
   "menu.select.colorRange": "Plage de couleurs…",
+  "menu.select.subject": "Sujet",
   "colorRange.title": "Plage de couleurs",
   "colorRange.fuzziness": "Tolérance :",
   "colorRange.invert": "Inverser",
@@ -557,6 +558,8 @@ const fr: Messages = {
   "ai.component.samBasePlus": "SAM 2.1 base+ : sélection d’objets",
   "ai.component.samTiny": "SAM 2.1 tiny : sélection d’objets",
   "ai.component.vitmatte": "ViTMatte-S : contours en pleine définition (cheveux, poils)",
+  "ai.component.birefnet": "BiRefNet : sélection du sujet",
+  "ai.component.birefnetLite": "BiRefNet lite : sélection du sujet",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",
 };

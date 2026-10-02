@@ -37,6 +37,7 @@
     type VectorInfo,
     type SaveFailed,
     type AiComponent,
+    type AiFeature,
     type AiFailure,
     type PromptPoint,
   } from "./lib/engine";
@@ -452,7 +453,9 @@
     } catch (e) {
       const failure = e as Partial<AiFailure> | null;
       if (failure?.code === "notInstalled") {
-        const components = await engine.aiComponents("segmentation");
+        // The detail names the feature whose components are missing.
+        const feature: AiFeature = failure.detail === "subject" ? "subject" : "segmentation";
+        const components = await engine.aiComponents(feature);
         if (components) {
           return await new Promise((resolve) => {
             aiDownload = {
@@ -489,6 +492,15 @@
       aiHoverBlocked = true;
       return null;
     }
+  }
+
+  /** Select > Subject: the main subject, refined at full resolution as Object Selection is. */
+  function selectSubject() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    quickSession = null;
+    void runAi(() => engine.aiSelectSubject(doc.id, aiLayer(), "replace", quick.objectRefine));
   }
 
   /** Object Selection: the object at a point, or in a box (document pixels). */
@@ -1866,6 +1878,7 @@
           ),
           separator,
           cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
+          cmd(t("menu.select.subject"), selectSubject, undefined, !doc),
           {
             kind: "submenu",
             label: t("menu.select.modify"),
