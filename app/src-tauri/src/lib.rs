@@ -532,6 +532,7 @@ fn blank_session() -> Session {
 fn image_session(image: RasterImage, name: &str) -> Session {
     let size = image.size();
     let content = LayerContent::Raster {
+        original: None,
         image: Arc::new(image),
     };
     session_with_layer(size, name, content)
@@ -885,6 +886,7 @@ fn insert_image(
                     blend_mode: BlendMode::Normal,
                     mask: None,
                     content: LayerContent::Raster {
+                        original: None,
                         image: Arc::new(image),
                     },
                 },
@@ -1563,7 +1565,7 @@ async fn add_mask_from_transparency(
             .layer(id)
             .ok_or("unknown layer")?;
         match &layer.content {
-            LayerContent::Raster { image } => image.clone(),
+            LayerContent::Raster { image, .. } => image.clone(),
             LayerContent::Fill { .. } => return Err("a fill layer has no transparency".to_owned()),
             LayerContent::Group { .. } => return Err("a group has no transparency".to_owned()),
             LayerContent::Adjustment { .. } => {
@@ -1613,7 +1615,7 @@ async fn layer_thumbnail(
         match (&layer.content, &layer.mask, mask) {
             (_, Some(layer_mask), true) => layer_mask.image.clone(),
             (_, None, true) => return Err("the layer has no mask".to_owned()),
-            (LayerContent::Raster { image }, _, false) => image.clone(),
+            (LayerContent::Raster { image, .. }, _, false) => image.clone(),
             (LayerContent::Fill { .. }, _, false) => {
                 return Err("fill layers have no thumbnail".to_owned());
             }
@@ -2254,6 +2256,7 @@ mod tests {
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
                 content: LayerContent::Raster {
+                    original: None,
                     image: Arc::new(image),
                 },
                 mask: Some(mask),

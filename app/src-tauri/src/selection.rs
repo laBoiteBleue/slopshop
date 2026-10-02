@@ -732,7 +732,7 @@ pub async fn add_layer_masks(
             }
             let to_document = layer.transform.then(doc.parent_transform(id));
             let size = match &layer.content {
-                LayerContent::Raster { image } => image.size(),
+                LayerContent::Raster { image, .. } => image.size(),
                 // Fills, groups and adjustments: the canvas, seen from the layer.
                 _ => {
                     let inverse = to_document
@@ -779,6 +779,7 @@ pub async fn add_layer_masks(
         .map(|(id, image)| Edit::SetLayerMask {
             id,
             mask: Some(LayerMask {
+                original: None,
                 image: Arc::new(image),
                 enabled: true,
                 replaces_alpha: false,
