@@ -13,39 +13,72 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
-/// The ONNX Runtime build this machine runs, and the models made for it.
+/// The ONNX Runtime build this machine runs, and the models made for it (ADR 0025).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Runtime {
-    /// Windows: ONNX Runtime with DirectML, on any DirectX 12 graphics card (ADR 0025).
+    /// Windows x64: DirectML, on any DirectX 12 graphics card; the models in half precision.
     DirectMl,
+    /// macOS on Apple silicon: Core ML (GPU and Neural Engine); the models in single precision.
+    CoreMl,
+    /// Linux (x64 or ARM): the processor; the small models.
+    Cpu,
 }
 
 impl Runtime {
-    /// This machine's. `None` where AI is not offered yet (outside Windows x64: no runtime in
-    /// the manifest).
+    /// This machine's. `None` where AI is not offered (no runtime in the manifest: Intel Macs,
+    /// Windows on ARM…).
     pub(crate) fn detect() -> Option<Self> {
-        cfg!(all(windows, target_arch = "x86_64")).then_some(Self::DirectMl)
+        if cfg!(all(windows, target_arch = "x86_64")) {
+            Some(Self::DirectMl)
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Some(Self::CoreMl)
+        } else if cfg!(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )) {
+            Some(Self::Cpu)
+        } else {
+            None
+        }
     }
 
     /// The helper's `--provider`.
     pub(crate) fn provider(self) -> &'static str {
         match self {
             Self::DirectMl => "directml",
+            Self::CoreMl => "coreml",
+            Self::Cpu => "cpu",
         }
     }
 
     /// The components a feature needs on this runtime (the runtime first).
     pub(crate) fn components(self, feature: Feature) -> [&'static str; 3] {
         // Every feature includes ViTMatte: selections are refined at full resolution.
-        let runtime = match self {
-            Self::DirectMl => "runtime-directml",
+        let (runtime, sam, birefnet) = match self {
+            Self::DirectMl => ("runtime-directml", "sam2.1-base-plus", "birefnet"),
+            Self::CoreMl => (
+                "runtime-coreml-macos-arm64",
+                "sam2.1-base-plus-fp32",
+                "birefnet-fp32",
+            ),
+            Self::Cpu if cfg!(target_arch = "aarch64") => {
+                ("runtime-cpu-linux-arm64", "sam2.1-tiny", "birefnet-lite")
+            }
+            Self::Cpu => ("runtime-cpu-linux-x64", "sam2.1-tiny", "birefnet-lite"),
         };
         let model = match feature {
-            Feature::Segmentation => "sam2.1-base-plus",
-            Feature::Subject => "birefnet",
+            Feature::Segmentation => sam,
+            Feature::Subject => birefnet,
         };
         [runtime, model, "vitmatte-small"]
     }
+}
+
+/// The helper's provider on this machine (`directml`, `coreml` or `cpu`), or `None` where AI
+/// is not offered: the UI picks its defaults from it (on the CPU, Refine Edges is slow).
+#[tauri::command]
+pub(crate) fn ai_runtime() -> Option<&'static str> {
+    Runtime::detect().map(Runtime::provider)
 }
 
 /// What the user asks AI for.
@@ -287,7 +320,7 @@ mod tests {
 
     #[test]
     fn every_feature_needs_components_of_the_manifest() {
-        for runtime in [Runtime::DirectMl] {
+        for runtime in [Runtime::DirectMl, Runtime::CoreMl, Runtime::Cpu] {
             for feature in FEATURES {
                 for id in runtime.components(feature) {
                     assert!(install::component(id).is_some(), "{id}");

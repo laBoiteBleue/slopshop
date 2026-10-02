@@ -2,7 +2,7 @@
 //! loaded at run time, and answers its requests (see the library's protocol) on its standard
 //! input and output. Diagnostics go to standard error.
 //!
-//!     slopshop-ai --runtime <onnxruntime library> --models <folder> [--provider auto|directml|cpu]
+//!     slopshop-ai --runtime <onnxruntime library> --models <folder> [--provider auto|directml|coreml|cpu]
 
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
@@ -17,11 +17,26 @@ use slopshop_ai::{
 /// SAM 2.1's input side.
 const SIDE: usize = 1024;
 /// SAM 2.1's models, by size, in the models folder (as downloaded from Hugging Face).
-const SAM_GPU: &str = "onnx-community/sam2.1-hiera-base-plus-ONNX/onnx";
-const SAM_CPU: &str = "onnx-community/sam2.1-hiera-tiny-ONNX/onnx";
+const SAM_BASE_PLUS: &str = "onnx-community/sam2.1-hiera-base-plus-ONNX/onnx";
+const SAM_TINY: &str = "onnx-community/sam2.1-hiera-tiny-ONNX/onnx";
 /// BiRefNet, by size: the full model on a GPU, the lite one on the CPU (in the models folder).
-const BIREFNET_GPU: &str = "onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx";
-const BIREFNET_CPU: &str = "onnx-community/BiRefNet_lite-ONNX/onnx/model_fp16.onnx";
+const BIREFNET: &str = "onnx-community/BiRefNet-ONNX/onnx";
+const BIREFNET_LITE: &str = "onnx-community/BiRefNet_lite-ONNX/onnx";
+
+/// The models for a provider (as the app's manifest installs them): half precision on
+/// DirectML, single on Core ML (half precision falls back to the CPU there), the small
+/// models on the CPU. `(SAM's folder, its files' suffix, BiRefNet's file)`.
+fn models_for(provider: &str) -> (&'static str, &'static str, String) {
+    match provider {
+        "directml" => (
+            SAM_BASE_PLUS,
+            "_fp16",
+            format!("{BIREFNET}/model_fp16.onnx"),
+        ),
+        "coreml" => (SAM_BASE_PLUS, "", format!("{BIREFNET}/model.onnx")),
+        _ => (SAM_TINY, "", format!("{BIREFNET_LITE}/model.onnx")),
+    }
+}
 /// ViTMatte-S, in the models folder.
 const VITMATTE: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
 
@@ -56,7 +71,9 @@ fn options() -> Result<Options, String> {
 fn providers(choice: &str) -> Vec<&'static str> {
     match choice {
         "directml" => vec!["directml"],
+        "coreml" => vec!["coreml"],
         "cpu" => vec!["cpu"],
+        _ if cfg!(target_os = "macos") => vec!["coreml", "cpu"],
         _ => vec!["directml", "cpu"],
     }
 }
@@ -68,6 +85,12 @@ fn session(path: &std::path::Path, provider: &str) -> Result<Session, String> {
             Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
         let mut builder = match provider {
             // DirectML's requirements (ONNX Runtime's documentation).
+            // ML Program: Core ML 5's format, the one with the widest operator coverage; what Core
+            // ML cannot run falls back to the CPU.
+            "coreml" => builder.with_execution_providers([ort::ep::CoreML::default()
+                .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+                .build()
+                .error_on_failure()])?,
             "directml" => builder
                 .with_memory_pattern(false)?
                 .with_parallel_execution(false)?
@@ -97,8 +120,8 @@ impl Sam {
     ) -> Result<(Self, &'static str), String> {
         let mut errors = Vec::new();
         for &provider in choices {
-            let dir = models.join(if provider == "cpu" { SAM_CPU } else { SAM_GPU });
-            let suffix = if provider == "cpu" { "" } else { "_fp16" };
+            let (sam, suffix, _) = models_for(provider);
+            let dir = models.join(sam);
             let encoder = session(&dir.join(format!("vision_encoder{suffix}.onnx")), provider);
             let decoder = session(
                 &dir.join(format!("prompt_encoder_mask_decoder{suffix}.onnx")),
@@ -216,15 +239,12 @@ struct Subject {
 }
 
 impl Subject {
-    /// BiRefNet on the first provider of `choices` that runs it (full on a GPU, lite on the CPU).
+    /// BiRefNet on the first provider of `choices` that runs it (full on a GPU, lite on the CPU;
+    /// see `models_for`).
     fn load(models: &std::path::Path, choices: &[&'static str]) -> Result<Self, String> {
         let mut errors = Vec::new();
         for &provider in choices {
-            let path = models.join(if provider == "cpu" {
-                BIREFNET_CPU
-            } else {
-                BIREFNET_GPU
-            });
+            let path = models.join(models_for(provider).2);
             match session(&path, provider) {
                 Ok(session) => {
                     eprintln!("slopshop-ai: BiRefNet on {provider}");

@@ -2073,6 +2073,7 @@ pub fn run() {
             present_view,
             reveal_in_folder,
             ai::ai_components,
+            ai::ai_runtime,
             ai::ai_install,
             ai::ai_cancel_install,
             ai::ai_remove,

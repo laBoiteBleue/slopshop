@@ -397,6 +397,10 @@
    * for Quick Selection (Photoshop's Enhance Edge).
    */
   let quick = $state({ size: 30, sampleAll: false, objectRefine: true, quickRefine: false });
+  // On the processor (Linux), Refine Edges takes about a second per window: off by default.
+  void engine.aiRuntime().then((runtime) => {
+    if (runtime === "cpu") quick.objectRefine = false;
+  });
   let aiBusy = $state(false);
   /** No hovering until a click asks again: the components are missing or AI cannot start. */
   let aiHoverBlocked = false;

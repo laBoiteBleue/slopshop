@@ -120,10 +120,13 @@ fn sam_selects_the_clicked_shape() {
         assert!(at(320 + 130, 240) < 0.2, "outside it: {}", at(450, 240));
     }
     // BiRefNet: the disc is the subject.
-    if Path::new(&models)
-        .join("onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx")
-        .is_file()
-    {
+    // The model the helper takes for the provider (see `models_for`).
+    let birefnet = match provider.as_str() {
+        "directml" => "onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx",
+        "coreml" => "onnx-community/BiRefNet-ONNX/onnx/model.onnx",
+        _ => "onnx-community/BiRefNet_lite-ONNX/onnx/model.onnx",
+    };
+    if Path::new(&models).join(birefnet).is_file() {
         let start = std::time::Instant::now();
         let logits = client
             .subject(w as u32, h as u32, rgb_again.clone())

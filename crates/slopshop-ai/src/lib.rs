@@ -84,7 +84,7 @@ pub struct Point {
 pub enum Response {
     Hello {
         version: u32,
-        /// `directml` or `cpu`.
+        /// `directml`, `coreml` or `cpu`.
         provider: String,
     },
     Done,
@@ -433,7 +433,7 @@ pub struct Launch<'a> {
     pub runtime: &'a Path,
     /// Where the models are (one folder per repository, as downloaded).
     pub models: &'a Path,
-    /// `auto`, `directml` or `cpu`.
+    /// `auto`, `directml`, `coreml` or `cpu`.
     pub provider: &'a str,
     /// Folders added to the helper's library search path (the runtime's own libraries).
     pub library_paths: &'a [&'a Path],
@@ -477,11 +477,19 @@ impl Client {
                 .iter()
                 .map(|p| p.to_path_buf())
                 .collect();
-            if let Some(existing) = std::env::var_os("PATH") {
+            // Where the system looks for libraries a library loads.
+            let variable = if cfg!(windows) {
+                "PATH"
+            } else if cfg!(target_os = "macos") {
+                "DYLD_LIBRARY_PATH"
+            } else {
+                "LD_LIBRARY_PATH"
+            };
+            if let Some(existing) = std::env::var_os(variable) {
                 paths.extend(std::env::split_paths(&existing));
             }
             if let Ok(joined) = std::env::join_paths(paths) {
-                command.env("PATH", joined);
+                command.env(variable, joined);
             }
         }
         let mut child = command.spawn()?;

@@ -1035,6 +1035,8 @@ export const engine = {
    * The AI components `feature` needs on this machine, or without a feature every one it can
    * use (and any other still installed). `null`: AI is not offered on this platform yet.
    */
+  /** The AI runtime on this machine (`directml`, `coreml`, `cpu`), or null where AI is not offered. */
+  aiRuntime: () => invoke<string | null>("ai_runtime"),
   aiComponents: (feature: AiFeature | null) =>
     invoke<AiComponent[] | null>("ai_components", { feature }),
   /** Downloads components in turn; one install at a time. Rejects with an `AiFailure`. */
