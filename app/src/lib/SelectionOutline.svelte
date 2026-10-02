@@ -161,11 +161,14 @@
     const tx = now.offset[0] - built.at.offset[0] * k;
     const ty = now.offset[1] - built.at.offset[1] * k;
     const scaled = Math.abs(k - 1) > 1e-9;
+    const [dx, dy] = [snap(tx), snap(ty)];
     return {
       scaled,
       transform: scaled
         ? `translate(${tx} ${ty}) scale(${k})`
-        : `translate(${snap(tx)} ${snap(ty)})`,
+        : dx !== 0 || dy !== 0
+          ? `translate(${dx} ${dy})`
+          : undefined,
     };
   });
 
@@ -192,9 +195,19 @@
 >
   <svg>
     {#if built && placed}
+      <!-- Lines keep one pixel while scaled; only then, as Chromium stops repainting the
+           animated dashes of non-scaling strokes until their transform changes. -->
       <g transform={placed.transform}>
-        <path class="under" d={built.path} vector-effect="non-scaling-stroke" />
-        <path class="ants" d={built.path} vector-effect="non-scaling-stroke" />
+        <path
+          class="under"
+          d={built.path}
+          vector-effect={placed.scaled ? "non-scaling-stroke" : undefined}
+        />
+        <path
+          class="ants"
+          d={built.path}
+          vector-effect={placed.scaled ? "non-scaling-stroke" : undefined}
+        />
       </g>
     {/if}
   </svg>
