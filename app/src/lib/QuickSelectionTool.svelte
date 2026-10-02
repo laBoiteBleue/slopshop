@@ -120,13 +120,6 @@
   onpointercancel={() => (stroke = null)}
   onpointerleave={() => (hover = null)}
 >
-  {#if stroke && stroke.screen.length > 1}
-    <polyline
-      class="stroke"
-      points={stroke.screen.map(([x, y]) => `${x},${y}`).join(" ")}
-      stroke-width={Math.max(radius * 2, 2)}
-    />
-  {/if}
   {#if hover && !mapping.hand}
     <circle class="brush" cx={hover.x} cy={hover.y} r={Math.max(radius, 2)} />
     <circle class="brush inner" cx={hover.x} cy={hover.y} r={Math.max(radius, 2)} />
@@ -151,15 +144,6 @@
 
   /* Space held: the viewport pans. */
   .quick.hand {
-    pointer-events: none;
-  }
-
-  .stroke {
-    fill: none;
-    stroke: #3b8eea;
-    stroke-opacity: 0.35;
-    stroke-linecap: round;
-    stroke-linejoin: round;
     pointer-events: none;
   }
 
