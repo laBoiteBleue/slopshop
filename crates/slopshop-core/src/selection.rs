@@ -1612,18 +1612,39 @@ pub fn select_logits(
         return Err(SelectionError::InvalidShape);
     }
     let cleaned = without_specks(logits, side);
-    let logits = cleaned.as_slice();
+    select_scores(canvas, current, &cleaned, side, side, area, combine)
+}
+
+/// A mask of `width × height` scores (positive: inside) stretched over `area` of the canvas,
+/// read bilinearly, inside where positive, its edge softened over about a pixel; nothing outside
+/// `area`. Combined with `current` by `combine`.
+pub fn select_scores(
+    canvas: Size,
+    current: Option<&RasterImage>,
+    scores: &[f32],
+    width: usize,
+    height: usize,
+    area: Rect,
+    combine: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
+    if width == 0
+        || height == 0
+        || scores.len() != width * height
+        || scores.iter().any(|v| v.is_nan())
+    {
+        return Err(SelectionError::InvalidShape);
+    }
     let area = area
         .intersection(Rect::new(0, 0, canvas.width, canvas.height))
         .ok_or(SelectionError::InvalidShape)?;
     let mut mask = Mask::new(canvas)?;
     let (sx, sy) = (
-        side as f64 / f64::from(area.width),
-        side as f64 / f64::from(area.height),
+        width as f64 / f64::from(area.width),
+        height as f64 / f64::from(area.height),
     );
     let (left, top) = (area.x as usize, area.y as usize);
     let (right, bottom) = (left + area.width as usize, top + area.height as usize);
-    let at = |x: usize, y: usize| logits[y.min(side - 1) * side + x.min(side - 1)];
+    let at = |x: usize, y: usize| scores[y.min(height - 1) * width + x.min(width - 1)];
     let inside = |x: usize, y: usize| -> bool {
         if x < left || y < top || x >= right || y >= bottom {
             return false;
@@ -1671,8 +1692,8 @@ pub fn select_logits(
             })
             .collect();
         for worker in workers {
-            // Invariant: reading logits does not panic (indices are clamped).
-            done.extend(worker.join().expect("logits worker panicked"));
+            // Invariant: reading scores does not panic (indices are clamped).
+            done.extend(worker.join().expect("scores worker panicked"));
         }
     });
     for (index, tile) in done {
