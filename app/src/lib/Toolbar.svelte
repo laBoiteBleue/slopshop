@@ -228,9 +228,12 @@
     width: 18px;
     height: 18px;
     padding: 0;
-    border: 1px solid var(--border-dark);
+    /* The same frame whatever the color, so both squares look the same size (an inner light
+       ring showed on dark colors only and made them look smaller); the dark outer ring parts
+       the foreground from the background where they overlap. */
+    border: 1px solid var(--text-muted);
     border-radius: 0;
-    box-shadow: 0 0 0 1px #ffffff55 inset;
+    box-shadow: 0 0 0 1px var(--border-dark);
     cursor: pointer;
   }
 
