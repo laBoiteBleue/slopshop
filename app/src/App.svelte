@@ -61,6 +61,7 @@
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
+  import FillChoiceDialog from "./lib/FillChoiceDialog.svelte";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
@@ -457,7 +458,9 @@
     sendPaint(run);
   }
 
-  /** Edit > Clear (Delete with a selection): the selected pixels of the active layer erased. */
+  /** Delete with a selection: what to do with the selected pixels is asked first. */
+  let fillChoice = $state<{ documentId: number; layerId: number } | null>(null);
+
   function clearSelection() {
     const doc = active;
     if (!doc) return;
@@ -467,7 +470,16 @@
       showError(t("paint.needRaster"));
       return;
     }
-    void sync(engine.clearSelection(doc.id, layer.id));
+    fillChoice = { documentId: doc.id, layerId: layer.id };
+  }
+
+  /** The choice made: erase (alpha only) or fill with one of the colors (ADR 0027). */
+  function applyFillChoice(choice: "erase" | "foreground" | "background") {
+    const target = fillChoice;
+    fillChoice = null;
+    if (!target) return;
+    const color = choice === "erase" ? null : hexToSrgb(colors[choice]);
+    void sync(engine.fillSelection(target.documentId, target.layerId, color));
   }
 
   /** Sends the samples waiting, or leaves them for when the batch in flight returns. */
@@ -2842,6 +2854,14 @@
   />
 {/if}
 
+{#if fillChoice}
+  <FillChoiceDialog
+    foreground={colors.foreground}
+    background={colors.background}
+    onchoose={applyFillChoice}
+    onclose={() => (fillChoice = null)}
+  />
+{/if}
 {#if modifyDialog && modifyDialog.document === activeId}
   <ModifyDialog
     kind={modifyDialog.kind}

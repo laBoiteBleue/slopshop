@@ -188,6 +188,10 @@ const fr: Messages = {
   "options.pressureOpacity": "Pression : opacité",
   "options.pressureOpacity.hint": "La pression du stylet fait varier l'opacité",
   "paint.needRaster": "Sélectionnez un calque de pixels pour peindre (Calque > Nouveau calque).",
+  "fillChoice.title": "Supprimer la sélection",
+  "fillChoice.erase": "Effacer (transparence)",
+  "fillChoice.foreground": "Remplir avec la couleur de premier plan",
+  "fillChoice.background": "Remplir avec la couleur d'arrière-plan",
   "paint.hidden": "Le calque est masqué : affichez-le pour y peindre.",
   "options.refineEdge": "Affiner les contours",
   "options.refineEdge.hint":

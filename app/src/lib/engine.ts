@@ -1145,9 +1145,12 @@ export const engine = {
    */
   paintStroke: (documentId: number, request: PaintRequest) =>
     serial(() => invoke<DocumentView | null>("paint_stroke", { documentId, request })),
-  /** Edit > Clear: the selected part of a raster layer erased, as paint (ADR 0027). */
-  clearSelection: (documentId: number, layerId: number) =>
-    serial(() => invoke<DocumentView>("clear_selection", { documentId, layerId })),
+  /**
+   * Delete with a selection: the selected part of a raster layer erased (`color` null) or
+   * filled with `color` (sRGB-encoded RGB in [0, 1]), as paint (ADR 0027).
+   */
+  fillSelection: (documentId: number, layerId: number, color: [number, number, number] | null) =>
+    serial(() => invoke<DocumentView>("fill_selection", { documentId, layerId, color })),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),

@@ -325,14 +325,16 @@ pub(crate) fn paint(
     }
 }
 
-/// Edit > Clear (Delete with a selection): the selected part of layer `layer_id` erased, kept
-/// apart from its original like a stroke of the Eraser (ADR 0027). Nothing selected, or the
-/// selection outside the layer: nothing changes.
+/// Delete with a selection (ADR 0027): the selected part of layer `layer_id` erased (`color`
+/// absent: only alpha changes) or filled with `color` (sRGB-encoded RGB in `[0, 1]`), kept
+/// apart from its original like a stroke. A fill grows the layer to the canvas if needed, as
+/// strokes do. Nothing selected: nothing changes.
 #[tauri::command]
-pub async fn clear_selection(
+pub async fn fill_selection(
     app: tauri::AppHandle,
     document_id: u64,
     layer_id: u64,
+    color: Option<[f32; 3]>,
 ) -> Result<DocumentView, String> {
     on_worker(move || {
         let state = app.state::<AppState>();
@@ -353,19 +355,18 @@ pub async fn clear_selection(
                 pressure_size: false,
                 pressure_opacity: false,
             },
-            color: None,
+            color,
             samples: Vec::new(),
             end: true,
         };
-        let (mut stroke, _) = start(document.session.document(), &request, false)?;
+        // Erasing only removes: no need to grow.
+        let (mut stroke, growth) = start(document.session.document(), &request, color.is_some())?;
         stroke.fill();
         if let Some(image) = stroke.finish().map_err(|e| e.to_string())? {
+            let layer = LayerId::from_raw(layer_id);
             document
                 .session
-                .perform(Edit::SetLayerPaint {
-                    id: LayerId::from_raw(layer_id),
-                    painted: Some(image),
-                })
+                .perform(paint_edit(layer, image, growth.as_ref()))
                 .map_err(|e| e.to_string())?;
         }
         Ok(document.view())
