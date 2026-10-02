@@ -135,7 +135,7 @@ impl LayerView {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
             LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
             LayerContent::Adjustment { .. } => ("adjustment", [0.0; 4], 0, false),
-            LayerContent::Raster { image } => (
+            LayerContent::Raster { image, .. } => (
                 "raster",
                 image
                     .average_color(&WORKING_SPACE)
