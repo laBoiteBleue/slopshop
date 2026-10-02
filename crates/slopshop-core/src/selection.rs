@@ -1702,6 +1702,32 @@ fn stretch(
         let lower = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
         coverage(upper * (1.0 - ty) + lower * ty)
     };
+    // A tile whose scores (the cells its pixels read) all give the same coverage is that
+    // constant, without reading each pixel: most tiles of a large canvas.
+    let uniform = |col: usize, row: usize, w: usize, h: usize| -> Option<u16> {
+        let (x0, y0) = (col * T, row * T);
+        let (x1, y1) = (x0 + w, y0 + h);
+        let inside = x0 >= left && y0 >= top && x1 <= right && y1 <= bottom;
+        let (cx0, cx1) = (
+            (((x0.max(left) - left) as f64 + 0.5) * sx - 0.5).max(0.0) as usize,
+            (((x1.min(right) - left) as f64 - 0.5) * sx - 0.5).max(0.0) as usize + 1,
+        );
+        let (cy0, cy1) = (
+            (((y0.max(top) - top) as f64 + 0.5) * sy - 0.5).max(0.0) as usize,
+            (((y1.min(bottom) - top) as f64 - 0.5) * sy - 0.5).max(0.0) as usize + 1,
+        );
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for cy in cy0..=cy1.min(height - 1) {
+            for cx in cx0..=cx1.min(width - 1) {
+                let v = at(cx, cy);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        let v = coverage(lo);
+        // Outside the area nothing is selected: a partly covered tile is only uniform at 0.
+        (v == coverage(hi) && (inside || v == 0)).then_some(v)
+    };
     // The tiles over the area; the others stay empty.
     let tiles: Vec<usize> = (top / T..bottom.div_ceil(T))
         .flat_map(|row| (left / T..right.div_ceil(T)).map(move |col| (col, row)))
@@ -1709,7 +1735,7 @@ fn stretch(
         .collect();
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let per_thread = tiles.len().div_ceil(threads).max(1);
-    let (shape, value) = (&mask, &value);
+    let (shape, value, uniform) = (&mask, &value, &uniform);
     let mut done: Vec<(usize, Tile)> = Vec::new();
     std::thread::scope(|scope| {
         let workers: Vec<_> = tiles
@@ -1721,6 +1747,9 @@ fn stretch(
                         .map(|&index| {
                             let (col, row) = (index % shape.columns, index / shape.columns);
                             let (w, h) = shape.valid(col, row);
+                            if let Some(v) = uniform(col, row, w, h) {
+                                return (index, Tile::Const(v));
+                            }
                             let mut values = vec![0u16; T * T];
                             for y in 0..h {
                                 for x in 0..w {
@@ -3320,6 +3349,46 @@ mod tests {
         assert!(!unknown_at(1300, 600), "outward, beyond the band");
         assert!(!unknown_at(900, 600), "inward, beyond 8 pixels");
         assert!(unknown_at(1568, 100), "a faint strand far from the edge");
+    }
+
+    #[test]
+    fn scores_stretched_over_a_large_area_match_pixel_by_pixel() {
+        // A 4 × 3 grid of scores over an offset area of a 2000 × 1500 canvas: most tiles are
+        // uniform (taken without reading their pixels); each pixel must still be the bilinear
+        // reading, before softening.
+        let canvas = Size::new(2000, 1500);
+        let area = Rect::new(300, 200, 1600, 1200);
+        let scores = [
+            -1.0, -1.0, -1.0, -1.0, -1.0, 2.0, -0.5, -1.0, -1.0, -1.0, -1.0, -1.0,
+        ];
+        let mask = stretch(
+            canvas,
+            &scores,
+            4,
+            3,
+            area,
+            |v| if v > 0.0 { FULL } else { 0 },
+        )
+        .unwrap();
+        let (sx, sy) = (4.0 / 1600.0, 3.0 / 1200.0);
+        let at = |x: usize, y: usize| scores[y.min(2) * 4 + x.min(3)];
+        for y in (0..1500).step_by(7) {
+            for x in (0..2000).step_by(7) {
+                let inside_area = (300..1900).contains(&x) && (200..1400).contains(&y);
+                let expected = inside_area && {
+                    let fx = (((x - 300) as f64 + 0.5) * sx - 0.5).max(0.0);
+                    let fy = (((y - 200) as f64 + 0.5) * sy - 0.5).max(0.0);
+                    let (x0, y0) = (fx as usize, fy as usize);
+                    let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+                    let upper = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+                    let lower = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+                    upper * (1.0 - ty) + lower * ty > 0.0
+                };
+                let got = mask.at(x as isize, y as isize) == FULL;
+                assert_eq!(got, expected, "at {x}, {y}");
+            }
+        }
+        assert!(mask.tiles.iter().filter(|t| t.constant().is_some()).count() > 30);
     }
 
     #[test]
