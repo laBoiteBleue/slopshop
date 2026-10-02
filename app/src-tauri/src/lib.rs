@@ -2080,6 +2080,7 @@ pub fn run() {
             segment::ai_segment,
             segment::ai_object_hover,
             segment::ai_object_select,
+            segment::ai_refine_selection,
             layer_thumbnail,
             add_mask_from_transparency,
             selection::select_shape,

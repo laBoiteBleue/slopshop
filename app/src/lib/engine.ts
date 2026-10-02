@@ -841,6 +841,8 @@ export type SegmentRequest = {
   layerId: number | null;
   /** How the result combines with the selection before the session; read at its start. */
   mode: SelectionMode;
+  /** Refine the edge at full resolution (ViTMatte). */
+  refine: boolean;
 };
 
 export const engine = {
@@ -1077,8 +1079,13 @@ export const engine = {
       region: [number, number, number, number];
       layerId: number | null;
       mode: SelectionMode;
+      /** Refine the edge at full resolution (ViTMatte). */
+      refine: boolean;
     },
   ) => serial(() => invoke<DocumentView>("ai_object_select", { documentId, request })),
+  /** Select > Refine Edge: the selection's edge matted within `radius` pixels (ViTMatte). */
+  aiRefineSelection: (documentId: number, radius: number, layerId: number | null) =>
+    serial(() => invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId })),
   /** Quick Selection: the model's mask for the session's prompts, as one undo entry. */
   aiSegment: (documentId: number, request: SegmentRequest) =>
     serial(() => invoke<DocumentView>("ai_segment", { documentId, request })),

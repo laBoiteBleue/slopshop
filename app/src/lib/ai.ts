@@ -9,6 +9,7 @@ const NAMES: Record<string, MessageKey> = {
   "runtime-cpu": "ai.component.runtimeCpu",
   "sam2.1-base-plus": "ai.component.samBasePlus",
   "sam2.1-tiny": "ai.component.samTiny",
+  "vitmatte-small": "ai.component.vitmatte",
 };
 
 /** A component's name; its id if this version of the UI does not know it. */

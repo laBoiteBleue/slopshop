@@ -23,6 +23,11 @@ use crate::selection;
 /// The longest side of the image SAM is given (it sees 1024² whatever it gets).
 const SAM_SIDE: f64 = 1024.0;
 
+/// Refine Edge: the side of the windows ViTMatte mattes, and how many at most (a longer
+/// outline is matted coarser).
+const MATTE_SIDE: u32 = 1024;
+const MAX_MATTE_WINDOWS: usize = 48;
+
 /// The helper, the image it has encoded, and the Quick Selection session under way.
 #[derive(Default)]
 pub(crate) struct SegmentState {
@@ -255,6 +260,93 @@ impl Session {
     }
 }
 
+impl Session {
+    /// The model's mask (`logits` over `region`) as a selection, its edge refined at full
+    /// resolution by ViTMatte when `refine` is set, combined with `current` by `combine`.
+    #[allow(clippy::too_many_arguments)]
+    fn selection(
+        &mut self,
+        state: &AppState,
+        root: &Path,
+        doc: &Document,
+        layer_id: Option<u64>,
+        logits: &[f32],
+        region: Rect,
+        current: Option<&RasterImage>,
+        combine: Combine,
+        refine: bool,
+    ) -> Result<Option<RasterImage>, AiFailure> {
+        let canvas = doc.size();
+        if !refine {
+            return core_selection::select_logits(
+                canvas, current, logits, MASK_SIDE, region, combine,
+            )
+            .map_err(internal);
+        }
+        let Some(mask) = core_selection::select_logits(
+            canvas,
+            None,
+            logits,
+            MASK_SIDE,
+            region,
+            Combine::Replace,
+        )
+        .map_err(internal)?
+        else {
+            return core_selection::select_logits(
+                canvas, current, logits, MASK_SIDE, region, combine,
+            )
+            .map_err(internal);
+        };
+        // The band to decide: a model cell and a half on each side of the coarse outline.
+        let cell = f64::from(region.width.max(region.height)) / MASK_SIDE as f64;
+        let band = (cell * 1.5).clamp(8.0, 256.0) as u32;
+        let mut plan =
+            core_selection::plan_refinement(canvas, &mask, band, MATTE_SIDE, MAX_MATTE_WINDOWS)
+                .map_err(internal)?;
+        self.matte(state, root, doc, layer_id, &mut plan)?;
+        plan.finish(current, combine).map_err(internal)
+    }
+
+    /// Mattes every window of `plan` with ViTMatte, on `doc` (only `layer_id`, if given).
+    fn matte(
+        &mut self,
+        state: &AppState,
+        root: &Path,
+        doc: &Document,
+        layer_id: Option<u64>,
+        plan: &mut core_selection::EdgeRefinement,
+    ) -> Result<(), AiFailure> {
+        let source = selection::sampled_document(doc, layer_id).map_err(internal)?;
+        let renderer = state.renderer().map_err(internal)?;
+        for window in plan.windows().to_vec() {
+            let size = window.input_size();
+            let view = ViewTransform {
+                origin: [f64::from(window.rect.x), f64::from(window.rect.y)],
+                scale: f64::from(window.scale),
+            };
+            let frame = renderer
+                .render_view(&source, view, size)
+                .map_err(internal)?;
+            let rgb: Vec<u8> = frame
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect();
+            let trimap = plan.trimap(&window);
+            let client = self.client(root)?;
+            let alpha = match client.matte(size.width, size.height, rgb, trimap.clone()) {
+                Ok(alpha) => alpha,
+                Err(e) => return Err(self.failed(e)),
+            };
+            plan.apply(&window, &trimap, &alpha);
+        }
+        Ok(())
+    }
+}
+
 /// The AI folder, and the document.
 fn prepare(app: &AppHandle, document_id: u64) -> Result<(PathBuf, Document), AiFailure> {
     let state = app.state::<AppState>();
@@ -285,6 +377,8 @@ pub(crate) struct SegmentRequest {
     /// How the mask combines with the selection before the session (`replace`, `add`,
     /// `subtract`); read when the session starts.
     mode: String,
+    /// Refine the edge at full resolution (ViTMatte).
+    refine: bool,
 }
 
 /// Quick Selection: SAM 2.1's mask for the session's prompts, combined with the selection
@@ -335,21 +429,28 @@ fn quick_selection(
         .map(|p| (p.x, p.y, p.positive))
         .collect();
     let logits = session.decode(&root, encoded, &points, None)?;
-    let quick = session
-        .quick
-        .as_mut()
-        .ok_or_else(|| internal("no session"))?;
-    let image = core_selection::select_logits(
-        doc.size(),
-        quick.base.as_deref(),
+    let (base, combine) = {
+        let quick = session
+            .quick
+            .as_ref()
+            .ok_or_else(|| internal("no session"))?;
+        (quick.base.clone(), quick.combine)
+    };
+    let image = session.selection(
+        &state,
+        &root,
+        &doc,
+        request.layer_id,
         &logits,
-        MASK_SIDE,
         region,
-        quick.combine,
-    )
-    .map_err(internal)?;
+        base.as_deref(),
+        combine,
+        request.refine,
+    )?;
     let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
-    quick.revision = view.revision;
+    if let Some(quick) = session.quick.as_mut() {
+        quick.revision = view.revision;
+    }
     // The encoded image stays valid: only the selection changed.
     if let Some(encoded) = session.encoded.as_mut() {
         encoded.revision = view.revision;
@@ -402,6 +503,8 @@ pub(crate) struct ObjectRequest {
     region: [u32; 4],
     layer_id: Option<u64>,
     mode: String,
+    /// Refine the edge at full resolution (ViTMatte).
+    refine: bool,
 }
 
 #[tauri::command]
@@ -424,18 +527,64 @@ pub(crate) async fn ai_object_select(
             .collect();
         let logits = session.decode(&root, encoded, &points, request.boxed)?;
         let current = doc.selection().map(|s| Arc::clone(s.image()));
-        let image = core_selection::select_logits(
-            doc.size(),
-            current.as_deref(),
+        let image = session.selection(
+            &state,
+            &root,
+            &doc,
+            request.layer_id,
             &logits,
-            MASK_SIDE,
             region,
+            current.as_deref(),
             combine,
-        )
-        .map_err(internal)?;
+            request.refine,
+        )?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: the encoded image stays valid for the next hover.
         if let Some(encoded) = session.encoded.as_mut() {
+            encoded.revision = view.revision;
+        }
+        Ok(view)
+    })
+    .await
+    .map_err(internal)?
+}
+
+/// The largest Refine Edge radius, document pixels.
+const MAX_REFINE_RADIUS: u32 = 256;
+
+/// Select > Refine Edge: the current selection's edge matted at full resolution by ViTMatte,
+/// within `radius` document pixels of its outline, as one undo entry.
+#[tauri::command]
+pub(crate) async fn ai_refine_selection(
+    app: AppHandle,
+    document_id: u64,
+    radius: u32,
+    layer_id: Option<u64>,
+) -> Result<DocumentView, AiFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (root, doc) = prepare(&app, document_id)?;
+        let Some(current) = doc.selection().map(|s| Arc::clone(s.image())) else {
+            return Err(internal("nothing is selected"));
+        };
+        let radius = radius.clamp(1, MAX_REFINE_RADIUS);
+        let mut plan = core_selection::plan_refinement(
+            doc.size(),
+            &current,
+            radius,
+            MATTE_SIDE,
+            MAX_MATTE_WINDOWS,
+        )
+        .map_err(internal)?;
+        let mut session = lock(&state)?;
+        session.matte(&state, &root, &doc, layer_id, &mut plan)?;
+        let image = plan.finish(None, Combine::Replace).map_err(internal)?;
+        let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
+        // Only the selection changed: an image encoded from this revision stays valid.
+        if let Some(encoded) = session.encoded.as_mut()
+            && encoded.document_id == document_id
+            && encoded.revision == doc.revision()
+        {
             encoded.revision = view.revision;
         }
         Ok(view)

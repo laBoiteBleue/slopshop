@@ -122,6 +122,9 @@ const fr: Messages = {
   "colorRange.subtract": "Soustraire de l’échantillon (Alt)",
   "colorRange.hint": "Cliquez sur l’image ou l’aperçu pour échantillonner des couleurs.",
   "menu.select.modify": "Modifier",
+  "menu.select.refineEdge": "Affiner les contours…",
+  "modify.refine.title": "Affiner les contours",
+  "modify.refine.label": "Rayon :",
   "menu.select.modify.border": "Cadre…",
   "menu.select.modify.smooth": "Lisser…",
   "menu.select.modify.expand": "Dilater…",
@@ -168,6 +171,9 @@ const fr: Messages = {
   "options.sampleAll": "Échantillonner tous les calques",
   "options.antiAlias": "Lissage",
   "options.brushSize": "Taille :",
+  "options.refineEdge": "Affiner les contours",
+  "options.refineEdge.hint":
+    "Affine les contours en pleine définition (cheveux, poils) : plus lent",
   "selection.readout": "{width} × {height} px",
   "menu.help": "Aide",
   "menu.help.about": "À propos de SlopShop",
@@ -550,6 +556,7 @@ const fr: Messages = {
   "ai.component.runtimeCpu": "Moteur d’IA pour le processeur (ONNX Runtime)",
   "ai.component.samBasePlus": "SAM 2.1 base+ : sélection d’objets",
   "ai.component.samTiny": "SAM 2.1 tiny : sélection d’objets",
+  "ai.component.vitmatte": "ViTMatte-S : contours en pleine définition (cheveux, poils)",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",
 };

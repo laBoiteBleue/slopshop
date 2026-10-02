@@ -59,7 +59,7 @@
   import { slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
-  import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
+  import { MAX_FEATHER, MAX_MODIFY, stepBrush, MAX_REFINE } from "./lib/selection";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
@@ -390,8 +390,12 @@
   // AI selection (ADR 0025), with SAM 2.1. Object Selection: the object under the pointer
   // lights up, a click or a box selects it. Quick Selection: strokes become prompts; the strokes
   // of a session refine one object, while the document only changes by their own results.
-  /** The AI tools' options: Quick Selection's brush, and every layer or the active one. */
-  let quick = $state({ size: 30, sampleAll: false });
+  /**
+   * The AI tools' options: Quick Selection's brush, every layer or the active one, and whether
+   * edges are refined at full resolution (ViTMatte): by default for Object Selection, on demand
+   * for Quick Selection (Photoshop's Enhance Edge).
+   */
+  let quick = $state({ size: 30, sampleAll: false, objectRefine: true, quickRefine: false });
   let aiBusy = $state(false);
   /** No hovering until a click asks again: the components are missing or AI cannot start. */
   let aiHoverBlocked = false;
@@ -504,6 +508,7 @@
       region: aiRegion(doc, view),
       layerId: aiLayer(),
       mode: keyMode ?? selectionMode,
+      refine: quick.objectRefine,
     };
     void runAi(() => engine.aiObjectSelect(doc.id, request));
   }
@@ -555,6 +560,7 @@
         region: session.region,
         layerId: session.layer,
         mode: session.mode,
+        refine: quick.quickRefine,
       }),
     ).then((view) => {
       if (view) session.revision = view.revision;
@@ -578,8 +584,9 @@
   }
 
   // Select > Modify: a dialog for the amount, remembered per change for the session.
-  let modifyDialog = $state<{ kind: SelectionModify; document: number } | null>(null);
-  let modifyAmounts = $state<Record<SelectionModify, number>>({
+  let modifyDialog = $state<{ kind: SelectionModify | "refine"; document: number } | null>(null);
+  let modifyAmounts = $state<Record<SelectionModify | "refine", number>>({
+    refine: 16,
     border: 10,
     smooth: 5,
     expand: 10,
@@ -587,7 +594,7 @@
     feather: 10,
   });
 
-  function openModify(kind: SelectionModify) {
+  function openModify(kind: SelectionModify | "refine") {
     if (active?.selectionKey != null) modifyDialog = { kind, document: active.id };
   }
 
@@ -597,7 +604,12 @@
     if (!dialog) return;
     modifyAmounts[dialog.kind] = amount;
     commitTransform();
-    void sync(engine.modifySelection(dialog.document, dialog.kind, amount));
+    const kind = dialog.kind;
+    if (kind === "refine") {
+      void runAi(() => engine.aiRefineSelection(dialog.document, amount, aiLayer()));
+    } else {
+      void sync(engine.modifySelection(dialog.document, kind, amount));
+    }
   }
 
   // Select > Color Range: a panel beside the image, whose clicks sample colors.
@@ -1870,6 +1882,12 @@
               ),
             ],
           },
+          cmd(
+            t("menu.select.refineEdge"),
+            () => openModify("refine"),
+            undefined,
+            doc?.selectionKey == null,
+          ),
           separator,
           {
             ...cmd(t("menu.select.quickMask"), toggleQuickMask, "Q", !doc),
@@ -2482,7 +2500,11 @@
   <ModifyDialog
     kind={modifyDialog.kind}
     value={modifyAmounts[modifyDialog.kind]}
-    max={modifyDialog.kind === "feather" ? MAX_FEATHER : MAX_MODIFY}
+    max={modifyDialog.kind === "feather"
+      ? MAX_FEATHER
+      : modifyDialog.kind === "refine"
+        ? MAX_REFINE
+        : MAX_MODIFY}
     onapply={applyModify}
     onclose={() => (modifyDialog = null)}
   />
