@@ -725,6 +725,65 @@ impl RasterImage {
         Some(Self::from_level0_tiles(self.size(), format, tiles))
     }
 
+    /// This image placed `offset` whole tiles (columns, rows) from the top-left corner of a
+    /// larger image of `size`, which is filled around it with zeros (transparent, or a gray mask
+    /// hiding): what a layer grows to when painted beyond its bounds (ADR 0027). Its tiles are
+    /// shared, except the edge tiles that were padded; `None` when it does not fit in `size`.
+    pub fn grown(&self, offset: (u32, u32), size: Size) -> Option<Result<Self, RasterError>> {
+        let t = TILE_SIZE;
+        let old = &self.levels[0];
+        let (ox, oy) = (
+            u64::from(offset.0) * u64::from(t),
+            u64::from(offset.1) * u64::from(t),
+        );
+        if ox + u64::from(old.size.width) > u64::from(size.width)
+            || oy + u64::from(old.size.height) > u64::from(size.height)
+        {
+            return None;
+        }
+        let stored = Codec::new(self.stored_format());
+        let bpp = stored.bytes_per_pixel;
+        let mut zero = vec![0u8; bpp];
+        stored.write([0.0; 3], 0.0, &mut zero);
+        let empty: Arc<[u8]> = Arc::from(zero.repeat((t * t) as usize));
+        let grid = tile_grid(size);
+        let mut tiles = Vec::with_capacity(grid.tile_count() as usize);
+        for row in 0..grid.rows() {
+            for col in 0..grid.columns() {
+                let inside = col >= offset.0 && row >= offset.1;
+                let coord = TileCoord {
+                    col: col.wrapping_sub(offset.0),
+                    row: row.wrapping_sub(offset.1),
+                };
+                let Some(tile) = old.tile(coord).filter(|_| inside) else {
+                    tiles.push(Arc::clone(&empty));
+                    continue;
+                };
+                let valid = |extent: u32, at: u32| (extent - at * t).min(t) as usize;
+                let (width, height) = (
+                    valid(old.size.width, coord.col),
+                    valid(old.size.height, coord.row),
+                );
+                if width == t as usize && height == t as usize {
+                    tiles.push(Arc::clone(tile));
+                    continue;
+                }
+                // An edge tile: its padding becomes zeros, then the new edge is padded.
+                let mut copy = tile.to_vec();
+                for (i, px) in copy.chunks_exact_mut(bpp).enumerate() {
+                    if i % t as usize >= width || i / t as usize >= height {
+                        px.copy_from_slice(&zero);
+                    }
+                }
+                let new_width = valid(size.width, col);
+                let new_height = valid(size.height, row);
+                pad_tile(&mut copy, new_width, new_height, bpp);
+                tiles.push(Arc::from(copy));
+            }
+        }
+        Some(Self::from_level0_tiles(size, self.format, tiles))
+    }
+
     /// Pyramid levels, finest first. Never empty.
     pub fn levels(&self) -> &[RasterLevel] {
         &self.levels
@@ -1006,6 +1065,19 @@ impl Codec {
         }
     }
 
+    /// Multiply the alpha of pixel `px` by `factor` (in `[0, 1]`), its color samples untouched;
+    /// `false` (nothing changed) where colors depend on alpha: premultiplied samples, or no
+    /// alpha sample.
+    pub(crate) fn scale_alpha(&self, px: &mut [u8], factor: f32) -> bool {
+        if !self.has_alpha || self.premultiplied {
+            return false;
+        }
+        let channel = self.channels - 1;
+        let alpha = self.unit(self.raw(px, channel, &mut |v| v));
+        self.put(alpha * factor.clamp(0.0, 1.0), channel, px);
+        true
+    }
+
     /// Bytes of a fully opaque alpha sample.
     fn opaque(&self) -> Vec<u8> {
         match self.sample {
@@ -1013,6 +1085,30 @@ impl Codec {
             SampleType::U16 => 65535u16.to_ne_bytes().to_vec(),
             SampleType::F16 => f32_to_f16(1.0).to_ne_bytes().to_vec(),
             SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+        }
+    }
+}
+
+/// Fill the padding of a tile whose `width` × `height` first pixels are valid: each row repeats
+/// its last valid pixel, then the rows below repeat the last valid row (as tiles are padded).
+pub(crate) fn pad_tile(tile: &mut [u8], width: usize, height: usize, bpp: usize) {
+    let t = TILE_SIZE as usize;
+    let row_bytes = t * bpp;
+    if width < t {
+        for y in 0..height {
+            let row = &mut tile[y * row_bytes..(y + 1) * row_bytes];
+            let (valid, padding) = row.split_at_mut(width * bpp);
+            let last = &valid[(width - 1) * bpp..];
+            for px in padding.chunks_exact_mut(bpp) {
+                px.copy_from_slice(last);
+            }
+        }
+    }
+    if height < t {
+        let (valid, padding) = tile.split_at_mut(height * row_bytes);
+        let last = &valid[(height - 1) * row_bytes..];
+        for row in padding.chunks_exact_mut(row_bytes) {
+            row.copy_from_slice(last);
         }
     }
 }
