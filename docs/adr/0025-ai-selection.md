@@ -73,6 +73,16 @@ TensorRT-RTX on demand on NVIDIA, else DirectML; models downloaded on first use.
    | Select > Subject | one command | BiRefNet | — |
    | Refine Edge (option of every tool, and a command for any selection) | — | ViTMatte-S | SAM2Matting, ZIM (non-commercial) |
 
+   > **Amended 2026-10-02 (maintainer, on a comparison on their hair photo):** Select > Subject
+   > keeps BiRefNet's probabilities as the selection's coverage instead of cutting them at one
+   > half: its thin strands (seen with little confidence) were lost there, not by the model.
+   > Refine Edge decides a band narrow inside the coarse mask and wide outside it (a sixteenth
+   > of the region's side, at most 256 px), plus every partly covered pixel: the symmetric band
+   > of a model cell and a half (8 px on a 1 MP photo) could only polish the coarse outline.
+   > **ViTMatte-B** (Apache-2.0, 387 MB, about twice ViTMatte-S's time) on a GPU; ViTMatte-S
+   > stays on the CPU. BiRefNet_HR-matting (MIT, 2048²) was the sharpest on hair; it has no
+   > official ONNX export and its VRAM at 2048² under DirectML is unmeasured: to decide.
+
    SAM 2.1 size by hardware: base+ on a GPU, tiny on the CPU.
 
    > **Amended 2026-10-02 (maintainer):** no semantic selection (Select > Semantic… with SAM

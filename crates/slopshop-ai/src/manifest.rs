@@ -34,6 +34,13 @@ const VITMATTE: License = License {
     accept: false,
 };
 
+const VITMATTE_BASE: License = License {
+    name: "Apache-2.0",
+    url: "https://huggingface.co/hustvl/vitmatte-base-composition-1k",
+    commercial: true,
+    accept: false,
+};
+
 /// Every component, by id.
 pub const COMPONENTS: &[Component] = &[
     Component {
@@ -258,6 +265,17 @@ pub const COMPONENTS: &[Component] = &[
             source: Source::File,
             size: 103885865,
             sha256: "bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225",
+        }],
+    },
+    Component {
+        id: "vitmatte-base",
+        licenses: &[VITMATTE_BASE],
+        files: &[Download {
+            path: "models/Xenova/vitmatte-base-composition-1k/onnx/model.onnx",
+            url: "https://huggingface.co/Xenova/vitmatte-base-composition-1k/resolve/1290b014b994e95ca1b9dd9c5f72c3b6d5b7236a/onnx/model.onnx",
+            source: Source::File,
+            size: 387371620,
+            sha256: "f6978437f5068849bcbf49b1f4e37b90aaca5155744e9fde4e6c689f70c2b9ee",
         }],
     },
 ];

@@ -545,6 +545,7 @@ const en = {
   "ai.component.birefnetLite": "BiRefNet lite: select the subject",
   "ai.component.samBasePlus": "SAM 2.1 base+: object selection",
   "ai.component.vitmatte": "ViTMatte-S: edges at full resolution (hair, fur)",
+  "ai.component.vitmatteBase": "ViTMatte-B: edges at full resolution (hair, fur)",
   "ai.component.birefnet": "BiRefNet: select the subject",
   "ai.error.start": "The AI engine could not start: {detail}",
   "ai.error.model": "The AI model failed: {detail}",

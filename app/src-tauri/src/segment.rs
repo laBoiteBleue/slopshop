@@ -262,6 +262,8 @@ impl Session {
 impl Session {
     /// The model's mask (`logits` over `region`) as a selection, its edge refined at full
     /// resolution by ViTMatte when `refine` is set, combined with `current` by `combine`.
+    /// `soft`: the mask keeps the model's probabilities (BiRefNet's thin strands) instead of
+    /// being cut at one half (SAM's masks).
     #[allow(clippy::too_many_arguments)]
     fn selection(
         &mut self,
@@ -274,24 +276,33 @@ impl Session {
         current: Option<&RasterImage>,
         combine: Combine,
         refine: bool,
+        soft: bool,
     ) -> Result<Option<RasterImage>, AiFailure> {
         // The model's square mask: SAM's 256², BiRefNet's 1024².
         let side = (logits.len() as f64).sqrt() as usize;
         let canvas = doc.size();
-        if !refine {
-            return core_selection::select_logits(canvas, current, logits, side, region, combine)
-                .map_err(internal);
-        }
-        let Some(mask) =
-            core_selection::select_logits(canvas, None, logits, side, region, Combine::Replace)
-                .map_err(internal)?
-        else {
-            return core_selection::select_logits(canvas, current, logits, side, region, combine)
-                .map_err(internal);
+        let select = |current: Option<&RasterImage>, combine: Combine| {
+            if soft {
+                core_selection::select_logits_soft(canvas, current, logits, side, region, combine)
+            } else {
+                core_selection::select_logits(canvas, current, logits, side, region, combine)
+            }
+            .map_err(internal)
         };
-        // The band to decide: a model cell and a half on each side of the coarse outline.
-        let cell = f64::from(region.width.max(region.height)) / side as f64;
-        let band = (cell * 1.5).clamp(8.0, 256.0) as u32;
+        if !refine {
+            return select(current, combine);
+        }
+        let Some(mask) = select(None, Combine::Replace)? else {
+            return select(current, combine);
+        };
+        // The band to decide: narrow inside the coarse mask, wide outside it, where hair and
+        // fur reach (a sixteenth of the region's longest side); at least two model cells.
+        let longest = f64::from(region.width.max(region.height));
+        let cell = longest / side as f64;
+        let band = core_selection::RefineBand {
+            inward: (cell * 2.0).clamp(16.0, 64.0) as u32,
+            outward: (longest / 16.0).max(cell * 2.0).clamp(16.0, 256.0) as u32,
+        };
         let mut plan =
             core_selection::plan_refinement(canvas, &mask, band, MATTE_SIDE, MAX_MATTE_WINDOWS)
                 .map_err(internal)?;
@@ -426,6 +437,7 @@ pub(crate) async fn ai_object_select(
             current.as_deref(),
             combine,
             request.refine,
+            false,
         )?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: the encoded image stays valid for the next hover.
@@ -461,7 +473,7 @@ pub(crate) async fn ai_refine_selection(
         let mut plan = core_selection::plan_refinement(
             doc.size(),
             &current,
-            radius,
+            core_selection::RefineBand::both(radius),
             MATTE_SIDE,
             MAX_MATTE_WINDOWS,
         )
@@ -540,6 +552,7 @@ pub(crate) async fn ai_select_subject(
             current.as_deref(),
             combine,
             refine,
+            true,
         )?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: an image encoded from this revision stays valid.

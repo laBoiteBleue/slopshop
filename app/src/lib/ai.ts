@@ -15,6 +15,7 @@ const NAMES: Record<string, MessageKey> = {
   "birefnet-lite": "ai.component.birefnetLite",
   "sam2.1-base-plus": "ai.component.samBasePlus",
   "vitmatte-small": "ai.component.vitmatte",
+  "vitmatte-base": "ai.component.vitmatteBase",
   birefnet: "ai.component.birefnet",
 };
 

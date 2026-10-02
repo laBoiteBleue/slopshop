@@ -70,7 +70,13 @@ impl Runtime {
             Feature::Segmentation => sam,
             Feature::Subject => birefnet,
         };
-        [runtime, model, "vitmatte-small"]
+        // Refine Edge: ViTMatte-B on a GPU; the small model on the CPU, where the base one
+        // takes about 2 s a window.
+        let matte = match self {
+            Self::Cpu => "vitmatte-small",
+            _ => "vitmatte-base",
+        };
+        [runtime, model, matte]
     }
 }
 
