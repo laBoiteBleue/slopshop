@@ -371,10 +371,21 @@
   /** The Magic Wand's options (Photoshop's defaults). */
   let wand = $state({ tolerance: 32, contiguous: true, sampleAll: false });
 
+  /** Document point (`x`, `y`) is outside the canvas of `doc`. */
+  function outsideCanvas(doc: DocumentView, x: number, y: number): boolean {
+    return x < 0 || y < 0 || x >= doc.width || y >= doc.height;
+  }
+
   function magicWand(x: number, y: number, mode: SelectionMode | null) {
     const doc = active;
     if (!doc) return;
     commitTransform();
+    // A click outside the image deselects, as with the other selection tools; with keys
+    // (adding, subtracting), it does nothing.
+    if (outsideCanvas(doc, x, y)) {
+      if (mode === null && doc.selectionKey != null) selectionCommand(engine.deselect);
+      return;
+    }
     // The active layer, unless every layer is sampled (or none is active).
     const layer = wand.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
     void sync(
@@ -518,6 +529,11 @@
     if (!doc) return;
     commitTransform();
     quickSession = null;
+    // A click outside the image deselects (with keys, it does nothing).
+    if (point && outsideCanvas(doc, point[0], point[1])) {
+      if (keyMode === null && doc.selectionKey != null) selectionCommand(engine.deselect);
+      return;
+    }
     const request = {
       point,
       box,
@@ -1654,6 +1670,24 @@
     ];
   });
 
+  /** The right-click menu of the layers panel's empty area: what adds layers. */
+  let emptyLayersContextMenu = $derived.by((): MenuItem[] => {
+    const doc = active;
+    return [
+      command(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
+      layerCommands.newGroup,
+      { kind: "separator" },
+      command(t("menu.edit.paste"), () => void paste(false), keys("mod", "V")),
+      { kind: "separator" },
+      command(
+        t("menu.select.allLayers"),
+        () => layersPanel?.selectAllLayers(),
+        keys("alt", "mod", "A"),
+        !doc || doc.layers.length === 0,
+      ),
+    ];
+  });
+
   let menus = $derived.by((): Menu[] => {
     const doc = active;
     const busy = doc !== null && saving.includes(doc.id);
@@ -2422,6 +2456,7 @@
             onlive={live}
             ongestureend={endGesture}
             contextMenu={layerContextMenu}
+            emptyContextMenu={emptyLayersContextMenu}
             onlayerdrag={onLayerDrag}
           />
         {/key}

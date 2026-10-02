@@ -1,6 +1,6 @@
 <script lang="ts">
   // The Magic Wand (W, ADR 0024): a click selects the pixels of a color similar to the clicked
-  // one (the options bar's tolerance), connected to it or not. As with the other selection tools,
+  // one (the options bar's tolerance), connected to it or not; outside the image, it deselects. As with the other selection tools,
   // Shift, Alt or both at the click add, subtract or intersect, shown by a badge by the pointer.
   import type { SelectionMode } from "./engine";
   import { MODE_BADGES, modeFromKeys } from "./selection";
@@ -14,7 +14,10 @@
     mapping: ViewMapping;
     /** The options bar's mode, which keys override. */
     mode: SelectionMode;
-    /** A click on document pixel (`x`, `y`); `mode`: the one the keys asked for, or null. */
+    /**
+     * A click on document pixel (`x`, `y`), possibly outside the canvas; `mode`: the one the
+     * keys asked for, or null.
+     */
     onpick: (x: number, y: number, mode: SelectionMode | null) => void;
   } = $props();
 
@@ -32,7 +35,6 @@
     e.preventDefault();
     if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
     const [x, y] = mapping.toDocument(e.clientX, e.clientY);
-    if (x < 0 || y < 0) return;
     onpick(Math.floor(x), Math.floor(y), modeFromKeys(e));
   }
 </script>
