@@ -137,6 +137,32 @@ fn sam_selects_the_clicked_shape() {
         );
         assert!(logits[side * 10 + 10] < 0.0, "a corner");
     }
+    // SAM 3: "circle" names the disc.
+    if Path::new(&models)
+        .join("wkentaro/sam3-onnx-models-v0.3.0/sam3_decoder.onnx")
+        .is_file()
+    {
+        let start = std::time::Instant::now();
+        let (count, probabilities) = client
+            .semantic(9, w as u32, h as u32, rgb_again.clone(), "yellow circle")
+            .expect("SAM 3 finds it");
+        eprintln!(
+            "semantic (with loading): {:?}, {count} instance(s)",
+            start.elapsed()
+        );
+        let side = slopshop_ai::SEMANTIC_SIDE;
+        assert!(count >= 1);
+        assert!(
+            probabilities[side / 2 * side + side / 2] > 0.5,
+            "the disc's center"
+        );
+        assert!(probabilities[side * 5 + 5] < 0.5, "a corner");
+        let start = std::time::Instant::now();
+        client
+            .semantic(9, w as u32, h as u32, rgb_again.clone(), "background")
+            .expect("SAM 3 again, same image");
+        eprintln!("semantic, image already encoded: {:?}", start.elapsed());
+    }
     // Another key than the encoded image's is refused.
     assert!(client.sam_decode(2, vec![click], None).is_err());
 }

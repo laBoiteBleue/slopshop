@@ -7,6 +7,7 @@
 //! an operation code; a response with a status (0: done, 1: failed, then a UTF-8 message).
 //! Images and masks travel as raw samples, never as text.
 
+pub mod clip;
 #[cfg(feature = "install")]
 pub mod install;
 #[cfg(feature = "install")]
@@ -33,6 +34,12 @@ pub const MAX_MATTE_SIDE: u32 = 2048;
 
 /// Side of the masks Select Subject returns (BiRefNet's output).
 pub const SUBJECT_SIDE: usize = 1024;
+
+/// Side of the masks semantic selection returns (SAM 3's output).
+pub const SEMANTIC_SIDE: usize = 288;
+
+/// Longest text a semantic selection takes, in bytes.
+pub const MAX_TEXT: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -68,6 +75,15 @@ pub enum Request {
         height: u32,
         rgb: Vec<u8>,
     },
+    /// What `text` names in an image (8-bit RGB, at most [`MAX_IMAGE_SIDE`]), every instance:
+    /// SAM 3. An image already seen under `key` is not encoded again.
+    Semantic {
+        key: u64,
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+        text: String,
+    },
     /// Stop.
     Quit,
 }
@@ -98,6 +114,12 @@ pub enum Response {
     Alpha(Vec<u16>),
     /// The subject: [`SUBJECT_SIDE`]² logits over the whole image (positive: inside).
     SubjectMask(Vec<f32>),
+    /// What a text names: how many instances, and their union, [`SEMANTIC_SIDE`]²
+    /// probabilities over the whole image.
+    SemanticMask {
+        count: u32,
+        probabilities: Vec<f32>,
+    },
     Failed(String),
 }
 
@@ -137,12 +159,14 @@ const OP_SAM_DECODE: u8 = 3;
 const OP_QUIT: u8 = 4;
 const OP_MATTE: u8 = 5;
 const OP_SUBJECT: u8 = 6;
+const OP_SEMANTIC: u8 = 7;
 
 const RESPONSE_HELLO: u8 = 0x81;
 const RESPONSE_DONE: u8 = 0x82;
 const RESPONSE_SAM_MASK: u8 = 0x83;
 const RESPONSE_ALPHA: u8 = 0x84;
 const RESPONSE_SUBJECT_MASK: u8 = 0x85;
+const RESPONSE_SEMANTIC_MASK: u8 = 0x86;
 const RESPONSE_FAILED: u8 = 0xff;
 
 /// Reads little-endian fields from a frame.
@@ -241,6 +265,20 @@ impl Request {
                 out.extend_from_slice(&height.to_le_bytes());
                 out.extend_from_slice(rgb);
             }
+            Request::Semantic {
+                key,
+                width,
+                height,
+                rgb,
+                text,
+            } => {
+                out.push(OP_SEMANTIC);
+                out.extend_from_slice(&key.to_le_bytes());
+                out.extend_from_slice(&width.to_le_bytes());
+                out.extend_from_slice(&height.to_le_bytes());
+                out.extend_from_slice(rgb);
+                out.extend_from_slice(text.as_bytes());
+            }
             Request::Quit => out.push(OP_QUIT),
         }
         out
@@ -308,6 +346,27 @@ impl Request {
                 let rgb = f.take(width as usize * height as usize * 3)?.to_vec();
                 Request::Subject { width, height, rgb }
             }
+            OP_SEMANTIC => {
+                let key = f.u64()?;
+                let (width, height) = (f.u32()?, f.u32()?);
+                if width == 0 || height == 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
+                    return Err(ProtocolError::Malformed("image size"));
+                }
+                let rgb = f.take(width as usize * height as usize * 3)?.to_vec();
+                let text = f.take(f.0.len())?;
+                if text.len() > MAX_TEXT {
+                    return Err(ProtocolError::Malformed("text length"));
+                }
+                let text = String::from_utf8(text.to_vec())
+                    .map_err(|_| ProtocolError::Malformed("text"))?;
+                Request::Semantic {
+                    key,
+                    width,
+                    height,
+                    rgb,
+                    text,
+                }
+            }
             OP_QUIT => Request::Quit,
             _ => return Err(ProtocolError::Malformed("operation")),
         };
@@ -342,6 +401,16 @@ impl Response {
             Response::SubjectMask(logits) => {
                 out.push(RESPONSE_SUBJECT_MASK);
                 for v in logits {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            Response::SemanticMask {
+                count,
+                probabilities,
+            } => {
+                out.push(RESPONSE_SEMANTIC_MASK);
+                out.extend_from_slice(&count.to_le_bytes());
+                for v in probabilities {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
             }
@@ -391,6 +460,16 @@ impl Response {
                     .map(|_| f.f32())
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            RESPONSE_SEMANTIC_MASK => {
+                let count = f.u32()?;
+                let probabilities = (0..SEMANTIC_SIDE * SEMANTIC_SIDE)
+                    .map(|_| f.f32())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Response::SemanticMask {
+                    count,
+                    probabilities,
+                }
+            }
             RESPONSE_FAILED => Response::Failed(text(f.take(f.0.len())?)),
             _ => return Err(ProtocolError::Malformed("response")),
         };
@@ -534,6 +613,32 @@ impl Client {
         }
     }
 
+    /// SAM 3's mask of what `text` names in an RGB image (every instance): how many, and
+    /// their union as [`SEMANTIC_SIDE`]² probabilities.
+    pub fn semantic(
+        &mut self,
+        key: u64,
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+        text: &str,
+    ) -> Result<(u32, Vec<f32>), ProtocolError> {
+        let request = Request::Semantic {
+            key,
+            width,
+            height,
+            rgb,
+            text: text.to_owned(),
+        };
+        match self.call(&request)? {
+            Response::SemanticMask {
+                count,
+                probabilities,
+            } => Ok((count, probabilities)),
+            _ => Err(ProtocolError::Unexpected),
+        }
+    }
+
     /// BiRefNet's mask of an RGB image's main subject: [`SUBJECT_SIDE`]² logits.
     pub fn subject(
         &mut self,
@@ -642,6 +747,13 @@ mod tests {
                 height: 1,
                 rgb: vec![9, 8, 7],
             },
+            Request::Semantic {
+                key: 3,
+                width: 1,
+                height: 1,
+                rgb: vec![1, 2, 3],
+                text: "red car".into(),
+            },
             Request::Quit,
         ];
         for request in requests {
@@ -663,6 +775,10 @@ mod tests {
             },
             Response::Alpha(vec![0, 32768, u16::MAX]),
             Response::SubjectMask((0..SUBJECT_SIDE * SUBJECT_SIDE).map(|i| i as f32).collect()),
+            Response::SemanticMask {
+                count: 2,
+                probabilities: vec![0.25; SEMANTIC_SIDE * SEMANTIC_SIDE],
+            },
             Response::Failed("no model".into()),
         ];
         for response in responses {

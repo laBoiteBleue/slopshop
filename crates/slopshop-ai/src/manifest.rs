@@ -33,6 +33,18 @@ const BIREFNET: License = License {
     commercial: true,
     accept: false,
 };
+const SAM3: License = License {
+    name: "SAM License",
+    url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/blob/main/LICENSE",
+    commercial: true,
+    accept: true,
+};
+const CLIP: License = License {
+    name: "MIT",
+    url: "https://github.com/openai/CLIP/blob/main/LICENSE",
+    commercial: true,
+    accept: false,
+};
 const VITMATTE: License = License {
     name: "Apache-2.0",
     url: "https://huggingface.co/hustvl/vitmatte-small-composition-1k",
@@ -322,5 +334,60 @@ pub const COMPONENTS: &[Component] = &[
             size: 114538221,
             sha256: "d39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402",
         }],
+    },
+    Component {
+        id: "sam3",
+        licenses: &[SAM3, CLIP],
+        files: &[
+            Download {
+                path: "models/wkentaro/sam3-onnx-models-v0.3.0/LICENSE",
+                url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/resolve/895f3980b24a88249898cbe5a44571b15dec2a7f/LICENSE",
+                source: Source::File,
+                size: 7353,
+                sha256: "4dea99bfaa016e21bc860d73f344236bd1e5c4977d1a9a8fd32f822b500ae1be",
+            },
+            Download {
+                path: "models/wkentaro/sam3-onnx-models-v0.3.0/sam3_image_encoder.onnx",
+                url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/resolve/895f3980b24a88249898cbe5a44571b15dec2a7f/sam3_image_encoder.onnx",
+                source: Source::File,
+                size: 2505504,
+                sha256: "c6f3769e9d42573806c34b663d6100b3827a4c0ecba6f45dbf39b8f3906be725",
+            },
+            Download {
+                path: "models/wkentaro/sam3-onnx-models-v0.3.0/sam3_image_encoder.onnx.data",
+                url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/resolve/895f3980b24a88249898cbe5a44571b15dec2a7f/sam3_image_encoder.onnx.data",
+                source: Source::File,
+                size: 1828519936,
+                sha256: "03bd50b0703e2b04e2193ca831b7f9d5ecf40bc5287cc59b1970f56ab800c995",
+            },
+            Download {
+                path: "models/wkentaro/sam3-onnx-models-v0.3.0/sam3_language_encoder.onnx",
+                url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/resolve/895f3980b24a88249898cbe5a44571b15dec2a7f/sam3_language_encoder.onnx",
+                source: Source::File,
+                size: 1394799,
+                sha256: "b3b465935c9bf4cf5efd950589741f3da5eec9e9bfe459576989cbe565331b53",
+            },
+            Download {
+                path: "models/wkentaro/sam3-onnx-models-v0.3.0/sam3_language_encoder.onnx.data",
+                url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/resolve/895f3980b24a88249898cbe5a44571b15dec2a7f/sam3_language_encoder.onnx.data",
+                source: Source::File,
+                size: 1615200256,
+                sha256: "1b03dabc657c1f2887d1b8ce2a3537467d4c033ea1f8c8be141fbca55e4b95f7",
+            },
+            Download {
+                path: "models/wkentaro/sam3-onnx-models-v0.3.0/sam3_decoder.onnx",
+                url: "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/resolve/895f3980b24a88249898cbe5a44571b15dec2a7f/sam3_decoder.onnx",
+                source: Source::File,
+                size: 129855861,
+                sha256: "bbc216dbf3de4742f692c2a0a0fd215ea8957956002a05f28150040a88b5dc1a",
+            },
+            Download {
+                path: "models/openai/CLIP/bpe_simple_vocab_16e6.txt.gz",
+                url: "https://raw.githubusercontent.com/openai/CLIP/d05afc436d78f1c48dc0dbf8e5980a9d471f35f6/clip/bpe_simple_vocab_16e6.txt.gz",
+                source: Source::File,
+                size: 1356917,
+                sha256: "924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a",
+            },
+        ],
     },
 ];

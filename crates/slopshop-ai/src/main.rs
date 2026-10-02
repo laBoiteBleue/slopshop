@@ -11,7 +11,8 @@ use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 use slopshop_ai::{
-    MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SUBJECT_SIDE, read_frame, write_frame,
+    MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SEMANTIC_SIDE, SUBJECT_SIDE, read_frame,
+    write_frame,
 };
 
 /// SAM 2.1's input side.
@@ -22,6 +23,12 @@ const SAM_CPU: &str = "onnx-community/sam2.1-hiera-tiny-ONNX/onnx";
 /// BiRefNet, by size: the full model on a GPU, the lite one on the CPU (in the models folder).
 const BIREFNET_GPU: &str = "onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx";
 const BIREFNET_CPU: &str = "onnx-community/BiRefNet_lite-ONNX/onnx/model_fp16.onnx";
+/// SAM 3 (Kentaro Wada's ONNX export) and CLIP's merges for its text, in the models folder.
+const SAM3: &str = "wkentaro/sam3-onnx-models-v0.3.0";
+const CLIP_MERGES: &str = "openai/CLIP/bpe_simple_vocab_16e6.txt.gz";
+/// SAM 3's input side and text length.
+const SAM3_SIDE: usize = 1008;
+const SAM3_TEXT: usize = 32;
 /// ViTMatte-S, in the models folder.
 const VITMATTE: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
 
@@ -68,8 +75,13 @@ fn session(path: &std::path::Path, provider: &str) -> Result<Session, String> {
         let builder =
             Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
         let mut builder = match provider {
-            "cuda" => builder
-                .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])?,
+            // The memory arena grows by what is asked, not by powers of two: SAM 3 alone takes
+            // most of a 16 GB card, and an arena doubled past the card spills into system
+            // memory (Windows' fallback), which made each SAM 3 prompt take seconds.
+            "cuda" => builder.with_execution_providers([ort::ep::CUDA::default()
+                .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
+                .build()
+                .error_on_failure()])?,
             // DirectML's requirements (ONNX Runtime's documentation).
             "directml" => builder
                 .with_memory_pattern(false)?
@@ -260,6 +272,152 @@ impl Subject {
     }
 }
 
+/// SAM 3: every instance of what a text names (semantic selection).
+struct Sam3 {
+    image_encoder: Session,
+    text_encoder: Session,
+    decoder: Session,
+    tokenizer: slopshop_ai::clip::ClipTokenizer,
+    /// The last image's key and the encoder outputs the decoder reads.
+    image: Option<(u64, [Tensor<f32>; 4])>,
+}
+
+impl Sam3 {
+    /// SAM 3 on the first provider of `choices` that runs it.
+    fn load(models: &std::path::Path, choices: &[&'static str]) -> Result<Self, String> {
+        let merges = std::fs::File::open(models.join(CLIP_MERGES)).map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(merges), &mut text)
+            .map_err(|e| e.to_string())?;
+        let tokenizer = slopshop_ai::clip::ClipTokenizer::from_merges(&text)?;
+        let dir = models.join(SAM3);
+        let mut errors = Vec::new();
+        for &provider in choices {
+            let sessions = (|| {
+                Ok::<_, String>((
+                    session(&dir.join("sam3_image_encoder.onnx"), provider)?,
+                    session(&dir.join("sam3_language_encoder.onnx"), provider)?,
+                    session(&dir.join("sam3_decoder.onnx"), provider)?,
+                ))
+            })();
+            match sessions {
+                Ok((image_encoder, text_encoder, decoder)) => {
+                    eprintln!("slopshop-ai: SAM 3 on {provider}");
+                    return Ok(Sam3 {
+                        image_encoder,
+                        text_encoder,
+                        decoder,
+                        tokenizer,
+                        image: None,
+                    });
+                }
+                Err(e) => errors.push(format!("{provider}: {e}")),
+            }
+        }
+        Err(format!("SAM 3 could not start: {}", errors.join("; ")))
+    }
+
+    /// What `text` names: how many instances, and their union (probabilities, 288²).
+    fn run(
+        &mut self,
+        key: u64,
+        width: u32,
+        height: u32,
+        rgb: &[u8],
+        text: &str,
+    ) -> Result<(u32, Vec<f32>), String> {
+        let err = |e: ort::Error| e.to_string();
+        if self.image.as_ref().map(|(k, _)| *k) != Some(key) {
+            // The image stretched to 1008² (bilinear), 8-bit, planar; the graph normalizes.
+            let (w, h) = (width as usize, height as usize);
+            let plane = SAM3_SIDE * SAM3_SIDE;
+            let mut pixels = vec![0u8; 3 * plane];
+            let (sx, sy) = (w as f32 / SAM3_SIDE as f32, h as f32 / SAM3_SIDE as f32);
+            for y in 0..SAM3_SIDE {
+                let fy = ((y as f32 + 0.5) * sy - 0.5).clamp(0.0, (h - 1) as f32);
+                let (y0, ty) = (fy.floor() as usize, fy.fract());
+                let y1 = (y0 + 1).min(h - 1);
+                for x in 0..SAM3_SIDE {
+                    let fx = ((x as f32 + 0.5) * sx - 0.5).clamp(0.0, (w - 1) as f32);
+                    let (x0, tx) = (fx.floor() as usize, fx.fract());
+                    let x1 = (x0 + 1).min(w - 1);
+                    for c in 0..3 {
+                        let at = |x: usize, y: usize| f32::from(rgb[(y * w + x) * 3 + c]);
+                        let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
+                        let bottom = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
+                        pixels[c * plane + y * SAM3_SIDE + x] =
+                            (top * (1.0 - ty) + bottom * ty).round() as u8;
+                    }
+                }
+            }
+            let input =
+                Tensor::from_array(([3usize, SAM3_SIDE, SAM3_SIDE], pixels)).map_err(err)?;
+            let outputs = self
+                .image_encoder
+                .run(ort::inputs!["image" => input])
+                .map_err(err)?;
+            let take = |name: &str| -> Result<Tensor<f32>, String> {
+                let (shape, data) = outputs[name]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| e.to_string())?;
+                let dims: Vec<usize> = shape.iter().map(|&d| d.max(0) as usize).collect();
+                Tensor::from_array((dims, data.to_vec())).map_err(|e| e.to_string())
+            };
+            let encoded = [
+                take("vision_pos_enc_2")?,
+                take("backbone_fpn_0")?,
+                take("backbone_fpn_1")?,
+                take("backbone_fpn_2")?,
+            ];
+            self.image = Some((key, encoded));
+        }
+        let tokens = self.tokenizer.tokens(text, SAM3_TEXT);
+        let tokens = Tensor::from_array(([1usize, SAM3_TEXT], tokens)).map_err(err)?;
+        let language = self
+            .text_encoder
+            .run(ort::inputs!["tokens" => tokens])
+            .map_err(err)?;
+        let (_, mask) = language["text_attention_mask"]
+            .try_extract_tensor::<bool>()
+            .map_err(err)?;
+        let language_mask =
+            Tensor::from_array(([1usize, SAM3_TEXT], mask.to_vec())).map_err(err)?;
+        let (shape, features) = language["text_memory"]
+            .try_extract_tensor::<f32>()
+            .map_err(err)?;
+        let dims: Vec<usize> = shape.iter().map(|&d| d.max(0) as usize).collect();
+        let language_features = Tensor::from_array((dims, features.to_vec())).map_err(err)?;
+        let Some((_, image)) = &self.image else {
+            return Err("no image encoded".into());
+        };
+        // Text only: the box prompt is masked out.
+        let outputs = self
+            .decoder
+            .run(ort::inputs![
+                "vision_pos_enc_2" => image[0].view(),
+                "backbone_fpn_0" => image[1].view(),
+                "backbone_fpn_1" => image[2].view(),
+                "backbone_fpn_2" => image[3].view(),
+                "language_mask" => language_mask,
+                "language_features" => language_features,
+                "box_coords" => Tensor::from_array(([1usize, 1, 4], vec![0f32; 4])).map_err(err)?,
+                "box_labels" => Tensor::from_array(([1usize, 1], vec![1i64])).map_err(err)?,
+                "box_masks" => Tensor::from_array(([1usize, 1], vec![true])).map_err(err)?,
+            ])
+            .map_err(err)?;
+        let (_, masks) = outputs["masks"].try_extract_tensor::<f32>().map_err(err)?;
+        let plane = SEMANTIC_SIDE * SEMANTIC_SIDE;
+        let count = masks.len() / plane;
+        let mut union = vec![0f32; plane];
+        for instance in masks.chunks_exact(plane) {
+            for (u, &p) in union.iter_mut().zip(instance) {
+                *u = u.max(p);
+            }
+        }
+        Ok((count as u32, union))
+    }
+}
+
 /// ViTMatte-S: mattes an image guided by a trimap (Refine Edge).
 struct Matte {
     session: Session,
@@ -379,6 +537,7 @@ fn main() {
     let mut sam: Option<Sam> = None;
     let mut matte: Option<Matte> = None;
     let mut subject: Option<Subject> = None;
+    let mut sam3: Option<Sam3> = None;
     let mut provider = "none";
     let mut input = BufReader::new(io::stdin().lock());
     let mut output = BufWriter::new(io::stdout().lock());
@@ -435,10 +594,37 @@ fn main() {
             Ok(Request::Subject { width, height, rgb }) => {
                 let loaded = match subject.as_mut() {
                     Some(subject) => Ok(subject),
-                    None => Subject::load(&options.models, &choices).map(|s| subject.insert(s)),
+                    None => {
+                        // One large model in memory at a time.
+                        sam3 = None;
+                        Subject::load(&options.models, &choices).map(|s| subject.insert(s))
+                    }
                 };
                 match loaded.and_then(|s| s.run(width, height, &rgb)) {
                     Ok(logits) => Response::SubjectMask(logits),
+                    Err(e) => Response::Failed(e),
+                }
+            }
+            Ok(Request::Semantic {
+                key,
+                width,
+                height,
+                rgb,
+                text,
+            }) => {
+                let loaded = match sam3.as_mut() {
+                    Some(sam3) => Ok(sam3),
+                    None => {
+                        // One large model in memory at a time.
+                        subject = None;
+                        Sam3::load(&options.models, &choices).map(|s| sam3.insert(s))
+                    }
+                };
+                match loaded.and_then(|s| s.run(key, width, height, &rgb, &text)) {
+                    Ok((count, probabilities)) => Response::SemanticMask {
+                        count,
+                        probabilities,
+                    },
                     Err(e) => Response::Failed(e),
                 }
             }

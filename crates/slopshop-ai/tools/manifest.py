@@ -59,6 +59,15 @@ LICENSES = {
         True,
         False,
     ),
+    # Meta's SAM License: use and redistribution allowed (commercial too) with a copy of it;
+    # forbids some uses (military, weapons…). Not open source: accepted explicitly.
+    "sam3": (
+        "SAM License",
+        "https://huggingface.co/wkentaro/sam3-onnx-models-v0.3.0/blob/main/LICENSE",
+        True,
+        True,
+    ),
+    "clip": ("MIT", "https://github.com/openai/CLIP/blob/main/LICENSE", True, False),
     # The weights' card (hustvl, the authors) says Apache-2.0; Xenova's repository is their
     # ONNX export.
     "vitmatte": (
@@ -159,19 +168,27 @@ def wheel(package, version, names, folder, cache_dir):
     return archive_files(url, names, folder, cache_dir)
 
 
-def hugging_face(repo, revision, names, folder):
+def hugging_face(repo, revision, names, folder, tree_path="onnx"):
     tree = json.load(
-        request(f"https://huggingface.co/api/models/{repo}/tree/{revision}/onnx?expand=true")
+        request(
+            f"https://huggingface.co/api/models/{repo}/tree/{revision}/{tree_path}?expand=true"
+        )
     )
     by_path = {f["path"]: f for f in tree}
     files = []
     for name in names:
         f = by_path[name]
-        sha = (f.get("lfs") or {}).get("oid")
-        assert sha, f"{name} is not stored with LFS: no SHA-256 to pin"
         url = HF.format(repo=repo, revision=revision, path=name)
+        # Large files are stored with LFS, which gives their SHA-256; small ones are hashed here.
+        sha = (f.get("lfs") or {}).get("oid") or hashlib.sha256(request(url).read()).hexdigest()
         files.append((f"{folder}/{repo}/{name}", url, "Source::File", f["size"], sha))
     return files
+
+
+def plain_file(url, path):
+    """A file at an immutable address (a commit), hashed here."""
+    data = request(url).read()
+    return [(path, url, "Source::File", len(data), hashlib.sha256(data).hexdigest())]
 
 
 def component(id, licenses, files):
@@ -267,6 +284,27 @@ def main():
         ["onnx/model_fp16.onnx"],
         "models",
     )
+    print("SAM 3")
+    sam3 = hugging_face(
+        "wkentaro/sam3-onnx-models-v0.3.0",
+        "895f3980b24a88249898cbe5a44571b15dec2a7f",
+        [
+            "LICENSE",
+            "sam3_image_encoder.onnx",
+            "sam3_image_encoder.onnx.data",
+            "sam3_language_encoder.onnx",
+            "sam3_language_encoder.onnx.data",
+            "sam3_decoder.onnx",
+        ],
+        "models",
+        tree_path="",
+    )
+    # CLIP's merges, for SAM 3's text (OpenAI's repository at a commit).
+    sam3 += plain_file(
+        "https://raw.githubusercontent.com/openai/CLIP/"
+        "d05afc436d78f1c48dc0dbf8e5980a9d471f35f6/clip/bpe_simple_vocab_16e6.txt.gz",
+        "models/openai/CLIP/bpe_simple_vocab_16e6.txt.gz",
+    )
     print("ViTMatte-S")
     vitmatte = hugging_face(
         "Xenova/vitmatte-small-composition-1k",
@@ -282,6 +320,7 @@ def main():
         component("vitmatte-small", ["vitmatte"], vitmatte),
         component("birefnet", ["birefnet"], birefnet),
         component("birefnet-lite", ["birefnet"], birefnet_lite),
+        component("sam3", ["sam3", "clip"], sam3),
     ]
 
     out = [

@@ -16,7 +16,7 @@ required-features = ["helper"]
 [features]
 # The executable: ONNX Runtime, loaded at run time from a library the app downloads (never
 # linked, never shipped with the editor). The library side (protocol, client) needs nothing.
-helper = ["dep:ort"]
+helper = ["dep:ort", "dep:flate2"]
 # The installer of ONNX Runtime and the models (`install` module): HTTPS, SHA-256, inflate.
 install = ["dep:ureq", "dep:sha2", "dep:flate2"]
 
