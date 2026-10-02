@@ -12,7 +12,7 @@
     clip: "M8 4v9a3 3 0 0 0 3 3h7 M15 13l3 3-3 3",
     adjust: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18Z M12 3v18 M12 7h5 M12 11h7 M12 15h6",
     // Tools.
-    move: "M12 3v18 M3 12h18 M9 6l3-3 3 3 M9 18l3 3 3-3 M6 9l-3 3 3 3 M18 9l3 3-3 3",
+    pointer: "M6 3v15.5l4.2-4 2.9 6.5 2.7-1.2-2.9-6.4H18Z",
     crop: "M7 2v15h15 M2 7h15v15",
     marquee: "M4 4h3 M10 4h4 M17 4h3v3 M20 10v4 M20 17v3h-3 M14 20h-4 M7 20H4v-3 M4 14v-4 M4 7V4",
     ellipse:
