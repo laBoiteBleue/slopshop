@@ -84,13 +84,15 @@ fn session(path: &std::path::Path, provider: &str) -> Result<Session, String> {
         let builder =
             Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
         let mut builder = match provider {
-            // DirectML's requirements (ONNX Runtime's documentation).
-            // ML Program: Core ML 5's format, the one with the widest operator coverage; what Core
-            // ML cannot run falls back to the CPU.
+            // ML Program: Core ML 5's format, the one with the widest operator coverage. Core
+            // ML takes only the parts of a graph with fixed shapes (SAM's decoder has a varying
+            // number of points, which Core ML cannot compile): the rest runs on the CPU.
             "coreml" => builder.with_execution_providers([ort::ep::CoreML::default()
                 .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+                .with_static_input_shapes(true)
                 .build()
                 .error_on_failure()])?,
+            // DirectML's requirements (ONNX Runtime's documentation).
             "directml" => builder
                 .with_memory_pattern(false)?
                 .with_parallel_execution(false)?
@@ -101,7 +103,18 @@ fn session(path: &std::path::Path, provider: &str) -> Result<Session, String> {
         };
         builder.commit_from_file(path)
     }
-    build(path, provider).map_err(|e| format!("{}: {e}", path.display()))
+    match build(path, provider) {
+        Ok(session) => Ok(session),
+        // A model Core ML cannot compile still runs, on the CPU (the same model file).
+        Err(e) if provider == "coreml" => {
+            eprintln!(
+                "slopshop-ai: Core ML cannot run {}: {e}; on the CPU",
+                path.display()
+            );
+            build(path, "cpu").map_err(|e| format!("{}: {e}", path.display()))
+        }
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
 }
 
 /// SAM 2.1: its encoder, its prompt decoder, and the last image's embeddings.
