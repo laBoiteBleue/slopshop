@@ -100,8 +100,8 @@ const KEPT_FAILURES: usize = 8;
 /// files) before quitting anyway.
 const QUIT_EXPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Default size of a new blank document.
-const NEW_DOCUMENT_SIZE: Size = Size::new(6000, 4000);
+/// Largest side of a new document, in pixels: Photoshop's largest (PSB), as Image Size accepts.
+const NEW_DOCUMENT_MAX_SIDE: u32 = 300_000;
 
 /// An open document (one tab): content, history, identity and view.
 struct OpenDocument {
@@ -540,12 +540,38 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
     Session::new(doc)
 }
 
-/// A white canvas.
-fn blank_session() -> Session {
-    let white = LayerContent::Fill {
-        color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+/// A new document of `size`, as Photoshop's New dialog makes it: one layer named `layer_name`,
+/// filled with `background` (sRGB-encoded) or transparent. A fill layer whatever the size, or
+/// one shared transparent tile: nothing is allocated per pixel.
+fn blank_session(
+    size: Size,
+    background: Option<[f32; 3]>,
+    layer_name: &str,
+) -> Result<Session, String> {
+    let valid = |side: u32| (1..=NEW_DOCUMENT_MAX_SIDE).contains(&side);
+    if !valid(size.width) || !valid(size.height) {
+        return Err(format!(
+            "a new document is 1 to {NEW_DOCUMENT_MAX_SIDE} pixels a side, not {}×{}",
+            size.width, size.height
+        ));
+    }
+    let content = match background {
+        Some([r, g, b]) => LayerContent::Fill {
+            color: LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0),
+        },
+        None => {
+            let image = RasterImage::from_placed(
+                size,
+                PixelFormat::RGBA8_SRGB,
+                Rect::new(0, 0, 0, 0),
+                &[],
+                &[0, 0, 0, 0],
+            )
+            .map_err(|e| e.to_string())?;
+            LayerContent::raster(Arc::new(image))
+        }
     };
-    session_with_layer(NEW_DOCUMENT_SIZE, "Background", white)
+    Ok(session_with_layer(size, layer_name, content))
 }
 
 fn image_session(image: RasterImage, name: &str) -> Session {
@@ -1002,10 +1028,21 @@ async fn document(state: State<'_, AppState>, document_id: u64) -> Result<Docume
     Ok(state.documents()?.get_mut(document_id)?.view())
 }
 
-/// A new blank document in a new tab.
+/// A new blank document in a new tab (File > New): `width × height` pixels, one layer named
+/// `layer_name` (translated by the UI) filled with `background` (sRGB-encoded), or transparent
+/// without one. `name` names the tab; none keeps it untitled.
 #[tauri::command]
-async fn new_document(state: State<'_, AppState>) -> Result<DocumentView, String> {
-    state.add_document(blank_session(), None, Vec::new())
+async fn new_document(
+    state: State<'_, AppState>,
+    name: Option<String>,
+    width: u32,
+    height: u32,
+    background: Option<[f32; 3]>,
+    layer_name: String,
+) -> Result<DocumentView, String> {
+    let session = blank_session(Size::new(width, height), background, &layer_name)?;
+    let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
+    state.add_document(session, name, Vec::new())
 }
 
 #[tauri::command]
@@ -2154,6 +2191,12 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    /// A white 6000 × 4000 document, as File > New makes by default.
+    fn blank_session() -> Session {
+        super::blank_session(Size::new(6000, 4000), Some([1.0, 1.0, 1.0]), "Background")
+            .expect("a valid size")
+    }
+
     #[test]
     fn opens_insert_in_the_order_asked_whatever_order_they_end_in() {
         let order = InsertionOrder::default();
@@ -2724,9 +2767,34 @@ mod tests {
 
     #[test]
     fn blank_session_has_background_and_empty_history() {
-        let s = blank_session();
+        let size = Size::new(1920, 1080);
+        let s = super::blank_session(size, Some([1.0, 1.0, 1.0]), "Arrière-plan").unwrap();
+        assert_eq!(s.document().size(), size);
         assert_eq!(s.document().layers().len(), 1);
         assert!(!s.can_undo());
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[0].kind, "fill");
+        assert_eq!(view.layers[0].name, "Arrière-plan");
+    }
+
+    #[test]
+    fn a_transparent_blank_session_has_one_empty_raster_layer() {
+        let size = Size::new(300_000, 2);
+        let s = super::blank_session(size, None, "Layer 1").unwrap();
+        assert_eq!(s.document().size(), size);
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers.len(), 1);
+        assert_eq!(view.layers[0].kind, "raster");
+    }
+
+    #[test]
+    fn a_blank_session_is_1_to_300000_pixels_a_side() {
+        for size in [Size::new(0, 10), Size::new(10, 0), Size::new(300_001, 10)] {
+            assert!(
+                super::blank_session(size, None, "Layer 1").is_err(),
+                "{size:?}"
+            );
+        }
     }
 
     #[test]
