@@ -20,7 +20,7 @@ pub use region::{export_renderer, export_source};
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
@@ -1371,37 +1371,29 @@ impl Renderer {
     /// Make the planned tiles resident; returns their cache slots (row-major), `None` when the
     /// cache has no slot left for this frame.
     fn try_upload(&self, plan: &RasterPlan<'_>, cache: &mut TileCache) -> Option<Vec<u32>> {
-        let level = &plan.image.levels()[plan.level];
         let stored = plan.image.stored_format();
         plan.keys()
-            .map(|key| {
-                let coord = TileCoord {
-                    col: key.col,
-                    row: key.row,
-                };
-                match level.tile(coord) {
-                    Some(tile) => cache.ensure(&self.queue, key, || gpu_texels(tile, stored)),
-                    // Not stored: transparent.
-                    None => Some(NO_TILE),
+            .map(|key| match key {
+                Some(key) => {
+                    let tile = Arc::clone(&key.0);
+                    cache.ensure(&self.queue, key, || gpu_texels(&tile, stored))
                 }
+                // Not stored: transparent.
+                None => Some(NO_TILE),
             })
             .collect()
     }
 
     /// Make the planned tiles resident; returns their cache slots (row-major).
     fn upload(&self, plan: &RasterPlan<'_>, cache: &mut TileCache) -> Vec<u32> {
-        let level = &plan.image.levels()[plan.level];
         let stored = plan.image.stored_format();
         plan.keys()
             .map(|key| {
-                let coord = TileCoord {
-                    col: key.col,
-                    row: key.row,
-                };
-                level
-                    .tile(coord)
-                    .and_then(|tile| cache.ensure(&self.queue, key, || gpu_texels(tile, stored)))
-                    .unwrap_or(NO_TILE)
+                key.and_then(|key| {
+                    let tile = Arc::clone(&key.0);
+                    cache.ensure(&self.queue, key, || gpu_texels(&tile, stored))
+                })
+                .unwrap_or(NO_TILE)
             })
             .collect()
     }
@@ -1525,15 +1517,15 @@ impl<'a> RasterPlan<'a> {
         tile_range(visible, self.factor(), grid.columns(), grid.rows())
     }
 
-    fn keys(&self) -> impl Iterator<Item = TileKey> + '_ {
+    /// The visible tiles, row-major (`None` for one that is not stored).
+    fn keys(&self) -> impl Iterator<Item = Option<TileKey>> + '_ {
         let range = self.range();
-        let (image, level) = (self.image.id(), self.level as u32);
+        let level = &self.image.levels()[self.level];
         (range.y..range.y + range.height).flat_map(move |row| {
-            (range.x..range.x + range.width).map(move |col| TileKey {
-                image,
-                level,
-                col,
-                row,
+            (range.x..range.x + range.width).map(move |col| {
+                level
+                    .tile(TileCoord { col, row })
+                    .map(|tile| TileKey(Arc::clone(tile)))
             })
         })
     }
@@ -1548,7 +1540,7 @@ fn fit_tile_budget(plans: &mut [Option<RasterPlan<'_>>], capacity: [u32; 4]) {
         // coarsened at each step, not recounted.
         let mut readers: HashMap<TileKey, u32> = HashMap::new();
         for plan in plans.iter().flatten().filter(|p| p.format == format) {
-            for key in plan.keys() {
+            for key in plan.keys().flatten() {
                 *readers.entry(key).or_default() += 1;
             }
         }
@@ -1560,7 +1552,7 @@ fn fit_tile_budget(plans: &mut [Option<RasterPlan<'_>>], capacity: [u32; 4]) {
                 .max_by_key(|plan| plan.range().width * plan.range().height);
             // All at their coarsest level: the upload order decides what is left out.
             let Some(plan) = largest else { break };
-            for key in plan.keys() {
+            for key in plan.keys().flatten() {
                 if let Some(n) = readers.get_mut(&key) {
                     *n -= 1;
                     if *n == 0 {
@@ -1569,7 +1561,7 @@ fn fit_tile_budget(plans: &mut [Option<RasterPlan<'_>>], capacity: [u32; 4]) {
                 }
             }
             plan.level += 1;
-            for key in plan.keys() {
+            for key in plan.keys().flatten() {
                 *readers.entry(key).or_default() += 1;
             }
         }
@@ -2003,5 +1995,32 @@ mod tests {
         let again = r.profile_view(&document, view, output, false).unwrap();
         assert_eq!(again.tiles_uploaded, 0);
         assert_eq!(again.gpu.is_some(), r.timestamp_period.is_some());
+
+        // A document whose image shares five of these six tiles (a painted one, ADR 0027):
+        // only the new tile is uploaded.
+        let LayerContent::Raster { image, .. } = &document.layers()[0].content else {
+            panic!("a raster layer");
+        };
+        let mut tiles = image.levels()[0].tiles().to_vec();
+        tiles[4] = vec![7u8; tiles[4].len()].into();
+        let painted = RasterImage::from_level0_tiles(image.size(), image.format(), tiles)
+            .expect("the same grid");
+        let mut repainted = Document::new(document.size());
+        let layer = Layer {
+            id: repainted.allocate_layer_id(),
+            content: LayerContent::Raster {
+                image: painted.into(),
+            },
+            ..document.layers()[0].clone()
+        };
+        slopshop_core::Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut repainted)
+        .expect("a valid layer");
+        let after = r.profile_view(&repainted, view, output, false).unwrap();
+        assert_eq!(after.tiles_uploaded, 1);
     }
 }

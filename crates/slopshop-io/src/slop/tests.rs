@@ -334,6 +334,51 @@ fn saving_without_changes_appends_only_metadata() {
 }
 
 #[test]
+fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
+    // A painted image (ADR 0027) shares the tiles it did not change with its original: saving
+    // it writes the changed tiles only, and reads back the same.
+    let path = temp_path("shared-tiles.slop");
+    let mut doc = sample_document();
+    let size = Size::new(512, 512);
+    let original = image(
+        size,
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        noise(512 * 512 * 4, 21),
+    );
+    push(
+        &mut doc,
+        "original",
+        LayerContent::Raster {
+            image: Arc::clone(&original),
+        },
+        1.0,
+    );
+    let mut file = SlopFile::create(&path, &doc).unwrap();
+    let mut tiles = original.levels()[0].tiles().to_vec();
+    tiles[3] = noise(tiles[3].len(), 22).into();
+    let shared = RasterImage::from_level0_tiles(size, original.format(), tiles).unwrap();
+    push(
+        &mut doc,
+        "shared",
+        LayerContent::Raster {
+            image: Arc::new(shared),
+        },
+        1.0,
+    );
+    let report = file.save(&doc).unwrap();
+    // One new level-0 tile, one new pyramid tile, metadata.
+    let tile = 256 * 256 * 4;
+    assert!(
+        report.bytes_written < 2 * tile as u64 + 64 * 1024,
+        "{report:?}"
+    );
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    fs::remove_file(&path).ok();
+}
+
+#[test]
 fn a_new_layer_appends_only_its_tiles_and_the_session_carries_on() {
     let path = temp_path("new-layer.slop");
     let mut doc = sample_document();

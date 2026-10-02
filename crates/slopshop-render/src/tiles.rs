@@ -5,22 +5,36 @@
 //! Values are uploaded as stored (no transfer or color conversion: the shader does that), so
 //! nothing is lost on the way to the GPU. Tiles are immutable, so a cached tile never needs
 //! invalidation; the least recently used ones are evicted when space is needed. Only tiles
-//! required by the current frame are uploaded.
+//! required by the current frame are uploaded. A tile is known by its allocation (ADR 0027):
+//! images that share tiles (a painted image and its original, uniform tiles) share their slots,
+//! and a new image uploads only the tiles it does not share.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use slopshop_core::color::{ChannelLayout, PixelFormat, SampleType, f32_to_f16};
-use slopshop_core::raster::{ImageId, TILE_SIZE};
+use slopshop_core::raster::TILE_SIZE;
 
-/// Identifies one tile of one pyramid level of one image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TileKey {
-    pub image: ImageId,
-    pub level: u32,
-    pub col: u32,
-    pub row: u32,
+/// Identifies one tile by its allocation: tiles are immutable, so the same allocation holds the
+/// same texels, whatever image or position it is used at. The key holds the tile, so that its
+/// address is not reused by another one while it is cached.
+#[derive(Debug, Clone)]
+pub(crate) struct TileKey(pub Arc<[u8]>);
+
+impl PartialEq for TileKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for TileKey {}
+
+impl Hash for TileKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
 }
 
 /// GPU storage class of tiles; one cache per class. The index is the `format` code used by
@@ -136,7 +150,7 @@ pub(crate) struct Slots<K> {
     frame: u64,
 }
 
-impl<K: Copy + Eq + Hash> Slots<K> {
+impl<K: Clone + Eq + Hash> Slots<K> {
     pub fn new(capacity: u32) -> Self {
         Self {
             slots: HashMap::new(),
@@ -163,11 +177,12 @@ impl<K: Copy + Eq + Hash> Slots<K> {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                let (&old, _) = self
+                let (old, _) = self
                     .slots
                     .iter()
                     .filter(|(_, slot)| slot.last_used != self.frame)
                     .min_by_key(|(_, slot)| slot.last_used)?;
+                let old = old.clone();
                 self.slots.remove(&old)?.index
             }
         };

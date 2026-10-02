@@ -507,7 +507,7 @@ fn chunk_plans<'a>(layers: &[Step<'a>], chunk: Rect) -> Vec<Option<RasterPlan<'a
 fn chunk_tiles(plans: &[Option<RasterPlan<'_>>]) -> [usize; 4] {
     let mut keys: [HashSet<TileKey>; 4] = Default::default();
     for plan in plans.iter().flatten() {
-        keys[plan.format.index()].extend(plan.keys());
+        keys[plan.format.index()].extend(plan.keys().flatten());
     }
     keys.map(|k| k.len())
 }
