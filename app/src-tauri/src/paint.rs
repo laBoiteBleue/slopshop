@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
-use slopshop_core::selection::{Selection, select_all};
+use slopshop_core::selection::{Selection, sample_colors, select_all};
 use slopshop_core::{
     Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage,
 };
@@ -456,4 +456,38 @@ pub async fn fill_selection(
         Ok(document.view())
     })
     .await
+}
+
+/// The color picker's eyedropper: the color shown at document point (`x`, `y`), every visible
+/// layer composited, as whole 8-bit sRGB values. `None` outside the canvas or where nothing is
+/// shown (transparent).
+#[tauri::command]
+pub async fn sample_color(
+    app: tauri::AppHandle,
+    document_id: u64,
+    x: f64,
+    y: f64,
+) -> Result<Option<[u8; 3]>, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        // Cheap: the layers' pixels are shared. The lock is not held while compositing.
+        let doc = state
+            .documents()?
+            .get_mut(document_id)?
+            .session
+            .document()
+            .clone();
+        Ok(sample_color_at(&doc, x, y))
+    })
+    .await
+}
+
+/// [`sample_color`]'s work.
+pub(crate) fn sample_color_at(doc: &Document, x: f64, y: f64) -> Option<[u8; 3]> {
+    // Negative or NaN: outside. Too large saturates, then falls outside the canvas.
+    if !(x >= 0.0 && y >= 0.0) {
+        return None;
+    }
+    let [r, g, b, alpha] = *sample_colors(doc, &[(x as u32, y as u32)]).first()?;
+    (alpha > 0.0).then(|| [r, g, b].map(|v| v.round().clamp(0.0, 255.0) as u8))
 }
