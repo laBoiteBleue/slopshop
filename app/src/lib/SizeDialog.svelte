@@ -5,6 +5,7 @@
   // current ones). Nothing is cut or rewritten: layers are transformed (ADR 0017, 0018).
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import Icon from "./Icon.svelte";
 
   let {
     mode,
@@ -119,6 +120,25 @@
     <div class="fields">
       <label for="size-width">{t("sizeDialog.width")}</label>
       <input id="size-width" type="number" step="any" bind:value={w} oninput={onWidth} />
+      {#if mode === "image"}
+        <!-- Photoshop's link between the width and the height: a bracket and a chain while the
+             proportions are kept, the chain open otherwise; a click toggles them, as the checkbox
+             does. -->
+        <button
+          type="button"
+          class="link"
+          class:on={constrain}
+          aria-pressed={constrain}
+          title={t("sizeDialog.constrain")}
+          aria-label={t("sizeDialog.constrain")}
+          onclick={() => {
+            constrain = !constrain;
+            onWidth();
+          }}
+        >
+          <Icon name={constrain ? "link" : "linkBroken"} size={14} />
+        </button>
+      {/if}
       <label for="size-height">{t("sizeDialog.height")}</label>
       <input id="size-height" type="number" step="any" bind:value={h} oninput={onHeight} />
       <label for="size-unit">{t("sizeDialog.unit")}</label>
@@ -201,15 +221,59 @@
 
   .fields {
     display: grid;
-    grid-template-columns: auto 1fr;
+    /* The third column holds the link between the width and the height (Image Size). */
+    grid-template-columns: auto 1fr 16px;
     align-items: center;
     gap: 6px 10px;
     padding: 10px;
   }
 
+  /* Each label starts a row, whether or not the link takes the third column. */
   .fields > label:not(.check),
   .label {
+    grid-column: 1;
     color: var(--text-muted);
+  }
+
+  .link {
+    position: relative;
+    grid-column: 3;
+    grid-row: span 2;
+    align-self: stretch;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    margin-left: -6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .link:hover {
+    color: var(--text);
+  }
+
+  /* The bracket from the middle of the width field to the middle of the height field. */
+  .link.on::before {
+    content: "";
+    position: absolute;
+    top: 25%;
+    bottom: 25%;
+    left: 0;
+    width: 8px;
+    border: 1px solid var(--text-muted);
+    border-left: 0;
+  }
+
+  .link :global(svg) {
+    position: relative;
+    margin-left: 0;
+    background: var(--panel);
+  }
+
+  .link.on {
+    color: var(--text);
   }
 
   input[type="number"],
