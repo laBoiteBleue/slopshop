@@ -36,6 +36,9 @@
     type Opening,
     type VectorInfo,
     type SaveFailed,
+    type AiComponent,
+    type AiFailure,
+    type PromptPoint,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import type { MessageKey } from "./lib/i18n/en";
@@ -56,9 +59,13 @@
   import { slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
-  import { MAX_FEATHER, MAX_MODIFY } from "./lib/selection";
+  import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
+  import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
+  import ObjectSelectionTool, { type ObjectHover } from "./lib/ObjectSelectionTool.svelte";
+  import AiDownloadDialog from "./lib/AiDownloadDialog.svelte";
+  import { failureMessage } from "./lib/ai";
   import ColorRangeDialog, { sampleAt, type ColorRangeState } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
@@ -378,6 +385,181 @@
         mode ?? selectionMode,
       ),
     );
+  }
+
+  // AI selection (ADR 0025), with SAM 2.1. Object Selection: the object under the pointer
+  // lights up, a click or a box selects it. Quick Selection: strokes become prompts; the strokes
+  // of a session refine one object, while the document only changes by their own results.
+  /** The AI tools' options: Quick Selection's brush, and every layer or the active one. */
+  let quick = $state({ size: 30, sampleAll: false });
+  let aiBusy = $state(false);
+  /** No hovering until a click asks again: the components are missing or AI cannot start. */
+  let aiHoverBlocked = false;
+  let quickSession: {
+    id: number;
+    documentId: number;
+    /** The document's revision after the session's last result. */
+    revision: number;
+    mode: SelectionMode;
+    region: [number, number, number, number];
+    layer: number | null;
+    points: PromptPoint[];
+  } | null = null;
+  let nextQuickSession = 1;
+  /** The components to download before AI can run, and what to do once they are there. */
+  let aiDownload = $state<{ components: AiComponent[]; then: () => void } | null>(null);
+  /** Prompts per request at most: long strokes are thinned out evenly. */
+  const MAX_PROMPTS = 48;
+
+  /**
+   * What the model sees, document pixels: the view when zoomed in (finer), the whole document
+   * otherwise. `view` is the document area in the viewport (unclamped).
+   */
+  function aiRegion(
+    doc: DocumentView,
+    view: [number, number, number, number],
+  ): [number, number, number, number] {
+    const left = Math.max(0, Math.floor(view[0]));
+    const top = Math.max(0, Math.floor(view[1]));
+    const right = Math.min(doc.width, Math.ceil(view[0] + view[2]));
+    const bottom = Math.min(doc.height, Math.ceil(view[1] + view[3]));
+    const zoomedIn = (right - left) * (bottom - top) < doc.width * doc.height * 0.8;
+    return zoomedIn && right > left && bottom > top
+      ? [left, top, right - left, bottom - top]
+      : [0, 0, doc.width, doc.height];
+  }
+
+  /** The layer the AI tools sample: the active one, unless every layer is (or none is active). */
+  function aiLayer(): number | null {
+    return quick.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
+  }
+
+  /**
+   * Runs an AI selection: on first use, asks to download what it needs, then runs it again;
+   * reports other failures. Resolves to the document view, or null when nothing was applied.
+   */
+  async function runAi(task: () => Promise<DocumentView>): Promise<DocumentView | null> {
+    aiBusy = true;
+    try {
+      const view = await task();
+      upsert(view);
+      aiHoverBlocked = false;
+      return view;
+    } catch (e) {
+      const failure = e as Partial<AiFailure> | null;
+      if (failure?.code === "notInstalled") {
+        const components = await engine.aiComponents("segmentation");
+        if (components) {
+          return await new Promise((resolve) => {
+            aiDownload = {
+              components,
+              then: () => void runAi(task).then(resolve),
+            };
+          });
+        }
+      } else {
+        const message = failureMessage(e);
+        if (message) showError(message);
+      }
+      return null;
+    } finally {
+      aiBusy = false;
+    }
+  }
+
+  /** Object Selection's hover: the object under document point (`x`, `y`), or null. */
+  async function objectHover(
+    x: number,
+    y: number,
+    view: [number, number, number, number],
+  ): Promise<ObjectHover | null> {
+    const doc = active;
+    if (!doc || aiHoverBlocked || aiBusy || x < 0 || y < 0 || x >= doc.width || y >= doc.height)
+      return null;
+    const region = aiRegion(doc, view);
+    try {
+      const mask = await engine.aiObjectHover(doc.id, x, y, region, aiLayer());
+      return mask ? { ...mask, region } : null;
+    } catch {
+      // Hovering only shows; a click reports why AI cannot run (and offers the download).
+      aiHoverBlocked = true;
+      return null;
+    }
+  }
+
+  /** Object Selection: the object at a point, or in a box (document pixels). */
+  function objectSelect(
+    point: [number, number] | null,
+    box: [number, number, number, number] | null,
+    keyMode: SelectionMode | null,
+    view: [number, number, number, number],
+  ) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    quickSession = null;
+    const request = {
+      point,
+      box,
+      region: aiRegion(doc, view),
+      layerId: aiLayer(),
+      mode: keyMode ?? selectionMode,
+    };
+    void runAi(() => engine.aiObjectSelect(doc.id, request));
+  }
+
+  function quickStroke(
+    stroke: [number, number][],
+    keyMode: SelectionMode | null,
+    view: [number, number, number, number],
+  ) {
+    const doc = active;
+    if (!doc || stroke.length === 0) return;
+    commitTransform();
+    const continuing =
+      quickSession !== null &&
+      quickSession.documentId === doc.id &&
+      quickSession.revision === doc.revision;
+    if (!continuing) {
+      const start = keyMode ?? selectionMode;
+      quickSession = {
+        id: nextQuickSession++,
+        documentId: doc.id,
+        revision: doc.revision,
+        mode: start === "intersect" ? "replace" : start,
+        region: aiRegion(doc, view),
+        layer: aiLayer(),
+        points: [],
+      };
+    }
+    const session = quickSession;
+    if (!session) return;
+    // A stroke in the session's direction adds to the object; the other direction (Alt in an
+    // adding session, Shift in a subtracting one) takes parts away.
+    const direction = keyMode ?? (continuing ? "add" : selectionMode);
+    const positive = (direction === "subtract") === (session.mode === "subtract");
+    const [x0, y0, w, h] = session.region;
+    for (const [x, y] of stroke) {
+      if (x >= x0 && y >= y0 && x < x0 + w && y < y0 + h) session.points.push({ x, y, positive });
+    }
+    if (session.points.length === 0) return;
+    const step = Math.max(1, session.points.length / MAX_PROMPTS);
+    const points = Array.from(
+      { length: Math.min(session.points.length, MAX_PROMPTS) },
+      (_, i) => session.points[Math.floor(i * step)],
+    );
+    void runAi(() =>
+      engine.aiSegment(doc.id, {
+        session: session.id,
+        points,
+        region: session.region,
+        layerId: session.layer,
+        mode: session.mode,
+      }),
+    ).then((view) => {
+      if (view) session.revision = view.revision;
+      else if (quickSession === session) quickSession = null;
+    });
   }
 
   function selectShape(shape: SelectionShape, mode: SelectionMode | null) {
@@ -1770,6 +1952,18 @@
         return;
       }
     }
+    // [ and ]: the brush size, by the physical keys as in Photoshop (^ and $ on AZERTY).
+    if (
+      tool === "quickSelection" &&
+      (e.code === "BracketLeft" || e.code === "BracketRight") &&
+      !hasShortcutModifier(e) &&
+      !e.altKey &&
+      !isTextField(e.target)
+    ) {
+      e.preventDefault();
+      quick.size = stepBrush(quick.size, e.code === "BracketRight");
+      return;
+    }
     // Shift+F6: Select > Modify > Feather, as in Photoshop.
     if (e.key === "F6" && e.shiftKey && !hasShortcutModifier(e) && !e.altKey) {
       e.preventDefault();
@@ -1953,7 +2147,15 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
-  <OptionsBar {tool} bind:autoSelect bind:selectionMode bind:feather bind:antiAlias bind:wand />
+  <OptionsBar
+    {tool}
+    bind:autoSelect
+    bind:selectionMode
+    bind:feather
+    bind:antiAlias
+    bind:wand
+    bind:quick
+  />
 
   <main
     class:has-panel={active !== null}
@@ -2110,6 +2312,22 @@
                   ></div>
                 {:else if tool === "wand"}
                   <WandTool {mapping} mode={selectionMode} onpick={magicWand} />
+                {:else if tool === "objectSelection"}
+                  <ObjectSelectionTool
+                    {mapping}
+                    mode={selectionMode}
+                    busy={aiBusy}
+                    onhover={objectHover}
+                    onselect={objectSelect}
+                  />
+                {:else if tool === "quickSelection"}
+                  <QuickSelectionTool
+                    {mapping}
+                    mode={selectionMode}
+                    size={quick.size}
+                    busy={aiBusy}
+                    onstroke={quickStroke}
+                  />
                 {:else if tool === "lasso" || tool === "polygonalLasso"}
                   <LassoTool
                     {mapping}
@@ -2272,6 +2490,18 @@
 
 {#if preferences}
   <PreferencesDialog onclose={() => (preferences = false)} />
+{/if}
+
+{#if aiDownload}
+  <AiDownloadDialog
+    components={aiDownload.components}
+    ondone={() => {
+      const then = aiDownload?.then;
+      aiDownload = null;
+      then?.();
+    }}
+    onclose={() => (aiDownload = null)}
+  />
 {/if}
 
 {#if sizeDialog && sizeDoc}

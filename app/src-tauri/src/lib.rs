@@ -10,6 +10,7 @@
 mod ai;
 mod export;
 mod ipc;
+mod segment;
 mod selection;
 mod vector;
 
@@ -388,6 +389,8 @@ struct AppState {
     vector: Arc<vector::VectorCache>,
     /// AI components being installed (see the `ai` module).
     ai: ai::AiState,
+    /// The AI helper and what it has encoded (see the `segment` module).
+    segment: segment::SegmentState,
 }
 
 impl AppState {
@@ -408,6 +411,7 @@ impl AppState {
             layer_clipboard: Mutex::new(None),
             vector: Arc::default(),
             ai: ai::AiState::default(),
+            segment: segment::SegmentState::default(),
         }
     }
 
@@ -2073,6 +2077,9 @@ pub fn run() {
             ai::ai_cancel_install,
             ai::ai_remove,
             ai::ai_open_license,
+            segment::ai_segment,
+            segment::ai_object_hover,
+            segment::ai_object_select,
             layer_thumbnail,
             add_mask_from_transparency,
             selection::select_shape,

@@ -176,6 +176,14 @@ an error, disappear after a few seconds). "Show in folder" reveals a finished fi
 `reveal_in_folder` (tauri-plugin-opener, not exposed to JavaScript). Closing the main window while jobs run cancels them and waits,
 off the main thread and a few seconds at most, for them to remove their temporary files.
 
+AI selection (`src-tauri/src/segment.rs`, ADR 0025): the `slopshop-ai` helper is started on
+first use and kept, the model loaded. The image SAM sees (the document, or the view when zoomed
+in, at most 1024 pixels on a side, rendered by the GPU) is encoded once and reused while only
+the selection changes, so Object Selection's hover (`ai_object_hover`: a 256² mask the UI tints)
+and its click or box (`ai_object_select`) only decode, in milliseconds. Quick Selection
+(`ai_segment`) keeps the prompts of a session (its strokes) and the selection before it. The
+mask becomes a selection through `selection::select_logits` (specks and pinholes dropped).
+
 AI components (`src-tauri/src/ai.rs`, ADR 0025): `ai_components` lists what a feature needs on
 this machine (the CUDA runtime when NVIDIA's driver is installed, else the CPU one; the models
 made for it) or, for Edit > Preferences, everything this machine can use; `ai_install`

@@ -5,7 +5,7 @@
   import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
-  import { MAX_FEATHER } from "./selection";
+  import { MAX_BRUSH, MAX_FEATHER } from "./selection";
   import { isSelectionTool, toolInfo, type ToolId } from "./tools";
   import { keepFocus } from "./platform";
 
@@ -16,6 +16,7 @@
     feather = $bindable(),
     antiAlias = $bindable(),
     wand = $bindable(),
+    quick = $bindable(),
   }: {
     tool: ToolId;
     /** Move tool: a drag takes the layer under the pointer (Ctrl inverts it). */
@@ -28,6 +29,8 @@
     antiAlias: boolean;
     /** Magic Wand: tolerance (0–255), connected pixels only, every layer or the active one. */
     wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
+    /** AI tools: Quick Selection's brush diameter (document pixels); every layer or the active one. */
+    quick: { size: number; sampleAll: boolean };
   } = $props();
 
   const current = $derived(toolInfo(tool));
@@ -57,7 +60,8 @@
       {t("options.autoSelect")}
     </label>
   {:else if isSelectionTool(tool)}
-    {#each MODES as entry (entry.mode)}
+    <!-- Quick Selection has no intersection, as in Photoshop. -->
+    {#each MODES.filter((m) => tool !== "quickSelection" || m.mode !== "intersect") as entry (entry.mode)}
       <button
         class="icon-btn"
         class:on={selectionMode === entry.mode}
@@ -71,7 +75,33 @@
       </button>
     {/each}
     <span class="divider"></span>
-    {#if tool === "wand"}
+    {#if tool === "quickSelection"}
+      <label class="option">
+        {t("options.brushSize")}
+        <input
+          type="number"
+          min="1"
+          max={MAX_BRUSH}
+          step="1"
+          value={quick.size}
+          oninput={(e) => {
+            const v = e.currentTarget.valueAsNumber;
+            if (Number.isFinite(v)) quick.size = Math.min(Math.max(Math.round(v), 1), MAX_BRUSH);
+          }}
+          onchange={(e) => (e.currentTarget.valueAsNumber = quick.size)}
+        />
+        px
+      </label>
+      <label class="option">
+        <input type="checkbox" bind:checked={quick.sampleAll} />
+        {t("options.sampleAll")}
+      </label>
+    {:else if tool === "objectSelection"}
+      <label class="option">
+        <input type="checkbox" bind:checked={quick.sampleAll} />
+        {t("options.sampleAll")}
+      </label>
+    {:else if tool === "wand"}
       <label class="option">
         {t("options.tolerance")}
         <input

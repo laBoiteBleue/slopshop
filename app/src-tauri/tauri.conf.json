@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.slopshop.app",
   "build": {
-    "beforeDevCommand": "cargo build -p slopshop-raw && npm run dev",
+    "beforeDevCommand": "cargo build -p slopshop-raw && cargo build -p slopshop-ai --features helper && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "cargo build --release -p slopshop-raw && npm run build",
+    "beforeBuildCommand": "cargo build --release -p slopshop-raw && cargo build --release -p slopshop-ai --features helper && npm run build",
     "frontendDist": "../dist"
   },
   "app": {

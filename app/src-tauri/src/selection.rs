@@ -64,7 +64,7 @@ impl From<ShapeRequest> for Shape {
     }
 }
 
-fn combine(id: &str) -> Result<Combine, String> {
+pub(crate) fn combine(id: &str) -> Result<Combine, String> {
     match id {
         "replace" => Ok(Combine::Replace),
         "add" => Ok(Combine::Add),
@@ -86,7 +86,7 @@ fn snapshot(
 
 /// Make `image` (or nothing) the selection, as one undo entry; nothing is recorded when it is
 /// already so.
-fn set_selection(
+pub(crate) fn set_selection(
     state: &AppState,
     document_id: u64,
     image: Option<RasterImage>,
@@ -106,7 +106,7 @@ fn set_selection(
     Ok(document.view())
 }
 
-async fn on_worker<T: Send + 'static>(
+pub(crate) async fn on_worker<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(work)
@@ -178,7 +178,7 @@ pub async fn magic_wand(
 
 /// The document to sample: the composited document, or with `layer_id` a document holding
 /// only that layer, placed as in the document.
-fn sampled_document(
+pub(crate) fn sampled_document(
     doc: &slopshop_core::Document,
     layer_id: Option<u64>,
 ) -> Result<slopshop_core::Document, String> {

@@ -827,6 +827,22 @@ export type AiFailure = { code: string; detail: string };
 
 export type AiProgress = { done: number; total: number };
 
+/** A prompt for a segmentation model, in document pixels. */
+export type PromptPoint = { x: number; y: number; positive: boolean };
+
+/** A Quick Selection request: every prompt of the session so far (see `ai::SegmentRequest`). */
+export type SegmentRequest = {
+  /** A new id starts over from the current selection. */
+  session: number;
+  points: PromptPoint[];
+  /** What the model sees, document pixels `[x, y, width, height]`. */
+  region: [number, number, number, number];
+  /** Only that layer, else the composited document. */
+  layerId: number | null;
+  /** How the result combines with the selection before the session; read at its start. */
+  mode: SelectionMode;
+};
+
 export const engine = {
   /** Open documents, in tab order. */
   documents: () => invoke<DocumentView[]>("documents"),
@@ -1030,6 +1046,42 @@ export const engine = {
   aiRemove: (id: string) => invoke<void>("ai_remove", { id }),
   /** Opens one of the components' licenses in the browser. */
   aiOpenLicense: (url: string) => invoke<void>("ai_open_license", { url }),
+  /**
+   * Object Selection's hover: the object under document point (`x`, `y`) as the model's mask
+   * over `region` (`side`² cells, 255 inside), or null when there is none.
+   */
+  aiObjectHover: async (
+    documentId: number,
+    x: number,
+    y: number,
+    region: [number, number, number, number],
+    layerId: number | null,
+  ): Promise<{ side: number; mask: Uint8Array } | null> => {
+    const bytes = await invoke<ArrayBuffer>("ai_object_hover", {
+      documentId,
+      x,
+      y,
+      region,
+      layerId,
+    });
+    const side = new DataView(bytes).getUint32(0, true);
+    return side > 0 ? { side, mask: new Uint8Array(bytes, 4, side * side) } : null;
+  },
+  /** Object Selection: the object at a point, or in a box, as one undo entry. */
+  aiObjectSelect: (
+    documentId: number,
+    request: {
+      point: [number, number] | null;
+      /** `[left, top, right, bottom]`, document pixels. */
+      box: [number, number, number, number] | null;
+      region: [number, number, number, number];
+      layerId: number | null;
+      mode: SelectionMode;
+    },
+  ) => serial(() => invoke<DocumentView>("ai_object_select", { documentId, request })),
+  /** Quick Selection: the model's mask for the session's prompts, as one undo entry. */
+  aiSegment: (documentId: number, request: SegmentRequest) =>
+    serial(() => invoke<DocumentView>("ai_segment", { documentId, request })),
   perform: (documentId: number, edit: EditRequest) =>
     serial(() => invoke<DocumentView>("perform", { documentId, edit })),
   /**
