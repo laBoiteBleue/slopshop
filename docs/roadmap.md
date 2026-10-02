@@ -185,7 +185,8 @@ paints on an empty layer or in a mask.
       it; Quick Selection: brush strokes, Alt takes parts away (SAM 2.1, coarse masks)
 - [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
       AI tools, and Select > Refine Edges… for any selection
-- [ ] Select > Subject (BiRefNet), Select > Semantic (SAM 3)
+- [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
+- [ ] Select > Semantic (SAM 3)
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
 

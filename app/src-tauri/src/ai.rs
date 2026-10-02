@@ -46,13 +46,18 @@ impl Runtime {
     /// The components a feature needs on this runtime.
     /// The components a feature needs on this runtime (the runtime first).
     pub(crate) fn components(self, feature: Feature) -> [&'static str; 3] {
-        // Segmentation includes ViTMatte: selections are refined at full resolution.
-        match (self, feature) {
-            (Self::Cuda, Feature::Segmentation) => {
-                ["runtime-cuda", "sam2.1-base-plus", "vitmatte-small"]
-            }
-            (Self::Cpu, Feature::Segmentation) => ["runtime-cpu", "sam2.1-tiny", "vitmatte-small"],
-        }
+        // Every feature includes ViTMatte: selections are refined at full resolution.
+        let runtime = match self {
+            Self::Cuda => "runtime-cuda",
+            Self::Cpu => "runtime-cpu",
+        };
+        let model = match (self, feature) {
+            (Self::Cuda, Feature::Segmentation) => "sam2.1-base-plus",
+            (Self::Cpu, Feature::Segmentation) => "sam2.1-tiny",
+            (Self::Cuda, Feature::Subject) => "birefnet",
+            (Self::Cpu, Feature::Subject) => "birefnet-lite",
+        };
+        [runtime, model, "vitmatte-small"]
     }
 }
 
@@ -62,9 +67,11 @@ impl Runtime {
 pub(crate) enum Feature {
     /// Objects from clicks, boxes and strokes (SAM 2.1): Quick and Object Selection.
     Segmentation,
+    /// The main subject of the image (BiRefNet): Select > Subject.
+    Subject,
 }
 
-const FEATURES: [Feature; 1] = [Feature::Segmentation];
+const FEATURES: [Feature; 2] = [Feature::Segmentation, Feature::Subject];
 
 /// Installs running, one at a time, and their cancellation.
 #[derive(Default)]
@@ -169,10 +176,15 @@ pub(crate) async fn ai_components(
         };
         let wanted: Vec<&str> = match feature {
             Some(feature) => runtime.components(feature).to_vec(),
-            None => FEATURES
-                .iter()
-                .flat_map(|&f| runtime.components(f))
-                .collect(),
+            None => {
+                let mut all: Vec<&str> = FEATURES
+                    .iter()
+                    .flat_map(|&f| runtime.components(f))
+                    .collect();
+                all.sort_unstable();
+                all.dedup();
+                all
+            }
         };
         let list = COMPONENTS
             .iter()

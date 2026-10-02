@@ -90,12 +90,6 @@ fn helper_executable() -> Option<PathBuf> {
 fn start_helper(root: &Path) -> Result<Client, AiFailure> {
     let runtime = Runtime::detect().ok_or_else(|| AiFailure::new("unsupported", ""))?;
     let ids = runtime.components(Feature::Segmentation);
-    for id in ids {
-        let component = slopshop_ai::install::component(id).ok_or_else(|| internal(id))?;
-        if !component.is_installed(root) {
-            return Err(AiFailure::new("notInstalled", id));
-        }
-    }
     let name = format!(
         "/{}onnxruntime{}",
         std::env::consts::DLL_PREFIX,
@@ -116,6 +110,23 @@ fn start_helper(root: &Path) -> Result<Client, AiFailure> {
         library_paths: &[folder],
     })
     .map_err(|e| AiFailure::new("start", e))
+}
+
+/// Fails with `notInstalled` (naming the feature, for the UI to offer the download) unless
+/// every component `feature` needs is installed.
+fn require(root: &Path, feature: Feature) -> Result<(), AiFailure> {
+    let runtime = Runtime::detect().ok_or_else(|| AiFailure::new("unsupported", ""))?;
+    for id in runtime.components(feature) {
+        let component = slopshop_ai::install::component(id).ok_or_else(|| internal(id))?;
+        if !component.is_installed(root) {
+            let name = match feature {
+                Feature::Segmentation => "segmentation",
+                Feature::Subject => "subject",
+            };
+            return Err(AiFailure::new("notInstalled", name));
+        }
+    }
+    Ok(())
 }
 
 /// Stops the helper (it frees its memory and its libraries), forgetting what it encoded.
@@ -276,30 +287,22 @@ impl Session {
         combine: Combine,
         refine: bool,
     ) -> Result<Option<RasterImage>, AiFailure> {
+        // The model's square mask: SAM's 256², BiRefNet's 1024².
+        let side = (logits.len() as f64).sqrt() as usize;
         let canvas = doc.size();
         if !refine {
-            return core_selection::select_logits(
-                canvas, current, logits, MASK_SIDE, region, combine,
-            )
-            .map_err(internal);
+            return core_selection::select_logits(canvas, current, logits, side, region, combine)
+                .map_err(internal);
         }
-        let Some(mask) = core_selection::select_logits(
-            canvas,
-            None,
-            logits,
-            MASK_SIDE,
-            region,
-            Combine::Replace,
-        )
-        .map_err(internal)?
+        let Some(mask) =
+            core_selection::select_logits(canvas, None, logits, side, region, Combine::Replace)
+                .map_err(internal)?
         else {
-            return core_selection::select_logits(
-                canvas, current, logits, MASK_SIDE, region, combine,
-            )
-            .map_err(internal);
+            return core_selection::select_logits(canvas, current, logits, side, region, combine)
+                .map_err(internal);
         };
         // The band to decide: a model cell and a half on each side of the coarse outline.
-        let cell = f64::from(region.width.max(region.height)) / MASK_SIDE as f64;
+        let cell = f64::from(region.width.max(region.height)) / side as f64;
         let band = (cell * 1.5).clamp(8.0, 256.0) as u32;
         let mut plan =
             core_selection::plan_refinement(canvas, &mask, band, MATTE_SIDE, MAX_MATTE_WINDOWS)
@@ -401,6 +404,7 @@ fn quick_selection(
 ) -> Result<DocumentView, AiFailure> {
     let state = app.state::<AppState>();
     let (root, doc) = prepare(app, document_id)?;
+    require(&root, Feature::Segmentation)?;
     let region = clamp_region(request.region, doc.size())?;
     let mut session = lock(&state)?;
     let continuing = session
@@ -473,6 +477,7 @@ pub(crate) async fn ai_object_hover(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let (root, doc) = prepare(&app, document_id)?;
+        require(&root, Feature::Segmentation)?;
         let region = clamp_region(region, doc.size())?;
         let mut session = lock(&state)?;
         let encoded = session.encode(&state, &root, document_id, &doc, region, layer_id)?;
@@ -517,6 +522,7 @@ pub(crate) async fn ai_object_select(
         let state = app.state::<AppState>();
         let combine = selection::combine(&request.mode).map_err(internal)?;
         let (root, doc) = prepare(&app, document_id)?;
+        require(&root, Feature::Segmentation)?;
         let region = clamp_region(request.region, doc.size())?;
         let mut session = lock(&state)?;
         let encoded = session.encode(&state, &root, document_id, &doc, region, request.layer_id)?;
@@ -564,6 +570,7 @@ pub(crate) async fn ai_refine_selection(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let (root, doc) = prepare(&app, document_id)?;
+        require(&root, Feature::Segmentation)?;
         let Some(current) = doc.selection().map(|s| Arc::clone(s.image())) else {
             return Err(internal("nothing is selected"));
         };
@@ -579,6 +586,78 @@ pub(crate) async fn ai_refine_selection(
         let mut session = lock(&state)?;
         session.matte(&state, &root, &doc, layer_id, &mut plan)?;
         let image = plan.finish(None, Combine::Replace).map_err(internal)?;
+        let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
+        // Only the selection changed: an image encoded from this revision stays valid.
+        if let Some(encoded) = session.encoded.as_mut()
+            && encoded.document_id == document_id
+            && encoded.revision == doc.revision()
+        {
+            encoded.revision = view.revision;
+        }
+        Ok(view)
+    })
+    .await
+    .map_err(internal)?
+}
+
+/// Select > Subject: BiRefNet's mask of the image's main subject (the whole document, at most
+/// 1024 pixels on a side), refined at full resolution when `refine` is set, combined with the
+/// selection by `mode`, as one undo entry.
+#[tauri::command]
+pub(crate) async fn ai_select_subject(
+    app: AppHandle,
+    document_id: u64,
+    layer_id: Option<u64>,
+    mode: String,
+    refine: bool,
+) -> Result<DocumentView, AiFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let combine = selection::combine(&mode).map_err(internal)?;
+        let (root, doc) = prepare(&app, document_id)?;
+        require(&root, Feature::Subject)?;
+        let canvas = doc.size();
+        let region = Rect::new(0, 0, canvas.width, canvas.height);
+        let source = selection::sampled_document(&doc, layer_id).map_err(internal)?;
+        let scale = (f64::from(canvas.width.max(canvas.height)) / SAM_SIDE).max(1.0);
+        let output = Size::new(
+            (f64::from(canvas.width) / scale).ceil().max(1.0) as u32,
+            (f64::from(canvas.height) / scale).ceil().max(1.0) as u32,
+        );
+        let view = ViewTransform {
+            origin: [0.0, 0.0],
+            scale,
+        };
+        let frame = state
+            .renderer()
+            .map_err(internal)?
+            .render_view(&source, view, output)
+            .map_err(internal)?;
+        let rgb: Vec<u8> = frame
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        let mut session = lock(&state)?;
+        let client = session.client(&root)?;
+        let logits = match client.subject(output.width, output.height, rgb) {
+            Ok(logits) => logits,
+            Err(e) => return Err(session.failed(e)),
+        };
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        let image = session.selection(
+            &state,
+            &root,
+            &doc,
+            layer_id,
+            &logits,
+            region,
+            current.as_deref(),
+            combine,
+            refine,
+        )?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: an image encoded from this revision stays valid.
         if let Some(encoded) = session.encoded.as_mut()
