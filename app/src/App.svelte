@@ -62,6 +62,7 @@
   import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillChoiceDialog from "./lib/FillChoiceDialog.svelte";
+  import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
@@ -396,6 +397,8 @@
   });
   /** The foreground (the Brush's) and background colors, `#rrggbb` sRGB. */
   let colors = $state({ foreground: "#000000", background: "#ffffff" });
+  /** The color the color picker is open for. */
+  let colorPicker = $state<"foreground" | "background" | null>(null);
   /** The stroke being sent: samples wait while a batch is in flight (none is ever dropped). */
   let paintRun: {
     id: number;
@@ -2533,7 +2536,13 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
-    <Toolbar {tool} choices={toolChoices} onselect={selectTool} bind:colors />
+    <Toolbar
+      {tool}
+      choices={toolChoices}
+      onselect={selectTool}
+      bind:colors
+      onpickcolor={(which) => (colorPicker = which)}
+    />
     <section class="workspace">
       <div
         class="tabbar"
@@ -2851,6 +2860,19 @@
     height={active.height}
     onapply={applyColorRange}
     onclose={() => (colorRange = null)}
+  />
+{/if}
+
+{#if colorPicker}
+  {@const which = colorPicker}
+  <ColorPickerDialog
+    title={t(which === "foreground" ? "colorPicker.foreground" : "colorPicker.background")}
+    color={colors[which]}
+    onapply={(hex) => {
+      colors[which] = hex;
+      colorPicker = null;
+    }}
+    onclose={() => (colorPicker = null)}
   />
 {/if}
 

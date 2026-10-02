@@ -2,7 +2,7 @@
   // The toolbar (ADR 0013): a vertical strip on the left, one button per slot in Photoshop's
   // order. A slot holding variants (Rectangular and Elliptical Marquee) shows the one used last,
   // with a corner mark; a right-click or a long press lists them all, as in Photoshop. Below
-  // them, the foreground and background colors (ADR 0027): a click on one picks it, the arrow
+  // them, the foreground and background colors (ADR 0027): a click on one opens the color picker, the arrow
   // swaps them (X), the small squares bring back black and white (D).
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
@@ -14,6 +14,7 @@
     choices,
     onselect,
     colors = $bindable(),
+    onpickcolor,
   }: {
     tool: ToolId;
     /** The variant each slot shows, by slot key. */
@@ -21,6 +22,8 @@
     onselect: (tool: ToolId) => void;
     /** The foreground and background colors, `#rrggbb` sRGB. */
     colors: { foreground: string; background: string };
+    /** A click on a color: the color picker opens for it. */
+    onpickcolor: (which: "foreground" | "background") => void;
   } = $props();
 
   /** A press held this long opens the variants. */
@@ -106,29 +109,22 @@
   {/each}
 
   <div class="colors">
-    <!-- The system's color picker opens on a click of the swatch (a hidden input under it). -->
-    <label
+    <button
       class="swatch background"
       style:background={colors.background}
       title={t("tools.background")}
-    >
-      <input
-        type="color"
-        value={colors.background}
-        onchange={(e) => (colors.background = e.currentTarget.value)}
-      />
-    </label>
-    <label
+      aria-label={t("tools.background")}
+      onmousedown={keepFocus}
+      onclick={() => onpickcolor("background")}
+    ></button>
+    <button
       class="swatch foreground"
       style:background={colors.foreground}
       title={t("tools.foreground")}
-    >
-      <input
-        type="color"
-        value={colors.foreground}
-        onchange={(e) => (colors.foreground = e.currentTarget.value)}
-      />
-    </label>
+      aria-label={t("tools.foreground")}
+      onmousedown={keepFocus}
+      onclick={() => onpickcolor("foreground")}
+    ></button>
     <button
       class="mini swap"
       title={t("tools.swapColors")}
@@ -231,17 +227,10 @@
     position: absolute;
     width: 18px;
     height: 18px;
+    padding: 0;
     border: 1px solid var(--border-dark);
+    border-radius: 0;
     box-shadow: 0 0 0 1px #ffffff55 inset;
-    cursor: pointer;
-  }
-
-  .swatch input {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
     cursor: pointer;
   }
 

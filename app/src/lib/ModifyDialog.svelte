@@ -81,6 +81,17 @@
         bind:value={amount}
       />
       <span>{t("modify.pixels")}</span>
+      <!-- Logarithmic, as a brush size: small amounts as easy to set as large ones. -->
+      <input
+        class="slider"
+        type="range"
+        min="0"
+        max="1000"
+        step="1"
+        aria-label={t(LABELS[kind])}
+        value={(Math.log(Math.max(amount, 1)) / Math.log(max)) * 1000}
+        oninput={(e) => (amount = Math.round(Math.pow(max, e.currentTarget.valueAsNumber / 1000)))}
+      />
     </div>
     <footer>
       <button type="button" class="btn" onclick={onclose}>{t("sizeDialog.cancel")}</button>
@@ -125,6 +136,11 @@
 
   input[type="number"] {
     min-width: 0;
+  }
+
+  .slider {
+    grid-column: 1 / -1;
+    accent-color: var(--accent);
   }
 
   footer {
