@@ -535,6 +535,8 @@
     if (task?.id !== progress.task) return;
     task.done = progress.done;
     task.total = progress.total;
+    // Refine Edge's windows take most of the time: say so.
+    if (progress.stage === "refine") task.label = t("ai.task.refine");
   }
 
   /** Object Selection's hover: the object under document point (`x`, `y`), or null. */

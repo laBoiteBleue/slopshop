@@ -1220,7 +1220,13 @@ export async function onOpenEvents(handlers: {
 }
 
 /** The steps an AI request has done, of those it knows of (`AiProgress` in segment.rs). */
-export type AiTaskProgress = { task: number; done: number; total: number };
+export type AiTaskProgress = {
+  task: number;
+  /** `select` (the model), then `refine` (Refine Edge's windows). */
+  stage: "select" | "refine";
+  done: number;
+  total: number;
+};
 
 /** AI requests' progress. Resolves once the listener is registered. */
 export async function onAiProgress(
