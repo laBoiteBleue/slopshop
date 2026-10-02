@@ -85,6 +85,13 @@ pub enum Edit {
         id: LayerId,
         painted: Option<Arc<RasterImage>>,
     },
+    /// Replace a raster layer's pixels and original at once (a layer grown to be painted
+    /// beyond its bounds, ADR 0027); `original` has the size of `image`.
+    SetLayerPixels {
+        id: LayerId,
+        image: Arc<RasterImage>,
+        original: Option<Arc<RasterImage>>,
+    },
     /// The same for a layer's mask: `painted` is a gray coverage of the mask's size.
     SetMaskPaint {
         id: LayerId,
@@ -283,6 +290,28 @@ impl Edit {
                 };
                 let painted = swap_paint(image, original, painted, |p, o| p.size() == o.size())?;
                 Edit::SetLayerPaint { id, painted }
+            }
+            Edit::SetLayerPixels {
+                id,
+                image,
+                original,
+            } => {
+                if original.as_ref().is_some_and(|o| o.size() != image.size()) {
+                    return Err(EditError::InvalidPaint);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Raster {
+                    image: shown,
+                    original: kept,
+                } = &mut layer.content
+                else {
+                    return Err(EditError::NotRaster(id));
+                };
+                Edit::SetLayerPixels {
+                    id,
+                    image: std::mem::replace(shown, image),
+                    original: std::mem::replace(kept, original),
+                }
             }
             Edit::SetMaskPaint { id, painted } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;

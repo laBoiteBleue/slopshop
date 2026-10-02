@@ -6,6 +6,11 @@
 //! stroke did not touch; the last one is the stroke's result. Pixels are always recomputed from
 //! the stroke's starting pixels and its coverage, so that dabs never re-quantize what earlier
 //! dabs wrote and the stroke's opacity is a true cap.
+//!
+//! Dabs combine as in Photoshop (Krita's "alpha darken", its Photoshop-compatible mode): each
+//! moves the stroke's coverage towards the dab's own value (its tip × the opacity) by the flow,
+//! never past it. At 100 % flow a stroke is exactly as soft as one dab; below, passing again
+//! builds up to the opacity.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -13,7 +18,10 @@ use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace, Blender};
 use crate::color::{IDENTITY, LinearRgba, Mat3, WORKING_SPACE, mat_vec};
-use crate::raster::{Codec, RasterError, RasterImage, TILE_SIZE, bands, parallel_for_each};
+use crate::geom::Size;
+use crate::raster::{
+    Codec, RasterError, RasterImage, TILE_SIZE, bands, pad_tile, parallel_for_each,
+};
 use crate::tile::TileCoord;
 use crate::transform::Affine;
 
@@ -141,21 +149,40 @@ struct Dab {
     opacity: f32,
 }
 
-/// The coverage of one tile: what the dabs added (`flow`), and the highest stroke opacity of
-/// the dabs that reached each pixel (`cap`). The paint is `min(flow, cap)`.
+/// The coverage of one tile: how much of the paint each pixel takes, in `[0, 1]`.
 #[derive(Debug, Clone)]
-struct Coverage {
-    flow: Vec<f32>,
-    cap: Vec<f32>,
-}
+struct Coverage(Vec<f32>);
 
 impl Coverage {
     fn new() -> Self {
-        Self {
-            flow: vec![0.0; TILE_PIXELS],
-            cap: vec![0.0; TILE_PIXELS],
-        }
+        Self(vec![0.0; TILE_PIXELS])
     }
+}
+
+/// Most pixels a layer grows to when painted beyond its bounds (see [`canvas_growth`]).
+const MAX_GROWN_PIXELS: u64 = 1 << 31;
+
+/// How an image of `size`, placed in the document by `to_document`, must grow so that strokes
+/// reach the whole `canvas` (ADR 0027): whole tiles (columns, rows) added before it, and its new
+/// size. `None` when it covers the canvas already, or when it would grow beyond
+/// [`MAX_GROWN_PIXELS`] (a layer shown much smaller than its pixels).
+pub fn canvas_growth(size: Size, to_document: Affine, canvas: Size) -> Option<((u32, u32), Size)> {
+    let to_image = to_document.inverse()?;
+    let [x0, y0, x1, y1] =
+        to_image.map_rect([0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)]);
+    let t = f64::from(TILE_SIZE);
+    let left = (-x0 / t).ceil().max(0.0);
+    let top = (-y0 / t).ceil().max(0.0);
+    let width = left * t + x1.ceil().max(f64::from(size.width));
+    let height = top * t + y1.ceil().max(f64::from(size.height));
+    if !(width.is_finite() && height.is_finite()) || width * height > MAX_GROWN_PIXELS as f64 {
+        return None;
+    }
+    let grown = Size::new(width as u32, height as u32);
+    if left == 0.0 && top == 0.0 && grown == size {
+        return None;
+    }
+    Some(((left as u32, top as u32), grown))
 }
 
 /// A brush stroke in progress on one image.
@@ -385,6 +412,49 @@ impl Stroke {
         }
     }
 
+    /// Paint everywhere at the brush's opacity, limited by the selection as strokes are (only
+    /// the tiles under its bounds): Delete on a selection with [`Paint::Erase`] (Edit > Clear),
+    /// kept apart from the original like any paint.
+    pub fn fill(&mut self) {
+        let size = self.base.size();
+        let image = [0.0, 0.0, f64::from(size.width), f64::from(size.height)];
+        let [x0, y0, x1, y1] = match &self.selection {
+            Some((selection, _)) => match crate::selection::bounds(selection) {
+                Some(b) => {
+                    let area = [
+                        f64::from(b.x),
+                        f64::from(b.y),
+                        b.right() as f64,
+                        b.bottom() as f64,
+                    ];
+                    let [a, b, c, d] = self.to_image.map_rect(area);
+                    [
+                        a.max(image[0]),
+                        b.max(image[1]),
+                        c.min(image[2]),
+                        d.min(image[3]),
+                    ]
+                }
+                None => return,
+            },
+            None => image,
+        };
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let tile = f64::from(TILE_SIZE);
+        let t = TILE_SIZE as usize;
+        let opacity = self.brush.opacity;
+        for row in (y0 / tile) as u32..(y1 / tile).ceil() as u32 {
+            for col in (x0 / tile) as u32..(x1 / tile).ceil() as u32 {
+                let coord = TileCoord { col, row };
+                self.coverage
+                    .insert(coord, Coverage(vec![opacity; TILE_PIXELS]));
+                self.dirty.insert(coord, [0, 0, t, t]);
+            }
+        }
+    }
+
     /// Whether the stroke has painted anything yet.
     pub fn has_paint(&self) -> bool {
         !self.coverage.is_empty()
@@ -460,7 +530,7 @@ impl Stroke {
                     let px = &mut row[x * bpp..(x + 1) * bpp];
                     // Coverage only grows: a pixel it does not reach yet is the base's.
                     px.copy_from_slice(&base[i * bpp..(i + 1) * bpp]);
-                    let amount = coverage.flow[i].min(coverage.cap[i]);
+                    let amount = coverage.0[i];
                     if amount > 0.0 {
                         self.paint_pixel(coord, x, y, amount, px);
                     }
@@ -472,7 +542,7 @@ impl Stroke {
             .zip(valid)
             .map(|(mut tile, (width, height))| {
                 if !tile.is_empty() {
-                    pad(&mut tile, width, height, bpp);
+                    pad_tile(&mut tile, width, height, bpp);
                 }
                 Arc::from(tile)
             })
@@ -494,6 +564,10 @@ impl Stroke {
             }
         }
         let codec = &self.codec;
+        if self.paint == Paint::Erase && codec.scale_alpha(px, 1.0 - amount) {
+            // Only the alpha changes: the colors stay as they were (ADR 0027).
+            return;
+        }
         let (color, alpha) = codec.read_mapped(px, &mut |v| v);
         let below = mat_vec(&self.to_working, color.map(f64::from));
         let mut dst = [below[0], below[1], below[2], f64::from(alpha)];
@@ -560,14 +634,14 @@ fn stamp_tile(
             if d2 >= reach2 {
                 continue;
             }
-            let strength = profile(d2.sqrt(), radius, inner, pixel) * flow;
-            if strength <= 0.0 {
+            // Towards the dab's own value by the flow, never past it (alpha darken).
+            let target = profile(d2.sqrt(), radius, inner, pixel) * f64::from(dab.opacity);
+            let i = y * t + x;
+            let c = f64::from(coverage.0[i]);
+            if target <= c {
                 continue;
             }
-            let i = y * t + x;
-            let c = f64::from(coverage.flow[i]);
-            coverage.flow[i] = (c + strength * (1.0 - c)) as f32;
-            coverage.cap[i] = coverage.cap[i].max(dab.opacity);
+            coverage.0[i] = (c + (target - c) * flow) as f32;
             changed = union(changed, Some([x, y, x + 1, y + 1]));
         }
     }
@@ -598,30 +672,6 @@ fn profile(d: f64, radius: f64, inner: f64, pixel: f64) -> f64 {
     let t = ((d - inner) / (radius - inner)).clamp(0.0, 1.0);
     // 1 − smoothstep: flat at both ends, so soft tips have no visible rim.
     (1.0 - t * t * (3.0 - 2.0 * t)) * edge
-}
-
-/// Fill the padding of a tile whose `width` × `height` first pixels are valid: each row repeats
-/// its last valid pixel, then the rows below repeat the last valid row (as tiles are padded).
-fn pad(tile: &mut [u8], width: usize, height: usize, bpp: usize) {
-    let t = TILE_SIZE as usize;
-    let row_bytes = t * bpp;
-    if width < t {
-        for y in 0..height {
-            let row = &mut tile[y * row_bytes..(y + 1) * row_bytes];
-            let (valid, padding) = row.split_at_mut(width * bpp);
-            let last = &valid[(width - 1) * bpp..];
-            for px in padding.chunks_exact_mut(bpp) {
-                px.copy_from_slice(last);
-            }
-        }
-    }
-    if height < t {
-        let (valid, padding) = tile.split_at_mut(height * row_bytes);
-        let last = &valid[(height - 1) * row_bytes..];
-        for row in padding.chunks_exact_mut(row_bytes) {
-            row.copy_from_slice(last);
-        }
-    }
 }
 
 /// Luminance weights of the working space's linear RGB (the Y row of its XYZ matrix).
@@ -662,7 +712,6 @@ impl MaskReader<'_> {
 mod tests {
     use super::*;
     use crate::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType};
-    use crate::geom::Size;
 
     fn rgba8() -> PixelFormat {
         PixelFormat::RGBA8_SRGB
@@ -961,6 +1010,110 @@ mod tests {
             new(Brush::default(), Affine::scale(0.0, 1.0)),
             Some(PaintError::InvalidTransform)
         );
+    }
+
+    #[test]
+    fn a_soft_stroke_at_full_flow_is_as_soft_as_one_dab() {
+        // Photoshop's alpha darken: dabs never build past their own value at full flow.
+        let brush = Brush {
+            diameter: 40.0,
+            hardness: 0.0,
+            ..Brush::default()
+        };
+        let dab = {
+            let mut s = stroke(transparent(Size::new(128, 128)), brush, red());
+            s.add(&[sample(64.0, 64.0)]);
+            s.finish().unwrap().unwrap()
+        };
+        let line = {
+            let mut s = stroke(transparent(Size::new(128, 128)), brush, red());
+            s.add(&[sample(20.0, 64.0), sample(108.0, 64.0)]);
+            s.finish().unwrap().unwrap()
+        };
+        // Across the stroke, under one of its dabs (every 10 px from 20), the same falloff as
+        // across one dab.
+        for y in 46..82 {
+            let (a, b) = (pixel(&dab, 64, y)[3], pixel(&line, 60, y)[3]);
+            assert!(a.abs_diff(b) <= 2, "y {y}: dab {a}, stroke {b}");
+        }
+    }
+
+    #[test]
+    fn the_eraser_changes_alpha_only() {
+        let base = filled(Size::new(64, 64), rgba8(), &[10, 20, 30, 200]);
+        let brush = Brush {
+            diameter: 20.0,
+            ..Brush::default()
+        };
+        let mut s = stroke(base, brush, Paint::Erase);
+        s.add(&[sample(32.0, 32.0)]);
+        let image = s.finish().unwrap().unwrap();
+        // Erased whole: transparent, its color kept.
+        assert_eq!(pixel(&image, 32, 32), [10, 20, 30, 0]);
+    }
+
+    #[test]
+    fn a_fill_clears_the_selection_only() {
+        let size = Size::new(600, 300);
+        // The left 100 columns selected.
+        let bytes: Vec<u8> = (0..600 * 300)
+            .flat_map(|i| if i % 600 < 100 { 65535u16 } else { 0 }.to_ne_bytes())
+            .collect();
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U16,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let selection = Arc::new(RasterImage::from_pixels(size, format, &bytes).unwrap());
+        let base = filled(size, rgba8(), &[10, 20, 30, 255]);
+        let mut s = Stroke::new(
+            base,
+            Affine::IDENTITY,
+            Some(selection),
+            BlendSpace::Perceptual,
+            Brush::default(),
+            Paint::Erase,
+        )
+        .unwrap();
+        s.fill();
+        let image = s.finish().unwrap().unwrap();
+        assert_eq!(pixel(&image, 50, 150)[3], 0);
+        assert_eq!(pixel(&image, 150, 150)[3], 255);
+        assert_eq!(pixel(&image, 550, 150)[3], 255);
+    }
+
+    #[test]
+    fn layers_grow_by_whole_tiles_to_reach_the_canvas() {
+        let canvas = Size::new(1000, 800);
+        // A 300 × 200 layer placed at (400, 300): grows left and up by whole tiles.
+        let at = Affine::translation(400.0, 300.0);
+        let ((left, top), size) = canvas_growth(Size::new(300, 200), at, canvas).unwrap();
+        assert_eq!((left, top), (2, 2));
+        assert_eq!(size, Size::new(512 + 600, 512 + 500));
+        // Covering the canvas already: no growth.
+        assert!(canvas_growth(canvas, Affine::IDENTITY, canvas).is_none());
+
+        let image = filled(Size::new(300, 200), rgba8(), &[10, 20, 30, 255]);
+        let grown = image.grown((left, top), size).unwrap().unwrap();
+        assert_eq!(grown.size(), size);
+        assert_eq!(pixel(&grown, 512, 512), [10, 20, 30, 255]);
+        assert_eq!(pixel(&grown, 811, 711), [10, 20, 30, 255]);
+        // Where the old padding was, and around: transparent.
+        assert_eq!(pixel(&grown, 812, 600)[3], 0);
+        assert_eq!(pixel(&grown, 600, 712)[3], 0);
+        assert_eq!(pixel(&grown, 10, 10)[3], 0);
+        // An interior tile is shared.
+        let big = filled(Size::new(600, 600), rgba8(), &[1, 2, 3, 255]);
+        let moved = big.grown((1, 1), Size::new(1000, 1000)).unwrap().unwrap();
+        let same = Arc::ptr_eq(
+            big.levels()[0].tile(TileCoord { col: 0, row: 0 }).unwrap(),
+            moved.levels()[0]
+                .tile(TileCoord { col: 1, row: 1 })
+                .unwrap(),
+        );
+        assert!(same);
+        assert!(big.grown((3, 0), Size::new(1000, 1000)).is_none());
     }
 
     /// Timing of a long soft stroke on a large layer (run with `--ignored --nocapture`).
