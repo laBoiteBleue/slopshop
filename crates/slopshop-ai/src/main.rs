@@ -417,7 +417,10 @@ fn main() {
         std::process::exit(3);
     }
     let choices = providers(&options.provider);
-    // The models load on the first request that needs them: greeting stays instant.
+    // The models load on the first request that needs them: greeting stays instant. BiRefNet
+    // and ViTMatte are never needed together and each holds gigabytes of GPU memory while
+    // loaded (BiRefNet about 10 GB on DirectML): loading one unloads the other, else the second
+    // spills into shared memory and runs several times slower. SAM is small and stays.
     let mut sam: Option<Sam> = None;
     let mut matte: Option<Matte> = None;
     let mut subject: Option<Subject> = None;
@@ -465,6 +468,7 @@ fn main() {
                 rgb,
                 trimap,
             }) => {
+                subject = None;
                 let loaded = match matte.as_mut() {
                     Some(matte) => Ok(matte),
                     None => Matte::load(&options.models, &choices).map(|m| matte.insert(m)),
@@ -475,6 +479,7 @@ fn main() {
                 }
             }
             Ok(Request::Subject { width, height, rgb }) => {
+                matte = None;
                 let loaded = match subject.as_mut() {
                     Some(subject) => Ok(subject),
                     None => Subject::load(&options.models, &choices).map(|s| subject.insert(s)),
