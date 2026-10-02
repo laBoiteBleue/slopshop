@@ -1627,6 +1627,51 @@ pub fn select_scores(
     area: Rect,
     combine: Combine,
 ) -> Result<Option<RasterImage>, SelectionError> {
+    let mask = stretch(canvas, scores, width, height, area, |v| {
+        if v > 0.0 { FULL } else { 0 }
+    })?;
+    finish(canvas, current, soften(&mask), combine)
+}
+
+/// A model's mask of `side`² logits over `area`, as [`select_logits`], but kept soft: each
+/// pixel's coverage is the model's probability (the logistic of its logit read bilinearly),
+/// almost sure values rounded to sure. Thin details a model sees with little confidence
+/// (strands of hair) stay partly selected instead of being cut at one half.
+pub fn select_logits_soft(
+    canvas: Size,
+    current: Option<&RasterImage>,
+    logits: &[f32],
+    side: usize,
+    area: Rect,
+    combine: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
+    let mask = stretch(canvas, logits, side, side, area, |v| {
+        let p = 1.0 / (1.0 + (-v).exp());
+        if p <= SOFT_FLOOR {
+            0
+        } else if p >= 1.0 - SOFT_FLOOR {
+            FULL
+        } else {
+            (p * f32::from(FULL)).round() as u16
+        }
+    })?;
+    finish(canvas, current, mask, combine)
+}
+
+/// Below this probability a soft mask selects nothing (and above one minus it, everything):
+/// the faint noise of a model's output would otherwise cover the canvas.
+const SOFT_FLOOR: f32 = 0.01;
+
+/// `width × height` scores stretched over `area` of the canvas, read bilinearly, each pixel's
+/// coverage given by `coverage`; nothing outside `area`.
+fn stretch(
+    canvas: Size,
+    scores: &[f32],
+    width: usize,
+    height: usize,
+    area: Rect,
+    coverage: impl Fn(f32) -> u16 + Sync,
+) -> Result<Mask, SelectionError> {
     if width == 0
         || height == 0
         || scores.len() != width * height
@@ -1645,9 +1690,9 @@ pub fn select_scores(
     let (left, top) = (area.x as usize, area.y as usize);
     let (right, bottom) = (left + area.width as usize, top + area.height as usize);
     let at = |x: usize, y: usize| scores[y.min(height - 1) * width + x.min(width - 1)];
-    let inside = |x: usize, y: usize| -> bool {
+    let value = |x: usize, y: usize| -> u16 {
         if x < left || y < top || x >= right || y >= bottom {
-            return false;
+            return 0;
         }
         let fx = (((x - left) as f64 + 0.5) * sx - 0.5).max(0.0);
         let fy = (((y - top) as f64 + 0.5) * sy - 0.5).max(0.0);
@@ -1655,7 +1700,7 @@ pub fn select_scores(
         let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
         let upper = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
         let lower = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
-        upper * (1.0 - ty) + lower * ty > 0.0
+        coverage(upper * (1.0 - ty) + lower * ty)
     };
     // The tiles over the area; the others stay empty.
     let tiles: Vec<usize> = (top / T..bottom.div_ceil(T))
@@ -1664,7 +1709,7 @@ pub fn select_scores(
         .collect();
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let per_thread = tiles.len().div_ceil(threads).max(1);
-    let (shape, inside) = (&mask, &inside);
+    let (shape, value) = (&mask, &value);
     let mut done: Vec<(usize, Tile)> = Vec::new();
     std::thread::scope(|scope| {
         let workers: Vec<_> = tiles
@@ -1679,9 +1724,7 @@ pub fn select_scores(
                             let mut values = vec![0u16; T * T];
                             for y in 0..h {
                                 for x in 0..w {
-                                    if inside(col * T + x, row * T + y) {
-                                        values[y * T + x] = FULL;
-                                    }
+                                    values[y * T + x] = value(col * T + x, row * T + y);
                                 }
                             }
                             pad(&mut values, w, h);
@@ -1699,7 +1742,7 @@ pub fn select_scores(
     for (index, tile) in done {
         mask.tiles[index] = tile;
     }
-    finish(canvas, current, soften(&mask), combine)
+    Ok(mask)
 }
 
 /// A model's mask (`side`² logits, positive inside) as inside or not per cell, without specks
@@ -1785,12 +1828,36 @@ impl EdgeWindow {
 #[derive(Debug, Clone)]
 pub struct EdgeRefinement {
     mask: Mask,
-    /// Document pixels on each side of the half-coverage contour that the model decides.
-    band: u32,
+    /// Document pixels around the outline that the model decides.
+    band: RefineBand,
     windows: Vec<EdgeWindow>,
 }
 
-/// A tile's coverage, seen from the half-coverage contour.
+/// How far from the outline Refine Edge lets the model decide, document pixels: `inward` into
+/// the selection, `outward` away from it. Hair and fur reach far outside a coarse mask, rarely
+/// far inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefineBand {
+    pub inward: u32,
+    pub outward: u32,
+}
+
+impl RefineBand {
+    /// The same distance on both sides.
+    pub fn both(radius: u32) -> Self {
+        Self {
+            inward: radius,
+            outward: radius,
+        }
+    }
+}
+
+/// Coverage at or above which a pixel is surely selected for Refine Edge, and at or below
+/// which surely not; the model decides between (a soft mask's thin details).
+const SURE_IN: u16 = 64_224; // 98 %
+const SURE_OUT: u16 = 1_311; // 2 %
+
+/// A tile's coverage, seen from the outline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
     In,
@@ -1799,37 +1866,46 @@ enum Side {
 }
 
 /// Plans Refine Edge on `selection` (`canvas`-sized): windows of at most `side`² model pixels
-/// along the outline, where coverage crosses one half, each deciding a band of `band` document
-/// pixels on both sides of it. Long outlines are seen coarser (two, four… document pixels per
-/// model pixel) so that there are at most `max_windows`.
+/// along the outline (where coverage is neither sure in nor sure out, or changes between
+/// them), each deciding `band` around it. Long outlines are seen coarser (two, four… document
+/// pixels per model pixel) so that there are at most `max_windows`.
 pub fn plan_refinement(
     canvas: Size,
     selection: &RasterImage,
-    band: u32,
+    band: RefineBand,
     side: u32,
     max_windows: usize,
 ) -> Result<EdgeRefinement, SelectionError> {
-    if side < 64 || band == 0 {
+    if side < 64 || band.inward == 0 || band.outward == 0 {
         return Err(SelectionError::InvalidShape);
     }
     let mask = Mask::from_image(canvas, selection)?;
+    let side_of = |v: u16| {
+        if v >= SURE_IN {
+            Side::In
+        } else if v <= SURE_OUT {
+            Side::Out
+        } else {
+            Side::Both
+        }
+    };
     let sides: Vec<Side> = mask
         .tiles
         .iter()
         .map(|tile| match tile {
-            Tile::Const(v) if *v >= HALF => Side::In,
-            Tile::Const(_) => Side::Out,
+            Tile::Const(v) => side_of(*v),
             other => {
                 let values = other.values();
-                let inside = values.iter().filter(|&&v| v >= HALF).count();
-                match inside {
-                    0 => Side::Out,
-                    n if n == values.len() => Side::In,
-                    _ => Side::Both,
+                let first = side_of(values[0]);
+                if values.iter().all(|&v| side_of(v) == first) {
+                    first
+                } else {
+                    Side::Both
                 }
             }
         })
         .collect();
+    let reach = band.inward.max(band.outward);
     let mut scale = 1u32;
     loop {
         // Windows of `side` model pixels; their inner parts tile the canvas, the rest (an
@@ -1845,7 +1921,7 @@ pub fn plan_refinement(
                     cell.min(canvas.width - x),
                     cell.min(canvas.height - y),
                 );
-                if crosses(&mask, &sides, inner, band) {
+                if crosses(&mask, &sides, inner, reach) {
                     let x0 = x.saturating_sub(margin);
                     let y0 = y.saturating_sub(margin);
                     let rect = Rect::new(
@@ -1898,44 +1974,61 @@ impl EdgeRefinement {
     }
 
     /// The trimap of `window`, [`EdgeWindow::input_size`] pixels: 255 surely inside, 0 surely
-    /// outside, [`TRIMAP_UNKNOWN`] within the band around the half-coverage contour.
+    /// outside, [`TRIMAP_UNKNOWN`] where the model decides: pixels neither sure in nor sure out,
+    /// sure ones within the band's inward distance of a pixel not sure in, and sure outside ones
+    /// within its outward distance of a pixel not sure out.
     pub fn trimap(&self, window: &EdgeWindow) -> Vec<u8> {
         let size = window.input_size();
         let (w, h) = (size.width as usize, size.height as usize);
         let s = i64::from(window.scale);
-        let inside: Vec<bool> = (0..w * h)
+        let coverage: Vec<u16> = (0..w * h)
             .map(|i| {
                 let x = i64::from(window.rect.x) + (i % w) as i64 * s + s / 2;
                 let y = i64::from(window.rect.y) + (i / w) as i64 * s + s / 2;
-                self.mask.get(x, y) >= HALF
+                self.mask.get(x, y)
             })
             .collect();
-        // Summed inside counts: a pixel is undecided when its neighborhood of the band's radius
-        // holds both sides.
-        let r = self.band.div_ceil(window.scale).max(1) as usize;
-        let mut sat = vec![0u32; (w + 1) * (h + 1)];
-        for y in 0..h {
-            let mut row = 0;
-            for x in 0..w {
-                row += u32::from(inside[y * w + x]);
-                sat[(y + 1) * (w + 1) + x + 1] = sat[y * (w + 1) + x + 1] + row;
+        // Summed counts of the pixels not sure in, and not sure out.
+        let summed = |count: &dyn Fn(u16) -> bool| {
+            let mut sat = vec![0u32; (w + 1) * (h + 1)];
+            for y in 0..h {
+                let mut row = 0;
+                for x in 0..w {
+                    row += u32::from(count(coverage[y * w + x]));
+                    sat[(y + 1) * (w + 1) + x + 1] = sat[y * (w + 1) + x + 1] + row;
+                }
             }
-        }
+            sat
+        };
+        let not_in = summed(&|v| v < SURE_IN);
+        let not_out = summed(&|v| v > SURE_OUT);
+        let near = |sat: &[u32], x: usize, y: usize, distance: u32| {
+            let r = distance.div_ceil(window.scale).max(1) as usize;
+            let (xa, xb) = (x.saturating_sub(r), (x + r + 1).min(w));
+            let (ya, yb) = (y.saturating_sub(r), (y + r + 1).min(h));
+            sat[yb * (w + 1) + xb] + sat[ya * (w + 1) + xa]
+                - sat[ya * (w + 1) + xb]
+                - sat[yb * (w + 1) + xa]
+                > 0
+        };
         (0..w * h)
             .map(|i| {
                 let (x, y) = (i % w, i / w);
-                let (xa, xb) = (x.saturating_sub(r), (x + r + 1).min(w));
-                let (ya, yb) = (y.saturating_sub(r), (y + r + 1).min(h));
-                let count = sat[yb * (w + 1) + xb] + sat[ya * (w + 1) + xa]
-                    - sat[ya * (w + 1) + xb]
-                    - sat[yb * (w + 1) + xa];
-                let area = ((xb - xa) * (yb - ya)) as u32;
-                if count > 0 && count < area {
-                    TRIMAP_UNKNOWN
-                } else if inside[i] {
-                    255
+                let v = coverage[i];
+                if v >= SURE_IN {
+                    if near(&not_in, x, y, self.band.inward) {
+                        TRIMAP_UNKNOWN
+                    } else {
+                        255
+                    }
+                } else if v <= SURE_OUT {
+                    if near(&not_out, x, y, self.band.outward) {
+                        TRIMAP_UNKNOWN
+                    } else {
+                        0
+                    }
                 } else {
-                    0
+                    TRIMAP_UNKNOWN
                 }
             })
             .collect()
@@ -3146,7 +3239,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let mut plan = plan_refinement(canvas, &selection, 16, 512, 64).unwrap();
+        let mut plan = plan_refinement(canvas, &selection, RefineBand::both(16), 512, 64).unwrap();
         let windows = plan.windows().to_vec();
         assert!(!windows.is_empty());
         // Only windows along x = 1024, at full resolution.
@@ -3173,9 +3266,60 @@ mod tests {
         assert_eq!(refined.gray_at(900, 500), 1.0, "outside the band: kept");
         assert_eq!(refined.gray_at(1200, 500), 0.0);
         // At most one window: the outline is seen coarser.
-        let coarse = plan_refinement(canvas, &selection, 16, 512, 1).unwrap();
+        let coarse = plan_refinement(canvas, &selection, RefineBand::both(16), 512, 1).unwrap();
         assert!(coarse.windows().len() <= 1 || coarse.windows()[0].scale > 1);
         assert!(coarse.windows().iter().all(|w| w.input_size().width <= 512));
+    }
+
+    #[test]
+    fn refine_edge_decides_farther_outside_than_inside_and_on_soft_coverage() {
+        // The left half of a 2048 × 1024 canvas, and faint strands far to its right.
+        let canvas = Size::new(2048, 1024);
+        let mut logits = vec![-20.0f32; 64 * 64];
+        for y in 0..64 {
+            for x in 0..64 {
+                if x < 32 {
+                    logits[y * 64 + x] = 20.0;
+                } else if (48..50).contains(&x) && y < 16 {
+                    logits[y * 64 + x] = -1.0; // About 27 %.
+                }
+            }
+        }
+        let area = canvas.bounds();
+        let soft = select_logits_soft(canvas, None, &logits, 64, area, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let strand = soft.gray_at(1568, 100);
+        assert!(strand > 0.1 && strand < 0.5, "{strand}");
+        assert_eq!(
+            soft.gray_at(1300, 600),
+            0.0,
+            "noise below the floor: nothing"
+        );
+        let band = RefineBand {
+            inward: 8,
+            outward: 64,
+        };
+        let plan = plan_refinement(canvas, &soft, band, 512, 64).unwrap();
+        let unknown_at = |x: u32, y: u32| {
+            plan.windows().iter().any(|w| {
+                let size = w.input_size();
+                let inside = x >= w.rect.x
+                    && y >= w.rect.y
+                    && x < w.rect.x + size.width * w.scale
+                    && y < w.rect.y + size.height * w.scale;
+                inside && {
+                    let trimap = plan.trimap(w);
+                    let (tx, ty) = ((x - w.rect.x) / w.scale, (y - w.rect.y) / w.scale);
+                    trimap[(ty * size.width + tx) as usize] == TRIMAP_UNKNOWN
+                }
+            })
+        };
+        // The soft edge spans x ≈ 1021–1028 (logits interpolated across one model cell).
+        assert!(unknown_at(1080, 600), "outward, within 64 of the soft edge");
+        assert!(!unknown_at(1300, 600), "outward, beyond the band");
+        assert!(!unknown_at(900, 600), "inward, beyond 8 pixels");
+        assert!(unknown_at(1568, 100), "a faint strand far from the edge");
     }
 
     #[test]
