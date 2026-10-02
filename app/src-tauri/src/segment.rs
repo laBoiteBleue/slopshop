@@ -127,6 +127,26 @@ struct Session {
     helper: Option<Client>,
     encoded: Option<Encoded>,
     next_key: u64,
+    /// When the helper was last asked for something.
+    last_used: Option<std::time::Instant>,
+}
+
+/// The helper stops after this long unused, freeing its memory (several GB of RAM and VRAM with
+/// the models loaded); the next request starts it again, loading the models (a few seconds).
+const HELPER_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Stops the helper if it has been unused for [`HELPER_IDLE`]; never while a request holds it.
+/// Called periodically by the app.
+pub(crate) fn stop_if_idle(state: &AppState) {
+    let Ok(mut session) = state.segment.session.try_lock() else {
+        return;
+    };
+    let idle = session
+        .last_used
+        .is_some_and(|used| used.elapsed() >= HELPER_IDLE);
+    if session.helper.is_some() && idle {
+        *session = Session::default();
+    }
 }
 
 /// The image SAM has encoded: a region of a document as it was at a revision.
@@ -238,6 +258,7 @@ fn clamp_region(region: [u32; 4], canvas: Size) -> Result<Rect, AiFailure> {
 impl Session {
     /// The helper, started if needed.
     fn client(&mut self, root: &Path) -> Result<&mut Client, AiFailure> {
+        self.last_used = Some(std::time::Instant::now());
         match self.helper {
             Some(ref mut client) => Ok(client),
             None => Ok(self.helper.insert(start_helper(root)?)),
