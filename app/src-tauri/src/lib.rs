@@ -1886,6 +1886,7 @@ async fn present_view(
             complete: presented != Presented::Partial,
             revision: doc.revision(),
             zoom: viewport.zoom(),
+            origin: viewport.transform().origin,
             fit: viewport.is_fit(),
             render_ms: start.elapsed().as_secs_f32() * 1000.0,
         })
@@ -2085,6 +2086,7 @@ pub fn run() {
             segment::ai_object_select,
             segment::ai_refine_selection,
             segment::ai_select_subject,
+            segment::ai_cancel,
             layer_thumbnail,
             add_mask_from_transparency,
             selection::select_shape,

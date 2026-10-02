@@ -155,9 +155,17 @@
 
   async function present() {
     const start = performance.now();
+    const responsesAtStart = viewResponses;
     const info = await engine.presentView(docId, deviceRect());
     if (destroyed) return;
     error = null;
+    // As frames do: the view presented is the latest one if it did not move meanwhile. Without
+    // it, the first view (fitted at opening) stayed unknown until a pan or zoom, and with it
+    // the overlays (tools, marching ants).
+    if (viewResponses === responsesAtStart && viewRequestsInFlight === 0 && !animating) {
+      target = { zoom: info.zoom, origin: info.origin };
+      targetView = target;
+    }
     report({
       zoom: info.zoom,
       fit: info.fit,
