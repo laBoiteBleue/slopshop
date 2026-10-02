@@ -1166,6 +1166,12 @@ export const engine = {
    * filled with `color` (sRGB-encoded RGB in [0, 1]), as paint (ADR 0027); of its mask
    * (`target` "mask"): hidden, or filled with the color's gray.
    */
+  /**
+   * The color picker's eyedropper: the color shown at a document point (every visible layer),
+   * whole 8-bit sRGB values; null outside the canvas or where nothing is shown.
+   */
+  sampleColor: (documentId: number, x: number, y: number) =>
+    serial(() => invoke<[number, number, number] | null>("sample_color", { documentId, x, y })),
   fillSelection: (
     documentId: number,
     layerId: number,

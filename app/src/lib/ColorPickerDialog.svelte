@@ -9,7 +9,9 @@
   // color space around the color, the slider setting the chosen component (the radio buttons)
   // and the square the two others; HSB, RGB, Lab and hexadecimal fields; the new color over the
   // current one (a click on the current one takes it back). Colors are sRGB; Lab is D50, as
-  // Photoshop's. OK applies, Esc or Cancel leaves the color as it was.
+  // Photoshop's. OK applies, Esc or Cancel leaves the color as it was. While it is open the rest
+  // of the app waits, except the image: a click or a drag there takes the color shown, as
+  // Photoshop's eyedropper does.
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
@@ -29,12 +31,21 @@
     color,
     onapply,
     onclose,
+    sample,
   }: {
     title: string;
     /** The current color, `#rrggbb` sRGB. */
     color: string;
     onapply: (hex: string) => void;
     onclose: () => void;
+    /**
+     * The color shown in the image under a window point (sRGB in [0, 1]); null where there is
+     * no image or nothing shown. `probe` only asks whether there is an image there.
+     */
+    sample?: {
+      at: (clientX: number, clientY: number) => Promise<Rgb | null>;
+      probe: (clientX: number, clientY: number) => boolean;
+    };
   } = $props();
 
   const SIDE = 256;
@@ -218,23 +229,81 @@
     setFromChannels({ [c]: Math.min(Math.max(v / scale, axis.min), axis.max) });
   }
 
+  /** The pointer is over the image: the eyedropper shows. */
+  let overImage = $state(false);
+  /** A press on the image samples until released; one sample in flight at a time. */
+  let sampling: { pointerId: number; busy: boolean; next: [number, number] | null } | null = null;
+
+  async function takeSample(x: number, y: number) {
+    const run = sampling;
+    if (!sample || !run) return;
+    if (run.busy) {
+      run.next = [x, y];
+      return;
+    }
+    run.busy = true;
+    try {
+      const shown = await sample.at(x, y);
+      if (shown) setRgb(shown);
+    } catch {
+      // Nothing to take there.
+    } finally {
+      run.busy = false;
+      const next = run.next;
+      run.next = null;
+      if (next && sampling === run) void takeSample(...next);
+    }
+  }
+
+  function onBlockerDown(e: PointerEvent) {
+    e.preventDefault();
+    if (e.button !== 0 || !sample?.probe(e.clientX, e.clientY)) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    sampling = { pointerId: e.pointerId, busy: false, next: null };
+    void takeSample(e.clientX, e.clientY);
+  }
+
+  function onBlockerMove(e: PointerEvent) {
+    overImage = sample?.probe(e.clientX, e.clientY) ?? false;
+    if (sampling?.pointerId === e.pointerId && overImage) void takeSample(e.clientX, e.clientY);
+  }
+
+  function onBlockerUp(e: PointerEvent) {
+    if (sampling?.pointerId === e.pointerId) sampling = null;
+  }
+
   onMount(() => {
-    dialog.showModal();
-    // Modal: the app's shortcuts must not act behind the dialog.
-    const isolate = (e: KeyboardEvent) => e.stopPropagation();
-    window.addEventListener("keydown", isolate, true);
-    return () => window.removeEventListener("keydown", isolate, true);
+    // Not modal for the browser, so that the image can be sampled: the blocker keeps the rest
+    // of the app waiting, and the app's shortcuts must not act behind the dialog.
+    dialog.show();
+    const keys = (e: KeyboardEvent) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onclose();
+      } else if (e.key === "Enter" && !dialog.contains(e.target as Node)) {
+        e.preventDefault();
+        onapply(hex);
+      }
+    };
+    window.addEventListener("keydown", keys, true);
+    return () => window.removeEventListener("keydown", keys, true);
   });
 </script>
 
-<dialog
-  bind:this={dialog}
-  aria-labelledby="color-picker-title"
-  oncancel={(e) => {
-    e.preventDefault();
-    onclose();
-  }}
->
+<div
+  class="blocker"
+  class:eyedropper={overImage}
+  role="presentation"
+  onpointerdown={onBlockerDown}
+  onpointermove={onBlockerMove}
+  onpointerup={onBlockerUp}
+  onpointercancel={onBlockerUp}
+  onpointerleave={() => (overImage = false)}
+  oncontextmenu={(e) => e.preventDefault()}
+></div>
+
+<dialog bind:this={dialog} aria-labelledby="color-picker-title">
   <form
     onsubmit={(e) => {
       e.preventDefault();
@@ -328,17 +397,28 @@
 </dialog>
 
 <style>
+  /* Above everything but the dialog, menus included. */
+  .blocker {
+    position: fixed;
+    inset: 0;
+    z-index: 400;
+  }
+
+  .blocker.eyedropper {
+    cursor: crosshair;
+  }
+
   dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 401;
+    margin: auto;
     padding: 0;
     border: 1px solid var(--border-dark);
     border-radius: 4px;
     background: var(--panel);
     color: var(--text);
     box-shadow: 0 10px 32px #0009;
-  }
-
-  dialog::backdrop {
-    background: #00000055;
   }
 
   header {
