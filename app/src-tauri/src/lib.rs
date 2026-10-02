@@ -2382,6 +2382,7 @@ mod tests {
         };
         let batch = |samples: Vec<[f64; 3]>, end: bool| paint::PaintRequest {
             stroke: 7,
+            target: paint::PaintTarget::Layer,
             layer_id: layer,
             brush: paint::BrushRequest {
                 size: 40.0,
@@ -2464,6 +2465,7 @@ mod tests {
         };
         let request = paint::PaintRequest {
             stroke: 1,
+            target: paint::PaintTarget::Layer,
             layer_id: id.get(),
             brush: paint::BrushRequest {
                 size: 20.0,
@@ -2512,6 +2514,135 @@ mod tests {
             matches!(&layer.content, LayerContent::Raster { image, original: None }
             if Arc::ptr_eq(image, &small))
         );
+    }
+
+    /// A one-batch stroke of a hard 20-pixel brush at (50, 50) on `target`.
+    fn dab(
+        layer: LayerId,
+        target: paint::PaintTarget,
+        color: Option<[f32; 3]>,
+    ) -> paint::PaintRequest {
+        paint::PaintRequest {
+            stroke: 1,
+            target,
+            layer_id: layer.get(),
+            brush: paint::BrushRequest {
+                size: 20.0,
+                hardness: 1.0,
+                spacing: 0.25,
+                flow: 1.0,
+                opacity: 1.0,
+                pressure_size: false,
+                pressure_opacity: false,
+            },
+            color,
+            samples: vec![[50.5, 50.5, 1.0]],
+            end: true,
+        }
+    }
+
+    #[test]
+    fn a_stroke_paints_a_mask_and_keeps_the_pixels() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let size = Size::new(200, 200);
+        let pixels = Arc::new(
+            RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &[200; 200 * 200 * 4]).unwrap(),
+        );
+        let id = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let id = document.session.allocate_layer_id();
+            let index = document.session.document().layers().len();
+            let mask = LayerMask {
+                image: Arc::new(slopshop_core::selection::select_all(size).unwrap()),
+                enabled: true,
+                replaces_alpha: false,
+                original: None,
+            };
+            document
+                .session
+                .perform(Edit::InsertLayer {
+                    parent: None,
+                    index,
+                    layer: Layer {
+                        transform: slopshop_core::Affine::IDENTITY,
+                        clipped: false,
+                        id,
+                        name: "masked".to_owned(),
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        content: LayerContent::Raster {
+                            original: None,
+                            image: Arc::clone(&pixels),
+                        },
+                        mask: Some(mask),
+                    },
+                })
+                .unwrap();
+            id
+        };
+        // Black (the foreground) hides where it paints; the pixels stay as they were.
+        let request = dab(id, paint::PaintTarget::Mask, Some([0.0; 3]));
+        let view = paint::paint(&state, doc.id, request).unwrap().unwrap();
+        assert!(view.layers.last().unwrap().painted);
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let layer = document.session.document().layer(id).unwrap();
+        let mask = layer.mask.as_ref().unwrap();
+        assert_eq!(mask.image.gray_at(50, 50), 0.0);
+        assert_eq!(mask.image.gray_at(150, 150), 1.0);
+        assert!(mask.original.is_some());
+        assert!(
+            matches!(&layer.content, LayerContent::Raster { image, original: None }
+            if Arc::ptr_eq(image, &pixels))
+        );
+        // One undo entry.
+        document.session.undo().unwrap();
+        let mask = document.session.document().layer(id).unwrap().mask.as_ref();
+        assert!(mask.is_some_and(|m| m.original.is_none() && m.image.gray_at(50, 50) == 1.0));
+    }
+
+    #[test]
+    fn a_stroke_in_quick_mask_paints_the_selection() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let background = {
+            let mut documents = state.documents().unwrap();
+            documents
+                .get_mut(doc.id)
+                .unwrap()
+                .session
+                .document()
+                .layers()[0]
+                .id
+        };
+        let selection = |state: &AppState| {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            document.session.document().selection().cloned()
+        };
+        // Nothing selected is everything selected: black unselects where it paints.
+        let request = dab(background, paint::PaintTarget::Selection, Some([0.0; 3]));
+        paint::paint(&state, doc.id, request).unwrap().unwrap();
+        let selected = selection(&state).expect("a selection");
+        assert_eq!(selected.image().gray_at(50, 50), 0.0);
+        assert_eq!(selected.image().gray_at(150, 150), 1.0);
+        // White selects again; the background layer is never painted.
+        let request = dab(background, paint::PaintTarget::Selection, Some([1.0; 3]));
+        paint::paint(&state, doc.id, request).unwrap().unwrap();
+        assert_eq!(selection(&state).unwrap().image().gray_at(50, 50), 1.0);
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        assert!(!document.session.document().layers()[0].is_painted());
+        document.session.undo().unwrap();
+        document.session.undo().unwrap();
+        assert!(document.session.document().selection().is_none());
     }
 
     #[test]

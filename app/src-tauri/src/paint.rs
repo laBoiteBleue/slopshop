@@ -4,6 +4,8 @@
 //! engine's stroke and its result is shown as a preview in place of the layer's pixels (view
 //! state, like the Quick Mask overlay: no history entry, no revision). The last batch commits
 //! the stroke as one edit, `Edit::SetLayerPaint`: one undo entry, the layer's original kept.
+//! A layer's mask is painted the same way (`Edit::SetMaskPaint`), and the selection in Quick
+//! Mask (`Edit::SetSelection`): both in gray, white showing or selecting, black hiding.
 //!
 //! A stroke reaches the whole canvas: a layer that does not cover it grows first, by whole
 //! tiles before it (its pixels, original and mask move with it, its transform compensates), so
@@ -12,7 +14,8 @@
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
-use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth};
+use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
+use slopshop_core::selection::{Selection, select_all};
 use slopshop_core::{
     Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage,
 };
@@ -28,7 +31,10 @@ use crate::selection::on_worker;
 pub struct PaintRequest {
     /// Batches of one stroke share its id; a new id starts a new stroke.
     pub stroke: u64,
-    /// The layer painted, a raster layer.
+    /// What is painted: the layer's pixels (a raster layer), its mask, or the selection.
+    #[serde(default)]
+    pub target: PaintTarget,
+    /// The layer painted, or whose mask is painted; unused for the selection.
     pub layer_id: u64,
     pub brush: BrushRequest,
     /// The Brush's color, sRGB-encoded RGB in `[0, 1]`; absent for the Eraser.
@@ -38,6 +44,38 @@ pub struct PaintRequest {
     pub samples: Vec<[f64; 3]>,
     /// The last batch: the stroke is committed.
     pub end: bool,
+}
+
+/// What a stroke paints (ADR 0027).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PaintTarget {
+    /// A raster layer's pixels.
+    #[default]
+    Layer,
+    /// A layer's mask, in gray.
+    Mask,
+    /// The selection in Quick Mask, in gray.
+    Selection,
+}
+
+/// A stroke's target in a document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Layer(LayerId),
+    Mask(LayerId),
+    Selection,
+}
+
+impl PaintRequest {
+    fn target(&self) -> Target {
+        let id = LayerId::from_raw(self.layer_id);
+        match self.target {
+            PaintTarget::Layer => Target::Layer(id),
+            PaintTarget::Mask => Target::Mask(id),
+            PaintTarget::Selection => Target::Selection,
+        }
+    }
 }
 
 /// The options bar's brush. Shares between 0 and 1.
@@ -72,7 +110,7 @@ impl BrushRequest {
 struct ActiveStroke {
     id: u64,
     document_id: u64,
-    layer: LayerId,
+    target: Target,
     stroke: Stroke,
     growth: Option<Growth>,
 }
@@ -91,10 +129,10 @@ pub struct PaintState {
     stroke: Mutex<Option<ActiveStroke>>,
 }
 
-/// What a document shows of a stroke under way: the layer's pixels as painted so far.
+/// What a document shows of a stroke under way: its target as painted so far.
 #[derive(Debug, Clone)]
 pub struct PaintPreview {
-    pub layer: LayerId,
+    target: Target,
     pub image: Arc<RasterImage>,
     pub growth: Option<Growth>,
 }
@@ -103,12 +141,27 @@ impl PaintPreview {
     /// `doc` (a snapshot being rendered) showing the stroke.
     pub fn apply_to(&self, doc: &mut Document) {
         // The layer may have gone meanwhile: then nothing to show.
-        let _ = paint_edit(self.layer, Arc::clone(&self.image), self.growth.as_ref()).apply(doc);
+        let _ = paint_edit(self.target, Arc::clone(&self.image), self.growth.as_ref()).apply(doc);
     }
 }
 
-/// The edit that gives `layer` the painted `image`, grown first by `growth` if any.
-fn paint_edit(layer: LayerId, image: Arc<RasterImage>, growth: Option<&Growth>) -> Edit {
+/// The edit that gives `target` the painted `image`, a layer grown first by `growth` if any.
+fn paint_edit(target: Target, image: Arc<RasterImage>, growth: Option<&Growth>) -> Edit {
+    let layer = match target {
+        Target::Layer(id) => id,
+        Target::Mask(id) => {
+            return Edit::SetMaskPaint {
+                id,
+                painted: Some(image),
+            };
+        }
+        // A stroke paints a gray image of the selection's: always a selection.
+        Target::Selection => {
+            return Edit::SetSelection {
+                selection: Selection::new(image),
+            };
+        }
+    };
     let Some(growth) = growth else {
         return Edit::SetLayerPaint {
             id: layer,
@@ -203,33 +256,59 @@ fn grow(doc: &Document, id: LayerId) -> Result<Option<(Arc<RasterImage>, Growth)
     )))
 }
 
-/// A stroke on layer `layer_id` of `doc`, as the request asks, on the layer grown to the canvas
-/// if it needs to (`grow`: strokes; not a clear, which only removes).
+/// A stroke on the request's target in `doc`, a layer grown to the canvas if it needs to
+/// (`grow_layer`: strokes; not a clear, which only removes).
 fn start(
     doc: &Document,
     request: &PaintRequest,
     grow_layer: bool,
 ) -> Result<(Stroke, Option<Growth>), String> {
-    let id = LayerId::from_raw(request.layer_id);
-    let layer = doc.layer(id).ok_or("the painted layer is gone")?;
-    let LayerContent::Raster { image, .. } = &layer.content else {
-        return Err("only raster layers can be painted".to_owned());
-    };
-    let (image, growth) = match grow_layer.then(|| grow(doc, id)).transpose()?.flatten() {
-        Some((grown, growth)) => (grown, Some(growth)),
-        None => (Arc::clone(image), None),
-    };
-    // Into the parent, then into the document.
-    let transform = growth.as_ref().map_or(layer.transform, |g| g.transform);
-    let to_document = transform.then(doc.parent_transform(id));
-    let paint = match request.color {
-        Some([r, g, b]) => Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0)),
-        None => Paint::Erase,
+    // In gray, a color paints its luminance and the Eraser hides (ADR 0027).
+    let gray = Paint::Gray(request.color.map_or(0.0, gray_of_srgb));
+    let selection = doc.selection().map(|s| Arc::clone(s.image()));
+    let (image, to_document, growth, paint, selection) = match request.target() {
+        Target::Layer(id) => {
+            let layer = doc.layer(id).ok_or("the painted layer is gone")?;
+            let LayerContent::Raster { image, .. } = &layer.content else {
+                return Err("only raster layers can be painted".to_owned());
+            };
+            let (image, growth) = match grow_layer.then(|| grow(doc, id)).transpose()?.flatten() {
+                Some((grown, growth)) => (grown, Some(growth)),
+                None => (Arc::clone(image), None),
+            };
+            // Into the parent, then into the document.
+            let transform = growth.as_ref().map_or(layer.transform, |g| g.transform);
+            let paint = match request.color {
+                Some([r, g, b]) => {
+                    Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0))
+                }
+                None => Paint::Erase,
+            };
+            let to_document = transform.then(doc.parent_transform(id));
+            (image, to_document, growth, paint, selection)
+        }
+        // A mask lies in its layer's pixel grid and covers what the layer can show: it does not
+        // grow.
+        Target::Mask(id) => {
+            let layer = doc.layer(id).ok_or("the painted layer is gone")?;
+            let mask = layer.mask.as_ref().ok_or("the layer has no mask")?;
+            let to_document = layer.transform.then(doc.parent_transform(id));
+            (Arc::clone(&mask.image), to_document, None, gray, selection)
+        }
+        // Without a selection everything is selected (Quick Mask shows no tint): black then
+        // unselects from the whole canvas. The selection does not limit its own paint.
+        Target::Selection => {
+            let image = match selection {
+                Some(image) => image,
+                None => Arc::new(select_all(doc.size()).map_err(|e| e.to_string())?),
+            };
+            (image, Affine::IDENTITY, None, gray, None)
+        }
     };
     let stroke = Stroke::new(
         image,
         to_document,
-        doc.selection().map(|s| Arc::clone(s.image())),
+        selection,
         doc.blend_space(),
         request.brush.brush(),
         paint,
@@ -274,7 +353,7 @@ pub(crate) fn paint(
                 ActiveStroke {
                     id: request.stroke,
                     document_id,
-                    layer: LayerId::from_raw(request.layer_id),
+                    target: request.target(),
                     stroke,
                     growth,
                 }
@@ -301,13 +380,13 @@ pub(crate) fn paint(
             if painted {
                 document
                     .session
-                    .perform(paint_edit(active.layer, image, active.growth.as_ref()))
+                    .perform(paint_edit(active.target, image, active.growth.as_ref()))
                     .map_err(|e| e.to_string())?;
             }
             Some(document.view())
         } else {
             document.paint_preview = Some(PaintPreview {
-                layer: active.layer,
+                target: active.target,
                 image,
                 growth: active.growth.clone(),
             });
@@ -328,12 +407,14 @@ pub(crate) fn paint(
 /// Delete with a selection (ADR 0027): the selected part of layer `layer_id` erased (`color`
 /// absent: only alpha changes) or filled with `color` (sRGB-encoded RGB in `[0, 1]`), kept
 /// apart from its original like a stroke. A fill grows the layer to the canvas if needed, as
-/// strokes do. Nothing selected: nothing changes.
+/// strokes do. With `target` the mask, the mask is hidden there or filled with the color's
+/// gray. Nothing selected: nothing changes.
 #[tauri::command]
 pub async fn fill_selection(
     app: tauri::AppHandle,
     document_id: u64,
     layer_id: u64,
+    target: PaintTarget,
     color: Option<[f32; 3]>,
 ) -> Result<DocumentView, String> {
     on_worker(move || {
@@ -343,8 +424,12 @@ pub async fn fill_selection(
         if document.session.document().selection().is_none() {
             return Ok(document.view());
         }
+        if target == PaintTarget::Selection {
+            return Err("the selection cannot fill itself".to_owned());
+        }
         let request = PaintRequest {
             stroke: 0,
+            target,
             layer_id,
             brush: BrushRequest {
                 size: 1.0,
@@ -363,10 +448,9 @@ pub async fn fill_selection(
         let (mut stroke, growth) = start(document.session.document(), &request, color.is_some())?;
         stroke.fill();
         if let Some(image) = stroke.finish().map_err(|e| e.to_string())? {
-            let layer = LayerId::from_raw(layer_id);
             document
                 .session
-                .perform(paint_edit(layer, image, growth.as_ref()))
+                .perform(paint_edit(request.target(), image, growth.as_ref()))
                 .map_err(|e| e.to_string())?;
         }
         Ok(document.view())
