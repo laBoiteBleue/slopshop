@@ -27,6 +27,12 @@ const SAM2: License = License {
     commercial: true,
     accept: false,
 };
+const VITMATTE: License = License {
+    name: "Apache-2.0",
+    url: "https://huggingface.co/hustvl/vitmatte-small-composition-1k",
+    commercial: true,
+    accept: false,
+};
 
 /// Every component, by id.
 pub const COMPONENTS: &[Component] = &[
@@ -277,5 +283,16 @@ pub const COMPONENTS: &[Component] = &[
                 sha256: "e9874d900dd4134ed60eab1e97910327c2419e0b2954485d8fd6e7f1a1470f47",
             },
         ],
+    },
+    Component {
+        id: "vitmatte-small",
+        licenses: &[VITMATTE],
+        files: &[Download {
+            path: "models/Xenova/vitmatte-small-composition-1k/onnx/model.onnx",
+            url: "https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/6bc1297f6140f055a227b6d2cfe8c093281f35d2/onnx/model.onnx",
+            source: Source::File,
+            size: 103885865,
+            sha256: "bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225",
+        }],
     },
 ];

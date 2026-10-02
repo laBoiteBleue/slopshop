@@ -28,6 +28,9 @@ pub const MAX_IMAGE_SIDE: u32 = 2048;
 /// Side of the masks SAM returns.
 pub const MASK_SIDE: usize = 256;
 
+/// Largest side of an image to matte (the editor sends windows along an outline).
+pub const MAX_MATTE_SIDE: u32 = 2048;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// The helper's protocol version and the execution provider it runs on.
@@ -46,6 +49,14 @@ pub enum Request {
         key: u64,
         points: Vec<Point>,
         boxed: Option<[f32; 4]>,
+    },
+    /// Matte an image (8-bit RGB, `width × height`) guided by a trimap (one byte per pixel: 0
+    /// outside, 255 inside, anything else to decide): ViTMatte's alpha where it decides.
+    Matte {
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+        trimap: Vec<u8>,
     },
     /// Stop.
     Quit,
@@ -73,6 +84,8 @@ pub enum Response {
         logits: Vec<f32>,
         score: f32,
     },
+    /// The matte: one 16-bit coverage per pixel of the image (0: outside, 65535: inside).
+    Alpha(Vec<u16>),
     Failed(String),
 }
 
@@ -110,10 +123,12 @@ const OP_HELLO: u8 = 1;
 const OP_SAM_ENCODE: u8 = 2;
 const OP_SAM_DECODE: u8 = 3;
 const OP_QUIT: u8 = 4;
+const OP_MATTE: u8 = 5;
 
 const RESPONSE_HELLO: u8 = 0x81;
 const RESPONSE_DONE: u8 = 0x82;
 const RESPONSE_SAM_MASK: u8 = 0x83;
+const RESPONSE_ALPHA: u8 = 0x84;
 const RESPONSE_FAILED: u8 = 0xff;
 
 /// Reads little-endian fields from a frame.
@@ -194,6 +209,18 @@ impl Request {
                     None => out.push(0),
                 }
             }
+            Request::Matte {
+                width,
+                height,
+                rgb,
+                trimap,
+            } => {
+                out.push(OP_MATTE);
+                out.extend_from_slice(&width.to_le_bytes());
+                out.extend_from_slice(&height.to_le_bytes());
+                out.extend_from_slice(rgb);
+                out.extend_from_slice(trimap);
+            }
             Request::Quit => out.push(OP_QUIT),
         }
         out
@@ -238,6 +265,21 @@ impl Request {
                 };
                 Request::SamDecode { key, points, boxed }
             }
+            OP_MATTE => {
+                let (width, height) = (f.u32()?, f.u32()?);
+                if width == 0 || height == 0 || width > MAX_MATTE_SIDE || height > MAX_MATTE_SIDE {
+                    return Err(ProtocolError::Malformed("image size"));
+                }
+                let pixels = width as usize * height as usize;
+                let rgb = f.take(pixels * 3)?.to_vec();
+                let trimap = f.take(pixels)?.to_vec();
+                Request::Matte {
+                    width,
+                    height,
+                    rgb,
+                    trimap,
+                }
+            }
             OP_QUIT => Request::Quit,
             _ => return Err(ProtocolError::Malformed("operation")),
         };
@@ -260,6 +302,12 @@ impl Response {
                 out.push(RESPONSE_SAM_MASK);
                 out.extend_from_slice(&score.to_le_bytes());
                 for v in logits {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            Response::Alpha(alpha) => {
+                out.push(RESPONSE_ALPHA);
+                for v in alpha {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
             }
@@ -289,6 +337,20 @@ impl Response {
                     .map(|_| f.f32())
                     .collect::<Result<Vec<_>, _>>()?;
                 Response::SamMask { logits, score }
+            }
+            RESPONSE_ALPHA => {
+                let bytes = f.take(f.0.len())?;
+                if bytes.len() % 2 != 0 {
+                    return Err(ProtocolError::Malformed("alpha"));
+                }
+                Response::Alpha(
+                    bytes
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| u16::from_le_bytes(*b))
+                        .collect(),
+                )
             }
             RESPONSE_FAILED => Response::Failed(text(f.take(f.0.len())?)),
             _ => return Err(ProtocolError::Malformed("response")),
@@ -433,6 +495,27 @@ impl Client {
         }
     }
 
+    /// ViTMatte's matte of an RGB image guided by a trimap (see [`Request::Matte`]).
+    pub fn matte(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+        trimap: Vec<u8>,
+    ) -> Result<Vec<u16>, ProtocolError> {
+        let pixels = width as usize * height as usize;
+        let request = Request::Matte {
+            width,
+            height,
+            rgb,
+            trimap,
+        };
+        match self.call(&request)? {
+            Response::Alpha(alpha) if alpha.len() == pixels => Ok(alpha),
+            _ => Err(ProtocolError::Unexpected),
+        }
+    }
+
     /// SAM's mask for `points` (and a box) on the image encoded under `key`.
     pub fn sam_decode(
         &mut self,
@@ -496,6 +579,12 @@ mod tests {
                 points: Vec::new(),
                 boxed: None,
             },
+            Request::Matte {
+                width: 2,
+                height: 1,
+                rgb: vec![1, 2, 3, 4, 5, 6],
+                trimap: vec![0, 128],
+            },
             Request::Quit,
         ];
         for request in requests {
@@ -515,6 +604,7 @@ mod tests {
                 logits: (0..MASK_SIDE * MASK_SIDE).map(|i| i as f32 - 3.0).collect(),
                 score: 0.9,
             },
+            Response::Alpha(vec![0, 32768, u16::MAX]),
             Response::Failed("no model".into()),
         ];
         for response in responses {

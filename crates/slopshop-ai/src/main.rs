@@ -17,6 +17,8 @@ const SIDE: usize = 1024;
 /// SAM 2.1's models, by size, in the models folder (as downloaded from Hugging Face).
 const SAM_GPU: &str = "onnx-community/sam2.1-hiera-base-plus-ONNX/onnx";
 const SAM_CPU: &str = "onnx-community/sam2.1-hiera-tiny-ONNX/onnx";
+/// ViTMatte-S, in the models folder.
+const VITMATTE: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
 
 struct Options {
     runtime: PathBuf,
@@ -206,6 +208,80 @@ impl Sam {
     }
 }
 
+/// ViTMatte-S: mattes an image guided by a trimap (Refine Edge).
+struct Matte {
+    session: Session,
+}
+
+impl Matte {
+    /// ViTMatte on the first provider of `choices` that runs it.
+    fn load(models: &std::path::Path, choices: &[&'static str]) -> Result<Self, String> {
+        let mut errors = Vec::new();
+        for &provider in choices {
+            match session(&models.join(VITMATTE), provider) {
+                Ok(session) => {
+                    eprintln!("slopshop-ai: ViTMatte on {provider}");
+                    return Ok(Matte { session });
+                }
+                Err(e) => errors.push(format!("{provider}: {e}")),
+            }
+        }
+        Err(format!("ViTMatte could not start: {}", errors.join("; ")))
+    }
+
+    /// The matte of `width × height` RGB pixels guided by `trimap` (0 out, 255 in, else to
+    /// decide), as 16-bit coverage. The model wants sides that are multiples of 32: the image is
+    /// padded by repeating its edges (outside, for the trimap) and the matte cropped back.
+    fn run(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgb: &[u8],
+        trimap: &[u8],
+    ) -> Result<Vec<u16>, String> {
+        let (w, h) = (width as usize, height as usize);
+        let (pw, ph) = (w.div_ceil(32) * 32, h.div_ceil(32) * 32);
+        let plane = pw * ph;
+        let mut input = vec![0f32; 4 * plane];
+        for y in 0..ph {
+            let sy = y.min(h - 1);
+            for x in 0..pw {
+                let sx = x.min(w - 1);
+                let i = sy * w + sx;
+                for c in 0..3 {
+                    input[c * plane + y * pw + x] = (f32::from(rgb[i * 3 + c]) / 255.0 - 0.5) / 0.5;
+                }
+                input[3 * plane + y * pw + x] = if x < w && y < h {
+                    f32::from(trimap[i]) / 255.0
+                } else {
+                    0.0
+                };
+            }
+        }
+        let tensor = Tensor::from_array(([1usize, 4, ph, pw], input)).map_err(|e| e.to_string())?;
+        let input_name = self.session.inputs()[0].name().to_owned();
+        let output_name = self.session.outputs()[0].name().to_owned();
+        let outputs = self
+            .session
+            .run(ort::inputs![input_name.as_str() => tensor])
+            .map_err(|e| e.to_string())?;
+        let (_, alpha) = outputs[output_name.as_str()]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| e.to_string())?;
+        if alpha.len() < plane {
+            return Err("ViTMatte returned a smaller matte".into());
+        }
+        let mut out = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                let a = alpha[y * pw + x].clamp(0.0, 1.0);
+                out.push((a * f32::from(u16::MAX)).round() as u16);
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// An RGB image resized (bilinear) to SAM's 1024² input and normalized with ImageNet's mean and
 /// standard deviation, planar.
 fn normalized(width: usize, height: usize, rgb: &[u8]) -> Vec<f32> {
@@ -249,6 +325,7 @@ fn main() {
     let choices = providers(&options.provider);
     // The models load on the first request that needs them: greeting stays instant.
     let mut sam: Option<Sam> = None;
+    let mut matte: Option<Matte> = None;
     let mut provider = "none";
     let mut input = BufReader::new(io::stdin().lock());
     let mut output = BufWriter::new(io::stdout().lock());
@@ -284,6 +361,21 @@ fn main() {
                 };
                 match loaded.and_then(|sam| sam.encode(key, width, height, &rgb)) {
                     Ok(()) => Response::Done,
+                    Err(e) => Response::Failed(e),
+                }
+            }
+            Ok(Request::Matte {
+                width,
+                height,
+                rgb,
+                trimap,
+            }) => {
+                let loaded = match matte.as_mut() {
+                    Some(matte) => Ok(matte),
+                    None => Matte::load(&options.models, &choices).map(|m| matte.insert(m)),
+                };
+                match loaded.and_then(|m| m.run(width, height, &rgb, &trimap)) {
+                    Ok(alpha) => Response::Alpha(alpha),
                     Err(e) => Response::Failed(e),
                 }
             }

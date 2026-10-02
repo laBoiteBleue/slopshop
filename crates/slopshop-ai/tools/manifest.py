@@ -53,6 +53,14 @@ LICENSES = {
         True,
         False,
     ),
+    # The weights' card (hustvl, the authors) says Apache-2.0; Xenova's repository is their
+    # ONNX export.
+    "vitmatte": (
+        "Apache-2.0",
+        "https://huggingface.co/hustvl/vitmatte-small-composition-1k",
+        True,
+        False,
+    ),
 }
 
 
@@ -240,11 +248,19 @@ def main():
         ],
         "models",
     )
+    print("ViTMatte-S")
+    vitmatte = hugging_face(
+        "Xenova/vitmatte-small-composition-1k",
+        "6bc1297f6140f055a227b6d2cfe8c093281f35d2",
+        ["onnx/model.onnx"],
+        "models",
+    )
     components = [
         component("runtime-cuda", ["onnxruntime", "cuda", "cudnn"], cuda),
         component("runtime-cpu", ["onnxruntime"], cpu),
         component("sam2.1-base-plus", ["sam2"], sam_gpu),
         component("sam2.1-tiny", ["sam2"], sam_cpu),
+        component("vitmatte-small", ["vitmatte"], vitmatte),
     ]
 
     out = [
