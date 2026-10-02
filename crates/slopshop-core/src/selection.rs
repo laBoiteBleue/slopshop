@@ -197,6 +197,47 @@ pub fn invert(
     Ok(mask.into_image())
 }
 
+/// The coverage (0–1) of `selection` at the centers of a `width × height` grid stretched over
+/// `area` of the canvas: the nearest pixel of the finest pyramid level whose pixels are no
+/// larger than the grid's (a level's pixel averages the ones it covers). Reads the tiles
+/// directly: a grid of a few megapixels takes milliseconds whatever the canvas.
+pub fn sample_grid(selection: &RasterImage, area: Rect, width: usize, height: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; width * height];
+    if width == 0 || height == 0 || area.is_empty() {
+        return out;
+    }
+    let levels = selection.levels();
+    let scale = (f64::from(area.width) / width as f64).max(f64::from(area.height) / height as f64);
+    let level = (scale.max(1.0).log2().floor() as usize).min(levels.len() - 1);
+    let raster = &levels[level];
+    let size = raster.size();
+    let factor = f64::from(1u32 << level);
+    let (sx, sy) = (
+        f64::from(area.width) / width as f64,
+        f64::from(area.height) / height as f64,
+    );
+    for (row, line) in out.chunks_mut(width).enumerate() {
+        let y = (f64::from(area.y) + (row as f64 + 0.5) * sy) / factor;
+        let y = (y as u32).min(size.height - 1);
+        for (col, value) in line.iter_mut().enumerate() {
+            let x = (f64::from(area.x) + (col as f64 + 0.5) * sx) / factor;
+            let x = (x as u32).min(size.width - 1);
+            let coord = TileCoord {
+                col: x / TILE_SIZE,
+                row: y / TILE_SIZE,
+            };
+            let Some(tile) = raster.tile(coord) else {
+                continue;
+            };
+            let at = (((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) * 2) as usize;
+            if let Some(bytes) = tile.get(at..at + 2) {
+                *value = f32::from(u16::from_ne_bytes([bytes[0], bytes[1]])) / f32::from(FULL);
+            }
+        }
+    }
+    out
+}
+
 /// The smallest rectangle holding every selected pixel (coverage above 0), or `None`.
 pub fn bounds(selection: &RasterImage) -> Option<Rect> {
     let size = selection.size();
@@ -1833,13 +1874,15 @@ fn without_specks(logits: &[f32], side: usize) -> Vec<f32> {
 // --- Refine Edge -------------------------------------------------------------------------------
 
 /// A window of the canvas to matte (Refine Edge, ADR 0025): `rect` (document pixels, within the
-/// canvas) is seen at one pixel per `scale`² document pixels; its `inner` part takes the matte
-/// (the rest is context, shared with the neighboring windows).
+/// canvas) is seen at one pixel per `scale`² document pixels; its `inner` part tiles the canvas
+/// with the other windows' and the rest, `margin` wide, is shared with its neighbors, where
+/// their mattes are blended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EdgeWindow {
     pub rect: Rect,
     pub inner: Rect,
     pub scale: u32,
+    pub margin: u32,
 }
 
 impl EdgeWindow {
@@ -1860,6 +1903,9 @@ pub struct EdgeRefinement {
     /// Document pixels around the outline that the model decides.
     band: RefineBand,
     windows: Vec<EdgeWindow>,
+    /// The mattes of the undecided pixels, by tile: the sum of each window's alpha times its
+    /// weight there, and the sum of the weights.
+    blend: HashMap<usize, (Vec<f32>, Vec<f32>)>,
 }
 
 /// How far from the outline Refine Edge lets the model decide, document pixels: `inward` into
@@ -1959,7 +2005,12 @@ pub fn plan_refinement(
                         (x + inner.width + margin).min(canvas.width) - x0,
                         (y + inner.height + margin).min(canvas.height) - y0,
                     );
-                    windows.push(EdgeWindow { rect, inner, scale });
+                    windows.push(EdgeWindow {
+                        rect,
+                        inner,
+                        scale,
+                        margin,
+                    });
                 }
             }
         }
@@ -1968,6 +2019,7 @@ pub fn plan_refinement(
                 mask,
                 band,
                 windows,
+                blend: HashMap::new(),
             });
         }
         scale *= 2;
@@ -2063,9 +2115,11 @@ impl EdgeRefinement {
             .collect()
     }
 
-    /// Writes the model's matte of `window` (`alpha`, 16-bit, [`EdgeWindow::input_size`]
-    /// pixels, read bilinearly when the window is seen coarser) into its inner part, where
-    /// `trimap` left it undecided; elsewhere the trimap's side, sharp.
+    /// Takes the model's matte of `window` (`alpha`, 16-bit, [`EdgeWindow::input_size`]
+    /// pixels, read bilinearly when the window is seen coarser). Where `trimap` left a pixel
+    /// undecided, the matte is blended with the other windows' that cover it, each weighing less
+    /// toward its edges (but those on the canvas's edge), so that neighbors meet without a seam;
+    /// elsewhere in its inner part, the trimap's side, sharp.
     pub fn apply(&mut self, window: &EdgeWindow, trimap: &[u8], alpha: &[u16]) {
         let size = window.input_size();
         let (w, h) = (size.width as usize, size.height as usize);
@@ -2086,48 +2140,100 @@ impl EdgeRefinement {
         let alpha_at = |i: usize| f64::from(alpha[i]);
         let unknown_at = |i: usize| f64::from(u8::from(trimap[i] == TRIMAP_UNKNOWN));
         let inside_at = |i: usize| f64::from(u8::from(trimap[i] == 255));
-        let inner = window.inner;
-        for row in inner.y / TILE_SIZE..(inner.y + inner.height).div_ceil(TILE_SIZE) {
-            for col in inner.x / TILE_SIZE..(inner.x + inner.width).div_ceil(TILE_SIZE) {
+        let (rect, inner, canvas) = (window.rect, window.inner, self.mask.size);
+        // Rising from the window's edges over its margin, except along the canvas's edges
+        // (no neighbor shares them).
+        let ramp = f64::from(window.margin.max(1));
+        let weight = |dx: u32, dy: u32| -> f64 {
+            let mut d = f64::INFINITY;
+            if rect.x > 0 {
+                d = d.min(f64::from(dx - rect.x) + 0.5);
+            }
+            if rect.y > 0 {
+                d = d.min(f64::from(dy - rect.y) + 0.5);
+            }
+            if rect.x + rect.width < canvas.width {
+                d = d.min(f64::from(rect.x + rect.width - dx) - 0.5);
+            }
+            if rect.y + rect.height < canvas.height {
+                d = d.min(f64::from(rect.y + rect.height - dy) - 0.5);
+            }
+            (d / ramp).clamp(1e-3, 1.0)
+        };
+        for row in rect.y / TILE_SIZE..(rect.y + rect.height).div_ceil(TILE_SIZE) {
+            for col in rect.x / TILE_SIZE..(rect.x + rect.width).div_ceil(TILE_SIZE) {
                 let index = row as usize * self.mask.columns + col as usize;
-                let mut values = self.mask.tiles[index].values().into_owned();
                 let (vw, vh) = self.mask.valid(col as usize, row as usize);
                 let (tx0, ty0) = (col * TILE_SIZE, row * TILE_SIZE);
+                let mut sharp: Option<Vec<u16>> = None;
                 for y in 0..vh {
                     let dy = ty0 + y as u32;
-                    if dy < inner.y || dy >= inner.y + inner.height {
+                    if dy < rect.y || dy >= rect.y + rect.height {
                         continue;
                     }
                     for x in 0..vw {
                         let dx = tx0 + x as u32;
-                        if dx < inner.x || dx >= inner.x + inner.width {
+                        if dx < rect.x || dx >= rect.x + rect.width {
                             continue;
                         }
                         // The window pixel whose center is this document pixel's center.
-                        let fx = (f64::from(dx - window.rect.x) + 0.5) / s - 0.5;
-                        let fy = (f64::from(dy - window.rect.y) + 0.5) / s - 0.5;
-                        let v = if sample(&unknown_at, fx, fy) > 0.0 {
-                            sample(&alpha_at, fx, fy)
-                        } else if sample(&inside_at, fx, fy) >= 0.5 {
-                            f64::from(FULL)
-                        } else {
-                            0.0
-                        };
-                        values[y * T + x] = v.round().clamp(0.0, f64::from(FULL)) as u16;
+                        let fx = (f64::from(dx - rect.x) + 0.5) / s - 0.5;
+                        let fy = (f64::from(dy - rect.y) + 0.5) / s - 0.5;
+                        if sample(&unknown_at, fx, fy) > 0.0 {
+                            let wt = weight(dx, dy);
+                            let (sums, weights) = self
+                                .blend
+                                .entry(index)
+                                .or_insert_with(|| (vec![0.0; T * T], vec![0.0; T * T]));
+                            sums[y * T + x] += (sample(&alpha_at, fx, fy) * wt) as f32;
+                            weights[y * T + x] += wt as f32;
+                        } else if dx >= inner.x
+                            && dy >= inner.y
+                            && dx < inner.x + inner.width
+                            && dy < inner.y + inner.height
+                        {
+                            let v = if sample(&inside_at, fx, fy) >= 0.5 {
+                                FULL
+                            } else {
+                                0
+                            };
+                            let tile = &self.mask.tiles[index];
+                            sharp.get_or_insert_with(|| tile.values().into_owned())[y * T + x] = v;
+                        }
                     }
                 }
-                pad(&mut values, vw, vh);
-                self.mask.tiles[index] = Tile::Data(values);
+                if let Some(mut values) = sharp {
+                    pad(&mut values, vw, vh);
+                    self.mask.tiles[index] = Tile::Data(values);
+                }
             }
         }
     }
 
-    /// The refined selection, combined with `current` by `combine`.
+    /// The refined selection (the blended mattes written), combined with `current` by
+    /// `combine`.
     pub fn finish(
-        self,
+        mut self,
         current: Option<&RasterImage>,
         combine: Combine,
     ) -> Result<Option<RasterImage>, SelectionError> {
+        for (index, (sums, weights)) in std::mem::take(&mut self.blend) {
+            let (vw, vh) = self
+                .mask
+                .valid(index % self.mask.columns, index / self.mask.columns);
+            let mut values = self.mask.tiles[index].values().into_owned();
+            for y in 0..vh {
+                for x in 0..vw {
+                    let wt = weights[y * T + x];
+                    if wt > 0.0 {
+                        let v = sums[y * T + x] / wt;
+                        values[y * T + x] = v.round().clamp(0.0, f32::from(FULL)) as u16;
+                    }
+                }
+            }
+            pad(&mut values, vw, vh);
+            self.mask.tiles[index] = computed_tile(values);
+        }
         finish(self.mask.size, current, self.mask, combine)
     }
 }
@@ -3389,6 +3495,57 @@ mod tests {
             }
         }
         assert!(mask.tiles.iter().filter(|t| t.constant().is_some()).count() > 30);
+    }
+
+    #[test]
+    fn a_selection_is_sampled_on_a_grid_as_pixel_reads_do() {
+        let canvas = Size::new(3000, 2000);
+        let image = select(canvas, &rect(500.0, 300.0, 2100.0, 1500.0));
+        // At full resolution: the same as reading each pixel.
+        let area = Rect::new(400, 200, 300, 200);
+        let fine = sample_grid(&image, area, 300, 200);
+        for (i, v) in fine.iter().enumerate() {
+            let (x, y) = (400 + (i % 300) as u32, 200 + (i / 300) as u32);
+            assert_eq!(*v, image.gray_at(x, y), "at {x}, {y}");
+        }
+        // Coarser (a pyramid level): inside and outside where far from the edge.
+        let coarse = sample_grid(&image, canvas.bounds(), 300, 200);
+        assert_eq!(coarse[100 * 300 + 130], 1.0);
+        assert_eq!(coarse[10 * 300 + 10], 0.0);
+        assert_eq!(coarse[190 * 300 + 290], 0.0);
+    }
+
+    #[test]
+    fn neighboring_windows_mattes_are_blended_without_a_seam() {
+        // A tall selection edge crossed by windows stacked vertically, mattes 0 and full in
+        // turn: along the edge, coverage changes gradually where windows overlap.
+        let canvas = Size::new(1024, 2048);
+        let half = select(canvas, &rect(0.0, 0.0, 512.0, 2048.0));
+        let mut plan = plan_refinement(canvas, &half, RefineBand::both(16), 256, 1000).unwrap();
+        let windows = plan.windows().to_vec();
+        assert!(windows.len() > 2);
+        for (i, w) in windows.iter().enumerate() {
+            let trimap = plan.trimap(w);
+            let value = if (w.inner.y / w.inner.height.max(1)) % 2 == 0 {
+                0
+            } else {
+                FULL
+            };
+            let _ = i;
+            plan.apply(w, &trimap, &vec![value; trimap.len()]);
+        }
+        let refined = plan.finish(None, Combine::Replace).unwrap().unwrap();
+        let mut previous = refined.gray_at(512, 0);
+        let mut largest = 0.0f32;
+        for y in 1..2048 {
+            let v = refined.gray_at(512, y);
+            largest = largest.max((v - previous).abs());
+            previous = v;
+        }
+        assert!(
+            largest < 0.1,
+            "a jump of {largest} between neighboring pixels"
+        );
     }
 
     #[test]
