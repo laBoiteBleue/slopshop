@@ -213,17 +213,84 @@ struct QuickStroke {
     document_id: u64,
     canvas: Size,
     region: Rect,
+    /// The image the stroke's end is cut on, and a coarser one for the selection shown while
+    /// it is painted (about four times faster).
+    fine: QuickGrid,
+    preview: QuickGrid,
+    base: Option<Arc<RasterImage>>,
+}
+
+/// The colors of the region and the selection on one grid.
+struct QuickGrid {
+    /// Document pixels per grid pixel.
     scale: f64,
     width: usize,
     height: usize,
     rgb: Vec<u8>,
     selected: Vec<bool>,
-    base: Option<Arc<RasterImage>>,
 }
+
+impl QuickGrid {
+    /// `fine` reduced by `factor` (an average of each `factor²` block), the selection sampled
+    /// again on the new grid.
+    fn reduced(
+        fine: &QuickGrid,
+        factor: usize,
+        region: Rect,
+        base: Option<&RasterImage>,
+    ) -> QuickGrid {
+        if factor < 2 {
+            return QuickGrid {
+                scale: fine.scale,
+                width: fine.width,
+                height: fine.height,
+                rgb: fine.rgb.clone(),
+                selected: fine.selected.clone(),
+            };
+        }
+        let (w, h) = (fine.width.div_ceil(factor), fine.height.div_ceil(factor));
+        let mut sums = vec![[0u32; 4]; w * h];
+        for y in 0..fine.height {
+            for x in 0..fine.width {
+                let cell = &mut sums[(y / factor) * w + x / factor];
+                let p = (y * fine.width + x) * 3;
+                for (sum, &v) in cell.iter_mut().zip(&fine.rgb[p..p + 3]) {
+                    *sum += u32::from(v);
+                }
+                cell[3] += 1;
+            }
+        }
+        let rgb = sums
+            .iter()
+            .flat_map(|s| (0..3).map(move |c| (s[c] / s[3].max(1)) as u8))
+            .collect();
+        QuickGrid {
+            scale: fine.scale * factor as f64,
+            width: w,
+            height: h,
+            rgb,
+            selected: selected_on(base, region, w, h),
+        }
+    }
+}
+
+/// Where `base` covers at least one half, on a `width × height` grid over `region`.
+fn selected_on(base: Option<&RasterImage>, region: Rect, width: usize, height: usize) -> Vec<bool> {
+    match base {
+        Some(mask) => selection::sample_grid(mask, region, width, height)
+            .into_iter()
+            .map(|v| v >= 0.5)
+            .collect(),
+        None => vec![false; width * height],
+    }
+}
+
+/// The longest side of the preview grid while a stroke is painted.
+const QUICK_PREVIEW_SIDE: usize = 800;
 
 impl QuickStroke {
     /// Renders `region` of the document (only `layer_id`, if given) at most [`QUICK_SIDE`] on a
-    /// side, and the selection on that grid.
+    /// side, the selection on that grid, and their preview.
     fn new(
         state: &AppState,
         id: u64,
@@ -264,37 +331,34 @@ impl QuickStroke {
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect();
         let (width, height) = (output.width as usize, output.height as usize);
-        // Inside where the selection's coverage reaches one half.
-        let selected: Vec<bool> = match &base {
-            Some(mask) => (0..width * height)
-                .map(|p| {
-                    let sx = f64::from(region.x) + ((p % width) as f64 + 0.5) * scale;
-                    let sy = f64::from(region.y) + ((p / width) as f64 + 0.5) * scale;
-                    mask.gray_at(sx as u32, sy as u32) >= 0.5
-                })
-                .collect(),
-            None => vec![false; width * height],
+        let fine = QuickGrid {
+            scale,
+            width,
+            height,
+            rgb,
+            selected: selected_on(base.as_deref(), region, width, height),
         };
+        let factor = width.max(height).div_ceil(QUICK_PREVIEW_SIDE);
+        let preview = QuickGrid::reduced(&fine, factor, region, base.as_deref());
         Ok(Self {
             id,
             document_id,
             canvas,
             region,
-            scale,
-            width,
-            height,
-            rgb,
-            selected,
+            fine,
+            preview,
             base,
         })
     }
 
-    /// The selection after the stroke along `points` (document pixels), combined by `mode`.
+    /// The selection after the stroke along `points` (document pixels), combined by `mode`:
+    /// on the preview grid while the stroke is `live`, else on the fine one.
     fn select(
         &self,
         points: &[[f64; 2]],
         radius: f64,
         mode: &str,
+        live: bool,
     ) -> Result<Option<RasterImage>, String> {
         use slopshop_core::quick_select::{self as quick, QuickImage, QuickMode};
         let (combine, mode) = match mode {
@@ -302,7 +366,8 @@ impl QuickStroke {
             "subtract" => (Combine::Subtract, QuickMode::Subtract),
             _ => (Combine::Replace, QuickMode::New),
         };
-        let (w, h, region, scale) = (self.width, self.height, self.region, self.scale);
+        let grid = if live { &self.preview } else { &self.fine };
+        let (w, h, region, scale) = (grid.width, grid.height, self.region, grid.scale);
         let points: Vec<[f64; 2]> = points
             .iter()
             .map(|[px, py]| {
@@ -316,10 +381,10 @@ impl QuickStroke {
         let image = QuickImage {
             width: w,
             height: h,
-            rgb: &self.rgb,
+            rgb: &grid.rgb,
         };
-        let changed = quick::quick_select(&image, &self.selected, &stroke, mode);
-        let scores = quick::change_scores(w, h, &changed, &self.selected, mode);
+        let changed = quick::quick_select(&image, &grid.selected, &stroke, mode);
+        let scores = quick::change_scores(w, h, &changed, &grid.selected, mode);
         let base = self.base.as_deref();
         selection::select_scores(self.canvas, base, &scores, w, h, region, combine)
             .map_err(|e| e.to_string())
@@ -361,7 +426,7 @@ pub async fn quick_select(
             }
         };
         let prepared = started.elapsed();
-        let image = stroke.select(&request.points, request.radius, &request.mode)?;
+        let image = stroke.select(&request.points, request.radius, &request.mode, request.live)?;
         let selected = started.elapsed();
         if !request.live {
             *state.quick.stroke.lock().map_err(|e| e.to_string())? = None;
@@ -385,9 +450,8 @@ pub async fn quick_select(
         }
         if cfg!(debug_assertions) {
             eprintln!(
-                "quick select {}x{}: image {prepared:?}, cut and combine {:?}, applied {:?}",
-                stroke.width,
-                stroke.height,
+                "quick select{}: image {prepared:?}, cut and combine {:?}, applied {:?}",
+                if request.live { " (preview)" } else { "" },
                 selected - prepared,
                 started.elapsed() - selected,
             );
@@ -490,13 +554,22 @@ pub async fn color_range_preview(
         let mut bytes = Vec::with_capacity(8 + (output.width * output.height) as usize);
         bytes.extend_from_slice(&output.width.to_le_bytes());
         bytes.extend_from_slice(&output.height.to_le_bytes());
+        // Within the selection, sampled on the preview's grid.
+        let (w, h) = (output.width as usize, output.height as usize);
+        let area = Rect::new(
+            0,
+            0,
+            ((w as f64 * scale) as u32).clamp(1, size.width),
+            ((h as f64 * scale) as u32).clamp(1, size.height),
+        );
+        let within = current
+            .as_ref()
+            .map(|selection| selection::sample_grid(selection, area, w, h));
         for (i, px) in frame.data.as_chunks::<4>().0.iter().enumerate() {
             let color = [f32::from(px[0]), f32::from(px[1]), f32::from(px[2]), 255.0];
             let mut c = range.coverage(color);
-            if let Some(selection) = &current {
-                let x = ((i as u32 % output.width) as f64 * scale) as u32;
-                let y = ((i as u32 / output.width) as f64 * scale) as u32;
-                c *= selection.gray_at(x, y);
+            if let Some(within) = &within {
+                c *= within.get(i).copied().unwrap_or(0.0);
             }
             bytes.push((c * 255.0).round() as u8);
         }
