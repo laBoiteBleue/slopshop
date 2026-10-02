@@ -119,6 +119,24 @@ fn sam_selects_the_clicked_shape() {
         );
         assert!(at(320 + 130, 240) < 0.2, "outside it: {}", at(450, 240));
     }
+    // BiRefNet: the disc is the subject.
+    if Path::new(&models)
+        .join("onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx")
+        .is_file()
+    {
+        let start = std::time::Instant::now();
+        let logits = client
+            .subject(w as u32, h as u32, rgb_again.clone())
+            .expect("BiRefNet finds the subject");
+        eprintln!("subject (with loading): {:?}", start.elapsed());
+        let side = slopshop_ai::SUBJECT_SIDE;
+        assert_eq!(logits.len(), side * side);
+        assert!(
+            logits[side / 2 * side + side / 2] > 0.0,
+            "the disc's center"
+        );
+        assert!(logits[side * 10 + 10] < 0.0, "a corner");
+    }
     // Another key than the encoded image's is refused.
     assert!(client.sam_decode(2, vec![click], None).is_err());
 }

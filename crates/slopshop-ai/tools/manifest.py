@@ -53,6 +53,12 @@ LICENSES = {
         True,
         False,
     ),
+    "birefnet": (
+        "MIT",
+        "https://github.com/ZhengPeng7/BiRefNet/blob/main/LICENSE",
+        True,
+        False,
+    ),
     # The weights' card (hustvl, the authors) says Apache-2.0; Xenova's repository is their
     # ONNX export.
     "vitmatte": (
@@ -248,6 +254,19 @@ def main():
         ],
         "models",
     )
+    print("BiRefNet")
+    birefnet = hugging_face(
+        "onnx-community/BiRefNet-ONNX",
+        "534d3c82d3bb8b2f0867db6dfbc3a525b8e42f67",
+        ["onnx/model_fp16.onnx"],
+        "models",
+    )
+    birefnet_lite = hugging_face(
+        "onnx-community/BiRefNet_lite-ONNX",
+        "de15b22ba131738a16dff04aab8bdf8dc32e3ac1",
+        ["onnx/model_fp16.onnx"],
+        "models",
+    )
     print("ViTMatte-S")
     vitmatte = hugging_face(
         "Xenova/vitmatte-small-composition-1k",
@@ -261,6 +280,8 @@ def main():
         component("sam2.1-base-plus", ["sam2"], sam_gpu),
         component("sam2.1-tiny", ["sam2"], sam_cpu),
         component("vitmatte-small", ["vitmatte"], vitmatte),
+        component("birefnet", ["birefnet"], birefnet),
+        component("birefnet-lite", ["birefnet"], birefnet_lite),
     ]
 
     out = [
