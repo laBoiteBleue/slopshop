@@ -2,7 +2,9 @@
 
 For a file inside a zip archive (ONNX Runtime's DirectML package), the manifest records
 where its compressed bytes lie in the archive, so the installer fetches only them (an HTTP range)
-and inflates them; for a plain file (a model on Hugging Face), the file itself. Every installed
+and inflates them; for a file inside a gzip-compressed tar archive (ONNX Runtime's macOS and
+Linux releases), the archive's size and the entry's name (it is fetched whole); for a plain
+file (a model on Hugging Face), the file itself. Every installed
 file is pinned by its size and SHA-256. Sources are immutable: release assets, PyPI files, and
 Hugging Face files at a commit.
 
@@ -14,9 +16,11 @@ locally instead of downloaded.
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import struct
+import tarfile
 import urllib.request
 import zlib
 
@@ -26,6 +30,9 @@ USER_AGENT = "slopshop-manifest"
 # from its PyPI package (a zip holding the libraries, whatever Python it targets).
 ORT_DIRECTML = ("onnxruntime-directml", "1.24.4", "cp312-cp312-win_amd64")
 PYPI = "https://pypi.org/pypi/{package}/{version}/json"
+# ONNX Runtime's macOS (Core ML built in) and Linux (CPU) releases.
+ORT = "1.30.0"
+ORT_URL = "https://github.com/microsoft/onnxruntime/releases/download/v{v}/{name}"
 HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 
 # id: (name, url, commercial use allowed, must be accepted explicitly: not permissive open source)
@@ -154,6 +161,17 @@ def wheel(package, version, tag, names, folder, cache_dir):
     return archive_files(url, names, folder, cache_dir)
 
 
+def tgz_file(url, suffix, path):
+    """The entry of a .tar.gz release whose name ends with `suffix`, installed at `path`."""
+    data = request(url).read()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        (member,) = [m for m in archive.getmembers() if m.isfile() and m.name.endswith(suffix)]
+        content = archive.extractfile(member).read()
+    print(f"  {member.name}: {len(content)} bytes ({len(data)} archive)")
+    source = f"Source::TarGz {{ archive: {len(data)}, entry: {json.dumps(member.name)} }}"
+    return [(path, url, source, len(content), hashlib.sha256(content).hexdigest())]
+
+
 def hugging_face(repo, revision, names, folder):
     tree = json.load(
         request(f"https://huggingface.co/api/models/{repo}/tree/{revision}/onnx?expand=true")
@@ -192,6 +210,22 @@ def main():
         "runtime/directml",
         cache,
     )
+    print("ONNX Runtime, macOS (Core ML), Linux (CPU)")
+    coreml = tgz_file(
+        ORT_URL.format(v=ORT, name=f"onnxruntime-osx-arm64-{ORT}.tgz"),
+        f"lib/libonnxruntime.{ORT}.dylib",
+        "runtime/coreml/libonnxruntime.dylib",
+    )
+    linux_x64 = tgz_file(
+        ORT_URL.format(v=ORT, name=f"onnxruntime-linux-x64-{ORT}.tgz"),
+        f"lib/libonnxruntime.so.{ORT}",
+        "runtime/cpu-x64/libonnxruntime.so",
+    )
+    linux_arm64 = tgz_file(
+        ORT_URL.format(v=ORT, name=f"onnxruntime-linux-aarch64-{ORT}.tgz"),
+        f"lib/libonnxruntime.so.{ORT}",
+        "runtime/cpu-arm64/libonnxruntime.so",
+    )
     print("SAM 2.1")
     sam_gpu = hugging_face(
         "onnx-community/sam2.1-hiera-base-plus-ONNX",
@@ -207,11 +241,51 @@ def main():
         ],
         "models",
     )
+    sam_fp32 = hugging_face(
+        "onnx-community/sam2.1-hiera-base-plus-ONNX",
+        "bab18593f44e652f04cf18b60b3690f60e8996b0",
+        [
+            f"onnx/{name}"
+            for name in [
+                "vision_encoder.onnx",
+                "vision_encoder.onnx_data",
+                "prompt_encoder_mask_decoder.onnx",
+                "prompt_encoder_mask_decoder.onnx_data",
+            ]
+        ],
+        "models",
+    )
+    sam_tiny = hugging_face(
+        "onnx-community/sam2.1-hiera-tiny-ONNX",
+        "814a066640debee5a91e70aa401fb8e17e030503",
+        [
+            f"onnx/{name}"
+            for name in [
+                "vision_encoder.onnx",
+                "vision_encoder.onnx_data",
+                "prompt_encoder_mask_decoder.onnx",
+                "prompt_encoder_mask_decoder.onnx_data",
+            ]
+        ],
+        "models",
+    )
     print("BiRefNet")
     birefnet = hugging_face(
         "onnx-community/BiRefNet-ONNX",
         "534d3c82d3bb8b2f0867db6dfbc3a525b8e42f67",
         ["onnx/model_fp16.onnx"],
+        "models",
+    )
+    birefnet_fp32 = hugging_face(
+        "onnx-community/BiRefNet-ONNX",
+        "534d3c82d3bb8b2f0867db6dfbc3a525b8e42f67",
+        ["onnx/model.onnx"],
+        "models",
+    )
+    birefnet_lite = hugging_face(
+        "onnx-community/BiRefNet_lite-ONNX",
+        "de15b22ba131738a16dff04aab8bdf8dc32e3ac1",
+        ["onnx/model.onnx"],
         "models",
     )
     print("ViTMatte-S")
@@ -222,10 +296,21 @@ def main():
         "models",
     )
     components = [
+        # Windows: DirectML, the models in half precision.
         component("runtime-directml", ["onnxruntime", "directml"], directml),
         component("sam2.1-base-plus", ["sam2"], sam_gpu),
-        component("vitmatte-small", ["vitmatte"], vitmatte),
         component("birefnet", ["birefnet"], birefnet),
+        # macOS (Apple silicon): Core ML, the models in single precision.
+        component("runtime-coreml-macos-arm64", ["onnxruntime"], coreml),
+        component("sam2.1-base-plus-fp32", ["sam2"], sam_fp32),
+        component("birefnet-fp32", ["birefnet"], birefnet_fp32),
+        # Linux: the CPU, the small models.
+        component("runtime-cpu-linux-x64", ["onnxruntime"], linux_x64),
+        component("runtime-cpu-linux-arm64", ["onnxruntime"], linux_arm64),
+        component("sam2.1-tiny", ["sam2"], sam_tiny),
+        component("birefnet-lite", ["birefnet"], birefnet_lite),
+        # Everywhere.
+        component("vitmatte-small", ["vitmatte"], vitmatte),
     ]
 
     out = [

@@ -30,6 +30,7 @@ ort = { version = "=2.0.0-rc.13", default-features = false, optional = true, fea
     "load-dynamic",
     "api-24",
     "directml",
+    "coreml",
 ] }
 # HTTPS client for the installer (MIT OR Apache-2.0): blocking (downloads run on their own
 # thread), rustls with its default ring provider and Mozilla's roots, no tokio. std has no HTTP.

@@ -110,3 +110,45 @@ jobs:
 
       - name: Test (AI helper)
         run: cargo test -p slopshop-ai --features helper,install --locked
+
+  # The AI helper end to end on the platforms the maintainer cannot test (ADR 0025): the
+  # installer fetches the platform's runtime and models (cached while the manifest is the same),
+  # then SAM 2.1, ViTMatte and BiRefNet run. Linux on the processor, macOS on Core ML (Apple
+  # silicon runners).
+  ai:
+    name: AI end to end (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            provider: cpu
+            runtime: runtime/cpu-x64/libonnxruntime.so
+            components: runtime-cpu-linux-x64,sam2.1-tiny,birefnet-lite,vitmatte-small
+          - os: macos-latest
+            provider: coreml
+            runtime: runtime/coreml/libonnxruntime.dylib
+            components: runtime-coreml-macos-arm64,sam2.1-base-plus-fp32,birefnet-fp32,vitmatte-small
+    runs-on: ${{ matrix.os }}
+    env:
+      AI_ROOT: ${{ github.workspace }}/../ai
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.AI_ROOT }}
+          key: ai-${{ matrix.os }}-${{ hashFiles('crates/slopshop-ai/src/manifest.rs') }}
+      - name: Install the runtime and the models
+        env:
+          SLOPSHOP_AI_INSTALL: ${{ matrix.components }}
+          SLOPSHOP_AI_INSTALL_ROOT: ${{ env.AI_ROOT }}
+        run: cargo test --release -p slopshop-ai --features install --test install --locked -- --nocapture
+      - name: Run the models
+        env:
+          SLOPSHOP_AI_RUNTIME: ${{ env.AI_ROOT }}/${{ matrix.runtime }}
+          SLOPSHOP_AI_MODELS: ${{ env.AI_ROOT }}/models
+          SLOPSHOP_AI_PROVIDER: ${{ matrix.provider }}
+        run: cargo test --release -p slopshop-ai --features helper --test helper --locked -- --nocapture

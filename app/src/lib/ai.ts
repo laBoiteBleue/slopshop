@@ -6,6 +6,13 @@ import type { MessageKey } from "./i18n/en";
 
 const NAMES: Record<string, MessageKey> = {
   "runtime-directml": "ai.component.runtimeDirectml",
+  "runtime-coreml-macos-arm64": "ai.component.runtimeCoreml",
+  "runtime-cpu-linux-x64": "ai.component.runtimeCpu",
+  "runtime-cpu-linux-arm64": "ai.component.runtimeCpu",
+  "sam2.1-base-plus-fp32": "ai.component.samBasePlus",
+  "sam2.1-tiny": "ai.component.samTiny",
+  "birefnet-fp32": "ai.component.birefnet",
+  "birefnet-lite": "ai.component.birefnetLite",
   "sam2.1-base-plus": "ai.component.samBasePlus",
   "vitmatte-small": "ai.component.vitmatte",
   birefnet: "ai.component.birefnet",

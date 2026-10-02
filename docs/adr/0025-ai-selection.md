@@ -44,8 +44,13 @@ TensorRT-RTX on demand on NVIDIA, else DirectML; models downloaded on first use.
    > Refine Edge, about 5× faster per window (65 ms against 320–430 ms on an RTX 5070 Ti);
    > SAM 2.1's clicks (16 ms against 7 ms), its encoder (same) and BiRefNet (165 ms against
    > 217 ms) differ little. DirectML is in maintenance at Microsoft (1.24.4 is its last
-   > release): its replacement is to be followed (Windows ML, the WebGPU plugin). The text
-   > below records the earlier plan.
+   > release): its replacement is to be followed (Windows ML, the WebGPU plugin). **macOS on
+   > Apple silicon**: Core ML, from ONNX Runtime's official macOS release (42 MB), the models
+   > in single precision. **Linux (x64, ARM)**: the processor, from ONNX Runtime's official
+   > Linux release (11 MB), the small models (SAM 2.1 tiny, BiRefNet lite); Refine Edge is off
+   > by default there (about a second per window). Neither can be tested by the maintainer:
+   > CI runs them end to end (macOS on Apple silicon runners). Intel Macs and Windows on ARM
+   > have no runtime. The text below records the earlier plan.
 
    - **NVIDIA**: CUDA, with **Microsoft's official ONNX Runtime build** (ort's prebuilt one has
      no RTX 50 kernels) and NVIDIA's runtime libraries (cuDNN, cuBLAS, CUDA runtime) fetched on

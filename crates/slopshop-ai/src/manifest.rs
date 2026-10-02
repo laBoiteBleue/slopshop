@@ -107,17 +107,6 @@ pub const COMPONENTS: &[Component] = &[
         ],
     },
     Component {
-        id: "vitmatte-small",
-        licenses: &[VITMATTE],
-        files: &[Download {
-            path: "models/Xenova/vitmatte-small-composition-1k/onnx/model.onnx",
-            url: "https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/6bc1297f6140f055a227b6d2cfe8c093281f35d2/onnx/model.onnx",
-            source: Source::File,
-            size: 103885865,
-            sha256: "bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225",
-        }],
-    },
-    Component {
         id: "birefnet",
         licenses: &[BIREFNET],
         files: &[Download {
@@ -126,6 +115,149 @@ pub const COMPONENTS: &[Component] = &[
             source: Source::File,
             size: 489666272,
             sha256: "3654c741eb80bd926ada8fed1713b506ccf8d30eb1f6487e87eb9f234f33df09",
+        }],
+    },
+    Component {
+        id: "runtime-coreml-macos-arm64",
+        licenses: &[ONNXRUNTIME],
+        files: &[Download {
+            path: "runtime/coreml/libonnxruntime.dylib",
+            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-osx-arm64-1.30.0.tgz",
+            source: Source::TarGz {
+                archive: 42373116,
+                entry: "./onnxruntime-osx-arm64-1.30.0/lib/libonnxruntime.1.30.0.dylib",
+            },
+            size: 43879424,
+            sha256: "bcc9110f9d638a119de2db7afb3ba9a1da8085f0cb3401e1c48ae1caf450b6fa",
+        }],
+    },
+    Component {
+        id: "sam2.1-base-plus-fp32",
+        licenses: &[SAM2],
+        files: &[
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-base-plus-ONNX/onnx/vision_encoder.onnx",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-base-plus-ONNX/resolve/bab18593f44e652f04cf18b60b3690f60e8996b0/onnx/vision_encoder.onnx",
+                source: Source::File,
+                size: 702836,
+                sha256: "6fd992cf796e6ad5a29f3b92a127f2ce33f7f320d63c8b3f02bf3775f5f692f4",
+            },
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-base-plus-ONNX/onnx/vision_encoder.onnx_data",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-base-plus-ONNX/resolve/bab18593f44e652f04cf18b60b3690f60e8996b0/onnx/vision_encoder.onnx_data",
+                source: Source::File,
+                size: 305746496,
+                sha256: "f8a5f1b14d02eb7ed3b3576ad6774b8ebcfef6cc20674d5f316d6144c60a08a5",
+            },
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-base-plus-ONNX/onnx/prompt_encoder_mask_decoder.onnx",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-base-plus-ONNX/resolve/bab18593f44e652f04cf18b60b3690f60e8996b0/onnx/prompt_encoder_mask_decoder.onnx",
+                source: Source::File,
+                size: 213114,
+                sha256: "f39eeec20243ed1c8f2cd013812e77813d937ddbc800fa4bc703761adc7e63cd",
+            },
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-base-plus-ONNX/onnx/prompt_encoder_mask_decoder.onnx_data",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-base-plus-ONNX/resolve/bab18593f44e652f04cf18b60b3690f60e8996b0/onnx/prompt_encoder_mask_decoder.onnx_data",
+                source: Source::File,
+                size: 20958208,
+                sha256: "445cd3f72a218815db10e336f4f1c46a6eb2713a0160a85af5365134607f32a7",
+            },
+        ],
+    },
+    Component {
+        id: "birefnet-fp32",
+        licenses: &[BIREFNET],
+        files: &[Download {
+            path: "models/onnx-community/BiRefNet-ONNX/onnx/model.onnx",
+            url: "https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/534d3c82d3bb8b2f0867db6dfbc3a525b8e42f67/onnx/model.onnx",
+            source: Source::File,
+            size: 972666916,
+            sha256: "58f621f00f5d756097615970a88a791584600dcf7c45b18a0a6267535a1ebd3c",
+        }],
+    },
+    Component {
+        id: "runtime-cpu-linux-x64",
+        licenses: &[ONNXRUNTIME],
+        files: &[Download {
+            path: "runtime/cpu-x64/libonnxruntime.so",
+            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz",
+            source: Source::TarGz {
+                archive: 11306877,
+                entry: "onnxruntime-linux-x64-1.30.0/lib/libonnxruntime.so.1.30.0",
+            },
+            size: 28985152,
+            sha256: "245a6f8c38127551057a1cd1ffd59f0a186a227ade4f3492dea2494eb565542e",
+        }],
+    },
+    Component {
+        id: "runtime-cpu-linux-arm64",
+        licenses: &[ONNXRUNTIME],
+        files: &[Download {
+            path: "runtime/cpu-arm64/libonnxruntime.so",
+            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-aarch64-1.30.0.tgz",
+            source: Source::TarGz {
+                archive: 10269495,
+                entry: "onnxruntime-linux-aarch64-1.30.0/lib/libonnxruntime.so.1.30.0",
+            },
+            size: 25135496,
+            sha256: "64e903a43a041240fd6bcffe0ac6d4fea47ef87bf24b9d097801bd00a9612a4b",
+        }],
+    },
+    Component {
+        id: "sam2.1-tiny",
+        licenses: &[SAM2],
+        files: &[
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/vision_encoder.onnx",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/vision_encoder.onnx",
+                source: Source::File,
+                size: 354238,
+                sha256: "4f30aacd3aaefbca81a0b7fe4c1fc96345570ea0a6f80ced599493d1b3be2e8c",
+            },
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/vision_encoder.onnx_data",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/vision_encoder.onnx_data",
+                source: Source::File,
+                size: 134084864,
+                sha256: "e83df9866a5afe68ea7f0f721f18f65137fc3acbf0da1c74e946d363e09c69cc",
+            },
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/prompt_encoder_mask_decoder.onnx",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/prompt_encoder_mask_decoder.onnx",
+                source: Source::File,
+                size: 213114,
+                sha256: "874414704c5d686db7d206a35f6e15d26563d50c8c4468fccc6739bd7e491dcf",
+            },
+            Download {
+                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/prompt_encoder_mask_decoder.onnx_data",
+                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/prompt_encoder_mask_decoder.onnx_data",
+                source: Source::File,
+                size: 20958208,
+                sha256: "e9874d900dd4134ed60eab1e97910327c2419e0b2954485d8fd6e7f1a1470f47",
+            },
+        ],
+    },
+    Component {
+        id: "birefnet-lite",
+        licenses: &[BIREFNET],
+        files: &[Download {
+            path: "models/onnx-community/BiRefNet_lite-ONNX/onnx/model.onnx",
+            url: "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model.onnx",
+            source: Source::File,
+            size: 224005088,
+            sha256: "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333",
+        }],
+    },
+    Component {
+        id: "vitmatte-small",
+        licenses: &[VITMATTE],
+        files: &[Download {
+            path: "models/Xenova/vitmatte-small-composition-1k/onnx/model.onnx",
+            url: "https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/6bc1297f6140f055a227b6d2cfe8c093281f35d2/onnx/model.onnx",
+            source: Source::File,
+            size: 103885865,
+            sha256: "bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225",
         }],
     },
 ];
