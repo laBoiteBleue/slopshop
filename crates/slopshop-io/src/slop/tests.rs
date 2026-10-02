@@ -350,6 +350,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         &mut doc,
         "original",
         LayerContent::Raster {
+            original: None,
             image: Arc::clone(&original),
         },
         1.0,
@@ -362,6 +363,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         &mut doc,
         "shared",
         LayerContent::Raster {
+            original: None,
             image: Arc::new(shared),
         },
         1.0,

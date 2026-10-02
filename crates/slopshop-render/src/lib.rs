@@ -2009,6 +2009,7 @@ mod tests {
         let layer = Layer {
             id: repainted.allocate_layer_id(),
             content: LayerContent::Raster {
+                original: None,
                 image: painted.into(),
             },
             ..document.layers()[0].clone()
