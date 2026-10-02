@@ -827,22 +827,17 @@ export type AiFailure = { code: string; detail: string };
 
 export type AiProgress = { done: number; total: number };
 
-/** A prompt for a segmentation model, in document pixels. */
-export type PromptPoint = { x: number; y: number; positive: boolean };
-
-/** A Quick Selection request: every prompt of the session so far (see `ai::SegmentRequest`). */
-export type SegmentRequest = {
-  /** A new id starts over from the current selection. */
-  session: number;
-  points: PromptPoint[];
-  /** What the model sees, document pixels `[x, y, width, height]`. */
+/** A Quick Selection stroke (see `selection::QuickRequest`). */
+export type QuickRequest = {
+  /** The brush's path and radius, document pixels. */
+  points: [number, number][];
+  radius: number;
+  /** The region worked on, document pixels `[x, y, width, height]`. */
   region: [number, number, number, number];
   /** Only that layer, else the composited document. */
   layerId: number | null;
-  /** How the result combines with the selection before the session; read at its start. */
+  /** `replace` (a new selection), `add` or `subtract`. */
   mode: SelectionMode;
-  /** Refine the edge at full resolution (ViTMatte). */
-  refine: boolean;
 };
 
 export const engine = {
@@ -1097,8 +1092,8 @@ export const engine = {
   aiRefineSelection: (documentId: number, radius: number, layerId: number | null) =>
     serial(() => invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId })),
   /** Quick Selection: the model's mask for the session's prompts, as one undo entry. */
-  aiSegment: (documentId: number, request: SegmentRequest) =>
-    serial(() => invoke<DocumentView>("ai_segment", { documentId, request })),
+  quickSelect: (documentId: number, request: QuickRequest) =>
+    serial(() => invoke<DocumentView>("quick_select", { documentId, request })),
   perform: (documentId: number, edit: EditRequest) =>
     serial(() => invoke<DocumentView>("perform", { documentId, edit })),
   /**

@@ -176,6 +176,116 @@ pub async fn magic_wand(
     set_selection(&state, document_id, image)
 }
 
+/// Quick Selection works on the region in view at most this many pixels on a side (the colors
+/// as shown, rendered by the GPU): the cut costs time in proportion to its pixels.
+const QUICK_SIDE: f64 = 1600.0;
+
+/// A Quick Selection stroke (ADR 0026).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickRequest {
+    /// The brush's path and radius, document pixels.
+    points: Vec<[f64; 2]>,
+    radius: f64,
+    /// The region to work on, document pixels `[x, y, width, height]`: the view when zoomed in
+    /// (finer), else the whole document.
+    region: [u32; 4],
+    /// Only that layer (placed as in the document), else the composited document.
+    layer_id: Option<u64>,
+    /// `replace` (a new selection), `add` or `subtract`.
+    mode: String,
+}
+
+/// Quick Selection: the region of similar colors the stroke paints over, bounded by the
+/// image's edges, combined with the selection by `mode`, as one undo entry.
+#[tauri::command]
+pub async fn quick_select(
+    app: tauri::AppHandle,
+    document_id: u64,
+    request: QuickRequest,
+) -> Result<DocumentView, String> {
+    use slopshop_core::quick_select::{self as quick, QuickImage, QuickMode};
+    use tauri::Manager;
+    let (combine, mode) = match request.mode.as_str() {
+        "add" => (Combine::Add, QuickMode::Add),
+        "subtract" => (Combine::Subtract, QuickMode::Subtract),
+        _ => (Combine::Replace, QuickMode::New),
+    };
+    let (doc, current) = {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document().clone();
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        (doc, current)
+    };
+    let canvas = doc.size();
+    let [x, y, w, h] = request.region;
+    let region = Rect::new(x, y, w, h)
+        .intersection(canvas.bounds())
+        .ok_or("empty region")?;
+    let image = {
+        let app = app.clone();
+        on_worker(move || {
+            let state = app.state::<AppState>();
+            let source = sampled_document(&doc, request.layer_id)?;
+            let scale = (f64::from(region.width.max(region.height)) / QUICK_SIDE).max(1.0);
+            let output = Size::new(
+                (f64::from(region.width) / scale).ceil().max(1.0) as u32,
+                (f64::from(region.height) / scale).ceil().max(1.0) as u32,
+            );
+            let view = slopshop_core::view::ViewTransform {
+                origin: [f64::from(region.x), f64::from(region.y)],
+                scale,
+            };
+            let frame = state
+                .renderer()?
+                .render_view(&source, view, output)
+                .map_err(|e| e.to_string())?;
+            let rgb: Vec<u8> = frame
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect();
+            let (w, h) = (output.width as usize, output.height as usize);
+            // The selection on the same grid: inside where its coverage reaches one half.
+            let selected: Vec<bool> = match &current {
+                Some(mask) => (0..w * h)
+                    .map(|p| {
+                        let sx = f64::from(region.x) + ((p % w) as f64 + 0.5) * scale;
+                        let sy = f64::from(region.y) + ((p / w) as f64 + 0.5) * scale;
+                        mask.gray_at(sx as u32, sy as u32) >= 0.5
+                    })
+                    .collect(),
+                None => vec![false; w * h],
+            };
+            let points: Vec<[f64; 2]> = request
+                .points
+                .iter()
+                .map(|[px, py]| {
+                    [
+                        (px - f64::from(region.x)) / scale,
+                        (py - f64::from(region.y)) / scale,
+                    ]
+                })
+                .collect();
+            let stroke = quick::brush(w, h, &points, request.radius / scale);
+            let image = QuickImage {
+                width: w,
+                height: h,
+                rgb: &rgb,
+            };
+            let changed = quick::quick_select(&image, &selected, &stroke, mode);
+            let scores = quick::change_scores(w, h, &changed, &selected, mode);
+            selection::select_scores(canvas, current.as_deref(), &scores, w, h, region, combine)
+                .map_err(|e| e.to_string())
+        })
+        .await?
+    };
+    set_selection(&app.state::<AppState>(), document_id, image)
+}
+
 /// The document to sample: the composited document, or with `layer_id` a document holding
 /// only that layer, placed as in the document.
 pub(crate) fn sampled_document(

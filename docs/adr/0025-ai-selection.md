@@ -67,6 +67,9 @@ TensorRT-RTX on demand on NVIDIA, else DirectML; models downloaded on first use.
    |---|---|---|---|
    | Object Selection | box, or click; later hover highlight | SAM 2.1 | — |
    | Quick Selection | brush strokes (Alt: remove), brush size | SAM 2.1 | — |
+
+   > **Amended 2026-10-02 (maintainer):** Quick Selection works on colors, as Photoshop's, with
+   > no model: [ADR 0026](0026-quick-selection.md).
    | Select > Subject | one command | BiRefNet | — |
    | Refine Edge (option of every tool, and a command for any selection) | — | ViTMatte-S | SAM2Matting, ZIM (non-commercial) |
 

@@ -1,7 +1,7 @@
 <script lang="ts">
-  // Quick Selection (W, ADR 0025): paint over an object and SAM 2.1 selects it whole. A stroke
-  // becomes points along it (one per half brush); the engine keeps the strokes of a session
-  // together, so the next strokes refine the same object: with Alt, they take parts away. As
+  // Quick Selection (W, ADR 0026): paint over an area and the selection grows to the similar
+  // colors around the stroke, up to the image's edges, as in Photoshop; the next strokes add to
+  // it, with Alt they take parts away. A stroke becomes points along it (one per half brush). As
   // with the other selection tools, Shift and Alt are shown by a badge by the pointer. The
   // brush is in document pixels, like Photoshop's.
   import type { SelectionMode } from "./engine";
@@ -20,7 +20,7 @@
     mode: SelectionMode;
     /** Brush diameter, document pixels. */
     size: number;
-    /** A stroke is being turned into a selection. */
+    /** The last stroke is still being turned into a selection. */
     busy: boolean;
     /**
      * A stroke: its points (document pixels), the mode the keys asked for (or null), and the

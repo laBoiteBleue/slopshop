@@ -39,7 +39,6 @@
     type AiComponent,
     type AiFeature,
     type AiFailure,
-    type PromptPoint,
   } from "./lib/engine";
   import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
   import type { MessageKey } from "./lib/i18n/en";
@@ -400,14 +399,12 @@
   }
 
   // AI selection (ADR 0025), with SAM 2.1. Object Selection: the object under the pointer
-  // lights up, a click or a box selects it. Quick Selection: strokes become prompts; the strokes
-  // of a session refine one object, while the document only changes by their own results.
+  // lights up, a click or a box selects it. Quick Selection works on colors (ADR 0026).
   /**
-   * The AI tools' options: Quick Selection's brush, every layer or the active one, and whether
-   * edges are refined at full resolution (ViTMatte): by default for Object Selection, on demand
-   * for Quick Selection (Photoshop's Enhance Edge).
+   * The options of Object and Quick Selection: Quick Selection's brush, every layer or the active
+   * one, and whether Object Selection refines edges at full resolution (ViTMatte).
    */
-  let quick = $state({ size: 30, sampleAll: false, objectRefine: true, quickRefine: false });
+  let quick = $state({ size: 30, sampleAll: false, objectRefine: true });
   // On the processor (Linux), Refine Edges takes about a second per window: off by default.
   void engine.aiRuntime().then((runtime) => {
     if (runtime === "cpu") quick.objectRefine = false;
@@ -415,21 +412,10 @@
   let aiBusy = $state(false);
   /** No hovering until a click asks again: the components are missing or AI cannot start. */
   let aiHoverBlocked = false;
-  let quickSession: {
-    id: number;
-    documentId: number;
-    /** The document's revision after the session's last result. */
-    revision: number;
-    mode: SelectionMode;
-    region: [number, number, number, number];
-    layer: number | null;
-    points: PromptPoint[];
-  } | null = null;
-  let nextQuickSession = 1;
+  /** A Quick Selection stroke is being turned into a selection. */
+  let quickBusy = $state(false);
   /** The components to download before AI can run, and what to do once they are there. */
   let aiDownload = $state<{ components: AiComponent[]; then: () => void } | null>(null);
-  /** Prompts per request at most: long strokes are thinned out evenly. */
-  const MAX_PROMPTS = 48;
 
   /**
    * What the model sees, document pixels: the view when zoomed in (finer), the whole document
@@ -514,7 +500,6 @@
     const doc = active;
     if (!doc) return;
     commitTransform();
-    quickSession = null;
     void runAi(() => engine.aiSelectSubject(doc.id, aiLayer(), "replace", quick.objectRefine));
   }
 
@@ -528,7 +513,6 @@
     const doc = active;
     if (!doc) return;
     commitTransform();
-    quickSession = null;
     // A click outside the image deselects (with keys, it does nothing).
     if (point && outsideCanvas(doc, point[0], point[1])) {
       if (keyMode === null && doc.selectionKey != null) selectionCommand(engine.deselect);
@@ -545,59 +529,38 @@
     void runAi(() => engine.aiObjectSelect(doc.id, request));
   }
 
+  /**
+   * Quick Selection (ADR 0026): the region of similar colors a stroke paints over. As in
+   * Photoshop, the first stroke of a new selection switches the tool to adding, and a click
+   * outside the image deselects.
+   */
   function quickStroke(
     stroke: [number, number][],
     keyMode: SelectionMode | null,
     view: [number, number, number, number],
   ) {
     const doc = active;
-    if (!doc || stroke.length === 0) return;
+    if (!doc || stroke.length === 0 || quickBusy) return;
     commitTransform();
-    const continuing =
-      quickSession !== null &&
-      quickSession.documentId === doc.id &&
-      quickSession.revision === doc.revision;
-    if (!continuing) {
-      const start = keyMode ?? selectionMode;
-      quickSession = {
-        id: nextQuickSession++,
-        documentId: doc.id,
-        revision: doc.revision,
-        mode: start === "intersect" ? "replace" : start,
+    if (stroke.every(([x, y]) => outsideCanvas(doc, x, y))) {
+      if (stroke.length === 1 && keyMode === null && doc.selectionKey != null) {
+        selectionCommand(engine.deselect);
+      }
+      return;
+    }
+    const chosen = keyMode ?? selectionMode;
+    const mode = chosen === "intersect" ? "replace" : chosen;
+    if (keyMode === null && mode === "replace") selectionMode = "add";
+    quickBusy = true;
+    void sync(
+      engine.quickSelect(doc.id, {
+        points: stroke,
+        radius: quick.size / 2,
         region: aiRegion(doc, view),
-        layer: aiLayer(),
-        points: [],
-      };
-    }
-    const session = quickSession;
-    if (!session) return;
-    // A stroke in the session's direction adds to the object; the other direction (Alt in an
-    // adding session, Shift in a subtracting one) takes parts away.
-    const direction = keyMode ?? (continuing ? "add" : selectionMode);
-    const positive = (direction === "subtract") === (session.mode === "subtract");
-    const [x0, y0, w, h] = session.region;
-    for (const [x, y] of stroke) {
-      if (x >= x0 && y >= y0 && x < x0 + w && y < y0 + h) session.points.push({ x, y, positive });
-    }
-    if (session.points.length === 0) return;
-    const step = Math.max(1, session.points.length / MAX_PROMPTS);
-    const points = Array.from(
-      { length: Math.min(session.points.length, MAX_PROMPTS) },
-      (_, i) => session.points[Math.floor(i * step)],
-    );
-    void runAi(() =>
-      engine.aiSegment(doc.id, {
-        session: session.id,
-        points,
-        region: session.region,
-        layerId: session.layer,
-        mode: session.mode,
-        refine: quick.quickRefine,
+        layerId: aiLayer(),
+        mode,
       }),
-    ).then((view) => {
-      if (view) session.revision = view.revision;
-      else if (quickSession === session) quickSession = null;
-    });
+    ).finally(() => (quickBusy = false));
   }
 
   function selectShape(shape: SelectionShape, mode: SelectionMode | null) {
@@ -2394,7 +2357,7 @@
                     {mapping}
                     mode={selectionMode}
                     size={quick.size}
-                    busy={aiBusy}
+                    busy={quickBusy}
                     onstroke={quickStroke}
                   />
                 {:else if tool === "lasso" || tool === "polygonalLasso"}

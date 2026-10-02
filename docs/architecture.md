@@ -182,14 +182,18 @@ AI selection (`src-tauri/src/segment.rs`, ADR 0025): the `slopshop-ai` helper is
 first use and kept, the model loaded. The image SAM sees (the document, or the view when zoomed
 in, at most 1024 pixels on a side, rendered by the GPU) is encoded once and reused while only
 the selection changes, so Object Selection's hover (`ai_object_hover`: a 256² mask the UI tints)
-and its click or box (`ai_object_select`) only decode, in milliseconds. Quick Selection
-(`ai_segment`) keeps the prompts of a session (its strokes) and the selection before it. The
+and its click or box (`ai_object_select`) only decode, in milliseconds. The
 mask becomes a selection through `selection::select_logits` (specks and pinholes dropped).
 Select > Subject (`ai_select_subject`) has BiRefNet find the main subject on the whole document
 (1024² logits) and goes through the same path. Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
 along the outline with `selection::plan_refinement` (at most 48; a longer outline is seen
 coarser), renders each at full resolution, has ViTMatte matte it with a trimap that leaves a
 band around the outline undecided, and writes the matte into that band only.
+
+Quick Selection (`selection::quick_select`, ADR 0026) has no model: the region in view is
+rendered by the GPU (at most 1600 pixels on a side), `slopshop_core::quick_select` cuts it
+between a color model of the stroke and one of the rest (a max-flow on the pixel grid, coarse
+then in a band), and the changed pixels join the selection through `selection::select_scores`.
 
 AI components (`src-tauri/src/ai.rs`, ADR 0025): `ai_components` lists what a feature needs on
 this machine (ONNX Runtime with DirectML, and the models) or, for Edit > Preferences, everything this machine can use; `ai_install`

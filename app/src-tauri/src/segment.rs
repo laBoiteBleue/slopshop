@@ -28,7 +28,7 @@ const SAM_SIDE: f64 = 1024.0;
 const MATTE_SIDE: u32 = 1024;
 const MAX_MATTE_WINDOWS: usize = 48;
 
-/// The helper, the image it has encoded, and the Quick Selection session under way.
+/// The helper and the image it has encoded.
 #[derive(Default)]
 pub(crate) struct SegmentState {
     session: Mutex<Session>,
@@ -38,7 +38,6 @@ pub(crate) struct SegmentState {
 struct Session {
     helper: Option<Client>,
     encoded: Option<Encoded>,
-    quick: Option<QuickSession>,
     next_key: u64,
 }
 
@@ -53,17 +52,6 @@ struct Encoded {
     scale: f64,
     /// The image's key in the helper.
     key: u64,
-}
-
-/// Strokes of one Quick Selection session refine one mask, combined with the selection there
-/// was before the session.
-struct QuickSession {
-    /// The UI's session id.
-    id: u64,
-    base: Option<Arc<RasterImage>>,
-    combine: Combine,
-    /// The document's revision after the session's last result: another change ends it.
-    revision: u64,
 }
 
 fn internal(e: impl ToString) -> AiFailure {
@@ -357,111 +345,6 @@ fn prepare(app: &AppHandle, document_id: u64) -> Result<(PathBuf, Document), AiF
 }
 
 /// A prompt, in document pixels.
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub(crate) struct PromptPoint {
-    x: f64,
-    y: f64,
-    /// Part of the object (else: not part of it).
-    positive: bool,
-}
-
-/// One Quick Selection request: every prompt of the session so far.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SegmentRequest {
-    /// The UI's session: a new id starts over from the current selection.
-    session: u64,
-    points: Vec<PromptPoint>,
-    /// What SAM sees, document pixels `[x, y, width, height]`: the view when zoomed in (finer),
-    /// else the whole document.
-    region: [u32; 4],
-    /// Only that layer (placed as in the document), else the composited document.
-    layer_id: Option<u64>,
-    /// How the mask combines with the selection before the session (`replace`, `add`,
-    /// `subtract`); read when the session starts.
-    mode: String,
-    /// Refine the edge at full resolution (ViTMatte).
-    refine: bool,
-}
-
-/// Quick Selection: SAM 2.1's mask for the session's prompts, combined with the selection
-/// before the session, as one undo entry.
-#[tauri::command]
-pub(crate) async fn ai_segment(
-    app: AppHandle,
-    document_id: u64,
-    request: SegmentRequest,
-) -> Result<DocumentView, AiFailure> {
-    tauri::async_runtime::spawn_blocking(move || quick_selection(&app, document_id, &request))
-        .await
-        .map_err(internal)?
-}
-
-fn quick_selection(
-    app: &AppHandle,
-    document_id: u64,
-    request: &SegmentRequest,
-) -> Result<DocumentView, AiFailure> {
-    let state = app.state::<AppState>();
-    let (root, doc) = prepare(app, document_id)?;
-    require(&root, Feature::Segmentation)?;
-    let region = clamp_region(request.region, doc.size())?;
-    let mut session = lock(&state)?;
-    let continuing = session
-        .quick
-        .as_ref()
-        .is_some_and(|q| q.id == request.session && q.revision == doc.revision())
-        && session.encoded.is_some_and(|e| {
-            e.document_id == document_id && e.region == region && e.layer_id == request.layer_id
-        });
-    let encoded = match (continuing, session.encoded) {
-        (true, Some(encoded)) => encoded,
-        _ => {
-            let combine = selection::combine(&request.mode).map_err(internal)?;
-            session.quick = Some(QuickSession {
-                id: request.session,
-                base: doc.selection().map(|s| Arc::clone(s.image())),
-                combine,
-                revision: doc.revision(),
-            });
-            session.encode(&state, &root, document_id, &doc, region, request.layer_id)?
-        }
-    };
-    let points: Vec<_> = request
-        .points
-        .iter()
-        .map(|p| (p.x, p.y, p.positive))
-        .collect();
-    let logits = session.decode(&root, encoded, &points, None)?;
-    let (base, combine) = {
-        let quick = session
-            .quick
-            .as_ref()
-            .ok_or_else(|| internal("no session"))?;
-        (quick.base.clone(), quick.combine)
-    };
-    let image = session.selection(
-        &state,
-        &root,
-        &doc,
-        request.layer_id,
-        &logits,
-        region,
-        base.as_deref(),
-        combine,
-        request.refine,
-    )?;
-    let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
-    if let Some(quick) = session.quick.as_mut() {
-        quick.revision = view.revision;
-    }
-    // The encoded image stays valid: only the selection changed.
-    if let Some(encoded) = session.encoded.as_mut() {
-        encoded.revision = view.revision;
-    }
-    Ok(view)
-}
-
 /// Object Selection's hover: the object under document point (`x`, `y`), as SAM's mask over
 /// `region`, raw binary: its side (`u32` little-endian, 0 when nothing is found) then one byte
 /// per cell (0 or 255), rows from the top.

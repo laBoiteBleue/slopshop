@@ -182,7 +182,9 @@ paints on an empty layer or in a mask.
 - [x] AI runtime ([ADR 0025](adr/0025-ai-selection.md)): the `slopshop-ai` helper (ONNX
       Runtime loaded at run time), components downloaded with consent (Edit > Preferences)
 - [x] Object Selection (W): the object under the pointer lights up, a click or a box selects
-      it; Quick Selection: brush strokes, Alt takes parts away (SAM 2.1, coarse masks)
+      it (SAM 2.1, coarse masks)
+- [x] Quick Selection (W) by color, as Photoshop's ([ADR 0026](adr/0026-quick-selection.md)):
+      the region of similar colors around the stroke, up to the image's edges; Alt subtracts
 - [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
       AI tools, and Select > Refine Edges… for any selection
 - [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
