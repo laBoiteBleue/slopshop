@@ -883,7 +883,17 @@ export const engine = {
   /** Open documents, in tab order. */
   documents: () => invoke<DocumentView[]>("documents"),
   document: (documentId: number) => invoke<DocumentView>("document", { documentId }),
-  newDocument: () => invoke<DocumentView>("new_document"),
+  /**
+   * A new document (File > New): one layer named `layerName`, filled with `background` (sRGB in
+   * [0, 1]) or transparent with `null`. A `null` name keeps the tab untitled.
+   */
+  newDocument: (settings: {
+    name: string | null;
+    width: number;
+    height: number;
+    background: [number, number, number] | null;
+    layerName: string;
+  }) => invoke<DocumentView>("new_document", settings),
   closeDocument: (documentId: number) =>
     serial(() => invoke<void>("close_document", { documentId })),
   /** Rename a document (its tab); the file on disk keeps its name. */

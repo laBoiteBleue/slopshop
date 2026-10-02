@@ -229,6 +229,26 @@ const en = {
     "SlopShop {version}, pre-alpha.\nAn open-source, non-destructive image editor. MIT license.",
 
   "document.untitled": "Untitled",
+  "newDocument.title": "New",
+  "newDocument.name": "Name",
+  "newDocument.preset": "Preset",
+  "newDocument.preset.custom": "Custom",
+  "newDocument.preset.photo": "Photo 3:2",
+  "newDocument.preset.a4": "A4, 300 ppi",
+  "newDocument.preset.letter": "US Letter, 300 ppi",
+  "newDocument.preset.hd": "HD 1080p",
+  "newDocument.preset.uhd": "4K UHD",
+  "newDocument.preset.square": "Square",
+  "newDocument.preset.story": "Story",
+  "newDocument.orientation": "Orientation",
+  "newDocument.portrait": "Portrait",
+  "newDocument.landscape": "Landscape",
+  "newDocument.background": "Background Contents",
+  "newDocument.background.white": "White",
+  "newDocument.background.black": "Black",
+  "newDocument.background.color": "Background Color",
+  "newDocument.background.transparent": "Transparent",
+  "newDocument.backgroundLayer": "Background",
 
   "tabs.closeHint": "Close ({mod}+W, or middle click)",
   "tabs.hint":
@@ -237,7 +257,7 @@ const en = {
 
   "welcome.title": "Open an image or create a document",
   "welcome.open": "Open…",
-  "welcome.new": "New document",
+  "welcome.new": "New document…",
   "welcome.drop": "…or drop files here",
 
   "drop.newTab": "Drop to open in a new tab",

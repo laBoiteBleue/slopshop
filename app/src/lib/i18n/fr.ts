@@ -230,6 +230,26 @@ const fr: Messages = {
     "SlopShop {version}, pré-alpha.\nUn éditeur d'images open source et non destructif. Licence MIT.",
 
   "document.untitled": "Sans titre",
+  "newDocument.title": "Nouveau",
+  "newDocument.name": "Nom",
+  "newDocument.preset": "Paramètre prédéfini",
+  "newDocument.preset.custom": "Personnalisé",
+  "newDocument.preset.photo": "Photo 3:2",
+  "newDocument.preset.a4": "A4, 300 ppp",
+  "newDocument.preset.letter": "Lettre US, 300 ppp",
+  "newDocument.preset.hd": "HD 1080p",
+  "newDocument.preset.uhd": "4K UHD",
+  "newDocument.preset.square": "Carré",
+  "newDocument.preset.story": "Story",
+  "newDocument.orientation": "Orientation",
+  "newDocument.portrait": "Portrait",
+  "newDocument.landscape": "Paysage",
+  "newDocument.background": "Contenu de l'arrière-plan",
+  "newDocument.background.white": "Blanc",
+  "newDocument.background.black": "Noir",
+  "newDocument.background.color": "Couleur d'arrière-plan",
+  "newDocument.background.transparent": "Transparent",
+  "newDocument.backgroundLayer": "Arrière-plan",
 
   "tabs.closeHint": "Fermer ({mod}+W, ou clic du milieu)",
   "tabs.hint":
@@ -238,7 +258,7 @@ const fr: Messages = {
 
   "welcome.title": "Ouvrez une image ou créez un document",
   "welcome.open": "Ouvrir…",
-  "welcome.new": "Nouveau document",
+  "welcome.new": "Nouveau document…",
   "welcome.drop": "…ou déposez des fichiers ici",
 
   "drop.newTab": "Déposez pour ouvrir dans un nouvel onglet",

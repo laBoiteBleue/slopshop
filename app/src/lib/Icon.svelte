@@ -43,6 +43,9 @@
     selectionAdd: "M3 3h12v12H3Z M18 14v8 M14 18h8",
     selectionSubtract: "M3 3h12v12H3Z M14 18h8",
     selectionIntersect: "M3 3h12v12H3Z M9 9h12v12H9Z",
+    // Page orientation (File > New).
+    portrait: "M7 3h10v18H7Z",
+    landscape: "M3 7h18v10H3Z",
     // View.
     fitScreen: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
     actualPixels: "M4.5 8.5l3-2.5v12 M12 9v1.5 M12 14v1.5 M16.5 8.5l3-2.5v12",

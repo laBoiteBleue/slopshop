@@ -62,6 +62,7 @@
   import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillChoiceDialog, { type FillContents } from "./lib/FillChoiceDialog.svelte";
+  import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -193,10 +194,38 @@
     }
   }
 
-  async function newDocument() {
-    const doc = await engine.newDocument();
-    upsert(doc);
-    activate(doc.id);
+  /** File > New asks for the size and the background first (Photoshop's New dialog). */
+  let newDialog = $state(false);
+
+  function newDocument() {
+    newDialog = true;
+  }
+
+  async function createDocument(settings: NewDocumentSettings) {
+    newDialog = false;
+    const transparent = settings.background === "transparent";
+    const hex =
+      settings.background === "background"
+        ? colors.background
+        : settings.background === "black"
+          ? "#000000"
+          : "#ffffff";
+    try {
+      const doc = await engine.newDocument({
+        name: settings.name,
+        width: settings.width,
+        height: settings.height,
+        background: transparent ? null : hexToSrgb(hex),
+        // Photoshop's names: a transparent document starts with Layer 1.
+        layerName: transparent
+          ? t("layers.defaultLayerName", { n: 1 })
+          : t("newDocument.backgroundLayer"),
+      });
+      upsert(doc);
+      activate(doc.id);
+    } catch (e) {
+      showError(String(e));
+    }
   }
 
   function cycleTabs(step: number) {
@@ -1971,7 +2000,7 @@
       {
         label: t("menu.file"),
         items: [
-          cmd(t("menu.file.new"), () => void newDocument(), keys("mod", "N")),
+          cmd(t("menu.file.new"), newDocument, keys("mod", "N")),
           cmd(t("menu.file.open"), () => void openWithDialog(), keys("mod", "O")),
           cmd(t("menu.file.openFolder"), () => void openFolderWithDialog()),
           cmd(
@@ -2405,7 +2434,7 @@
     }
     if (key === "n" && !e.shiftKey) {
       e.preventDefault();
-      void newDocument();
+      newDocument();
       return;
     }
     if (key === "n" && e.shiftKey) {
@@ -2893,6 +2922,9 @@
 
 {#if fillChoice}
   <FillChoiceDialog onchoose={applyFillChoice} onclose={() => (fillChoice = null)} />
+{/if}
+{#if newDialog}
+  <NewDocumentDialog oncreate={(s) => void createDocument(s)} onclose={() => (newDialog = false)} />
 {/if}
 {#if modifyDialog && modifyDialog.document === activeId}
   <ModifyDialog
