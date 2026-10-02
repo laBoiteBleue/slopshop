@@ -10,13 +10,18 @@ use std::path::PathBuf;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
-use slopshop_ai::{MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, read_frame, write_frame};
+use slopshop_ai::{
+    MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SUBJECT_SIDE, read_frame, write_frame,
+};
 
 /// SAM 2.1's input side.
 const SIDE: usize = 1024;
 /// SAM 2.1's models, by size, in the models folder (as downloaded from Hugging Face).
 const SAM_GPU: &str = "onnx-community/sam2.1-hiera-base-plus-ONNX/onnx";
 const SAM_CPU: &str = "onnx-community/sam2.1-hiera-tiny-ONNX/onnx";
+/// BiRefNet, by size: the full model on a GPU, the lite one on the CPU (in the models folder).
+const BIREFNET_GPU: &str = "onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx";
+const BIREFNET_CPU: &str = "onnx-community/BiRefNet_lite-ONNX/onnx/model_fp16.onnx";
 /// ViTMatte-S, in the models folder.
 const VITMATTE: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
 
@@ -208,6 +213,53 @@ impl Sam {
     }
 }
 
+/// BiRefNet: the main subject of an image (Select Subject).
+struct Subject {
+    session: Session,
+}
+
+impl Subject {
+    /// BiRefNet on the first provider of `choices` that runs it (full on a GPU, lite on the CPU).
+    fn load(models: &std::path::Path, choices: &[&'static str]) -> Result<Self, String> {
+        let mut errors = Vec::new();
+        for &provider in choices {
+            let path = models.join(if provider == "cpu" {
+                BIREFNET_CPU
+            } else {
+                BIREFNET_GPU
+            });
+            match session(&path, provider) {
+                Ok(session) => {
+                    eprintln!("slopshop-ai: BiRefNet on {provider}");
+                    return Ok(Subject { session });
+                }
+                Err(e) => errors.push(format!("{provider}: {e}")),
+            }
+        }
+        Err(format!("BiRefNet could not start: {}", errors.join("; ")))
+    }
+
+    /// The subject's 1024² logits (positive: inside) over the whole image.
+    fn run(&mut self, width: u32, height: u32, rgb: &[u8]) -> Result<Vec<f32>, String> {
+        let pixels = normalized(width as usize, height as usize, rgb);
+        let input =
+            Tensor::from_array(([1usize, 3, SIDE, SIDE], pixels)).map_err(|e| e.to_string())?;
+        let input_name = self.session.inputs()[0].name().to_owned();
+        let output_name = self.session.outputs()[0].name().to_owned();
+        let outputs = self
+            .session
+            .run(ort::inputs![input_name.as_str() => input])
+            .map_err(|e| e.to_string())?;
+        let (_, logits) = outputs[output_name.as_str()]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| e.to_string())?;
+        logits
+            .get(..SUBJECT_SIDE * SUBJECT_SIDE)
+            .map(<[f32]>::to_vec)
+            .ok_or_else(|| "BiRefNet returned a smaller mask".to_owned())
+    }
+}
+
 /// ViTMatte-S: mattes an image guided by a trimap (Refine Edge).
 struct Matte {
     session: Session,
@@ -326,6 +378,7 @@ fn main() {
     // The models load on the first request that needs them: greeting stays instant.
     let mut sam: Option<Sam> = None;
     let mut matte: Option<Matte> = None;
+    let mut subject: Option<Subject> = None;
     let mut provider = "none";
     let mut input = BufReader::new(io::stdin().lock());
     let mut output = BufWriter::new(io::stdout().lock());
@@ -376,6 +429,16 @@ fn main() {
                 };
                 match loaded.and_then(|m| m.run(width, height, &rgb, &trimap)) {
                     Ok(alpha) => Response::Alpha(alpha),
+                    Err(e) => Response::Failed(e),
+                }
+            }
+            Ok(Request::Subject { width, height, rgb }) => {
+                let loaded = match subject.as_mut() {
+                    Some(subject) => Ok(subject),
+                    None => Subject::load(&options.models, &choices).map(|s| subject.insert(s)),
+                };
+                match loaded.and_then(|s| s.run(width, height, &rgb)) {
+                    Ok(logits) => Response::SubjectMask(logits),
                     Err(e) => Response::Failed(e),
                 }
             }

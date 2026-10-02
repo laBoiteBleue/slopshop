@@ -31,6 +31,9 @@ pub const MASK_SIDE: usize = 256;
 /// Largest side of an image to matte (the editor sends windows along an outline).
 pub const MAX_MATTE_SIDE: u32 = 2048;
 
+/// Side of the masks Select Subject returns (BiRefNet's output).
+pub const SUBJECT_SIDE: usize = 1024;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// The helper's protocol version and the execution provider it runs on.
@@ -57,6 +60,13 @@ pub enum Request {
         height: u32,
         rgb: Vec<u8>,
         trimap: Vec<u8>,
+    },
+    /// The image's main subject (8-bit RGB, `width × height`, at most [`MAX_IMAGE_SIDE`]):
+    /// BiRefNet's mask.
+    Subject {
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
     },
     /// Stop.
     Quit,
@@ -86,6 +96,8 @@ pub enum Response {
     },
     /// The matte: one 16-bit coverage per pixel of the image (0: outside, 65535: inside).
     Alpha(Vec<u16>),
+    /// The subject: [`SUBJECT_SIDE`]² logits over the whole image (positive: inside).
+    SubjectMask(Vec<f32>),
     Failed(String),
 }
 
@@ -124,11 +136,13 @@ const OP_SAM_ENCODE: u8 = 2;
 const OP_SAM_DECODE: u8 = 3;
 const OP_QUIT: u8 = 4;
 const OP_MATTE: u8 = 5;
+const OP_SUBJECT: u8 = 6;
 
 const RESPONSE_HELLO: u8 = 0x81;
 const RESPONSE_DONE: u8 = 0x82;
 const RESPONSE_SAM_MASK: u8 = 0x83;
 const RESPONSE_ALPHA: u8 = 0x84;
+const RESPONSE_SUBJECT_MASK: u8 = 0x85;
 const RESPONSE_FAILED: u8 = 0xff;
 
 /// Reads little-endian fields from a frame.
@@ -221,6 +235,12 @@ impl Request {
                 out.extend_from_slice(rgb);
                 out.extend_from_slice(trimap);
             }
+            Request::Subject { width, height, rgb } => {
+                out.push(OP_SUBJECT);
+                out.extend_from_slice(&width.to_le_bytes());
+                out.extend_from_slice(&height.to_le_bytes());
+                out.extend_from_slice(rgb);
+            }
             Request::Quit => out.push(OP_QUIT),
         }
         out
@@ -280,6 +300,14 @@ impl Request {
                     trimap,
                 }
             }
+            OP_SUBJECT => {
+                let (width, height) = (f.u32()?, f.u32()?);
+                if width == 0 || height == 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
+                    return Err(ProtocolError::Malformed("image size"));
+                }
+                let rgb = f.take(width as usize * height as usize * 3)?.to_vec();
+                Request::Subject { width, height, rgb }
+            }
             OP_QUIT => Request::Quit,
             _ => return Err(ProtocolError::Malformed("operation")),
         };
@@ -308,6 +336,12 @@ impl Response {
             Response::Alpha(alpha) => {
                 out.push(RESPONSE_ALPHA);
                 for v in alpha {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            Response::SubjectMask(logits) => {
+                out.push(RESPONSE_SUBJECT_MASK);
+                for v in logits {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
             }
@@ -352,6 +386,11 @@ impl Response {
                         .collect(),
                 )
             }
+            RESPONSE_SUBJECT_MASK => Response::SubjectMask(
+                (0..SUBJECT_SIDE * SUBJECT_SIDE)
+                    .map(|_| f.f32())
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             RESPONSE_FAILED => Response::Failed(text(f.take(f.0.len())?)),
             _ => return Err(ProtocolError::Malformed("response")),
         };
@@ -495,6 +534,19 @@ impl Client {
         }
     }
 
+    /// BiRefNet's mask of an RGB image's main subject: [`SUBJECT_SIDE`]² logits.
+    pub fn subject(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+    ) -> Result<Vec<f32>, ProtocolError> {
+        match self.call(&Request::Subject { width, height, rgb })? {
+            Response::SubjectMask(logits) => Ok(logits),
+            _ => Err(ProtocolError::Unexpected),
+        }
+    }
+
     /// ViTMatte's matte of an RGB image guided by a trimap (see [`Request::Matte`]).
     pub fn matte(
         &mut self,
@@ -585,6 +637,11 @@ mod tests {
                 rgb: vec![1, 2, 3, 4, 5, 6],
                 trimap: vec![0, 128],
             },
+            Request::Subject {
+                width: 1,
+                height: 1,
+                rgb: vec![9, 8, 7],
+            },
             Request::Quit,
         ];
         for request in requests {
@@ -605,6 +662,7 @@ mod tests {
                 score: 0.9,
             },
             Response::Alpha(vec![0, 32768, u16::MAX]),
+            Response::SubjectMask((0..SUBJECT_SIDE * SUBJECT_SIDE).map(|i| i as f32).collect()),
             Response::Failed("no model".into()),
         ];
         for response in responses {

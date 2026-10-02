@@ -27,6 +27,12 @@ const SAM2: License = License {
     commercial: true,
     accept: false,
 };
+const BIREFNET: License = License {
+    name: "MIT",
+    url: "https://github.com/ZhengPeng7/BiRefNet/blob/main/LICENSE",
+    commercial: true,
+    accept: false,
+};
 const VITMATTE: License = License {
     name: "Apache-2.0",
     url: "https://huggingface.co/hustvl/vitmatte-small-composition-1k",
@@ -293,6 +299,28 @@ pub const COMPONENTS: &[Component] = &[
             source: Source::File,
             size: 103885865,
             sha256: "bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225",
+        }],
+    },
+    Component {
+        id: "birefnet",
+        licenses: &[BIREFNET],
+        files: &[Download {
+            path: "models/onnx-community/BiRefNet-ONNX/onnx/model_fp16.onnx",
+            url: "https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/534d3c82d3bb8b2f0867db6dfbc3a525b8e42f67/onnx/model_fp16.onnx",
+            source: Source::File,
+            size: 489666272,
+            sha256: "3654c741eb80bd926ada8fed1713b506ccf8d30eb1f6487e87eb9f234f33df09",
+        }],
+    },
+    Component {
+        id: "birefnet-lite",
+        licenses: &[BIREFNET],
+        files: &[Download {
+            path: "models/onnx-community/BiRefNet_lite-ONNX/onnx/model_fp16.onnx",
+            url: "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx",
+            source: Source::File,
+            size: 114538221,
+            sha256: "d39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402",
         }],
     },
 ];
