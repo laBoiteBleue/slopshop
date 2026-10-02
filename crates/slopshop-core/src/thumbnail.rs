@@ -268,7 +268,14 @@ mod tests {
         });
         let thumb = raster_thumbnail(&image, 64);
         assert_eq!(thumb.size, Size::new(20, 10), "never enlarged");
-        assert!(thumb.pixels.chunks_exact(4).all(|p| p == [255, 0, 0, 255]));
+        assert!(
+            thumb
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 0, 0, 255])
+        );
         // Nothing visible: the whole image.
         let empty = rgba8(Size::new(400, 200), |_, _| [0, 0, 0, 0]);
         assert_eq!(raster_thumbnail(&empty, 64).size, Size::new(64, 32));
@@ -282,6 +289,13 @@ mod tests {
         });
         let thumb = raster_thumbnail(&big, 50);
         assert_eq!(thumb.size, Size::new(50, 50));
-        assert!(thumb.pixels.chunks_exact(4).all(|p| p == [0, 0, 255, 255]));
+        assert!(
+            thumb
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [0, 0, 255, 255])
+        );
     }
 }
