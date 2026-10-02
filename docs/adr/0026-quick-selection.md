@@ -31,6 +31,11 @@ documents are large; a stroke must answer in a fraction of a second.
 4. **Photoshop's interaction**: each stroke is one undo entry; the first stroke of a new
    selection switches the options bar to Add; Alt subtracts; a click outside the image
    deselects. No Refine Edge option on this tool (Select > Refine Edges… stays available).
+5. **Live** (maintainer's request): the selection grows while the stroke is painted. The
+   stroke so far is sent as it grows (one request at a time, the latest waiting), cut on an
+   800-pixel preview grid; its end on the 1600-pixel grid. The image and the selection before
+   the stroke are prepared once per stroke; each result replaces the previous one within a
+   gesture. Esc drops the stroke under way. The stroke is not drawn, only the brush circle.
 
 ## Alternatives
 

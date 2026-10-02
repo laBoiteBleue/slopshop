@@ -83,6 +83,23 @@ TensorRT-RTX on demand on NVIDIA, else DirectML; models downloaded on first use.
    > stays on the CPU. BiRefNet_HR-matting (MIT, 2048²) was the sharpest on hair; it has no
    > official ONNX export and its VRAM at 2048² under DirectML is unmeasured: to decide.
 
+   > **Amended 2026-10-02 (maintainer, after testing; RTX 4090 Laptop, DirectML):**
+   > - **Object Selection, one click**: SAM's first mask is the whole object, the others its
+   >   parts. The whole object when SAM's score for it is at least 0.2 and its edge stable (area
+   >   at logit > 1 over area at logit > -1 at least 0.85), else the best-rated mask: a click on
+   >   hair or a sleeve selects the person, on a hand, a hat or the face that part. 24 of 29
+   >   clicks on 3 photos as intended, against 18 for the best-rated mask. Detectors (OWLv2,
+   >   Florence-2) with SAM did worse; entity segmentation (CropFormer) is non-commercial.
+   >   The hover is tinted and outlined, a spinner by the pointer while it computes.
+   > - **Refine Edge is off by default for Object Selection** (an option); Select > Subject
+   >   keeps it. Its band is narrow outward for soft masks, wider for SAM's; overlapping windows
+   >   are blended (no seams); windows of 512 pixels, seen coarser on large images: 8.4 s on a
+   >   24 MP portrait against 21.7 s for 1024 at full resolution, strands alike at 100 %.
+   > - **Memory**: BiRefNet (about 10 GB of VRAM on DirectML) and ViTMatte are never loaded
+   >   together, else the second spilled into shared memory (124 s instead of 28 s); the helper
+   >   stops after two minutes unused. BiRefNet_lite brought nothing on DirectML (fp32 only).
+   > - AI requests show their progress (the model, then each window) and stop on Esc.
+
    SAM 2.1 size by hardware: base+ on a GPU, tiny on the CPU.
 
    > **Amended 2026-10-02 (maintainer):** no semantic selection (Select > Semantic… with SAM
