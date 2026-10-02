@@ -186,11 +186,14 @@ and its click or box (`ai_object_select`) only decode, in milliseconds. The
 mask becomes a selection through `selection::select_logits` (specks and pinholes dropped).
 Select > Subject (`ai_select_subject`) has BiRefNet find the main subject on the whole document
 (1024² logits) and goes through the same path. Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
-along the outline with `selection::plan_refinement` (at most 48; a longer outline is seen
-coarser), renders each at full resolution, has ViTMatte (B on a GPU, S on the CPU) matte it
+along the outline with `selection::plan_refinement` (512 pixels, at most 40; a longer outline
+is seen coarser), renders each, has ViTMatte (B on a GPU, S on the CPU) matte it
 with a trimap that leaves undecided a band around the outline (`RefineBand`: narrow inward,
-wide outward) and every partly covered pixel, and writes the matte there only. Select > Subject
-keeps BiRefNet's probabilities as coverage (`selection::select_logits_soft`).
+wide outward) and every partly covered pixel, and blends the overlapping windows' mattes there
+only. Select > Subject keeps BiRefNet's probabilities as coverage
+(`selection::select_logits_soft`). AI requests carry a task id: their progress is the
+`ai-progress` event and `ai_cancel` stops them at their next step. The helper unloads BiRefNet
+before ViTMatte and the reverse, and stops after two minutes unused (`stop_if_idle`).
 
 Quick Selection (`selection::quick_select`, ADR 0026) has no model: the region in view is
 rendered by the GPU (at most 1600 pixels on a side), `slopshop_core::quick_select` cuts it
