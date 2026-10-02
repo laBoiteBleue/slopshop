@@ -12,6 +12,7 @@
     EXPORT_FORMATS,
     engine,
     onExportEvents,
+    onAiProgress,
     onOpenEvents,
     type DocumentView,
     type EditRequest,
@@ -23,6 +24,7 @@
     type ExportFinished,
     type ExportFormat,
     type ExportProgress,
+    type AiTaskProgress,
     type ExportSpec,
     type ExportStarted,
     type GpuInfo,
@@ -459,13 +461,42 @@
   }
 
   /**
-   * Runs an AI selection: on first use, asks to download what it needs, then runs it again;
-   * reports other failures. Resolves to the document view, or null when nothing was applied.
+   * The AI request under way, shown with its progress (after a moment, so that quick ones do
+   * not flash) and cancelled by Esc or its button: it stops at its next step.
    */
-  async function runAi(task: () => Promise<DocumentView>): Promise<DocumentView | null> {
+  let aiTask = $state<{
+    id: number;
+    label: string;
+    done: number;
+    total: number;
+    shown: boolean;
+  } | null>(null);
+  let nextAiTask = 1;
+
+  function cancelAiTask() {
+    const task = aiTask;
+    if (!task) return;
+    aiTask = null;
+    void engine.aiCancel(task.id).catch(() => undefined);
+  }
+
+  /**
+   * Runs an AI selection, its progress shown under `label`: on first use, asks to download what
+   * it needs, then runs it again; reports other failures (not a cancellation). Resolves to the
+   * document view, or null when nothing was applied.
+   */
+  async function runAi(
+    label: MessageKey,
+    task: (id: number) => Promise<DocumentView>,
+  ): Promise<DocumentView | null> {
     aiBusy = true;
+    const id = nextAiTask++;
+    aiTask = { id, label: t(label), done: 0, total: 0, shown: false };
+    setTimeout(() => {
+      if (aiTask?.id === id) aiTask.shown = true;
+    }, 250);
     try {
-      const view = await task();
+      const view = await task(id);
       upsert(view);
       aiHoverBlocked = false;
       return view;
@@ -479,7 +510,7 @@
           return await new Promise((resolve) => {
             aiDownload = {
               components,
-              then: () => void runAi(task).then(resolve),
+              then: () => void runAi(label, task).then(resolve),
             };
           });
         }
@@ -490,7 +521,15 @@
       return null;
     } finally {
       aiBusy = false;
+      if (aiTask?.id === id) aiTask = null;
     }
+  }
+
+  function onAiTaskProgress(progress: AiTaskProgress) {
+    const task = aiTask;
+    if (task?.id !== progress.task) return;
+    task.done = progress.done;
+    task.total = progress.total;
   }
 
   /** Object Selection's hover: the object under document point (`x`, `y`), or null. */
@@ -518,7 +557,9 @@
     const doc = active;
     if (!doc) return;
     commitTransform();
-    void runAi(() => engine.aiSelectSubject(doc.id, aiLayer(), "replace", quick.objectRefine));
+    void runAi("ai.task.subject", (task) =>
+      engine.aiSelectSubject(doc.id, aiLayer(), "replace", quick.objectRefine, task),
+    );
   }
 
   /** Object Selection: the object at a point, or in a box (document pixels). */
@@ -544,7 +585,7 @@
       mode: keyMode ?? selectionMode,
       refine: quick.objectRefine,
     };
-    void runAi(() => engine.aiObjectSelect(doc.id, request));
+    void runAi("ai.task.object", (task) => engine.aiObjectSelect(doc.id, { ...request, task }));
   }
 
   /**
@@ -680,7 +721,9 @@
     commitTransform();
     const kind = dialog.kind;
     if (kind === "refine") {
-      void runAi(() => engine.aiRefineSelection(dialog.document, amount, aiLayer()));
+      void runAi("ai.task.refine", (task) =>
+        engine.aiRefineSelection(dialog.document, amount, aiLayer(), task),
+      );
     } else {
       void sync(engine.modifySelection(dialog.document, kind, amount));
     }
@@ -2029,6 +2072,11 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && aiTask) {
+      e.preventDefault();
+      cancelAiTask();
+      return;
+    }
     if (e.key === "Escape" && layerTransfer) {
       endTransfer();
       return;
@@ -2194,6 +2242,11 @@
       if (destroyed) stop();
       else stopExportEvents = stop;
     });
+    let stopAiProgress: (() => void) | null = null;
+    void onAiProgress(onAiTaskProgress).then((stop) => {
+      if (destroyed) stop();
+      else stopAiProgress = stop;
+    });
     // Subscribe first, then catch up with what happened before (e.g. startup files).
     void onOpenEvents({
       started: onOpenStarted,
@@ -2242,6 +2295,7 @@
       destroyed = true;
       stopEvents?.();
       stopExportEvents?.();
+      stopAiProgress?.();
       void stopDrop.then((unlisten) => unlisten());
       void stopClose.then((unlisten) => unlisten());
     };
@@ -2658,9 +2712,30 @@
   {/key}
 {/if}
 
-<!-- Exports run in the background: progress and outcome in a card above the status bar. -->
-{#if exports.length > 0 || toasts.length > 0}
+<!-- Exports run in the background: progress and outcome in a card above the status bar; an AI
+     selection under way shows there too. -->
+{#if exports.length > 0 || toasts.length > 0 || aiTask?.shown}
   <aside class="export-card" aria-live="polite">
+    {#if aiTask?.shown}
+      {@const task = aiTask}
+      {@const percent = task.total > 0 ? Math.round((100 * task.done) / task.total) : 0}
+      <div class="export-job">
+        <div class="export-row">
+          <span class="export-title">
+            {t("ai.task.progress", { label: task.label, percent })}
+          </span>
+          <button
+            class="icon-btn card-button"
+            title={t("ai.task.cancel")}
+            aria-label={t("ai.task.cancel")}
+            onclick={cancelAiTask}
+          >
+            ✕
+          </button>
+        </div>
+        <div class="export-bar"><span style:width="{percent}%"></span></div>
+      </div>
+    {/if}
     {#each exports as job (job.id)}
       <div class="export-job">
         <div class="export-row">

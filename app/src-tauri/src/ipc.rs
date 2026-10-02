@@ -665,6 +665,8 @@ pub struct PresentInfo {
     pub revision: u64,
     /// 1.0 = 100%.
     pub zoom: f64,
+    /// The view presented: its document point at the top left of the canvas.
+    pub origin: [f64; 2],
     pub fit: bool,
     /// Engine-side time (composite + copy + present call), in ms.
     pub render_ms: f32,

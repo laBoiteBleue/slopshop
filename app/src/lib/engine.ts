@@ -283,6 +283,8 @@ export type PresentInfo = {
   complete: boolean;
   revision: number;
   zoom: number;
+  /** The view presented: its document point at the top left of the canvas. */
+  origin: [number, number];
   fit: boolean;
   renderMs: number;
 };
@@ -1082,6 +1084,8 @@ export const engine = {
       mode: SelectionMode;
       /** Refine the edge at full resolution (ViTMatte). */
       refine: boolean;
+      /** Follows the request (`onAiProgress`) and cancels it (`aiCancel`). */
+      task: number;
     },
   ) => serial(() => invoke<DocumentView>("ai_object_select", { documentId, request })),
   /** Select > Subject: the image's main subject (BiRefNet), as one undo entry. */
@@ -1090,11 +1094,18 @@ export const engine = {
     layerId: number | null,
     mode: SelectionMode,
     refine: boolean,
+    task: number,
   ) =>
-    serial(() => invoke<DocumentView>("ai_select_subject", { documentId, layerId, mode, refine })),
+    serial(() =>
+      invoke<DocumentView>("ai_select_subject", { documentId, layerId, mode, refine, task }),
+    ),
   /** Select > Refine Edge: the selection's edge matted within `radius` pixels (ViTMatte). */
-  aiRefineSelection: (documentId: number, radius: number, layerId: number | null) =>
-    serial(() => invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId })),
+  aiRefineSelection: (documentId: number, radius: number, layerId: number | null, task: number) =>
+    serial(() =>
+      invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId, task }),
+    ),
+  /** Cancels an AI request: it stops at its next step, changing nothing (code `cancelled`). */
+  aiCancel: (task: number) => invoke<void>("ai_cancel", { task }),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),
@@ -1206,6 +1217,16 @@ export async function onOpenEvents(handlers: {
     listen<OpenFailed>("open-failed", (e) => handlers.failed(e.payload)),
   ]);
   return () => unlisten.forEach((stop) => stop());
+}
+
+/** The steps an AI request has done, of those it knows of (`AiProgress` in segment.rs). */
+export type AiTaskProgress = { task: number; done: number; total: number };
+
+/** AI requests' progress. Resolves once the listener is registered. */
+export async function onAiProgress(
+  handler: (progress: AiTaskProgress) => void,
+): Promise<() => void> {
+  return listen<AiTaskProgress>("ai-progress", (e) => handler(e.payload));
 }
 
 /** Export progress and outcomes. Resolves once the listeners are registered. */

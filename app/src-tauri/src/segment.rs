@@ -4,14 +4,15 @@
 //! image SAM sees is encoded once and reused until the document, the region or the sampled
 //! layer changes, so hovering and clicking only decode (milliseconds).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use slopshop_ai::{Client, Launch, MASK_SIDE, Point};
 use slopshop_core::selection::{self as core_selection, Combine};
 use slopshop_core::view::ViewTransform;
-use slopshop_core::{Document, RasterImage, Rect, Size};
+use slopshop_core::{CancelToken, Document, RasterImage, Rect, Size};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Manager};
 
@@ -19,6 +20,91 @@ use crate::AppState;
 use crate::ai::{self, AiFailure, Feature, Runtime};
 use crate::ipc::DocumentView;
 use crate::selection;
+
+/// The progress of an AI request the UI follows (`AiProgress` in engine.ts).
+const EVENT_AI_PROGRESS: &str = "ai-progress";
+
+#[derive(Debug, Clone, Serialize)]
+struct AiProgress {
+    task: u64,
+    done: u64,
+    total: u64,
+}
+
+/// An AI request the UI follows and can cancel (`ai_cancel`): its steps (a model run, a window
+/// of Refine Edge) are reported as they are done, and cancellation is checked between them.
+/// A model run under way finishes first.
+struct Task<'a> {
+    app: &'a AppHandle,
+    id: u64,
+    cancel: CancelToken,
+    done: u64,
+    total: u64,
+}
+
+impl<'a> Task<'a> {
+    fn start(app: &'a AppHandle, id: u64) -> Self {
+        let cancel = CancelToken::new();
+        if let Ok(mut tasks) = app.state::<AppState>().segment.tasks.lock() {
+            tasks.insert(id, cancel.clone());
+        }
+        Self {
+            app,
+            id,
+            cancel,
+            done: 0,
+            total: 0,
+        }
+    }
+
+    /// `steps` more steps to come.
+    fn expect(&mut self, steps: u64) {
+        self.total += steps;
+        self.report();
+    }
+
+    /// A step is done; stops here if the request was cancelled.
+    fn step(&mut self) -> Result<(), AiFailure> {
+        self.done = (self.done + 1).min(self.total);
+        self.report();
+        self.check()
+    }
+
+    fn check(&self) -> Result<(), AiFailure> {
+        if self.cancel.is_cancelled() {
+            Err(AiFailure::new("cancelled", ""))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn report(&self) {
+        let progress = AiProgress {
+            task: self.id,
+            done: self.done,
+            total: self.total,
+        };
+        crate::emit(self.app, EVENT_AI_PROGRESS, &progress);
+    }
+}
+
+impl Drop for Task<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut tasks) = self.app.state::<AppState>().segment.tasks.lock() {
+            tasks.remove(&self.id);
+        }
+    }
+}
+
+/// Cancels the AI request `task`: it stops at its next step, changing nothing.
+#[tauri::command]
+pub(crate) fn ai_cancel(app: AppHandle, task: u64) {
+    if let Ok(tasks) = app.state::<AppState>().segment.tasks.lock()
+        && let Some(cancel) = tasks.get(&task)
+    {
+        cancel.cancel();
+    }
+}
 
 /// The longest side of the image SAM is given (it sees 1024² whatever it gets).
 const SAM_SIDE: f64 = 1024.0;
@@ -32,6 +118,8 @@ const MAX_MATTE_WINDOWS: usize = 48;
 #[derive(Default)]
 pub(crate) struct SegmentState {
     session: Mutex<Session>,
+    /// The AI requests under way, by the UI's task id.
+    tasks: Mutex<HashMap<u64, CancelToken>>,
 }
 
 #[derive(Default)]
@@ -277,6 +365,7 @@ impl Session {
         combine: Combine,
         refine: bool,
         soft: bool,
+        task: &mut Task<'_>,
     ) -> Result<Option<RasterImage>, AiFailure> {
         // The model's square mask: SAM's 256², BiRefNet's 1024².
         let side = (logits.len() as f64).sqrt() as usize;
@@ -295,18 +384,21 @@ impl Session {
         let Some(mask) = select(None, Combine::Replace)? else {
             return select(current, combine);
         };
-        // The band to decide: narrow inside the coarse mask, wide outside it, where hair and
-        // fur reach (a sixteenth of the region's longest side); at least two model cells.
+        // The band to decide, in model cells around the coarse outline: narrow inside it; outside,
+        // narrow too for a soft mask (its partly covered pixels, BiRefNet's strands, are
+        // decided anyway), wider for a hard one (SAM's), where hair and fur reach past it. A
+        // wide band over plain background lets the matting model leave it half selected.
         let longest = f64::from(region.width.max(region.height));
         let cell = longest / side as f64;
+        let outward = if soft { cell * 2.0 } else { cell * 6.0 };
         let band = core_selection::RefineBand {
             inward: (cell * 2.0).clamp(16.0, 64.0) as u32,
-            outward: (longest / 16.0).max(cell * 2.0).clamp(16.0, 256.0) as u32,
+            outward: outward.clamp(16.0, 128.0) as u32,
         };
         let mut plan =
             core_selection::plan_refinement(canvas, &mask, band, MATTE_SIDE, MAX_MATTE_WINDOWS)
                 .map_err(internal)?;
-        self.matte(state, root, doc, layer_id, &mut plan)?;
+        self.matte(state, root, doc, layer_id, &mut plan, task)?;
         plan.finish(current, combine).map_err(internal)
     }
 
@@ -318,7 +410,9 @@ impl Session {
         doc: &Document,
         layer_id: Option<u64>,
         plan: &mut core_selection::EdgeRefinement,
+        task: &mut Task<'_>,
     ) -> Result<(), AiFailure> {
+        task.expect(plan.windows().len() as u64);
         let source = selection::sampled_document(doc, layer_id).map_err(internal)?;
         let renderer = state.renderer().map_err(internal)?;
         for window in plan.windows().to_vec() {
@@ -344,6 +438,7 @@ impl Session {
                 Err(e) => return Err(self.failed(e)),
             };
             plan.apply(&window, &trimap, &alpha);
+            task.step()?;
         }
         Ok(())
     }
@@ -404,6 +499,8 @@ pub(crate) struct ObjectRequest {
     mode: String,
     /// Refine the edge at full resolution (ViTMatte).
     refine: bool,
+    /// The UI's task, to follow and cancel (`ai_cancel`).
+    task: u64,
 }
 
 #[tauri::command]
@@ -418,8 +515,11 @@ pub(crate) async fn ai_object_select(
         let (root, doc) = prepare(&app, document_id)?;
         require(&root, Feature::Segmentation)?;
         let region = clamp_region(request.region, doc.size())?;
+        let mut task = Task::start(&app, request.task);
+        task.expect(1);
         let mut session = lock(&state)?;
         let encoded = session.encode(&state, &root, document_id, &doc, region, request.layer_id)?;
+        task.step()?;
         let points: Vec<_> = request
             .point
             .map(|[x, y]| (x, y, true))
@@ -438,7 +538,9 @@ pub(crate) async fn ai_object_select(
             combine,
             request.refine,
             false,
+            &mut task,
         )?;
+        task.check()?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: the encoded image stays valid for the next hover.
         if let Some(encoded) = session.encoded.as_mut() {
@@ -461,6 +563,7 @@ pub(crate) async fn ai_refine_selection(
     document_id: u64,
     radius: u32,
     layer_id: Option<u64>,
+    task: u64,
 ) -> Result<DocumentView, AiFailure> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -470,6 +573,7 @@ pub(crate) async fn ai_refine_selection(
             return Err(internal("nothing is selected"));
         };
         let radius = radius.clamp(1, MAX_REFINE_RADIUS);
+        let mut task = Task::start(&app, task);
         let mut plan = core_selection::plan_refinement(
             doc.size(),
             &current,
@@ -479,7 +583,8 @@ pub(crate) async fn ai_refine_selection(
         )
         .map_err(internal)?;
         let mut session = lock(&state)?;
-        session.matte(&state, &root, &doc, layer_id, &mut plan)?;
+        session.matte(&state, &root, &doc, layer_id, &mut plan, &mut task)?;
+        task.check()?;
         let image = plan.finish(None, Combine::Replace).map_err(internal)?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: an image encoded from this revision stays valid.
@@ -505,12 +610,15 @@ pub(crate) async fn ai_select_subject(
     layer_id: Option<u64>,
     mode: String,
     refine: bool,
+    task: u64,
 ) -> Result<DocumentView, AiFailure> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let combine = selection::combine(&mode).map_err(internal)?;
         let (root, doc) = prepare(&app, document_id)?;
         require(&root, Feature::Subject)?;
+        let mut task = Task::start(&app, task);
+        task.expect(1);
         let canvas = doc.size();
         let region = Rect::new(0, 0, canvas.width, canvas.height);
         let source = selection::sampled_document(&doc, layer_id).map_err(internal)?;
@@ -541,6 +649,7 @@ pub(crate) async fn ai_select_subject(
             Ok(logits) => logits,
             Err(e) => return Err(session.failed(e)),
         };
+        task.step()?;
         let current = doc.selection().map(|s| Arc::clone(s.image()));
         let image = session.selection(
             &state,
@@ -553,7 +662,9 @@ pub(crate) async fn ai_select_subject(
             combine,
             refine,
             true,
+            &mut task,
         )?;
+        task.check()?;
         let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
         // Only the selection changed: an image encoded from this revision stays valid.
         if let Some(encoded) = session.encoded.as_mut()
