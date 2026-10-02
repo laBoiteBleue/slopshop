@@ -23,11 +23,14 @@
     onlive,
     ongestureend,
     contextMenu = [],
+    emptyContextMenu = [],
     onlayerdrag,
   }: {
     doc: DocumentView;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
     contextMenu?: MenuItem[];
+    /** The right-click menu of the empty area below the layers (built by the app). */
+    emptyContextMenu?: MenuItem[];
     /**
      * A drag of layers in progress (where the pointer is), or its end (`null`): the app lets it
      * go on to another tab.
@@ -221,7 +224,7 @@
     activeId = id;
   }
 
-  let newColor = $state("#e84ca3");
+  let newColor = $state("#ffffff");
   let list: HTMLUListElement;
 
   /** `#rrggbb` → sRGB-encoded RGBA in [0, 1]. The engine converts it to its working space. */
@@ -312,15 +315,26 @@
     void edit({ kind: "setLayerVisible", id: layer.id, visible });
   }
 
-  // The right-click menu: where it is open, if it is.
-  let menuAt = $state<{ x: number; y: number } | null>(null);
+  // The right-click menu: where it is open, if it is, and whether it is the empty area's.
+  let menuAt = $state<{ x: number; y: number; empty: boolean } | null>(null);
+  const menuItems = $derived(menuAt?.empty ? emptyContextMenu : contextMenu);
 
   function onRowContextMenu(e: MouseEvent, layer: LayerView) {
     e.preventDefault();
     if (renaming !== null) return;
     // As in Photoshop: a layer outside the selection becomes the selection.
     if (!selectedSet.has(layer.id)) select([layer.id], layer.id);
-    menuAt = { x: e.clientX, y: e.clientY };
+    menuAt = { x: e.clientX, y: e.clientY, empty: false };
+  }
+
+  /** A right-click in the empty area: its own menu (new layers, paste), layers deselected. */
+  function onEmptyContextMenu(e: MouseEvent) {
+    const empty = e.target instanceof HTMLElement && e.target.classList.contains("empty");
+    if (e.target !== e.currentTarget && !empty) return;
+    e.preventDefault();
+    if (renaming !== null) return;
+    deselectLayers();
+    menuAt = { x: e.clientX, y: e.clientY, empty: true };
   }
 
   /** A new empty group above the active layer, or at the top. */
@@ -864,6 +878,7 @@
     onpointerdown={(e) => {
       if (e.button === 0 && e.target === e.currentTarget) deselectLayers();
     }}
+    oncontextmenu={onEmptyContextMenu}
   >
     {#each rows as { layer, depth, shown, clipping }, row (layer.id)}
       <li
@@ -970,8 +985,8 @@
     {/each}
   </ul>
 
-  {#if menuAt && contextMenu.length > 0}
-    <ContextMenu x={menuAt.x} y={menuAt.y} items={contextMenu} onclose={() => (menuAt = null)} />
+  {#if menuAt && menuItems.length > 0}
+    <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onclose={() => (menuAt = null)} />
   {/if}
 
   <div class="footer">

@@ -31,7 +31,7 @@ export type ToolSlot = {
 };
 
 export const SLOTS: readonly ToolSlot[] = [
-  { key: "V", tools: [{ id: "move", icon: "move", name: "tools.move" }] },
+  { key: "V", tools: [{ id: "move", icon: "pointer", name: "tools.move" }] },
   {
     key: "M",
     tools: [
