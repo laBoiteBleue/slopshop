@@ -530,8 +530,6 @@ const fr: Messages = {
   "layers.opacity": "Opacité",
   "layers.blendMode": "Mode de fusion",
   "layers.blendSpace": "Fusion",
-  "layers.blendSpace.hint":
-    "Où se mélangent les calques de ce document. Perceptuelle : le rendu habituel des éditeurs d'images. Linéaire : la lumière se mélange physiquement (pour le HDR et le compositing photo)",
   "layers.blendSpace.perceptual": "Perceptuelle (comme Photoshop)",
   "layers.blendSpace.linear": "Linéaire (physique, HDR)",
   "layers.delete": "Supprimer le calque",
