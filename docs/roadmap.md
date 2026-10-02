@@ -125,8 +125,11 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       layers (nothing cut, nothing rewritten)
 - [x] Crop tool (C): a frame on the image with handles, snapping, Enter applies; nothing is
       deleted
-- [ ] A detail option for enlargements (Photoshop's Preserve Details crispness): a detail pass
-      after resampling, clamped to the local range (see the comparison of 2026-09-30)
+- Dropped (2026-10-02): a detail option for enlargements (Photoshop's Preserve Details
+  crispness). A sharpening kernel folded into the resampling filter, clamped to the local range,
+  gained about 2% of error against originals reduced 4× and enlarged back: edges are crisper,
+  no detail comes back, and textures turn patchy at full strength. Enlargements that recover
+  detail belong to the AI track (AI upscaling).
 - [ ] Image > Crop to the selection, with selections
 - [x] Adjustment layers, engine ([ADR 0020](adr/0020-adjustment-layers.md)): Exposure,
       Hue/Saturation and Levels, applied to what is below (opacity, mask, clipping, groups),
@@ -209,6 +212,8 @@ paints on an empty layer or in a mask.
       stale/invalidated state, preview vs. full-definition render
 - [ ] First AI feature (likely object removal / generative fill in a region), optional and
       local
+- [ ] AI upscaling for enlargements (Photoshop's Preserve Details 2.0, Super Resolution), as a
+      node: the classical detail pass was dropped for too small a gain (Phase 2)
 
 ## Phase 5 — Extensibility and distribution
 
