@@ -6,7 +6,16 @@
 import type { IconName } from "./Icon.svelte";
 import type { MessageKey } from "./i18n/en";
 
-export type ToolId = "move" | "marquee" | "ellipse" | "lasso" | "polygonalLasso" | "wand" | "crop";
+export type ToolId =
+  | "move"
+  | "marquee"
+  | "ellipse"
+  | "lasso"
+  | "polygonalLasso"
+  | "objectSelection"
+  | "quickSelection"
+  | "wand"
+  | "crop";
 
 export type Tool = {
   id: ToolId;
@@ -37,7 +46,14 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "polygonalLasso", icon: "polygonalLasso", name: "tools.polygonalLasso" },
     ],
   },
-  { key: "W", tools: [{ id: "wand", icon: "wand", name: "tools.wand" }] },
+  {
+    key: "W",
+    tools: [
+      { id: "objectSelection", icon: "objectSelection", name: "tools.objectSelection" },
+      { id: "quickSelection", icon: "quickSelection", name: "tools.quickSelection" },
+      { id: "wand", icon: "wand", name: "tools.wand" },
+    ],
+  },
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
 ];
 
@@ -63,6 +79,8 @@ export function isSelectionTool(id: ToolId): boolean {
     id === "ellipse" ||
     id === "lasso" ||
     id === "polygonalLasso" ||
+    id === "objectSelection" ||
+    id === "quickSelection" ||
     id === "wand"
   );
 }

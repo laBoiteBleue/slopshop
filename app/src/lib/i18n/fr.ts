@@ -148,6 +148,8 @@ const fr: Messages = {
   "tools.tooltip": "{name} ({key})",
   "tools.move": "Outil Déplacement",
   "tools.wand": "Outil Baguette magique",
+  "tools.objectSelection": "Outil Sélection d’objet",
+  "tools.quickSelection": "Outil Sélection rapide",
   "tools.crop": "Outil Recadrage",
   "tools.marquee": "Outil Rectangle de sélection",
   "tools.ellipse": "Outil Ellipse de sélection",
@@ -165,6 +167,7 @@ const fr: Messages = {
   "options.contiguous": "Pixels contigus",
   "options.sampleAll": "Échantillonner tous les calques",
   "options.antiAlias": "Lissage",
+  "options.brushSize": "Taille :",
   "selection.readout": "{width} × {height} px",
   "menu.help": "Aide",
   "menu.help.about": "À propos de SlopShop",
@@ -547,6 +550,8 @@ const fr: Messages = {
   "ai.component.runtimeCpu": "Moteur d’IA pour le processeur (ONNX Runtime)",
   "ai.component.samBasePlus": "SAM 2.1 base+ : sélection d’objets",
   "ai.component.samTiny": "SAM 2.1 tiny : sélection d’objets",
+  "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
+  "ai.error.model": "Le modèle d’IA a échoué : {detail}",
 };
 
 export default fr;

@@ -148,6 +148,8 @@ const en = {
   "tools.tooltip": "{name} ({key})",
   "tools.move": "Move Tool",
   "tools.wand": "Magic Wand Tool",
+  "tools.objectSelection": "Object Selection Tool",
+  "tools.quickSelection": "Quick Selection Tool",
   "tools.crop": "Crop Tool",
   "tools.marquee": "Rectangular Marquee Tool",
   "tools.ellipse": "Elliptical Marquee Tool",
@@ -165,6 +167,7 @@ const en = {
   "options.contiguous": "Contiguous",
   "options.sampleAll": "Sample All Layers",
   "options.antiAlias": "Anti-alias",
+  "options.brushSize": "Size:",
   "selection.readout": "{width} × {height} px",
   "menu.help": "Help",
   "menu.help.about": "About SlopShop",
@@ -533,6 +536,8 @@ const en = {
   "ai.component.runtimeCpu": "AI engine for the processor (ONNX Runtime)",
   "ai.component.samBasePlus": "SAM 2.1 base+: object selection",
   "ai.component.samTiny": "SAM 2.1 tiny: object selection",
+  "ai.error.start": "The AI engine could not start: {detail}",
+  "ai.error.model": "The AI model failed: {detail}",
 } satisfies Record<string, string>;
 
 export default en;

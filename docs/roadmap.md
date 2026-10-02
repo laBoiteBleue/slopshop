@@ -179,9 +179,12 @@ paints on an empty layer or in a mask.
       tile by tile with a bounded cache (50 MP: about 1 s)
 - [x] Select > Color Range: eyedroppers (sample, add, subtract) on the image or a live
       preview, Fuzziness, Invert, within the selection if any
-- [ ] AI selection ([ADR 0025](adr/0025-ai-selection.md)): the `slopshop-ai` helper (ONNX
-      Runtime), Quick Selection and Object Selection (SAM 2.1), Refine Edge (ViTMatte on the
-      outline's tiles), Select > Subject (BiRefNet), Select > Semantic (SAM 3)
+- [x] AI runtime ([ADR 0025](adr/0025-ai-selection.md)): the `slopshop-ai` helper (ONNX
+      Runtime loaded at run time), components downloaded with consent (Edit > Preferences)
+- [x] Object Selection (W): the object under the pointer lights up, a click or a box selects
+      it; Quick Selection: brush strokes, Alt takes parts away (SAM 2.1, coarse masks)
+- [ ] Refine Edge at full resolution (ViTMatte on the outline's tiles), Select > Subject
+      (BiRefNet), Select > Semantic (SAM 3)
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
 

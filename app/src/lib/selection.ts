@@ -25,3 +25,13 @@ export function modeFromKeys(e: { shiftKey: boolean; altKey: boolean }): Selecti
   if (e.altKey) return "subtract";
   return null;
 }
+
+/** The largest brush (Quick Selection), document pixels, as Photoshop's. */
+export const MAX_BRUSH = 5000;
+
+/** The next brush size with `[` (smaller) or `]` (larger), in Photoshop-like steps. */
+export function stepBrush(size: number, larger: boolean): number {
+  const step = size < 10 ? 1 : size < 50 ? 5 : size < 100 ? 10 : size < 500 ? 25 : 100;
+  const next = larger ? size + step : size - step;
+  return Math.min(Math.max(Math.round(next / step) * step, 1), MAX_BRUSH);
+}

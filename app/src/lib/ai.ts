@@ -22,6 +22,9 @@ const FAILURES: Record<string, MessageKey> = {
   disk: "ai.error.disk",
   corrupt: "ai.error.corrupt",
   busy: "ai.error.busy",
+  start: "ai.error.start",
+  model: "ai.error.model",
+  unsupported: "ai.unsupported",
 };
 
 /** What went wrong, for the user (`null` when the user cancelled). */

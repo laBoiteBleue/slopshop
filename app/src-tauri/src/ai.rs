@@ -15,7 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 
 /// The ONNX Runtime build this machine runs, and the models made for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Runtime {
+pub(crate) enum Runtime {
     /// NVIDIA GPUs: ONNX Runtime's CUDA build and NVIDIA's libraries.
     Cuda,
     /// The processor: slower, but everywhere.
@@ -25,7 +25,7 @@ enum Runtime {
 impl Runtime {
     /// This machine's: CUDA when NVIDIA's driver is installed. `None` where AI is not offered
     /// yet (outside Windows x64: no runtime in the manifest).
-    fn detect() -> Option<Self> {
+    pub(crate) fn detect() -> Option<Self> {
         if !cfg!(all(windows, target_arch = "x86_64")) {
             return None;
         }
@@ -35,8 +35,16 @@ impl Runtime {
         Some(if nvidia { Self::Cuda } else { Self::Cpu })
     }
 
+    /// The helper's `--provider`.
+    pub(crate) fn provider(self) -> &'static str {
+        match self {
+            Self::Cuda => "cuda",
+            Self::Cpu => "cpu",
+        }
+    }
+
     /// The components a feature needs on this runtime.
-    fn components(self, feature: Feature) -> [&'static str; 2] {
+    pub(crate) fn components(self, feature: Feature) -> [&'static str; 2] {
         match (self, feature) {
             (Self::Cuda, Feature::Segmentation) => ["runtime-cuda", "sam2.1-base-plus"],
             (Self::Cpu, Feature::Segmentation) => ["runtime-cpu", "sam2.1-tiny"],
@@ -90,7 +98,7 @@ pub(crate) struct AiFailure {
 }
 
 impl AiFailure {
-    fn new(code: &'static str, detail: impl ToString) -> Self {
+    pub(crate) fn new(code: &'static str, detail: impl ToString) -> Self {
         Self {
             code,
             detail: detail.to_string(),
@@ -116,7 +124,7 @@ pub(crate) struct InstallProgress {
     total: u64,
 }
 
-fn folder(app: &AppHandle) -> Result<PathBuf, AiFailure> {
+pub(crate) fn folder(app: &AppHandle) -> Result<PathBuf, AiFailure> {
     app.path()
         .app_local_data_dir()
         .map(|dir| dir.join("ai"))
@@ -245,6 +253,8 @@ pub(crate) async fn ai_remove(
     if state.ai.installing.lock().map(|i| *i).unwrap_or(true) {
         return Err(AiFailure::new("busy", ""));
     }
+    // The helper may hold the runtime's libraries open.
+    crate::segment::stop(&state);
     let root = folder(&app)?;
     tauri::async_runtime::spawn_blocking(move || component.remove(&root))
         .await
