@@ -491,6 +491,14 @@
     if (dx !== 0 || dy !== 0) void changeView({ kind: "pan", dx, dy });
   }
 
+  /** The document point under a window point (CSS pixels); `null` outside the viewport. */
+  export function documentPointAt(clientX: number, clientY: number): [number, number] | null {
+    const rect = container.getBoundingClientRect();
+    const inside =
+      clientX >= rect.left && clientY >= rect.top && clientX < rect.right && clientY < rect.bottom;
+    return inside ? toDocument(clientX, clientY) : null;
+  }
+
   /** Document coordinates of a point of the window (CSS pixels). */
   function toDocument(clientX: number, clientY: number): [number, number] {
     const rect = container.getBoundingClientRect();

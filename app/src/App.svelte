@@ -434,6 +434,26 @@
   let colors = $state({ foreground: "#000000", background: "#ffffff" });
   /** The color the color picker is open for. */
   let colorPicker = $state<"foreground" | "background" | null>(null);
+
+  /** The image point under a window point, if it lies on the active document's canvas. */
+  function canvasPointAt(clientX: number, clientY: number): [number, number] | null {
+    const doc = active;
+    const point = viewport?.documentPointAt(clientX, clientY) ?? null;
+    if (!doc || !point || outsideCanvas(doc, point[0], point[1])) return null;
+    return point;
+  }
+
+  /** The color picker's eyedropper: the color shown in the active document. */
+  const pickerSample = {
+    probe: (clientX: number, clientY: number) => canvasPointAt(clientX, clientY) !== null,
+    at: async (clientX: number, clientY: number) => {
+      const doc = active;
+      const point = canvasPointAt(clientX, clientY);
+      if (!doc || !point) return null;
+      const shown = await engine.sampleColor(doc.id, point[0], point[1]);
+      return shown ? (shown.map((v) => v / 255) as [number, number, number]) : null;
+    },
+  };
   /** The stroke being sent: samples wait while a batch is in flight (none is ever dropped). */
   let paintRun: {
     id: number;
@@ -2943,6 +2963,7 @@
       colorPicker = null;
     }}
     onclose={() => (colorPicker = null)}
+    sample={pickerSample}
   />
 {/if}
 
