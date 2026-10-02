@@ -559,6 +559,7 @@ const fr: Messages = {
   "ai.component.birefnetLite": "BiRefNet lite : sélection du sujet",
   "ai.component.samBasePlus": "SAM 2.1 base+ : sélection d’objets",
   "ai.component.vitmatte": "ViTMatte-S : contours en pleine définition (cheveux, poils)",
+  "ai.component.vitmatteBase": "ViTMatte-B : contours en pleine définition (cheveux, poils)",
   "ai.component.birefnet": "BiRefNet : sélection du sujet",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",

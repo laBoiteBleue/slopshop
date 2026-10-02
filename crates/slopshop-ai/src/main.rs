@@ -37,8 +37,23 @@ fn models_for(provider: &str) -> (&'static str, &'static str, String) {
         _ => (SAM_TINY, "", format!("{BIREFNET_LITE}/model.onnx")),
     }
 }
-/// ViTMatte-S, in the models folder.
-const VITMATTE: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
+/// ViTMatte's base and small models, in the models folder.
+const VITMATTE_BASE: &str = "Xenova/vitmatte-base-composition-1k/onnx/model.onnx";
+const VITMATTE_SMALL: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
+
+/// The ViTMatte to run on `provider`: the base model on a GPU, the small one on the CPU (ADR
+/// 0025), else whichever is installed.
+fn vitmatte(models: &std::path::Path, provider: &str) -> std::path::PathBuf {
+    let preferred = match provider {
+        "directml" | "coreml" => [VITMATTE_BASE, VITMATTE_SMALL],
+        _ => [VITMATTE_SMALL, VITMATTE_BASE],
+    };
+    preferred
+        .iter()
+        .map(|path| models.join(path))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| models.join(preferred[0]))
+}
 
 struct Options {
     runtime: PathBuf,
@@ -290,7 +305,7 @@ impl Subject {
     }
 }
 
-/// ViTMatte-S: mattes an image guided by a trimap (Refine Edge).
+/// ViTMatte: mattes an image guided by a trimap (Refine Edge).
 struct Matte {
     session: Session,
 }
@@ -300,7 +315,7 @@ impl Matte {
     fn load(models: &std::path::Path, choices: &[&'static str]) -> Result<Self, String> {
         let mut errors = Vec::new();
         for &provider in choices {
-            match session(&models.join(VITMATTE), provider) {
+            match session(&vitmatte(models, provider), provider) {
                 Ok(session) => {
                     eprintln!("slopshop-ai: ViTMatte on {provider}");
                     return Ok(Matte { session });

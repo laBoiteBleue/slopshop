@@ -69,6 +69,12 @@ LICENSES = {
         True,
         False,
     ),
+    "vitmatte_base": (
+        "Apache-2.0",
+        "https://huggingface.co/hustvl/vitmatte-base-composition-1k",
+        True,
+        False,
+    ),
 }
 
 
@@ -295,6 +301,13 @@ def main():
         ["onnx/model.onnx"],
         "models",
     )
+    print("ViTMatte-B")
+    vitmatte_base = hugging_face(
+        "Xenova/vitmatte-base-composition-1k",
+        "1290b014b994e95ca1b9dd9c5f72c3b6d5b7236a",
+        ["onnx/model.onnx"],
+        "models",
+    )
     components = [
         # Windows: DirectML, the models in half precision.
         component("runtime-directml", ["onnxruntime", "directml"], directml),
@@ -309,8 +322,10 @@ def main():
         component("runtime-cpu-linux-arm64", ["onnxruntime"], linux_arm64),
         component("sam2.1-tiny", ["sam2"], sam_tiny),
         component("birefnet-lite", ["birefnet"], birefnet_lite),
-        # Everywhere.
+        # Refine Edge: the base model on a GPU, the small one on the CPU (2 s a window for
+        # the base model there).
         component("vitmatte-small", ["vitmatte"], vitmatte),
+        component("vitmatte-base", ["vitmatte_base"], vitmatte_base),
     ]
 
     out = [

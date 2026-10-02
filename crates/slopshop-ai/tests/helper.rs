@@ -88,9 +88,13 @@ fn sam_selects_the_clicked_shape() {
         .expect("SAM decodes");
     eprintln!("decode, warm: {:?}", start.elapsed());
     // ViTMatte on the disc's edge: a trimap undecided on a ring around it.
-    if Path::new(&models)
-        .join("Xenova/vitmatte-small-composition-1k/onnx/model.onnx")
-        .is_file()
+    let vitmatte = [
+        "Xenova/vitmatte-small-composition-1k/onnx/model.onnx",
+        "Xenova/vitmatte-base-composition-1k/onnx/model.onnx",
+    ];
+    if vitmatte
+        .iter()
+        .any(|path| Path::new(&models).join(path).is_file())
     {
         let trimap: Vec<u8> = (0..w * h)
             .map(|i| {

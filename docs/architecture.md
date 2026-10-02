@@ -187,8 +187,10 @@ mask becomes a selection through `selection::select_logits` (specks and pinholes
 Select > Subject (`ai_select_subject`) has BiRefNet find the main subject on the whole document
 (1024² logits) and goes through the same path. Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
 along the outline with `selection::plan_refinement` (at most 48; a longer outline is seen
-coarser), renders each at full resolution, has ViTMatte matte it with a trimap that leaves a
-band around the outline undecided, and writes the matte into that band only.
+coarser), renders each at full resolution, has ViTMatte (B on a GPU, S on the CPU) matte it
+with a trimap that leaves undecided a band around the outline (`RefineBand`: narrow inward,
+wide outward) and every partly covered pixel, and writes the matte there only. Select > Subject
+keeps BiRefNet's probabilities as coverage (`selection::select_logits_soft`).
 
 Quick Selection (`selection::quick_select`, ADR 0026) has no model: the region in view is
 rendered by the GPU (at most 1600 pixels on a side), `slopshop_core::quick_select` cuts it

@@ -130,7 +130,7 @@ jobs:
           - os: macos-latest
             provider: coreml
             runtime: runtime/coreml/libonnxruntime.dylib
-            components: runtime-coreml-macos-arm64,sam2.1-base-plus-fp32,birefnet-fp32,vitmatte-small
+            components: runtime-coreml-macos-arm64,sam2.1-base-plus-fp32,birefnet-fp32,vitmatte-base
     runs-on: ${{ matrix.os }}
     env:
       AI_ROOT: ${{ github.workspace }}/../ai
