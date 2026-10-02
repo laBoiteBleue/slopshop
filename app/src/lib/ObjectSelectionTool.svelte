@@ -65,20 +65,25 @@
     return [left, top, right - left, bottom - top];
   }
 
-  // Hover: one request at a time, the latest position (window pixels) wins.
+  // Hover: one request at a time, the latest position (window pixels) wins. A small spinner by
+  // the pointer when one takes a moment (the first one encodes the image, loading the model).
   let inFlight = false;
   let wanted: [number, number] | null = null;
+  let slowHover = $state(false);
   function ask(clientX: number, clientY: number) {
     wanted = [clientX, clientY];
     if (inFlight) return;
     const [x, y] = mapping.toDocument(clientX, clientY);
     wanted = null;
     inFlight = true;
+    const slow = setTimeout(() => (slowHover = true), 150);
     void onhover(x, y, view())
       .then((result) => {
         if (pointer && !drag) hovered = result;
       })
       .finally(() => {
+        clearTimeout(slow);
+        slowHover = false;
         inFlight = false;
         if (wanted && pointer && !drag) ask(...wanted);
       });
@@ -219,6 +224,12 @@
       height={Math.abs(drag.end[1] - drag.start[1])}
     />
   {/if}
+  {#if pointer && (slowHover || busy) && !mapping.hand}
+    <g class="spinner" transform="translate({pointer.x + 14} {pointer.y - 10})">
+      <circle r="6" />
+      <path d="M0 -6A6 6 0 0 1 6 0" />
+    </g>
+  {/if}
   {#if pointer && badge && !mapping.hand}
     <text class="badge" x={pointer.x + 8} y={pointer.y + 16}>{badge}</text>
   {/if}
@@ -246,6 +257,29 @@
   /* Space held: the viewport pans. */
   .object.hand {
     pointer-events: none;
+  }
+
+  .spinner circle,
+  .spinner path {
+    fill: none;
+    stroke-width: 2.5px;
+    pointer-events: none;
+  }
+
+  .spinner circle {
+    stroke: #00000080;
+  }
+
+  .spinner path {
+    stroke: #ffffff;
+    stroke-linecap: round;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .edge {

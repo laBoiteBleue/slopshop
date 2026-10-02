@@ -27,6 +27,8 @@ const EVENT_AI_PROGRESS: &str = "ai-progress";
 #[derive(Debug, Clone, Serialize)]
 struct AiProgress {
     task: u64,
+    /// `select` (the model), then `refine` (Refine Edge's windows), for the UI's wording.
+    stage: &'static str,
     done: u64,
     total: u64,
 }
@@ -37,6 +39,7 @@ struct AiProgress {
 struct Task<'a> {
     app: &'a AppHandle,
     id: u64,
+    stage: &'static str,
     cancel: CancelToken,
     done: u64,
     total: u64,
@@ -51,6 +54,7 @@ impl<'a> Task<'a> {
         Self {
             app,
             id,
+            stage: "select",
             cancel,
             done: 0,
             total: 0,
@@ -81,6 +85,7 @@ impl<'a> Task<'a> {
     fn report(&self) {
         let progress = AiProgress {
             task: self.id,
+            stage: self.stage,
             done: self.done,
             total: self.total,
         };
@@ -436,6 +441,7 @@ impl Session {
         plan: &mut core_selection::EdgeRefinement,
         task: &mut Task<'_>,
     ) -> Result<(), AiFailure> {
+        task.stage = "refine";
         task.expect(plan.windows().len() as u64);
         let source = selection::sampled_document(doc, layer_id).map_err(internal)?;
         let renderer = state.renderer().map_err(internal)?;
