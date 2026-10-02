@@ -848,10 +848,16 @@ export type BrushRequest = {
   pressureOpacity: boolean;
 };
 
+/** What a stroke paints (see `paint::PaintTarget`): masks and the selection in gray. */
+export type PaintTarget = "layer" | "mask" | "selection";
+
 /** A batch of a Brush or Eraser stroke (see `paint::PaintRequest`). */
 export type PaintRequest = {
   /** Batches of one stroke share its id. */
   stroke: number;
+  /** What is painted: the layer's pixels, its mask, or the selection (Quick Mask). */
+  target: PaintTarget;
+  /** The layer painted, or whose mask is painted; unused for the selection. */
   layerId: number;
   brush: BrushRequest;
   /** The Brush's color, sRGB-encoded RGB in [0, 1]; null for the Eraser. */
@@ -1147,10 +1153,15 @@ export const engine = {
     serial(() => invoke<DocumentView | null>("paint_stroke", { documentId, request })),
   /**
    * Delete with a selection: the selected part of a raster layer erased (`color` null) or
-   * filled with `color` (sRGB-encoded RGB in [0, 1]), as paint (ADR 0027).
+   * filled with `color` (sRGB-encoded RGB in [0, 1]), as paint (ADR 0027); of its mask
+   * (`target` "mask"): hidden, or filled with the color's gray.
    */
-  fillSelection: (documentId: number, layerId: number, color: [number, number, number] | null) =>
-    serial(() => invoke<DocumentView>("fill_selection", { documentId, layerId, color })),
+  fillSelection: (
+    documentId: number,
+    layerId: number,
+    target: Exclude<PaintTarget, "selection">,
+    color: [number, number, number] | null,
+  ) => serial(() => invoke<DocumentView>("fill_selection", { documentId, layerId, target, color })),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),

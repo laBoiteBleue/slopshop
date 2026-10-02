@@ -15,6 +15,7 @@
     onAiProgress,
     onOpenEvents,
     type BrushRequest,
+    type PaintTarget,
     type DocumentView,
     type EditRequest,
     type LayerMaskKind,
@@ -408,6 +409,7 @@
   let paintRun: {
     id: number;
     documentId: number;
+    target: PaintTarget;
     layerId: number;
     brush: BrushRequest;
     color: [number, number, number] | null;
@@ -431,20 +433,30 @@
       commitTransform();
       const layer = layersPanel?.selectedLayer() ?? null;
       paintRun = null;
-      // As in Photoshop: only pixels can be painted, and not while hidden.
-      if (!layer || layer.kind !== "raster") {
-        showError(t("paint.needRaster"));
-        return;
-      }
-      if (!layer.visible) {
-        showError(t("paint.hidden"));
-        return;
+      // Quick Mask paints the selection, whatever the layer; else the active layer's mask
+      // when it is the target, or its pixels.
+      const target: PaintTarget = doc.quickMask
+        ? "selection"
+        : layersPanel?.paintsMask()
+          ? "mask"
+          : "layer";
+      // As in Photoshop: only pixels or a mask can be painted, and not while hidden.
+      if (target !== "selection") {
+        if (!layer || (target === "layer" && layer.kind !== "raster")) {
+          showError(t("paint.needRaster"));
+          return;
+        }
+        if (!layer.visible) {
+          showError(t("paint.hidden"));
+          return;
+        }
       }
       const options = tool === "eraser" ? eraserOptions : brushOptions;
       paintRun = {
         id: nextPaintStroke++,
         documentId: doc.id,
-        layerId: layer.id,
+        target,
+        layerId: layer?.id ?? 0,
         brush: { ...options, spacing: 0.25 },
         color: tool === "eraser" ? null : hexToSrgb(colors.foreground),
         sending: false,
@@ -467,18 +479,20 @@
   }
 
   /** Delete with a selection: what to do with the selected pixels is asked first. */
-  let fillChoice = $state<{ documentId: number; layerId: number } | null>(null);
+  let fillChoice = $state<{ documentId: number; layerId: number; mask: boolean } | null>(null);
 
   function clearSelection() {
     const doc = active;
     if (!doc) return;
     commitTransform();
     const layer = layersPanel?.selectedLayer() ?? null;
-    if (!layer || layer.kind !== "raster") {
+    // The mask when it is the target: hidden there, or filled with a color's gray.
+    const mask = layersPanel?.paintsMask() ?? false;
+    if (!layer || (!mask && layer.kind !== "raster")) {
       showError(t("paint.needRaster"));
       return;
     }
-    fillChoice = { documentId: doc.id, layerId: layer.id };
+    fillChoice = { documentId: doc.id, layerId: layer.id, mask };
   }
 
   /** Photoshop's fixed fill colors: Black, 50% Gray and White (sRGB). */
@@ -497,7 +511,14 @@
               ? colors[contents]
               : FILL_COLORS[contents],
           );
-    void sync(engine.fillSelection(target.documentId, target.layerId, color));
+    void sync(
+      engine.fillSelection(
+        target.documentId,
+        target.layerId,
+        target.mask ? "mask" : "layer",
+        color,
+      ),
+    );
   }
 
   /** Sends the samples waiting, or leaves them for when the batch in flight returns. */
@@ -510,6 +531,7 @@
     engine
       .paintStroke(run.documentId, {
         stroke: run.id,
+        target: run.target,
         layerId: run.layerId,
         brush: run.brush,
         color: run.color,
@@ -944,7 +966,11 @@
   function addLayerMasks(kind: LayerMaskKind) {
     const doc = active;
     const ids = (layersPanel?.selectedLayers() ?? []).filter((l) => !l.mask).map((l) => l.id);
-    if (doc && ids.length > 0) selectionCommand((id) => engine.addLayerMasks(id, ids, kind));
+    if (doc && ids.length > 0) {
+      // As in Photoshop, the new masks are what painting reaches.
+      layersPanel?.targetMasks(ids);
+      selectionCommand((id) => engine.addLayerMasks(id, ids, kind));
+    }
   }
 
   function selectionCommand(run: (id: number) => Promise<DocumentView>) {

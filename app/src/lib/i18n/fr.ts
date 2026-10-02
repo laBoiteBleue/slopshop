@@ -106,7 +106,8 @@ const fr: Messages = {
   "menu.layer.maskDisable": "Désactiver",
   "menu.layer.maskEnable": "Activer",
   "menu.layer.maskDelete": "Supprimer",
-  "layers.mask.hint": "Masque de fusion : Maj+clic pour le désactiver ou l'activer",
+  "layers.mask.hint":
+    "Masque de fusion : clic pour y peindre, Maj+clic pour le désactiver ou l'activer",
   "menu.view": "Affichage",
   "menu.select": "Sélection",
   "menu.select.allLayers": "Tous les calques",
@@ -187,7 +188,8 @@ const fr: Messages = {
   "options.pressureSize.hint": "La pression du stylet fait varier la taille du pinceau",
   "options.pressureOpacity": "Pression : opacité",
   "options.pressureOpacity.hint": "La pression du stylet fait varier l'opacité",
-  "paint.needRaster": "Sélectionnez un calque de pixels pour peindre (Calque > Nouveau calque).",
+  "paint.needRaster":
+    "Sélectionnez un calque de pixels ou un masque de fusion pour peindre (Calque > Nouveau calque).",
   "fillChoice.title": "Remplir",
   "fillChoice.contents": "Contenu :",
   "fillChoice.erase": "Transparence (effacer)",

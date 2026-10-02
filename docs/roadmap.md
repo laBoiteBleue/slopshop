@@ -110,7 +110,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Layer masks: from a layer's transparency, enabled or disabled, deleted
       ([ADR 0014](adr/0014-layer-masks.md)); thumbnails in the layers panel
 - [x] Dissolve blend mode (a noise fixed by document position, identical on CPU and GPU)
-- [ ] Painting in masks and in Quick Mask (with the brushes of Phase 3, ADR 0027)
+- [x] Painting in masks and in Quick Mask (ADR 0027): a click on a mask's thumbnail makes it the
+      target (new masks are), the Brush paints the gray of its color, the Eraser hides
 - [x] Non-destructive transforms, step 1 ([ADR 0017](adr/0017-non-destructive-transforms.md)): a
       transform per layer (a group's applies inside it), whole-pixel moves rendered exactly,
       the Move tool (drag on the image, arrows, Shift+arrows), `.slop` 0.6

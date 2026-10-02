@@ -243,6 +243,30 @@
     return selected;
   }
 
+  /**
+   * Layers whose mask, rather than their pixels, is what painting reaches (UI state, as in
+   * Photoshop: a click on a thumbnail chooses, a frame shows it on the active layer).
+   */
+  let maskTargets = $state<Set<number>>(new Set());
+
+  function targetMask(id: number, mask: boolean) {
+    if (maskTargets.has(id) === mask) return;
+    const next = new Set(maskTargets);
+    if (mask) next.add(id);
+    else next.delete(id);
+    maskTargets = next;
+  }
+
+  /** New masks become the target of painting, as in Photoshop. */
+  export function targetMasks(ids: number[]) {
+    maskTargets = new Set([...maskTargets, ...ids]);
+  }
+
+  /** Painting reaches the active layer's mask rather than its pixels. */
+  export function paintsMask(): boolean {
+    return selected?.mask != null && maskTargets.has(selected.id);
+  }
+
   /** Every selected layer, bottom to top. */
   export function selectedLayers(): LayerView[] {
     return selection;
@@ -686,6 +710,11 @@
     }
     if ((e.target as HTMLElement).closest("button.eye")) return;
     list.focus({ preventScroll: true });
+    // A click on the layer's thumbnail or its mask's chooses what painting reaches.
+    const thumb = (e.target as HTMLElement).closest(".thumb, .mask-thumb");
+    if (thumb && layer.mask && !e.shiftKey && !e.altKey) {
+      targetMask(layer.id, thumb.classList.contains("mask-thumb"));
+    }
     // Alt+click on the line between two layers of a level clips the upper one to the lower
     // one, or releases it (Photoshop).
     if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
@@ -963,13 +992,19 @@
             <Icon name="adjust" size={24} />
           </span>
         {:else}
-          <span class="thumb"><LayerThumbnail {documentId} {layer} size={36} /></span>
+          <span
+            class="thumb"
+            class:targeted={layer.mask && selected?.id === layer.id && !maskTargets.has(layer.id)}
+          >
+            <LayerThumbnail {documentId} {layer} size={36} />
+          </span>
         {/if}
         {#if layer.mask}
           <!-- Shift+click toggles the mask, as in Photoshop. -->
           <button
             class="mask-thumb"
             class:disabled={!layer.mask.enabled}
+            class:targeted={selected?.id === layer.id && maskTargets.has(layer.id)}
             title={t("layers.mask.hint")}
             aria-label={t("layers.mask.hint")}
             onpointerdown={(e) => {
@@ -1253,6 +1288,13 @@
     border: 0;
     background: none;
     flex: none;
+  }
+
+  /* What painting reaches on the active layer, when it has a mask: its pixels or its mask. */
+  .thumb.targeted,
+  .mask-thumb.targeted {
+    outline: 2px solid var(--text);
+    outline-offset: 1px;
   }
 
   /* A disabled mask is crossed out in red, as in Photoshop. */
