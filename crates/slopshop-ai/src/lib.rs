@@ -17,7 +17,7 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 /// The helper's protocol version, checked by [`Request::Hello`].
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Largest frame accepted (an RGB image of 2048² is 12 MB).
 pub const MAX_FRAME: usize = 64 << 20;
@@ -399,22 +399,53 @@ impl Response {
     }
 }
 
+/// What starts every frame. The helper's standard output also receives what the native
+/// libraries print there (Core ML on macOS does): the reader skips anything before it.
+const MAGIC: [u8; 8] = *b"SLOPAI\x00\x02";
+
+/// Text skipped before a frame, at most (beyond it, the stream is not the helper's).
+const MAX_SKIPPED: usize = 1 << 20;
+
 /// Write one frame.
 pub fn write_frame(out: &mut impl Write, body: &[u8]) -> io::Result<()> {
     let len = u32::try_from(body.len()).map_err(|_| io::Error::other("frame too large"))?;
+    out.write_all(&MAGIC)?;
     out.write_all(&len.to_le_bytes())?;
     out.write_all(body)?;
     out.flush()
 }
 
-/// Read one frame; `None` at the end of the stream.
+/// Read one frame; `None` at the end of the stream. Bytes before the frame's start (a library's
+/// printing) are passed on to standard error.
 pub fn read_frame(input: &mut impl Read) -> Result<Option<Vec<u8>>, ProtocolError> {
-    let mut len = [0u8; 4];
-    match input.read_exact(&mut len) {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e.into()),
+    let mut window = [0u8; 8];
+    let mut seen = 0usize;
+    let mut skipped = Vec::new();
+    let mut byte = [0u8; 1];
+    while seen < MAGIC.len() || window != MAGIC {
+        match input.read_exact(&mut byte) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof && seen == 0 => return Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                return Err(ProtocolError::Malformed("frame start"));
+            }
+            Err(e) => return Err(e.into()),
+        }
+        if seen >= MAGIC.len() {
+            skipped.push(window[0]);
+            if skipped.len() > MAX_SKIPPED {
+                return Err(ProtocolError::Malformed("frame start"));
+            }
+        }
+        window.rotate_left(1);
+        window[7] = byte[0];
+        seen += 1;
     }
+    if !skipped.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&skipped));
+    }
+    let mut len = [0u8; 4];
+    input.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len) as usize;
     if len > MAX_FRAME {
         return Err(ProtocolError::Malformed("frame length"));
@@ -676,6 +707,17 @@ mod tests {
         for response in responses {
             assert_eq!(Response::decode(&response.encode()).unwrap(), response);
         }
+    }
+
+    #[test]
+    fn text_printed_before_a_frame_is_skipped() {
+        let mut stream = b"CoreML: compiling the model\n".to_vec();
+        write_frame(&mut stream, b"body").unwrap();
+        write_frame(&mut stream, b"next").unwrap();
+        let mut reader = stream.as_slice();
+        assert_eq!(read_frame(&mut reader).unwrap().unwrap(), b"body");
+        assert_eq!(read_frame(&mut reader).unwrap().unwrap(), b"next");
+        assert!(read_frame(&mut reader).unwrap().is_none());
     }
 
     #[test]
