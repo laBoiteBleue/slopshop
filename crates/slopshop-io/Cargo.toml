@@ -25,7 +25,7 @@ gif = { workspace = true }
 # GIF export: the palette of images with more than 256 colors (NeuQuant). Already in the tree
 # through `gif` and `image` (same version); `gif`'s own RGBA helper panics on bad input and
 # cannot skip transparent pixels when learning the palette.
-color_quant = "1.1.0"
+color_quant = "2.0.0"
 # - JPEG component color space, to refuse CMYK instead of converting it silently.
 zune-jpeg = { workspace = true }
 # - OpenEXR chromaticities (the primaries of the file). Default features: `rayon`, which
@@ -66,7 +66,7 @@ zune-core = "0.5.3"
 # TIFF export compresses its own strips (tiff's streaming encoder ignores compression, and its
 # codecs are private) with the codecs tiff uses internally, already in the tree through it:
 # - LZW;
-weezl = "0.1.12"
+weezl = "0.2.1"
 # - Deflate (zlib).
 flate2 = "1.1.10"
 # JPEG export (ADR 0010): pure Rust, fed band by band through its pull API (baseline JPEG
