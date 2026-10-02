@@ -1501,35 +1501,53 @@ pub fn color_range(
 
 // --- AI masks ----------------------------------------------------------------------------------
 
-/// A model's mask over the whole canvas (ADR 0025): `side`² logits (positive: inside) stretched
-/// over the canvas, read bilinearly, inside where positive, its edge softened over about a
-/// pixel; combined with `current` by `combine`. The coarse selection that Refine Edge improves.
+/// A model's mask (ADR 0025): `side`² logits (positive: inside) stretched over `area` of the
+/// canvas (the whole image, or the region the model saw), read bilinearly, inside where
+/// positive, its edge softened over about a pixel; nothing outside `area`. Specks and pinholes
+/// smaller than [`MIN_LOGIT_REGION`] of the mask are dropped first, as SAM's own
+/// post-processing does (an uncertain area otherwise turns into noise and countless ants).
+/// Combined with `current` by `combine`. The coarse selection that Refine Edge improves.
 pub fn select_logits(
     canvas: Size,
     current: Option<&RasterImage>,
     logits: &[f32],
     side: usize,
+    area: Rect,
     combine: Combine,
 ) -> Result<Option<RasterImage>, SelectionError> {
     if side == 0 || logits.len() != side * side || logits.iter().any(|v| v.is_nan()) {
         return Err(SelectionError::InvalidShape);
     }
+    let cleaned = without_specks(logits, side);
+    let logits = cleaned.as_slice();
+    let area = area
+        .intersection(Rect::new(0, 0, canvas.width, canvas.height))
+        .ok_or(SelectionError::InvalidShape)?;
     let mut mask = Mask::new(canvas)?;
     let (sx, sy) = (
-        side as f64 / f64::from(canvas.width),
-        side as f64 / f64::from(canvas.height),
+        side as f64 / f64::from(area.width),
+        side as f64 / f64::from(area.height),
     );
+    let (left, top) = (area.x as usize, area.y as usize);
+    let (right, bottom) = (left + area.width as usize, top + area.height as usize);
     let at = |x: usize, y: usize| logits[y.min(side - 1) * side + x.min(side - 1)];
     let inside = |x: usize, y: usize| -> bool {
-        let fx = ((x as f64 + 0.5) * sx - 0.5).max(0.0);
-        let fy = ((y as f64 + 0.5) * sy - 0.5).max(0.0);
+        if x < left || y < top || x >= right || y >= bottom {
+            return false;
+        }
+        let fx = (((x - left) as f64 + 0.5) * sx - 0.5).max(0.0);
+        let fy = (((y - top) as f64 + 0.5) * sy - 0.5).max(0.0);
         let (x0, y0) = (fx as usize, fy as usize);
         let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
-        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
-        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
-        top * (1.0 - ty) + bottom * ty > 0.0
+        let upper = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+        let lower = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+        upper * (1.0 - ty) + lower * ty > 0.0
     };
-    let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
+    // The tiles over the area; the others stay empty.
+    let tiles: Vec<usize> = (top / T..bottom.div_ceil(T))
+        .flat_map(|row| (left / T..right.div_ceil(T)).map(move |col| (col, row)))
+        .map(|(col, row)| row * mask.columns + col)
+        .collect();
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let per_thread = tiles.len().div_ceil(threads).max(1);
     let (shape, inside) = (&mask, &inside);
@@ -1568,6 +1586,62 @@ pub fn select_logits(
         mask.tiles[index] = tile;
     }
     finish(canvas, current, soften(&mask), combine)
+}
+
+/// A model's mask (`side`² logits, positive inside) as inside or not per cell, without specks
+/// (see [`select_logits`]): what a hover shows before anything is selected.
+pub fn logits_mask(logits: &[f32], side: usize) -> Vec<bool> {
+    without_specks(logits, side)
+        .iter()
+        .map(|&v| v > 0.0)
+        .collect()
+}
+
+/// The smallest region of a model's mask kept, as a fraction of the mask.
+pub const MIN_LOGIT_REGION: f64 = 1.0 / 1024.0;
+
+/// `logits` (a `side`² mask, positive inside) with every connected region (4-neighbors) of
+/// either sign smaller than [`MIN_LOGIT_REGION`] of the mask flipped to its surroundings.
+fn without_specks(logits: &[f32], side: usize) -> Vec<f32> {
+    let min = ((side * side) as f64 * MIN_LOGIT_REGION).ceil() as usize;
+    let mut out = logits.to_vec();
+    let mut seen = vec![false; side * side];
+    let mut region = Vec::new();
+    let mut stack = Vec::new();
+    for start in 0..side * side {
+        if seen[start] {
+            continue;
+        }
+        let inside = logits[start] > 0.0;
+        region.clear();
+        stack.push(start);
+        seen[start] = true;
+        while let Some(i) = stack.pop() {
+            region.push(i);
+            let (x, y) = (i % side, i / side);
+            let neighbors = [
+                (x > 0).then(|| i - 1),
+                (x + 1 < side).then(|| i + 1),
+                (y > 0).then(|| i - side),
+                (y + 1 < side).then(|| i + side),
+            ];
+            for n in neighbors.into_iter().flatten() {
+                if !seen[n] && (logits[n] > 0.0) == inside {
+                    seen[n] = true;
+                    stack.push(n);
+                }
+            }
+        }
+        if region.len() < min {
+            // Just past zero on the other side: the region takes its surroundings' sign
+            // and the edge around it stays smooth once upsampled.
+            let flipped = if inside { -1e-3 } else { 1e-3 };
+            for &i in &region {
+                out[i] = flipped;
+            }
+        }
+    }
+    out
 }
 
 // --- Rasterization -----------------------------------------------------------------------------
@@ -2597,7 +2671,8 @@ mod tests {
             logits[y * 4 + x] = 5.0;
         }
         let canvas = Size::new(800, 400);
-        let image = select_logits(canvas, None, &logits, 4, Combine::Replace)
+        let whole = Rect::new(0, 0, 800, 400);
+        let image = select_logits(canvas, None, &logits, 4, whole, Combine::Replace)
             .unwrap()
             .unwrap();
         assert_eq!(image.gray_at(400, 200), 1.0);
@@ -2609,12 +2684,46 @@ mod tests {
             (b.x as i64 - 200).abs() <= 2 && (b.y as i64 - 100).abs() <= 2,
             "{b:?}"
         );
-        assert!(select_logits(canvas, None, &logits, 3, Combine::Replace).is_err());
+        assert!(select_logits(canvas, None, &logits, 3, whole, Combine::Replace).is_err());
         let negative = vec![-1.0f32; 16];
         assert!(
-            select_logits(canvas, None, &negative, 4, Combine::Replace)
+            select_logits(canvas, None, &negative, 4, whole, Combine::Replace)
                 .unwrap()
                 .is_none()
+        );
+        // A one-logit speck and a one-logit hole are dropped (64² mask: below 4 logits).
+        let mut specks = vec![-5.0f32; 64 * 64];
+        for y in 16..48 {
+            for x in 16..48 {
+                specks[y * 64 + x] = 5.0;
+            }
+        }
+        specks[32 * 64 + 32] = -5.0;
+        specks[4 * 64 + 4] = 5.0;
+        let cleaned = without_specks(&specks, 64);
+        assert!(cleaned[32 * 64 + 32] > 0.0 && cleaned[4 * 64 + 4] < 0.0);
+        assert!(cleaned[20 * 64 + 20] > 0.0 && cleaned[60 * 64 + 60] < 0.0);
+        // Over a region: the region's middle half, nothing outside it.
+        let region = Rect::new(400, 0, 400, 400);
+        let image = select_logits(canvas, None, &logits, 4, region, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let b = bounds(&image).unwrap();
+        assert!(
+            (b.x as i64 - 500).abs() <= 2 && (b.width as i64 - 200).abs() <= 4,
+            "{b:?}"
+        );
+        assert_eq!(image.gray_at(200, 200), 0.0);
+        assert!(
+            select_logits(
+                canvas,
+                None,
+                &logits,
+                4,
+                Rect::new(900, 0, 10, 10),
+                Combine::Replace
+            )
+            .is_err()
         );
     }
 
