@@ -67,6 +67,7 @@ pub(crate) fn grouped(
             next,
             image_name,
             LayerContent::Raster {
+                original: None,
                 image: Arc::new(imported.image),
             },
         );

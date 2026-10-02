@@ -174,7 +174,7 @@ fn contains(outer: Area, inner: Area) -> bool {
 /// The canvas area of a raster `layer` placed at whole pixels (its siblings mapped to the
 /// document by `parent`); `None` for other layers and transforms.
 fn placed_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
-    let LayerContent::Raster { image } = &layer.content else {
+    let LayerContent::Raster { image, .. } = &layer.content else {
         return None;
     };
     let (x, y) = layer.transform.then(parent).integer_translation()?;
@@ -211,7 +211,7 @@ fn opaque_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
     }
     match &layer.content {
         LayerContent::Fill { color } => (color.a >= 1.0).then(|| canvas_area(canvas)),
-        LayerContent::Raster { image } if !image.format().layout.has_alpha() => {
+        LayerContent::Raster { image, .. } if !image.format().layout.has_alpha() => {
             placed_area(layer, parent, canvas).filter(|area| !is_empty(*area))
         }
         _ => None,
@@ -464,7 +464,7 @@ fn source(
                 a,
             ])
         }
-        LayerContent::Raster { image } => {
+        LayerContent::Raster { image, .. } => {
             let matrix = image.matrix_to(&WORKING_SPACE);
             let (level, placement) = placement(image, transform)?;
             SourceContent::Raster {
@@ -1002,6 +1002,7 @@ mod tests {
 
     fn raster(size: Size, format: PixelFormat, pixels: &[u8]) -> LayerContent {
         LayerContent::Raster {
+            original: None,
             image: Arc::new(RasterImage::from_pixels(size, format, pixels).unwrap()),
         }
     }
@@ -1392,6 +1393,7 @@ mod tests {
         let id = add(
             &mut doc,
             LayerContent::Raster {
+                original: None,
                 image: image.clone(),
             },
             1.0,
@@ -1437,6 +1439,7 @@ mod tests {
             &mut doc,
             id,
             Some(crate::document::LayerMask {
+                original: None,
                 image: mask_image,
                 enabled: true,
                 replaces_alpha: false,
@@ -1454,6 +1457,7 @@ mod tests {
         let id = add(
             &mut doc,
             LayerContent::Raster {
+                original: None,
                 image: image.clone(),
             },
             1.0,
@@ -1477,6 +1481,7 @@ mod tests {
         assert_eq!(toggled, Edit::SetLayerMaskEnabled { id, enabled: true });
         // A color image is not a mask.
         let not_gray = crate::document::LayerMask {
+            original: None,
             image: image.clone(),
             enabled: true,
             replaces_alpha: false,
@@ -1661,6 +1666,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             };
             g.mask = Some(crate::document::LayerMask {
+                original: None,
                 image: Arc::new(RasterImage::from_pixels(Size::new(4, 2), format, &mask).unwrap()),
                 enabled: true,
                 replaces_alpha: false,
@@ -1856,7 +1862,7 @@ mod tests {
 
     /// The alpha of a raster content as a mask.
     fn alpha_mask_of(content: &LayerContent) -> crate::document::LayerMask {
-        let LayerContent::Raster { image } = content else {
+        let LayerContent::Raster { image, .. } = content else {
             panic!("a raster expected");
         };
         let mut mask = crate::document::LayerMask::from_transparency(image).unwrap();
@@ -1984,6 +1990,7 @@ mod tests {
                     alpha: AlphaMode::Straight,
                 };
                 let mask = crate::document::LayerMask {
+                    original: None,
                     image: Arc::new(
                         RasterImage::from_pixels(Size::new(3, 2), gray, &mask_values).unwrap(),
                     ),
@@ -2038,6 +2045,7 @@ mod tests {
                 let mut layer = new_layer(
                     &mut reference,
                     LayerContent::Raster {
+                        original: None,
                         image: Arc::new(placed_image),
                     },
                     BlendMode::Screen,
@@ -2233,7 +2241,7 @@ mod tests {
             push(&mut passing, g);
 
             let alphas = match &shape_layer.content {
-                LayerContent::Raster { image } => (0..8)
+                LayerContent::Raster { image, .. } => (0..8)
                     .map(|i| image.alpha_at(i % 4, i / 4))
                     .collect::<Vec<_>>(),
                 _ => unreachable!("a raster"),

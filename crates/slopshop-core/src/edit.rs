@@ -9,10 +9,12 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace};
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
 use crate::geom::Size;
+use crate::raster::RasterImage;
 use crate::transform::Affine;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +79,17 @@ pub enum Edit {
         id: LayerId,
         transform: Affine,
     },
+    /// Show `painted` in place of a raster layer's pixels, the pixels it had before any paint
+    /// kept as its original (ADR 0027); `None` deletes the paint, showing the original again.
+    SetLayerPaint {
+        id: LayerId,
+        painted: Option<Arc<RasterImage>>,
+    },
+    /// The same for a layer's mask: `painted` is a gray coverage of the mask's size.
+    SetMaskPaint {
+        id: LayerId,
+        painted: Option<Arc<RasterImage>>,
+    },
     /// Replace an adjustment layer's adjustment (its kind or its parameters, ADR 0020).
     SetAdjustment {
         id: LayerId,
@@ -118,6 +131,11 @@ pub enum EditError {
     InvalidAdjustment,
     /// Masks are gray images.
     InvalidMask,
+    /// Paint of another size than the pixels it covers, or a mask's paint that is not gray
+    /// (ADR 0027).
+    InvalidPaint,
+    /// Painting needs a raster layer (ADR 0027).
+    NotRaster(LayerId),
     /// The layer has no mask.
     NoMask(LayerId),
     /// The layer is not a group (as a parent, or for a group edit).
@@ -159,6 +177,13 @@ impl fmt::Display for EditError {
                 )
             }
             EditError::InvalidMask => write!(f, "a mask must be a gray image"),
+            EditError::InvalidPaint => {
+                write!(
+                    f,
+                    "paint must have the size (and, in a mask, the gray) of its pixels"
+                )
+            }
+            EditError::NotRaster(id) => write!(f, "{id} is not a raster layer"),
             EditError::NoMask(id) => write!(f, "{id} has no mask"),
             EditError::NotAGroup(id) => write!(f, "{id} is not a group"),
             EditError::MoveIntoItself(id) => write!(f, "{id} cannot go inside itself"),
@@ -250,6 +275,22 @@ impl Edit {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.mask, mask);
                 Edit::SetLayerMask { id, mask: previous }
+            }
+            Edit::SetLayerPaint { id, painted } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Raster { image, original } = &mut layer.content else {
+                    return Err(EditError::NotRaster(id));
+                };
+                let painted = swap_paint(image, original, painted, |p, o| p.size() == o.size())?;
+                Edit::SetLayerPaint { id, painted }
+            }
+            Edit::SetMaskPaint { id, painted } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let mask = layer.mask.as_mut().ok_or(EditError::NoMask(id))?;
+                let painted = swap_paint(&mut mask.image, &mut mask.original, painted, |p, o| {
+                    p.size() == o.size() && LayerMask::is_valid_image(p)
+                })?;
+                Edit::SetMaskPaint { id, painted }
             }
             Edit::SetLayerMaskEnabled { id, enabled } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
@@ -434,6 +475,41 @@ impl Edit {
                     index,
                 }),
         );
+        Ok(Edit::Batch(edits))
+    }
+
+    /// The edit that deletes the paint of `ids` and of the layers inside them, pixels and masks
+    /// (Layer > Delete Paint, ADR 0027): their originals show again. [`EditError::NoLayers`]
+    /// when none of them is painted.
+    pub fn delete_paint(doc: &Document, ids: &[LayerId]) -> Result<Edit, EditError> {
+        let mut edits = Vec::new();
+        let mut seen = HashSet::new();
+        for &id in ids {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            for layer in layer.subtree() {
+                if !seen.insert(layer.id) {
+                    continue;
+                }
+                if let LayerContent::Raster {
+                    original: Some(_), ..
+                } = layer.content
+                {
+                    edits.push(Edit::SetLayerPaint {
+                        id: layer.id,
+                        painted: None,
+                    });
+                }
+                if layer.mask.as_ref().is_some_and(|m| m.original.is_some()) {
+                    edits.push(Edit::SetMaskPaint {
+                        id: layer.id,
+                        painted: None,
+                    });
+                }
+            }
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
         Ok(Edit::Batch(edits))
     }
 
@@ -713,6 +789,38 @@ fn validate_new_layer(
         }
     }
     Ok(())
+}
+
+/// Show `painted` in place of `image`, keeping the unpainted pixels in `original` (ADR 0027);
+/// `None` shows `original` again. `fits(painted, original)` validates new paint. Returns the
+/// inverse's `painted`.
+fn swap_paint(
+    image: &mut Arc<RasterImage>,
+    original: &mut Option<Arc<RasterImage>>,
+    painted: Option<Arc<RasterImage>>,
+    fits: impl Fn(&RasterImage, &RasterImage) -> bool,
+) -> Result<Option<Arc<RasterImage>>, EditError> {
+    match painted {
+        Some(painted) => {
+            let unpainted = original.as_ref().unwrap_or(image);
+            if !fits(&painted, unpainted) {
+                return Err(EditError::InvalidPaint);
+            }
+            let shown = std::mem::replace(image, painted);
+            Ok(match original {
+                // Painted before: the inverse shows the previous paint again.
+                Some(_) => Some(shown),
+                // First paint: the inverse deletes it.
+                None => {
+                    *original = Some(shown);
+                    None
+                }
+            })
+        }
+        None => Ok(original
+            .take()
+            .map(|unpainted| std::mem::replace(image, unpainted))),
+    }
 }
 
 /// Transforms layers may have: finite and invertible (ADR 0018).
@@ -1685,5 +1793,179 @@ mod tests {
         undo.apply(&mut doc).unwrap();
         assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
         assert!(doc.layer(ids[1]).unwrap().transform.is_identity());
+    }
+
+    /// An image of `size` filled with one gray (`gray`) or RGBA (otherwise) 8-bit value.
+    fn image(size: Size, gray: bool, value: u8) -> Arc<RasterImage> {
+        let format = crate::color::PixelFormat {
+            layout: if gray {
+                crate::color::ChannelLayout::Gray
+            } else {
+                crate::color::ChannelLayout::Rgba
+            },
+            ..crate::color::PixelFormat::RGBA8_SRGB
+        };
+        let channels = if gray { 1 } else { 4 };
+        let pixels = vec![value; size.pixel_count() as usize * channels];
+        Arc::new(RasterImage::from_pixels(size, format, &pixels).unwrap())
+    }
+
+    fn raster_layer(doc: &mut Document, image: Arc<RasterImage>) -> LayerId {
+        let id = doc.allocate_layer_id();
+        let layer = Layer {
+            id,
+            content: LayerContent::raster(image),
+            ..fill_layer(doc, "pixels")
+        };
+        let index = doc.layers().len();
+        Edit::InsertLayer {
+            parent: None,
+            index,
+            layer,
+        }
+        .apply(doc)
+        .unwrap();
+        id
+    }
+
+    /// What layer `id` shows and its original, by identity.
+    fn shown(doc: &Document, id: LayerId) -> (Arc<RasterImage>, Option<Arc<RasterImage>>) {
+        match &doc.layer(id).unwrap().content {
+            LayerContent::Raster { image, original } => (Arc::clone(image), original.clone()),
+            _ => panic!("a raster layer"),
+        }
+    }
+
+    #[test]
+    fn paint_shows_in_place_of_the_original_and_comes_off_whole() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let original = image(size, false, 10);
+        let id = raster_layer(&mut doc, Arc::clone(&original));
+        assert!(!doc.layer(id).unwrap().is_painted());
+
+        let (first, second) = (image(size, false, 20), image(size, false, 30));
+        let undo_first = Edit::SetLayerPaint {
+            id,
+            painted: Some(Arc::clone(&first)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(undo_first, Edit::SetLayerPaint { id, painted: None });
+        let (image_now, kept) = shown(&doc, id);
+        assert!(Arc::ptr_eq(&image_now, &first));
+        assert!(Arc::ptr_eq(kept.as_ref().unwrap(), &original));
+        assert!(doc.layer(id).unwrap().is_painted());
+
+        // A second stroke keeps the same original; undoing it shows the first paint.
+        let undo_second = Edit::SetLayerPaint {
+            id,
+            painted: Some(Arc::clone(&second)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(Arc::ptr_eq(shown(&doc, id).1.as_ref().unwrap(), &original));
+        assert_round_trip(&mut doc.clone(), Edit::SetLayerPaint { id, painted: None });
+
+        // Delete Paint, then undo it.
+        let undo_delete = Edit::delete_paint(&doc, &[id])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let (image_now, kept) = shown(&doc, id);
+        assert!(Arc::ptr_eq(&image_now, &original) && kept.is_none());
+        assert_eq!(
+            Edit::delete_paint(&doc, &[id]),
+            Err(EditError::NoLayers),
+            "nothing left to delete"
+        );
+        undo_delete.apply(&mut doc).unwrap();
+        assert!(Arc::ptr_eq(&shown(&doc, id).0, &second));
+        undo_second.apply(&mut doc).unwrap();
+        assert!(Arc::ptr_eq(&shown(&doc, id).0, &first));
+        undo_first.apply(&mut doc).unwrap();
+        let (image_now, kept) = shown(&doc, id);
+        assert!(Arc::ptr_eq(&image_now, &original) && kept.is_none());
+    }
+
+    #[test]
+    fn paint_must_fit_what_it_covers() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let id = raster_layer(&mut doc, image(size, false, 10));
+        let wrong = Edit::SetLayerPaint {
+            id,
+            painted: Some(image(Size::new(9, 8), false, 0)),
+        };
+        assert_eq!(wrong.apply(&mut doc), Err(EditError::InvalidPaint));
+        let fill = fill_layer(&mut doc, "fill");
+        let fill_id = fill.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: fill,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let on_fill = Edit::SetLayerPaint {
+            id: fill_id,
+            painted: Some(image(size, false, 0)),
+        };
+        assert_eq!(on_fill.apply(&mut doc), Err(EditError::NotRaster(fill_id)));
+        let no_mask = Edit::SetMaskPaint {
+            id,
+            painted: Some(image(size, true, 0)),
+        };
+        assert_eq!(no_mask.apply(&mut doc), Err(EditError::NoMask(id)));
+    }
+
+    #[test]
+    fn masks_are_painted_apart_and_deleted_with_the_pixels() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let id = raster_layer(&mut doc, image(size, false, 10));
+        let mask = image(size, true, 255);
+        Edit::SetLayerMask {
+            id,
+            mask: Some(LayerMask {
+                image: Arc::clone(&mask),
+                enabled: true,
+                replaces_alpha: false,
+                original: None,
+            }),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let color = Edit::SetMaskPaint {
+            id,
+            painted: Some(image(size, false, 0)),
+        };
+        assert_eq!(color.apply(&mut doc), Err(EditError::InvalidPaint));
+        let painted = image(size, true, 0);
+        assert_round_trip(
+            &mut doc,
+            Edit::SetMaskPaint {
+                id,
+                painted: Some(Arc::clone(&painted)),
+            },
+        );
+        Edit::SetLayerPaint {
+            id,
+            painted: Some(image(size, false, 99)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let layer = doc.layer(id).unwrap();
+        assert!(Arc::ptr_eq(&layer.mask.as_ref().unwrap().image, &painted));
+        // Both come off in one edit.
+        let delete = Edit::delete_paint(&doc, &[id]).unwrap();
+        assert_round_trip(&mut doc.clone(), delete);
+        Edit::delete_paint(&doc, &[id])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let layer = doc.layer(id).unwrap();
+        assert!(!layer.is_painted());
+        assert!(Arc::ptr_eq(&layer.mask.as_ref().unwrap().image, &mask));
     }
 }

@@ -17,7 +17,7 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
+    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED,
     NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema,
     Writer,
 };
@@ -141,16 +141,20 @@ fn kept_images(
     images
 }
 
-/// Every image of the document: layer rasters and masks, groups included.
+/// Every image of the document: layer rasters and masks, groups included, painted ones with
+/// their originals (ADR 0027).
 fn rasters(document: &Document) -> impl Iterator<Item = &Arc<RasterImage>> {
     document.all_layers().flat_map(|layer| {
-        let content = match &layer.content {
-            LayerContent::Raster { image } => Some(image),
-            _ => None,
+        let (image, original) = match &layer.content {
+            LayerContent::Raster { image, original } => (Some(image), original.as_ref()),
+            _ => (None, None),
         };
-        content
+        let mask = layer.mask.as_ref();
+        image
             .into_iter()
-            .chain(layer.mask.as_ref().map(|m| &m.image))
+            .chain(original)
+            .chain(mask.map(|m| &m.image))
+            .chain(mask.and_then(|m| m.original.as_ref()))
     })
 }
 
@@ -421,9 +425,13 @@ fn build_manifest(
         let id = layer.id.get();
         let mut inputs = Vec::new();
         let (kind, params) = match &layer.content {
-            LayerContent::Raster { image } => {
+            LayerContent::Raster { image, original } => {
                 let key = key_of(image).map(Hash::to_key).unwrap_or_default();
-                (NODE_RASTER, json!({ "image": key }))
+                let mut params = json!({ "image": key });
+                if let Some(original) = original {
+                    params["original"] = json!(key_of(original).map(Hash::to_key));
+                }
+                (NODE_RASTER, params)
             }
             LayerContent::Fill { color } => (
                 NODE_FILL,
@@ -465,20 +473,23 @@ fn build_manifest(
         }
         if let Some(mask) = &layer.mask {
             let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
-            params.insert(
-                "mask".to_owned(),
-                json!({
-                    "image": key,
-                    "enabled": mask.enabled,
-                    "replaces_alpha": mask.replaces_alpha,
-                }),
-            );
+            let mut value = json!({
+                "image": key,
+                "enabled": mask.enabled,
+                "replaces_alpha": mask.replaces_alpha,
+            });
+            if let Some(original) = &mask.original {
+                value["original"] = json!(key_of(original).map(Hash::to_key));
+            }
+            params.insert("mask".to_owned(), value);
         }
         nodes.insert(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if !layer.transform.is_identity() {
+                version: if layer.is_painted() {
+                    NODE_VERSION_PAINTED
+                } else if !layer.transform.is_identity() {
                     NODE_VERSION_TRANSFORMED
                 } else if layer.clipped {
                     NODE_VERSION_CLIPPED

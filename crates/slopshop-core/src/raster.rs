@@ -56,6 +56,13 @@ pub struct RasterLevel {
     tiles: Vec<Arc<[u8]>>,
 }
 
+/// Images are immutable: the same image is the same allocation, told by its id.
+impl PartialEq for RasterImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
 impl RasterLevel {
     /// The same level, its tiles shared.
     fn shared(&self) -> Self {

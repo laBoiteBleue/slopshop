@@ -66,7 +66,13 @@ fn layer(s: &mut Session, content: LayerContent) -> Layer {
 }
 
 fn raster(s: &mut Session, image: Arc<RasterImage>) -> Layer {
-    layer(s, LayerContent::Raster { image })
+    layer(
+        s,
+        LayerContent::Raster {
+            image,
+            original: None,
+        },
+    )
 }
 
 fn push(s: &mut Session, layer: Layer) -> LayerId {
@@ -124,6 +130,7 @@ fn varied_document() -> Session {
     );
     fill.opacity = 0.6;
     fill.mask = Some(LayerMask {
+        original: None,
         image: gray_mask(Size::new(300, 300), |x, y| ((x + 2 * y) % 256) as u8),
         enabled: true,
         replaces_alpha: false,

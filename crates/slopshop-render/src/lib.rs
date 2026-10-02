@@ -1116,7 +1116,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
             layer, transform, ..
         } => {
             let content = match &layer.content {
-                LayerContent::Raster { image } => Some((image.as_ref(), *transform)),
+                LayerContent::Raster { image, .. } => Some((image.as_ref(), *transform)),
                 _ => None,
             };
             [
@@ -1941,6 +1941,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                original: None,
                 image: image.into(),
             },
         };
@@ -1979,6 +1980,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                original: None,
                 image: image.into(),
             },
         };

@@ -107,6 +107,7 @@ fn sample_document() -> Document {
         &mut doc,
         "photo",
         LayerContent::Raster {
+            original: None,
             image: rgb8.clone(),
         },
         0.8,
@@ -115,6 +116,7 @@ fn sample_document() -> Document {
         &mut doc,
         "rgba16",
         LayerContent::Raster {
+            original: None,
             image: image(size, ChannelLayout::Rgba, SampleType::U16, pixels(8, 3)),
         },
         1.0,
@@ -124,6 +126,7 @@ fn sample_document() -> Document {
         &mut doc,
         "gray f16",
         LayerContent::Raster {
+            original: None,
             image: image(
                 Size::new(40, 520),
                 ChannelLayout::GrayAlpha,
@@ -137,6 +140,7 @@ fn sample_document() -> Document {
         &mut doc,
         "rgba f32",
         LayerContent::Raster {
+            original: None,
             image: image(
                 Size::new(17, 9),
                 ChannelLayout::Rgba,
@@ -150,7 +154,10 @@ fn sample_document() -> Document {
     let hidden = push(
         &mut doc,
         "photo (copie)",
-        LayerContent::Raster { image: rgb8 },
+        LayerContent::Raster {
+            image: rgb8,
+            original: None,
+        },
         0.25,
     );
     Edit::SetLayerVisible {
@@ -193,6 +200,27 @@ fn assert_same(a: &Document, b: &Document) {
     assert_same_layers(a.layers(), b.layers());
 }
 
+/// Same size, format and tile bytes at every level.
+fn assert_same_image(a: &RasterImage, b: &RasterImage, what: &str) {
+    assert_eq!(a.size(), b.size(), "{what}");
+    assert_eq!(a.format(), b.format(), "{what}");
+    assert_eq!(a.levels().len(), b.levels().len(), "{what}");
+    for (l, m) in a.levels().iter().zip(b.levels()) {
+        for (s, t) in l.tiles().iter().zip(m.tiles()) {
+            assert!(s[..] == t[..], "{what}: tile differs");
+        }
+    }
+}
+
+/// Both `None`, or the same image.
+fn assert_same_original(a: Option<&Arc<RasterImage>>, b: Option<&Arc<RasterImage>>, what: &str) {
+    match (a, b) {
+        (None, None) => {}
+        (Some(a), Some(b)) => assert_same_image(a, b, what),
+        _ => panic!("{what}: paint differs"),
+    }
+}
+
 fn assert_same_layers(a: &[Layer], b: &[Layer]) {
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b) {
@@ -210,12 +238,9 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
                     "{}",
                     x.name
                 );
-                assert_eq!(m.image.format(), n.image.format(), "{}", x.name);
-                for (l, k) in m.image.levels().iter().zip(n.image.levels()) {
-                    for (s, t) in l.tiles().iter().zip(k.tiles()) {
-                        assert!(s[..] == t[..], "{}: mask tile differs", x.name);
-                    }
-                }
+                assert_same_image(&m.image, &n.image, &format!("{} mask", x.name));
+                let what = format!("{} mask original", x.name);
+                assert_same_original(m.original.as_ref(), n.original.as_ref(), &what);
             }
             _ => panic!("{}: mask presence differs", x.name),
         }
@@ -224,15 +249,19 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
                 let bits = |c: &LinearRgba| [c.r, c.g, c.b, c.a].map(f32::to_bits);
                 assert_eq!(bits(c), bits(d), "{}", x.name);
             }
-            (LayerContent::Raster { image: i }, LayerContent::Raster { image: j }) => {
-                assert_eq!(i.size(), j.size(), "{}", x.name);
-                assert_eq!(i.format(), j.format(), "{}", x.name);
-                assert_eq!(i.levels().len(), j.levels().len(), "{}", x.name);
-                for (l, m) in i.levels().iter().zip(j.levels()) {
-                    for (s, t) in l.tiles().iter().zip(m.tiles()) {
-                        assert!(s[..] == t[..], "{}: tile differs", x.name);
-                    }
-                }
+            (
+                LayerContent::Raster {
+                    image: i,
+                    original: o,
+                },
+                LayerContent::Raster {
+                    image: j,
+                    original: q,
+                },
+            ) => {
+                assert_same_image(i, j, &x.name);
+                let what = format!("{} original", x.name);
+                assert_same_original(o.as_ref(), q.as_ref(), &what);
             }
             (
                 LayerContent::Group {
@@ -278,7 +307,7 @@ fn documents_round_trip_bit_exact() {
         .layers()
         .iter()
         .filter_map(|l| match &l.content {
-            LayerContent::Raster { image } if l.name.starts_with("photo") => Some(image),
+            LayerContent::Raster { image, .. } if l.name.starts_with("photo") => Some(image),
             _ => None,
         })
         .collect();
@@ -322,7 +351,10 @@ fn a_new_layer_appends_only_its_tiles_and_the_session_carries_on() {
     push(
         &mut doc,
         "nouveau",
-        LayerContent::Raster { image: added },
+        LayerContent::Raster {
+            image: added,
+            original: None,
+        },
         1.0,
     );
     let before = file.len();
@@ -352,6 +384,7 @@ fn removed_data_is_compacted_away_once_it_dominates() {
         &mut doc,
         "gros",
         LayerContent::Raster {
+            original: None,
             image: image(
                 size,
                 ChannelLayout::Rgba,
@@ -398,6 +431,7 @@ fn two_generations(name: &str) -> (PathBuf, Document, Document, Vec<u8>, Vec<u8>
         &mut second,
         "ajout",
         LayerContent::Raster {
+            original: None,
             image: image(
                 Size::new(300, 10),
                 ChannelLayout::Rgb,
@@ -499,6 +533,7 @@ fn damaged_files_are_errors_never_panics() {
         &mut doc,
         "image",
         LayerContent::Raster {
+            original: None,
             image: image(
                 Size::new(40, 30),
                 ChannelLayout::Rgb,
@@ -587,8 +622,44 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
-/// The document of the golden fixture of schema 0.9: the schema 0.8 one with Curves on top.
+/// The document of the golden fixture of schema 0.10: the schema 0.9 one with paint on the
+/// first raster layer and on the first mask (ADR 0027).
 fn golden_document() -> Document {
+    let mut doc = golden_document_v0_9();
+    let raster = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { image, .. } => Some((l.id, Arc::clone(image))),
+            _ => None,
+        })
+        .expect("a raster layer");
+    let masked = doc
+        .all_layers()
+        .find_map(|l| l.mask.as_ref().map(|m| (l.id, Arc::clone(&m.image))))
+        .expect("a mask");
+    // Paint: the original with its first tile replaced by the last one.
+    let painted = |image: &RasterImage| {
+        let mut tiles = image.levels()[0].tiles().to_vec();
+        tiles[0] = Arc::clone(tiles.last().unwrap());
+        Arc::new(RasterImage::from_level0_tiles(image.size(), image.format(), tiles).unwrap())
+    };
+    Edit::SetLayerPaint {
+        id: raster.0,
+        painted: Some(painted(&raster.1)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    Edit::SetMaskPaint {
+        id: masked.0,
+        painted: Some(painted(&masked.1)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
+/// The document of the golden fixture of schema 0.9: the schema 0.8 one with Curves on top.
+fn golden_document_v0_9() -> Document {
     use slopshop_core::curve::Curve;
     let mut doc = golden_document_v0_8();
     let id = doc.allocate_layer_id();
@@ -722,7 +793,7 @@ fn golden_document_v0_4() -> Document {
     let mut doc = golden_document_v0_3();
     let tint = doc.layers()[2].id;
     let masked_by = match &doc.layers()[1].content {
-        LayerContent::Raster { image } => slopshop_core::LayerMask::from_transparency(image),
+        LayerContent::Raster { image, .. } => slopshop_core::LayerMask::from_transparency(image),
         _ => None,
     };
     let folder = doc.allocate_layer_id();
@@ -782,6 +853,7 @@ fn golden_document_v0_3() -> Document {
         .collect();
     let ramp = image(size, ChannelLayout::GrayAlpha, SampleType::F16, ramp);
     let raster = |image: &Arc<RasterImage>| LayerContent::Raster {
+        original: None,
         image: image.clone(),
     };
     push(&mut doc, "Gradient", raster(&gradient), 1.0);
@@ -791,7 +863,7 @@ fn golden_document_v0_3() -> Document {
     let hidden = push(&mut doc, "Gradient again", raster(&gradient), 1.0);
     // A mask from transparency (schema 0.3) on the half-float gray + alpha layer, disabled.
     let ramp_layer = doc.layers()[1].clone();
-    if let LayerContent::Raster { image } = &ramp_layer.content {
+    if let LayerContent::Raster { image, .. } = &ramp_layer.content {
         let mut mask = slopshop_core::LayerMask::from_transparency(image).unwrap();
         mask.enabled = false;
         Edit::SetLayerMask {
@@ -884,6 +956,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.8")).unwrap();
     assert_same(&golden_document_v0_8(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.9")).unwrap();
+    assert_same(&golden_document_v0_9(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.10")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 
@@ -953,7 +1027,7 @@ fn masks_round_trip_and_share_their_tiles() {
     let path = temp_path("masks.slop");
     let mut doc = sample_document();
     for layer in doc.layers().to_vec() {
-        if let LayerContent::Raster { image } = &layer.content
+        if let LayerContent::Raster { image, .. } = &layer.content
             && let Some(mask) = slopshop_core::LayerMask::from_transparency(image)
         {
             Edit::SetLayerMask {

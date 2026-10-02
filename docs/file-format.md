@@ -254,6 +254,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     are not at the identity are written at v5. The transform must be finite and invertible
     (magnitudes below 1e9, |a·d − b·c| ≥ 1e-9, [ADR 0018](adr/0018-resampling.md)); earlier
     versions of SlopShop read only whole-pixel translations and refuse the others.
+  - v6 (schema 0.10, [ADR 0027](adr/0027-painting.md)) adds paint: `params.original` on a
+    raster node is the key of its unpainted image, `params.image` being its painted pixels (what
+    it shows), and `params.mask.original` likewise for a painted mask. Both images have the same
+    size and share their unpainted tiles in the file. Only painted nodes are written at v6, so
+    that readers without paint refuse them instead of losing the original.
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,

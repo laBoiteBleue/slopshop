@@ -60,6 +60,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                original: None,
                 image: Arc::new(image),
             },
         };
@@ -145,7 +146,7 @@ pub fn inspect(args: &[String]) -> Result<(), String> {
 fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
     for layer in layers {
         let content = match &layer.content {
-            LayerContent::Raster { image } => {
+            LayerContent::Raster { image, .. } => {
                 let format = image.format();
                 format!(
                     "image {}x{} {:?} {:?} {}",
@@ -201,7 +202,7 @@ fn pixel_bytes(document: &Document) -> u64 {
     let mut seen = Vec::new();
     let mut total = 0;
     for layer in document.all_layers() {
-        if let LayerContent::Raster { image } = &layer.content
+        if let LayerContent::Raster { image, .. } = &layer.content
             && !seen.contains(&image.id())
         {
             seen.push(image.id());

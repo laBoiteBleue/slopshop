@@ -7,7 +7,7 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use slopshop_core::adjust::PARAM_COUNT;
 use slopshop_core::color::LinearRgba;
 use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
@@ -21,7 +21,8 @@ use super::format::{
 };
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VERSION_CLIPPED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED, NODE_VERSION_TRANSFORMED, NodeDto,
+    PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -320,7 +321,7 @@ pub(super) fn read_node(
         return Err(corrupt("a node is used twice"));
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
-    let known_version = (1..=NODE_VERSION_TRANSFORMED).contains(&node.version);
+    let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
     let content = match node.kind.as_str() {
         NODE_RASTER if known_version => {
             let key = node
@@ -334,6 +335,7 @@ pub(super) fn read_node(
                 .ok_or_else(|| corrupt("raster node with a missing image"))?;
             LayerContent::Raster {
                 image: image.clone(),
+                original: painted_original(node, &node.params, rasters)?,
             }
         }
         NODE_FILL if known_version => {
@@ -352,7 +354,7 @@ pub(super) fn read_node(
                 color: LinearRgba::new(color[0], color[1], color[2], color[3]),
             }
         }
-        NODE_GROUP if (3..=NODE_VERSION_TRANSFORMED).contains(&node.version) => {
+        NODE_GROUP if (3..=NODE_VERSION_PAINTED).contains(&node.version) => {
             // Checked before going deeper: the file is untrusted.
             if depth >= MAX_GROUP_DEPTH {
                 return Err(corrupt("groups nested too deep"));
@@ -372,7 +374,7 @@ pub(super) fn read_node(
                 pass_through,
             }
         }
-        NODE_ADJUSTMENT if (3..=NODE_VERSION_TRANSFORMED).contains(&node.version) => {
+        NODE_ADJUSTMENT if (3..=NODE_VERSION_PAINTED).contains(&node.version) => {
             let id = node
                 .params
                 .get("adjustment")
@@ -516,7 +518,27 @@ fn node_mask(
         image: image.clone(),
         enabled: flag("enabled")?,
         replaces_alpha: flag("replaces_alpha")?,
+        original: painted_original(node, mask, rasters)?,
     }))
+}
+
+/// The unpainted image named by `params.original` (version 6, ADR 0027), if any.
+fn painted_original(
+    node: &NodeDto,
+    params: &Map<String, Value>,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
+) -> Result<Option<Arc<RasterImage>>, FileError> {
+    match params.get("original") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(key)) if node.version >= NODE_VERSION_PAINTED => {
+            Hash::from_key(key.as_str())
+                .and_then(|key| rasters.get(&key))
+                .cloned()
+                .map(Some)
+                .ok_or_else(|| corrupt("paint with a missing original"))
+        }
+        Some(_) => Err(corrupt("invalid original")),
+    }
 }
 
 /// The document's blend space. Schema 0.1 documents composited in linear light.
