@@ -29,8 +29,8 @@
     antiAlias: boolean;
     /** Magic Wand: tolerance (0–255), connected pixels only, every layer or the active one. */
     wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
-    /** AI tools: Quick Selection's brush diameter (document pixels); every layer or the active one. */
-    quick: { size: number; sampleAll: boolean; objectRefine: boolean; quickRefine: boolean };
+    /** Object and Quick Selection: the brush diameter (document pixels); every layer or the active one. */
+    quick: { size: number; sampleAll: boolean; objectRefine: boolean };
   } = $props();
 
   const current = $derived(toolInfo(tool));
@@ -95,10 +95,6 @@
       <label class="option">
         <input type="checkbox" bind:checked={quick.sampleAll} />
         {t("options.sampleAll")}
-      </label>
-      <label class="option" title={t("options.refineEdge.hint")}>
-        <input type="checkbox" bind:checked={quick.quickRefine} />
-        {t("options.refineEdge")}
       </label>
     {:else if tool === "objectSelection"}
       <label class="option">
