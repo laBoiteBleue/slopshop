@@ -406,10 +406,15 @@
    * The options of Object and Quick Selection: Quick Selection's brush, every layer or the active
    * one, and whether Object Selection refines edges at full resolution (ViTMatte).
    */
-  let quick = $state({ size: 30, sampleAll: false, objectRefine: true });
-  // On the processor (Linux), Refine Edges takes about a second per window: off by default.
+  let quick = $state({ size: 30, sampleAll: false, objectRefine: false });
+  /**
+   * Select > Subject refines its edges at full resolution (BiRefNet's soft mask, then ViTMatte),
+   * except on the processor (Linux), where it takes about a second per window.
+   */
+  let subjectRefine = true;
+  // On the processor, Select Subject does not refine (see above).
   void engine.aiRuntime().then((runtime) => {
-    if (runtime === "cpu") quick.objectRefine = false;
+    if (runtime === "cpu") subjectRefine = false;
   });
   let aiBusy = $state(false);
   /** No hovering until a click asks again: the components are missing or AI cannot start. */
@@ -558,7 +563,7 @@
     if (!doc) return;
     commitTransform();
     void runAi("ai.task.subject", (task) =>
-      engine.aiSelectSubject(doc.id, aiLayer(), "replace", quick.objectRefine, task),
+      engine.aiSelectSubject(doc.id, aiLayer(), "replace", subjectRefine, task),
     );
   }
 
