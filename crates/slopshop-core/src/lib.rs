@@ -28,6 +28,7 @@ pub mod edit;
 pub mod geom;
 pub mod job;
 mod maxflow;
+pub mod paint;
 pub mod pick;
 pub mod quick_select;
 pub mod raster;
