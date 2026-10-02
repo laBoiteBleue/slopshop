@@ -1129,7 +1129,7 @@ pub fn magic_wand(
                                     }
                                 }
                                 pad(&mut values, w, h);
-                                (index, Tile::Data(values))
+                                (index, computed_tile(values))
                             })
                             .collect::<Vec<_>>()
                     })
@@ -1171,7 +1171,8 @@ impl<'a> WandSampler<'a> {
         let region = Rect::new((col * T) as u32, (row * T) as u32, w as u32, h as u32);
         let mut rgba = vec![0f32; w * h * 4];
         let mut out = vec![[0f32; 4]; T * T];
-        if crate::composite::composite_region(self.document, region, &mut rgba).is_err() {
+        // Callers composite tiles on every core already: one thread per tile.
+        if crate::composite::composite_region_serial(self.document, region, &mut rgba).is_err() {
             return out;
         }
         for y in 0..h {
@@ -1187,9 +1188,7 @@ impl<'a> WandSampler<'a> {
                             f64::from(p[2] / a),
                         ],
                     );
-                    linear.map(|v| {
-                        (crate::color::srgb_encode((v as f32).clamp(0.0, 1.0)) * 255.0).round()
-                    })
+                    linear.map(|v| f32::from(srgb_byte(v as f32)))
                 } else {
                     [0.0; 3]
                 };
@@ -1198,6 +1197,31 @@ impl<'a> WandSampler<'a> {
         }
         out
     }
+}
+
+/// `round(srgb_encode(v) × 255)` for `v` clamped to `[0, 1]`, without a power per call: the
+/// smallest value of each code, found once by bisection on that very formula (so the result is
+/// the same bit for bit), then a binary search.
+fn srgb_byte(v: f32) -> u8 {
+    static THRESHOLDS: std::sync::OnceLock<[f32; 255]> = std::sync::OnceLock::new();
+    let exact = |v: f32| (crate::color::srgb_encode(v.clamp(0.0, 1.0)) * 255.0).round();
+    let thresholds = THRESHOLDS.get_or_init(|| {
+        std::array::from_fn(|k| {
+            let code = (k + 1) as f32;
+            // Non-negative floats are ordered as their bits: bisect on them.
+            let (mut low, mut high) = (0u32, 1f32.to_bits());
+            while low < high {
+                let mid = low + (high - low) / 2;
+                if exact(f32::from_bits(mid)) >= code {
+                    high = mid;
+                } else {
+                    low = mid + 1;
+                }
+            }
+            f32::from_bits(low)
+        })
+    });
+    thresholds.partition_point(|&t| t <= v) as u8
 }
 
 /// The contiguous fill from `seed`, tile by tile: each tile is filled from the pixels where the
@@ -1348,32 +1372,101 @@ fn flood(
     }
 }
 
-/// A 3×3 average on the tiles that are not uniform: about a pixel of anti-aliasing.
+/// A 3×3 average, about a pixel of anti-aliasing: on the tiles that are not uniform, or whose
+/// neighbors differ from them. Tiles are averaged on every core.
 fn soften(mask: &Mask) -> Mask {
+    let (columns, rows) = (mask.columns as isize, mask.rows as isize);
+    let uniform = |index: usize| {
+        let value = mask.tiles[index].constant()?;
+        let (col, row) = (
+            (index % mask.columns) as isize,
+            (index / mask.columns) as isize,
+        );
+        let same = (-1..=1).all(|dy| {
+            (-1..=1).all(|dx| {
+                let (c, r) = (
+                    (col + dx).clamp(0, columns - 1),
+                    (row + dy).clamp(0, rows - 1),
+                );
+                mask.tiles[(r * columns + c) as usize].constant() == Some(value)
+            })
+        });
+        same.then_some(value)
+    };
+    let edges: Vec<usize> = (0..mask.tiles.len())
+        .filter(|&i| uniform(i).is_none())
+        .collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = edges.len().div_ceil(threads).max(1);
     let mut out = mask.clone();
-    for (index, tile) in out.tiles.iter_mut().enumerate() {
-        if tile.constant().is_some() {
-            continue;
-        }
-        let (col, row) = (index % mask.columns, index / mask.columns);
-        let (w, h) = mask.valid(col, row);
-        let mut values = vec![0u16; T * T];
-        for y in 0..h {
-            for x in 0..w {
-                let (gx, gy) = ((col * T + x) as isize, (row * T + y) as isize);
-                let mut sum = 0u32;
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        sum += u32::from(mask.at(gx + dx, gy + dy));
-                    }
-                }
-                values[y * T + x] = (sum / 9) as u16;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = edges
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&index| (index, soften_tile(mask, index)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: averaging does not panic.
+            for (index, tile) in worker.join().expect("soften worker panicked") {
+                out.tiles[index] = tile;
             }
         }
-        pad(&mut values, w, h);
-        *tile = Tile::Data(values);
-    }
+    });
     out
+}
+
+/// Tile `index` of `mask` averaged over 3×3 pixels (the canvas edge repeating).
+fn soften_tile(mask: &Mask, index: usize) -> Tile {
+    let (col, row) = (index % mask.columns, index / mask.columns);
+    let (w, h) = mask.valid(col, row);
+    // The tile and a ring of one pixel around it, read from its neighbors.
+    let stride = w + 2;
+    let mut around = vec![0u32; stride * (h + 2)];
+    let inside = mask.tiles[index].values();
+    let (x0, y0) = ((col * T) as isize, (row * T) as isize);
+    for y in 0..h + 2 {
+        for x in 0..w + 2 {
+            around[y * stride + x] = if (1..=w).contains(&x) && (1..=h).contains(&y) {
+                u32::from(inside[(y - 1) * T + x - 1])
+            } else {
+                u32::from(mask.at(x0 + x as isize - 1, y0 + y as isize - 1))
+            };
+        }
+    }
+    // Sums of three along rows, then along columns.
+    let mut sums = vec![0u32; stride * (h + 2)];
+    for y in 0..h + 2 {
+        let line = &around[y * stride..(y + 1) * stride];
+        for x in 1..=w {
+            sums[y * stride + x] = line[x - 1] + line[x] + line[x + 1];
+        }
+    }
+    let mut values = vec![0u16; T * T];
+    for y in 0..h {
+        for x in 0..w {
+            let at = |dy: usize| sums[(y + dy) * stride + x + 1];
+            values[y * T + x] = ((at(0) + at(1) + at(2)) / 9) as u16;
+        }
+    }
+    pad(&mut values, w, h);
+    Tile::Data(values)
+}
+
+/// A tile of computed values: a constant one when they are all the same, so that later steps
+/// (anti-aliasing, combining, storing) skip it.
+fn computed_tile(values: Vec<u16>) -> Tile {
+    let first = values[0];
+    if values.iter().all(|&v| v == first) {
+        Tile::Const(first)
+    } else {
+        Tile::Data(values)
+    }
 }
 
 // --- Color Range -------------------------------------------------------------------------------
@@ -1479,7 +1572,7 @@ pub fn color_range(
                                 }
                             }
                             pad(&mut values, w, h);
-                            (index, Tile::Data(values))
+                            (index, computed_tile(values))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1571,7 +1664,7 @@ pub fn select_logits(
                                 }
                             }
                             pad(&mut values, w, h);
-                            (index, Tile::Data(values))
+                            (index, computed_tile(values))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -2866,6 +2959,40 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn srgb_bytes_match_the_transfer_function() {
+        let exact = |v: f32| (crate::color::srgb_encode(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+        for i in -1000..=201_000 {
+            let v = i as f32 / 200_000.0;
+            assert_eq!(srgb_byte(v), exact(v), "at {v}");
+        }
+        for v in [
+            f32::NAN,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            0.0,
+            1.0,
+            1e-9,
+            0.003_130_8,
+        ] {
+            assert_eq!(srgb_byte(v), exact(v), "at {v}");
+        }
+    }
+
+    #[test]
+    fn softening_reaches_uniform_tiles_along_an_edge() {
+        // A vertical edge on a tile boundary: both sides soften, as if the tiles were one.
+        let size = Size::new(2 * TILE_SIZE, 4);
+        let mut mask = Mask::new(size).unwrap();
+        mask.tiles[0] = Tile::Const(FULL);
+        let soft = soften(&mask);
+        let left = soft.at(TILE_SIZE as isize - 1, 1);
+        let right = soft.at(TILE_SIZE as isize, 1);
+        assert_eq!(left, (u32::from(FULL) * 6 / 9) as u16);
+        assert_eq!(right, (u32::from(FULL) * 3 / 9) as u16);
+        assert_eq!(soft.at(0, 1), FULL);
     }
 
     #[test]
