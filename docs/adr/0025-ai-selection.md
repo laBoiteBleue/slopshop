@@ -36,7 +36,17 @@ TensorRT-RTX on demand on NVIDIA, else DirectML; models downloaded on first use.
    through **ONNX Runtime** (`ort`, loaded dynamically). Started on first use and kept while the
    app runs, it talks to the app over a pipe (binary messages: images and masks never as JSON).
    A crash or a driver error ends the helper, not the editor; quitting it frees the VRAM.
-2. **Execution providers**, picked at start and reported to the UI:
+2. **Execution providers**, picked at start and reported to the UI.
+
+   > **Amended 2026-10-02 (maintainer):** **DirectML only on Windows**, for every graphics
+   > card: ONNX Runtime 1.24.4 with DirectML, from its official PyPI package (16 MB to
+   > download, against about 1 GB for CUDA). Without SAM 3 (see 3), CUDA's only gain is
+   > Refine Edge, about 5× faster per window (65 ms against 320–430 ms on an RTX 5070 Ti);
+   > SAM 2.1's clicks (16 ms against 7 ms), its encoder (same) and BiRefNet (165 ms against
+   > 217 ms) differ little. DirectML is in maintenance at Microsoft (1.24.4 is its last
+   > release): its replacement is to be followed (Windows ML, the WebGPU plugin). The text
+   > below records the earlier plan.
+
    - **NVIDIA**: CUDA, with **Microsoft's official ONNX Runtime build** (ort's prebuilt one has
      no RTX 50 kernels) and NVIDIA's runtime libraries (cuDNN, cuBLAS, CUDA runtime) fetched on
      demand from NVIDIA's packages. **TensorRT-RTX** replaces it once NVIDIA's standalone plugin
@@ -53,10 +63,15 @@ TensorRT-RTX on demand on NVIDIA, else DirectML; models downloaded on first use.
    | Object Selection | box, or click; later hover highlight | SAM 2.1 | — |
    | Quick Selection | brush strokes (Alt: remove), brush size | SAM 2.1 | — |
    | Select > Subject | one command | BiRefNet | — |
-   | Select > Semantic… | text ("sky", "the red car") | SAM 3 (SAM License, accepted) | — |
    | Refine Edge (option of every tool, and a command for any selection) | — | ViTMatte-S | SAM2Matting, ZIM (non-commercial) |
 
    SAM 2.1 size by hardware: base+ on a GPU, tiny on the CPU.
+
+   > **Amended 2026-10-02 (maintainer):** no semantic selection (Select > Semantic… with SAM
+   > 3, and the translation of its text): 3.6 GB of models, most of a 16 GB card, for little
+   > use in a graphic designer's workflow. It was built and measured (branches
+   > `feat/select-semantic` and `feat/translate`, kept) but not merged. SlopShop keeps
+   > Photoshop's tools: Object and Quick Selection, Select > Subject, Refine Edge.
 4. **Large images**: a model sees the pyramid level near 1024² (or the region in view or in
    the box). Its mask is upsampled into a coarse selection, shown at once. **Refine Edge**
    then runs the matting model on full-resolution tiles along the outline only, guided by a

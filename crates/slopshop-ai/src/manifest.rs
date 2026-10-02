@@ -9,15 +9,9 @@ const ONNXRUNTIME: License = License {
     commercial: true,
     accept: false,
 };
-const CUDA: License = License {
-    name: "NVIDIA CUDA Toolkit EULA",
-    url: "https://docs.nvidia.com/cuda/eula/index.html",
-    commercial: true,
-    accept: true,
-};
-const CUDNN: License = License {
-    name: "NVIDIA cuDNN Software License Agreement",
-    url: "https://docs.nvidia.com/deeplearning/cudnn/backend/latest/reference/eula.html",
+const DIRECTML: License = License {
+    name: "Microsoft DirectML License",
+    url: "https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License",
     commercial: true,
     accept: true,
 };
@@ -43,184 +37,40 @@ const VITMATTE: License = License {
 /// Every component, by id.
 pub const COMPONENTS: &[Component] = &[
     Component {
-        id: "runtime-cuda",
-        licenses: &[ONNXRUNTIME, CUDA, CUDNN],
+        id: "runtime-directml",
+        licenses: &[ONNXRUNTIME, DIRECTML],
         files: &[
             Download {
-                path: "runtime/cuda/onnxruntime.dll",
-                url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-gpu_cuda13-1.30.0.zip",
+                path: "runtime/directml/onnxruntime.dll",
+                url: "https://files.pythonhosted.org/packages/88/ea/33814eb0ec96775eda4c1d30b0d86e91d7d2cd0d84c66d3915aef0e06fa3/onnxruntime_directml-1.24.4-cp312-cp312-win_amd64.whl",
                 source: Source::Deflated {
-                    offset: 218516,
-                    compressed: 5943657,
+                    offset: 9377518,
+                    compressed: 6706812,
                 },
-                size: 16921400,
-                sha256: "ed0de29f6579482eb2d54674a5e51b77761e195a5e0d70dbadc916ab925a9ec1",
+                size: 21111832,
+                sha256: "302c69f9779d63ef4ab90316e59444c4acbaca7fe3455020d79d10bcfcb00715",
             },
             Download {
-                path: "runtime/cuda/onnxruntime_providers_shared.dll",
-                url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-gpu_cuda13-1.30.0.zip",
+                path: "runtime/directml/onnxruntime_providers_shared.dll",
+                url: "https://files.pythonhosted.org/packages/88/ea/33814eb0ec96775eda4c1d30b0d86e91d7d2cd0d84c66d3915aef0e06fa3/onnxruntime_directml-1.24.4-cp312-cp312-win_amd64.whl",
                 source: Source::Deflated {
-                    offset: 288501763,
-                    compressed: 12369,
+                    offset: 16098247,
+                    compressed: 12163,
                 },
-                size: 21856,
-                sha256: "7ee69db9b57ce7279fd0a3b2c2ecb262de2509faeaf48de65a73415f9a0ca6f9",
+                size: 21576,
+                sha256: "f6bbae3af4c0673b0d1e6ca8db900dc85ad959a395b69d361038ec7995cc2652",
             },
             Download {
-                path: "runtime/cuda/onnxruntime_providers_cuda.dll",
-                url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-gpu_cuda13-1.30.0.zip",
+                path: "runtime/directml/DirectML.dll",
+                url: "https://files.pythonhosted.org/packages/88/ea/33814eb0ec96775eda4c1d30b0d86e91d7d2cd0d84c66d3915aef0e06fa3/onnxruntime_directml-1.24.4-cp312-cp312-win_amd64.whl",
                 source: Source::Deflated {
-                    offset: 80326483,
-                    compressed: 145794384,
+                    offset: 42715,
+                    compressed: 9332752,
                 },
-                size: 186986848,
-                sha256: "9b4e3abd26420845561c548d48adb80dde730e8d585b8f9c7a2d14cddc806eaa",
-            },
-            Download {
-                path: "runtime/cuda/cudart64_13.dll",
-                url: "https://files.pythonhosted.org/packages/86/00/d5436004268f049214193659ebc36550b5ef3925c3d13b4cc980e13be6f5/nvidia_cuda_runtime-13.4.92-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 68,
-                    compressed: 215509,
-                },
-                size: 551024,
-                sha256: "d26fd1c2629594759af569a5252f94e4568d4ebeca67dc323834deb141aa278a",
-            },
-            Download {
-                path: "runtime/cuda/cublas64_13.dll",
-                url: "https://files.pythonhosted.org/packages/a3/df/f1246959833e2c437db8be3e5b477f66b87f8817821ed40de6c7561c9a36/nvidia_cublas-13.8.0.4-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 68,
-                    compressed: 50740237,
-                },
-                size: 54873200,
-                sha256: "60bbba8868290311e9c1657b2193ddec667744eb555ff843f87acb7c039f9efa",
-            },
-            Download {
-                path: "runtime/cuda/cublasLt64_13.dll",
-                url: "https://files.pythonhosted.org/packages/a3/df/f1246959833e2c437db8be3e5b477f66b87f8817821ed40de6c7561c9a36/nvidia_cublas-13.8.0.4-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 50740375,
-                    compressed: 372350161,
-                },
-                size: 493474416,
-                sha256: "cad63434448e7141629e240ea093ad596a7ef6a0f67b468ba9bc1df6e1eeee33",
-            },
-            Download {
-                path: "runtime/cuda/cudnn64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 60,
-                    compressed: 121298,
-                },
-                size: 270448,
-                sha256: "0016bd73ac9192537ae5af6a3f05814316726dad1d1da44f113f0a9ef00ae34c",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_adv64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 121422,
-                    compressed: 100399743,
-                },
-                size: 105226864,
-                sha256: "041cab1d6439d2558b4a7073a42dd95058d0395463ffb0d37275af11ec0af8d7",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_cnn64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 100521229,
-                    compressed: 1155789,
-                },
-                size: 1533040,
-                sha256: "7dd1bcc6d8f00ad635f6a8a2cd076faba21626f3412e13c61a6bece3f88eacb1",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_engines_precompiled64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 101677098,
-                    compressed: 198094908,
-                },
-                size: 231660656,
-                sha256: "5d9b829228ae18594dafedf718d9612606c8ce6d199aa7151bea53e863baeefe",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_engines_runtime_compiled64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 299772091,
-                    compressed: 18924122,
-                },
-                size: 39266928,
-                sha256: "8e65eeb0a4a3b7afa48ea3ca71c4b88e355199f85485b6fc0badcc97ebc552ef",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_engines_tensor_ir64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 318696291,
-                    compressed: 70044,
-                },
-                size: 156272,
-                sha256: "51afb44ce4b901ccdac1434f9fc9d8d707b690f39ae1e2a6ffca98c5fd9dfa96",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_ext64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 318766399,
-                    compressed: 63256,
-                },
-                size: 130160,
-                sha256: "a0e0e2e8e8e4678956bbef93fdccc4730bd5edf9b23d38bff49030ebba1940a6",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_graph64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 318829721,
-                    compressed: 48000207,
-                },
-                size: 116132464,
-                sha256: "ccc90435b2fd37b5ddd6a9fa0fd053ad8f46c2dc8b0a6256ef0ebea7f3efbace",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_heuristic64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 366829998,
-                    compressed: 34324022,
-                },
-                size: 94795376,
-                sha256: "c0439ee74a3dbec8ecf56fecbc6ac2506efcce702453e36119649545d02509c3",
-            },
-            Download {
-                path: "runtime/cuda/cudnn_ops64_9.dll",
-                url: "https://files.pythonhosted.org/packages/87/6a/e55ff0ac26a5c6e2b21f41c9d04ad096b4ed6da593fba7e25845c61b0532/nvidia_cudnn_cu13-9.27.0.42-py3-none-win_amd64.whl",
-                source: Source::Deflated {
-                    offset: 401154084,
-                    compressed: 35208630,
-                },
-                size: 37462128,
-                sha256: "2bd7f4122eaeccb85538c2a6f7923d7254ad77d7b7149fed0a8139f1e3cf0b07",
+                size: 18527776,
+                sha256: "b73972115320e906a49602f2027a3266622881b0d325ba685e0f165a9482a8d7",
             },
         ],
-    },
-    Component {
-        id: "runtime-cpu",
-        licenses: &[ONNXRUNTIME],
-        files: &[Download {
-            path: "runtime/cpu/onnxruntime.dll",
-            url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-1.30.0.zip",
-            source: Source::Deflated {
-                offset: 215476,
-                compressed: 5924158,
-            },
-            size: 16462648,
-            sha256: "7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da",
-        }],
     },
     Component {
         id: "sam2.1-base-plus",
@@ -257,40 +107,6 @@ pub const COMPONENTS: &[Component] = &[
         ],
     },
     Component {
-        id: "sam2.1-tiny",
-        licenses: &[SAM2],
-        files: &[
-            Download {
-                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/vision_encoder.onnx",
-                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/vision_encoder.onnx",
-                source: Source::File,
-                size: 354238,
-                sha256: "4f30aacd3aaefbca81a0b7fe4c1fc96345570ea0a6f80ced599493d1b3be2e8c",
-            },
-            Download {
-                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/vision_encoder.onnx_data",
-                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/vision_encoder.onnx_data",
-                source: Source::File,
-                size: 134084864,
-                sha256: "e83df9866a5afe68ea7f0f721f18f65137fc3acbf0da1c74e946d363e09c69cc",
-            },
-            Download {
-                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/prompt_encoder_mask_decoder.onnx",
-                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/prompt_encoder_mask_decoder.onnx",
-                source: Source::File,
-                size: 213114,
-                sha256: "874414704c5d686db7d206a35f6e15d26563d50c8c4468fccc6739bd7e491dcf",
-            },
-            Download {
-                path: "models/onnx-community/sam2.1-hiera-tiny-ONNX/onnx/prompt_encoder_mask_decoder.onnx_data",
-                url: "https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX/resolve/814a066640debee5a91e70aa401fb8e17e030503/onnx/prompt_encoder_mask_decoder.onnx_data",
-                source: Source::File,
-                size: 20958208,
-                sha256: "e9874d900dd4134ed60eab1e97910327c2419e0b2954485d8fd6e7f1a1470f47",
-            },
-        ],
-    },
-    Component {
         id: "vitmatte-small",
         licenses: &[VITMATTE],
         files: &[Download {
@@ -310,17 +126,6 @@ pub const COMPONENTS: &[Component] = &[
             source: Source::File,
             size: 489666272,
             sha256: "3654c741eb80bd926ada8fed1713b506ccf8d30eb1f6487e87eb9f234f33df09",
-        }],
-    },
-    Component {
-        id: "birefnet-lite",
-        licenses: &[BIREFNET],
-        files: &[Download {
-            path: "models/onnx-community/BiRefNet_lite-ONNX/onnx/model_fp16.onnx",
-            url: "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx",
-            source: Source::File,
-            size: 114538221,
-            sha256: "d39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402",
         }],
     },
 ];

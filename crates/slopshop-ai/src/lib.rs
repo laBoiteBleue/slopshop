@@ -84,7 +84,7 @@ pub struct Point {
 pub enum Response {
     Hello {
         version: u32,
-        /// `cuda`, `directml` or `cpu`.
+        /// `directml` or `cpu`.
         provider: String,
     },
     Done,
@@ -433,9 +433,9 @@ pub struct Launch<'a> {
     pub runtime: &'a Path,
     /// Where the models are (one folder per repository, as downloaded).
     pub models: &'a Path,
-    /// `auto`, `cuda`, `directml` or `cpu`.
+    /// `auto`, `directml` or `cpu`.
     pub provider: &'a str,
-    /// Folders added to the helper's library search path (NVIDIA's runtime libraries).
+    /// Folders added to the helper's library search path (the runtime's own libraries).
     pub library_paths: &'a [&'a Path],
 }
 
@@ -654,7 +654,7 @@ mod tests {
         let responses = [
             Response::Hello {
                 version: PROTOCOL_VERSION,
-                provider: "cuda".into(),
+                provider: "directml".into(),
             },
             Response::Done,
             Response::SamMask {

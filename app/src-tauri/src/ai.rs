@@ -16,46 +16,33 @@ use tauri_plugin_opener::OpenerExt;
 /// The ONNX Runtime build this machine runs, and the models made for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Runtime {
-    /// NVIDIA GPUs: ONNX Runtime's CUDA build and NVIDIA's libraries.
-    Cuda,
-    /// The processor: slower, but everywhere.
-    Cpu,
+    /// Windows: ONNX Runtime with DirectML, on any DirectX 12 graphics card (ADR 0025).
+    DirectMl,
 }
 
 impl Runtime {
-    /// This machine's: CUDA when NVIDIA's driver is installed. `None` where AI is not offered
-    /// yet (outside Windows x64: no runtime in the manifest).
+    /// This machine's. `None` where AI is not offered yet (outside Windows x64: no runtime in
+    /// the manifest).
     pub(crate) fn detect() -> Option<Self> {
-        if !cfg!(all(windows, target_arch = "x86_64")) {
-            return None;
-        }
-        // The driver installs the CUDA driver library; the rest comes with the download.
-        let nvidia = std::env::var_os("SystemRoot")
-            .is_some_and(|root| PathBuf::from(root).join("System32/nvcuda.dll").is_file());
-        Some(if nvidia { Self::Cuda } else { Self::Cpu })
+        cfg!(all(windows, target_arch = "x86_64")).then_some(Self::DirectMl)
     }
 
     /// The helper's `--provider`.
     pub(crate) fn provider(self) -> &'static str {
         match self {
-            Self::Cuda => "cuda",
-            Self::Cpu => "cpu",
+            Self::DirectMl => "directml",
         }
     }
 
-    /// The components a feature needs on this runtime.
     /// The components a feature needs on this runtime (the runtime first).
     pub(crate) fn components(self, feature: Feature) -> [&'static str; 3] {
         // Every feature includes ViTMatte: selections are refined at full resolution.
         let runtime = match self {
-            Self::Cuda => "runtime-cuda",
-            Self::Cpu => "runtime-cpu",
+            Self::DirectMl => "runtime-directml",
         };
-        let model = match (self, feature) {
-            (Self::Cuda, Feature::Segmentation) => "sam2.1-base-plus",
-            (Self::Cpu, Feature::Segmentation) => "sam2.1-tiny",
-            (Self::Cuda, Feature::Subject) => "birefnet",
-            (Self::Cpu, Feature::Subject) => "birefnet-lite",
+        let model = match feature {
+            Feature::Segmentation => "sam2.1-base-plus",
+            Feature::Subject => "birefnet",
         };
         [runtime, model, "vitmatte-small"]
     }
@@ -300,7 +287,7 @@ mod tests {
 
     #[test]
     fn every_feature_needs_components_of_the_manifest() {
-        for runtime in [Runtime::Cuda, Runtime::Cpu] {
+        for runtime in [Runtime::DirectMl] {
             for feature in FEATURES {
                 for id in runtime.components(feature) {
                     assert!(install::component(id).is_some(), "{id}");

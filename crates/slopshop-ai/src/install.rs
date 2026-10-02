@@ -636,6 +636,6 @@ mod tests {
                 assert!(!file.path.contains(".."), "{}", file.path);
             }
         }
-        assert!(component("runtime-cuda").is_some());
+        assert!(component("runtime-directml").is_some());
     }
 }

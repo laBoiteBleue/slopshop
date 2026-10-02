@@ -1,6 +1,6 @@
 """Generates `src/manifest.rs`: what the AI installer downloads, pinned (ADR 0025).
 
-For a file inside a zip archive (ONNX Runtime's release, NVIDIA's wheels), the manifest records
+For a file inside a zip archive (ONNX Runtime's DirectML package), the manifest records
 where its compressed bytes lie in the archive, so the installer fetches only them (an HTTP range)
 and inflates them; for a plain file (a model on Hugging Face), the file itself. Every installed
 file is pinned by its size and SHA-256. Sources are immutable: release assets, PyPI files, and
@@ -22,8 +22,9 @@ import zlib
 
 USER_AGENT = "slopshop-manifest"
 
-ORT = "1.30.0"
-ORT_URL = "https://github.com/microsoft/onnxruntime/releases/download/v{v}/{name}"
+# ONNX Runtime with DirectML: Microsoft's last DirectML release (DirectML is in maintenance),
+# from its PyPI package (a zip holding the libraries, whatever Python it targets).
+ORT_DIRECTML = ("onnxruntime-directml", "1.24.4", "cp312-cp312-win_amd64")
 PYPI = "https://pypi.org/pypi/{package}/{version}/json"
 HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 
@@ -35,15 +36,9 @@ LICENSES = {
         True,
         False,
     ),
-    "cuda": (
-        "NVIDIA CUDA Toolkit EULA",
-        "https://docs.nvidia.com/cuda/eula/index.html",
-        True,
-        True,
-    ),
-    "cudnn": (
-        "NVIDIA cuDNN Software License Agreement",
-        "https://docs.nvidia.com/deeplearning/cudnn/backend/latest/reference/eula.html",
+    "directml": (
+        "Microsoft DirectML License",
+        "https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License",
         True,
         True,
     ),
@@ -153,9 +148,9 @@ def archive_files(url, names, folder, cache_dir):
     return files
 
 
-def wheel(package, version, names, folder, cache_dir):
+def wheel(package, version, tag, names, folder, cache_dir):
     info = json.load(request(PYPI.format(package=package, version=version)))
-    (url,) = [u["url"] for u in info["urls"] if u["filename"].endswith("win_amd64.whl")]
+    (url,) = [u["url"] for u in info["urls"] if u["filename"].endswith(f"{tag}.whl")]
     return archive_files(url, names, folder, cache_dir)
 
 
@@ -184,46 +179,18 @@ def main():
     args = parser.parse_args()
     cache = args.cache
 
-    print("ONNX Runtime, CUDA")
-    cuda_name = f"onnxruntime-win-x64-gpu_cuda13-{ORT}"
-    cuda = archive_files(
-        ORT_URL.format(v=ORT, name=f"{cuda_name}.zip"),
+    print("ONNX Runtime, DirectML")
+    package, version, tag = ORT_DIRECTML
+    directml = wheel(
+        package,
+        version,
+        tag,
         [
-            f"{cuda_name}/lib/{dll}"
-            for dll in [
-                "onnxruntime.dll",
-                "onnxruntime_providers_shared.dll",
-                "onnxruntime_providers_cuda.dll",
-            ]
+            f"onnxruntime/capi/{dll}"
+            for dll in ["onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll"]
         ],
-        "runtime/cuda",
-        None,
-    )
-    print("CUDA runtime, cuBLAS")
-    cuda += wheel(
-        "nvidia-cuda-runtime",
-        "13.4.92",
-        ["nvidia/cu13/bin/x86_64/cudart64_13.dll"],
-        "runtime/cuda",
+        "runtime/directml",
         cache,
-    )
-    cuda += wheel(
-        "nvidia-cublas",
-        "13.8.0.4",
-        ["nvidia/cu13/bin/x86_64/cublas64_13.dll", "nvidia/cu13/bin/x86_64/cublasLt64_13.dll"],
-        "runtime/cuda",
-        cache,
-    )
-    print("cuDNN")
-    # Every library of cuDNN: it loads its sublibraries by name, as its operations need them.
-    cuda += wheel("nvidia-cudnn-cu13", "9.27.0.42", ["nvidia/cudnn/bin/"], "runtime/cuda", cache)
-    print("ONNX Runtime, CPU")
-    cpu_name = f"onnxruntime-win-x64-{ORT}"
-    cpu = archive_files(
-        ORT_URL.format(v=ORT, name=f"{cpu_name}.zip"),
-        [f"{cpu_name}/lib/onnxruntime.dll"],
-        "runtime/cpu",
-        None,
     )
     print("SAM 2.1")
     sam_gpu = hugging_face(
@@ -240,30 +207,10 @@ def main():
         ],
         "models",
     )
-    sam_cpu = hugging_face(
-        "onnx-community/sam2.1-hiera-tiny-ONNX",
-        "814a066640debee5a91e70aa401fb8e17e030503",
-        [
-            f"onnx/{name}"
-            for name in [
-                "vision_encoder.onnx",
-                "vision_encoder.onnx_data",
-                "prompt_encoder_mask_decoder.onnx",
-                "prompt_encoder_mask_decoder.onnx_data",
-            ]
-        ],
-        "models",
-    )
     print("BiRefNet")
     birefnet = hugging_face(
         "onnx-community/BiRefNet-ONNX",
         "534d3c82d3bb8b2f0867db6dfbc3a525b8e42f67",
-        ["onnx/model_fp16.onnx"],
-        "models",
-    )
-    birefnet_lite = hugging_face(
-        "onnx-community/BiRefNet_lite-ONNX",
-        "de15b22ba131738a16dff04aab8bdf8dc32e3ac1",
         ["onnx/model_fp16.onnx"],
         "models",
     )
@@ -275,13 +222,10 @@ def main():
         "models",
     )
     components = [
-        component("runtime-cuda", ["onnxruntime", "cuda", "cudnn"], cuda),
-        component("runtime-cpu", ["onnxruntime"], cpu),
+        component("runtime-directml", ["onnxruntime", "directml"], directml),
         component("sam2.1-base-plus", ["sam2"], sam_gpu),
-        component("sam2.1-tiny", ["sam2"], sam_cpu),
         component("vitmatte-small", ["vitmatte"], vitmatte),
         component("birefnet", ["birefnet"], birefnet),
-        component("birefnet-lite", ["birefnet"], birefnet_lite),
     ]
 
     out = [

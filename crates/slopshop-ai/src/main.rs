@@ -2,7 +2,7 @@
 //! loaded at run time, and answers its requests (see the library's protocol) on its standard
 //! input and output. Diagnostics go to standard error.
 //!
-//!     slopshop-ai --runtime <onnxruntime library> --models <folder> [--provider auto|cuda|directml|cpu]
+//!     slopshop-ai --runtime <onnxruntime library> --models <folder> [--provider auto|directml|cpu]
 
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
@@ -55,10 +55,9 @@ fn options() -> Result<Options, String> {
 /// The execution providers to try, best first, for `--provider`.
 fn providers(choice: &str) -> Vec<&'static str> {
     match choice {
-        "cuda" => vec!["cuda"],
         "directml" => vec!["directml"],
         "cpu" => vec!["cpu"],
-        _ => vec!["cuda", "directml", "cpu"],
+        _ => vec!["directml", "cpu"],
     }
 }
 
@@ -68,8 +67,6 @@ fn session(path: &std::path::Path, provider: &str) -> Result<Session, String> {
         let builder =
             Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
         let mut builder = match provider {
-            "cuda" => builder
-                .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])?,
             // DirectML's requirements (ONNX Runtime's documentation).
             "directml" => builder
                 .with_memory_pattern(false)?

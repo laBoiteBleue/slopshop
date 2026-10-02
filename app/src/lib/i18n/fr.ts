@@ -552,14 +552,10 @@ const fr: Messages = {
     "Un fichier téléchargé était endommagé ({detail}) et a été supprimé : réessayez.",
   "ai.error.busy": "Un autre téléchargement est en cours.",
   "ai.error.internal": "Erreur inattendue : {detail}",
-  "ai.component.runtimeCuda":
-    "Moteur d’IA pour cartes graphiques NVIDIA (ONNX Runtime, CUDA, cuDNN)",
-  "ai.component.runtimeCpu": "Moteur d’IA pour le processeur (ONNX Runtime)",
+  "ai.component.runtimeDirectml": "Moteur d’IA (ONNX Runtime, DirectML : toutes cartes graphiques)",
   "ai.component.samBasePlus": "SAM 2.1 base+ : sélection d’objets",
-  "ai.component.samTiny": "SAM 2.1 tiny : sélection d’objets",
   "ai.component.vitmatte": "ViTMatte-S : contours en pleine définition (cheveux, poils)",
   "ai.component.birefnet": "BiRefNet : sélection du sujet",
-  "ai.component.birefnetLite": "BiRefNet lite : sélection du sujet",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",
 };
