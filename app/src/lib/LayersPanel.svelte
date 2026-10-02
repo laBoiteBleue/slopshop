@@ -4,7 +4,6 @@
   import {
     BLEND_MODE_GROUPS,
     type BlendModeId,
-    type BlendSpaceId,
     type DocumentView,
     type EditRequest,
     type LayerView,
@@ -890,21 +889,6 @@
     <span class="unit">%</span>
   </div>
 
-  <div class="options">
-    <label for="blend-space" title={t("layers.blendSpace.hint")}>{t("layers.blendSpace")}</label>
-    <select
-      id="blend-space"
-      class="blend-space"
-      title={t("layers.blendSpace.hint")}
-      value={doc.blendSpace}
-      onchange={(e) =>
-        void edit({ kind: "setBlendSpace", space: e.currentTarget.value as BlendSpaceId })}
-    >
-      <option value="perceptual">{t("layers.blendSpace.perceptual")}</option>
-      <option value="linear">{t("layers.blendSpace.linear")}</option>
-    </select>
-  </div>
-
   <!-- A click in the empty area below the layers deselects them, as in Photoshop. -->
   <ul
     bind:this={list}
@@ -1091,11 +1075,6 @@
 
   .blend-mode {
     width: 118px;
-    min-width: 0;
-  }
-
-  .blend-space {
-    flex: 1;
     min-width: 0;
   }
 

@@ -519,8 +519,6 @@ const en = {
   "layers.opacity": "Opacity",
   "layers.blendMode": "Blend mode",
   "layers.blendSpace": "Blending",
-  "layers.blendSpace.hint":
-    "Where the layers of this document mix. Perceptual: the usual look of image editors. Linear: light mixes physically (for HDR and photographic compositing)",
   "layers.blendSpace.perceptual": "Perceptual (like Photoshop)",
   "layers.blendSpace.linear": "Linear (physical, HDR)",
   "layers.delete": "Delete layer",
