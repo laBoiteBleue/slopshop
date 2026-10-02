@@ -1644,6 +1644,258 @@ fn without_specks(logits: &[f32], side: usize) -> Vec<f32> {
     out
 }
 
+// --- Refine Edge -------------------------------------------------------------------------------
+
+/// A window of the canvas to matte (Refine Edge, ADR 0025): `rect` (document pixels, within the
+/// canvas) is seen at one pixel per `scale`² document pixels; its `inner` part takes the matte
+/// (the rest is context, shared with the neighboring windows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeWindow {
+    pub rect: Rect,
+    pub inner: Rect,
+    pub scale: u32,
+}
+
+impl EdgeWindow {
+    /// The size of the image (and trimap) the matting model gets for this window.
+    pub fn input_size(&self) -> Size {
+        Size::new(
+            self.rect.width.div_ceil(self.scale),
+            self.rect.height.div_ceil(self.scale),
+        )
+    }
+}
+
+/// Refining a selection's edge: the windows along its outline, the band of each to decide, and
+/// the selection as the mattes come back.
+#[derive(Debug, Clone)]
+pub struct EdgeRefinement {
+    mask: Mask,
+    /// Document pixels on each side of the half-coverage contour that the model decides.
+    band: u32,
+    windows: Vec<EdgeWindow>,
+}
+
+/// A tile's coverage, seen from the half-coverage contour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    In,
+    Out,
+    Both,
+}
+
+/// Plans Refine Edge on `selection` (`canvas`-sized): windows of at most `side`² model pixels
+/// along the outline, where coverage crosses one half, each deciding a band of `band` document
+/// pixels on both sides of it. Long outlines are seen coarser (two, four… document pixels per
+/// model pixel) so that there are at most `max_windows`.
+pub fn plan_refinement(
+    canvas: Size,
+    selection: &RasterImage,
+    band: u32,
+    side: u32,
+    max_windows: usize,
+) -> Result<EdgeRefinement, SelectionError> {
+    if side < 64 || band == 0 {
+        return Err(SelectionError::InvalidShape);
+    }
+    let mask = Mask::from_image(canvas, selection)?;
+    let sides: Vec<Side> = mask
+        .tiles
+        .iter()
+        .map(|tile| match tile {
+            Tile::Const(v) if *v >= HALF => Side::In,
+            Tile::Const(_) => Side::Out,
+            other => {
+                let values = other.values();
+                let inside = values.iter().filter(|&&v| v >= HALF).count();
+                match inside {
+                    0 => Side::Out,
+                    n if n == values.len() => Side::In,
+                    _ => Side::Both,
+                }
+            }
+        })
+        .collect();
+    let mut scale = 1u32;
+    loop {
+        // Windows of `side` model pixels; their inner parts tile the canvas, the rest (an
+        // eighth on each side) is context.
+        let margin = side / 8 * scale;
+        let cell = (side * scale).saturating_sub(2 * margin).max(1);
+        let mut windows = Vec::new();
+        for y in (0..canvas.height).step_by(cell as usize) {
+            for x in (0..canvas.width).step_by(cell as usize) {
+                let inner = Rect::new(
+                    x,
+                    y,
+                    cell.min(canvas.width - x),
+                    cell.min(canvas.height - y),
+                );
+                if crosses(&mask, &sides, inner, band) {
+                    let x0 = x.saturating_sub(margin);
+                    let y0 = y.saturating_sub(margin);
+                    let rect = Rect::new(
+                        x0,
+                        y0,
+                        (x + inner.width + margin).min(canvas.width) - x0,
+                        (y + inner.height + margin).min(canvas.height) - y0,
+                    );
+                    windows.push(EdgeWindow { rect, inner, scale });
+                }
+            }
+        }
+        if windows.len() <= max_windows || cell >= canvas.width.max(canvas.height) {
+            return Ok(EdgeRefinement {
+                mask,
+                band,
+                windows,
+            });
+        }
+        scale *= 2;
+    }
+}
+
+/// Whether the contour passes within `band` of `inner`: the tiles there are not all on one side.
+fn crosses(mask: &Mask, sides: &[Side], inner: Rect, band: u32) -> bool {
+    let t = TILE_SIZE;
+    let col0 = inner.x.saturating_sub(band) / t;
+    let row0 = inner.y.saturating_sub(band) / t;
+    let col1 = ((inner.x + inner.width + band).min(mask.size.width) - 1) / t;
+    let row1 = ((inner.y + inner.height + band).min(mask.size.height) - 1) / t;
+    let mut seen = None;
+    for row in row0..=row1 {
+        for col in col0..=col1 {
+            match (sides[row as usize * mask.columns + col as usize], seen) {
+                (Side::Both, _) => return true,
+                (s, Some(previous)) if s != previous => return true,
+                (s, _) => seen = Some(s),
+            }
+        }
+    }
+    false
+}
+
+/// The trimap value the model decides.
+pub const TRIMAP_UNKNOWN: u8 = 128;
+
+impl EdgeRefinement {
+    pub fn windows(&self) -> &[EdgeWindow] {
+        &self.windows
+    }
+
+    /// The trimap of `window`, [`EdgeWindow::input_size`] pixels: 255 surely inside, 0 surely
+    /// outside, [`TRIMAP_UNKNOWN`] within the band around the half-coverage contour.
+    pub fn trimap(&self, window: &EdgeWindow) -> Vec<u8> {
+        let size = window.input_size();
+        let (w, h) = (size.width as usize, size.height as usize);
+        let s = i64::from(window.scale);
+        let inside: Vec<bool> = (0..w * h)
+            .map(|i| {
+                let x = i64::from(window.rect.x) + (i % w) as i64 * s + s / 2;
+                let y = i64::from(window.rect.y) + (i / w) as i64 * s + s / 2;
+                self.mask.get(x, y) >= HALF
+            })
+            .collect();
+        // Summed inside counts: a pixel is undecided when its neighborhood of the band's radius
+        // holds both sides.
+        let r = self.band.div_ceil(window.scale).max(1) as usize;
+        let mut sat = vec![0u32; (w + 1) * (h + 1)];
+        for y in 0..h {
+            let mut row = 0;
+            for x in 0..w {
+                row += u32::from(inside[y * w + x]);
+                sat[(y + 1) * (w + 1) + x + 1] = sat[y * (w + 1) + x + 1] + row;
+            }
+        }
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let (xa, xb) = (x.saturating_sub(r), (x + r + 1).min(w));
+                let (ya, yb) = (y.saturating_sub(r), (y + r + 1).min(h));
+                let count = sat[yb * (w + 1) + xb] + sat[ya * (w + 1) + xa]
+                    - sat[ya * (w + 1) + xb]
+                    - sat[yb * (w + 1) + xa];
+                let area = ((xb - xa) * (yb - ya)) as u32;
+                if count > 0 && count < area {
+                    TRIMAP_UNKNOWN
+                } else if inside[i] {
+                    255
+                } else {
+                    0
+                }
+            })
+            .collect()
+    }
+
+    /// Writes the model's matte of `window` (`alpha`, 16-bit, [`EdgeWindow::input_size`]
+    /// pixels, read bilinearly when the window is seen coarser) into its inner part, where
+    /// `trimap` left it undecided; elsewhere the trimap's side, sharp.
+    pub fn apply(&mut self, window: &EdgeWindow, trimap: &[u8], alpha: &[u16]) {
+        let size = window.input_size();
+        let (w, h) = (size.width as usize, size.height as usize);
+        if trimap.len() != w * h || alpha.len() != w * h {
+            return;
+        }
+        let s = f64::from(window.scale);
+        let sample = |values: &dyn Fn(usize) -> f64, fx: f64, fy: f64| -> f64 {
+            let fx = fx.clamp(0.0, (w - 1) as f64);
+            let fy = fy.clamp(0.0, (h - 1) as f64);
+            let (x0, y0) = (fx as usize, fy as usize);
+            let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+            let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
+            let top = values(y0 * w + x0) * (1.0 - tx) + values(y0 * w + x1) * tx;
+            let bottom = values(y1 * w + x0) * (1.0 - tx) + values(y1 * w + x1) * tx;
+            top * (1.0 - ty) + bottom * ty
+        };
+        let alpha_at = |i: usize| f64::from(alpha[i]);
+        let unknown_at = |i: usize| f64::from(u8::from(trimap[i] == TRIMAP_UNKNOWN));
+        let inside_at = |i: usize| f64::from(u8::from(trimap[i] == 255));
+        let inner = window.inner;
+        for row in inner.y / TILE_SIZE..(inner.y + inner.height).div_ceil(TILE_SIZE) {
+            for col in inner.x / TILE_SIZE..(inner.x + inner.width).div_ceil(TILE_SIZE) {
+                let index = row as usize * self.mask.columns + col as usize;
+                let mut values = self.mask.tiles[index].values().into_owned();
+                let (vw, vh) = self.mask.valid(col as usize, row as usize);
+                let (tx0, ty0) = (col * TILE_SIZE, row * TILE_SIZE);
+                for y in 0..vh {
+                    let dy = ty0 + y as u32;
+                    if dy < inner.y || dy >= inner.y + inner.height {
+                        continue;
+                    }
+                    for x in 0..vw {
+                        let dx = tx0 + x as u32;
+                        if dx < inner.x || dx >= inner.x + inner.width {
+                            continue;
+                        }
+                        // The window pixel whose center is this document pixel's center.
+                        let fx = (f64::from(dx - window.rect.x) + 0.5) / s - 0.5;
+                        let fy = (f64::from(dy - window.rect.y) + 0.5) / s - 0.5;
+                        let v = if sample(&unknown_at, fx, fy) > 0.0 {
+                            sample(&alpha_at, fx, fy)
+                        } else if sample(&inside_at, fx, fy) >= 0.5 {
+                            f64::from(FULL)
+                        } else {
+                            0.0
+                        };
+                        values[y * T + x] = v.round().clamp(0.0, f64::from(FULL)) as u16;
+                    }
+                }
+                pad(&mut values, vw, vh);
+                self.mask.tiles[index] = Tile::Data(values);
+            }
+        }
+    }
+
+    /// The refined selection, combined with `current` by `combine`.
+    pub fn finish(
+        self,
+        current: Option<&RasterImage>,
+        combine: Combine,
+    ) -> Result<Option<RasterImage>, SelectionError> {
+        finish(self.mask.size, current, self.mask, combine)
+    }
+}
+
 // --- Rasterization -----------------------------------------------------------------------------
 
 /// The coverage of a closed polygon on a canvas: each pixel gets the exact fraction of its area
@@ -2725,6 +2977,57 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn refine_edge_mattes_the_band_along_the_outline_only() {
+        // The left half of a 2048 × 1024 canvas.
+        let canvas = Size::new(2048, 1024);
+        let half = Shape::Rectangle {
+            left: 0.0,
+            top: 0.0,
+            right: 1024.0,
+            bottom: 1024.0,
+        };
+        let selection = select_shape(
+            canvas,
+            None,
+            &half,
+            EdgeOptions::default(),
+            Combine::Replace,
+        )
+        .unwrap()
+        .unwrap();
+        let mut plan = plan_refinement(canvas, &selection, 16, 512, 64).unwrap();
+        let windows = plan.windows().to_vec();
+        assert!(!windows.is_empty());
+        // Only windows along x = 1024, at full resolution.
+        for w in &windows {
+            assert_eq!(w.scale, 1);
+            assert!(
+                w.inner.x <= 1024 + 16 && w.inner.x + w.inner.width + 16 >= 1024,
+                "{w:?}"
+            );
+        }
+        // A model answering one half everywhere.
+        for w in &windows {
+            let trimap = plan.trimap(w);
+            let size = w.input_size();
+            assert_eq!(trimap.len(), (size.width * size.height) as usize);
+            assert!(trimap.contains(&TRIMAP_UNKNOWN));
+            let alpha = vec![HALF; trimap.len()];
+            plan.apply(w, &trimap, &alpha);
+        }
+        let refined = plan.finish(None, Combine::Replace).unwrap().unwrap();
+        // In the band: the model's answer.
+        assert!((refined.gray_at(1020, 500) - 0.5).abs() < 1e-3);
+        assert!((refined.gray_at(1030, 500) - 0.5).abs() < 1e-3);
+        assert_eq!(refined.gray_at(900, 500), 1.0, "outside the band: kept");
+        assert_eq!(refined.gray_at(1200, 500), 0.0);
+        // At most one window: the outline is seen coarser.
+        let coarse = plan_refinement(canvas, &selection, 16, 512, 1).unwrap();
+        assert!(coarse.windows().len() <= 1 || coarse.windows()[0].scale > 1);
+        assert!(coarse.windows().iter().all(|w| w.input_size().width <= 512));
     }
 
     #[test]
