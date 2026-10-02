@@ -2004,6 +2004,14 @@ pub fn run() {
                     window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)))?;
                 }
             }
+            // The AI helper stops when unused for a while, freeing its memory.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(15));
+                    segment::stop_if_idle(&handle.state::<AppState>());
+                }
+            });
             // Warm up the GPU in the background so the first frame is fast, then open the
             // startup files, if any (decoding a large image takes seconds).
             let handle = app.handle().clone();
