@@ -5,6 +5,9 @@
   // crosses one half (as Photoshop does; Quick Mask shows a soft edge). The engine is asked again
   // only when the selection, the level of detail or the area changes enough: at once, one
   // request at a time, the latest wins (as frames do); the last outline stays drawn meanwhile.
+  // The SVG path is built for one view and follows pans and zooms with a transform, as the image
+  // does while its frame renders: rebuilding it on every view change made the ants lag behind
+  // the image. After a zoom, it is rebuilt once the view rests (crisp lines again).
   import { untrack } from "svelte";
   import { engine, type SelectionOutline } from "./engine";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -117,12 +120,19 @@
     send();
   });
 
+  /** A view as a viewport point is `document / docPerCss + offset` (CSS pixels). */
+  type Placement = { docPerCss: number; offset: [number, number] };
+
+  function placementOf(m: ViewMapping): Placement {
+    return { docPerCss: m.docPerCss, offset: m.toViewport(0, 0) };
+  }
+
   /** Polylines as an SVG path in viewport pixels, on pixel centers for crisp lines. */
-  function toPath(lines: SelectionOutline): string {
+  function toPath(lines: SelectionOutline, m: ViewMapping): string {
     const parts: string[] = [];
     for (const line of lines) {
       for (let i = 0; i < line.length; i += 2) {
-        const [x, y] = mapping.toViewport(line[i], line[i + 1]);
+        const [x, y] = m.toViewport(line[i], line[i + 1]);
         parts.push(`${i === 0 ? "M" : "L"}${Math.round(x) + 0.5} ${Math.round(y) + 0.5}`);
       }
     }
@@ -132,7 +142,45 @@
   const current = $derived(
     !hidden && fetched && fetched.key === selectionKey ? fetched.outline : null,
   );
-  const path = $derived(current ? toPath(current) : "");
+
+  /** The path, and the view it was built for. */
+  let built = $state.raw<{ outline: SelectionOutline; at: Placement; path: string } | null>(null);
+  const rebuild = () => {
+    const outline = current;
+    built = outline ? { outline, at: placementOf(mapping), path: toPath(outline, mapping) } : null;
+  };
+
+  /** How the built path is moved and scaled to the current view. */
+  const placed = $derived.by(() => {
+    if (!built) return null;
+    const now = placementOf(mapping);
+    const k = built.at.docPerCss / now.docPerCss;
+    // Whole device pixels, so that unscaled lines stay crisp.
+    const dpr = window.devicePixelRatio;
+    const snap = (v: number) => Math.round(v * dpr) / dpr;
+    const tx = now.offset[0] - built.at.offset[0] * k;
+    const ty = now.offset[1] - built.at.offset[1] * k;
+    const scaled = Math.abs(k - 1) > 1e-9;
+    return {
+      scaled,
+      transform: scaled
+        ? `translate(${tx} ${ty}) scale(${k})`
+        : `translate(${snap(tx)} ${snap(ty)})`,
+    };
+  });
+
+  // A new outline: a new path, for the current view.
+  $effect(() => {
+    void current;
+    untrack(rebuild);
+  });
+
+  // Zoomed: rebuilt once the view rests.
+  $effect(() => {
+    if (!placed?.scaled) return;
+    const timer = setTimeout(rebuild, 150);
+    return () => clearTimeout(timer);
+  });
 </script>
 
 <div
@@ -143,8 +191,12 @@
   aria-hidden="true"
 >
   <svg>
-    <path class="under" d={path} />
-    <path class="ants" d={path} />
+    {#if built && placed}
+      <g transform={placed.transform}>
+        <path class="under" d={built.path} vector-effect="non-scaling-stroke" />
+        <path class="ants" d={built.path} vector-effect="non-scaling-stroke" />
+      </g>
+    {/if}
   </svg>
 </div>
 
