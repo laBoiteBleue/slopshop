@@ -14,6 +14,7 @@
     onExportEvents,
     onAiProgress,
     onOpenEvents,
+    type BrushRequest,
     type DocumentView,
     type EditRequest,
     type LayerMaskKind,
@@ -58,7 +59,9 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
-  import { slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
+  import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
+  import PaintTool from "./lib/PaintTool.svelte";
+  import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush, MAX_REFINE } from "./lib/selection";
@@ -371,6 +374,133 @@
   let antiAlias = $state(true);
   /** The Magic Wand's options (Photoshop's defaults). */
   let wand = $state({ tolerance: 32, contiguous: true, sampleAll: false });
+
+  // Painting (ADR 0027): the Brush and the Eraser keep their own options, as in Photoshop.
+  // Size in document pixels; hardness, opacity and flow as shares in [0, 1].
+  let brushOptions = $state({
+    size: 30,
+    hardness: 1,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+  });
+  let eraserOptions = $state({
+    size: 50,
+    hardness: 1,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+  });
+  /** The foreground (the Brush's) and background colors, `#rrggbb` sRGB. */
+  let colors = $state({ foreground: "#000000", background: "#ffffff" });
+  /** The stroke being sent: samples wait while a batch is in flight (none is ever dropped). */
+  let paintRun: {
+    id: number;
+    documentId: number;
+    layerId: number;
+    brush: BrushRequest;
+    color: [number, number, number] | null;
+    sending: boolean;
+    waiting: [number, number, number][];
+    ended: boolean;
+    failed: boolean;
+  } | null = null;
+  let nextPaintStroke = 1;
+  /** Where the last stroke ended, by document: Shift+click paints a line from there. */
+  const lastPaintPoint = new Map<number, [number, number, number]>();
+
+  /** A stroke's samples from the Brush or Eraser tool (see `PaintTool`). */
+  function paintStroke(
+    samples: [number, number, number][],
+    phase: "start" | "line" | "move" | "end",
+  ) {
+    const doc = active;
+    if (!doc) return;
+    if (phase === "start" || phase === "line") {
+      commitTransform();
+      const layer = layersPanel?.selectedLayer() ?? null;
+      paintRun = null;
+      // As in Photoshop: only pixels can be painted, and not while hidden.
+      if (!layer || layer.kind !== "raster") {
+        showError(t("paint.needRaster"));
+        return;
+      }
+      if (!layer.visible) {
+        showError(t("paint.hidden"));
+        return;
+      }
+      const options = tool === "eraser" ? eraserOptions : brushOptions;
+      paintRun = {
+        id: nextPaintStroke++,
+        documentId: doc.id,
+        layerId: layer.id,
+        brush: { ...options, spacing: 0.25 },
+        color: tool === "eraser" ? null : hexToSrgb(colors.foreground),
+        sending: false,
+        waiting: [],
+        ended: false,
+        failed: false,
+      };
+      const last = lastPaintPoint.get(doc.id);
+      if (phase === "line" && last) samples = [last, ...samples];
+    }
+    const run = paintRun;
+    if (!run || run.ended || run.documentId !== doc.id) return;
+    run.waiting.push(...samples);
+    if (phase === "end") {
+      run.ended = true;
+      const last = run.waiting.at(-1);
+      if (last) lastPaintPoint.set(run.documentId, last);
+    }
+    sendPaint(run);
+  }
+
+  /** Edit > Clear (Delete with a selection): the selected pixels of the active layer erased. */
+  function clearSelection() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    const layer = layersPanel?.selectedLayer() ?? null;
+    if (!layer || layer.kind !== "raster") {
+      showError(t("paint.needRaster"));
+      return;
+    }
+    void sync(engine.clearSelection(doc.id, layer.id));
+  }
+
+  /** Sends the samples waiting, or leaves them for when the batch in flight returns. */
+  function sendPaint(run: NonNullable<typeof paintRun>) {
+    if (run.sending || run.failed || (run.waiting.length === 0 && !run.ended)) return;
+    const samples = run.waiting;
+    run.waiting = [];
+    const end = run.ended;
+    run.sending = true;
+    engine
+      .paintStroke(run.documentId, {
+        stroke: run.id,
+        layerId: run.layerId,
+        brush: run.brush,
+        color: run.color,
+        samples,
+        end,
+      })
+      .then((view) => {
+        if (view) upsert(view);
+        else if (active?.id === run.documentId) viewport?.redraw();
+      })
+      .catch((e) => {
+        run.failed = true;
+        if (e !== DOCUMENT_CLOSED) showError(String(e));
+      })
+      .finally(() => {
+        run.sending = false;
+        if (end || run.failed) {
+          if (paintRun === run) paintRun = null;
+        } else sendPaint(run);
+      });
+  }
 
   /** Document point (`x`, `y`) is outside the canvas of `doc`. */
   function outsideCanvas(doc: DocumentView, x: number, y: number): boolean {
@@ -1689,6 +1819,18 @@
         selectedCount === 0,
       ),
       newGroup: command(t("menu.layer.newGroup"), () => layersPanel?.newGroup(), undefined, !doc),
+      newLayer: command(
+        t("menu.layer.newLayer"),
+        () => layersPanel?.newLayer(),
+        keys("shift", "mod", "N"),
+        !doc,
+      ),
+      deletePaint: command(
+        t("menu.layer.deletePaint"),
+        () => layersPanel?.deletePaintSelected(),
+        undefined,
+        !layersPanel?.selectionPainted(),
+      ),
       group: command(
         t("menu.layer.group"),
         () => layersPanel?.groupSelected(),
@@ -1754,6 +1896,7 @@
       c.ungroup,
       separator,
       c.clipping,
+      c.deletePaint,
       c.maskRevealAll,
       c.maskRevealSelection,
       c.maskFromTransparency,
@@ -1766,6 +1909,7 @@
   let emptyLayersContextMenu = $derived.by((): MenuItem[] => {
     const doc = active;
     return [
+      layerCommands.newLayer,
       command(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
       layerCommands.newGroup,
       { kind: "separator" },
@@ -1941,6 +2085,7 @@
       {
         label: t("menu.layer"),
         items: [
+          layerCommands.newLayer,
           cmd(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
           {
             kind: "submenu",
@@ -1972,6 +2117,7 @@
           layerCommands.ungroup,
           separator,
           layerCommands.clipping,
+          layerCommands.deletePaint,
           separator,
           layerCommands.duplicate,
           layerCommands.rename,
@@ -2118,6 +2264,37 @@
         return;
       }
     }
+    // [ and ] with the Brush and the Eraser: their size; with Shift, their hardness by
+    // quarters (Photoshop's steps).
+    if (
+      isPaintTool(tool) &&
+      (e.code === "BracketLeft" || e.code === "BracketRight") &&
+      !hasShortcutModifier(e) &&
+      !e.altKey &&
+      !isTextField(e.target)
+    ) {
+      e.preventDefault();
+      const options = tool === "eraser" ? eraserOptions : brushOptions;
+      const larger = e.code === "BracketRight";
+      if (e.shiftKey) {
+        options.hardness = Math.min(Math.max(options.hardness + (larger ? 0.25 : -0.25), 0), 1);
+      } else options.size = stepBrush(options.size, larger);
+      return;
+    }
+    // D: the default colors (black and white); X: swap them, as in Photoshop.
+    const colorLetter = shortcutLetter(e);
+    if (
+      (colorLetter === "d" || colorLetter === "x") &&
+      !hasShortcutModifier(e) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      !isTextField(e.target)
+    ) {
+      e.preventDefault();
+      if (colorLetter === "d") colors = { foreground: "#000000", background: "#ffffff" };
+      else colors = { foreground: colors.background, background: colors.foreground };
+      return;
+    }
     // [ and ]: the brush size, by the physical keys as in Photoshop (^ and $ on AZERTY).
     if (
       tool === "quickSelection" &&
@@ -2199,6 +2376,11 @@
     if (key === "n" && !e.shiftKey) {
       e.preventDefault();
       void newDocument();
+      return;
+    }
+    if (key === "n" && e.shiftKey) {
+      e.preventDefault();
+      if (!e.repeat && active) layersPanel?.newLayer();
       return;
     }
     if (key === "w" && !e.shiftKey) {
@@ -2327,6 +2509,8 @@
     bind:antiAlias
     bind:wand
     bind:quick
+    bind:brush={brushOptions}
+    bind:eraser={eraserOptions}
   />
 
   <main
@@ -2337,7 +2521,7 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
-    <Toolbar {tool} choices={toolChoices} onselect={selectTool} />
+    <Toolbar {tool} choices={toolChoices} onselect={selectTool} bind:colors />
     <section class="workspace">
       <div
         class="tabbar"
@@ -2492,6 +2676,12 @@
                     onhover={objectHover}
                     onselect={objectSelect}
                   />
+                {:else if tool === "brush" || tool === "eraser"}
+                  <PaintTool
+                    {mapping}
+                    size={(tool === "eraser" ? eraserOptions : brushOptions).size}
+                    onstroke={paintStroke}
+                  />
                 {:else if tool === "quickSelection"}
                   <QuickSelectionTool
                     {mapping}
@@ -2558,6 +2748,7 @@
             onedit={edit}
             onlive={live}
             ongestureend={endGesture}
+            onclear={clearSelection}
             contextMenu={layerContextMenu}
             emptyContextMenu={emptyLayersContextMenu}
             onlayerdrag={onLayerDrag}

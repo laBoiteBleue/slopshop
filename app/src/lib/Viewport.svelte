@@ -300,6 +300,12 @@
     viewEpoch++;
   }
 
+  /** Draw a new frame: what the document shows changed without a new revision (a paint
+   * stroke's preview, ADR 0027). */
+  export function redraw() {
+    void draw();
+  }
+
   /** Zoom about the viewport center (zoom slider). Replaces any wheel zoom still animating. */
   export function zoomTo(zoom: number): Promise<void> {
     remainingLogZoom = 0;

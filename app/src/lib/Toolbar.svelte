@@ -1,7 +1,9 @@
 <script lang="ts">
   // The toolbar (ADR 0013): a vertical strip on the left, one button per slot in Photoshop's
   // order. A slot holding variants (Rectangular and Elliptical Marquee) shows the one used last,
-  // with a corner mark; a right-click or a long press lists them all, as in Photoshop.
+  // with a corner mark; a right-click or a long press lists them all, as in Photoshop. Below
+  // them, the foreground and background colors (ADR 0027): a click on one picks it, the arrow
+  // swaps them (X), the small squares bring back black and white (D).
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import { SLOTS, toolInfo, type ToolId, type ToolSlot } from "./tools";
@@ -11,11 +13,14 @@
     tool,
     choices,
     onselect,
+    colors = $bindable(),
   }: {
     tool: ToolId;
     /** The variant each slot shows, by slot key. */
     choices: Record<string, ToolId>;
     onselect: (tool: ToolId) => void;
+    /** The foreground and background colors, `#rrggbb` sRGB. */
+    colors: { foreground: string; background: string };
   } = $props();
 
   /** A press held this long opens the variants. */
@@ -99,6 +104,51 @@
       <Icon name={info.icon} size={18} />
     </button>
   {/each}
+
+  <div class="colors">
+    <!-- The system's color picker opens on a click of the swatch (a hidden input under it). -->
+    <label
+      class="swatch background"
+      style:background={colors.background}
+      title={t("tools.background")}
+    >
+      <input
+        type="color"
+        value={colors.background}
+        onchange={(e) => (colors.background = e.currentTarget.value)}
+      />
+    </label>
+    <label
+      class="swatch foreground"
+      style:background={colors.foreground}
+      title={t("tools.foreground")}
+    >
+      <input
+        type="color"
+        value={colors.foreground}
+        onchange={(e) => (colors.foreground = e.currentTarget.value)}
+      />
+    </label>
+    <button
+      class="mini swap"
+      title={t("tools.swapColors")}
+      aria-label={t("tools.swapColors")}
+      onmousedown={keepFocus}
+      onclick={() => (colors = { foreground: colors.background, background: colors.foreground })}
+    >
+      <Icon name="swap" size={11} />
+    </button>
+    <button
+      class="mini default"
+      title={t("tools.defaultColors")}
+      aria-label={t("tools.defaultColors")}
+      onmousedown={keepFocus}
+      onclick={() => (colors = { foreground: "#000000", background: "#ffffff" })}
+    >
+      <span class="mini-swatch back"></span>
+      <span class="mini-swatch front"></span>
+    </button>
+  </div>
 </nav>
 
 {#if open}
@@ -167,6 +217,88 @@
   .tool:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+  }
+
+  /* Photoshop's color squares: the foreground over the background, offset. */
+  .colors {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    margin-top: 8px;
+  }
+
+  .swatch {
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border: 1px solid var(--border-dark);
+    box-shadow: 0 0 0 1px #ffffff55 inset;
+    cursor: pointer;
+  }
+
+  .swatch input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .foreground {
+    top: 0;
+    left: 2px;
+    z-index: 1;
+  }
+
+  .background {
+    right: 2px;
+    bottom: 2px;
+  }
+
+  .mini {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .mini:hover {
+    color: var(--text);
+  }
+
+  .swap {
+    top: 0;
+    right: 0;
+  }
+
+  .default {
+    bottom: 0;
+    left: 0;
+  }
+
+  .mini-swatch {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border: 1px solid var(--text-muted);
+  }
+
+  .mini-swatch.front {
+    top: 1px;
+    left: 1px;
+    background: #000000;
+  }
+
+  .mini-swatch.back {
+    right: 1px;
+    bottom: 1px;
+    background: #ffffff;
   }
 
   .variants {

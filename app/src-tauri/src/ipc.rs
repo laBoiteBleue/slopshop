@@ -90,6 +90,8 @@ pub struct LayerView {
     /// From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`, a point
     /// `(x, y)` going to `(a·x + c·y + e, b·x + d·y + f)`.
     pub transform: [f64; 6],
+    /// Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it.
+    pub painted: bool,
 }
 
 impl DocumentView {
@@ -187,6 +189,7 @@ impl LayerView {
             ),
             clipped: layer.clipped,
             transform: layer.transform.to_array(),
+            painted: layer.is_painted(),
         }
     }
 }
@@ -316,6 +319,19 @@ pub enum EditRequest {
         #[serde(default)]
         curves: Option<Vec<Vec<[u8; 2]>>>,
     },
+    /// A new empty layer to paint on (Layer > New > Layer, ADR 0027): canvas-sized, 8-bit
+    /// sRGB, transparent, at `index` among the layers of `parent` (absent: the top level).
+    AddEmptyLayer {
+        name: String,
+        #[serde(default)]
+        parent: Option<u64>,
+        index: usize,
+    },
+    /// Remove the paint of layers and of the layers inside them, pixels and masks (Layer >
+    /// Delete Paint, ADR 0027).
+    DeletePaint {
+        ids: Vec<u64>,
+    },
     /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
     GroupLayers {
         ids: Vec<u64>,
@@ -429,6 +445,41 @@ impl EditRequest {
             EditRequest::RemoveLayer { id } => Edit::RemoveLayer {
                 id: LayerId::from_raw(id),
             },
+            EditRequest::AddEmptyLayer {
+                name,
+                parent,
+                index,
+            } => {
+                let size = session.document().size();
+                // One shared transparent tile, whatever the canvas size.
+                let image = slopshop_core::RasterImage::from_placed(
+                    size,
+                    slopshop_core::color::PixelFormat::RGBA8_SRGB,
+                    slopshop_core::Rect::new(0, 0, 0, 0),
+                    &[],
+                    &[0, 0, 0, 0],
+                )
+                .map_err(|e| e.to_string())?;
+                Edit::InsertLayer {
+                    parent: parent.map(LayerId::from_raw),
+                    index,
+                    layer: Layer {
+                        transform: slopshop_core::Affine::IDENTITY,
+                        clipped: false,
+                        id: session.allocate_layer_id(),
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::raster(std::sync::Arc::new(image)),
+                    },
+                }
+            }
+            EditRequest::DeletePaint { ids } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::delete_paint(session.document(), &ids).map_err(|e| e.to_string())?
+            }
             EditRequest::SetLayerVisible { id, visible } => Edit::SetLayerVisible {
                 id: LayerId::from_raw(id),
                 visible,
