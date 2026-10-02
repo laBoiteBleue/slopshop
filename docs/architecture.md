@@ -183,6 +183,10 @@ the selection changes, so Object Selection's hover (`ai_object_hover`: a 256² m
 and its click or box (`ai_object_select`) only decode, in milliseconds. Quick Selection
 (`ai_segment`) keeps the prompts of a session (its strokes) and the selection before it. The
 mask becomes a selection through `selection::select_logits` (specks and pinholes dropped).
+Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
+along the outline with `selection::plan_refinement` (at most 48; a longer outline is seen
+coarser), renders each at full resolution, has ViTMatte matte it with a trimap that leaves a
+band around the outline undecided, and writes the matte into that band only.
 
 AI components (`src-tauri/src/ai.rs`, ADR 0025): `ai_components` lists what a feature needs on
 this machine (the CUDA runtime when NVIDIA's driver is installed, else the CPU one; the models

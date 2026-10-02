@@ -35,3 +35,6 @@ export function stepBrush(size: number, larger: boolean): number {
   const next = larger ? size + step : size - step;
   return Math.min(Math.max(Math.round(next / step) * step, 1), MAX_BRUSH);
 }
+
+/** The largest Refine Edge radius, document pixels (the engine's `MAX_REFINE_RADIUS`). */
+export const MAX_REFINE = 256;

@@ -183,8 +183,9 @@ paints on an empty layer or in a mask.
       Runtime loaded at run time), components downloaded with consent (Edit > Preferences)
 - [x] Object Selection (W): the object under the pointer lights up, a click or a box selects
       it; Quick Selection: brush strokes, Alt takes parts away (SAM 2.1, coarse masks)
-- [ ] Refine Edge at full resolution (ViTMatte on the outline's tiles), Select > Subject
-      (BiRefNet), Select > Semantic (SAM 3)
+- [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
+      AI tools, and Select > Refine Edges… for any selection
+- [ ] Select > Subject (BiRefNet), Select > Semantic (SAM 3)
 - [ ] GPU brush engine on tiles (pressure, spacing, hardness), eraser
 - [ ] Undo of pixel edits by tile reference (no whole-layer copies)
 

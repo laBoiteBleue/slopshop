@@ -44,10 +44,14 @@ impl Runtime {
     }
 
     /// The components a feature needs on this runtime.
-    pub(crate) fn components(self, feature: Feature) -> [&'static str; 2] {
+    /// The components a feature needs on this runtime (the runtime first).
+    pub(crate) fn components(self, feature: Feature) -> [&'static str; 3] {
+        // Segmentation includes ViTMatte: selections are refined at full resolution.
         match (self, feature) {
-            (Self::Cuda, Feature::Segmentation) => ["runtime-cuda", "sam2.1-base-plus"],
-            (Self::Cpu, Feature::Segmentation) => ["runtime-cpu", "sam2.1-tiny"],
+            (Self::Cuda, Feature::Segmentation) => {
+                ["runtime-cuda", "sam2.1-base-plus", "vitmatte-small"]
+            }
+            (Self::Cpu, Feature::Segmentation) => ["runtime-cpu", "sam2.1-tiny", "vitmatte-small"],
         }
     }
 }
