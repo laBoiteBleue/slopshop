@@ -679,8 +679,74 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
     Ok(record)
 }
 
+/// A Gradient Map's `grdm` block (Adobe's layout): version, reverse, dither, a Unicode name,
+/// the color stops (location 0–4096, midpoint, mode, a color: space and four components), the
+/// transparency stops, then the smoothness among the noise settings. Approximated (reported)
+/// when the gradient is smooth (Photoshop's smoothness above 0), has midpoints off the middle,
+/// transparency, or colors in a space other than RGB and gray.
+fn gradient_map(block: &[u8]) -> Option<(Adjustment, bool)> {
+    use slopshop_core::gradient::{GRADIENT_LOCATIONS, GRADIENT_STOPS, Gradient, GradientStop};
+    let u16_at = |at: usize| {
+        block
+            .get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
+    let u32_at = |at: usize| {
+        block
+            .get(at..at + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let reverse = *block.get(2)? != 0;
+    let name = u32_at(4)? as usize;
+    let mut at = 8usize.checked_add(name.checked_mul(2)?)?;
+    let count = usize::from(u16_at(at)?);
+    at += 2;
+    let mut approximated = false;
+    let mut stops = Vec::with_capacity(count);
+    for _ in 0..count {
+        let location = u32_at(at)?.min(u32::from(GRADIENT_LOCATIONS)) as u16;
+        let midpoint = u32_at(at + 4)?;
+        let space = u16_at(at + 10)?;
+        let c = [u16_at(at + 12)?, u16_at(at + 14)?, u16_at(at + 16)?];
+        let byte = |v: u16| (u32::from(v) * 255).div_ceil(65535).min(255) as u8;
+        let color = match space {
+            0 => c.map(byte),
+            // Gray: 0–10000, from white.
+            8 => [(255 - (u32::from(c[0].min(10000)) * 255 / 10000)) as u8; 3],
+            _ => {
+                approximated = true;
+                [0; 3]
+            }
+        };
+        approximated |= midpoint != 50;
+        stops.push(GradientStop { location, color });
+        at += 20;
+    }
+    let transparency = usize::from(u16_at(at)?);
+    at += 2;
+    for _ in 0..transparency {
+        approximated |= u16_at(at + 8)? < 255;
+        at += 10;
+    }
+    // Expansion count, then the interpolation (smoothness, 0–4096).
+    approximated |= u16_at(at + 2).is_some_and(|smoothness| smoothness > 0);
+    stops.sort_by_key(|s| s.location);
+    if stops.len() > GRADIENT_STOPS {
+        stops.truncate(GRADIENT_STOPS);
+        approximated = true;
+    }
+    if stops.len() == 1 {
+        stops.push(GradientStop {
+            location: GRADIENT_LOCATIONS,
+            ..stops[0]
+        });
+    }
+    let gradient = Gradient::new(&stops)?;
+    Some((Adjustment::GradientMap { gradient, reverse }, approximated))
+}
+
 /// The adjustment of an adjustment layer's block, and whether it is only approximated (settings
-/// this version leaves out: Hue/Saturation color ranges); `None` for
+/// this version leaves out: Hue/Saturation color ranges, Gradient Map's smoothness); `None` for
 /// adjustments not reproduced yet, or damaged blocks (the layer is then skipped).
 fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
     let u16_at = |at: usize| {
@@ -803,6 +869,7 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
             false,
         ),
         b"nvrt" => (Adjustment::Invert, false),
+        b"grdm" => gradient_map(block)?,
         // The number of levels.
         b"post" => (
             Adjustment::Posterize {

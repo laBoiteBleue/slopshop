@@ -450,7 +450,38 @@ fn adjustment_of(
     if adjustment.curves().is_some() {
         return curves_of(params);
     }
+    if let slopshop_core::adjust::Adjustment::GradientMap { reverse, .. } = adjustment {
+        return gradient_map_of(params, reverse);
+    }
     Ok(adjustment)
+}
+
+/// Gradient Map's gradient (schema 0.14): `params.gradient`, a list of `[location, r, g, b]`.
+fn gradient_map_of(
+    params: &Map<String, Value>,
+    reverse: bool,
+) -> Result<slopshop_core::adjust::Adjustment, FileError> {
+    use slopshop_core::gradient::{Gradient, GradientStop};
+    let invalid = || corrupt("gradient map without a valid gradient");
+    let stops = params
+        .get("gradient")
+        .and_then(Value::as_array)
+        .and_then(|stops| {
+            stops
+                .iter()
+                .map(|s| {
+                    let s = s.as_array().filter(|s| s.len() == 4)?;
+                    let byte = |v: &Value| v.as_u64().and_then(|v| u8::try_from(v).ok());
+                    Some(GradientStop {
+                        location: s[0].as_u64().and_then(|v| u16::try_from(v).ok())?,
+                        color: [byte(&s[1])?, byte(&s[2])?, byte(&s[3])?],
+                    })
+                })
+                .collect::<Option<Vec<GradientStop>>>()
+        })
+        .ok_or_else(invalid)?;
+    let gradient = Gradient::new(&stops).ok_or_else(invalid)?;
+    Ok(slopshop_core::adjust::Adjustment::GradientMap { gradient, reverse })
 }
 
 /// A raster node's content: its image, and its stack (version 7, ADR 0029), or its paint as a

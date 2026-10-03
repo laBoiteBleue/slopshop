@@ -33,6 +33,7 @@ pub mod curve;
 pub mod document;
 pub mod edit;
 pub mod geom;
+pub mod gradient;
 pub mod job;
 mod maxflow;
 pub mod move_pixels;

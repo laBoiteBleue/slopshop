@@ -319,6 +319,9 @@ impl Blender {
         let straight = unpremultiply(below);
         let adjusted = if adjustment.adjustment().is_linear() {
             adjustment.apply(straight)
+        } else if adjustment.adjustment().is_perceptual() && self.space != BlendSpace::Perceptual {
+            let perceptual = Blender::new(BlendSpace::Perceptual);
+            perceptual.decode(adjustment.apply(perceptual.encode(straight)))
         } else {
             self.decode(adjustment.apply(self.encode(straight)))
         };

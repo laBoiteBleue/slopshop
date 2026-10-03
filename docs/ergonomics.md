@@ -178,7 +178,12 @@ built. Contributors: propose here first.
   list never moves; the maintainer's choice) shows the selected adjustment's parameters: sliders applied live (one undo entry
   per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays
   normal for now. Levels has Photoshop's Channel menu: RGB, Red, Green, Blue, each channel's
-  own settings applied before the RGB ones (as Curves).
+  own settings applied before the RGB ones (as Curves). Gradient Map (Layer > New Adjustment Layer and
+  Image > Adjustments, after Threshold) has a simple gradient editor: the gradient, its color
+  stops below it; a click under the gradient adds a stop (of the color the gradient has
+  there), a drag moves one between its neighbours, a drag down away from it removes it; Color,
+  Location and Delete edit the selected stop; Reverse. Photoshop's preset gradients,
+  smoothness, midpoints and transparency are not there.
 - Crop tool (C, Image > Crop): a frame on the whole image with eight handles, the outside
   shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
   a corner keeps the proportions), outside to draw a new one; edges snap to the canvas, the
@@ -242,8 +247,8 @@ built. Contributors: propose here first.
 
 Decided, not built yet:
 
-- [x] Gradient Map and Selective Color, as adjustment layers and in Image > Adjustments (the
-      same engine); Selective Color approximates Photoshop's unpublished math.
+- [x] Selective Color, as an adjustment layer and in Image > Adjustments (the same engine);
+      it approximates Photoshop's unpublished math.
 
 Decided, nothing to build:
 

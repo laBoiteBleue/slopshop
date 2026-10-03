@@ -1336,6 +1336,29 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
                 saturation: -20.0,
             },
             Adjustment::Invert,
+            // A gradient through three colors (a hard edge in the middle), reversed.
+            Adjustment::GradientMap {
+                gradient: slopshop_core::gradient::Gradient::new(&[
+                    slopshop_core::gradient::GradientStop {
+                        location: 0,
+                        color: [20, 40, 200],
+                    },
+                    slopshop_core::gradient::GradientStop {
+                        location: 2000,
+                        color: [250, 200, 10],
+                    },
+                    slopshop_core::gradient::GradientStop {
+                        location: 2000,
+                        color: [0, 120, 60],
+                    },
+                    slopshop_core::gradient::GradientStop {
+                        location: 4096,
+                        color: [255, 255, 255],
+                    },
+                ])
+                .unwrap(),
+                reverse: true,
+            },
             // Levels with red's and blue's own settings, green left as it is.
             Adjustment::Levels {
                 input_black: 0.05,

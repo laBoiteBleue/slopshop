@@ -1480,6 +1480,13 @@ fn adjustment_fields(
             tile_table.extend(curve.lut().iter().map(|v| v.to_bits()));
         }
     }
+    // Gradient Map's (red, green, blue), the same way.
+    if let Some(gradient) = adjustment.gradient() {
+        fields.table_offset = tile_table.len() as u32;
+        for lut in gradient.luts() {
+            tile_table.extend(lut.iter().map(|v| v.to_bits()));
+        }
+    }
     fields
 }
 
