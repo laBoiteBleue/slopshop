@@ -33,9 +33,15 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
    this form, so paint over an effect follows when an effect below it is deleted, and two paint
    entries that become neighbours merge exactly (`P₂ + k₂·P₁`, `k₂·k₁`). A paint entry stores
    only the tiles it touched; untouched tiles are the identity (`P = 0`, `k = 1`), one shared
-   tile; a fill without a selection is one uniform tile. `P` keeps the layer's pixel format (an
-   8-bit layer's paint quantizes as today), `k` is 16-bit. Painting continues the top entry when
-   it is paint, otherwise starts a new one.
+   tile; a fill without a selection is one uniform tile. `P` is stored as a pixel of the
+   layer's own format with alpha (an 8-bit layer's paint quantizes as today, and a v6 painted
+   pixel is kept bit for bit), converted to the blend space to compute; `k` has `P`'s sample
+   type (`f32` for float layers), so that `P`'s alpha and `k` round to complementary values and
+   an opaque pixel painted over stays exactly opaque. The result is quantized to the layer's
+   format after every entry, as Photoshop writes the layer's pixels after every operation: then
+   evaluating from the original and adding to a result give the same pixels, and only the tiles
+   an entry reaches are recomputed. Painting continues the top entry when it is paint, otherwise
+   starts a new one.
 3. **Tools that read pixels bake what they read.** Moving selected pixels (and later Smudge,
    Clone, AI fill) write into `P` the values they took from below: deleting an effect under
    them does not change those values.
@@ -57,7 +63,12 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
    0 is exact; coarser levels evaluate the stack on the original's coarser level, the
    approximation views of adjustment layers already make. A spatial filter's result is cached
    too, so that deleting an entry above it recomputes from there. Layers without a stack skip
-   all of this.
+   all of this. *First version (`slopshop_core::stack`, 2026-10-03)*: the result is evaluated on
+   the CPU, on every core, into an image held by the layer as its painted image is today
+   (tiles no entry reaches are the original's), so that the renderer, export, thumbnails and
+   tools read it unchanged; history and files still keep only entries. The GPU evaluation and
+   the bounded cache come as an optimization (measured: an adjustment over a 12 MP 8-bit layer,
+   pyramid included, 0.28 s on 32 threads).
 7. **Edits**: `Edit::PushEntry`, `Edit::RemoveEntry` (its merges included) and
    `Edit::SetTopPaint` (a stroke's end, replacing the top paint), each inverse keeping the
    previous entries by reference. Layer > Delete Paint becomes deleting entries (the UI is the
