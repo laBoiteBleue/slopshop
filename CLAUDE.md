@@ -29,6 +29,7 @@ cargo test --workspace
 cargo deny check                                 # licenses (no GPL/AGPL), advisories, sources
 cd app && npm install                             # once
 cd app && npm run format && npm run check        # format + type-check the UI (incl. i18n catalogs)
+cd app && npm test                               # UI logic tests (Node's runner, tests/*.test.ts)
 cd app && npm run tauri dev                      # run the desktop app
 cargo run -p slopshop-cli -- --help              # headless CLI
 # Dev builds of the app open $SLOPSHOP_OPEN, else out/default.slop, else out/default.jpg at startup.
@@ -131,6 +132,9 @@ merge on green CI, or stop for the maintainer when the change needs their decisi
 **Testing**
 - Important logic is tested (edits and their inverses, history, geometry, color math, render
   correctness). Bug fixes come with a regression test.
+- UI logic (geometry, key handling, state rules) lives in plain `.ts` modules under
+  `app/src/lib`, tested by `npm test`; components keep presentation and wiring. A tested module
+  imports other app files with `import type` only: Node erases those, but cannot load the rest.
 - GPU tests skip when no adapter is available, except when `SLOPSHOP_REQUIRE_GPU=1` (CI).
 
 ## Skills and documentation
