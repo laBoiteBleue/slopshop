@@ -59,3 +59,27 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 } as unknown as typeof ResizeObserver;
+
+// Range inputs: a browser snaps a value set to the nearest step and keeps it within the range
+// (the sanitization algorithm); jsdom keeps it as given, and then finds the form invalid
+// (a step mismatch), so that it does not submit. `step="any"` never snaps.
+const inputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+if (inputValue?.set) {
+  const set = inputValue.set;
+  Object.defineProperty(HTMLInputElement.prototype, "value", {
+    ...inputValue,
+    set(this: HTMLInputElement, value: string) {
+      if (this.type === "range") {
+        const min = this.min === "" ? 0 : Number(this.min);
+        const max = this.max === "" ? 100 : Number(this.max);
+        const step = this.step === "any" ? 0 : Number(this.step) > 0 ? Number(this.step) : 1;
+        const given = Number(value);
+        if (Number.isFinite(given)) {
+          const snapped = step > 0 ? min + Math.round((given - min) / step) * step : given;
+          value = String(Math.min(Math.max(snapped, min), max));
+        }
+      }
+      set.call(this, value);
+    },
+  });
+}
