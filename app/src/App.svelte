@@ -682,6 +682,25 @@
     curves: number[][][] | null;
   } | null>(null);
 
+  /**
+   * The layers of document `documentId` before Image > Adjustments added its previews: the
+   * others are the previews, hidden from the layers panel (never selected, so the Properties
+   * panel does not show them) from the moment they arrive until they are gone.
+   */
+  let previewBase = $state<{ documentId: number; before: Set<number> } | null>(null);
+  let previewHidden = $derived.by(() => {
+    const base = previewBase;
+    if (!base || active?.id !== base.documentId) return [];
+    return walk(active.layers)
+      .map((l) => l.id)
+      .filter((id) => !base.before.has(id));
+  });
+
+  /** The previews are gone (the gesture cancelled or replaced): nothing to hide any more. */
+  function endPreview(done: Promise<unknown>) {
+    void done.finally(() => (previewBase = null));
+  }
+
   /** The settings the adjustment dialog shows: those of its first preview layer. */
   let adjustShown = $derived.by(() => {
     const dialog = adjustDialog;
@@ -709,6 +728,7 @@
       return;
     }
     const before = new Set(walk(doc.layers).map((l) => l.id));
+    previewBase = { documentId: doc.id, before };
     await live(doc.id, { kind: "previewEffect", ids, adjustment });
     const after = tabs.find((d) => d.id === doc.id);
     const previews = after
@@ -717,7 +737,7 @@
           .filter((id) => !before.has(id))
       : [];
     if (previews.length === 0) {
-      void cancelGesture(doc.id);
+      endPreview(cancelGesture(doc.id));
       return;
     }
     adjustDialog = {
@@ -778,24 +798,26 @@
     if (!dialog) return;
     const values = dialog.values ?? shown?.values;
     if (!values) {
-      void cancelGesture(dialog.documentId);
+      endPreview(cancelGesture(dialog.documentId));
       return;
     }
-    void sync(
-      engine.replaceGesture(dialog.documentId, {
-        kind: "applyEffect",
-        ids: dialog.ids,
-        adjustment: dialog.adjustment,
-        values,
-        curves: dialog.curves ?? shown?.curves ?? undefined,
-      }),
+    endPreview(
+      sync(
+        engine.replaceGesture(dialog.documentId, {
+          kind: "applyEffect",
+          ids: dialog.ids,
+          adjustment: dialog.adjustment,
+          values,
+          curves: dialog.curves ?? shown?.curves ?? undefined,
+        }),
+      ),
     );
   }
 
   function cancelAdjust() {
     const dialog = adjustDialog;
     adjustDialog = null;
-    if (dialog) void cancelGesture(dialog.documentId);
+    if (dialog) endPreview(cancelGesture(dialog.documentId));
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
@@ -3720,7 +3742,7 @@
             contextMenu={layerContextMenu}
             emptyContextMenu={emptyLayersContextMenu}
             onlayerdrag={onLayerDrag}
-            hidden={adjustDialog?.documentId === active.id ? adjustDialog.previews : []}
+            hidden={previewHidden}
           />
         {/key}
         {#if selectedAdjustment}

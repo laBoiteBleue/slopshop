@@ -187,3 +187,15 @@ test("layers added to the document become the selection", async () => {
   await rerender({ ...props, doc: documentOf([...LAYERS, layer(6, "Pasted")]) });
   expect(selectedNames()).toEqual(["Pasted"]);
 });
+
+test("hidden layers (Image > Adjustments' previews) are never selected, and the selection stays", async () => {
+  const { rerender, props, user } = open();
+  await user.click(row("Sea"));
+  // The previews arrive already hidden, then go: the selection does not move.
+  const preview = layer(6, "levels", { kind: "adjustment", clipped: true });
+  await rerender({ ...props, doc: documentOf([...LAYERS, preview]), hidden: [6] });
+  expect(selectedNames()).toEqual(["Sea"]);
+  expect(screen.queryByText("levels")).not.toBeInTheDocument();
+  await rerender({ ...props, doc: documentOf(LAYERS), hidden: [] });
+  expect(selectedNames()).toEqual(["Sea"]);
+});
