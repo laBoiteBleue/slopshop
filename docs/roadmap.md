@@ -235,6 +235,29 @@ removable as a whole; undo keeps the old tiles by reference.
 - [ ] AI upscaling for enlargements (Photoshop's Preserve Details 2.0, Super Resolution), as a
       node: the classical detail pass was dropped for too small a gain (Phase 2)
 
+## Open to contributors: advanced transforms
+
+None of these exist yet, and none has a menu entry until it works (Edit > Transform lists only
+what is implemented). Each must stay non-destructive and editable: parameters kept on the layer,
+pixels never resampled into it (as [ADR 0017](adr/0017-non-destructive-transforms.md) does for
+affine transforms), rendered identically on the CPU and the GPU. Discuss the model in an ADR
+first.
+
+- [ ] **Warp / mesh deformation** (Edit > Transform > Warp once it works): a grid of control
+      points and handles over the layer, editable again at any time.
+- [ ] **Puppet Warp**: a mesh over the layer's content with pins, fixed or moved, for organic
+      deformations; pins and mesh kept, editable again.
+- [ ] **Perspective Warp**: quadrilateral planes drawn on the image, connected, then moved
+      together; planes and their positions kept, editable again. Distinct from the simple
+      perspective of Free Transform below.
+- [ ] **Free Transform: distort and perspective** (corner handles moved freely, Ctrl and
+      Alt+Shift+Ctrl as in Photoshop): needs a projective transform per layer instead of the
+      affine one (rendering, `.slop`, export, painting in the layer's grid): an ADR.
+- [ ] Proposed: **content-aware scaling** as an option of Free Transform's scaling (protecting
+      what matters while the rest stretches), not a command of its own.
+- [ ] Proposed: **Liquify**-like brush deformations kept as a displacement field on the layer,
+      editable and removable.
+
 ## Phase 5 — Extensibility and distribution
 
 - [ ] 🔶 Plugin/extension API (nodes, importers/exporters)

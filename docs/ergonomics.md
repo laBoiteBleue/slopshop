@@ -77,8 +77,12 @@ built. Contributors: propose here first.
 - Free Transform (Ctrl+T, Edit > Free Transform, or a double-click on a layer in the image): a
   box around the selected layers with eight
   handles. Drag inside to move (Shift: along one axis); a corner scales keeping the proportions
-  (Shift: freely), a side scales one way (Shift: proportionally), Alt scales about the center;
-  drag outside to rotate about the center (Shift: steps of 15°). A readout next to the pointer
+  (Shift: freely), a side scales one way (Shift: proportionally), Alt scales about the reference point;
+  drag outside to rotate about the reference point (Shift: steps of 15°); Ctrl and a side
+  handle skew (Alt: about the reference point). The reference point (the small circle, at the
+  center at first) can be dragged anywhere, snapping to the handles and the center; rotations
+  and Alt scaling turn about it. A right-click on the box: Rotate 180°, 90° both ways, Flip
+  Horizontal and Vertical about the reference point, Apply, Cancel. A readout next to the pointer
   shows the move, the size in % or the angle. Enter, a double-click inside or a click outside
   (without dragging) applies it as one undo entry; Esc or Ctrl+Z cancels it; Ctrl+T again,
   another edit or another tab applies it, without a question or buttons (undo is there for
@@ -111,6 +115,12 @@ built. Contributors: propose here first.
   editable afterwards (ADR 0029); an editable stroke will be a layer of its own (Layer menu).
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
   Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
+- Edit > Transform > Again (Shift+Ctrl+T) repeats the last Free Transform or Edit > Transform on
+  the selected layers; Alt+Shift+Ctrl+T duplicates them and transforms the copies (one undo
+  entry), the copies selected so that it can go on. Free Transform with a selection (Ctrl+T,
+  Edit > Free Transform), as in Photoshop: the selected pixels of the active layer float in a
+  new layer above it, leaving a hole (paint), and are transformed; Esc takes it all back. A
+  double-click on a layer still transforms the whole layer.
 - Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and
   height in pixels or percent; Image Size keeps the proportions by default, Canvas Size has
   Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All
@@ -195,9 +205,6 @@ built. Contributors: propose here first.
 
 - [ ] Free Transform: an options bar with X, Y, W, H and angle fields and a link to keep the
       proportions (Photoshop's).
-- [ ] Free Transform: Ctrl+drag a handle skews (Photoshop's distort needs perspective, which
-      affine transforms cannot do), a movable pivot point, and the right-click menu of the box
-      (flip, rotate 90°).
 - [ ] Arrow keys move the Free Transform box, as in Photoshop.
 - [ ] Smart guides also show equal spacing between three layers or more (Photoshop's distance
       marks), and the distance to the nearest layer while Alt-dragging.
