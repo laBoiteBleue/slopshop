@@ -484,7 +484,7 @@ mod tests {
                     blend_mode: BlendMode::Normal,
                     mask: None,
                     content: LayerContent::Raster {
-                        original: None,
+                        stack: None,
                         image: image.clone(),
                     },
                 },

@@ -1300,7 +1300,7 @@ fn build_layer(
 
     Ok(Built {
         content: LayerContent::Raster {
-            original: None,
+            stack: None,
             image: Arc::new(image),
         },
         mask: build_mask(record, raw, context)?,

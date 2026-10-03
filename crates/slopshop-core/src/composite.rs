@@ -1002,7 +1002,7 @@ mod tests {
 
     fn raster(size: Size, format: PixelFormat, pixels: &[u8]) -> LayerContent {
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: Arc::new(RasterImage::from_pixels(size, format, pixels).unwrap()),
         }
     }
@@ -1393,7 +1393,7 @@ mod tests {
         let id = add(
             &mut doc,
             LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: image.clone(),
             },
             1.0,
@@ -1457,7 +1457,7 @@ mod tests {
         let id = add(
             &mut doc,
             LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: image.clone(),
             },
             1.0,
@@ -2045,7 +2045,7 @@ mod tests {
                 let mut layer = new_layer(
                     &mut reference,
                     LayerContent::Raster {
-                        original: None,
+                        stack: None,
                         image: Arc::new(placed_image),
                     },
                     BlendMode::Screen,

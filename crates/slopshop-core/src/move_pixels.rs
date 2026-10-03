@@ -1185,12 +1185,11 @@ mod tests {
         let moved = moving.image(dx, dy).unwrap();
         assert!(moved.grown.is_none());
         let mut result = doc.clone();
-        Edit::SetLayerPaint {
-            id,
-            painted: Some(moved.image),
-        }
-        .apply(&mut result)
-        .unwrap();
+        let stack = layer.content.stack().unwrap();
+        Edit::bake_pixels(&doc, id, &stack, moving.base(), &moved.image)
+            .unwrap()
+            .apply(&mut result)
+            .unwrap();
         let (a, b) = (composite(&shown), composite(&result));
         let worst = a
             .iter()

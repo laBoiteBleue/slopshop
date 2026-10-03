@@ -60,7 +60,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: Arc::new(image),
             },
         };

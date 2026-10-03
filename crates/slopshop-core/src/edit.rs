@@ -83,18 +83,15 @@ pub enum Edit {
         id: LayerId,
         transform: Affine,
     },
-    /// Show `painted` in place of a raster layer's pixels, the pixels it had before any paint
-    /// kept as its original (ADR 0027); `None` deletes the paint, showing the original again.
-    SetLayerPaint {
+    /// Give a raster layer `stack` (ADR 0029): its original (grown, for a layer painted beyond
+    /// its bounds) and what is applied to it. The layer shows the stack's result: `shown` when
+    /// given (what a stroke computed, of the stack's size and format), else evaluated again
+    /// where the stack differs from the layer's. The inverse keeps the previous stack only, by
+    /// reference: undo evaluates again, so that history never holds evaluated pixels.
+    SetLayerStack {
         id: LayerId,
-        painted: Option<Arc<RasterImage>>,
-    },
-    /// Replace a raster layer's pixels and original at once (a layer grown to be painted
-    /// beyond its bounds, ADR 0027); `original` has the size of `image`.
-    SetLayerPixels {
-        id: LayerId,
-        image: Arc<RasterImage>,
-        original: Option<Arc<RasterImage>>,
+        stack: crate::stack::LayerStack,
+        shown: Option<Arc<RasterImage>>,
     },
     /// The same for a layer's mask: `painted` is a gray coverage of the mask's size.
     SetMaskPaint {
@@ -147,6 +144,8 @@ pub enum EditError {
     InvalidPaint,
     /// Painting needs a raster layer (ADR 0027).
     NotRaster(LayerId),
+    /// A layer's stack could not be evaluated (ADR 0029).
+    Stack(crate::stack::StackError),
     /// The layer has no mask.
     NoMask(LayerId),
     /// The layer is not a group (as a parent, or for a group edit).
@@ -197,6 +196,7 @@ impl fmt::Display for EditError {
                 )
             }
             EditError::NotRaster(id) => write!(f, "{id} is not a raster layer"),
+            EditError::Stack(e) => write!(f, "{e}"),
             EditError::NoMask(id) => write!(f, "{id} has no mask"),
             EditError::NotAGroup(id) => write!(f, "{id} is not a group"),
             EditError::MoveIntoItself(id) => write!(f, "{id} cannot go inside itself"),
@@ -298,34 +298,31 @@ impl Edit {
                 let previous = std::mem::replace(&mut layer.mask, mask);
                 Edit::SetLayerMask { id, mask: previous }
             }
-            Edit::SetLayerPaint { id, painted } => {
+            Edit::SetLayerStack { id, stack, shown } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
-                let LayerContent::Raster { image, original } = &mut layer.content else {
+                let LayerContent::Raster { image, stack: kept } = &mut layer.content else {
                     return Err(EditError::NotRaster(id));
                 };
-                let painted = swap_paint(image, original, painted, |p, o| p.size() == o.size())?;
-                Edit::SetLayerPaint { id, painted }
-            }
-            Edit::SetLayerPixels {
-                id,
-                image,
-                original,
-            } => {
-                if original.as_ref().is_some_and(|o| o.size() != image.size()) {
-                    return Err(EditError::InvalidPaint);
-                }
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
-                let LayerContent::Raster {
-                    image: shown,
-                    original: kept,
-                } = &mut layer.content
-                else {
-                    return Err(EditError::NotRaster(id));
+                let before = kept
+                    .clone()
+                    .unwrap_or_else(|| crate::stack::LayerStack::new(Arc::clone(image)));
+                let shown = match shown {
+                    Some(shown) => {
+                        if shown.size() != stack.original().size()
+                            || shown.format() != stack.format()
+                        {
+                            return Err(EditError::InvalidPaint);
+                        }
+                        shown
+                    }
+                    None => stack.reevaluate(&before, image).map_err(EditError::Stack)?,
                 };
-                Edit::SetLayerPixels {
+                *image = shown;
+                *kept = (!stack.is_empty()).then_some(stack);
+                Edit::SetLayerStack {
                     id,
-                    image: std::mem::replace(shown, image),
-                    original: std::mem::replace(kept, original),
+                    stack: before,
+                    shown: None,
                 }
             }
             Edit::SetMaskPaint { id, painted } => {
@@ -535,12 +532,13 @@ impl Edit {
                     continue;
                 }
                 if let LayerContent::Raster {
-                    original: Some(_), ..
-                } = layer.content
+                    stack: Some(stack), ..
+                } = &layer.content
                 {
-                    edits.push(Edit::SetLayerPaint {
+                    edits.push(Edit::SetLayerStack {
                         id: layer.id,
-                        painted: None,
+                        stack: crate::stack::LayerStack::new(Arc::clone(stack.original())),
+                        shown: Some(Arc::clone(stack.original())),
                     });
                 }
                 if layer.mask.as_ref().is_some_and(|m| m.original.is_some()) {
@@ -555,6 +553,26 @@ impl Edit {
             return Err(EditError::NoLayers);
         }
         Ok(Edit::Batch(edits))
+    }
+
+    /// The edit that gives raster layer `id` `stack` with the change from `before` (what it
+    /// shows) to `after` baked on top as paint (ADR 0029): what tools that read pixels leave,
+    /// moved pixels. `stack` is the layer's, grown first if the pixels grew.
+    pub fn bake_pixels(
+        doc: &Document,
+        id: LayerId,
+        stack: &crate::stack::LayerStack,
+        before: &RasterImage,
+        after: &RasterImage,
+    ) -> Result<Edit, EditError> {
+        let stack = stack
+            .with_painted(before, after, doc.blend_space())
+            .map_err(EditError::Stack)?;
+        Ok(Edit::SetLayerStack {
+            id,
+            stack,
+            shown: None,
+        })
     }
 
     /// The edit that moves `ids` by `(dx, dy)` whole pixels in their parents' space (the Move
@@ -887,7 +905,9 @@ pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blend::BlendSpace;
     use crate::color::LinearRgba;
+    use crate::stack::{Effect, LayerStack, PaintEntry, PaintOp};
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
@@ -1899,44 +1919,77 @@ mod tests {
         id
     }
 
-    /// What layer `id` shows and its original, by identity.
-    fn shown(doc: &Document, id: LayerId) -> (Arc<RasterImage>, Option<Arc<RasterImage>>) {
+    /// What layer `id` shows and its stack.
+    fn shown(doc: &Document, id: LayerId) -> (Arc<RasterImage>, Option<LayerStack>) {
         match &doc.layer(id).unwrap().content {
-            LayerContent::Raster { image, original } => (Arc::clone(image), original.clone()),
+            LayerContent::Raster { image, stack } => (Arc::clone(image), stack.clone()),
             _ => panic!("a raster layer"),
         }
     }
 
+    /// `original` with one paint entry: the first pixels of its first tile in `value`.
+    fn painted_stack(original: &Arc<RasterImage>, value: f32) -> LayerStack {
+        let empty = PaintEntry::empty(original.format(), original.size(), BlendSpace::Perceptual);
+        let coord = crate::tile::TileCoord { col: 0, row: 0 };
+        let tile = empty.painted_tile(
+            coord,
+            PaintOp::Color(LinearRgba::new(value, value, value, 1.0)),
+            |x, y| if x + y < 4 { 1.0 } else { 0.0 },
+        );
+        let paint = empty.with_tiles(vec![(coord, tile)]).unwrap();
+        LayerStack::new(Arc::clone(original))
+            .with_top_paint(Arc::new(paint))
+            .unwrap()
+    }
+
     #[test]
-    fn paint_shows_in_place_of_the_original_and_comes_off_whole() {
+    fn a_stack_shows_its_result_and_comes_off_whole() {
         let size = Size::new(8, 8);
         let mut doc = Document::new(size);
         let original = image(size, false, 10);
         let id = raster_layer(&mut doc, Arc::clone(&original));
         assert!(!doc.layer(id).unwrap().is_painted());
 
-        let (first, second) = (image(size, false, 20), image(size, false, 30));
-        let undo_first = Edit::SetLayerPaint {
+        let first = painted_stack(&original, 1.0);
+        let undo_first = Edit::SetLayerStack {
             id,
-            painted: Some(Arc::clone(&first)),
+            stack: first.clone(),
+            shown: None,
         }
         .apply(&mut doc)
         .unwrap();
-        assert_eq!(undo_first, Edit::SetLayerPaint { id, painted: None });
+        assert_eq!(
+            undo_first,
+            Edit::SetLayerStack {
+                id,
+                stack: LayerStack::new(Arc::clone(&original)),
+                shown: None
+            }
+        );
         let (image_now, kept) = shown(&doc, id);
-        assert!(Arc::ptr_eq(&image_now, &first));
-        assert!(Arc::ptr_eq(kept.as_ref().unwrap(), &original));
+        assert_eq!(kept.as_ref(), Some(&first));
+        assert_eq!(image_now.alpha_at(0, 0), 1.0);
+        assert_eq!(image_now.levels()[0].tiles()[0][0], 255, "painted white");
         assert!(doc.layer(id).unwrap().is_painted());
 
-        // A second stroke keeps the same original; undoing it shows the first paint.
-        let undo_second = Edit::SetLayerPaint {
+        // An effect on top; undoing it evaluates again.
+        let second = first
+            .with_effect(Effect {
+                adjustment: crate::adjust::Adjustment::Invert,
+                selection: None,
+                to_document: Affine::IDENTITY,
+                space: BlendSpace::Perceptual,
+            })
+            .unwrap();
+        let undo_second = Edit::SetLayerStack {
             id,
-            painted: Some(Arc::clone(&second)),
+            stack: second.clone(),
+            shown: None,
         }
         .apply(&mut doc)
         .unwrap();
-        assert!(Arc::ptr_eq(shown(&doc, id).1.as_ref().unwrap(), &original));
-        assert_round_trip(&mut doc.clone(), Edit::SetLayerPaint { id, painted: None });
+        assert_eq!(shown(&doc, id).0.levels()[0].tiles()[0][0], 0, "inverted");
+        assert_round_trip(&mut doc.clone(), undo_second.clone());
 
         // Delete Paint, then undo it.
         let undo_delete = Edit::delete_paint(&doc, &[id])
@@ -1951,22 +2004,26 @@ mod tests {
             "nothing left to delete"
         );
         undo_delete.apply(&mut doc).unwrap();
-        assert!(Arc::ptr_eq(&shown(&doc, id).0, &second));
+        assert_eq!(shown(&doc, id).1, Some(second));
         undo_second.apply(&mut doc).unwrap();
-        assert!(Arc::ptr_eq(&shown(&doc, id).0, &first));
+        let (image_now, kept) = shown(&doc, id);
+        assert_eq!(kept, Some(first));
+        assert_eq!(image_now.levels()[0].tiles()[0][0], 255);
         undo_first.apply(&mut doc).unwrap();
         let (image_now, kept) = shown(&doc, id);
         assert!(Arc::ptr_eq(&image_now, &original) && kept.is_none());
     }
 
     #[test]
-    fn paint_must_fit_what_it_covers() {
+    fn a_stack_must_fit_its_layer() {
         let size = Size::new(8, 8);
         let mut doc = Document::new(size);
-        let id = raster_layer(&mut doc, image(size, false, 10));
-        let wrong = Edit::SetLayerPaint {
+        let original = image(size, false, 10);
+        let id = raster_layer(&mut doc, Arc::clone(&original));
+        let wrong = Edit::SetLayerStack {
             id,
-            painted: Some(image(Size::new(9, 8), false, 0)),
+            stack: painted_stack(&original, 1.0),
+            shown: Some(image(Size::new(9, 8), false, 0)),
         };
         assert_eq!(wrong.apply(&mut doc), Err(EditError::InvalidPaint));
         let fill = fill_layer(&mut doc, "fill");
@@ -1978,9 +2035,10 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let on_fill = Edit::SetLayerPaint {
+        let on_fill = Edit::SetLayerStack {
             id: fill_id,
-            painted: Some(image(size, false, 0)),
+            stack: painted_stack(&original, 1.0),
+            shown: None,
         };
         assert_eq!(on_fill.apply(&mut doc), Err(EditError::NotRaster(fill_id)));
         let no_mask = Edit::SetMaskPaint {
@@ -2020,9 +2078,11 @@ mod tests {
                 painted: Some(Arc::clone(&painted)),
             },
         );
-        Edit::SetLayerPaint {
+        let original = Arc::clone(doc.layer(id).unwrap().content.original().unwrap());
+        Edit::SetLayerStack {
             id,
-            painted: Some(image(size, false, 99)),
+            stack: painted_stack(&original, 1.0),
+            shown: None,
         }
         .apply(&mut doc)
         .unwrap();

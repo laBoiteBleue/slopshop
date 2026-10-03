@@ -597,7 +597,7 @@ fn blank_session(
 fn image_session(image: RasterImage, name: &str) -> Session {
     let size = image.size();
     let content = LayerContent::Raster {
-        original: None,
+        stack: None,
         image: Arc::new(image),
     };
     session_with_layer(size, name, content)
@@ -985,7 +985,7 @@ fn insert_image(
                     blend_mode: BlendMode::Normal,
                     mask: None,
                     content: LayerContent::Raster {
-                        original: None,
+                        stack: None,
                         image: Arc::new(image),
                     },
                 },
@@ -2226,7 +2226,7 @@ mod tests {
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
                 content: LayerContent::Raster {
-                    original: None,
+                    stack: None,
                     image: Arc::new(image),
                 },
                 mask: Some(mask),
@@ -2391,7 +2391,7 @@ mod tests {
         let mut documents = state.documents().unwrap();
         let document = documents.get_mut(doc.id).unwrap();
         let layer = document.session.document().layer(id).unwrap().clone();
-        let LayerContent::Raster { image, original } = &layer.content else {
+        let LayerContent::Raster { image, stack } = &layer.content else {
             panic!("a raster layer");
         };
         // Grown to the canvas by whole tiles; its old pixels where they were.
@@ -2408,7 +2408,7 @@ mod tests {
             (alpha - 200.0 / 255.0).abs() < 1e-3,
             "the old pixels kept: {alpha} at {x}, {y}"
         );
-        assert_eq!(original.as_ref().unwrap().size(), image.size());
+        assert_eq!(stack.as_ref().unwrap().original().size(), image.size());
         // One undo entry brings the small layer back as it was.
         document.session.undo().unwrap();
         let layer = document.session.document().layer(id).unwrap();
@@ -2417,7 +2417,7 @@ mod tests {
             slopshop_core::Affine::translation(1000.0, 1000.0)
         );
         assert!(
-            matches!(&layer.content, LayerContent::Raster { image, original: None }
+            matches!(&layer.content, LayerContent::Raster { image, stack: None }
             if Arc::ptr_eq(image, &small))
         );
     }
@@ -2482,7 +2482,7 @@ mod tests {
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         content: LayerContent::Raster {
-                            original: None,
+                            stack: None,
                             image: Arc::clone(&pixels),
                         },
                         mask: Some(mask),
@@ -2503,7 +2503,7 @@ mod tests {
         assert_eq!(mask.image.gray_at(150, 150), 1.0);
         assert!(mask.original.is_some());
         assert!(
-            matches!(&layer.content, LayerContent::Raster { image, original: None }
+            matches!(&layer.content, LayerContent::Raster { image, stack: None }
             if Arc::ptr_eq(image, &pixels))
         );
         // One undo entry.
@@ -3535,10 +3535,10 @@ mod tests {
             let mut documents = state.documents().unwrap();
             let document = documents.get_mut(doc.id).unwrap();
             let layer = document.session.document().layer(id).unwrap();
-            let LayerContent::Raster { image, original } = &layer.content else {
+            let LayerContent::Raster { image, stack } = &layer.content else {
                 panic!("a raster layer");
             };
-            let original = original.as_ref().unwrap().size();
+            let original = stack.as_ref().unwrap().original().size();
             (Arc::clone(image), original, layer.transform.e)
         };
         let pixel = |image: &RasterImage, x: u32, y: u32| -> Vec<u8> {
@@ -3584,10 +3584,10 @@ mod tests {
             document.session.undo().unwrap();
         }
         let layer = document.session.document().layer(id).unwrap();
-        let LayerContent::Raster { image, original } = &layer.content else {
+        let LayerContent::Raster { image, stack } = &layer.content else {
             panic!("a raster layer");
         };
-        assert_eq!((image.size(), original.is_none()), (size, true));
+        assert_eq!((image.size(), stack.is_none()), (size, true));
         assert_eq!(layer.transform, slopshop_core::Affine::IDENTITY);
     }
 }

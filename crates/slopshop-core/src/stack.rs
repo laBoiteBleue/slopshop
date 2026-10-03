@@ -14,9 +14,9 @@
 //! result already evaluated give the same pixels, and only the tiles that an entry reaches are
 //! ever recomputed. Entries are not edited; deleting one merges the neighbours that become alike.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::adjust::{Adjustment, Prepared};
 use crate::blend::{BlendSpace, Blender};
@@ -35,6 +35,10 @@ use crate::transform::Affine;
 
 /// Pixels per tile.
 const TILE_PIXELS: usize = (TILE_SIZE * TILE_SIZE) as usize;
+/// Rows a thread computes at a time when one tile is shared between threads.
+const BAND_ROWS: usize = 8;
+/// The largest pixel: RGBA of `f32`.
+const MAX_PIXEL_BYTES: usize = 16;
 
 /// A raster layer's original pixels and the entries applied to them, bottom to top. Cloning
 /// shares everything.
@@ -70,6 +74,19 @@ pub struct PaintEntry {
     format: PixelFormat,
     space: BlendSpace,
     tiles: BTreeMap<TileCoord, PaintTile>,
+    /// `P` and `k` as whole images, made once when asked (files store them so).
+    images: OnceLock<(Arc<RasterImage>, Arc<RasterImage>)>,
+    /// What was below it when it was laid, the tiles it reached: the next stroke continuing it
+    /// reuses them while the stack below is the same (a cache, never saved).
+    below: Mutex<Option<BelowTiles>>,
+}
+
+/// Tiles of the result of a stack below a paint (see [`PaintEntry`]).
+#[derive(Debug, Clone)]
+struct BelowTiles {
+    stack: LayerStack,
+    format: PixelFormat,
+    tiles: HashMap<TileCoord, Arc<[u8]>>,
 }
 
 /// The paint of one tile: `TILE_SIZE²` pixels of `P` (the entry's stored format) and of `k`,
@@ -336,6 +353,8 @@ fn contains(size: Size, coord: TileCoord) -> bool {
 
 /// Encodes and decodes the paint of one entry.
 struct PaintPixels {
+    /// `P`'s format.
+    format: PixelFormat,
     pixels: Pixels,
     codec: Codec,
     keep: SampleType,
@@ -347,6 +366,7 @@ impl PaintPixels {
     fn new(format: PixelFormat, space: BlendSpace) -> Self {
         let codec = Codec::new(format);
         Self {
+            format,
             pixels: Pixels::new(format),
             bpp: codec.bytes_per_pixel,
             codec,
@@ -382,6 +402,28 @@ impl PaintPixels {
         (vec![0; TILE_PIXELS * self.bpp], keep)
     }
 
+    /// `tile` once its valid pixels (`from`: width, height) become the first ones of a tile
+    /// whose valid pixels are `to`: the identity where it had only padding, padded again.
+    fn reframed(&self, tile: &PaintTile, from: (usize, usize), to: (usize, usize)) -> PaintTile {
+        if from == to {
+            return tile.clone();
+        }
+        let (mut color, mut keep) = self.identity();
+        let t = TILE_SIZE as usize;
+        let kb = self.keep.bytes() as usize;
+        for y in 0..from.1 {
+            let (a, b) = (y * t, y * t + from.0);
+            color[a * self.bpp..b * self.bpp]
+                .copy_from_slice(&tile.color[a * self.bpp..b * self.bpp]);
+            keep[a * kb..b * kb].copy_from_slice(&tile.keep[a * kb..b * kb]);
+        }
+        pad_tile(&mut color, to.0, to.1, self.bpp);
+        pad_tile(&mut keep, to.0, to.1, kb);
+        let mut out = self.tile(color, keep);
+        out.lowers_alpha |= tile.lowers_alpha;
+        out
+    }
+
     /// A tile from its padded buffers.
     fn tile(&self, color: Vec<u8>, keep: Vec<u8>) -> PaintTile {
         let limit = 1.0 - half_step(self.keep);
@@ -404,6 +446,8 @@ impl PaintEntry {
             size,
             format: paint_format(layer_format),
             space,
+            images: OnceLock::new(),
+            below: Mutex::new(None),
             tiles: BTreeMap::new(),
         }
     }
@@ -438,12 +482,26 @@ impl PaintEntry {
         painted: &RasterImage,
         space: BlendSpace,
     ) -> Result<Self, StackError> {
-        let size = original.size();
-        if painted.size() != size {
+        Self::between(original.format(), original, painted, space)
+    }
+
+    /// The paint that turns `before` into `after` (two images of a layer of `layer_format`):
+    /// `P` the pixels of `after` and `k = 0` where they differ, the identity elsewhere. What
+    /// tools that read pixels write (moved pixels, ADR 0029): the values they took are baked.
+    /// Only the tiles that are not shared are compared.
+    pub fn between(
+        layer_format: PixelFormat,
+        before: &RasterImage,
+        after: &RasterImage,
+        space: BlendSpace,
+    ) -> Result<Self, StackError> {
+        let size = before.size();
+        if after.size() != size {
             return Err(StackError::SizeMismatch);
         }
-        let empty = Self::empty(original.format(), size, space);
+        let empty = Self::empty(layer_format, size, space);
         let math = empty.math();
+        let (painted, original) = (after, before);
         let (before, after) = (&original.levels()[0], &painted.levels()[0]);
         let (old, new) = (
             Codec::new(original.stored_format()),
@@ -522,6 +580,91 @@ impl PaintEntry {
         &self.tiles
     }
 
+    /// The format of `k` as an image: gray samples read as they are.
+    pub fn keep_format(&self) -> PixelFormat {
+        PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: self.keep_sample(),
+            color_space: crate::color::ColorSpace::LINEAR_SRGB,
+            alpha: crate::color::AlphaMode::Straight,
+        }
+    }
+
+    /// `P` and `k` as whole images of the layer's size (what files store): every tile it did
+    /// not touch is one shared identity tile. Made once.
+    pub fn images(&self) -> Result<(Arc<RasterImage>, Arc<RasterImage>), StackError> {
+        if let Some(images) = self.images.get() {
+            return Ok(images.clone());
+        }
+        let math = self.math();
+        let (color, keep) = math.identity();
+        let (color, keep): (Arc<[u8]>, Arc<[u8]>) = (Arc::from(color), Arc::from(keep));
+        let coords: Vec<TileCoord> = grid_coords(self.size).collect();
+        let pick = |of: fn(&PaintTile) -> &Arc<[u8]>, identity: &Arc<[u8]>| -> Vec<Arc<[u8]>> {
+            coords
+                .iter()
+                .map(|c| {
+                    self.tiles
+                        .get(c)
+                        .map_or_else(|| Arc::clone(identity), |t| Arc::clone(of(t)))
+                })
+                .collect()
+        };
+        let images = (
+            Arc::new(RasterImage::from_level0_tiles(
+                self.size,
+                self.format,
+                pick(PaintTile::color, &color),
+            )?),
+            Arc::new(RasterImage::from_level0_tiles(
+                self.size,
+                self.keep_format(),
+                pick(PaintTile::keep, &keep),
+            )?),
+        );
+        Ok(self.images.get_or_init(|| images).clone())
+    }
+
+    /// Paint read back from its images ([`Self::images`]) on a layer of `layer_format`.
+    pub fn from_images(
+        layer_format: PixelFormat,
+        color: &RasterImage,
+        keep: &RasterImage,
+        space: BlendSpace,
+    ) -> Result<Self, StackError> {
+        let empty = Self::empty(layer_format, color.size(), space);
+        if keep.size() != color.size() {
+            return Err(StackError::SizeMismatch);
+        }
+        if color.format() != empty.format || keep.format() != empty.keep_format() {
+            return Err(StackError::FormatMismatch);
+        }
+        let math = empty.math();
+        let (identity_color, identity_keep) = math.identity();
+        let (colors, keeps) = (&color.levels()[0], &keep.levels()[0]);
+        let mut tiles = Vec::new();
+        for coord in grid_coords(empty.size) {
+            let (Some(c), Some(k)) = (colors.tile(coord), keeps.tile(coord)) else {
+                return Err(StackError::TileOutside(coord));
+            };
+            if **c != *identity_color || **k != *identity_keep {
+                tiles.push((coord, Arc::clone(c), Arc::clone(k)));
+            }
+        }
+        Self::from_tiles(layer_format, empty.size, space, tiles)
+    }
+
+    /// Bytes its tiles hold (tiles shared between positions counted once).
+    pub fn memory_bytes(&self) -> u64 {
+        let mut seen = HashSet::new();
+        self.tiles
+            .values()
+            .flat_map(|t| [&t.color, &t.keep])
+            .filter(|tile| seen.insert(tile.as_ptr() as usize))
+            .map(|tile| tile.len() as u64)
+            .sum()
+    }
+
     /// Whether it changes nothing.
     pub fn is_identity(&self) -> bool {
         self.tiles.is_empty()
@@ -569,16 +712,11 @@ impl PaintEntry {
             Some(tile) => (tile.color.to_vec(), tile.keep.to_vec()),
             None => math.identity(),
         };
-        let paint = match op {
-            PaintOp::Color(c) => Some(math.blender.encode_premultiplied(&[
-                f64::from(c.r),
-                f64::from(c.g),
-                f64::from(c.b),
-                1.0,
-            ])),
-            PaintOp::Erase | PaintOp::Restore => None,
-        };
+        let paint = op_color(&math, op);
         let (width, height) = valid_area(self.size, coord);
+        // Erased once, a tile keeps asking for an alpha channel, so that the layer's format
+        // does not depend on how small the erasing was.
+        let mut erased = self.tiles.get(&coord).is_some_and(|t| t.lowers_alpha);
         for y in 0..height {
             for x in 0..width {
                 let a = f64::from(amount(x, y));
@@ -586,22 +724,18 @@ impl PaintEntry {
                     continue;
                 }
                 let a = a.min(1.0);
+                erased |= op == PaintOp::Erase;
                 let i = y * TILE_SIZE as usize + x;
                 let (p, k) = math.read(&color, &keep, i);
-                let (p, k) = match (op, paint) {
-                    (PaintOp::Color(_), Some(c)) => (
-                        std::array::from_fn(|n| a * c[n] + (1.0 - a) * p[n]),
-                        (1.0 - a) * k,
-                    ),
-                    (PaintOp::Restore, _) => (p.map(|v| (1.0 - a) * v), (1.0 - a) * k + a),
-                    _ => (p.map(|v| (1.0 - a) * v), (1.0 - a) * k),
-                };
+                let (p, k) = lay(op, paint, a, p, k);
                 math.write(p, k, &mut color, &mut keep, i);
             }
         }
         pad_tile(&mut color, width, height, math.bpp);
         pad_tile(&mut keep, width, height, math.keep.bytes() as usize);
-        math.tile(color, keep)
+        let mut tile = math.tile(color, keep);
+        tile.lowers_alpha |= erased;
+        tile
     }
 
     /// This paint with `tiles` replaced (tiles made by [`Self::painted_tile`] of a paint of the
@@ -625,6 +759,8 @@ impl PaintEntry {
             size: self.size,
             format: self.format,
             space: self.space,
+            images: OnceLock::new(),
+            below: Mutex::new(None),
         })
     }
 
@@ -660,7 +796,9 @@ impl PaintEntry {
                     }
                     pad_tile(&mut color, width, height, math.bpp);
                     pad_tile(&mut keep, width, height, math.keep.bytes() as usize);
-                    math.tile(color, keep)
+                    let mut tile = math.tile(color, keep);
+                    tile.lowers_alpha |= below.lowers_alpha || top.lowers_alpha;
+                    tile
                 }
                 (Some(only), None) | (None, Some(only)) => only.clone(),
                 (None, None) => return,
@@ -671,11 +809,38 @@ impl PaintEntry {
             size: self.size,
             format: self.format,
             space: self.space,
+            images: OnceLock::new(),
+            below: Mutex::new(None),
             tiles: work
                 .into_iter()
                 .filter_map(|(coord, tile)| tile.map(|t| (coord, t)))
                 .collect(),
         }
+    }
+}
+
+/// `op`'s color as premultiplied blend-space values (`None` for the erasers).
+fn op_color(math: &PaintPixels, op: PaintOp) -> Option<[f64; 4]> {
+    match op {
+        PaintOp::Color(c) => Some(math.blender.encode_premultiplied(&[
+            f64::from(c.r),
+            f64::from(c.g),
+            f64::from(c.b),
+            1.0,
+        ])),
+        PaintOp::Erase | PaintOp::Restore => None,
+    }
+}
+
+/// `P` and `k` once `op` (its color from [`op_color`]) is laid at `a` in `(0, 1]` over them.
+fn lay(op: PaintOp, color: Option<[f64; 4]>, a: f64, p: [f64; 4], k: f64) -> ([f64; 4], f64) {
+    match (op, color) {
+        (PaintOp::Color(_), Some(c)) => (
+            std::array::from_fn(|n| a * c[n] + (1.0 - a) * p[n]),
+            (1.0 - a) * k,
+        ),
+        (PaintOp::Restore, _) => (p.map(|v| (1.0 - a) * v), (1.0 - a) * k + a),
+        _ => (p.map(|v| (1.0 - a) * v), (1.0 - a) * k),
     }
 }
 
@@ -807,10 +972,11 @@ struct Evaluator<'a> {
 }
 
 impl<'a> Evaluator<'a> {
-    fn new(stack: &'a LayerStack, atoms: &[Atom<'a>]) -> Self {
+    /// The evaluator of `atoms` over `stack`'s original, into `format` (the stack's, or the
+    /// format a stroke shows).
+    fn new(stack: &'a LayerStack, atoms: &[Atom<'a>], format: PixelFormat) -> Self {
         let original = stack.original.as_ref();
         let size = original.size();
-        let format = stack.format();
         let steps = atoms
             .iter()
             .map(|&atom| match atom {
@@ -843,18 +1009,51 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Tile `coord` of the result: from `start` (the result of the steps before `from`), or
-    /// from the original when `None`.
+    /// from the original when `None`. Shared with it when no step reaches the tile.
     fn tile(&self, coord: TileCoord, from: usize, start: Option<&Arc<[u8]>>) -> Arc<[u8]> {
-        let mut current = match start {
+        let current = match start {
             Some(tile) => Arc::clone(tile),
             None => self.original_tile(coord),
         };
+        let mut buffer: Option<Vec<u8>> = None;
         for step in &self.steps[from..] {
             if step.reaches(coord) {
-                current = self.apply(step, coord, &current);
+                let rows = buffer.get_or_insert_with(|| current.to_vec());
+                self.apply_rows(step, coord, rows, 0);
             }
         }
-        current
+        self.finished(coord, buffer).unwrap_or(current)
+    }
+
+    /// [`Self::tile`] from the original, each step on every core (bands of rows): one tile
+    /// as fast as many, for a stroke reaching a new tile.
+    fn tile_on_every_core(&self, coord: TileCoord) -> Arc<[u8]> {
+        let current = self.original_tile(coord);
+        let row_bytes = TILE_SIZE as usize * self.target.bytes_per_pixel;
+        let height = valid_area(self.size, coord).1;
+        let mut buffer: Option<Vec<u8>> = None;
+        for step in &self.steps {
+            if step.reaches(coord) {
+                let rows = buffer.get_or_insert_with(|| current.to_vec());
+                let mut bands: Vec<(usize, &mut [u8])> = rows[..height * row_bytes]
+                    .chunks_mut(BAND_ROWS * row_bytes)
+                    .enumerate()
+                    .map(|(n, band)| (n * BAND_ROWS, band))
+                    .collect();
+                parallel_for_each(&mut bands, |(first, band)| {
+                    self.apply_rows(step, coord, band, *first);
+                });
+            }
+        }
+        self.finished(coord, buffer).unwrap_or(current)
+    }
+
+    /// A tile computed into `buffer`, padded.
+    fn finished(&self, coord: TileCoord, buffer: Option<Vec<u8>>) -> Option<Arc<[u8]>> {
+        let mut buffer = buffer?;
+        let (width, height) = valid_area(self.size, coord);
+        pad_tile(&mut buffer, width, height, self.target.bytes_per_pixel);
+        Some(Arc::from(buffer))
     }
 
     fn original_tile(&self, coord: TileCoord) -> Arc<[u8]> {
@@ -876,37 +1075,31 @@ impl<'a> Evaluator<'a> {
         Arc::from(out)
     }
 
-    fn apply(&self, step: &Step<'_>, coord: TileCoord, below: &[u8]) -> Arc<[u8]> {
-        let mut out = below.to_vec();
+    /// `step` applied in place to `rows`, whole rows of tile `coord` from row `first` on (its
+    /// valid pixels; the caller pads).
+    fn apply_rows(&self, step: &Step<'_>, coord: TileCoord, rows: &mut [u8], first: usize) {
         let bpp = self.target.bytes_per_pixel;
+        let t = TILE_SIZE as usize;
         let (width, height) = valid_area(self.size, coord);
-        let pixel = |i: usize| i * bpp..(i + 1) * bpp;
+        let last = (first + rows.len() / (t * bpp)).min(height);
         match step {
             Step::Paint { paint, math } => {
                 let Some(tile) = paint.tiles.get(&coord) else {
-                    return Arc::from(out);
+                    return;
                 };
-                // `P` copies as is where it replaces everything (`k = 0`), in the same format.
-                let copy_p = stored_format(paint.format) == self.format;
-                for y in 0..height {
+                let mut below = [0u8; MAX_PIXEL_BYTES];
+                for y in first..last {
                     for x in 0..width {
-                        let i = y * TILE_SIZE as usize + x;
-                        let k = read_keep(math.keep, &tile.keep, i);
-                        let p_bytes = &tile.color[i * math.bpp..(i + 1) * math.bpp];
-                        if k >= 1.0 && math.codec.alpha(p_bytes) <= 0.0 {
-                            continue;
-                        }
-                        if k <= 0.0 && copy_p {
-                            out[pixel(i)].copy_from_slice(p_bytes);
-                            continue;
-                        }
-                        let (p, k) = math.read(&tile.color, &tile.keep, i);
-                        let b = math.blender.encode_premultiplied(
-                            &self.pixels.read(&self.target, &below[pixel(i)]),
+                        let px = &mut rows[((y - first) * t + x) * bpp..][..bpp];
+                        below[..bpp].copy_from_slice(px);
+                        self.paint_pixel(
+                            math,
+                            &tile.color,
+                            &tile.keep,
+                            y * t + x,
+                            &below[..bpp],
+                            px,
                         );
-                        let r = std::array::from_fn(|n| p[n] + k * b[n]);
-                        let r = math.blender.decode_premultiplied(&r);
-                        self.pixels.write(&self.target, r, &mut out[pixel(i)]);
                     }
                 }
             }
@@ -921,9 +1114,8 @@ impl<'a> Evaluator<'a> {
                     f64::from(coord.col * TILE_SIZE),
                     f64::from(coord.row * TILE_SIZE),
                 );
-                for y in 0..height {
+                for y in first..last {
                     for x in 0..width {
-                        let i = y * TILE_SIZE as usize + x;
                         let coverage = match selection {
                             Some((image, codec)) => {
                                 let (dx, dy) = effect
@@ -936,15 +1128,45 @@ impl<'a> Evaluator<'a> {
                         if coverage <= 0.0 {
                             continue;
                         }
-                        let b = self.pixels.read(&self.target, &below[pixel(i)]);
+                        let px = &mut rows[((y - first) * t + x) * bpp..][..bpp];
+                        let b = self.pixels.read(&self.target, px);
                         let r = blender.adjust(prepared, &b, coverage);
-                        self.pixels.write(&self.target, r, &mut out[pixel(i)]);
+                        self.pixels.write(&self.target, r, px);
                     }
                 }
             }
         }
-        pad_tile(&mut out, width, height, bpp);
-        Arc::from(out)
+    }
+
+    /// Pixel `i` of the paint (`color`, `keep`: `P` and `k` tiles of `math`'s format) over
+    /// `below` (a pixel of the result's format), into `out`.
+    fn paint_pixel(
+        &self,
+        math: &PaintPixels,
+        color: &[u8],
+        keep: &[u8],
+        i: usize,
+        below: &[u8],
+        out: &mut [u8],
+    ) {
+        let k = read_keep(math.keep, keep, i);
+        let p_bytes = &color[i * math.bpp..(i + 1) * math.bpp];
+        if k >= 1.0 && math.codec.alpha(p_bytes) <= 0.0 {
+            out.copy_from_slice(below);
+            return;
+        }
+        // `P` copies as is where it replaces everything (`k = 0`), in the same format.
+        if k <= 0.0 && stored_format(math.format) == self.format {
+            out.copy_from_slice(p_bytes);
+            return;
+        }
+        let (p, k) = math.read(color, keep, i);
+        let b = math
+            .blender
+            .encode_premultiplied(&self.pixels.read(&self.target, below));
+        let r = std::array::from_fn(|n| p[n] + k * b[n]);
+        let r = math.blender.decode_premultiplied(&r);
+        self.pixels.write(&self.target, r, out);
     }
 
     /// The tiles `coords` of the result, evaluated from scratch, on every core.
@@ -957,6 +1179,13 @@ impl<'a> Evaluator<'a> {
         work.into_iter()
             .filter_map(|(coord, tile)| tile.map(|t| (coord, t)))
             .collect()
+    }
+}
+
+impl PartialEq for LayerStack {
+    fn eq(&self, other: &Self) -> bool {
+        // Immutable and shared: the same allocations, the same stack.
+        Arc::ptr_eq(&self.original, &other.original) && self.entries == other.entries
     }
 }
 
@@ -1042,11 +1271,114 @@ impl LayerStack {
         })
     }
 
-    /// The stack with `effect` applied on top, an entry of its own.
+    /// The stack with the paint that turns `before` into `after` on top (both of this layer's
+    /// size; see [`PaintEntry::between`]), continuing the top paint when it can: what moving
+    /// selected pixels leaves.
+    pub fn with_painted(
+        &self,
+        before: &RasterImage,
+        after: &RasterImage,
+        space: BlendSpace,
+    ) -> Result<Self, StackError> {
+        let delta = PaintEntry::between(self.original.format(), before, after, space)?;
+        let paint = match self.top_paint() {
+            Some(top) if top.merges_with(&delta) => top.merged(&delta),
+            _ => {
+                let mut entries = self.entries.clone();
+                let entry = Entry::Paint(Arc::new(delta));
+                self.check(&entry)?;
+                entries.push(entry);
+                return Ok(Self {
+                    original: Arc::clone(&self.original),
+                    entries,
+                });
+            }
+        };
+        self.with_top_paint(Arc::new(paint))
+    }
+
+    /// The stack of the layer grown by `offset` whole tiles (columns, rows) before its pixels
+    /// to `size` (painting beyond its bounds, ADR 0027): the original given an alpha channel
+    /// and grown, transparent around; the paint moved with it; the effects' selections still
+    /// read where they were applied.
+    pub fn grown(&self, offset: (u32, u32), size: Size) -> Result<Self, StackError> {
+        let with_alpha = match self.original.with_alpha() {
+            Some(converted) => Arc::new(converted?),
+            None => Arc::clone(&self.original),
+        };
+        let original = Arc::new(
+            with_alpha
+                .grown(offset, size)
+                .ok_or(StackError::SizeMismatch)??,
+        );
+        let (left, top) = offset;
+        let t = f64::from(TILE_SIZE);
+        let shift = Affine::translation(-f64::from(left) * t, -f64::from(top) * t);
+        let format = paint_format(original.format());
+        let old_size = self.original.size();
+        let entries = self
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::Paint(paint) => Entry::Paint(Arc::new(PaintEntry {
+                    size,
+                    format,
+                    space: paint.space,
+                    images: OnceLock::new(),
+                    below: Mutex::new(None),
+                    tiles: paint
+                        .tiles
+                        .iter()
+                        .map(|(coord, tile)| {
+                            let moved = TileCoord {
+                                col: coord.col + left,
+                                row: coord.row + top,
+                            };
+                            let math = paint.math();
+                            (
+                                moved,
+                                math.reframed(
+                                    tile,
+                                    valid_area(old_size, *coord),
+                                    valid_area(size, moved),
+                                ),
+                            )
+                        })
+                        .collect(),
+                })),
+                Entry::Effect(effect) => Entry::Effect(Arc::new(EffectEntry {
+                    steps: effect
+                        .steps
+                        .iter()
+                        .map(|step| {
+                            Arc::new(Effect {
+                                to_document: shift.then(step.to_document),
+                                ..(**step).clone()
+                            })
+                        })
+                        .collect(),
+                })),
+            })
+            .collect();
+        Self::with_entries(original, entries)
+    }
+
+    /// The stack with `effect` applied on top: an entry of its own, or joining the top entry
+    /// when it holds effects of the same kind (contiguous entries never are alike); an Invert
+    /// on an Invert cancels it.
     pub fn with_effect(&self, effect: Effect) -> Result<Self, StackError> {
-        let entry = Entry::Effect(Arc::new(EffectEntry::new(vec![Arc::new(effect)])?));
+        let added = EffectEntry::new(vec![Arc::new(effect)])?;
         let mut entries = self.entries.clone();
-        entries.push(entry);
+        match entries.last() {
+            Some(Entry::Effect(top)) if top.kind() == added.kind() => {
+                let steps = joined(top, &added);
+                entries.pop();
+                if !steps.is_empty() {
+                    entries.push(Entry::Effect(Arc::new(EffectEntry::new(steps)?)));
+                }
+            }
+            _ => entries.push(Entry::Effect(Arc::new(added))),
+        }
         Ok(Self {
             original: Arc::clone(&self.original),
             entries,
@@ -1070,15 +1402,7 @@ impl LayerStack {
                     break;
                 }
                 (Entry::Effect(below), Entry::Effect(above)) if below.kind() == above.kind() => {
-                    let mut steps: Vec<Arc<Effect>> = Vec::new();
-                    for step in below.steps.iter().chain(&above.steps) {
-                        match steps.last() {
-                            Some(last) if last.cancels(step) => {
-                                steps.pop();
-                            }
-                            _ => steps.push(Arc::clone(step)),
-                        }
-                    }
+                    let steps = joined(below, above);
                     if steps.is_empty() {
                         entries.drain(seam - 1..=seam);
                         seam -= 1;
@@ -1118,7 +1442,7 @@ impl LayerStack {
             return Ok(Arc::clone(&self.original));
         }
         let atoms = atoms(&self.entries);
-        let evaluator = Evaluator::new(self, &atoms);
+        let evaluator = Evaluator::new(self, &atoms, format);
         let size = self.original.size();
         let tiles = evaluator
             .tiles(grid_coords(size).collect())
@@ -1155,7 +1479,7 @@ impl LayerStack {
             .zip(&new)
             .take_while(|(a, b)| a.address() == b.address())
             .count();
-        let evaluator = Evaluator::new(self, &new);
+        let evaluator = Evaluator::new(self, &new, format);
         let replaced: Vec<(TileCoord, Arc<[u8]>)> = if common == old.len() {
             // Added on top: from what is shown.
             let mut reached = Footprint::Tiles(BTreeSet::new());
@@ -1191,6 +1515,294 @@ impl LayerStack {
         }
         Ok(Arc::new(shown.with_tiles(replaced)?))
     }
+}
+
+/// Paint being laid on top of a stack, tile by tile: a stroke's frames, Fill, Delete. It
+/// continues the top paint (or starts one) and keeps the paint laid so far; what is below that
+/// paint is evaluated once per tile and cached for the whole stroke, so that a frame computes
+/// only the pixels that changed, as painting an image does (ADR 0027).
+#[derive(Debug)]
+pub struct TopPaint {
+    /// The stack without the paint being laid.
+    below: LayerStack,
+    /// The paint it continues (empty if none).
+    start: PaintEntry,
+    /// The paint laid so far: the tiles changed since the start.
+    painted: BTreeMap<TileCoord, PaintTile>,
+    /// What the layer shows meanwhile.
+    format: PixelFormat,
+    /// What the layer showed when the paint started: what is below it where the paint it
+    /// continues did not reach.
+    shown: Option<Arc<RasterImage>>,
+    /// Tiles of what is below the paint, evaluated once each for the whole stroke.
+    cache: HashMap<TileCoord, Arc<[u8]>>,
+}
+
+impl TopPaint {
+    /// Paint on `stack` blending in `space`, whose result the layer shows as `shown`; `erase`:
+    /// the paint may lower alpha (the layer shows an alpha channel from the start).
+    pub fn new(
+        stack: &LayerStack,
+        shown: &Arc<RasterImage>,
+        space: BlendSpace,
+        erase: bool,
+    ) -> Self {
+        let (below, start) = match stack.top_paint() {
+            Some(top) if top.space == space => (
+                LayerStack {
+                    original: Arc::clone(&stack.original),
+                    entries: stack.entries[..stack.entries.len() - 1].to_vec(),
+                },
+                PaintEntry {
+                    size: top.size,
+                    format: top.format,
+                    space,
+                    images: OnceLock::new(),
+                    below: Mutex::new(None),
+                    tiles: top.tiles.clone(),
+                },
+            ),
+            _ => (
+                stack.clone(),
+                PaintEntry::empty(stack.original.format(), stack.original.size(), space),
+            ),
+        };
+        let format = stack.format();
+        let format = if erase && !format.layout.has_alpha() {
+            paint_format(format)
+        } else {
+            format
+        };
+        // What is below the paint: what the layer shows where the paint it continues (if any)
+        // did not reach, else what that paint kept, while it still applies.
+        let continues = below.entries.len() < stack.entries.len();
+        let shown = (shown.format() == format && shown.size() == stack.original.size())
+            .then(|| Arc::clone(shown));
+        let cache = match stack.top_paint() {
+            Some(top) if continues => top
+                .below
+                .lock()
+                .ok()
+                .and_then(|kept| kept.clone())
+                .filter(|kept| kept.stack == below && kept.format == format)
+                .map(|kept| kept.tiles)
+                .unwrap_or_default(),
+            _ => HashMap::new(),
+        };
+        Self {
+            below,
+            start,
+            painted: BTreeMap::new(),
+            format,
+            shown,
+            cache,
+        }
+    }
+
+    /// The format of the tiles shown while painting.
+    pub fn format(&self) -> PixelFormat {
+        self.format
+    }
+
+    /// Whether some paint was laid.
+    pub fn has_paint(&self) -> bool {
+        !self.painted.is_empty()
+    }
+
+    /// Lay `op` at `amount(coord, x, y)` on the pixels `area` (`[x0, y0, x1, y1)` within the
+    /// tile) of each tile of `dirty`, from the paint it started from: the tiles the layer then
+    /// shows, from those of `shown` (what it showed so far, of [`Self::format`]), on every core
+    /// (bands of rows). Amounts only grow during a stroke, so a pixel not reached yet keeps its
+    /// start.
+    pub fn lay(
+        &mut self,
+        dirty: &[(TileCoord, [usize; 4])],
+        op: PaintOp,
+        amount: impl Fn(TileCoord, usize, usize) -> f32 + Sync,
+        shown: &RasterImage,
+    ) -> Vec<(TileCoord, Arc<[u8]>)> {
+        let atoms = atoms(&self.below.entries);
+        let evaluator = Evaluator::new(&self.below, &atoms, self.format);
+        let math = self.start.math();
+        let color = op_color(&math, op);
+        let level = &shown.levels()[0];
+        let size = self.start.size;
+        // Each tile with its area and what it shows so far.
+        type Dirty<'a> = (TileCoord, [usize; 4], &'a Arc<[u8]>);
+        let dirty: Vec<Dirty<'_>> = dirty
+            .iter()
+            .filter(|(c, _)| contains(size, *c))
+            .filter_map(|&(c, area)| Some((c, area, level.tile(c)?)))
+            .collect();
+        // What is below the paint: evaluated once per tile for the whole stroke.
+        let shown_below = self.shown.as_ref().map(|image| &image.levels()[0]);
+        let below: Vec<Arc<[u8]>> = dirty
+            .iter()
+            .map(|(coord, _, _)| {
+                let untouched = !self.start.tiles.contains_key(coord);
+                Arc::clone(self.cache.entry(*coord).or_insert_with(|| {
+                    match shown_below
+                        .filter(|_| untouched)
+                        .and_then(|level| level.tile(*coord))
+                    {
+                        Some(tile) => Arc::clone(tile),
+                        None => evaluator.tile_on_every_core(*coord),
+                    }
+                }))
+            })
+            .collect();
+        let identity = math.identity();
+        let starts: Vec<(&[u8], &[u8], bool)> = dirty
+            .iter()
+            .map(|(coord, _, _)| match self.start.tiles.get(coord) {
+                Some(t) => (&t.color[..], &t.keep[..], t.lowers_alpha),
+                None => (&identity.0[..], &identity.1[..], false),
+            })
+            .collect();
+        // Each tile's `P`, `k`, what it shows, and whether it was erased.
+        type Buffers = (Vec<u8>, Vec<u8>, Vec<u8>, bool);
+        let mut buffers: Vec<Buffers> = dirty
+            .iter()
+            .zip(&starts)
+            .map(
+                |((coord, _, current), start)| match self.painted.get(coord) {
+                    Some(t) => (
+                        t.color.to_vec(),
+                        t.keep.to_vec(),
+                        current.to_vec(),
+                        t.lowers_alpha,
+                    ),
+                    None => (
+                        start.0.to_vec(),
+                        start.1.to_vec(),
+                        current.to_vec(),
+                        start.2,
+                    ),
+                },
+            )
+            .collect();
+        let t = TILE_SIZE as usize;
+        let (bpp, kb, sb) = (
+            math.bpp,
+            math.keep.bytes() as usize,
+            evaluator.target.bytes_per_pixel,
+        );
+        // Bands of the rows each area reaches, every tile's together.
+        type Band<'a> = (usize, usize, &'a mut [u8], &'a mut [u8], &'a mut [u8]);
+        let mut work: Vec<Band<'_>> = Vec::new();
+        for (index, ((p, k, px, _), (coord, area, _))) in buffers.iter_mut().zip(&dirty).enumerate()
+        {
+            let height = valid_area(size, *coord).1;
+            let (y0, y1) = (area[1].min(height), area[3].min(height));
+            if y0 >= y1 {
+                continue;
+            }
+            let p_rows = p[y0 * t * bpp..y1 * t * bpp].chunks_mut(BAND_ROWS * t * bpp);
+            let k_rows = k[y0 * t * kb..y1 * t * kb].chunks_mut(BAND_ROWS * t * kb);
+            let px_rows = px[y0 * t * sb..y1 * t * sb].chunks_mut(BAND_ROWS * t * sb);
+            for (n, ((pr, kr), xr)) in p_rows.zip(k_rows).zip(px_rows).enumerate() {
+                work.push((index, y0 + n * BAND_ROWS, pr, kr, xr));
+            }
+        }
+        let erased = parallel_for_each(&mut work, |(index, first, pr, kr, xr)| {
+            let (coord, area, _) = dirty[*index];
+            let (p0, k0, _) = starts[*index];
+            let below = &below[*index];
+            let width = valid_area(size, coord).0;
+            let rows = pr.len() / (t * bpp);
+            let mut erased = false;
+            for r in 0..rows {
+                let y = *first + r;
+                for x in area[0]..area[2].min(width) {
+                    let (i, local) = (y * t + x, r * t + x);
+                    // From the start: an amount never re-applies over what the last frame laid.
+                    pr[local * bpp..(local + 1) * bpp].copy_from_slice(&p0[i * bpp..(i + 1) * bpp]);
+                    kr[local * kb..(local + 1) * kb].copy_from_slice(&k0[i * kb..(i + 1) * kb]);
+                    let a = f64::from(amount(coord, x, y));
+                    if a > 0.0 {
+                        let (pv, kv) = math.read(pr, kr, local);
+                        let (pv, kv) = lay(op, color, a.min(1.0), pv, kv);
+                        math.write(pv, kv, pr, kr, local);
+                        erased |= op == PaintOp::Erase;
+                    }
+                    evaluator.paint_pixel(
+                        &math,
+                        pr,
+                        kr,
+                        local,
+                        &below[i * sb..(i + 1) * sb],
+                        &mut xr[local * sb..(local + 1) * sb],
+                    );
+                }
+            }
+            (*index, erased)
+        });
+        drop(work);
+        for (index, erased) in erased {
+            buffers[index].3 |= erased;
+        }
+        let mut shown_tiles = Vec::with_capacity(dirty.len());
+        for ((p, k, mut px, erased), (coord, _, _)) in buffers.into_iter().zip(&dirty) {
+            let (width, height) = valid_area(size, *coord);
+            let (mut p, mut k) = (p, k);
+            pad_tile(&mut p, width, height, bpp);
+            pad_tile(&mut k, width, height, kb);
+            pad_tile(&mut px, width, height, sb);
+            let mut tile = math.tile(p, k);
+            tile.lowers_alpha |= erased;
+            self.painted.insert(*coord, tile);
+            shown_tiles.push((*coord, Arc::from(px)));
+        }
+        shown_tiles
+    }
+
+    /// The paint laid so far, continuing the start.
+    pub fn paint(&self) -> Result<PaintEntry, StackError> {
+        self.start
+            .with_tiles(self.painted.iter().map(|(c, t)| (*c, t.clone())).collect())
+    }
+
+    /// The stack with the paint laid so far on top; without it when it changes nothing. The
+    /// paint keeps what was below the tiles it reached, for the next stroke.
+    pub fn stack(&self) -> Result<LayerStack, StackError> {
+        let mut paint = self.paint()?;
+        let reached = self
+            .cache
+            .iter()
+            .filter(|(coord, _)| paint.tiles.contains_key(coord))
+            .map(|(coord, tile)| (*coord, Arc::clone(tile)))
+            .collect();
+        paint.below = Mutex::new(Some(BelowTiles {
+            stack: self.below.clone(),
+            format: self.format,
+            tiles: reached,
+        }));
+        let entry = Entry::Paint(Arc::new(paint));
+        self.below.check(&entry)?;
+        let mut entries = self.below.entries.clone();
+        if matches!(&entry, Entry::Paint(p) if !p.is_identity()) {
+            entries.push(entry);
+        }
+        Ok(LayerStack {
+            original: Arc::clone(&self.below.original),
+            entries,
+        })
+    }
+}
+
+/// The steps of two effect entries of one kind as one entry's, `below` first; Inverts that
+/// meet cancel.
+fn joined(below: &EffectEntry, above: &EffectEntry) -> Vec<Arc<Effect>> {
+    let mut steps: Vec<Arc<Effect>> = Vec::new();
+    for step in below.steps.iter().chain(&above.steps) {
+        match steps.last() {
+            Some(last) if last.cancels(step) => {
+                steps.pop();
+            }
+            _ => steps.push(Arc::clone(step)),
+        }
+    }
+    steps
 }
 
 fn union(a: Footprint, b: Footprint) -> Footprint {
@@ -1548,6 +2160,36 @@ mod tests {
     }
 
     #[test]
+    fn contiguous_effects_of_a_kind_are_one_entry_and_inverts_cancel() {
+        let original = gradient(true);
+        let brighter = |amount| {
+            effect(
+                Adjustment::BrightnessContrast {
+                    brightness: amount,
+                    contrast: 0.0,
+                },
+                None,
+            )
+        };
+        let base = LayerStack::new(Arc::clone(&original));
+        let once = base.with_effect(brighter(20.0)).unwrap();
+        let twice = once.with_effect(brighter(-40.0)).unwrap();
+        let [Entry::Effect(entry)] = twice.entries() else {
+            panic!("one effect entry expected");
+        };
+        assert_eq!(entry.steps().len(), 2);
+        // Applied on top of what is shown: the first step is not evaluated again.
+        let shown = once.reevaluate(&base, &original).unwrap();
+        let shown = twice.reevaluate(&once, &shown).unwrap();
+        assert_eq!(difference(&shown, &twice.evaluate().unwrap()), 0);
+        // Another kind starts an entry; an Invert on an Invert cancels.
+        let other = twice.with_effect(effect(Adjustment::Invert, None)).unwrap();
+        assert_eq!(other.entries().len(), 2);
+        let back = other.with_effect(effect(Adjustment::Invert, None)).unwrap();
+        assert_eq!(back.entries(), twice.entries());
+    }
+
+    #[test]
     fn an_effect_stays_within_its_selection() {
         let original = gradient(true);
         let stack = LayerStack::new(Arc::clone(&original))
@@ -1648,6 +2290,106 @@ mod tests {
             .with_top_paint(restored)
             .unwrap();
         assert_eq!(difference(&stack.evaluate().unwrap(), &original), 0);
+    }
+
+    #[test]
+    fn a_stroke_shows_what_its_stack_evaluates_to() {
+        let original = gradient(false);
+        let first = painted(&empty(&original), gray(0.2), |x, _| {
+            if x < 140 { 0.7 } else { 0.0 }
+        });
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_effect(effect(Adjustment::Invert, Some(selection(|_, y| y < 100))))
+            .unwrap()
+            .with_top_paint(first)
+            .unwrap();
+        for (op, erase) in [(gray(0.9), false), (PaintOp::Erase, true)] {
+            let mut top = TopPaint::new(
+                &stack,
+                &stack.evaluate().unwrap(),
+                BlendSpace::Perceptual,
+                erase,
+            );
+            let mut shown = stack.evaluate().unwrap();
+            if erase {
+                // RGB is stored with alpha: the same tiles.
+                shown = Arc::new(shown.with_alpha().unwrap().unwrap());
+            }
+            assert_eq!(shown.format(), top.format());
+            let t = T as usize;
+            // Two frames, the second reaching further with more.
+            for (reach, more) in [(100, 0.0), (200, 0.3)] {
+                let dirty = [
+                    (TileCoord { col: 0, row: 0 }, [0, 0, t, t]),
+                    (TileCoord { col: 1, row: 1 }, [0, 0, 20, 4]),
+                ];
+                let amount = move |coord: TileCoord, x: usize, _| {
+                    if coord.col == 0 && x > reach {
+                        0.0
+                    } else {
+                        0.25 + more
+                    }
+                };
+                let tiles = top.lay(&dirty, op, amount, &shown);
+                shown = Arc::new(shown.with_tiles(tiles).unwrap());
+            }
+            let result = top.stack().unwrap();
+            assert_eq!(result.entries().len(), 2, "the top paint continues");
+            assert_eq!(result.format(), top.format());
+            assert_eq!(difference(&shown, &result.evaluate().unwrap()), 0);
+        }
+    }
+
+    #[test]
+    fn a_grown_stack_shows_the_same_pixels_moved() {
+        let original = gradient(true);
+        let paint = painted(&empty(&original), gray(1.0), |x, _| {
+            if x > 280 { 0.6 } else { 0.0 }
+        });
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_top_paint(paint)
+            .unwrap()
+            .with_effect(effect(Adjustment::Invert, Some(selection(|x, _| x > 150))))
+            .unwrap();
+        let shown = stack.evaluate().unwrap();
+        let grown = stack.grown((1, 0), Size::new(W + 2 * T, H)).unwrap();
+        let moved = grown.evaluate().unwrap();
+        for y in [0, 100, H - 1] {
+            for x in [0, 149, 151, 290, W - 1] {
+                assert_eq!(pixel(&moved, x + T, y), pixel(&shown, x, y), "({x}, {y})");
+            }
+            // Transparent around, the paint's padding included.
+            assert_eq!(pixel(&moved, 10, y)[3], 0);
+            assert_eq!(pixel(&moved, W + T + 5, y)[3], 0);
+        }
+    }
+
+    #[test]
+    fn moved_pixels_are_baked_into_the_top_paint() {
+        let original = gradient(true);
+        let paint = painted(
+            &empty(&original),
+            gray(0.5),
+            |x, _| {
+                if x < 50 { 0.5 } else { 0.0 }
+            },
+        );
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_top_paint(paint)
+            .unwrap();
+        let shown = stack.evaluate().unwrap();
+        let after = image(PixelFormat::RGBA8_SRGB, |x, y| {
+            let mut px = pixel(&shown, x, y);
+            if (100..120).contains(&x) {
+                px = vec![1, 2, 3, 128];
+            }
+            px
+        });
+        let moved = stack
+            .with_painted(&shown, &after, BlendSpace::Perceptual)
+            .unwrap();
+        assert_eq!(moved.entries().len(), 1, "it continues the top paint");
+        assert!(difference(&moved.evaluate().unwrap(), &after) <= 1);
     }
 
     #[test]

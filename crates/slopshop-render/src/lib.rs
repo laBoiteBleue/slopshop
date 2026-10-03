@@ -1933,7 +1933,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: image.into(),
             },
         };
@@ -1972,7 +1972,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: image.into(),
             },
         };
@@ -2009,7 +2009,7 @@ mod tests {
         let layer = Layer {
             id: repainted.allocate_layer_id(),
             content: LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: painted.into(),
             },
             ..document.layers()[0].clone()

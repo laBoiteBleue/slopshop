@@ -59,7 +59,7 @@ fn image(size: Size, format: PixelFormat, pixel: impl Fn(u32, u32) -> Vec<u8>) -
 
 fn raster(image: &Arc<RasterImage>) -> LayerContent {
     LayerContent::Raster {
-        original: None,
+        stack: None,
         image: image.clone(),
     }
 }

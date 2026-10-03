@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 11;
+pub(crate) const SCHEMA_MINOR: u32 = 12;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -44,8 +44,12 @@ pub(crate) const NODE_VERSION_TRANSFORMED: u32 = 5;
 /// Version of the nodes that carry paint (schema 0.10, ADR 0027): `params.original` (a raster's
 /// unpainted image, `params.image` being its painted one) and `params.mask.original` likewise.
 /// Written only for painted nodes: readers without paint refuse them instead of dropping the
-/// original. The newest node version this code reads.
+/// original.
 pub(crate) const NODE_VERSION_PAINTED: u32 = 6;
+/// Version of the raster nodes with a stack (schema 0.12, ADR 0029): `params.image` is the
+/// original and `params.stack` what is applied to it. Written only for those nodes. The newest
+/// node version this code reads.
+pub(crate) const NODE_VERSION_STACK: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

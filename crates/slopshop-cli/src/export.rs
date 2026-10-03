@@ -1207,7 +1207,7 @@ pub(crate) fn single_layer_document(image: RasterImage, name: &str) -> Result<Do
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: Arc::new(image),
             },
         },

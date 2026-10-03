@@ -49,11 +49,12 @@ pub enum LayerContent {
     Fill { color: LinearRgba },
     /// Source pixels, placed at the document origin. The image is immutable and shared:
     /// cloning the layer (snapshots, undo) never copies pixels. `image` is what the layer shows:
-    /// once painted (ADR 0027), its painted pixels, and `original` keeps the pixels it had
-    /// before any paint, never written (same size; it shares the tiles no stroke touched).
+    /// once painted or adjusted, the result of its stack (ADR 0029), which keeps the pixels it
+    /// had before, never written, and what was applied to them (the result shares the tiles
+    /// nothing reached). `None`: nothing applied, `image` is the original.
     Raster {
         image: Arc<RasterImage>,
-        original: Option<Arc<RasterImage>>,
+        stack: Option<crate::stack::LayerStack>,
     },
     /// Other layers, bottom to top (ADR 0015). A pass-through group lets its children blend
     /// directly onto what is below it, then fades that result by its opacity and mask; an
@@ -74,16 +75,14 @@ impl PartialEq for LayerContent {
         match (self, other) {
             (Self::Fill { color: a }, Self::Fill { color: b }) => a == b,
             // Immutable images: same allocation, same content.
-            (
-                Self::Raster {
-                    image: a,
-                    original: c,
-                },
-                Self::Raster {
-                    image: b,
-                    original: d,
-                },
-            ) => Arc::ptr_eq(a, b) && same_image(c, d),
+            (Self::Raster { image: a, stack: c }, Self::Raster { image: b, stack: d }) => {
+                match (c, d) {
+                    // The image is the stack's result, evaluated again by undo: the stack tells.
+                    (Some(c), Some(d)) => c == d,
+                    (None, None) => Arc::ptr_eq(a, b),
+                    _ => false,
+                }
+            }
             (
                 Self::Group {
                     children: a,
@@ -112,9 +111,28 @@ fn same_image(a: &Option<Arc<RasterImage>>, b: &Option<Arc<RasterImage>>) -> boo
 impl LayerContent {
     /// Raster content showing `image`, not painted.
     pub fn raster(image: Arc<RasterImage>) -> Self {
-        Self::Raster {
-            image,
-            original: None,
+        Self::Raster { image, stack: None }
+    }
+
+    /// A raster's original pixels: its stack's, or the image it shows when nothing was applied.
+    pub fn original(&self) -> Option<&Arc<RasterImage>> {
+        match self {
+            Self::Raster {
+                stack: Some(stack), ..
+            } => Some(stack.original()),
+            Self::Raster { image, .. } => Some(image),
+            _ => None,
+        }
+    }
+
+    /// A raster's stack, from its original when nothing was applied yet.
+    pub fn stack(&self) -> Option<crate::stack::LayerStack> {
+        match self {
+            Self::Raster {
+                stack: Some(stack), ..
+            } => Some(stack.clone()),
+            Self::Raster { image, .. } => Some(crate::stack::LayerStack::new(Arc::clone(image))),
+            _ => None,
         }
     }
 }
@@ -178,15 +196,11 @@ impl Layer {
         matches!(self.content, LayerContent::Group { .. })
     }
 
-    /// Whether the layer's pixels or its mask carry paint (ADR 0027): what Delete Paint removes.
+    /// Whether something was applied to the layer's pixels (paint or effects, ADR 0029) or its
+    /// mask was painted (ADR 0027): what Delete Paint removes.
     pub fn is_painted(&self) -> bool {
-        matches!(
-            self.content,
-            LayerContent::Raster {
-                original: Some(_),
-                ..
-            }
-        ) || self.mask.as_ref().is_some_and(|m| m.original.is_some())
+        matches!(self.content, LayerContent::Raster { stack: Some(_), .. })
+            || self.mask.as_ref().is_some_and(|m| m.original.is_some())
     }
 
     /// Groups on the deepest path through this layer, itself included: 0 for a layer that is
@@ -578,9 +592,9 @@ fn validate_restored(
         }
         if let LayerContent::Raster {
             image,
-            original: Some(original),
+            stack: Some(stack),
         } = &layer.content
-            && original.size() != image.size()
+            && (stack.original().size() != image.size() || stack.format() != image.format())
         {
             return Err(RestoreError::InvalidPaint(id));
         }
@@ -617,7 +631,7 @@ pub enum RestoreError {
     TooDeep(LayerId),
     /// A transform that is not finite and invertible (ADR 0018).
     InvalidTransform(LayerId),
-    /// Painted pixels of another size than the original (ADR 0027).
+    /// A stack whose result has another size or format than the pixels shown (ADR 0029).
     InvalidPaint(LayerId),
     /// A resolution that is not a finite number of pixels per inch in range (ADR 0028).
     InvalidResolution,

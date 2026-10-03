@@ -22,6 +22,7 @@ use crate::geom::Size;
 use crate::raster::{
     Codec, RasterError, RasterImage, TILE_SIZE, bands, pad_tile, parallel_for_each,
 };
+use crate::stack::{LayerStack, PaintOp, TopPaint};
 use crate::tile::TileCoord;
 use crate::transform::Affine;
 
@@ -130,9 +131,11 @@ pub enum PaintError {
     InvalidColor,
     /// The layer's transform cannot be inverted.
     InvalidTransform,
-    /// [`Paint::Gray`] on an image that is not a coverage (gray without alpha).
+    /// [`Paint::Gray`] on an image that is not a coverage (gray without alpha), or a gray on a
+    /// layer's stack.
     NotACoverage,
     Raster(RasterError),
+    Stack(crate::stack::StackError),
 }
 
 impl fmt::Display for PaintError {
@@ -143,11 +146,18 @@ impl fmt::Display for PaintError {
             PaintError::InvalidTransform => write!(f, "the layer's transform is not invertible"),
             PaintError::NotACoverage => write!(f, "only a mask or a selection is painted in gray"),
             PaintError::Raster(e) => write!(f, "{e}"),
+            PaintError::Stack(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for PaintError {}
+
+impl From<crate::stack::StackError> for PaintError {
+    fn from(e: crate::stack::StackError) -> Self {
+        PaintError::Stack(e)
+    }
+}
 
 impl From<RasterError> for PaintError {
     fn from(e: RasterError) -> Self {
@@ -224,6 +234,8 @@ pub struct Stroke {
     to_working: Mat3,
     from_working: Mat3,
     coverage: BTreeMap<TileCoord, Coverage>,
+    /// Painting a layer's stack (ADR 0029): the paint laid on top of it, and what it does.
+    top: Option<(TopPaint, PaintOp)>,
     /// Tiles whose coverage changed since the last frame, with the box of their changed pixels
     /// (`[x0, y0, x1, y1)` within the tile).
     dirty: BTreeMap<TileCoord, [usize; 4]>,
@@ -294,10 +306,37 @@ impl Stroke {
             to_working,
             from_working,
             coverage: BTreeMap::new(),
+            top: None,
             dirty: BTreeMap::new(),
             last: None,
             until_next: 0.0,
         })
+    }
+
+    /// A stroke painting `paint` (a color or the Eraser) on a layer's `stack` (ADR 0029), whose
+    /// result the layer shows as `shown`: the paint is laid on top of the stack, continuing its
+    /// top paint. The rest is as [`Self::new`].
+    pub fn on_stack(
+        stack: &LayerStack,
+        shown: Arc<RasterImage>,
+        to_document: Affine,
+        selection: Option<Arc<RasterImage>>,
+        blend_space: BlendSpace,
+        brush: Brush,
+        paint: Paint,
+    ) -> Result<Self, PaintError> {
+        let op = match paint {
+            Paint::Color(c) => PaintOp::Color(c),
+            Paint::Erase => PaintOp::Erase,
+            Paint::Gray(_) => return Err(PaintError::NotACoverage),
+        };
+        let mut stroke = Self::new(shown, to_document, selection, blend_space, brush, paint)?;
+        let top = TopPaint::new(stack, &stroke.base, blend_space, op == PaintOp::Erase);
+        if stroke.base.format() != top.format() {
+            return Err(PaintError::Stack(crate::stack::StackError::FormatMismatch));
+        }
+        stroke.top = Some((top, op));
+        Ok(stroke)
     }
 
     /// Continue the stroke through `samples`: dabs every spacing along the path (the first
@@ -492,6 +531,9 @@ impl Stroke {
         }
         let dirty: Vec<(TileCoord, [usize; 4])> =
             std::mem::take(&mut self.dirty).into_iter().collect();
+        if self.top.is_some() {
+            return self.lay_on_stack(&dirty);
+        }
         let tiles = self.paint_tiles(&dirty);
         let replaced = dirty
             .into_iter()
@@ -500,6 +542,62 @@ impl Stroke {
             .collect();
         self.current = Arc::new(self.current.with_changed_tiles(replaced)?);
         Ok(Arc::clone(&self.current))
+    }
+
+    /// A frame on a layer's stack: the paint laid where the coverage changed, and what the
+    /// layer shows with it.
+    fn lay_on_stack(
+        &mut self,
+        dirty: &[(TileCoord, [usize; 4])],
+    ) -> Result<Arc<RasterImage>, PaintError> {
+        let Some((top, op)) = &mut self.top else {
+            return Ok(Arc::clone(&self.current));
+        };
+        let (coverage, selection, to_document) =
+            (&self.coverage, &self.selection, self.to_document);
+        let amount = |coord: TileCoord, x: usize, y: usize| {
+            let Some(c) = coverage.get(&coord) else {
+                return 0.0;
+            };
+            let amount = c.0[y * TILE_SIZE as usize + x];
+            if amount <= 0.0 {
+                return 0.0;
+            }
+            amount * selected(selection, to_document, coord, x, y)
+        };
+        let tiles = top.lay(dirty, *op, amount, &self.current);
+        let areas: BTreeMap<TileCoord, [usize; 4]> = dirty.iter().copied().collect();
+        let replaced = tiles
+            .into_iter()
+            .map(|(coord, tile)| {
+                let area = areas.get(&coord).copied().unwrap_or([0; 4]);
+                (coord, tile, area.map(|v| v as u32))
+            })
+            .collect();
+        self.current = Arc::new(self.current.with_changed_tiles(replaced)?);
+        Ok(Arc::clone(&self.current))
+    }
+
+    /// On a layer's stack ([`Self::on_stack`]): the stack with the paint laid so far on top
+    /// (what [`Self::image`] shows). `None` for a stroke on an image.
+    pub fn stack(&self) -> Result<Option<LayerStack>, PaintError> {
+        match &self.top {
+            Some((top, _)) => Ok(Some(top.stack()?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The stroke's result on a layer's stack ([`Self::on_stack`]): the stack with its paint
+    /// on top, and what the layer shows with it; `None` if it painted nothing.
+    pub fn finish_stack(mut self) -> Result<Option<(LayerStack, Arc<RasterImage>)>, PaintError> {
+        if !self.has_paint() {
+            return Ok(None);
+        }
+        let shown = self.image()?;
+        let Some((top, _)) = &self.top else {
+            return Err(PaintError::NotACoverage);
+        };
+        Ok(Some((top.stack()?, shown)))
     }
 
     /// The stroke's result: `None` if it painted nothing (e.g. outside the image).
@@ -576,16 +674,9 @@ impl Stroke {
     /// Apply the paint at `amount` (before the selection) to pixel (`x`, `y`) of tile `coord`,
     /// `px` holding the base pixel.
     fn paint_pixel(&self, coord: TileCoord, x: usize, y: usize, amount: f32, px: &mut [u8]) {
-        let mut amount = amount;
-        if let Some((image, codec)) = &self.selection {
-            let (dx, dy) = self.to_document.apply(
-                f64::from(coord.col * TILE_SIZE) + x as f64 + 0.5,
-                f64::from(coord.row * TILE_SIZE) + y as f64 + 0.5,
-            );
-            amount *= MaskReader { image, codec }.at(dx.floor(), dy.floor());
-            if amount <= 0.0 {
-                return;
-            }
+        let amount = amount * selected(&self.selection, self.to_document, coord, x, y);
+        if amount <= 0.0 {
+            return;
         }
         let codec = &self.codec;
         if let Paint::Gray(value) = self.paint {
@@ -629,6 +720,25 @@ impl Stroke {
         };
         codec.write(rgb.map(|v| v as f32), dst[3] as f32, px);
     }
+}
+
+/// How much `selection` (a coverage and its codec; everything without one) selects pixel
+/// (`x`, `y`) of tile `coord` of an image placed by `to_document`.
+fn selected(
+    selection: &Option<(Arc<RasterImage>, Codec)>,
+    to_document: Affine,
+    coord: TileCoord,
+    x: usize,
+    y: usize,
+) -> f32 {
+    let Some((image, codec)) = selection else {
+        return 1.0;
+    };
+    let (dx, dy) = to_document.apply(
+        f64::from(coord.col * TILE_SIZE) + x as f64 + 0.5,
+        f64::from(coord.row * TILE_SIZE) + y as f64 + 0.5,
+    );
+    MaskReader { image, codec }.at(dx.floor(), dy.floor())
 }
 
 /// Add `dab`, whose box in the image's pixels is `[x0, y0, x1, y1]`, to the coverage of tile
@@ -798,6 +908,99 @@ mod tests {
             paint,
         )
         .unwrap()
+    }
+
+    fn soft_brush() -> Brush {
+        Brush {
+            diameter: 30.0,
+            hardness: 0.3,
+            flow: 0.6,
+            ..Brush::default()
+        }
+    }
+
+    /// A stroke of `paint` along a path on `stack`, as a layer painted with it shows.
+    fn stack_stroke(stack: &LayerStack, paint: Paint) -> (LayerStack, Arc<RasterImage>) {
+        let mut shown = stack.evaluate().unwrap();
+        if paint == Paint::Erase
+            && let Some(with_alpha) = shown.with_alpha()
+        {
+            shown = Arc::new(with_alpha.unwrap());
+        }
+        let mut s = Stroke::on_stack(
+            stack,
+            shown,
+            Affine::IDENTITY,
+            None,
+            BlendSpace::Perceptual,
+            soft_brush(),
+            paint,
+        )
+        .unwrap();
+        // Frames, as the app sends them.
+        s.add(&[sample(20.0, 20.0), sample(200.0, 40.0)]);
+        s.image().unwrap();
+        s.add(&[sample(280.0, 270.0), sample(30.0, 260.0)]);
+        s.finish_stack().unwrap().unwrap()
+    }
+
+    #[test]
+    fn strokes_on_a_stack_paint_as_strokes_on_pixels_and_evaluate_alike() {
+        let size = Size::new(300, 290);
+        let original = filled(size, rgba8(), &[40, 160, 220, 255]);
+        let plain = LayerStack::new(Arc::clone(&original));
+        for paint in [red(), Paint::Erase] {
+            let (stack, shown) = stack_stroke(&plain, paint);
+            assert_eq!(stack.entries().len(), 1);
+            // The same pixels as painting the image itself, but for rounding.
+            let mut s = stroke(Arc::clone(&original), soft_brush(), paint);
+            s.add(&[sample(20.0, 20.0), sample(200.0, 40.0)]);
+            s.add(&[sample(280.0, 270.0), sample(30.0, 260.0)]);
+            let direct = s.finish().unwrap().unwrap();
+            for (x, y) in [
+                (20, 20),
+                (110, 30),
+                (200, 40),
+                (150, 265),
+                (5, 5),
+                (299, 289),
+            ] {
+                let (a, b) = (pixel(&shown, x, y), pixel(&direct, x, y));
+                assert!(
+                    a.iter().zip(&b).all(|(a, b)| a.abs_diff(*b) <= 1),
+                    "({x}, {y}): {a:?} {b:?}"
+                );
+            }
+            // What the stroke showed is what its stack gives.
+            let evaluated = stack.evaluate().unwrap();
+            for (a, b) in shown.levels()[0]
+                .tiles()
+                .iter()
+                .zip(evaluated.levels()[0].tiles())
+            {
+                assert_eq!(**a, **b);
+            }
+        }
+        // Over an effect, a second stroke continues the first's paint.
+        let inverted = plain
+            .with_effect(crate::stack::Effect {
+                adjustment: crate::adjust::Adjustment::Invert,
+                selection: None,
+                to_document: Affine::IDENTITY,
+                space: BlendSpace::Perceptual,
+            })
+            .unwrap();
+        let (once, _) = stack_stroke(&inverted, red());
+        let (twice, shown) = stack_stroke(&once, black());
+        assert_eq!(twice.entries().len(), 2);
+        let evaluated = twice.evaluate().unwrap();
+        for (a, b) in shown.levels()[0]
+            .tiles()
+            .iter()
+            .zip(evaluated.levels()[0].tiles())
+        {
+            assert_eq!(**a, **b);
+        }
     }
 
     #[test]

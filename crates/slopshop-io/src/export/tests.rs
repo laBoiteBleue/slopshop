@@ -44,14 +44,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
 fn raster_document(image: RasterImage) -> Document {
     let mut doc = Document::new(image.size());
     let image = Arc::new(image);
-    push_layer(
-        &mut doc,
-        LayerContent::Raster {
-            image,
-            original: None,
-        },
-        1.0,
-    );
+    push_layer(&mut doc, LayerContent::Raster { image, stack: None }, 1.0);
     doc
 }
 
@@ -556,14 +549,7 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         alpha: AlphaMode::Straight,
     };
     let image = Arc::new(RasterImage::from_pixels(doc.size(), format, &bytes).unwrap());
-    push_layer(
-        &mut doc,
-        LayerContent::Raster {
-            image,
-            original: None,
-        },
-        1.0,
-    );
+    push_layer(&mut doc, LayerContent::Raster { image, stack: None }, 1.0);
     let path = temp_path("non-finite.exr");
     let spec = ExportSpec {
         format: ExportFormat::Exr {
@@ -792,7 +778,7 @@ fn default_specs_follow_the_sources() {
         &mut doc,
         LayerContent::Raster {
             image: p3,
-            original: None,
+            stack: None,
         },
         1.0,
     );
@@ -808,7 +794,7 @@ fn default_specs_follow_the_sources() {
         &mut doc,
         LayerContent::Raster {
             image: wide,
-            original: None,
+            stack: None,
         },
         1.0,
     );
@@ -860,7 +846,7 @@ fn alpha_is_dropped_only_for_structurally_opaque_documents() {
         &mut doc,
         LayerContent::Raster {
             image: small,
-            original: None,
+            stack: None,
         },
         1.0,
     );
@@ -912,7 +898,7 @@ fn flattening_over_the_matte_equals_a_fill_below() {
         push_layer(
             &mut flattened_doc,
             LayerContent::Raster {
-                original: None,
+                stack: None,
                 image: image.clone(),
             },
             1.0,
@@ -926,10 +912,7 @@ fn flattening_over_the_matte_equals_a_fill_below() {
         push_layer(&mut fill_doc, LayerContent::Fill { color: matte }, 1.0);
         push_layer(
             &mut fill_doc,
-            LayerContent::Raster {
-                image,
-                original: None,
-            },
+            LayerContent::Raster { image, stack: None },
             1.0,
         );
         let fill_path = temp_path("matte-fill.png");
@@ -1187,7 +1170,7 @@ fn gray_documents_export_as_gray_by_default() {
         &mut doc,
         LayerContent::Raster {
             image: gray,
-            original: None,
+            stack: None,
         },
         1.0,
     );
@@ -1217,7 +1200,7 @@ fn gray_documents_export_as_gray_by_default() {
         &mut doc,
         LayerContent::Raster {
             image: rgb,
-            original: None,
+            stack: None,
         },
         1.0,
     );
@@ -1283,7 +1266,7 @@ fn layered_document() -> Document {
         None,
         "Background",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: rgba(64, 48, &|x, y| [(x * 4) as u8, (y * 5) as u8, 120, 255]),
         },
     );
@@ -1292,7 +1275,7 @@ fn layered_document() -> Document {
         None,
         "Moved \u{e9}toile",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: rgba(20, 16, &|x, y| {
                 [200, (x * 12) as u8, (y * 15) as u8, ((x + y) * 8) as u8]
             }),
@@ -1352,7 +1335,7 @@ fn layered_document() -> Document {
         Some(group),
         "Inside",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: rgba(30, 20, &|x, _| {
                 [30, 90, (x * 8) as u8, if x < 20 { 255 } else { 0 }]
             }),
@@ -1379,7 +1362,7 @@ fn layered_document() -> Document {
         None,
         "Hidden",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: rgba(8, 8, &|_, _| [255, 255, 255, 255]),
         },
     );
@@ -2591,14 +2574,7 @@ fn opened_samples(path: &Path) -> (Document, PixelFormat) {
     };
     let format = image.format();
     let mut doc = Document::new(image.size());
-    push_layer(
-        &mut doc,
-        LayerContent::Raster {
-            image,
-            original: None,
-        },
-        1.0,
-    );
+    push_layer(&mut doc, LayerContent::Raster { image, stack: None }, 1.0);
     (doc, format)
 }
 
