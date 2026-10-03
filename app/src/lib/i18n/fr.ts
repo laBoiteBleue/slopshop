@@ -15,6 +15,7 @@ const fr: Messages = {
   "menu.file.save": "Enregistrer",
   "menu.file.export": "Exporter…",
   "menu.file.saveAs": "Enregistrer sous…",
+  "menu.file.print": "Imprimer…",
   "menu.file.documentInfo": "Infos du document…",
   "menu.file.quit": "Quitter",
   "menu.edit": "Édition",

@@ -69,6 +69,7 @@
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
   import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
+  import { printImage } from "./lib/print";
   import { recentLabels } from "./lib/recent";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -235,6 +236,23 @@
       documentInfo = await engine.documentInfo(doc.id);
     } catch (e) {
       showError(String(e));
+    }
+  }
+
+  /** File > Print (Ctrl+P): the document as displayed, through the system's print dialog. */
+  let printing = false;
+
+  async function printDocument() {
+    const doc = active;
+    if (!doc || printing) return;
+    printing = true;
+    try {
+      const page = await engine.printPage(doc.id);
+      await printImage(page, tabTitle(doc), doc.width > doc.height);
+    } catch (e) {
+      showError(String(e));
+    } finally {
+      printing = false;
     }
   }
 
@@ -2192,6 +2210,7 @@
             !doc,
           ),
           separator,
+          cmd(t("menu.file.print"), () => void printDocument(), keys("mod", "P"), !doc),
           cmd(
             t("menu.file.documentInfo"),
             () => void showDocumentInfo(),
@@ -2599,6 +2618,11 @@
     if (key === "s") {
       e.preventDefault();
       if (!e.repeat) saveActive(e.shiftKey);
+      return;
+    }
+    if (key === "p" && !e.shiftKey) {
+      e.preventDefault();
+      if (!e.repeat) void printDocument();
       return;
     }
     if (key === "k" && !e.shiftKey) {

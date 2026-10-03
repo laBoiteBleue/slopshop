@@ -12,6 +12,7 @@ mod export;
 mod info;
 mod ipc;
 mod paint;
+mod print;
 mod recent;
 mod segment;
 mod selection;
@@ -2227,6 +2228,7 @@ pub fn run() {
             recent::clear_recent_files,
             recent::recent_thumbnail,
             info::document_info,
+            print::print_page,
             paint::sample_color,
             selection::color_range_preview,
             selection::color_range,

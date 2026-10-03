@@ -52,6 +52,30 @@ pub(super) fn check_size(size: Size) -> Result<(), ExportError> {
     Ok(())
 }
 
+/// An 8-bit sRGB RGB image (`size.width × size.height × 3` bytes, rows top to bottom) as a
+/// JPEG in memory, 4:4:4 and tagged sRGB: for small pages such as File > Print's, not for
+/// exports (which stream to their file).
+pub fn encode_srgb8(rgb: &[u8], size: Size, quality: u8) -> Result<Vec<u8>, ExportError> {
+    check_size(size)?;
+    if rgb.len() != size.width as usize * size.height as usize * 3 {
+        return Err(ExportError::Encode(
+            "the pixels do not match the size".to_owned(),
+        ));
+    }
+    let profile = icc::write_matrix_trc(&slopshop_core::color::ColorSpace::SRGB)
+        .map_err(|_| ExportError::UnsupportedSpace(slopshop_core::color::ColorSpace::SRGB))?;
+    let mut bytes = Vec::new();
+    let mut encoder = Encoder::new(&mut bytes, quality);
+    encoder.set_sampling_factor(SamplingFactor::F_1_1);
+    encoder.add_icc_profile(&profile).map_err(encode_error)?;
+    // Checked above: both sides fit in `u16`.
+    let (width, height) = (size.width as u16, size.height as u16);
+    encoder
+        .encode(rgb, width, height, jpeg_encoder::ColorType::Rgb)
+        .map_err(encode_error)?;
+    Ok(bytes)
+}
+
 /// A band of rows as YCbCr planes (or one gray plane), from `first_row`.
 struct Band {
     first_row: u32,
