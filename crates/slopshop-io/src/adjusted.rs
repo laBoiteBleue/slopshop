@@ -135,7 +135,7 @@ pub(crate) fn extremes(decoded: &Decoded) -> Option<(f64, f64)> {
 }
 
 /// Apply Levels to the samples (the flattened image), as the compositor does in a perceptual
-/// document.
+/// document: the composite settings (gray images have no channels of their own).
 pub(crate) fn apply_levels(levels: &Adjustment, decoded: &mut Decoded) {
     let Adjustment::Levels {
         input_black,
@@ -143,6 +143,7 @@ pub(crate) fn apply_levels(levels: &Adjustment, decoded: &mut Decoded) {
         gamma,
         output_black,
         output_white,
+        ..
     } = *levels
     else {
         return;

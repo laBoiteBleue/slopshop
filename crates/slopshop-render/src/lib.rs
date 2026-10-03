@@ -1447,7 +1447,7 @@ fn set_raster_fields(
 }
 
 /// The fields of an adjustment (an adjustment layer at `opacity`, or a stack's effect): its
-/// 16 parameters in fields it has no other use for, Curves' lookup tables appended to
+/// 20 parameters in fields it has no other use for, Curves' lookup tables appended to
 /// `tile_table`.
 fn adjustment_fields(
     adjustment: &Adjustment,
@@ -1470,7 +1470,7 @@ fn adjustment_fields(
         color: vec4(0),
         transfer: vec4(4),
         transfer2: vec4(8),
-        matrix: [vec4(12), [0.0; 4], [0.0; 4]],
+        matrix: [vec4(12), vec4(16), [0.0; 4]],
         ..LayerFields::default()
     };
     // Curves' lookup tables (composite, red, green, blue), after the tile slots.

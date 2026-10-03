@@ -1349,7 +1349,7 @@ fn damaged_layer_trees_are_refused() {
         Err("newerVersion"),
         "an adjustment from a newer SlopShop"
     );
-    // Schema 0.8: missing values read as 0, more than 16 are refused.
+    // Schema 0.8: missing values read as 0; more than 20 are refused (16 before schema 0.13).
     assert!(
         read(
             &adjustment(r#""adjustment":"exposure","values":[1,0,1]"#),
@@ -1359,9 +1359,60 @@ fn damaged_layer_trees_are_refused() {
     );
     assert_eq!(
         read(
-            &adjustment(r#""adjustment":"exposure","values":[1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"#),
+            &adjustment(
+                r#""adjustment":"exposure","values":[1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"#
+            ),
             "[1]"
         ),
         Err("corrupt")
     );
+}
+
+#[test]
+fn levels_keep_their_channels_and_write_five_values_without_them() {
+    use slopshop_core::adjust::{Adjustment, LEVELS_IDENTITY};
+    let composite = Adjustment::Levels {
+        input_black: 0.1,
+        input_white: 0.9,
+        gamma: 1.2,
+        output_black: 0.0,
+        output_white: 1.0,
+        channels: [LEVELS_IDENTITY; 3],
+    };
+    let channels = Adjustment::Levels {
+        input_black: 0.1,
+        input_white: 0.9,
+        gamma: 1.2,
+        output_black: 0.0,
+        output_white: 1.0,
+        channels: [
+            [0.05, 0.95, 0.8, 0.0, 1.0],
+            LEVELS_IDENTITY,
+            [0.0, 0.7, 1.0, 0.1, 0.9],
+        ],
+    };
+    // Without channels of their own: the five numbers earlier readers read.
+    let values = |a: &Adjustment| {
+        super::write::adjustment_params(a)["values"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    assert_eq!(values(&composite), 5);
+    assert_eq!(values(&channels), 20);
+
+    let path = temp_path("levels-channels.slop");
+    let mut doc = Document::new(Size::new(4, 4));
+    for adjustment in [composite, channels] {
+        push(
+            &mut doc,
+            "levels",
+            LayerContent::Adjustment { adjustment },
+            1.0,
+        );
+    }
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    fs::remove_file(&path).ok();
 }

@@ -83,11 +83,11 @@
       slider(2, "adjustment.hueSaturation.lightness", -100, 100),
     ],
     levels: [
-      slider(0, "adjustment.levels.inputBlack", 0, 253, { scale: 255 }),
-      slider(2, "adjustment.levels.gamma", 0.01, 9.99, { step: 0.01 }),
-      slider(1, "adjustment.levels.inputWhite", 2, 255, { scale: 255 }),
-      slider(3, "adjustment.levels.outputBlack", 0, 255, { scale: 255 }),
-      slider(4, "adjustment.levels.outputWhite", 0, 255, { scale: 255 }),
+      slider(0, "adjustment.levels.inputBlack", 0, 253, { scale: 255, selected: true }),
+      slider(2, "adjustment.levels.gamma", 0.01, 9.99, { step: 0.01, selected: true }),
+      slider(1, "adjustment.levels.inputWhite", 2, 255, { scale: 255, selected: true }),
+      slider(3, "adjustment.levels.outputBlack", 0, 255, { scale: 255, selected: true }),
+      slider(4, "adjustment.levels.outputWhite", 0, 255, { scale: 255, selected: true }),
     ],
     brightnessContrast: [
       slider(0, "adjustment.brightnessContrast.brightness", -150, 150),
@@ -133,6 +133,16 @@
   };
 
   const SELECTORS: Partial<Record<AdjustmentId, Selector>> = {
+    // Photoshop's Channel menu: the composite, then each channel's own settings.
+    levels: {
+      label: "adjustment.levels.channel",
+      options: [
+        { label: "adjustment.levels.rgb", offset: 0 },
+        { label: "adjustment.levels.red", offset: 5 },
+        { label: "adjustment.levels.green", offset: 10 },
+        { label: "adjustment.levels.blue", offset: 15 },
+      ],
+    },
     colorBalance: {
       label: "adjustment.colorBalance.tone",
       options: [
@@ -162,7 +172,7 @@
   const DEFAULTS: Record<AdjustmentId, Values> = {
     exposure: padded([0, 0, 1]),
     hueSaturation: padded([]),
-    levels: padded([0, 1, 1, 0, 1]),
+    levels: padded([0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1]),
     brightnessContrast: padded([]),
     vibrance: padded([]),
     colorBalance: padded([0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
@@ -203,9 +213,9 @@
     const next = [...values];
     const i = at(f);
     let v = Math.min(Math.max(shown, f.min), f.max) / f.scale;
-    // Levels: the input black stays below the input white.
-    if (adjustment.id === "levels" && i === 0) v = Math.min(v, next[1] - 2 / 255);
-    if (adjustment.id === "levels" && i === 1) v = Math.max(v, next[0] + 2 / 255);
+    // Levels: the input black stays below the input white (of the channel shown).
+    if (adjustment.id === "levels" && f.index === 0) v = Math.min(v, next[i + 1] - 2 / 255);
+    if (adjustment.id === "levels" && f.index === 1) v = Math.max(v, next[i - 1] + 2 / 255);
     next[i] = v;
     return next;
   }

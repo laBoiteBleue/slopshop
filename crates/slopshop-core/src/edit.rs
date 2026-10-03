@@ -1144,6 +1144,7 @@ mod tests {
                     gamma: 1.2,
                     output_black: 0.0,
                     output_white: 1.0,
+                    channels: [crate::adjust::LEVELS_IDENTITY; 3],
                 },
             },
         );

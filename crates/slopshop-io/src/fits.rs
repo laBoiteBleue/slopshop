@@ -366,6 +366,7 @@ fn stretch(decoded: &Decoded) -> Option<Adjustment> {
         gamma: gamma as f32,
         output_black: 0.0,
         output_white: 1.0,
+        channels: [slopshop_core::adjust::LEVELS_IDENTITY; 3],
     })
 }
 

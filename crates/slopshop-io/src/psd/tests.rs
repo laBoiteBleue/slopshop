@@ -1118,6 +1118,7 @@ fn adjustment_layers_are_imported_with_their_settings() {
             input_white: 235.0 / 255.0,
             gamma: 0.72,
             output_black: 0.0,
+            channels: [slopshop_core::adjust::LEVELS_IDENTITY; 3],
             output_white: 1.0
         }
     );
@@ -1151,7 +1152,22 @@ fn adjustment_layers_are_imported_with_their_settings() {
             level: 128.0 / 255.0
         }
     );
-    // Levels with a channel of its own: close, not identical.
+    // Levels with a channel of its own: the green one, exactly.
+    assert_eq!(
+        find("Levels 2"),
+        Adjustment::Levels {
+            input_black: 7.0 / 255.0,
+            input_white: 235.0 / 255.0,
+            gamma: 0.72,
+            output_black: 0.0,
+            output_white: 1.0,
+            channels: [
+                slopshop_core::adjust::LEVELS_IDENTITY,
+                [10.0 / 255.0, 1.0, 1.0, 0.0, 1.0],
+                slopshop_core::adjust::LEVELS_IDENTITY,
+            ],
+        }
+    );
     let warnings_of = |name: &str| {
         opened
             .document
@@ -1161,10 +1177,7 @@ fn adjustment_layers_are_imported_with_their_settings() {
             .map(|(_, w)| w.clone())
             .unwrap()
     };
-    assert_eq!(
-        warnings_of("Levels 2"),
-        [ImportWarning::AdjustmentsApproximated]
-    );
+    assert!(warnings_of("Levels 2").is_empty());
     assert!(warnings_of("Levels 1").is_empty());
 }
 

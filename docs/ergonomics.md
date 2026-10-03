@@ -156,7 +156,8 @@ built. Contributors: propose here first.
   above the active layer (in its folder) and selected. A Properties panel below Layers (the
   list never moves; the maintainer's choice) shows the selected adjustment's parameters: sliders applied live (one undo entry
   per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays
-  normal for now.
+  normal for now. Levels has Photoshop's Channel menu: RGB, Red, Green, Blue, each channel's
+  own settings applied before the RGB ones (as Curves).
 - Crop tool (C, Image > Crop): a frame on the whole image with eight handles, the outside
   shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
   a corner keeps the proportions), outside to draw a new one; edges snap to the canvas, the

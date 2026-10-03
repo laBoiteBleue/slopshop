@@ -702,18 +702,31 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             gamma,
             output_black,
             output_white,
+            channels,
         } => {
             let code = |v: f32| (v * 255.0).round() as i16;
+            let record = |[ib, iw, g, ob, ow]: [f32; 5]| {
+                be16(&[
+                    code(ib),
+                    code(iw),
+                    code(ob),
+                    code(ow),
+                    (g * 100.0).round() as i16,
+                ])
+            };
             let mut b = be16(&[2]);
-            b.extend(be16(&[
-                code(input_black),
-                code(input_white),
-                code(output_black),
-                code(output_white),
-                (gamma * 100.0).round() as i16,
+            b.extend(record([
+                input_black,
+                input_white,
+                gamma,
+                output_black,
+                output_white,
             ]));
-            // The channel records: unchanged.
-            for _ in 1..29 {
+            // Red, green and blue, then the other records, unchanged.
+            for channel in channels {
+                b.extend(record(channel));
+            }
+            for _ in 4..29 {
                 b.extend(be16(&[0, 255, 0, 255, 100]));
             }
             vec![(*b"levl", b)]

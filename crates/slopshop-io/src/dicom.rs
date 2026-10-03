@@ -647,6 +647,7 @@ fn levels(from: f64, to: f64, inverted: bool) -> Option<Adjustment> {
         gamma: 1.0,
         output_black: output_black as f32,
         output_white: output_white as f32,
+        channels: [slopshop_core::adjust::LEVELS_IDENTITY; 3],
     })
 }
 
@@ -710,6 +711,7 @@ mod tests {
                 output_black,
                 output_white,
                 gamma,
+                ..
             } => {
                 assert_eq!(gamma, 1.0);
                 [input_black, input_white, output_black, output_white]

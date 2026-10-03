@@ -838,8 +838,8 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 }
 
 // Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
-// `format` is the adjustment (Adjustment::index); its 16 parameters are `color`, `transfer`,
-// `transfer2` and `m0` (p0 to p3), Photo Filter's color already linear (sRGB primaries).
+// `format` is the adjustment (Adjustment::index); its 20 parameters are `color`, `transfer`,
+// `transfer2`, `m0` and `m1` (p0 to p4), Photo Filter's color already linear (sRGB primaries).
 // Curves' lookup tables (composite, red, green, blue: CURVE_LUT f32 each) are in the tile
 // table from `table_offset`.
 const ADJUST_EXPOSURE: u32 = 0u;
@@ -967,7 +967,13 @@ fn black_and_white(c: vec3<f32>, w: array<f32, 6>) -> f32 {
     return c[lo] + (c[mid] - c[lo]) * weights[secondary] + (c[hi] - c[mid]) * weights[2u * hi];
 }
 
-fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, table: u32, c: vec3<f32>) -> vec3<f32> {
+// Levels' settings (input black and white, gamma, output black and white) applied to `v`.
+fn levels(v: vec3<f32>, ib: vec3<f32>, iw: vec3<f32>, gamma: vec3<f32>, ob: vec3<f32>, ow: vec3<f32>) -> vec3<f32> {
+    let t = pow(clamp((v - ib) / (iw - ib), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0 / gamma);
+    return ob + t * (ow - ob);
+}
+
+fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, p4: vec4<f32>, table: u32, c: vec3<f32>) -> vec3<f32> {
     switch kind {
         case ADJUST_EXPOSURE: {
             let v = c * exp2(p.x) + p.y;
@@ -979,8 +985,17 @@ fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<
             return select(saturated + (1.0 - saturated) * l, saturated * (1.0 + l), l < 0.0);
         }
         case ADJUST_LEVELS: {
-            let t = pow(clamp((c - p.x) / (p.y - p.x), vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / p.z));
-            return p.w + t * (p1.x - p.w);
+            // Red, green and blue's own settings (params 5–19), each left alone at the identity,
+            // then the composite ones (0–4).
+            let ib = vec3<f32>(p1.y, p2.z, p3.w);
+            let iw = vec3<f32>(p1.z, p2.w, p4.x);
+            let g = vec3<f32>(p1.w, p3.x, p4.y);
+            let ob = vec3<f32>(p2.x, p3.y, p4.z);
+            let ow = vec3<f32>(p2.y, p3.z, p4.w);
+            let identity = ib == vec3<f32>(0.0) & iw == vec3<f32>(1.0) & g == vec3<f32>(1.0)
+                & ob == vec3<f32>(0.0) & ow == vec3<f32>(1.0);
+            let channels = select(levels(c, ib, iw, g, ob, ow), c, identity);
+            return levels(channels, vec3<f32>(p.x), vec3<f32>(p.y), vec3<f32>(p.z), vec3<f32>(p.w), vec3<f32>(p1.x));
         }
         case ADJUST_BRIGHTNESS_CONTRAST: {
             let v = sign(c) * pow(abs(c), vec3<f32>(exp2(-p.x / 100.0)));
@@ -1086,11 +1101,12 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     let p1 = layer.transfer;
     let p2 = layer.transfer2;
     let p3 = layer.m0;
+    let p4 = layer.m1;
     if kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER {
-        adjusted = adjust_color(kind, p0, p1, p2, p3, layer.table_offset, straight);
+        adjusted = adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, straight);
     } else {
         let encoded = to_blend(straight, perceptual);
-        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, layer.table_offset, encoded), perceptual);
+        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, encoded), perceptual);
     }
     return fade(below, vec4<f32>(adjusted * alpha, alpha), coverage, perceptual);
 }

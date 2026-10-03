@@ -24,7 +24,8 @@ node model the document is heading to (ADR 0009).
 4. **First adjustments**, parameters as in Photoshop:
    - Exposure: exposure (stops), offset, gamma correction;
    - Hue/Saturation (master): hue (−180…180°), saturation and lightness (−100…100);
-   - Levels (RGB): input black and white, gamma, output black and white.
+   - Levels (RGB): input black and white, gamma, output black and white; from 2026-10-03 also
+     per channel (red, green, blue), applied before the composite settings, as Curves.
    Then Brightness/Contrast (black and white kept: a gamma and an S-curve, as Photoshop's
    current mode behaves; Adobe's exact curves are not published), Vibrance, Invert, Posterize
    and Threshold; then Black & White (a gray from each color's hue family, optionally

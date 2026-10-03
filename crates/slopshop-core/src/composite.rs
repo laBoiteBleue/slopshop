@@ -2265,6 +2265,7 @@ mod tests {
                         gamma: 0.7,
                         output_black: 0.05,
                         output_white: 0.95,
+                        channels: [crate::adjust::LEVELS_IDENTITY; 3],
                     },
                     0.3,
                 ),
