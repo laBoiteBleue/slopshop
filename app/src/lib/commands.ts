@@ -30,7 +30,10 @@ export const SHORTCUTS = {
   redo: ["shift+mod+z", "mod+y"],
   cut: ["mod+x"],
   copy: ["mod+c"],
+  copyMerged: ["shift+mod+c"],
   paste: ["mod+v"],
+  pasteInPlace: ["shift+mod+v"],
+  pasteInto: ["alt+shift+mod+v"],
   freeTransform: ["mod+t"],
   keyboardShortcuts: ["alt+shift+mod+k"],
   // ⌘, is every macOS application's settings; Ctrl+, does no harm elsewhere.

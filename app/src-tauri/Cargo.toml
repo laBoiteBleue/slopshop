@@ -30,8 +30,9 @@ tauri-plugin-dialog = "2"
 # "Show in folder" after an export: selects the file in Explorer / Finder / the Linux file
 # manager (official plugin; its JavaScript commands are not granted, only our command uses it).
 tauri-plugin-opener = "2"
-# Paste (Ctrl+V): reads images (PNG, DIB) and copied file lists from the OS clipboard, in Rust,
-# so that pixels never go through the webview. Pure Rust over the OS APIs (MIT OR Apache-2.0,
+# Copy and Paste: reads images (PNG, DIB) and copied file lists from the OS clipboard and
+# writes the image of a copy for other applications, in Rust, so that pixels never go through
+# the webview. Pure Rust over the OS APIs (MIT OR Apache-2.0,
 # by 1Password); std has no clipboard, and Tauri's clipboard plugin wraps it for JavaScript
 # only, where images would cross the IPC.
 arboard = "3.6.1"

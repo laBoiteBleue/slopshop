@@ -16,6 +16,8 @@
     onRecentFiles,
     onOpenEvents,
     type BrushRequest,
+    type CopyRequest,
+    type PasteKind,
     type PaintTarget,
     type DocumentInfo,
     type DocumentView,
@@ -282,7 +284,11 @@
   /** File > New asks for the size and the background first (Photoshop's New dialog). */
   let newDialog = $state(false);
 
-  function newDocument() {
+  /** The size of what the clipboard holds, offered by File > New (Photoshop's Clipboard preset). */
+  let newClipboard = $state<[number, number] | null>(null);
+
+  async function newDocument() {
+    newClipboard = await engine.clipboardSize().catch(() => null);
     newDialog = true;
   }
 
@@ -2053,30 +2059,84 @@
     return job.total > 0 ? Math.floor((job.done * 100) / job.total) : 0;
   }
 
-  // --- Paste ------------------------------------------------------------------------------------
+  // --- Clipboard: Cut, Copy, Copy Merged, Paste, Paste in Place, Paste Into ---------------------
 
-  /** Paste the clipboard into the active document (as layers), or into a new tab. */
-  /** Edit > Copy (Ctrl+C) on the selected layers; with `cut`, they are then deleted (Ctrl+X). */
-  async function copyLayers(cut: boolean) {
+  /**
+   * Edit > Copy (Ctrl+C), and Cut (Ctrl+X) with `cut`, as in Photoshop: with a selection, the
+   * selected pixels of the active raster layer (or of its mask when it is the target), cut by
+   * erasing them; otherwise the selected layers whole (groups, masks, adjustments…), cut by
+   * deleting them. One undo entry for a cut.
+   */
+  async function copySelection(cut: boolean) {
     const doc = active;
+    if (!doc) return;
+    commitTransform();
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const mask = layersPanel?.paintsMask() ?? false;
+    const pixels = doc.selectionKey != null && layer !== null && (mask || layer.kind === "raster");
     const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
-    if (!doc || ids.length === 0) return;
+    if (!pixels && ids.length === 0) return;
+    const request: CopyRequest = pixels
+      ? { kind: "pixels", layerId: layer.id, target: mask ? "mask" : "layer" }
+      : { kind: "layers", ids };
     try {
-      await engine.copyLayersToClipboard(doc.id, ids);
-      if (cut) layersPanel?.deleteSelected();
+      if (!(await engine.copy(doc.id, request))) {
+        showError(t("copy.nothingSelected"));
+        return;
+      }
+    } catch (e) {
+      showError(t("copy.failed", { error: String(e) }));
+      return;
+    }
+    if (!cut) return;
+    if (pixels) {
+      // Erased as the Eraser does (paint, ADR 0027): Delete Paint brings them back.
+      void sync(engine.fillSelection(doc.id, layer.id, mask ? "mask" : "layer", null));
+    } else layersPanel?.deleteSelected();
+  }
+
+  /** Edit > Copy Merged (Shift+Ctrl+C): the visible layers composited, in the selection. */
+  async function copyMerged() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    try {
+      if (!(await engine.copy(doc.id, { kind: "merged", name: t("copy.mergedName") }))) {
+        showError(t("copy.nothingSelected"));
+      }
     } catch (e) {
       showError(t("copy.failed", { error: String(e) }));
     }
   }
 
-  async function paste(intoNewTab: boolean) {
-    const target = intoNewTab ? null : activeId;
+  /**
+   * Edit > Paste (Ctrl+V), Paste in Place (Shift+Ctrl+V) and Paste Into (Alt+Shift+Ctrl+V), into
+   * the active document or, without one, a new tab. The pasted layers are selected; files copied
+   * in the file manager are placed like dropped ones, in the middle of the view.
+   */
+  async function paste(kind: PasteKind) {
+    const doc = active;
+    commitTransform();
+    const view = doc ? (viewport?.visibleRect() ?? null) : null;
     try {
-      const pasted = await engine.paste(target, t("paste.layerName"));
-      if (pasted.kind === "image" || pasted.kind === "layers") {
+      const pasted = await engine.paste(doc?.id ?? null, t("paste.layerName"), kind, view);
+      if (pasted.kind === "layers") {
         upsert(pasted.document);
         if (pasted.newTab) activate(pasted.document.id);
-      } else if (pasted.kind === "nothing") {
+        else if (activeId === pasted.document.id) {
+          await tick();
+          layersPanel?.selectLayers(pasted.ids);
+        }
+      } else if (pasted.kind === "files") {
+        if (doc) {
+          const center: [number, number] = view
+            ? [(view[0] + view[2]) / 2, (view[1] + view[3]) / 2]
+            : [doc.width / 2, doc.height / 2];
+          void placeDropped(doc.id, pasted.paths, center);
+        } else void openFiles(pasted.paths, "tab");
+      } else if (pasted.kind === "noSelection") {
+        showError(t("paste.noSelection"));
+      } else {
         showError(t("paste.nothing"));
       }
     } catch (e) {
@@ -2148,7 +2208,7 @@
     const several = selectedCount > 1;
     const noSelection = doc?.selectionKey == null;
     return {
-      newDocument: { label: t("menu.file.new"), run: newDocument, whileTyping: true },
+      newDocument: { label: t("menu.file.new"), run: () => void newDocument(), whileTyping: true },
       open: { label: t("menu.file.open"), run: () => void openWithDialog(), whileTyping: true },
       importLayers: {
         label: t("menu.file.importLayers"),
@@ -2204,15 +2264,26 @@
       redo: { label: t("menu.edit.redo"), run: redo, disabled: !doc?.canRedo, repeats: true },
       cut: {
         label: t("menu.edit.cut"),
-        run: () => void copyLayers(true),
-        disabled: !doc || selectedCount === 0,
+        run: () => void copySelection(true),
+        disabled: !doc || (noSelection && selectedCount === 0),
       },
       copy: {
         label: t("menu.edit.copy"),
-        run: () => void copyLayers(false),
-        disabled: !doc || selectedCount === 0,
+        run: () => void copySelection(false),
+        disabled: !doc || (noSelection && selectedCount === 0),
       },
-      paste: { label: t("menu.edit.paste"), run: () => void paste(false) },
+      copyMerged: {
+        label: t("menu.edit.copyMerged"),
+        run: () => void copyMerged(),
+        disabled: !doc,
+      },
+      paste: { label: t("menu.edit.paste"), run: () => void paste("paste") },
+      pasteInPlace: { label: t("menu.edit.pasteInPlace"), run: () => void paste("inPlace") },
+      pasteInto: {
+        label: t("menu.edit.pasteInto"),
+        run: () => void paste("into"),
+        disabled: noSelection,
+      },
       freeTransform: {
         label: t("menu.edit.freeTransform"),
         run: () => (transforming ? commitTransform() : void startFreeTransform()),
@@ -2521,8 +2592,10 @@
           separator,
           item("cut"),
           item("copy"),
+          item("copyMerged"),
           item("paste"),
-          cmd(t("menu.edit.pasteNewDocument"), () => void paste(true)),
+          item("pasteInPlace"),
+          item("pasteInto"),
           separator,
           item("freeTransform"),
           {
@@ -3272,7 +3345,11 @@
   <FillChoiceDialog onchoose={applyFillChoice} onclose={() => (fillChoice = null)} />
 {/if}
 {#if newDialog}
-  <NewDocumentDialog oncreate={(s) => void createDocument(s)} onclose={() => (newDialog = false)} />
+  <NewDocumentDialog
+    clipboard={newClipboard}
+    oncreate={(s) => void createDocument(s)}
+    onclose={() => (newDialog = false)}
+  />
 {/if}
 {#if modifyDialog && modifyDialog.document === activeId}
   <ModifyDialog

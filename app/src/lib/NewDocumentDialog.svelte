@@ -87,16 +87,37 @@
   };
 
   let {
+    clipboard,
     oncreate,
     onclose,
   }: {
+    /** The size of what the clipboard holds: a preset, chosen at first, as in Photoshop. */
+    clipboard: [number, number] | null;
     oncreate: (settings: NewDocumentSettings) => void;
     onclose: () => void;
   } = $props();
 
+  /** The presets, the clipboard's first. */
+  const presets = $derived(
+    clipboard
+      ? [
+          {
+            id: "clipboard",
+            label: "newDocument.preset.clipboard" as MessageKey,
+            width: clipboard[0],
+            height: clipboard[1],
+            ppi: last.resolution,
+          },
+          ...PRESETS,
+        ]
+      : PRESETS,
+  );
+
   let name = $state("");
-  let width = $state(last.width);
-  let height = $state(last.height);
+  // svelte-ignore state_referenced_locally
+  let width = $state(clipboard?.[0] ?? last.width);
+  // svelte-ignore state_referenced_locally
+  let height = $state(clipboard?.[1] ?? last.height);
   let background = $state(last.background);
   /** Pixels per inch. */
   let resolution = $state(last.resolution);
@@ -143,7 +164,7 @@
   );
   /** The preset matching the size, either way round; none is Custom. */
   const preset = $derived(
-    PRESETS.find(
+    presets.find(
       (p) =>
         (p.width === width && p.height === height) || (p.width === height && p.height === width),
     )?.id ?? "custom",
@@ -151,7 +172,7 @@
   const portrait = $derived(height > width);
 
   function choosePreset(id: string) {
-    const chosen = PRESETS.find((p) => p.id === id);
+    const chosen = presets.find((p) => p.id === id);
     if (!chosen) return;
     [width, height, resolution] = [chosen.width, chosen.height, chosen.ppi];
     sync();
@@ -218,7 +239,7 @@
         onchange={(e) => choosePreset((e.currentTarget as HTMLSelectElement).value)}
       >
         <option value="custom">{t("newDocument.preset.custom")}</option>
-        {#each PRESETS as p (p.id)}
+        {#each presets as p (p.id)}
           <option value={p.id}>{t(p.label)} ({p.width} × {p.height})</option>
         {/each}
       </select>
