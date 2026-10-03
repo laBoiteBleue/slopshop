@@ -196,6 +196,10 @@ impl LayerView {
                                 .collect()
                         })
                     }),
+                    gradient: match adjustment {
+                        Adjustment::GradientMap { gradient, .. } => Some(gradient_stops(gradient)),
+                        _ => None,
+                    },
                 }),
                 _ => None,
             },
@@ -248,6 +252,8 @@ pub struct AdjustmentView {
     pub curves: Option<[Vec<[u8; 2]>; 4]>,
     /// Each curve's output at `i / CURVE_SAMPLES` (0 to 1), for the editor to draw.
     pub curve_samples: Option<[Vec<f32>; 4]>,
+    /// Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says).
+    pub gradient: Option<Vec<[u16; 4]>>,
 }
 
 /// Intervals of [`AdjustmentView::curve_samples`].
@@ -361,6 +367,9 @@ pub enum EditRequest {
         /// otherwise.
         #[serde(default)]
         curves: Option<Vec<Vec<[u8; 2]>>>,
+        /// Gradient Map's stops (`AdjustmentView::gradient`); required for `gradientMap`.
+        #[serde(default)]
+        gradient: Option<Vec<[u16; 4]>>,
     },
     /// A new empty layer to paint on (Layer > New > Layer, ADR 0027): canvas-sized, 8-bit
     /// sRGB, transparent, at `index` among the layers of `parent` (absent: the top level).
@@ -388,6 +397,8 @@ pub enum EditRequest {
         values: Vec<f32>,
         #[serde(default)]
         curves: Option<Vec<Vec<[u8; 2]>>>,
+        #[serde(default)]
+        gradient: Option<Vec<[u16; 4]>>,
     },
     /// Image > Auto Tone, Auto Contrast and Auto Color (`correction`: `tone`, `contrast` or
     /// `color`):
@@ -581,6 +592,7 @@ impl EditRequest {
                 adjustment,
                 values,
                 curves,
+                gradient,
             } => {
                 let mut built = Adjustment::from_params(&adjustment, &values).ok_or(format!(
                     "unknown adjustment {adjustment} or too many values"
@@ -588,6 +600,7 @@ impl EditRequest {
                 if built.curves().is_some() {
                     built = curves_adjustment(curves.as_deref())?;
                 }
+                built = with_gradient(built, gradient.as_deref())?;
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::apply_effect(session.document(), &ids, built).map_err(|e| e.to_string())?
             }
@@ -713,6 +726,7 @@ impl EditRequest {
                 adjustment,
                 values,
                 curves,
+                gradient,
             } => {
                 let mut built = Adjustment::from_params(&adjustment, &values).ok_or(format!(
                     "unknown adjustment {adjustment} or too many values"
@@ -720,6 +734,7 @@ impl EditRequest {
                 if built.curves().is_some() {
                     built = curves_adjustment(curves.as_deref())?;
                 }
+                built = with_gradient(built, gradient.as_deref())?;
                 Edit::SetAdjustment {
                     id: LayerId::from_raw(id),
                     adjustment: built,
@@ -1058,6 +1073,40 @@ fn curves_adjustment(lists: Option<&[Vec<[u8; 2]>]>) -> Result<Adjustment, Strin
         green: curve(&lists[2])?,
         blue: curve(&lists[3])?,
     })
+}
+
+/// Gradient Map with the stops `[location, r, g, b]` given (its reverse flag kept); other
+/// adjustments as they are.
+fn with_gradient(adjustment: Adjustment, stops: Option<&[[u16; 4]]>) -> Result<Adjustment, String> {
+    let Adjustment::GradientMap { reverse, .. } = adjustment else {
+        return Ok(adjustment);
+    };
+    use slopshop_core::gradient::{Gradient, GradientStop};
+    let stops = stops.ok_or("a gradient map needs its stops")?;
+    let stops: Vec<GradientStop> = stops
+        .iter()
+        .map(|&[location, r, g, b]| {
+            let byte = |v: u16| u8::try_from(v).map_err(|_| format!("invalid color value {v}"));
+            Ok(GradientStop {
+                location,
+                color: [byte(r)?, byte(g)?, byte(b)?],
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let gradient = Gradient::new(&stops).ok_or(format!("invalid gradient stops {stops:?}"))?;
+    Ok(Adjustment::GradientMap { gradient, reverse })
+}
+
+/// A gradient's stops as the UI gets them, `[location, r, g, b]`.
+fn gradient_stops(gradient: &slopshop_core::gradient::Gradient) -> Vec<[u16; 4]> {
+    gradient
+        .stops()
+        .iter()
+        .map(|s| {
+            let [r, g, b] = s.color.map(u16::from);
+            [s.location, r, g, b]
+        })
+        .collect()
 }
 
 /// Export file formats.

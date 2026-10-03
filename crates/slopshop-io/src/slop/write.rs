@@ -483,6 +483,18 @@ pub(super) fn adjustment_params(adjustment: &Adjustment) -> Value {
         let points: Vec<&[[u8; 2]]> = curves.iter().map(|c| c.points()).collect();
         params["curves"] = json!(points);
     }
+    // Schema 0.14: Gradient Map's stops, `[location, r, g, b]` (not reversed: `values` says).
+    if let Adjustment::GradientMap { gradient, .. } = adjustment {
+        let stops: Vec<[u16; 4]> = gradient
+            .stops()
+            .iter()
+            .map(|s| {
+                let [r, g, b] = s.color.map(u16::from);
+                [s.location, r, g, b]
+            })
+            .collect();
+        params["gradient"] = json!(stops);
+    }
     params
 }
 

@@ -153,6 +153,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Curves (with a curve editor), `.slop` 0.9, PSD import and export
 - [x] Levels per channel (Photoshop's Channel menu), `.slop` 0.13, PSD import and export
 - [x] Image > Auto Tone, Auto Contrast, Auto Color: Levels computed from the visible image
+- [x] Gradient Map (a simple gradient editor), `.slop` 0.14, PSD import and export
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,
       `.slop` 0.4

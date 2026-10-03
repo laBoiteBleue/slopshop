@@ -61,14 +61,14 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    white as Photoshop does, and the ICC profile. Checked by re-importing and with psd-tools.
 5. **Adjustment layers** ✅ in part (ADR 0020): Brightness/Contrast (from its descriptor, as
    current Photoshop versions write it), Levels, Curves, Exposure, Vibrance, Hue/Saturation,
-   Color Balance, Black & White, Photo Filter, Channel Mixer, Invert, Posterize and Threshold
-   become
-   native adjustment layers with their mask (and are exported as such); Levels per channel,
-   Hue/Saturation color ranges, legacy Brightness/Contrast, the Black & White tint, Photo
+   Color Balance, Black & White, Photo Filter, Channel Mixer, Invert, Posterize, Threshold
+   and Gradient Map become
+   native adjustment layers with their mask (and are exported as such); Hue/Saturation color
+   ranges, Gradient Map's smoothness, midpoints and transparency, legacy Brightness/Contrast, the Black & White tint, Photo
    Filter colors other than RGB or Lab (and version 3's XYZ) and blend modes other than normal
    are approximated and reported; Photo Filter colors are kept within sRGB; Colorize, drawn
-   ("map") curves, curves of more than 16 points, Color Lookup, Selective Color and Gradient
-   Map are left out for now.
+   ("map") curves, curves of more than 16 points, Color Lookup and Selective Color are left
+   out for now.
    Then layer styles as native nodes, text as rasterized pixels plus its parameters, smart
    objects as embedded documents.
 
@@ -107,7 +107,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| **Photoshop** | `.psd`, `.pdd` | ✅ layers | ✅ layers | **P0** | in-house reader (see above) | groups, clipping and thirteen kinds of adjustment layers kept; other adjustments and styles reported; CMYK, Lab refused |
+| **Photoshop** | `.psd`, `.pdd` | ✅ layers | ✅ layers | **P0** | in-house reader (see above) | groups, clipping and fourteen kinds of adjustment layers kept; other adjustments and styles reported; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | ✅ layers | ✅ layers | **P0** | same reader and writer (64-bit lengths) | up to 300,000 px per side |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
 | PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export; APNG frames as layers (see GIF) |

@@ -36,7 +36,11 @@ node model the document is heading to (ADR 0009).
    Photoshop's 0–255 scale (composite, red, green, blue; each channel's curve, then the
    composite), a natural cubic spline through them, applied through 1024-entry lookup tables
    that both compositors interpolate the same way (on the GPU, appended to the tile table,
-   so no new binding). Others follow on the same model.
+   so no new binding). Then Gradient Map (2026-10-03): up to 16 color stops (location 0–4096,
+   sRGB 8-bit colors), interpolated linearly, the luminance (Rec. 601 weights) mapped through
+   three lookup tables like Curves'; it always runs on sRGB-encoded values, whatever the blend
+   space, so that the gradient's colors come out as chosen (Photoshop's smoothness is not
+   reproduced). Others follow on the same model.
 5. **Blend mode**: normal only for now; the others (luminosity, color…) come later.
 6. **Both compositors**: a step of the shared step list (`Step::Adjust`), computed identically
    by the CPU reference and the GPU (tested against each other).

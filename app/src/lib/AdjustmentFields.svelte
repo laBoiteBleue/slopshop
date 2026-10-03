@@ -1,10 +1,11 @@
 <script lang="ts">
   // The settings of an adjustment (ADR 0020), as Photoshop shows them: sliders with a number
-  // field each, checkboxes, color swatches, menus choosing what the sliders edit, and the Curves
-  // editor. Used by the Properties panel (an adjustment layer) and by Image > Adjustments.
+  // field each, checkboxes, color swatches, menus choosing what the sliders edit, the Curves
+  // editor and Gradient Map's gradient editor. Used by the Properties panel (an adjustment layer) and by Image > Adjustments.
   import { ADJUSTMENT_PARAMS, type AdjustmentId, type LayerView } from "./engine";
   import { hexToSrgb, srgbToHex } from "./color";
   import CurvesEditor from "./CurvesEditor.svelte";
+  import GradientEditor from "./GradientEditor.svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
 
@@ -22,10 +23,10 @@
     /** What the settings belong to (e.g. a layer id): the menus go back to their first
      * option when it changes. */
     owner: number;
-    /** Settings changed during a drag (part of a gesture). */
-    onlive: (values: number[]) => void;
+    /** Settings changed during a drag (part of a gesture); Gradient Map's stops with them. */
+    onlive: (values: number[], gradient?: number[][]) => void;
     /** Settings changed at once (one change). */
-    onapply: (values: number[]) => void;
+    onapply: (values: number[], gradient?: number[][]) => void;
     /** The end of a drag. */
     onend: () => void;
     /** Curves' points changed during a drag, or at once: composite, red, green, blue. */
@@ -128,6 +129,7 @@
     ],
     invert: [],
     curves: [],
+    gradientMap: [{ kind: "check", index: 0, label: "adjustment.gradientMap.reverse" }],
     posterize: [slider(0, "adjustment.posterize.levels", 2, 255)],
     threshold: [slider(0, "adjustment.threshold.level", 1, 255, { scale: 255 })],
   };
@@ -181,6 +183,7 @@
     channelMixer: padded([100, 0, 0, 0, 0, 100, 0, 0, 0, 0, 100, 0, 0]),
     invert: padded([]),
     curves: padded([]),
+    gradientMap: padded([]),
     posterize: padded([4]),
     threshold: padded([128 / 255]),
   };
@@ -264,10 +267,19 @@
     return fields.length > 0 || adjustment.curves !== null;
   }
 
+  /** Gradient Map's default gradient: black to white. */
+  const BLACK_TO_WHITE = [
+    [0, 0, 0, 0],
+    [4096, 255, 255, 255],
+  ];
+
   /** Put the neutral settings back (those of a new adjustment layer). */
   export function reset() {
     if (adjustment.id === "curves") oncurvesapply(IDENTITY_CURVES);
-    else apply([...DEFAULTS[adjustment.id]]);
+    else if (adjustment.id === "gradientMap") {
+      values = [...DEFAULTS.gradientMap];
+      onapply(values, BLACK_TO_WHITE);
+    } else apply([...DEFAULTS[adjustment.id]]);
   }
 
   const shown = (f: Slider) => {
@@ -286,6 +298,14 @@
       onlive={oncurveslive}
       {onend}
       onapply={oncurvesapply}
+    />
+  {/if}
+  {#if adjustment.gradient}
+    <GradientEditor
+      stops={adjustment.gradient}
+      onlive={(stops) => onlive(values, stops)}
+      {onend}
+      onapply={(stops) => onapply(values, stops)}
     />
   {/if}
   {#if selector && !selectorHidden}

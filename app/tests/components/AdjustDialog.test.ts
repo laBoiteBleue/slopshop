@@ -21,7 +21,7 @@ function open(id: AdjustmentId = "hueSaturation", values: number[] = [], preview
     oncancel: vi.fn(),
   };
   render(AdjustDialog, {
-    adjustment: { id, values: padded(values), curves: null, curveSamples: null },
+    adjustment: { id, values: padded(values), curves: null, curveSamples: null, gradient: null },
     preview,
     ...callbacks,
   });

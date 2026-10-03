@@ -282,7 +282,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,
-    `colorBalance`, `photoFilter` or `channelMixer`. `params.values` holds its parameters in
+    `colorBalance`, `photoFilter` or `channelMixer`, from schema 0.9 `curves`, and from schema
+    0.14 `gradientMap`. `params.values` holds its parameters in
     this order: exposure, offset, gamma; hue, saturation, lightness; input black, input
     white, gamma, output black, output white; brightness, contrast; vibrance, saturation;
     nothing (invert); levels (posterize); level in [0, 1] (threshold); the reds, yellows,
@@ -300,6 +301,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     values of its own but `params.curves`: four lists (composite, red, green, blue) of 2 to 16
     points `[input, output]`, integers 0–255 with strictly increasing inputs; the curve through
     them is a natural cubic spline, flat outside its points.
+    From schema 0.14, `gradientMap` has one value, reverse (flag), and `params.gradient`: 2 to
+    16 stops `[location, r, g, b]`, the location an integer 0–4096 never decreasing along the
+    list, the color sRGB-encoded 0–255; between two stops the color is interpolated linearly
+    (on sRGB-encoded values), outside them it stays the end stop's; the luminance mapped is
+    0.299 r + 0.587 g + 0.114 b of the sRGB-encoded color, whatever the blend space.
     Parameters out of range make the file invalid; an unknown adjustment comes from a newer
     SlopShop. No `inputs`.
   - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills and adjustments.

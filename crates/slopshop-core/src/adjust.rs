@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 
 use crate::color::{ColorSpace, Mat3, TransferFunction, WORKING_SPACE, mat_vec};
 use crate::curve::{Curve, lookup};
+use crate::gradient::Gradient;
 
 /// Number of parameters of an adjustment ([`Adjustment::params`]).
 pub const PARAM_COUNT: usize = 20;
@@ -102,13 +103,18 @@ pub enum Adjustment {
         green: Curve,
         blue: Curve,
     },
+    /// Each color replaced by the gradient's color at its luminance (Rec. 601 weights, as
+    /// Photoshop), from the other end when `reverse`. On sRGB-encoded values whatever the
+    /// document's blend space, so that the gradient's colors come out as chosen. The gradient
+    /// is its own data, not in [`Adjustment::params`] (as Curves').
+    GradientMap { gradient: Gradient, reverse: bool },
 }
 
 impl Adjustment {
     /// Every adjustment, with the parameters a new layer gets (Photoshop's defaults): neutral
-    /// ones, except for Invert, Posterize, Threshold, Black & White and Photo Filter, which
-    /// change the image by nature.
-    pub const DEFAULTS: [Adjustment; 13] = [
+    /// ones, except for Invert, Posterize, Threshold, Black & White, Photo Filter and Gradient
+    /// Map, which change the image by nature.
+    pub const DEFAULTS: [Adjustment; 14] = [
         Adjustment::Exposure {
             exposure: 0.0,
             offset: 0.0,
@@ -170,6 +176,10 @@ impl Adjustment {
             green: Curve::IDENTITY,
             blue: Curve::IDENTITY,
         },
+        Adjustment::GradientMap {
+            gradient: Gradient::BLACK_TO_WHITE,
+            reverse: false,
+        },
     ];
 
     /// Stable identifier (files, IPC).
@@ -188,6 +198,7 @@ impl Adjustment {
             Adjustment::PhotoFilter { .. } => "photoFilter",
             Adjustment::ChannelMixer { .. } => "channelMixer",
             Adjustment::Curves { .. } => "curves",
+            Adjustment::GradientMap { .. } => "gradientMap",
         }
     }
 
@@ -212,6 +223,7 @@ impl Adjustment {
             Adjustment::PhotoFilter { .. } => 10,
             Adjustment::ChannelMixer { .. } => 11,
             Adjustment::Curves { .. } => 12,
+            Adjustment::GradientMap { .. } => 13,
         }
     }
 
@@ -222,7 +234,9 @@ impl Adjustment {
             Adjustment::Levels { .. } => 20,
             Adjustment::BrightnessContrast { .. } | Adjustment::Vibrance { .. } => 2,
             Adjustment::Invert | Adjustment::Curves { .. } => 0,
-            Adjustment::Posterize { .. } | Adjustment::Threshold { .. } => 1,
+            Adjustment::Posterize { .. }
+            | Adjustment::Threshold { .. }
+            | Adjustment::GradientMap { .. } => 1,
             Adjustment::BlackWhite { .. } => 9,
             Adjustment::ColorBalance { .. } => 10,
             Adjustment::PhotoFilter { .. } => 5,
@@ -272,6 +286,7 @@ impl Adjustment {
                 saturation,
             } => vec![vibrance, saturation],
             Adjustment::Invert | Adjustment::Curves { .. } => vec![],
+            Adjustment::GradientMap { reverse, .. } => vec![flag(reverse)],
             Adjustment::Posterize { levels } => vec![levels],
             Adjustment::Threshold { level } => vec![level],
             Adjustment::BlackWhite {
@@ -380,6 +395,11 @@ impl Adjustment {
             },
             // Curves are set with Adjustment::Curves itself.
             curves @ Adjustment::Curves { .. } => curves,
+            // The gradient is set with Adjustment::GradientMap itself.
+            Adjustment::GradientMap { gradient, .. } => Adjustment::GradientMap {
+                gradient,
+                reverse: flag(p[0]),
+            },
         })
     }
 
@@ -463,8 +483,8 @@ impl Adjustment {
                 .iter()
                 .flatten()
                 .all(|&v| within(v, -200.0, 200.0)),
-            // Valid by construction (Curve::new).
-            Adjustment::Curves { .. } => true,
+            // Valid by construction (Curve::new, Gradient::new).
+            Adjustment::Curves { .. } | Adjustment::GradientMap { .. } => true,
         }
     }
 
@@ -481,16 +501,34 @@ impl Adjustment {
         }
     }
 
-    /// Ready to apply to many colors: Curves' lookup tables computed once.
+    /// Gradient Map's gradient, reversed when it says so: what it maps to.
+    pub fn gradient(&self) -> Option<Gradient> {
+        match *self {
+            Adjustment::GradientMap { gradient, reverse } => Some(if reverse {
+                gradient.reversed()
+            } else {
+                gradient
+            }),
+            _ => None,
+        }
+    }
+
+    /// Ready to apply to many colors: Curves' and Gradient Map's lookup tables computed once.
     pub fn prepare(&self) -> Prepared {
-        let luts = match self.curves() {
-            Some(curves) => curves.iter().map(Curve::lut).collect(),
-            None => Vec::new(),
+        let luts = match (self.curves(), self.gradient()) {
+            (Some(curves), _) => curves.iter().map(Curve::lut).collect(),
+            (None, Some(gradient)) => gradient.luts().into(),
+            (None, None) => Vec::new(),
         };
         Prepared {
             adjustment: *self,
             luts,
         }
+    }
+
+    /// Runs on sRGB-encoded values whatever the document's blend space: Gradient Map.
+    pub fn is_perceptual(&self) -> bool {
+        matches!(self, Adjustment::GradientMap { .. })
     }
 
     /// Runs in linear light whatever the document's blend space (ADR 0020).
@@ -689,6 +727,10 @@ impl Adjustment {
                 let rgb = &luts[0];
                 [0, 1, 2].map(|i| lookup(rgb, lookup(&luts[i + 1], c[i])))
             }
+            Adjustment::GradientMap { .. } => {
+                let luminance = LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
+                [0, 1, 2].map(|i| lookup(&luts[i], luminance))
+            }
         }
     }
 }
@@ -697,7 +739,8 @@ impl Adjustment {
 #[derive(Debug, Clone)]
 pub struct Prepared {
     adjustment: Adjustment,
-    /// Curves' lookup tables (composite, red, green, blue); empty for other adjustments.
+    /// Curves' lookup tables (composite, red, green, blue), Gradient Map's (red, green, blue);
+    /// empty for other adjustments.
     luts: Vec<Vec<f32>>,
 }
 
@@ -858,6 +901,7 @@ mod tests {
                     | Adjustment::Threshold { .. }
                     | Adjustment::BlackWhite { .. }
                     | Adjustment::PhotoFilter { .. }
+                    | Adjustment::GradientMap { .. }
             );
             assert_eq!(!close(a.apply(c), c), changes, "{a:?}");
         }
@@ -985,6 +1029,57 @@ mod tests {
             channels: [crate::adjust::LEVELS_IDENTITY; 3],
         };
         assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn gradient_map_replaces_each_color_by_the_gradient_at_its_luminance() {
+        use crate::gradient::{Gradient, GradientStop};
+        let gradient = Gradient::new(&[
+            GradientStop {
+                location: 0,
+                color: [255, 0, 0],
+            },
+            GradientStop {
+                location: 4096,
+                color: [0, 0, 255],
+            },
+        ])
+        .unwrap();
+        let a = Adjustment::GradientMap {
+            gradient,
+            reverse: false,
+        };
+        assert!(close(a.apply([0.0; 3]), [1.0, 0.0, 0.0]));
+        assert!(close(a.apply([1.0; 3]), [0.0, 0.0, 1.0]));
+        // Pure green: luminance 0.587 (Rec. 601).
+        let green = a.apply([0.0, 1.0, 0.0]);
+        assert!((green[2] - 0.587).abs() < 2e-3 && (green[0] - 0.413).abs() < 2e-3);
+        // Reverse: from the other end; the flag is its one parameter.
+        let reversed = Adjustment::GradientMap {
+            gradient,
+            reverse: true,
+        };
+        assert!(close(reversed.apply([0.0; 3]), [0.0, 0.0, 1.0]));
+        assert_eq!(reversed.params()[0], 1.0);
+        assert!(matches!(
+            Adjustment::from_params("gradientMap", &[1.0]),
+            Some(Adjustment::GradientMap { reverse: true, .. })
+        ));
+    }
+
+    #[test]
+    fn gradient_map_gives_its_colors_in_a_linear_document_too() {
+        use crate::blend::{BlendSpace, Blender};
+        let a = Adjustment::defaults("gradientMap").unwrap().prepare();
+        // Black to white: a gray in, the same gray out, whatever the blend space.
+        let gray = crate::color::LinearRgba::from_srgb_encoded_to_working(0.5, 0.5, 0.5, 1.0);
+        let px = [f64::from(gray.r), f64::from(gray.g), f64::from(gray.b), 1.0];
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            let out = Blender::new(space).adjust(&a, &px, 1.0);
+            for c in 0..3 {
+                assert!((out[c] - px[c]).abs() < 1e-4, "{space:?} {out:?}");
+            }
+        }
     }
 
     #[test]
