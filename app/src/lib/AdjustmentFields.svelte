@@ -279,12 +279,15 @@
     />
   {/if}
   {#if selector && !selectorHidden}
-    <label class="label" for="property-selector">{t(selector.label)}</label>
-    <select id="property-selector" class="selector" bind:value={chosen}>
-      {#each selector.options as option, i (option.offset)}
-        <option value={i}>{t(option.label)}</option>
-      {/each}
-    </select>
+    <!-- A row of its own: the options' names (Midtones…) need more than a number's width. -->
+    <div class="selector-row">
+      <label class="label" for="property-selector">{t(selector.label)}</label>
+      <select id="property-selector" class="selector" bind:value={chosen}>
+        {#each selector.options as option, i (option.offset)}
+          <option value={i}>{t(option.label)}</option>
+        {/each}
+      </select>
+    </div>
   {/if}
   {#each fields as f (f.index)}
     {#if f.kind === "slider"}
@@ -353,15 +356,22 @@
   }
 
   .number,
-  .selector,
   .swatch {
     width: 64px;
     min-width: 0;
   }
 
+  .selector-row {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
   .selector {
-    width: auto;
-    min-width: 64px;
+    flex: 1;
+    min-width: 0;
   }
 
   .slider {
