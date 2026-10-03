@@ -239,6 +239,24 @@
     }
   }
 
+  /** File > Import from Device (Windows): a scanner's or a camera's image in a new tab. */
+  let acquiring = false;
+
+  async function acquireImage() {
+    if (acquiring) return;
+    acquiring = true;
+    try {
+      const outcome = await engine.acquireImage();
+      if (outcome === "noDevice") showError(t("acquire.noDevice"));
+      // The new tab is untitled: its temporary file is no name.
+      if (outcome === "opened") await refreshTabs();
+    } catch (e) {
+      showError(t("acquire.failed", { detail: String(e) }));
+    } finally {
+      acquiring = false;
+    }
+  }
+
   /** File > Print (Ctrl+P): the print settings of this document, while shown. */
   let printDialog = $state<number | null>(null);
 
@@ -2182,6 +2200,8 @@
             keys("mod", "shift", "O"),
             !doc,
           ),
+          // Windows' scanning dialog (WIA); not available on other systems yet.
+          ...(isWindows ? [cmd(t("menu.file.importDevice"), () => void acquireImage())] : []),
           separator,
           cmd(t("menu.file.close"), () => doc && void closeTab(doc.id), keys("mod", "W"), !doc),
           cmd(t("menu.file.closeAll"), () => void closeAll(), keys("mod", "alt", "W"), !doc),
