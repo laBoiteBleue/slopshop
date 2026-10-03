@@ -1077,8 +1077,14 @@ async fn new_document(
     height: u32,
     background: Option<[f32; 3]>,
     layer_name: String,
+    resolution: Option<f64>,
 ) -> Result<DocumentView, String> {
-    let session = blank_session(Size::new(width, height), background, &layer_name)?;
+    let mut session = blank_session(Size::new(width, height), background, &layer_name)?;
+    if let Some(ppi) = resolution {
+        // Cheap: the layer's pixels are shared.
+        let doc = session.document().clone().with_resolution(ppi);
+        session = Session::new(doc.map_err(|e| e.to_string())?);
+    }
     let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
     state.add_document(session, name, Vec::new())
 }
@@ -3311,6 +3317,39 @@ mod tests {
         assert!(unknown.is_err());
         while s.undo().unwrap() {}
         assert_eq!(s.document().size(), size);
+        // Image Size with a resolution (ADR 0028): one undo entry; without resampling, the
+        // resolution alone.
+        let resize = |s: &mut Session, json: &str| {
+            let edit = serde_json::from_str::<EditRequest>(json)
+                .unwrap()
+                .into_edit(s)
+                .unwrap();
+            s.perform(edit).unwrap();
+        };
+        resize(
+            &mut s,
+            r#"{"kind":"resizeImage","width":40,"height":30,"resolution":300}"#,
+        );
+        assert_eq!(
+            (s.document().size(), s.document().resolution()),
+            (Size::new(40, 30), 300.0)
+        );
+        let (w, h) = (40, 30);
+        resize(
+            &mut s,
+            &format!(r#"{{"kind":"resizeImage","width":{w},"height":{h},"resolution":150}}"#),
+        );
+        assert_eq!(
+            (s.document().size(), s.document().resolution()),
+            (Size::new(40, 30), 150.0)
+        );
+        s.undo().unwrap();
+        assert_eq!(s.document().resolution(), 300.0);
+        s.undo().unwrap();
+        assert_eq!(
+            (s.document().size(), s.document().resolution()),
+            (size, slopshop_core::document::DEFAULT_RESOLUTION)
+        );
     }
 
     #[test]

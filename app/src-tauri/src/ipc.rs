@@ -41,6 +41,8 @@ pub struct DocumentView {
     pub working_space: &'static str,
     /// Where layers blend: `perceptual` or `linear` (ADR 0012).
     pub blend_space: &'static str,
+    /// Pixels per inch (ADR 0028).
+    pub resolution: f64,
     pub revision: u64,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -106,6 +108,7 @@ impl DocumentView {
             height: doc.size().height,
             working_space: color_space_id(doc.working_space()),
             blend_space: doc.blend_space().id(),
+            resolution: doc.resolution(),
             revision: doc.revision(),
             can_undo: session.can_undo(),
             can_redo: session.can_redo(),
@@ -373,6 +376,9 @@ pub enum EditRequest {
     ResizeImage {
         width: u32,
         height: u32,
+        /// The new resolution, pixels per inch (ADR 0028), in the same undo entry; absent: kept.
+        #[serde(default)]
+        resolution: Option<f64>,
     },
     /// Image > Canvas Size: the canvas resized, the image kept at `anchor` (each in [0, 1]:
     /// 0 left/top, 0.5 center, 1 right/bottom).
@@ -580,9 +586,20 @@ impl EditRequest {
                 )
                 .map_err(|e| e.to_string())?
             }
-            EditRequest::ResizeImage { width, height } => {
-                Edit::resize_image(session.document(), Size::new(width, height))
-                    .map_err(|e| e.to_string())?
+            EditRequest::ResizeImage {
+                width,
+                height,
+                resolution,
+            } => {
+                let doc = session.document();
+                let size = Size::new(width, height);
+                let resize = Edit::resize_image(doc, size).map_err(|e| e.to_string())?;
+                // Resample off (Photoshop): only the resolution changes.
+                match resolution.filter(|&ppi| ppi != doc.resolution()) {
+                    Some(ppi) if size == doc.size() => Edit::SetResolution { ppi },
+                    Some(ppi) => Edit::Batch(vec![resize, Edit::SetResolution { ppi }]),
+                    None => resize,
+                }
             }
             EditRequest::CanvasSize {
                 width,
