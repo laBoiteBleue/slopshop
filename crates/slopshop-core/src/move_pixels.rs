@@ -332,7 +332,7 @@ impl PixelMove {
                     self.codec.write([0.0; 3], 0.0, px);
                 } else if !self.codec.scale_alpha(px, c) {
                     let (color, alpha) = self.codec.read_mapped(px, &mut |v| v);
-                    self.codec.write(color, alpha * c, px);
+                    self.codec.write(color.map(|v| v * c), alpha * c, px);
                 }
             }
         }
@@ -732,6 +732,38 @@ mod tests {
         assert_eq!(pixel(&extracted.image, 38, 7), [0, 0, 0, 0]);
         assert_eq!(pixel(&extracted.image, 49, 7), [0, 0, 0, 0]);
         assert_eq!(pixel(&extracted.image, 39, 13), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn premultiplied_pixels_extracted_in_part_keep_their_color() {
+        let canvas = Size::new(8, 8);
+        let format = PixelFormat {
+            layout: ChannelLayout::Rgba,
+            sample: crate::color::SampleType::F32,
+            color_space: crate::color::ColorSpace::LINEAR_SRGB,
+            alpha: crate::color::AlphaMode::Premultiplied,
+        };
+        let pixel_bytes: Vec<u8> = [0.4f32, 0.2, 0.1, 0.8]
+            .iter()
+            .flat_map(|v| v.to_ne_bytes())
+            .collect();
+        let base =
+            Arc::new(RasterImage::from_pixels(canvas, format, &pixel_bytes.repeat(64)).unwrap());
+        // Column 2 is half selected.
+        let selection = rectangle(canvas, 2.5, 0.0, 6.0, 8.0);
+        let extracted = pixel_move(base, Affine::IDENTITY, &selection)
+            .extract()
+            .unwrap()
+            .unwrap();
+        let half: Vec<f32> = pixel(&extracted.image, 2, 0)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
+            .collect();
+        for (value, expected) in half.iter().zip([0.2, 0.1, 0.05, 0.4]) {
+            assert!((value - expected).abs() < 1e-3, "{half:?}");
+        }
     }
 
     #[test]
