@@ -93,6 +93,18 @@ export const ADJUSTMENTS: AdjustmentId[] = [
 export const ADJUSTMENT_PARAMS = 16;
 
 /** Turns and flips of Image > Image Rotation. */
+/** What Image > Trim takes off: transparent margins, or those of a corner's color. */
+export type TrimBasis = "transparent" | "topLeft" | "bottomRight";
+
+/** Image > Trim's settings: what a margin is and the sides it is taken off. */
+export type TrimSettings = {
+  basis: TrimBasis;
+  top: boolean;
+  bottom: boolean;
+  left: boolean;
+  right: boolean;
+};
+
 export type ImageTurn =
   "clockwise" | "counterClockwise" | "halfTurn" | "flipHorizontal" | "flipVertical";
 
@@ -274,6 +286,12 @@ export type EditRequest =
   | { kind: "crop"; x: number; y: number; width: number; height: number }
   /** Image > Image Rotation: exact turns and flips of the whole image. */
   | { kind: "rotateImage"; turn: ImageTurn }
+  /** Image > Image Rotation > Arbitrary: `degrees` clockwise, the canvas grown to hold it. */
+  | { kind: "rotateImageBy"; degrees: number }
+  /** Image > Reveal All: the canvas grown to every layer's pixels. */
+  | { kind: "revealAll" }
+  /** Image > Trim: the margins of `basis` taken off the sides asked. */
+  | ({ kind: "trim" } & TrimSettings)
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }

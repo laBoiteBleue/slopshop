@@ -107,7 +107,7 @@ const KEPT_FAILURES: usize = 8;
 const QUIT_EXPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Largest side of a new document, in pixels: Photoshop's largest (PSB), as Image Size accepts.
-const NEW_DOCUMENT_MAX_SIDE: u32 = 300_000;
+pub(crate) const NEW_DOCUMENT_MAX_SIDE: u32 = 300_000;
 
 /// An open document (one tab): content, history, identity and view.
 struct OpenDocument {

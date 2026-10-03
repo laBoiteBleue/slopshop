@@ -38,6 +38,7 @@
     type ExportStarted,
     type GpuInfo,
     type ImageTurn,
+    type TrimSettings,
     type Bounds,
     type Matrix,
     type SnapTargets,
@@ -90,6 +91,8 @@
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
+  import RotateDialog from "./lib/RotateDialog.svelte";
+  import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush, MAX_REFINE } from "./lib/selection";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
@@ -1918,6 +1921,47 @@
     if (active) void edit(active.id, { kind: "rotateImage", turn });
   }
 
+  // Image > Image Rotation > Arbitrary: Photoshop's dialog, its last angle remembered for the
+  // session.
+  let rotateDialog = $state<{ document: number } | null>(null);
+  let rotateLast = $state({ angle: 0, clockwise: true });
+
+  function applyRotate(angle: number, clockwise: boolean) {
+    const dialog = rotateDialog;
+    rotateDialog = null;
+    if (!dialog) return;
+    rotateLast = { angle, clockwise };
+    // No turn: nothing to undo, as in Photoshop.
+    if (angle % 360 === 0) return;
+    const degrees = clockwise ? angle : -angle;
+    void edit(dialog.document, { kind: "rotateImageBy", degrees }).then(() => {
+      if (activeId === dialog.document) void viewport?.fit();
+    });
+  }
+
+  // Image > Trim (Photoshop's dialog, its settings remembered for the session) and Reveal All:
+  // crops computed by the engine; nothing is deleted, and nothing to do leaves no undo entry.
+  let trimDialog = $state<{ document: number } | null>(null);
+  let trimLast = $state<TrimSettings>({
+    basis: "transparent",
+    top: true,
+    bottom: true,
+    left: true,
+    right: true,
+  });
+
+  function applyTrim(settings: TrimSettings) {
+    const dialog = trimDialog;
+    trimDialog = null;
+    if (!dialog) return;
+    trimLast = settings;
+    void edit(dialog.document, { kind: "trim", ...settings });
+  }
+
+  function revealAll() {
+    if (active) void edit(active.id, { kind: "revealAll" });
+  }
+
   /** A thumbnail of the dragged layers following the pointer. */
   let dragGhost = $state<{ document: number; ids: number[]; x: number; y: number } | null>(null);
 
@@ -3142,7 +3186,6 @@
             })(),
           },
           separator,
-          cmd(t("menu.image.crop"), cropImage, undefined, !doc),
           item("imageSize"),
           item("canvasSize"),
           {
@@ -3153,11 +3196,24 @@
               cmd(t("menu.image.rotation.halfTurn"), () => rotateImage("halfTurn")),
               cmd(t("menu.image.rotation.clockwise"), () => rotateImage("clockwise")),
               cmd(t("menu.image.rotation.counterClockwise"), () => rotateImage("counterClockwise")),
+              cmd(t("menu.image.rotation.arbitrary"), () => {
+                if (doc) rotateDialog = { document: doc.id };
+              }),
               separator,
               cmd(t("menu.image.rotation.flipHorizontal"), () => rotateImage("flipHorizontal")),
               cmd(t("menu.image.rotation.flipVertical"), () => rotateImage("flipVertical")),
             ],
           },
+          cmd(t("menu.image.crop"), cropImage, undefined, !doc),
+          cmd(
+            t("menu.image.trim"),
+            () => {
+              if (doc) trimDialog = { document: doc.id };
+            },
+            undefined,
+            !doc,
+          ),
+          cmd(t("menu.image.revealAll"), revealAll, undefined, !doc),
           separator,
           {
             kind: "submenu",
@@ -3944,6 +4000,19 @@
       then?.();
     }}
     onclose={() => (aiDownload = null)}
+  />
+{/if}
+
+{#if trimDialog}
+  <TrimDialog settings={trimLast} onapply={applyTrim} onclose={() => (trimDialog = null)} />
+{/if}
+
+{#if rotateDialog}
+  <RotateDialog
+    angle={rotateLast.angle}
+    clockwise={rotateLast.clockwise}
+    onapply={applyRotate}
+    onclose={() => (rotateDialog = null)}
   />
 {/if}
 
