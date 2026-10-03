@@ -6,6 +6,8 @@
         label: string;
         /** Displayed only: the shortcut itself is handled by the owner. */
         shortcut?: string;
+        /** Every shortcut of the command, the first being `shortcut` (Edit > Keyboard Shortcuts). */
+        shortcuts?: string[];
         disabled?: boolean;
         /** Radio or toggle state, shown with a check mark. */
         checked?: boolean;

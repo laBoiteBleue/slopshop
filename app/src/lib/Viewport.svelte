@@ -554,24 +554,7 @@
       spaceHeld = true;
       return;
     }
-    if (!hasShortcutModifier(e) || e.altKey) return;
-    let request: ViewRequest | null = null;
-    // Digits also match the physical key: on AZERTY the unshifted digit row types "à" and "&".
-    if (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0") {
-      request = { kind: "fit" };
-    } else if (e.key === "1" || e.code === "Digit1" || e.code === "Numpad1") {
-      request = { kind: "setZoom", zoom: 1 };
-    } else if (e.key === "+" || e.key === "=") {
-      request = { kind: "step", zoomIn: true, x: null, y: null };
-    } else if (e.key === "-" || e.key === "_") {
-      request = { kind: "step", zoomIn: false, x: null, y: null };
-    }
-    if (request) {
-      e.preventDefault();
-      // An explicit zoom replaces any wheel zoom still animating.
-      remainingLogZoom = 0;
-      void changeView(request);
-    }
+    // Ctrl+0, Ctrl+1, Ctrl++ and Ctrl+-: commands of the app (`SHORTCUTS` in commands.ts).
   }
 
   function onWindowKeyup(e: KeyboardEvent) {

@@ -14,14 +14,12 @@
   import type { MenuItem } from "./MenuBar.svelte";
   import LayerThumbnail from "./LayerThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
-  import { shortcutLetter } from "./platform";
 
   let {
     doc,
     onedit,
     onlive,
     ongestureend,
-    onclear,
     onnudge,
     contextMenu = [],
     emptyContextMenu = [],
@@ -46,8 +44,6 @@
      * document reflects the whole gesture.
      */
     ongestureend: (documentId: number) => Promise<void>;
-    /** Delete with a selection: the selected pixels of the active layer are erased instead. */
-    onclear?: () => void;
     /**
      * Arrows: the app may move the selected pixels instead of the layers (the Move tool with a
      * selection); whether it did.
@@ -275,6 +271,11 @@
   /** Every selected layer, bottom to top. */
   export function selectedLayers(): LayerView[] {
     return selection;
+  }
+
+  /** Renaming or dragging a layer: the layer keys (Delete, F2) wait. */
+  export function busy(): boolean {
+    return renaming !== null || drag?.active === true;
   }
 
   export function renameSelected() {
@@ -523,68 +524,7 @@
       moveSelected(arrow[0] * step, arrow[1] * step);
       return;
     }
-    // Alt+Ctrl+G clips the selected layers to the layers below them, or releases them.
-    if (
-      (e.ctrlKey || e.metaKey) &&
-      e.altKey &&
-      !e.shiftKey &&
-      shortcutLetter(e) === "g" &&
-      !e.repeat
-    ) {
-      if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
-      e.preventDefault();
-      toggleClippingSelected();
-      return;
-    }
-    // Ctrl+J duplicates the selected layers, as in Photoshop.
-    if (
-      (e.ctrlKey || e.metaKey) &&
-      !e.altKey &&
-      !e.shiftKey &&
-      shortcutLetter(e) === "j" &&
-      !e.repeat
-    ) {
-      if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
-      e.preventDefault();
-      duplicateSelected();
-      return;
-    }
-    // Ctrl+G groups the selected layers, Shift+Ctrl+G ungroups, as in Photoshop.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && shortcutLetter(e) === "g" && !e.repeat) {
-      if (isTextField(e.target) || document.querySelector("dialog[open]")) return;
-      e.preventDefault();
-      if (e.shiftKey) ungroupSelected();
-      else groupSelected();
-      return;
-    }
-    // Alt+Ctrl+A: select all layers, as in Photoshop.
-    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && shortcutLetter(e) === "a") {
-      if (isTextField(e.target)) return;
-      e.preventDefault();
-      selectAllLayers();
-      return;
-    }
-    // Delete (or Backspace) deletes the selected layers, as in Photoshop without a selection.
-    if (
-      (e.key === "Delete" || e.key === "Backspace") &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.altKey &&
-      !e.repeat
-    ) {
-      // Not while a modal dialog (e.g. export) has the keyboard.
-      if (isTextField(e.target) || renaming !== null || drag?.active) return;
-      if (document.querySelector("dialog[open]")) return;
-      e.preventDefault();
-      // With a selection, Photoshop erases the selected pixels (Edit > Clear).
-      if (doc.selectionKey != null && onclear) onclear();
-      else deleteSelected();
-      return;
-    }
-    if (e.key !== "F2" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (isTextField(e.target) || !selected || renaming !== null || drag?.active) return;
-    e.preventDefault();
-    renaming = selected.id;
+    // Ctrl+J, Ctrl+G, Delete, F2…: commands of the app (`SHORTCUTS` in commands.ts).
   }
 
   // Opacity: live while dragging the slider, one undo entry per drag. `change` does not fire

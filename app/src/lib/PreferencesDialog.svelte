@@ -1,12 +1,13 @@
 <script lang="ts">
-  // Edit > Preferences (Ctrl+K). One section so far, the AI components (ADR 0025): what is
-  // installed, its size and licenses; download what is missing, remove what is not wanted.
+  // Edit > Preferences (Ctrl+K): the interface's language, and the AI components (ADR 0025):
+  // what is installed, its size and licenses; download what is missing, remove what is not
+  // wanted.
   import { onMount } from "svelte";
   import { engine, type AiComponent } from "./engine";
   import AiDownloadDialog from "./AiDownloadDialog.svelte";
   import { componentName, failureMessage } from "./ai";
   import { formatBytes } from "./format";
-  import { t } from "./i18n/index.svelte";
+  import { getLocale, locales, setLocale, t, type Locale } from "./i18n/index.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -57,6 +58,18 @@
   }}
 >
   <header id="preferences-title">{t("preferences.title")}</header>
+  <section class="body" aria-labelledby="preferences-language">
+    <h2 id="preferences-language">{t("preferences.language")}</h2>
+    <select
+      aria-labelledby="preferences-language"
+      value={getLocale()}
+      onchange={(e) => setLocale(e.currentTarget.value as Locale)}
+    >
+      {#each Object.entries(locales) as [code, { name }] (code)}
+        <option value={code}>{name}</option>
+      {/each}
+    </select>
+  </section>
   <section class="body" aria-labelledby="preferences-ai">
     <h2 id="preferences-ai">{t("preferences.ai")}</h2>
     <p class="muted">{t("preferences.ai.intro")}</p>
@@ -159,6 +172,14 @@
     display: grid;
     gap: 8px;
     padding: 10px;
+  }
+
+  .body + .body {
+    padding-top: 0;
+  }
+
+  select {
+    justify-self: start;
   }
 
   h2 {
