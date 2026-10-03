@@ -75,6 +75,33 @@ impl Session {
         Ok(())
     }
 
+    /// Apply `edit` as the end of the last history entry, made when the document was at
+    /// `revision`: one undo entry covers both when nothing happened since (Layer > Bake to
+    /// Pixels: the pixels replacing their preview, ADR 0030); otherwise a new entry, as
+    /// [`Self::perform`].
+    pub fn perform_after(&mut self, edit: Edit, revision: u64) -> Result<(), EditError> {
+        if matches!(&edit, Edit::Batch(edits) if edits.is_empty()) {
+            return Ok(());
+        }
+        let continues = self.gesture.is_empty() && self.document.revision() == revision;
+        match self.undo.pop() {
+            Some(last) if continues => match edit.apply(&mut self.document) {
+                Ok(inverse) => {
+                    self.undo.push(Edit::Batch(vec![inverse, last]));
+                    Ok(())
+                }
+                Err(e) => {
+                    self.undo.push(last);
+                    Err(e)
+                }
+            },
+            last => {
+                self.undo.extend(last);
+                self.perform(edit)
+            }
+        }
+    }
+
     /// Apply an edit as part of a continuous gesture (e.g. dragging a slider): the document
     /// changes immediately, and all edits of the gesture become a single history entry when
     /// [`Self::end_gesture`] is called.
@@ -368,6 +395,41 @@ mod tests {
         while s.undo().unwrap() {}
         assert!(s.document().layers().is_empty());
         assert!(s.can_redo());
+    }
+
+    #[test]
+    fn an_edit_after_continues_the_last_entry_while_nothing_happened_since() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        let revision = s.document().revision();
+        s.perform_after(
+            Edit::RenameLayer {
+                id: a,
+                name: "b".into(),
+            },
+            revision,
+        )
+        .unwrap();
+        assert_eq!(names(&s), ["b"]);
+        // One undo takes both back.
+        assert!(s.undo().unwrap());
+        assert_eq!(names(&s), Vec::<String>::new());
+        assert!(s.redo().unwrap());
+        assert_eq!(names(&s), ["b"]);
+
+        // Something happened since: an entry of its own.
+        let revision = s.document().revision();
+        add_layer(&mut s, "c");
+        s.perform_after(
+            Edit::RenameLayer {
+                id: a,
+                name: "d".into(),
+            },
+            revision,
+        )
+        .unwrap();
+        assert!(s.undo().unwrap());
+        assert_eq!(names(&s), ["b", "c"]);
     }
 
     #[test]
