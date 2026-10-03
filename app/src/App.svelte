@@ -1380,14 +1380,19 @@
   /**
    * Free Transform of the selected layers or, for files just dropped on the image, of the new
    * layers `place.ids`, first centered on `place.at` and scaled down to fit the canvas when
-   * larger (Photoshop's Place, with its default "Resize Image During Place").
+   * larger (Photoshop's Place, with its default "Resize Image During Place"); without `at`,
+   * where they are (floating pixels). With `pixels` and a selection, its pixels float first
+   * (Edit > Free Transform, see `floatSelection`).
    */
   async function startFreeTransform(
-    place: { ids: number[]; at: [number, number]; insertions: number } | null = null,
+    place: { ids: number[]; at: [number, number] | null; insertions: number } | null = null,
+    pixels = false,
   ) {
     const doc = active;
     if (!doc || transforming) return;
     if (tool === "crop") tool = "move";
+    // Edit > Free Transform with a selection: its pixels (a double-click takes the layer).
+    if (pixels && !place && doc.selectionKey != null && (await floatSelection(doc))) return;
     const ids = place?.ids ?? layersPanel?.selectedLayers().map((l) => l.id) ?? [];
     if (ids.length === 0) return;
     const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
@@ -1395,7 +1400,9 @@
     if (!targets?.moving || active?.id !== doc.id || transforming) return;
     let box = targets.moving;
     let placed: Transforming["placed"] = null;
-    if (place) {
+    if (place && !place.at) {
+      placed = { matrix: affine.IDENTITY, insertions: place.insertions };
+    } else if (place?.at) {
       const [width, height] = [box.right - box.left, box.bottom - box.top];
       const fit = Math.min(1, doc.width / width, doc.height / height);
       const [cx, cy] = [(box.left + box.right) / 2, (box.top + box.bottom) / 2];
@@ -1435,8 +1442,73 @@
     const total = current.placed
       ? affine.then(current.placed.matrix, current.matrix)
       : current.matrix;
+    if (!affine.isIdentity(current.matrix)) lastTransform = current.matrix;
     if (affine.isIdentity(total)) void cancelGesture(current.document);
     else void endGesture(current.document);
+  }
+
+  /**
+   * Ctrl+T with a selection, as in Photoshop: the selected pixels of the active raster layer
+   * float in a new layer above it (leaving a hole), which Free Transform then transforms; Esc
+   * takes it all back. Whether they floated (otherwise the layers are transformed whole).
+   */
+  async function floatSelection(doc: DocumentView): Promise<boolean> {
+    const layer = layersPanel?.selectedLayer() ?? null;
+    if (!layer || layer.kind !== "raster" || layersPanel?.paintsMask()) return false;
+    const floated = await engine.floatPixels(doc.id, layer.id).catch((e) => {
+      showError(String(e));
+      return null;
+    });
+    if (!floated) return false;
+    const [view, id] = floated;
+    upsert(view);
+    if (activeId !== doc.id) return true;
+    await tick();
+    layersPanel?.selectLayers([id]);
+    await startFreeTransform({ ids: [id], at: null, insertions: 1 });
+    return true;
+  }
+
+  /**
+   * The last transform applied (Free Transform, Edit > Transform), a map of the document's
+   * space: what Edit > Transform > Again repeats.
+   */
+  let lastTransform = $state<Matrix | null>(null);
+
+  /** Edit > Transform > Again (Shift+Ctrl+T): the last transform, on the selected layers. */
+  function repeatTransform() {
+    commitTransform();
+    const doc = active;
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (!doc || ids.length === 0 || !lastTransform) return;
+    void edit(doc.id, { kind: "transformLayers", ids, matrix: lastTransform });
+  }
+
+  /**
+   * Duplicate and Transform Again (Alt+Shift+Ctrl+T), as in Photoshop: copies of the selected
+   * layers, the last transform applied to them (one undo entry); the copies are selected, so
+   * that the next one continues from them.
+   */
+  async function duplicateAndRepeat() {
+    commitTransform();
+    const doc = active;
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (!doc || ids.length === 0 || !lastTransform) return;
+    const known = new Set(doc.layers.map((l) => l.id));
+    const nameFormat = t("layers.copyName", { name: "{name}" });
+    const request: EditRequest = {
+      kind: "duplicateTransformLayers",
+      ids,
+      nameFormat,
+      matrix: lastTransform,
+    };
+    await edit(doc.id, request);
+    const after = tabs.find((d) => d.id === doc.id);
+    const copies = after?.layers.filter((l) => !known.has(l.id)).map((l) => l.id) ?? [];
+    if (copies.length > 0 && activeId === doc.id) {
+      await tick();
+      layersPanel?.selectLayers(copies);
+    }
   }
 
   /** Esc: the layers as they were; layers just placed are taken back, as in Photoshop. */
@@ -1497,6 +1569,7 @@
     const matrix: Matrix = [...around];
     matrix[4] = Math.round(matrix[4]);
     matrix[5] = Math.round(matrix[5]);
+    lastTransform = matrix;
     void edit(doc.id, { kind: "transformLayers", ids, matrix });
   }
 
@@ -2359,8 +2432,18 @@
       },
       freeTransform: {
         label: t("menu.edit.freeTransform"),
-        run: () => (transforming ? commitTransform() : void startFreeTransform()),
+        run: () => (transforming ? commitTransform() : void startFreeTransform(null, true)),
         disabled: !doc || selectedCount === 0,
+      },
+      repeatTransform: {
+        label: t("menu.edit.transform.again"),
+        run: repeatTransform,
+        disabled: !doc || selectedCount === 0 || !lastTransform,
+      },
+      duplicateRepeat: {
+        label: t("menu.edit.transform.duplicateAgain"),
+        run: () => void duplicateAndRepeat(),
+        disabled: !doc || selectedCount === 0 || !lastTransform,
       },
       keyboardShortcuts: {
         label: t("menu.edit.keyboardShortcuts"),
@@ -2679,6 +2762,8 @@
             label: t("menu.edit.transform"),
             disabled: !doc || selectedCount === 0,
             items: [
+              item("repeatTransform"),
+              separator,
               cmd(
                 t("menu.edit.transform.rotate180"),
                 () => void quickTransform(affine.rotation(Math.PI)),
@@ -3470,7 +3555,16 @@
 {/if}
 
 {#if shortcutsList}
-  <KeyboardShortcutsDialog {menus} onclose={() => (shortcutsList = false)} />
+  <KeyboardShortcutsDialog
+    {menus}
+    extra={[
+      {
+        label: t("menu.edit.transform.duplicateAgain"),
+        keys: SHORTCUTS.duplicateRepeat.map(shortcutText),
+      },
+    ]}
+    onclose={() => (shortcutsList = false)}
+  />
 {/if}
 
 {#if aiDownload}

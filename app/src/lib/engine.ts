@@ -233,6 +233,8 @@ export type EditRequest =
   | { kind: "ungroup"; id: number }
   /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */
   | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
+  /** Copies as `duplicateLayers`, then `matrix` applied to them (Duplicate and Transform Again). */
+  | { kind: "duplicateTransformLayers"; ids: number[]; nameFormat: string; matrix: Matrix }
   | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
   | { kind: "setLayerClipped"; id: number; clipped: boolean }
   /** Move layers by whole document pixels (a group moves whole). */
@@ -1201,6 +1203,13 @@ export const engine = {
    * anything was copied (`false`: the selection holds nothing of the layer). Queued after the
    * edits already sent.
    */
+  /**
+   * Free Transform with a selection: the selected pixels of raster layer `layerId` float in a new
+   * layer right above it and leave a hole, deselected (one undo entry). The document and the
+   * new layer's id; null when the selection holds nothing of the layer.
+   */
+  floatPixels: (documentId: number, layerId: number) =>
+    serial(() => invoke<[DocumentView, number] | null>("float_pixels", { documentId, layerId })),
   /** File > New's Clipboard preset: the size of the document a paste would make, if any. */
   clipboardSize: () => invoke<[number, number] | null>("clipboard_size"),
   copy: (documentId: number, request: CopyRequest) =>

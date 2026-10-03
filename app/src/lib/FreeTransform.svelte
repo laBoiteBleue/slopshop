@@ -1,10 +1,14 @@
 <script lang="ts">
   // Free Transform (Ctrl+T, as in Photoshop): a box around the selected layers with eight
-  // handles. Drag inside to move, a handle to scale (corners keep the proportions, Shift frees
-  // them; sides scale one way, Shift keeps the proportions; Alt scales about the center), and
-  // outside to rotate about the center (Shift: steps of 15°). Enter, a double-click inside or a
-  // click outside (without dragging) applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
+  // handles and a reference point (the pivot, at the center until dragged). Drag inside to
+  // move, a handle to scale (corners keep the proportions, Shift frees them; sides scale one
+  // way, Shift keeps the proportions; Alt scales about the pivot), Ctrl and a side handle to
+  // skew, and outside to rotate about the pivot (Shift: steps of 15°). The right-click menu
+  // rotates and flips about the pivot. Enter, a double-click inside or a click outside (without
+  // dragging) applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
   import * as affine from "./affine";
+  import ContextMenu from "./ContextMenu.svelte";
+  import type { MenuItem } from "./MenuBar.svelte";
   import type { Bounds, Matrix } from "./engine";
   import { getLocale, t } from "./i18n/index.svelte";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -46,7 +50,7 @@
 
   type Drag = {
     pointerId: number;
-    kind: "move" | "scale" | "rotate";
+    kind: "move" | "scale" | "rotate" | "skew" | "pivot";
     /** The handle dragged (scale). */
     handle: number;
     /** `matrix` and `rotation` when the drag began, and the document point it began at. */
@@ -69,6 +73,11 @@
     (box.left + box.right) / 2,
     (box.top + box.bottom) / 2,
   ]);
+  /** The reference point, in the box's coordinates: rotations and Alt scale about it. */
+  // svelte-ignore state_referenced_locally
+  let pivot = $state<[number, number]>([(box.left + box.right) / 2, (box.top + box.bottom) / 2]);
+  /** The right-click menu, where it opened. */
+  let menuAt = $state<{ x: number; y: number } | null>(null);
   /** Handles in the box's coordinates, clockwise from the top-left corner (even: corners). */
   const handles = $derived.by((): [number, number][] => {
     const [cx, cy] = center;
@@ -88,6 +97,7 @@
     handles.map(([x, y]) => mapping.toViewport(...affine.apply(matrix, x, y))),
   );
   const screenCenter = $derived(mapping.toViewport(...affine.apply(matrix, ...center)));
+  const screenPivot = $derived(mapping.toViewport(...affine.apply(matrix, ...pivot)));
   const outline = $derived([0, 2, 4, 6].map((i) => `${screen[i][0]},${screen[i][1]}`).join(" "));
 
   const RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"];
@@ -136,7 +146,7 @@
     if (!inverse) return start;
     const [qx, qy] = affine.apply(inverse, ...p);
     const [hx, hy] = handles[handle];
-    const [ax, ay] = e.altKey ? center : handles[(handle + 4) % 8];
+    const [ax, ay] = e.altKey ? pivot : handles[(handle + 4) % 8];
     const [wx, wy] = [hx - ax, hy - ay];
     const ux = wx !== 0 ? (qx - ax) / wx : 1;
     const uy = wy !== 0 ? (qy - ay) / wy : 1;
@@ -160,6 +170,52 @@
     return affine.then(affine.about(affine.scaling(bounded(sx), bounded(sy)), ax, ay), start);
   }
 
+  /** The skew by side handle `handle` dragged to `p` (document), from `start`: the side slides
+   * along itself, the opposite one stays (Alt: about the pivot). */
+  function skewedTo(start: Matrix, handle: number, p: [number, number], e: PointerEvent): Matrix {
+    const inverse = affine.invert(start);
+    if (!inverse) return start;
+    const [qx, qy] = affine.apply(inverse, ...p);
+    const [hx, hy] = handles[handle];
+    const [ax, ay] = e.altKey ? pivot : handles[(handle + 4) % 8];
+    // Top and bottom sides slide horizontally, left and right ones vertically.
+    const horizontal = hy !== center[1];
+    const by: Matrix = horizontal
+      ? [1, 0, hy !== ay ? (qx - hx) / (hy - ay) : 0, 1, 0, 0]
+      : [1, hx !== ax ? (qy - hy) / (hx - ax) : 0, 0, 1, 0, 0];
+    return affine.then(affine.about(by, ax, ay), start);
+  }
+
+  /** Points the pivot snaps to (box coordinates): the handles and the center. */
+  const pivotSnaps = $derived([...handles, center]);
+
+  /** A rotation or flip of the box about the pivot (the right-click menu), as one step. */
+  function turn(by: Matrix, radians = 0) {
+    const [px, py] = affine.apply(matrix, ...pivot);
+    matrix = affine.then(matrix, affine.about(by, px, py));
+    rotation += radians;
+    onchange(matrix);
+  }
+
+  const menuItems = $derived.by((): MenuItem[] => {
+    const command = (label: string, run: () => void): MenuItem => ({ kind: "command", label, run });
+    return [
+      command(t("menu.edit.transform.rotate180"), () => turn(affine.rotation(Math.PI), Math.PI)),
+      command(t("menu.edit.transform.rotateCw"), () =>
+        turn(affine.rotation(Math.PI / 2), Math.PI / 2),
+      ),
+      command(t("menu.edit.transform.rotateCcw"), () =>
+        turn(affine.rotation(-Math.PI / 2), -Math.PI / 2),
+      ),
+      { kind: "separator" },
+      command(t("menu.edit.transform.flipHorizontal"), () => turn(affine.scaling(-1, 1))),
+      command(t("menu.edit.transform.flipVertical"), () => turn(affine.scaling(1, -1))),
+      { kind: "separator" },
+      command(t("transform.apply"), oncommit),
+      command(t("transform.cancel"), oncancel),
+    ];
+  });
+
   const number = (v: number, digits: number) =>
     new Intl.NumberFormat(getLocale(), {
       minimumFractionDigits: digits,
@@ -179,7 +235,26 @@
     const threshold = SNAP_CSS_PX * mapping.docPerCss;
     let shown: Guide[] = [];
     let text = "";
-    if (drag.kind === "move") {
+    if (drag.kind === "pivot") {
+      const inverse = affine.invert(matrix);
+      if (!inverse) return;
+      let point = affine.apply(inverse, ...p);
+      // Onto a handle or the center within the snap distance, as Photoshop's reference point.
+      const [sx, sy] = mapping.toViewport(...p);
+      for (const snap of pivotSnaps) {
+        const [vx, vy] = mapping.toViewport(...affine.apply(matrix, ...snap));
+        if (Math.hypot(vx - sx, vy - sy) <= SNAP_CSS_PX) point = snap;
+      }
+      pivot = point;
+      guides = [];
+      return;
+    } else if (drag.kind === "skew") {
+      matrix = skewedTo(start, drag.handle, p, e);
+      const [a, b, c, d] = matrix;
+      // The angle the sides lean by, from upright.
+      const lean = (Math.atan2(c * a + d * b, a * d - b * c) * 180) / Math.PI;
+      text = t("transform.readout.skew", { angle: number(lean, 1) });
+    } else if (drag.kind === "move") {
       let [dx, dy] = [p[0] - from[0], p[1] - from[1]];
       // Shift: along one axis.
       if (e.shiftKey) {
@@ -196,7 +271,7 @@
       matrix = affine.then(start, affine.translation(dx, dy));
       text = t("transform.readout.move", { dx: number(dx, 0), dy: number(dy, 0) });
     } else if (drag.kind === "rotate") {
-      const [cx, cy] = affine.apply(start, ...center);
+      const [cx, cy] = affine.apply(start, ...pivot);
       const turned = Math.atan2(p[1] - cy, p[0] - cx) - Math.atan2(from[1] - cy, from[0] - cx);
       let total = drag.startRotation + turned;
       if (e.shiftKey) total = Math.round(total / ROTATION_STEP) * ROTATION_STEP;
@@ -214,7 +289,7 @@
       const unrotated = Math.abs(start[1]) < 1e-9 && Math.abs(start[2]) < 1e-9;
       if (snaps && unrotated) {
         const [hx, hy] = affine.apply(matrix, ...handles[drag.handle]);
-        const anchor = e.altKey ? center : handles[(drag.handle + 4) % 8];
+        const anchor = e.altKey ? pivot : handles[(drag.handle + 4) % 8];
         const [ax, ay] = affine.apply(start, ...anchor);
         const span = e.altKey ? 2 : 1;
         const side = drag.handle % 2 === 1;
@@ -295,12 +370,16 @@
 <svg
   class="free-transform"
   role="presentation"
-  style:cursor={drag?.kind === "scale"
+  style:cursor={drag?.kind === "scale" || drag?.kind === "skew"
     ? cursorFor(drag.handle)
-    : drag?.kind === "move"
+    : drag?.kind === "move" || drag?.kind === "pivot"
       ? "default"
       : ROTATE_CURSOR}
   onpointerdown={(e) => begin(e, "rotate")}
+  oncontextmenu={(e) => {
+    e.preventDefault();
+    menuAt = { x: e.clientX, y: e.clientY };
+  }}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   onpointercancel={onPointerUp}
@@ -322,12 +401,23 @@
       height="8"
       role="presentation"
       style:cursor={drag ? undefined : cursorFor(i)}
-      onpointerdown={(e) => begin(e, "scale", i)}
+      onpointerdown={(e) => begin(e, i % 2 === 1 && hasShortcutModifier(e) ? "skew" : "scale", i)}
     />
   {/each}
-  <circle class="pivot" cx={screenCenter[0]} cy={screenCenter[1]} r="3" />
+  <circle
+    class="pivot"
+    cx={screenPivot[0]}
+    cy={screenPivot[1]}
+    r="4"
+    role="presentation"
+    style:cursor={drag ? undefined : "move"}
+    onpointerdown={(e) => begin(e, "pivot")}
+  />
   <Guides {guides} {mapping} />
 </svg>
+{#if menuAt}
+  <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onclose={() => (menuAt = null)} />
+{/if}
 {#if readout}
   <div class="readout" style:left="{readout.x}px" style:top="{readout.y}px">{readout.text}</div>
 {/if}
@@ -354,10 +444,9 @@
   }
 
   .pivot {
-    fill: none;
+    fill: transparent;
     stroke: #fff;
     stroke-width: 1.5;
-    pointer-events: none;
     filter: drop-shadow(0 0 1px #000);
   }
 
