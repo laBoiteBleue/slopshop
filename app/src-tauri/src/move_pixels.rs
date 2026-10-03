@@ -8,13 +8,18 @@
 //! As in Photoshop, the pixels float until something else happens: the next drag moves them
 //! from where they started, so what they covered at an intermediate place comes back. A drag
 //! continues the float only while the document still shows what the last one left.
+//!
+//! During a drag, a layer's pixels are only shown floating (`MovePreview`, view state like a
+//! stroke's preview): the layer split once into its pixels with the hole and the selected
+//! pixels, the latter moved by a transform at each request, as cheap as moving a layer. The
+//! moved image is computed once, when the drag ends. A mask's pixels are moved at each request.
 
 use std::sync::Arc;
 
 use serde::Deserialize;
-use slopshop_core::move_pixels::{MoveMode, Moved, PixelMove};
+use slopshop_core::move_pixels::{Lifted, MoveMode, Moved, PixelMove, show_floating};
 use slopshop_core::selection::{Selection, translated};
-use slopshop_core::{Document, Edit, LayerContent, LayerId, RasterImage, Size};
+use slopshop_core::{Affine, Document, Edit, LayerContent, LayerId, LayerMask, RasterImage, Size};
 use tauri::Manager;
 
 use crate::AppState;
@@ -51,6 +56,8 @@ pub struct Floating {
     /// A layer as the float found it (grown to the canvas if it needed to, as for painting):
     /// its original, mask and transform, which every move sets again, grown if it grew.
     lifted: Option<Growth>,
+    /// A layer's pixels split for drags (computed at the first drag that shows them).
+    pixels: Option<Lifted>,
     /// `lifted` grown with the pixels of the last move that grew (tiles before, size), kept
     /// while the next ones grow the same.
     grown: Option<((u32, u32), Size, Growth)>,
@@ -133,6 +140,7 @@ fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> 
         moving,
         selection: Arc::clone(selection.image()),
         lifted,
+        pixels: None,
         grown: None,
         offset: (0, 0),
         shown: None,
@@ -169,13 +177,42 @@ fn moved_edit(floating: &mut Floating, moved: &Moved) -> Result<Edit, String> {
     Ok(paint_edit(floating.target, image, Some(&growth)))
 }
 
-/// Move the selected pixels (see the module documentation).
+/// What a document shows of a drag under way: layer `id` with its pixels floating.
+#[derive(Debug, Clone)]
+pub struct MovePreview {
+    id: LayerId,
+    pixels: Lifted,
+    /// The move, whole pixels of the layer's image.
+    offset: (i64, i64),
+    /// The layer's transform and mask as the float found it.
+    transform: Affine,
+    mask: Option<LayerMask>,
+}
+
+impl MovePreview {
+    /// `doc` (a snapshot being rendered) showing the drag.
+    pub fn apply_to(&self, doc: &mut Document) {
+        // The layer may have gone meanwhile: then nothing to show.
+        let mask = self.mask.clone();
+        let _ = show_floating(
+            doc,
+            self.id,
+            &self.pixels,
+            self.offset,
+            self.transform,
+            mask,
+        );
+    }
+}
+
+/// Move the selected pixels (see the module documentation). Returns the document once it
+/// changed; `None` while a layer's pixels float (the view redraws to show them).
 #[tauri::command]
 pub async fn move_selected_pixels(
     app: tauri::AppHandle,
     document_id: u64,
     request: MovePixelsRequest,
-) -> Result<DocumentView, String> {
+) -> Result<Option<DocumentView>, String> {
     on_worker(move || move_pixels(&app.state::<AppState>(), document_id, &request)).await
 }
 
@@ -184,7 +221,7 @@ pub(crate) fn move_pixels(
     state: &AppState,
     document_id: u64,
     request: &MovePixelsRequest,
-) -> Result<DocumentView, String> {
+) -> Result<Option<DocumentView>, String> {
     let id = LayerId::from_raw(request.layer_id);
     let target = match request.target {
         PaintTarget::Layer => Target::Layer(id),
@@ -213,6 +250,25 @@ pub(crate) fn move_pixels(
         floating.offset.0 + request.dx,
         floating.offset.1 + request.dy,
     );
+    if !request.end && floating.lifted.is_some() {
+        if floating.pixels.is_none() {
+            floating.pixels = floating.moving.lift().map_err(|e| e.to_string())?;
+        }
+        if let (Some(pixels), Some(layer)) = (&floating.pixels, &floating.lifted) {
+            let preview = MovePreview {
+                id,
+                pixels: pixels.clone(),
+                offset: floating.moving.image_offset(dx, dy),
+                transform: layer.transform,
+                mask: layer.mask.clone(),
+            };
+            let mut documents = state.documents()?;
+            let document = documents.get_mut(document_id)?;
+            document.move_preview = Some(preview);
+            document.floating = Some(floating);
+            return Ok(None);
+        }
+    }
     let moved = floating.moving.image(dx, dy).map_err(|e| e.to_string())?;
     let selection = translated(canvas, &floating.selection, dx, dy)
         .map_err(|e| e.to_string())?
@@ -226,6 +282,7 @@ pub(crate) fn move_pixels(
 
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
+    document.move_preview = None;
     let session = &mut document.session;
     session.cancel_gesture().map_err(|e| e.to_string())?;
     let shifted = (request.dx, request.dy) != (0, 0);
@@ -243,7 +300,7 @@ pub(crate) fn move_pixels(
         }
     }
     document.floating = Some(floating);
-    Ok(document.view())
+    Ok(Some(document.view()))
 }
 
 /// The selection's bounds when document point (`x`, `y`) is inside it (selected at least

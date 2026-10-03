@@ -214,6 +214,8 @@ removable as a whole; undo keeps the old tiles by reference.
       its targeted mask) move with the selection, leaving a hole; Alt copies them; arrows nudge
       them; they float until something else happens; pixels moved off the canvas are kept (the
       layer grows); kept as paint (the original intact)
+- [x] Selected pixels float in the view during the drag (an isolated group of the layer with
+      its hole and the moved pixels), the move computed once on release
 
 ## Phase 4 — Very large images
 

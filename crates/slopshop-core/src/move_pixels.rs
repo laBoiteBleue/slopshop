@@ -8,12 +8,20 @@
 //! layer's painted image (ADR 0027): the layer's original stays intact, and Delete Paint brings
 //! it back. A layer's image grows, by whole tiles, to keep the pixels that land beyond it (off
 //! the canvas too, as Photoshop keeps them); a mask keeps its size, as it covers its layer.
+//!
+//! While a drag goes on, a layer's pixels float ([`PixelMove::lift`], [`show_floating`]): the
+//! view shows the layer as an isolated group of its pixels with the hole and of the selected
+//! pixels alone, moved by a transform. A frame then costs what moving a layer costs, whatever
+//! the image; the moved image is computed once, when the drag ends. Both composite the same, up
+//! to the rounding of the pixels' format at soft edges.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace, Blender};
 use crate::color::{ChannelLayout, IDENTITY, Mat3, WORKING_SPACE, mat_vec};
+use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
+use crate::edit::{Edit, EditError};
 use crate::geom::Size;
 use crate::paint::{MaskReader, PaintError};
 use crate::raster::{Codec, RasterImage, TILE_SIZE, pad_tile, parallel_for_each};
@@ -53,6 +61,16 @@ pub struct Extracted {
     pub image: Arc<RasterImage>,
     /// Where the image lies in the document: the base's place, moved to the first tile taken.
     pub to_document: Affine,
+}
+
+/// A layer's pixels lifted for a move (see [`show_floating`]).
+#[derive(Debug, Clone)]
+pub struct Lifted {
+    /// The pixels with the hole the selected ones leave (the base itself for a copy).
+    pub hole: Arc<RasterImage>,
+    /// The selected pixels alone ([`PixelMove::extract`]), and where their image starts among
+    /// the layer's pixels (whole tiles); `None` when nothing of the layer is selected.
+    pub pixels: Option<(Arc<RasterImage>, (i64, i64))>,
 }
 
 /// An image the move works on and where it lies.
@@ -218,6 +236,50 @@ impl PixelMove {
             (x1 + ox).clamp(0, width),
             (y1 + oy).clamp(0, height),
         ];
+        Ok(Moved {
+            image: self.compose(&placement, (ox, oy), to)?,
+            grown: growth.map(|(offset, _)| offset),
+        })
+    }
+
+    /// The pixels split for a drag (see [`show_floating`]): the base with its hole, and the
+    /// selected pixels alone. `None` for a mask, which has no transparency to show them with.
+    pub fn lift(&self) -> Result<Option<Lifted>, PaintError> {
+        if self.coverage {
+            return Ok(None);
+        }
+        let hole = match self.mode {
+            // Nothing lands: only the hole.
+            MoveMode::Cut => self.compose(&self.placement, (0, 0), [0; 4])?,
+            MoveMode::Copy => Arc::clone(&self.placement.base),
+        };
+        let base_to_document = self.placement.to_document;
+        let pixels = self.extract()?.map(|extracted| {
+            // Where the extracted image starts in the base: whole tiles, so exact.
+            let start = extracted
+                .to_document
+                .then(base_to_document.inverse().unwrap_or(Affine::IDENTITY))
+                .apply(0.0, 0.0);
+            (
+                extracted.image,
+                (start.0.round() as i64, start.1.round() as i64),
+            )
+        });
+        Ok(Some(Lifted { hole, pixels }))
+    }
+
+    /// `placement`'s base with the selected pixels moved by `offset` image pixels, landing
+    /// within `to` (`[x0, y0, x1, y1)`, empty: nothing lands), leaving a hole for a cut. Every
+    /// tile the move does not reach is shared with the base.
+    fn compose(
+        &self,
+        placement: &Placement,
+        offset: (i64, i64),
+        to: [i64; 4],
+    ) -> Result<Arc<RasterImage>, PaintError> {
+        let Some([x0, y0, x1, y1]) = placement.area else {
+            return Ok(Arc::clone(&placement.base));
+        };
         let mut reached = BTreeSet::new();
         let t = TILE_SIZE as i64;
         let mut reach = |[x0, y0, x1, y1]: [i64; 4]| {
@@ -243,16 +305,13 @@ impl PixelMove {
             .filter_map(|coord| Some((coord, level.tile(coord)?.to_vec())))
             .collect();
         parallel_for_each(&mut work, |(coord, tile)| {
-            self.move_tile(&placement, *coord, tile, (ox, oy), to);
+            self.move_tile(placement, *coord, tile, offset, to);
         });
         let replaced = work
             .into_iter()
             .map(|(coord, tile)| (coord, Arc::from(tile)))
             .collect();
-        Ok(Moved {
-            image: Arc::new(placement.base.with_tiles(replaced)?),
-            grown: growth.map(|(offset, _)| offset),
-        })
+        Ok(Arc::new(placement.base.with_tiles(replaced)?))
     }
 
     /// The selected pixels alone (Edit > Copy with a selection): the base's tiles the selection
@@ -607,11 +666,69 @@ impl PixelMove {
     }
 }
 
+/// Show layer `id` of `doc` with `lifted` pixels floating, moved by `offset` image pixels (see
+/// [`PixelMove::image_offset`]): the view of a drag, never a document change (`doc` is a
+/// snapshot). The layer becomes an isolated group with its id, name, visibility, opacity,
+/// blend mode and clipping, placed by `transform` with `mask` (the layer as the move found
+/// it, grown to the canvas if it needed to), holding the pixels with their hole and, above,
+/// the selected pixels moved. An isolated group composites as one layer, also as a clipping
+/// base (ADR 0015, 0016): it shows what the moved image will.
+pub fn show_floating(
+    doc: &mut Document,
+    id: LayerId,
+    lifted: &Lifted,
+    offset: (i64, i64),
+    transform: Affine,
+    mask: Option<LayerMask>,
+) -> Result<(), EditError> {
+    let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?.clone();
+    let (parent, index) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
+    let part = |id: LayerId, image: &Arc<RasterImage>, transform: Affine| Layer {
+        id,
+        name: String::new(),
+        visible: true,
+        opacity: 1.0,
+        blend_mode: BlendMode::Normal,
+        content: LayerContent::raster(Arc::clone(image)),
+        mask: None,
+        clipped: false,
+        transform,
+    };
+    let mut children = vec![part(
+        doc.allocate_layer_id(),
+        &lifted.hole,
+        Affine::IDENTITY,
+    )];
+    if let Some((pixels, (x, y))) = &lifted.pixels {
+        let moved = Affine::translation((x + offset.0) as f64, (y + offset.1) as f64);
+        children.push(part(doc.allocate_layer_id(), pixels, moved));
+    }
+    let group = Layer {
+        content: LayerContent::Group {
+            children,
+            pass_through: false,
+        },
+        mask,
+        transform,
+        ..layer
+    };
+    Edit::Batch(vec![
+        Edit::RemoveLayer { id },
+        Edit::InsertLayer {
+            parent,
+            index,
+            layer: group,
+        },
+    ])
+    .apply(doc)
+    .map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::PixelFormat;
-    use crate::geom::Size;
+    use crate::blend::BlendMode;
+    use crate::color::{LinearRgba, PixelFormat};
     use crate::selection::{Combine, EdgeOptions, Shape, select_shape};
 
     /// A `size` image whose pixel (x, y) is `[x, y, 7, 255]`.
@@ -952,6 +1069,169 @@ mod tests {
         assert_eq!(pixel(&moved.image, 29, 0), [0]);
     }
 
+    /// A document like a user's: a fill, layer `L` (colors and partial alpha, a layer only moved
+    /// by whole pixels, 60 % opacity in Multiply, a mask hiding its right part) and a fill
+    /// clipped to it; a soft selection.
+    fn scene(placed: Affine) -> (Document, LayerId, Selection) {
+        let canvas = Size::new(300, 200);
+        let mut doc = Document::new(canvas);
+        let fill = |doc: &mut Document, color: LinearRgba, clipped: bool| Layer {
+            id: doc.allocate_layer_id(),
+            name: String::new(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            content: LayerContent::Fill { color },
+            mask: None,
+            clipped,
+            transform: Affine::IDENTITY,
+        };
+        let mut pixels = Vec::new();
+        for y in 0..canvas.height {
+            for x in 0..canvas.width {
+                let alpha = if (x / 7 + y / 5) % 3 == 0 { 120 } else { 255 };
+                pixels.extend_from_slice(&[(x % 256) as u8, (y * 2 % 256) as u8, 90, alpha]);
+            }
+        }
+        let image = RasterImage::from_pixels(canvas, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let shape = Shape::Rectangle {
+            left: 0.0,
+            top: 0.0,
+            right: 230.0,
+            bottom: 200.0,
+        };
+        let edges = EdgeOptions {
+            anti_alias: true,
+            feather: 6.0,
+        };
+        let hiding = select_shape(canvas, None, &shape, edges, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let id = doc.allocate_layer_id();
+        let layer = Layer {
+            id,
+            name: "L".into(),
+            visible: true,
+            opacity: 0.6,
+            blend_mode: BlendMode::Multiply,
+            content: LayerContent::raster(Arc::new(image)),
+            mask: Some(LayerMask {
+                image: Arc::new(hiding),
+                enabled: true,
+                replaces_alpha: false,
+                original: None,
+            }),
+            clipped: false,
+            transform: placed,
+        };
+        let below = fill(&mut doc, LinearRgba::new(0.2, 0.5, 0.8, 1.0), false);
+        let clipped = fill(&mut doc, LinearRgba::new(0.9, 0.1, 0.1, 0.3), true);
+        for (index, layer) in [below, layer, clipped].into_iter().enumerate() {
+            Edit::InsertLayer {
+                parent: None,
+                index,
+                layer,
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+        let shape = Shape::Ellipse {
+            left: 40.0,
+            top: 30.0,
+            right: 160.0,
+            bottom: 140.0,
+        };
+        let soft = select_shape(canvas, None, &shape, edges, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        (doc, id, Selection::new(Arc::new(soft)).unwrap())
+    }
+
+    fn composite(doc: &Document) -> Vec<f32> {
+        let size = doc.size();
+        let mut out = vec![0.0; size.pixel_count() as usize * 4];
+        crate::composite::composite_region(doc, size.bounds(), &mut out).unwrap();
+        out
+    }
+
+    /// The floating view of a move by (`dx`, `dy`) composites as its result does.
+    fn floating_matches_the_result(placed: Affine, mode: MoveMode, dx: i64, dy: i64) {
+        let (doc, id, selection) = scene(placed);
+        let layer = doc.layer(id).unwrap().clone();
+        let LayerContent::Raster { image, .. } = &layer.content else {
+            unreachable!("a raster layer");
+        };
+        let mut moving = PixelMove::new(
+            Arc::clone(image),
+            layer.transform,
+            &selection,
+            doc.blend_space(),
+            mode,
+            false,
+        )
+        .unwrap();
+        let lifted = moving.lift().unwrap().unwrap();
+        let mut shown = doc.clone();
+        let offset = moving.image_offset(dx, dy);
+        show_floating(
+            &mut shown,
+            id,
+            &lifted,
+            offset,
+            layer.transform,
+            layer.mask.clone(),
+        )
+        .unwrap();
+        let moved = moving.image(dx, dy).unwrap();
+        assert!(moved.grown.is_none());
+        let mut result = doc.clone();
+        Edit::SetLayerPaint {
+            id,
+            painted: Some(moved.image),
+        }
+        .apply(&mut result)
+        .unwrap();
+        let (a, b) = (composite(&shown), composite(&result));
+        let worst = a
+            .iter()
+            .zip(&b)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        // 8-bit pixels round their soft edges: within a few levels of 255.
+        assert!(worst < 0.012, "{worst}");
+        // And the move shows: the views differ from the unmoved document.
+        let unmoved = composite(&doc);
+        assert!(a.iter().zip(&unmoved).any(|(a, b)| (a - b).abs() > 0.1));
+    }
+
+    #[test]
+    fn floating_pixels_show_what_the_move_will_give() {
+        floating_matches_the_result(Affine::IDENTITY, MoveMode::Cut, 37, 21);
+        floating_matches_the_result(Affine::IDENTITY, MoveMode::Copy, -15, 40);
+        floating_matches_the_result(Affine::translation(12.0, -5.0), MoveMode::Cut, 50, -9);
+    }
+
+    #[test]
+    fn a_mask_does_not_float() {
+        let canvas = Size::new(32, 32);
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            ..PixelFormat::RGBA8_SRGB
+        };
+        let base = Arc::new(RasterImage::from_pixels(canvas, gray, &[255; 32 * 32]).unwrap());
+        let selection = rectangle(canvas, 2.0, 2.0, 4.0, 4.0);
+        let moving = PixelMove::new(
+            base,
+            Affine::IDENTITY,
+            &selection,
+            BlendSpace::Perceptual,
+            MoveMode::Cut,
+            true,
+        )
+        .unwrap();
+        assert!(moving.lift().unwrap().is_none());
+    }
+
     /// Timing of a move of a large selection on a photo-sized layer (run with `--release
     /// --ignored --nocapture`).
     #[test]
@@ -983,6 +1263,12 @@ mod tests {
         .unwrap();
         let selection = Selection::new(Arc::new(image)).unwrap();
         let mut moving = pixel_move(base, Affine::IDENTITY, &selection);
+        let started = std::time::Instant::now();
+        moving.lift().unwrap();
+        println!(
+            "lifted once (a drag's start): {:.1} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         let started = std::time::Instant::now();
         let frames = 20;
         for i in 0..frames {

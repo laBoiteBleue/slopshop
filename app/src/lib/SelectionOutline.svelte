@@ -19,6 +19,7 @@
     width,
     height,
     hidden = false,
+    shift,
   }: {
     mapping: ViewMapping;
     /** Read once: the overlay is recreated with the viewport for another document. */
@@ -29,6 +30,8 @@
     height: number;
     /** Not drawn (Quick Mask shows the selection): kept, so its outline is ready again. */
     hidden?: boolean;
+    /** Drawn moved by this much, document pixels (selected pixels floating in a drag). */
+    shift?: [number, number];
   } = $props();
 
   const docId = untrack(() => documentId);
@@ -158,8 +161,9 @@
     // Whole device pixels, so that unscaled lines stay crisp.
     const dpr = window.devicePixelRatio;
     const snap = (v: number) => Math.round(v * dpr) / dpr;
-    const tx = now.offset[0] - built.at.offset[0] * k;
-    const ty = now.offset[1] - built.at.offset[1] * k;
+    const [sx, sy] = shift ?? [0, 0];
+    const tx = now.offset[0] - built.at.offset[0] * k + sx / now.docPerCss;
+    const ty = now.offset[1] - built.at.offset[1] * k + sy / now.docPerCss;
     const scaled = Math.abs(k - 1) > 1e-9;
     const [dx, dy] = [snap(tx), snap(ty)];
     return {

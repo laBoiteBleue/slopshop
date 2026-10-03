@@ -1292,7 +1292,7 @@
     const target = pixelTarget();
     if (target) {
       const request = { ...target, drag: nextPixelDrag++, dx, dy, copy: false, end: true };
-      void sync(engine.movePixels(doc.id, request));
+      void sendPixels(doc.id, request);
     }
     return true;
   }
@@ -1326,12 +1326,34 @@
     drag.applied = { x: tx, y: ty };
     if (drag.pixels) {
       drag.pixels.sent = true;
-      void sync(engine.movePixels(drag.document, pixelRequest(drag.pixels, drag, false)));
+      // A layer's pixels float in the view: the outline follows them on screen.
+      if (drag.pixels.target === "layer") {
+        pixelShift = { drag: drag.pixels.drag, document: drag.document, x: tx, y: ty };
+      }
+      void sendPixels(drag.document, pixelRequest(drag.pixels, drag, false));
       return;
     }
     if (!drag.ids) return;
     const move: EditRequest = { kind: "translateLayers", ids: drag.ids, dx: tx, dy: ty };
     void sync(engine.performLive(drag.document, move, true));
+  }
+
+  /** How far the outline is drawn from the selection while a layer's pixels float. */
+  let pixelShift = $state<{ drag: number; document: number; x: number; y: number } | null>(null);
+
+  /**
+   * A request of a pixel drag: the document once it changed; while a layer's pixels float only
+   * the view changes, so it redraws.
+   */
+  async function sendPixels(documentId: number, request: MovePixelsRequest) {
+    try {
+      const view = await engine.movePixels(documentId, request);
+      if (view) upsert(view);
+      else if (active?.id === documentId) viewport?.redraw();
+    } catch (e) {
+      if (e === DOCUMENT_CLOSED) await refreshTabs();
+      else showError(String(e));
+    }
   }
 
   function pixelRequest(pixels: PixelDrag, drag: MoveDrag, end: boolean): MovePixelsRequest {
@@ -1350,7 +1372,11 @@
     if (drag?.pixels) {
       // Back where it started, the engine leaves no undo entry.
       if (drag.pixels.sent) {
-        void sync(engine.movePixels(drag.document, pixelRequest(drag.pixels, drag, true)));
+        const id = drag.pixels.drag;
+        // The outline stays moved until the moved selection arrives.
+        void sendPixels(drag.document, pixelRequest(drag.pixels, drag, true)).finally(() => {
+          if (pixelShift?.drag === id) pixelShift = null;
+        });
       }
       return;
     }
@@ -3270,6 +3296,9 @@
                 {#if active?.selectionKey != null}
                   <SelectionOutline
                     hidden={active.quickMask}
+                    shift={pixelShift?.document === active.id
+                      ? [pixelShift.x, pixelShift.y]
+                      : undefined}
                     {mapping}
                     documentId={active.id}
                     selectionKey={active.selectionKey}
