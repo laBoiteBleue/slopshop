@@ -18,6 +18,7 @@
 //! - [`copy`]: the clipboard's pixels (Copy Merged, the image other applications get) and where
 //!   Paste places what it pastes.
 //! - [`job`]: cancellation and progress of background jobs.
+//! - [`trim`]: Image > Trim, the canvas reduced to the image without its uniform margins.
 
 pub mod adjust;
 pub mod blend;
@@ -44,6 +45,7 @@ pub mod stack;
 pub mod thumbnail;
 pub mod tile;
 pub mod transform;
+pub mod trim;
 pub mod view;
 
 pub use blend::{BlendMode, BlendSpace};

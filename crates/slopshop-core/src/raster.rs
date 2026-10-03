@@ -470,11 +470,19 @@ impl RasterImage {
             if !self.format.layout.has_alpha() {
                 return Some(self.size().bounds());
             }
-            self.scan_content_bounds()
+            self.scan_bounds(|(_, alpha)| alpha > 0.0)
         })
     }
 
-    fn scan_content_bounds(&self) -> Option<Rect> {
+    /// The smallest rectangle holding every pixel whose first channel is above 0: what a mask
+    /// lets show (ADR 0014); `None` when it hides everything. Scanned each time (rarely asked).
+    pub fn coverage_bounds(&self) -> Option<Rect> {
+        self.scan_bounds(|(color, _)| color[0] > 0.0)
+    }
+
+    /// The smallest rectangle holding every pixel for which `keep` holds (on its decoded color
+    /// and alpha), tile by tile in parallel.
+    fn scan_bounds(&self, keep: fn(([f32; 3], f32)) -> bool) -> Option<Rect> {
         let level = &self.levels[0];
         let stored = Codec::new(self.stored_format());
         let t = TILE_SIZE as usize;
@@ -502,7 +510,7 @@ impl RasterImage {
                     for (tile, bounds) in chunk.iter().zip(out) {
                         let mut b: Option<[usize; 4]> = None;
                         for (i, px) in tile.chunks_exact(stored.bytes_per_pixel).enumerate() {
-                            if stored.read(px).1 > 0.0 {
+                            if keep(stored.read(px)) {
                                 let (x, y) = (i % t, i / t);
                                 b = Some(match b {
                                     None => [x, y, x, y],
