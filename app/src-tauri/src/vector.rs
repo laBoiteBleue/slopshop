@@ -152,7 +152,11 @@ pub(crate) async fn open_vector_pages(
     };
     tauri::async_runtime::spawn_blocking(move || {
         // The outcome is reported by the open's own events.
-        let _ = open_path(&app, &path, Source::Pages(&pages), target, None);
+        let opened = open_path(&app, &path, Source::Pages(&pages), target, None);
+        if let (Ok(view), None) = (opened, document_id) {
+            crate::recent::remember_document(&app, &path, view.id);
+            crate::recent::record(&app, std::slice::from_ref(&path));
+        }
     })
     .await
     .map_err(|e| e.to_string())
