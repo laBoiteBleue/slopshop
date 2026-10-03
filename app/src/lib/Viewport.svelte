@@ -499,6 +499,12 @@
     return inside ? toDocument(clientX, clientY) : null;
   }
 
+  /** The part of the document the viewport shows, `[x0, y0, x1, y1)` in document pixels. */
+  export function visibleRect(): [number, number, number, number] {
+    const rect = container.getBoundingClientRect();
+    return [...toDocument(rect.left, rect.top), ...toDocument(rect.right, rect.bottom)];
+  }
+
   /** Document coordinates of a point of the window (CSS pixels). */
   function toDocument(clientX: number, clientY: number): [number, number] {
     const rect = container.getBoundingClientRect();

@@ -32,6 +32,16 @@ test("Ctrl+Z undoes, Ctrl+Shift+Z and Ctrl+Y redo", () => {
   assert.equal(commandAt(press("y", ctrl), false), "redo");
 });
 
+test("Copy Merged, Paste in Place and Paste Into are Photoshop's", () => {
+  assert.equal(commandAt(press("C", { ...ctrl, shiftKey: true }), false), "copyMerged");
+  assert.equal(commandAt(press("c", { ...ctrl, altKey: true }), false), "canvasSize");
+  assert.equal(commandAt(press("V", { ...ctrl, shiftKey: true }), false), "pasteInPlace");
+  assert.equal(
+    commandAt(press("V", { ...ctrl, shiftKey: true, altKey: true }), false),
+    "pasteInto",
+  );
+});
+
 test("macOS: Cmd is the modifier, Ctrl is not", () => {
   assert.equal(commandAt(press("z", cmd), true), "undo");
   assert.equal(commandAt(press("z", { ...cmd, shiftKey: true }), true), "redo");

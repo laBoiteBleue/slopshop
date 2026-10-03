@@ -298,11 +298,24 @@ export type PresentInfo = {
 };
 
 /** What a paste found on the clipboard (Pasted in app/src-tauri/src/lib.rs). */
+/** What a paste brought (Pasted in clipboard.rs). */
 export type Pasted =
-  | { kind: "files" }
-  | { kind: "image"; document: DocumentView; newTab: boolean }
-  | { kind: "layers"; document: DocumentView; newTab: boolean }
-  | { kind: "nothing" };
+  /** Files copied in the file manager: the app opens them. */
+  | { kind: "files"; paths: string[] }
+  /** New top-level layers `ids` (the group of a Paste Into) in `document`, a new tab or not. */
+  | { kind: "layers"; document: DocumentView; newTab: boolean; ids: number[] }
+  | { kind: "nothing" }
+  /** Paste Into without a selection. */
+  | { kind: "noSelection" };
+
+/** What Edit > Copy takes (CopyRequest in clipboard.rs). */
+export type CopyRequest =
+  | { kind: "layers"; ids: number[] }
+  | { kind: "pixels"; layerId: number; target: "layer" | "mask" }
+  | { kind: "merged"; name: string };
+
+/** Edit > Paste, Paste in Place or Paste Into. */
+export type PasteKind = "paste" | "inPlace" | "into";
 
 /** What an open found in folders and zip archives (OpenSummary in lib.rs). */
 export type OpenSummary = {
@@ -1167,18 +1180,28 @@ export const engine = {
     return lines;
   },
   /**
-   * Paste the clipboard: copied files open like dropped ones (layers of `documentId`, or new
-   * tabs; outcomes arrive as `open-*` events), a copied image becomes a layer named `name` of
-   * `documentId`, or a new tab.
+   * Paste into `documentId` (a new tab without one): SlopShop's own copy while the system
+   * clipboard still holds the image it got, else what another application put there (files are
+   * returned for the app to open, an image becomes a layer named `name`). `view` is the part
+   * of the document shown, where a paste out of sight lands. `name` also names the group of a
+   * Paste Into. One undo entry. Queued after the edits already sent.
    */
-  paste: (documentId: number | null, name: string) => invoke<Pasted>("paste", { documentId, name }),
+  paste: (
+    documentId: number | null,
+    name: string,
+    kind: PasteKind,
+    view: [number, number, number, number] | null,
+  ) => serial(() => invoke<Pasted>("paste", { documentId, name, kind, view })),
   /**
-   * Edit > Copy on layers: keep `layerIds` of a document (a group with its content) for Paste,
-   * which brings them when the system clipboard has no newer files or image. Resolves with how
-   * many were copied. Queued after the edits already sent.
+   * Edit > Copy (layers, or the selected pixels of a layer or its mask) and Copy Merged: kept
+   * whole for Paste, and an 8-bit image of it for other applications. Resolves with whether
+   * anything was copied (`false`: the selection holds nothing of the layer). Queued after the
+   * edits already sent.
    */
-  copyLayersToClipboard: (documentId: number, layerIds: number[]) =>
-    serial(() => invoke<number>("copy_layers_to_clipboard", { documentId, layerIds })),
+  /** File > New's Clipboard preset: the size of the document a paste would make, if any. */
+  clipboardSize: () => invoke<[number, number] | null>("clipboard_size"),
+  copy: (documentId: number, request: CopyRequest) =>
+    serial(() => invoke<boolean>("copy", { documentId, request })),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   /**
