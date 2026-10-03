@@ -863,6 +863,7 @@ fn render_overlays(
 #[test]
 fn quick_mask_tints_what_the_selection_leaves_out() {
     use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
+    use slopshop_render::SelectionView;
     use std::sync::Arc;
     let quick_mask = slopshop_render::ViewOverlays {
         quick_mask: true,
@@ -924,5 +925,21 @@ fn quick_mask_tints_what_the_selection_leaves_out() {
         let opaque = render_overlays(&r, s.document(), opaque, size);
         assert_close(pixel(&light, 450, 290), [255, 191, 191, 255]);
         assert_close(pixel(&opaque, 450, 290), [255, 0, 0, 255]);
+        // Select and Mask's views: on black, the mask in gray.
+        let view = |selection_view| slopshop_render::ViewOverlays {
+            selection_view,
+            ..Default::default()
+        };
+        let on_black = render_overlays(&r, s.document(), view(SelectionView::OnBlack), size);
+        assert_eq!(pixel(&on_black, 10, 10), [255, 255, 255, 255]);
+        assert_eq!(pixel(&on_black, 450, 290), [0, 0, 0, 255]);
+        assert_close(pixel(&on_black, 300, 150), [128, 128, 128, 255]);
+        let mask = render_overlays(&r, s.document(), view(SelectionView::Mask), size);
+        assert_eq!(pixel(&mask, 10, 10), [255, 255, 255, 255]);
+        assert_eq!(pixel(&mask, 450, 290), [0, 0, 0, 255]);
+        // Nothing selected in Select and Mask: everything is left out.
+        s.perform(Edit::SetSelection { selection: None }).unwrap();
+        let none = render_overlays(&r, s.document(), view(SelectionView::OnBlack), size);
+        assert_eq!(pixel(&none, 10, 10), [0, 0, 0, 255]);
     }
 }

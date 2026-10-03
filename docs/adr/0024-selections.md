@@ -75,7 +75,9 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
   soft, and a tile reading only uniform tiles of one value stays uniform.
 - Quick Mask (Q) shows soft edges: a view overlay the GPU draws over the finished frame (after
   the display cache, in the encoded display space as Photoshop does), sampling the selection's
-  pyramid like a layer's mask, at an opacity the user sets (half by default).
+  pyramid like a layer's mask, at an opacity the user sets (half by default). Select and
+  Mask's views use the same pass: the tint black or white wholly (On Black, On White), or the
+  mask itself in gray.
 - The brush will respect the selection: it multiplies the stroke's coverage by the mask.
 - Rasterizing touches every pixel of the shape's bounds once (0.65 s for an ellipse filling a
   600 MP canvas); interior tiles could be detected without being filled if that matters.

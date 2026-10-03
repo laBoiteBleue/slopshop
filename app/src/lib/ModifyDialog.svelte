@@ -1,8 +1,7 @@
 <script lang="ts">
   // Select > Modify, as in Photoshop: one number of pixels (Border's width, Smooth's sample
   // radius, Expand's and Contract's amounts, Feather's radius), applied to the whole selection,
-  // shown live on the image while it changes (`onpreview`). Also Select > Refine Edge's radius
-  // (the band ViTMatte decides around the outline), not previewed: it runs a model.
+  // shown live on the image while it changes (`onpreview`).
   import { onMount, untrack } from "svelte";
   import type { SelectionModify } from "./engine";
   import { t } from "./i18n/index.svelte";
@@ -16,7 +15,7 @@
     onclose,
     onpreview,
   }: {
-    kind: SelectionModify | "refine";
+    kind: SelectionModify;
     /** The value used last for this kind. */
     value: number;
     /** The largest value accepted, in pixels. */
@@ -27,16 +26,14 @@
     onpreview?: (value: number) => void;
   } = $props();
 
-  const TITLES: Record<SelectionModify | "refine", MessageKey> = {
-    refine: "modify.refine.title",
+  const TITLES: Record<SelectionModify, MessageKey> = {
     border: "modify.border.title",
     smooth: "modify.smooth.title",
     expand: "modify.expand.title",
     contract: "modify.contract.title",
     feather: "modify.feather.title",
   };
-  const LABELS: Record<SelectionModify | "refine", MessageKey> = {
-    refine: "modify.refine.label",
+  const LABELS: Record<SelectionModify, MessageKey> = {
     border: "modify.border.label",
     smooth: "modify.smooth.label",
     expand: "modify.expand.label",

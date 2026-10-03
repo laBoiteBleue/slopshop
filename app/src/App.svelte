@@ -125,7 +125,12 @@
   import { loadDock } from "./lib/panelDock";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
-  import { MAX_FEATHER, MAX_MODIFY, stepBrush, MAX_REFINE } from "./lib/selection";
+  import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
+  import { latestWins } from "./lib/latest";
+  import SelectAndMaskPanel, {
+    DEFAULT_REFINE,
+    type RefineSettings,
+  } from "./lib/SelectAndMaskPanel.svelte";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
@@ -1368,9 +1373,8 @@
   }
 
   // Select > Modify: a dialog for the amount, remembered per change for the session.
-  let modifyDialog = $state<{ kind: SelectionModify | "refine"; document: number } | null>(null);
-  let modifyAmounts = $state<Record<SelectionModify | "refine", number>>({
-    refine: 16,
+  let modifyDialog = $state<{ kind: SelectionModify; document: number } | null>(null);
+  let modifyAmounts = $state<Record<SelectionModify, number>>({
     border: 10,
     smooth: 5,
     expand: 10,
@@ -1378,7 +1382,7 @@
     feather: 10,
   });
 
-  function openModify(kind: SelectionModify | "refine") {
+  function openModify(kind: SelectionModify) {
     commitTransform();
     if (active?.selectionKey != null) modifyDialog = { kind, document: active.id };
   }
@@ -1387,47 +1391,98 @@
    * Select > Modify's amount shown live while the dialog is open: one request at a time, the
    * latest amount wins; each replaces the previous one in the engine.
    */
-  let modifyPreview: { busy: boolean; next: number | null } = { busy: false, next: null };
-  function previewModify(amount: number) {
+  const modifyPreview = latestWins((amount: number) => {
     const dialog = modifyDialog;
-    if (!dialog || dialog.kind === "refine") return;
-    const kind = dialog.kind;
-    if (modifyPreview.busy) {
-      modifyPreview.next = amount;
-      return;
-    }
-    modifyPreview.busy = true;
-    void sync(engine.modifySelection(dialog.document, kind, amount, true)).finally(() => {
-      modifyPreview.busy = false;
-      const next = modifyPreview.next;
-      modifyPreview.next = null;
-      if (next !== null && modifyDialog === dialog) previewModify(next);
-    });
-  }
+    if (!dialog) return Promise.resolve();
+    return sync(engine.modifySelection(dialog.document, dialog.kind, amount, true));
+  });
 
   /** Cancel: the selection as it was before the dialog. */
   function closeModify() {
     const dialog = modifyDialog;
     modifyDialog = null;
-    modifyPreview.next = null;
-    if (dialog && dialog.kind !== "refine") void cancelGesture(dialog.document);
+    modifyPreview.drop();
+    if (dialog) void cancelGesture(dialog.document);
   }
 
   function applyModify(amount: number) {
     const dialog = modifyDialog;
     modifyDialog = null;
-    modifyPreview.next = null;
+    modifyPreview.drop();
     if (!dialog) return;
     modifyAmounts[dialog.kind] = amount;
-    const kind = dialog.kind;
-    if (kind === "refine") {
-      void runAi("ai.task.refine", (task) =>
-        engine.aiRefineSelection(dialog.document, amount, aiLayer(), task),
-      );
+    void sync(engine.modifySelection(dialog.document, dialog.kind, amount));
+  }
+
+  // Select > Select and Mask: a panel beside the image refining the selection it opened on.
+  let refining = $state<{ document: number } | null>(null);
+  let refineSettings = $state<RefineSettings>(structuredClone(DEFAULT_REFINE));
+
+  async function openSelectAndMask() {
+    const doc = active;
+    commitTransform();
+    if (!doc || doc.selectionKey == null || refining) return;
+    try {
+      upsert(await engine.refineOpen(doc.id));
+    } catch (e) {
+      showError(String(e));
+      return;
+    }
+    if (activeId === doc.id) refining = { document: doc.id };
+  }
+
+  /** The edge settings shown live: the latest wins. */
+  const refinePreview = latestWins((edges: RefineSettings["edges"]) => {
+    const session = refining;
+    if (!session) return Promise.resolve();
+    return sync(engine.refinePreview(session.document, edges, true));
+  });
+
+  function refineView(view: RefineSettings["view"]) {
+    if (refining) void sync(engine.refineView(refining.document, view));
+  }
+
+  /** Edge detection on the base (ViTMatte), then the settings shown on it again. */
+  function refineDetect(radius: number) {
+    const session = refining;
+    if (!session) return;
+    const edges = $state.snapshot(refineSettings.edges);
+    void runAi("ai.task.refine", async (task) => {
+      await engine.aiRefineBase(session.document, radius, aiLayer(), task);
+      return engine.refinePreview(session.document, edges, true);
+    });
+  }
+
+  function applySelectAndMask() {
+    const session = refining;
+    refining = null;
+    refinePreview.drop();
+    if (!session) return;
+    const edges = $state.snapshot(refineSettings.edges);
+    const layer = layersPanel?.selectedLayer() ?? null;
+    if (refineSettings.output === "selection" || !layer) {
+      void sync(engine.refinePreview(session.document, edges, false));
     } else {
-      void sync(engine.modifySelection(dialog.document, kind, amount));
+      const nameFormat = t("layers.copyName", { name: "{name}" });
+      const newLayer = refineSettings.output === "newLayer";
+      void sync(engine.refineOutput(session.document, edges, layer.id, newLayer, nameFormat));
     }
   }
+
+  function closeSelectAndMask() {
+    const session = refining;
+    refining = null;
+    refinePreview.drop();
+    if (session) void sync(engine.refineClose(session.document));
+  }
+
+  $effect(() => {
+    if (refining && refining.document !== activeId) {
+      const session = refining;
+      refining = null;
+      void sync(engine.refineClose(session.document));
+    }
+  });
 
   /** Select > Save Selection is asking a name, for this document. */
   let saveSelectionFor = $state<number | null>(null);
@@ -3590,7 +3645,7 @@
           cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
           cmd(
             t("menu.select.refineEdge"),
-            () => openModify("refine"),
+            () => void openSelectAndMask(),
             undefined,
             doc?.selectionKey == null,
           ),
@@ -3987,7 +4042,8 @@
               {#snippet overlay(mapping)}
                 {#if active?.selectionKey != null}
                   <SelectionOutline
-                    hidden={active.quickMask}
+                    hidden={active.quickMask ||
+                      (refining?.document === active.id && refineSettings.view !== "ants")}
                     shift={outlineShift?.document === active.id
                       ? [outlineShift.x, outlineShift.y]
                       : undefined}
@@ -4350,14 +4406,23 @@
   <ModifyDialog
     kind={modifyDialog.kind}
     value={modifyAmounts[modifyDialog.kind]}
-    max={modifyDialog.kind === "feather"
-      ? MAX_FEATHER
-      : modifyDialog.kind === "refine"
-        ? MAX_REFINE
-        : MAX_MODIFY}
+    max={modifyDialog.kind === "feather" ? MAX_FEATHER : MAX_MODIFY}
     onapply={applyModify}
     onclose={closeModify}
-    onpreview={previewModify}
+    onpreview={modifyPreview.push}
+  />
+{/if}
+
+{#if refining && refining.document === activeId}
+  <SelectAndMaskPanel
+    bind:settings={refineSettings}
+    canOutputToLayer={(layersPanel?.selectedLayer() ?? null) !== null}
+    busy={aiBusy}
+    onview={refineView}
+    onedges={refinePreview.push}
+    ondetect={refineDetect}
+    onapply={applySelectAndMask}
+    onclose={closeSelectAndMask}
   />
 {/if}
 

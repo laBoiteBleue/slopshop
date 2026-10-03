@@ -202,6 +202,8 @@ pub struct Renderer {
 /// the display cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewOverlays {
+    /// Select and Mask's view of the selection, while it is open (over Quick Mask's).
+    pub selection_view: SelectionView,
     /// Quick Mask (ADR 0024): the area the selection leaves out tinted red, at
     /// `quick_mask_opacity` where nothing is selected, fading where the selection is soft.
     /// Nothing without a selection.
@@ -210,9 +212,25 @@ pub struct ViewOverlays {
     pub quick_mask_opacity: u8,
 }
 
+/// How Select and Mask shows the selection over the image (ADR 0024).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectionView {
+    /// Not shown by this pass (the marching ants, or Quick Mask, show it).
+    #[default]
+    Off,
+    /// Quick Mask's tint over what is left out, at its opacity.
+    Overlay,
+    /// What is left out black, or white: the selection's content alone.
+    OnBlack,
+    OnWhite,
+    /// The selection itself in gray: white selected, black left out.
+    Mask,
+}
+
 impl Default for ViewOverlays {
     fn default() -> Self {
         Self {
+            selection_view: SelectionView::Off,
             quick_mask: false,
             quick_mask_opacity: 50,
         }
@@ -240,6 +258,19 @@ const KIND_STACK_BEGIN: u32 = 5;
 const KIND_STACK_PAINT: u32 = 6;
 /// A stack's effect: an adjustment's fields, the selection as the mask.
 const KIND_STACK_EFFECT: u32 = 7;
+/// The selection pass shows the mask in gray (Select and Mask's Mask view).
+const KIND_SHOW_MASK: u32 = 8;
+
+/// What the selection pass draws (Quick Mask, Select and Mask's views).
+struct SelectionPass<'a> {
+    /// `None`: nothing is selected.
+    selection: Option<&'a RasterImage>,
+    /// The tint over what is left out (encoded display RGB) and its opacity.
+    tint: [f32; 3],
+    opacity: f32,
+    /// The mask in gray instead.
+    mask: bool,
+}
 /// Layer flags (see composite.wgsl).
 const FLAG_PREMULTIPLIED: u32 = 1;
 /// Gray source: green and blue of its GPU texels are copies of red ([`gpu_texels`]).
@@ -872,8 +903,22 @@ impl Renderer {
         tiles: &mut [Option<TileCache>; 4],
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
     ) {
-        let selection = frame.document.selection().filter(|_| overlays.quick_mask);
-        if let Some(selection) = selection {
+        let opacity = f32::from(overlays.quick_mask_opacity.min(100)) / 100.0;
+        // What the pass draws: a tint and its opacity, or the mask itself.
+        let shown = match overlays.selection_view {
+            SelectionView::Off => overlays
+                .quick_mask
+                .then_some(([1.0, 0.0, 0.0], opacity, false)),
+            SelectionView::Overlay => Some(([1.0, 0.0, 0.0], opacity, false)),
+            SelectionView::OnBlack => Some(([0.0; 3], 1.0, false)),
+            SelectionView::OnWhite => Some(([1.0; 3], 1.0, false)),
+            SelectionView::Mask => Some(([0.0; 3], 1.0, true)),
+        };
+        // Quick Mask without a selection: everything is selected, nothing to tint. Select and
+        // Mask's views without one: nothing is left selected.
+        let selection = frame.document.selection();
+        let views = overlays.selection_view != SelectionView::Off;
+        if let Some((tint, opacity, mask)) = shown.filter(|_| selection.is_some() || views) {
             // The tiles the frame reads stay resident only until it is submitted: submit it
             // first, so that the overlay's uploads cannot replace them under it.
             self.queue.submit([encoder.finish()]);
@@ -882,26 +927,33 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("quick mask"),
                 });
-            let opacity = f32::from(overlays.quick_mask_opacity.min(100)) / 100.0;
-            self.record_quick_mask(&mut encoder, frame, selection.image(), opacity, tiles);
+            let pass = SelectionPass {
+                selection: selection.map(|s| s.image().as_ref()),
+                tint,
+                opacity,
+                mask,
+            };
+            self.record_quick_mask(&mut encoder, frame, pass, tiles);
         }
         finish(&mut encoder, frame.pixels);
         self.queue.submit([encoder.finish()]);
     }
 
-    /// Quick Mask (ADR 0024): the unselected area of the frame tinted red at `opacity`, the
-    /// selection sampled at the view's level like a layer's mask.
+    /// Quick Mask and Select and Mask's views (ADR 0024): the unselected area of the frame
+    /// tinted, or the selection shown in gray, the selection sampled at the view's level like a
+    /// layer's mask.
     fn record_quick_mask(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Composited<'_>,
-        selection: &RasterImage,
-        opacity: f32,
+        pass: SelectionPass<'_>,
         tiles: &mut [Option<TileCache>; 4],
     ) {
         let doc_size = frame.document.size();
-        let plan = visible_document_rect(doc_size, frame.view, frame.output).and_then(|visible| {
-            RasterPlan::new(selection, visible, Affine::IDENTITY, frame.view.scale)
+        let plan = pass.selection.and_then(|selection| {
+            visible_document_rect(doc_size, frame.view, frame.output).and_then(|visible| {
+                RasterPlan::new(selection, visible, Affine::IDENTITY, frame.view.scale)
+            })
         });
         let mut prepared = PreparedLayers {
             count: 1,
@@ -909,9 +961,11 @@ impl Renderer {
             tile_table: Vec::new(),
         };
         // A mask with no tile in view (or none planned) reads 0: all of the view is tinted.
+        let [r, g, b] = pass.tint;
         let mut fields = LayerFields {
-            kind: KIND_FILL,
-            opacity,
+            kind: if pass.mask { KIND_SHOW_MASK } else { KIND_FILL },
+            color: [r, g, b, 1.0],
+            opacity: pass.opacity,
             ..LayerFields::default()
         };
         if let Some(plan) = plan.filter(|plan| !plan.range().is_empty()) {
@@ -1855,6 +1909,7 @@ fn shader_source() -> String {
     constants += &format!("const KIND_STACK_BEGIN: u32 = {KIND_STACK_BEGIN}u;\n");
     constants += &format!("const KIND_STACK_PAINT: u32 = {KIND_STACK_PAINT}u;\n");
     constants += &format!("const KIND_STACK_EFFECT: u32 = {KIND_STACK_EFFECT}u;\n");
+    constants += &format!("const KIND_SHOW_MASK: u32 = {KIND_SHOW_MASK}u;\n");
     constants += &format!("const FLAG_STACK_END: u32 = {FLAG_STACK_END}u;\n");
     constants += &format!(
         "const CURVE_LUT: u32 = {}u;\n",

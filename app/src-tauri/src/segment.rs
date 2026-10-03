@@ -585,46 +585,79 @@ pub(crate) async fn ai_object_select(
 /// The largest Refine Edge radius, document pixels.
 const MAX_REFINE_RADIUS: u32 = 256;
 
-/// Select > Refine Edge: the current selection's edge matted at full resolution by ViTMatte,
-/// within `radius` document pixels of its outline, as one undo entry.
+/// `current`'s edge matted at full resolution by ViTMatte within `radius` document pixels of
+/// its outline (Refine Edge, Select and Mask's edge detection).
+#[allow(clippy::too_many_arguments)]
+fn matted(
+    state: &AppState,
+    root: &std::path::Path,
+    session: &mut Session,
+    doc: &slopshop_core::Document,
+    current: &RasterImage,
+    radius: u32,
+    layer_id: Option<u64>,
+    task: &mut Task,
+) -> Result<Option<RasterImage>, AiFailure> {
+    let radius = radius.clamp(1, MAX_REFINE_RADIUS);
+    let mut plan = core_selection::plan_refinement(
+        doc.size(),
+        current,
+        core_selection::RefineBand::both(radius),
+        MATTE_SIDE,
+        MAX_MATTE_WINDOWS,
+    )
+    .map_err(internal)?;
+    session.matte(state, root, doc, layer_id, &mut plan, task)?;
+    task.check()?;
+    plan.finish(None, Combine::Replace).map_err(internal)
+}
+
+/// Select and Mask's edge detection: the base it refines (the selection it was opened with)
+/// matted by ViTMatte within `radius` pixels of its outline, which becomes its new base. The
+/// panel then shows its settings on it again (`refine_preview`).
 #[tauri::command]
-pub(crate) async fn ai_refine_selection(
+pub(crate) async fn ai_refine_base(
     app: AppHandle,
     document_id: u64,
     radius: u32,
     layer_id: Option<u64>,
     task: u64,
-) -> Result<DocumentView, AiFailure> {
+) -> Result<(), AiFailure> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let (root, doc) = prepare(&app, document_id)?;
         require(&root, Feature::Segmentation)?;
-        let Some(current) = doc.selection().map(|s| Arc::clone(s.image())) else {
-            return Err(internal("nothing is selected"));
+        let base = {
+            let mut documents = state.documents().map_err(internal)?;
+            let document = documents.get_mut(document_id).map_err(internal)?;
+            document
+                .refine_base
+                .clone()
+                .ok_or_else(|| internal("Select and Mask is not open"))?
         };
-        let radius = radius.clamp(1, MAX_REFINE_RADIUS);
         let mut task = Task::start(&app, task);
-        let mut plan = core_selection::plan_refinement(
-            doc.size(),
-            &current,
-            core_selection::RefineBand::both(radius),
-            MATTE_SIDE,
-            MAX_MATTE_WINDOWS,
-        )
-        .map_err(internal)?;
         let mut session = lock(&state)?;
-        session.matte(&state, &root, &doc, layer_id, &mut plan, &mut task)?;
-        task.check()?;
-        let image = plan.finish(None, Combine::Replace).map_err(internal)?;
-        let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
-        // Only the selection changed: an image encoded from this revision stays valid.
-        if let Some(encoded) = session.encoded.as_mut()
-            && encoded.document_id == document_id
-            && encoded.revision == doc.revision()
-        {
-            encoded.revision = view.revision;
+        let image = matted(
+            &state,
+            &root,
+            &mut session,
+            &doc,
+            &base,
+            radius,
+            layer_id,
+            &mut task,
+        )?;
+        let image = match image {
+            Some(image) => image,
+            None => core_selection::uniform_mask(doc.size(), false).map_err(internal)?,
+        };
+        let mut documents = state.documents().map_err(internal)?;
+        let document = documents.get_mut(document_id).map_err(internal)?;
+        // The panel may have closed meanwhile.
+        if document.refine_base.is_some() {
+            document.refine_base = Some(Arc::new(image));
         }
-        Ok(view)
+        Ok(())
     })
     .await
     .map_err(internal)?

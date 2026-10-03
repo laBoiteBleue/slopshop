@@ -1080,6 +1080,9 @@ pub enum Modify {
     Border(f64),
     /// Round its corners and drop its specks, about this radius.
     Smooth(f64),
+    /// Harden its soft edges, percent (0: unchanged, 100: no soft edge left), around one
+    /// half: Select and Mask's Contrast.
+    Contrast(f64),
 }
 
 /// `selection` changed by `how` on a `canvas`. `None`: nothing is left selected. Expand,
@@ -1096,11 +1099,12 @@ pub fn modify(
     | Modify::Expand(r)
     | Modify::Contract(r)
     | Modify::Border(r)
-    | Modify::Smooth(r)) = how;
-    let max = if matches!(how, Modify::Feather(_)) {
-        MAX_FEATHER
-    } else {
-        MAX_MODIFY
+    | Modify::Smooth(r)
+    | Modify::Contrast(r)) = how;
+    let max = match how {
+        Modify::Feather(_) => MAX_FEATHER,
+        Modify::Contrast(_) => 100.0,
+        _ => MAX_MODIFY,
     };
     if !r.is_finite() || !(0.0..=max).contains(&r) {
         return Err(SelectionError::InvalidShape);
@@ -1116,18 +1120,11 @@ pub fn modify(
             // and specks narrower than the blur fade out.
             let sigma = radius / 2.0;
             let gain = (sigma * (2.0 * std::f64::consts::PI).sqrt()).max(1.0) as f32;
-            let mut blurred = feather(&mask, sigma);
-            for tile in &mut blurred.tiles {
-                let sharp = |v: u16| {
-                    let c = (f32::from(v) / f32::from(FULL) - 0.5) * gain + 0.5;
-                    (c.clamp(0.0, 1.0) * f32::from(FULL)).round() as u16
-                };
-                *tile = match &*tile {
-                    Tile::Const(v) => Tile::Const(sharp(*v)),
-                    other => Tile::Data(other.values().iter().map(|&v| sharp(v)).collect()),
-                };
-            }
-            blurred
+            sharpened(feather(&mask, sigma), gain)
+        }
+        // 100 % is a step: a gain far beyond any 16-bit ramp.
+        Modify::Contrast(percent) => {
+            sharpened(mask, (1.0 / (1.0 - percent / 100.0).max(1e-5)) as f32)
         }
         Modify::Expand(r) => by_distance(&mask, r, move |h| r - h + 0.5),
         Modify::Contract(r) => by_distance(&mask, r, move |h| -r - h + 0.5),
@@ -1136,6 +1133,58 @@ pub fn modify(
         }
     };
     Ok(result.into_image())
+}
+
+/// `mask`'s coverage steepened by `gain` around one half (1: unchanged).
+fn sharpened(mut mask: Mask, gain: f32) -> Mask {
+    let sharp = |v: u16| {
+        let c = (f32::from(v) / f32::from(FULL) - 0.5) * gain + 0.5;
+        (c.clamp(0.0, 1.0) * f32::from(FULL)).round() as u16
+    };
+    for tile in &mut mask.tiles {
+        *tile = match &*tile {
+            Tile::Const(v) => Tile::Const(sharp(*v)),
+            other => Tile::Data(other.values().iter().map(|&v| sharp(v)).collect()),
+        };
+    }
+    mask
+}
+
+/// Select and Mask's edge settings, applied in this order: Smooth (a radius), Shift Edge
+/// (pixels, outward when positive: Expand or Contract), Feather (a radius), Contrast (percent).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EdgeSettings {
+    pub smooth: f64,
+    pub shift: f64,
+    pub feather: f64,
+    pub contrast: f64,
+}
+
+/// `base` with `settings` applied ([`EdgeSettings`]), each step a [`modify`]; unchanged
+/// (sharing its tiles) without any. `None`: nothing is left selected.
+pub fn refine_edges(
+    canvas: Size,
+    base: &RasterImage,
+    settings: EdgeSettings,
+) -> Result<Option<RasterImage>, SelectionError> {
+    let steps = [
+        (settings.smooth > 0.0).then_some(Modify::Smooth(settings.smooth)),
+        (settings.shift > 0.0).then_some(Modify::Expand(settings.shift)),
+        (settings.shift < 0.0).then_some(Modify::Contract(-settings.shift)),
+        (settings.feather > 0.0).then_some(Modify::Feather(settings.feather)),
+        (settings.contrast > 0.0).then_some(Modify::Contrast(settings.contrast)),
+    ];
+    let mut out: Option<RasterImage> = None;
+    for how in steps.into_iter().flatten() {
+        match modify(canvas, out.as_ref().unwrap_or(base), how)? {
+            Some(next) => out = Some(next),
+            None => return Ok(None),
+        }
+    }
+    match out {
+        Some(out) => Ok(Some(out)),
+        None => Ok(Mask::from_image(canvas, base)?.into_image()),
+    }
 }
 
 /// Where Edit > Stroke draws its band, relative to the selection's outline (Photoshop's
@@ -3824,6 +3873,47 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn select_and_mask_settings_chain_the_modify_steps() {
+        let canvas = Size::new(400, 300);
+        let square = select(canvas, &rect(100.0, 100.0, 200.0, 200.0));
+        // Nothing to do: the same coverage.
+        let same = refine_edges(canvas, &square, EdgeSettings::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(same.gray_at(150, 150), 1.0);
+        assert_eq!(same.gray_at(99, 150), 0.0);
+        // Shifted out by 10 then feathered: the half-coverage edge moved, soft.
+        let settings = EdgeSettings {
+            shift: 10.0,
+            feather: 4.0,
+            ..EdgeSettings::default()
+        };
+        let soft = refine_edges(canvas, &square, settings).unwrap().unwrap();
+        let edge = soft.gray_at(90, 150);
+        assert!(edge > 0.4 && edge < 0.6, "{edge}");
+        assert_eq!(soft.gray_at(150, 150), 1.0);
+        // Contrast hardens what Feather softened; 100 % leaves no soft pixel.
+        let hard = refine_edges(
+            canvas,
+            &square,
+            EdgeSettings {
+                contrast: 100.0,
+                ..settings
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!((80..100).all(|x| [0.0, 1.0].contains(&hard.gray_at(x, 150))));
+        // Shifted in past its size: nothing left.
+        let gone = EdgeSettings {
+            shift: -60.0,
+            ..EdgeSettings::default()
+        };
+        assert!(refine_edges(canvas, &square, gone).unwrap().is_none());
+        assert!(modify(canvas, &square, Modify::Contrast(101.0)).is_err());
     }
 
     #[test]

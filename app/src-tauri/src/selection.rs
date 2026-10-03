@@ -977,6 +977,28 @@ pub async fn set_quick_mask(
     Ok(document.view())
 }
 
+/// The size of a new mask for `layer`: its pixels', or for fills, groups and adjustments the
+/// canvas as seen from the layer.
+pub(crate) fn mask_size(
+    doc: &slopshop_core::Document,
+    layer: &slopshop_core::Layer,
+) -> Result<Size, String> {
+    match &layer.content {
+        LayerContent::Raster { image, .. } => Ok(image.size()),
+        _ => {
+            let canvas = doc.size();
+            let to_document = layer.transform.then(doc.parent_transform(layer.id));
+            let inverse = to_document
+                .inverse()
+                .ok_or("a layer transform is not invertible")?;
+            let [_, _, x1, y1] =
+                inverse.map_rect([0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)]);
+            let side = |v: f64| v.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
+            Ok(Size::new(side(x1), side(y1)))
+        }
+    }
+}
+
 /// Layer > Layer Mask > Reveal All, Hide All, Reveal Selection or Hide Selection (`kind`:
 /// `revealAll`, `hideAll`, `revealSelection`, `hideSelection`) on each of `layer_ids` that has no
 /// mask yet, as one undo entry. A mask from the selection drops the selection, as Photoshop does.
@@ -998,7 +1020,6 @@ pub async fn add_layer_masks(
     let (targets, selection) = {
         let mut documents = state.documents()?;
         let doc = documents.get_mut(document_id)?.session.document();
-        let canvas = doc.size();
         let mut targets = Vec::new();
         for raw in layer_ids {
             let id = LayerId::from_raw(raw);
@@ -1007,24 +1028,7 @@ pub async fn add_layer_masks(
                 continue;
             }
             let to_document = layer.transform.then(doc.parent_transform(id));
-            let size = match &layer.content {
-                LayerContent::Raster { image, .. } => image.size(),
-                // Fills, groups and adjustments: the canvas, seen from the layer.
-                _ => {
-                    let inverse = to_document
-                        .inverse()
-                        .ok_or("a layer transform is not invertible")?;
-                    let [_, _, x1, y1] = inverse.map_rect([
-                        0.0,
-                        0.0,
-                        f64::from(canvas.width),
-                        f64::from(canvas.height),
-                    ]);
-                    let side = |v: f64| v.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
-                    Size::new(side(x1), side(y1))
-                }
-            };
-            targets.push((id, size, to_document));
+            targets.push((id, mask_size(doc, layer)?, to_document));
         }
         let selection = doc.selection().map(|s| Arc::clone(s.image()));
         (targets, selection)

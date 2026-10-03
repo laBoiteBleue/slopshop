@@ -5,7 +5,7 @@ import ModifyDialog from "../../src/lib/ModifyDialog.svelte";
 import type { SelectionModify } from "../../src/lib/engine";
 
 /** Select > Modify of the given kind, last used with `value` pixels, accepting up to `max`. */
-function open(kind: SelectionModify | "refine" = "expand", value = 10, max = 500) {
+function open(kind: SelectionModify = "expand", value = 10, max = 500) {
   const onapply = vi.fn();
   const onclose = vi.fn();
   render(ModifyDialog, { kind, value, max, onapply, onclose });
@@ -20,12 +20,6 @@ test("each kind has its own title and label, and starts at the value used last",
   expect(screen.getByRole("dialog", { name: "Feather Selection" })).toBeInTheDocument();
   expect(amount("Feather Radius:")).toHaveValue(25);
   expect(screen.getByText("pixels")).toBeInTheDocument();
-});
-
-test("Refine Edges asks for its radius", () => {
-  open("refine", 8);
-  expect(screen.getByRole("dialog", { name: "Refine Edges" })).toBeInTheDocument();
-  expect(amount("Radius:")).toHaveValue(8);
 });
 
 test("a number typed is applied by OK or by Enter", async () => {

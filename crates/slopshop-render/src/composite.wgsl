@@ -1423,9 +1423,9 @@ fn fill_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(cache_target, id.xy, finite(to_display(acc), false));
 }
 
-// Quick Mask (ADR 0024): Photoshop's red over what the selection leaves out, at the opacity
-// `layers[0].opacity` carries (half by default).
-const QUICK_MASK_COLOR = vec3<f32>(1.0, 0.0, 0.0);
+// Quick Mask and Select and Mask's views (ADR 0024): `layers[0].color` tints what the selection
+// leaves out at `layers[0].opacity` (Quick Mask: Photoshop's red, half opaque by default; black
+// or white wholly); with KIND_SHOW_MASK, the selection itself in gray.
 
 // Quick Mask over the finished frame in `output`: `layers[0]` carries the selection as its mask.
 // Tinted in the encoded display space, as Photoshop draws it; the pasteboard is left alone.
@@ -1443,10 +1443,15 @@ fn quick_mask_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (layer.flags & FLAG_MASK) != 0u {
         selected = mask_coverage(layer, pixel.footprint, Resampled(vec4<f32>(0.0), 0.0, 0u));
     }
-    let amount = layer.opacity * (1.0 - selected) * min(pixel.coverage, 1.0);
     let index = id.y * params.out_size.x + id.x;
     let color = unpack4x8unorm(output[index]);
-    output[index] = pack4x8unorm(vec4<f32>(mix(color.rgb, QUICK_MASK_COLOR, amount), 1.0));
+    let inside = min(pixel.coverage, 1.0);
+    if layer.kind == KIND_SHOW_MASK {
+        output[index] = pack4x8unorm(vec4<f32>(mix(color.rgb, vec3<f32>(selected), inside), 1.0));
+        return;
+    }
+    let amount = layer.opacity * (1.0 - selected) * inside;
+    output[index] = pack4x8unorm(vec4<f32>(mix(color.rgb, layer.color.rgb, amount), 1.0));
 }
 
 // Display cache, present: the cache layer holding texel `texel` of the frame's level `i`, or
