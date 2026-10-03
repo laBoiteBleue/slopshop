@@ -164,6 +164,14 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       Layers (Shift+Ctrl+G), drag into and out of groups, Pass Through in the blend modes
 - [x] PSD groups; a document of several layers (`.slop`, PSD, a tab) imported into another
       arrives as a group named after it
+- [x] Layer menu restructured (New, fill and adjustment layers, Arrange with Ctrl+[ and ],
+      commands on every selected layer), after an audit against Photoshop's
+      ([ergonomics](ergonomics.md#layer-menu-audit-of-2026-10-03))
+- [ ] Solid color fill layers editable after creation
+- [ ] Layer > Align and Distribute, shared with the Move tool's options bar
+- [ ] New Layer from Visible (stamp visible)
+- [ ] Merge Layers, Merge Visible, Flatten, Rasterize (their submenu is an open question)
+- [ ] Layer styles (an ADR first)
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation
