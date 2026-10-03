@@ -1,8 +1,9 @@
 // The edits the Layers panel sends for the selected layers, as in Photoshop: one undo entry for
 // all of them (a batch), and nothing for layers already as asked. Null: nothing to send.
 
+import { hexToSrgb, srgbToHex } from "./color";
 import type { BlendModeId, EditRequest, LayerView } from "./engine";
-import { childrenOf, outermost, type LayerTree } from "./layerTree";
+import { childrenOf, insertionPoint, outermost, type LayerTree } from "./layerTree";
 
 /** One edit, or one batch (a single undo entry) for several. */
 export function batchOf(edits: EditRequest[]): EditRequest {
@@ -97,6 +98,31 @@ export function maskRemoval(layers: LayerView[]): EditRequest | null {
   return batchOrNone(
     layers.filter((l) => l.mask).map((l): EditRequest => ({ kind: "removeLayerMask", id: l.id })),
   );
+}
+
+/**
+ * A new solid color fill layer of `hex` (`#rrggbb`, sRGB) above `active` in its group, or at
+ * the top without one, as the other new layers (Layer > New Fill Layer > Solid Color).
+ */
+export function newFill(
+  tree: LayerTree,
+  active: number | null,
+  hex: string,
+  name: string,
+): EditRequest {
+  const { parent, index } = insertionPoint(tree, active);
+  return { kind: "addFillLayer", name, color: [...hexToSrgb(hex), 1], parent, index };
+}
+
+/** A fill layer's color as `#rrggbb`, from its display swatch. */
+export function fillHex(layer: LayerView): string {
+  return srgbToHex(layer.swatch);
+}
+
+/** `layer`'s fill color set to `hex`; null when it is not a fill layer or has that color. */
+export function fillColorEdit(layer: LayerView, hex: string): EditRequest | null {
+  if (layer.kind !== "fill" || fillHex(layer) === hex.toLowerCase()) return null;
+  return { kind: "setFillColor", id: layer.id, color: [...hexToSrgb(hex), 1] };
 }
 
 /** Show or hide `layers`. */

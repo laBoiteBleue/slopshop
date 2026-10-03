@@ -8,8 +8,11 @@ import {
   clippingReleases,
   clippingToggle,
   eyeClick,
+  fillColorEdit,
+  fillHex,
   maskEnabledToggle,
   maskRemoval,
+  newFill,
   opacityEdit,
   opacityPercent,
   referenceMask,
@@ -192,4 +195,35 @@ test("masks are disabled, enabled and deleted on every selected layer that has o
   });
   assert.equal(maskEnabledToggle([bare], bare), null);
   assert.equal(maskRemoval([bare]), null);
+});
+
+test("a new fill layer goes above the active layer in its group, of the color given", () => {
+  const inner = layer(3);
+  const tree = layerTree([layer(1), layer(2, { kind: "group", children: [inner, layer(4)] })]);
+  assert.deepEqual(newFill(tree, 3, "#ff0000", "Color Fill 1"), {
+    kind: "addFillLayer",
+    name: "Color Fill 1",
+    color: [1, 0, 0, 1],
+    parent: 2,
+    index: 1,
+  });
+  assert.deepEqual(newFill(tree, null, "#000000", "Color Fill 1"), {
+    kind: "addFillLayer",
+    name: "Color Fill 1",
+    color: [0, 0, 0, 1],
+    parent: null,
+    index: 2,
+  });
+});
+
+test("a fill layer's color changes only for a fill layer, and only to another color", () => {
+  const fill = layer(5, { kind: "fill", swatch: [1, 0, 0, 1] });
+  assert.equal(fillHex(fill), "#ff0000");
+  assert.equal(fillColorEdit(fill, "#FF0000"), null);
+  assert.deepEqual(fillColorEdit(fill, "#0000ff"), {
+    kind: "setFillColor",
+    id: 5,
+    color: [0, 0, 1, 1],
+  });
+  assert.equal(fillColorEdit(layer(6), "#0000ff"), null);
 });
