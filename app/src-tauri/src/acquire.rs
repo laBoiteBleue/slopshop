@@ -13,6 +13,10 @@ use tauri::AppHandle;
 /// How an import ended, for the UI to say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "only the Windows scanner reports an outcome")
+)]
 pub enum AcquireOutcome {
     /// The image is open in a new tab.
     Opened,
