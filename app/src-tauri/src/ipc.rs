@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use slopshop_core::adjust::Adjustment;
+use slopshop_core::align::{self, Align, Distribute};
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::curve::Curve;
 use slopshop_core::stack::Entry;
@@ -456,6 +457,18 @@ pub enum EditRequest {
     Ungroup {
         ids: Vec<u64>,
     },
+    /// Line layers up (Layer > Align, the Move tool's buttons): `align` is `left`,
+    /// `horizontalCenters`, `right`, `top`, `verticalCenters` or `bottom`.
+    AlignLayers {
+        ids: Vec<u64>,
+        align: String,
+    },
+    /// Spread layers evenly (Layer > Distribute): `distribute` is `horizontalCenters`,
+    /// `verticalCenters`, `horizontalSpacing` or `verticalSpacing`.
+    DistributeLayers {
+        ids: Vec<u64>,
+        distribute: String,
+    },
     /// Move layers within their groups (Layer > Arrange): `arrange` is `front`, `forward`,
     /// `backward` or `back`.
     ArrangeLayers {
@@ -807,6 +820,31 @@ impl EditRequest {
             EditRequest::Ungroup { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::ungroup_layers(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::AlignLayers { ids, align } => {
+                let align = match align.as_str() {
+                    "left" => Align::Left,
+                    "horizontalCenters" => Align::HorizontalCenters,
+                    "right" => Align::Right,
+                    "top" => Align::Top,
+                    "verticalCenters" => Align::VerticalCenters,
+                    "bottom" => Align::Bottom,
+                    other => return Err(format!("unknown alignment {other}")),
+                };
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                align::align_layers(session.document(), &ids, align).map_err(|e| e.to_string())?
+            }
+            EditRequest::DistributeLayers { ids, distribute } => {
+                let distribute = match distribute.as_str() {
+                    "horizontalCenters" => Distribute::HorizontalCenters,
+                    "verticalCenters" => Distribute::VerticalCenters,
+                    "horizontalSpacing" => Distribute::HorizontalSpacing,
+                    "verticalSpacing" => Distribute::VerticalSpacing,
+                    other => return Err(format!("unknown distribution {other}")),
+                };
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                align::distribute_layers(session.document(), &ids, distribute)
+                    .map_err(|e| e.to_string())?
             }
             EditRequest::ArrangeLayers { ids, arrange } => {
                 let arrange = match arrange.as_str() {
