@@ -102,6 +102,13 @@ built. Contributors: propose here first.
   content stays whole behind the mask and moves under it), deselected. Without a document, a
   paste opens a new one of the size of what was copied; File > New offers that size as its
   Clipboard preset.
+- Delete with a selection erases the selected pixels of the active layer (Photoshop's Clear);
+  Edit > Fill (Shift+F5 or Shift+Backspace), Photoshop's dialog: the foreground or background
+  color, Color… (the picker), black, 50% gray or white, and an opacity, in the selection or the
+  whole layer without one. Edit > Stroke, Photoshop's dialog: a band along the selection's
+  outline, inside, centered or outside, its width, color (the swatch opens the picker) and
+  opacity. All of them are paint (ADR 0027): the original stays intact, but the paint is not
+  editable afterwards (ADR 0029); an editable stroke will be a layer of its own (Layer menu).
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
   Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
 - Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and
