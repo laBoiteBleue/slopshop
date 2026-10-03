@@ -3250,6 +3250,7 @@
       title={tabTitle(doc)}
       width={doc.width}
       height={doc.height}
+      resolution={doc.resolution}
       onclose={() => (printDialog = null)}
     />
   {/if}

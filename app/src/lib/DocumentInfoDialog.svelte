@@ -70,6 +70,15 @@
         })}
       </dd>
 
+      <dt>{t("sizeDialog.resolution")}</dt>
+      <dd>
+        {t("documentInfo.resolutionValue", {
+          ppi: number(info.resolution, 2),
+          width: number((info.width / info.resolution) * 2.54, 1),
+          height: number((info.height / info.resolution) * 2.54, 1),
+        })}
+      </dd>
+
       <dt>{t("documentInfo.colorSpace")}</dt>
       <dd>{spaceName(info.workingSpace)}</dd>
 

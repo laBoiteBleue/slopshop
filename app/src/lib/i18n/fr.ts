@@ -278,6 +278,7 @@ const fr: Messages = {
   "documentInfo.name": "Nom",
   "documentInfo.size": "Dimensions",
   "documentInfo.sizeValue": "{width} × {height} px ({megapixels} mégapixels)",
+  "documentInfo.resolutionValue": "{ppi} ppp (imprimé à {width} × {height} cm)",
   "documentInfo.colorSpace": "Espace colorimétrique",
   "documentInfo.raster": "Calques de pixels",
   "documentInfo.fill": "Calques de remplissage",

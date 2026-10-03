@@ -865,6 +865,8 @@ export type DocumentInfo = {
   height: number;
   workingSpace: ColorSpaceId;
   blendSpace: "perceptual" | "linear";
+  /** Pixels per inch. */
+  resolution: number;
   layers: { raster: number; fill: number; adjustment: number; group: number; masks: number };
   /** The raster layers' pixel formats, the most used first. */
   formats: {

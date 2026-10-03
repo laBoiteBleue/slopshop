@@ -15,6 +15,7 @@
     title,
     width,
     height,
+    resolution,
     onclose,
   }: {
     documentId: number;
@@ -23,6 +24,8 @@
     /** The document's size, pixels. */
     width: number;
     height: number;
+    /** The document's resolution, pixels per inch: its print size when not fitted. */
+    resolution: number;
     onclose: () => void;
   } = $props();
 
@@ -30,14 +33,18 @@
   /** Below this, a print looks soft: the dialog says so. */
   const LOW_PPI = 150;
 
-  /** Paper, size and position are remembered; the orientation follows the image. */
+  /**
+   * Paper, scaling and centering are remembered; the orientation follows the image and the
+   * resolution is the document's (Photoshop's print size).
+   */
   function restore(): PrintSettings {
     const landscape = untrack(() => width > height);
+    const ppi = untrack(() => resolution);
     const defaults: PrintSettings = {
       paper: "a4",
       landscape,
       fit: true,
-      ppi: 300,
+      ppi,
       center: true,
       left: 0,
       top: 0,
@@ -50,7 +57,6 @@
           ...defaults,
           paper,
           fit: saved.fit !== false,
-          ppi: Number.isFinite(saved.ppi) && saved.ppi > 0 ? saved.ppi : defaults.ppi,
           center: saved.center !== false,
         };
       }
@@ -64,9 +70,9 @@
   const layout = $derived(layoutOf(settings, width, height));
 
   $effect(() => {
-    const { paper, fit, ppi, center } = settings;
+    const { paper, fit, center } = settings;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ paper, fit, ppi, center }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ paper, fit, center }));
     } catch {
       // Not remembered: fine.
     }
