@@ -61,7 +61,7 @@ pub enum PaintTarget {
 
 /// A stroke's target in a document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Target {
+pub(crate) enum Target {
     Layer(LayerId),
     Mask(LayerId),
     Selection,
@@ -119,7 +119,7 @@ struct ActiveStroke {
 /// grown original (the unpainted pixels) and its grown mask, if any.
 #[derive(Debug, Clone)]
 pub struct Growth {
-    transform: Affine,
+    pub(crate) transform: Affine,
     original: Arc<RasterImage>,
     mask: Option<LayerMask>,
 }
@@ -146,7 +146,7 @@ impl PaintPreview {
 }
 
 /// The edit that gives `target` the painted `image`, a layer grown first by `growth` if any.
-fn paint_edit(target: Target, image: Arc<RasterImage>, growth: Option<&Growth>) -> Edit {
+pub(crate) fn paint_edit(target: Target, image: Arc<RasterImage>, growth: Option<&Growth>) -> Edit {
     let layer = match target {
         Target::Layer(id) => id,
         Target::Mask(id) => {
@@ -190,7 +190,10 @@ fn paint_edit(target: Target, image: Arc<RasterImage>, growth: Option<&Growth>) 
 
 /// The growth of layer `id` that lets a stroke reach the whole canvas of `doc`, if it needs one
 /// (see the module documentation): its pixels to paint, and the growth.
-fn grow(doc: &Document, id: LayerId) -> Result<Option<(Arc<RasterImage>, Growth)>, String> {
+pub(crate) fn grow(
+    doc: &Document,
+    id: LayerId,
+) -> Result<Option<(Arc<RasterImage>, Growth)>, String> {
     let layer = doc.layer(id).ok_or("the painted layer is gone")?;
     let LayerContent::Raster { image, original } = &layer.content else {
         return Ok(None);

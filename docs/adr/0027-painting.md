@@ -124,6 +124,9 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
   version, so that an older SlopShop reports a newer file instead of dropping the paint). Shared
   tiles are stored once (the file addresses tiles by content). PSD export writes the painted
   pixels; PSD import has no paint.
+- The Move tool dragged inside a selection moves the selected pixels the same way
+  (`slopshop_core::move_pixels`): the result is the layer's (or its mask's) painted image,
+  computed from the pixels the move started from, so the original stays intact.
 - Order of work: the core (brush model, coverage, apply, the painted image and `SetLayerPaint`,
   tests and benchmark); tile identity in the renderer and the writer, `.slop`; the app (new
   layer, Brush and Eraser with their options bar, colors and picker, pressure, brush outline,

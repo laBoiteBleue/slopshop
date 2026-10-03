@@ -37,6 +37,7 @@
     type LayerView,
     type Matrix,
     type SnapTargets,
+    type MovePixelsRequest,
     type OpenFailed,
     type OpenFinished,
     type Opening,
@@ -1084,6 +1085,8 @@
   // document pixels, one undo entry per drag. As in Photoshop: Auto-Select (the options bar)
   // takes the layer under the pointer, Ctrl inverting it; the moving layers snap to the canvas
   // and to the other layers (edges and centers, not with Ctrl), with magenta smart guides.
+  // A drag from inside the selection moves the selected pixels of the active layer (or of its
+  // mask when it is the target) with the selection, leaving a hole; Alt copies them.
   let autoSelect = $state(true);
   /** View > Snap. */
   let snapping = $state(true);
@@ -1091,6 +1094,8 @@
     document: number;
     /** Known once Auto-Select answered. */
     ids: number[] | null;
+    /** Inside the selection: the selected pixels move instead of the layers. */
+    pixels: PixelDrag | null;
     targets: SnapTargets | null;
     /** The pointer's movement since the start, and the whole pixels sent so far. */
     raw: { x: number; y: number };
@@ -1098,15 +1103,25 @@
     docPerCss: number;
     free: boolean;
   };
+  type PixelDrag = {
+    drag: number;
+    target: "layer" | "mask";
+    layerId: number;
+    copy: boolean;
+    /** A move was sent: the end must be. */
+    sent: boolean;
+  };
   let moveDrag: MoveDrag | null = null;
+  let nextPixelDrag = 1;
   let guides = $state<Guide[]>([]);
 
-  function onMoveStart(x: number, y: number, ctrl: boolean) {
+  function onMoveStart(x: number, y: number, ctrl: boolean, alt: boolean) {
     const doc = active;
     if (!doc) return;
     const drag: MoveDrag = {
       document: doc.id,
       ids: null,
+      pixels: null,
       targets: null,
       raw: { x: 0, y: 0 },
       applied: { x: 0, y: 0 },
@@ -1123,13 +1138,62 @@
           ids = [hit];
         }
       }
+      // Quick Mask hides the outline: the layers move.
+      const inside =
+        doc.selectionKey != null && !doc.quickMask
+          ? await engine.selectionBoundsAt(doc.id, x, y).catch(() => null)
+          : null;
       if (moveDrag !== drag) return;
-      drag.ids = ids;
-      if (ids.length > 0 && snapping) {
-        drag.targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+      if (inside) {
+        const target = pixelTarget();
+        drag.ids = [];
+        if (!target) return;
+        drag.pixels = { ...target, drag: nextPixelDrag++, copy: alt, sent: false };
+        if (snapping) {
+          const others = await engine.moveSnapTargets(doc.id, []).catch(() => null);
+          drag.targets = { moving: inside, others: others?.others ?? [] };
+        }
+      } else {
+        drag.ids = ids;
+        if (ids.length > 0 && snapping) {
+          drag.targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+        }
       }
       if (moveDrag === drag) flushMove(drag);
     })();
+  }
+
+  /**
+   * What moving selected pixels takes, as painting does: the active layer's pixels, or its
+   * mask when it is the target; null (a notice shown) when it cannot.
+   */
+  function pixelTarget(): { target: "layer" | "mask"; layerId: number } | null {
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const target = layersPanel?.paintsMask() ? "mask" : "layer";
+    if (!layer || (target === "layer" && layer.kind !== "raster")) {
+      showError(t("move.needRaster"));
+      return null;
+    }
+    if (!layer.visible) {
+      showError(t("move.hidden"));
+      return null;
+    }
+    return { target, layerId: layer.id };
+  }
+
+  /**
+   * Arrows with the Move tool and a selection: the selected pixels move by (dx, dy), one undo
+   * entry each, as in Photoshop. Whether they did (else the layers move).
+   */
+  function nudgePixels(dx: number, dy: number): boolean {
+    const doc = active;
+    if (tool !== "move" || !doc || doc.selectionKey == null || doc.quickMask) return false;
+    const target = pixelTarget();
+    if (target) {
+      const request = { ...target, drag: nextPixelDrag++, dx, dy, copy: false, end: true };
+      void sync(engine.movePixels(doc.id, request));
+    }
+    return true;
   }
 
   function onMoveDrag(dx: number, dy: number, docPerCss: number, free: boolean) {
@@ -1143,7 +1207,7 @@
 
   /** Send the whole pixels the drag has moved since it began, snapped (replacing the last). */
   function flushMove(drag: MoveDrag) {
-    if (!drag.ids || drag.ids.length === 0) return;
+    if (!drag.pixels && (!drag.ids || drag.ids.length === 0)) return;
     let { x, y } = drag.raw;
     let shown: Guide[] = [];
     const doc = tabs.find((d) => d.id === drag.document);
@@ -1159,8 +1223,19 @@
     const ty = Math.round(y);
     if (tx === drag.applied.x && ty === drag.applied.y) return;
     drag.applied = { x: tx, y: ty };
+    if (drag.pixels) {
+      drag.pixels.sent = true;
+      void sync(engine.movePixels(drag.document, pixelRequest(drag.pixels, drag, false)));
+      return;
+    }
+    if (!drag.ids) return;
     const move: EditRequest = { kind: "translateLayers", ids: drag.ids, dx: tx, dy: ty };
     void sync(engine.performLive(drag.document, move, true));
+  }
+
+  function pixelRequest(pixels: PixelDrag, drag: MoveDrag, end: boolean): MovePixelsRequest {
+    const { drag: id, target, layerId, copy } = pixels;
+    return { drag: id, target, layerId, copy, dx: drag.applied.x, dy: drag.applied.y, end };
   }
 
   function canvasBounds(doc: DocumentView): Bounds {
@@ -1171,6 +1246,13 @@
     const drag = moveDrag;
     moveDrag = null;
     guides = [];
+    if (drag?.pixels) {
+      // Back where it started, the engine leaves no undo entry.
+      if (drag.pixels.sent) {
+        void sync(engine.movePixels(drag.document, pixelRequest(drag.pixels, drag, true)));
+      }
+      return;
+    }
     if (!drag?.ids) return;
     // Back where it started: no undo entry.
     if (drag.applied.x === 0 && drag.applied.y === 0) void cancelGesture(drag.document);
@@ -3027,6 +3109,7 @@
             onlive={live}
             ongestureend={endGesture}
             onclear={clearSelection}
+            onnudge={nudgePixels}
             contextMenu={layerContextMenu}
             emptyContextMenu={emptyLayersContextMenu}
             onlayerdrag={onLayerDrag}

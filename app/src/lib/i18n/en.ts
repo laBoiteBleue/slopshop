@@ -221,6 +221,8 @@ const en = {
   "colorPicker.a": "a:",
   "colorPicker.labB": "b:",
   "paint.hidden": "The layer is hidden: show it to paint on it.",
+  "move.needRaster": "Select a pixel layer or a layer mask to move the selected pixels.",
+  "move.hidden": "The layer is hidden: show it to move its selected pixels.",
   "options.refineEdge": "Refine Edges",
   "options.refineEdge.hint": "Refine the edges at full resolution (hair, fur): slower",
   "selection.readout": "{width} × {height} px",

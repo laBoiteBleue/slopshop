@@ -204,6 +204,9 @@ removable as a whole; undo keeps the old tiles by reference.
       outline, new empty layer (Shift+Ctrl+N), Delete Paint and the painted-layer mark
 - [x] Delete with a selection, as Photoshop's Fill dialog: transparency, the foreground or
       background color, black, 50% gray or white, as paint
+- [x] Move tool inside a selection, as Photoshop: the selected pixels of the active layer (or of
+      its targeted mask) move with the selection, leaving a hole; Alt copies them; arrows nudge
+      them; they float until something else happens; kept as paint (the original intact)
 
 ## Phase 4 — Very large images
 

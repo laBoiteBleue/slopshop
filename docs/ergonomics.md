@@ -69,7 +69,11 @@ built. Contributors: propose here first.
   a layer already selected keeps the whole selection moving); Ctrl held inverts it. Snap:
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
-  turns it off.
+  turns it off. A drag from inside the selection moves the selected pixels instead (Photoshop):
+  those of the active layer, or of its mask when the mask is the target, with the selection,
+  leaving a hole (transparent, or hidden in a mask); Alt copies them; arrows nudge them. As in
+  Photoshop they float until something else happens: moving them again brings back what they
+  covered. The move is kept as the layer's paint (ADR 0027): Delete Paint restores the original.
 - Free Transform (Ctrl+T, Edit > Free Transform, or a double-click on a layer in the image): a
   box around the selected layers with eight
   handles. Drag inside to move (Shift: along one axis); a corner scales keeping the proportions
