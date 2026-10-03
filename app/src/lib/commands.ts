@@ -65,6 +65,8 @@ export const SHORTCUTS = {
   bringForward: ["mod+]"],
   sendBackward: ["mod+["],
   sendToBack: ["shift+mod+["],
+  // Photoshop's stamp visible.
+  newLayerFromVisible: ["alt+shift+mod+e"],
   renameLayer: ["f2"],
   deleteLayers: ["delete", "backspace"],
   // Select

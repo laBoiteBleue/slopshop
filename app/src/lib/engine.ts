@@ -1206,6 +1206,9 @@ export const engine = {
   /** What moving `ids` can snap to (bounds in document pixels). */
   moveSnapTargets: (documentId: number, ids: number[]) =>
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
+  /** Layer > New Layer from Visible: the visible composite as a new layer on top. */
+  newLayerFromVisible: (documentId: number, name: string) =>
+    serial(() => invoke<DocumentView>("new_layer_from_visible", { documentId, name })),
   addMaskFromTransparency: (documentId: number, layerId: number) =>
     serial(() => invoke<DocumentView>("add_mask_from_transparency", { documentId, layerId })),
   /** Select `shape` combined with the selection by `mode` (ADR 0024); feather in pixels. */
