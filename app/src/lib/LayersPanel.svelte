@@ -28,6 +28,16 @@
     topmost,
   } from "./layerTree";
   import {
+    blendModeChange,
+    clippingToggle,
+    eyeClick,
+    opacityEdit,
+    opacityPercent,
+    removal,
+    typedOpacity,
+    visibilityToggle,
+  } from "./layerEdits";
+  import {
     afterLayersChange,
     allSelected,
     pressed,
@@ -156,11 +166,6 @@
     untrack(() => apply(afterLayersChange(current(), known, order)));
   });
 
-  /** One edit, or one batch (a single undo entry) for several. */
-  function batchOf(edits: EditRequest[]): EditRequest {
-    return edits.length === 1 ? edits[0] : { kind: "batch", edits };
-  }
-
   function toggleSelected(id: number) {
     apply(
       toggled(
@@ -235,14 +240,13 @@
     if (selected) renaming = selected.id;
   }
 
+  /** Send `request`, unless there is nothing to do. */
+  function send(request: EditRequest | null) {
+    if (request) void edit(request);
+  }
+
   export function deleteSelected() {
-    if (selection.length === 0) return;
-    // A group takes its layers with it.
-    const ids = outermost(
-      tree,
-      selection.map((l) => l.id),
-    );
-    void edit(batchOf(ids.map((id) => ({ kind: "removeLayer", id }))));
+    send(removal(tree, selection));
   }
 
   /**
@@ -250,12 +254,7 @@
    * (Layer > Create/Release Clipping Mask, Alt+Ctrl+G).
    */
   export function toggleClippingSelected() {
-    if (selection.length === 0) return;
-    const release = selection.every((l) => l.clipped);
-    const edits = selection
-      .filter((l) => l.clipped === release)
-      .map((l): EditRequest => ({ kind: "setLayerClipped", id: l.id, clipped: !release }));
-    if (edits.length > 0) void edit(batchOf(edits));
+    send(clippingToggle(selection));
   }
 
   const ARROWS: Record<string, [number, number]> = {
@@ -280,28 +279,7 @@
 
   /** Hide the selected layers, or show them all when the active one is hidden. */
   export function toggleSelectedVisibility() {
-    if (selection.length === 0) return;
-    const visible = selected?.visible === false;
-    const edits = selection
-      .filter((l) => l.visible !== visible)
-      .map((l): EditRequest => ({ kind: "setLayerVisible", id: l.id, visible }));
-    if (edits.length > 0) void edit(batchOf(edits));
-  }
-
-  /**
-   * The eye of `layer`: within a selection of several layers, shows or hides them all (as the
-   * clicked one becomes, one undo entry); otherwise toggles that layer alone.
-   */
-  function toggleEye(layer: LayerView) {
-    const visible = !layer.visible;
-    if (selection.length > 1 && selectedSet.has(layer.id)) {
-      const edits = selection
-        .filter((l) => l.visible !== visible)
-        .map((l): EditRequest => ({ kind: "setLayerVisible", id: l.id, visible }));
-      if (edits.length > 0) void edit(batchOf(edits));
-      return;
-    }
-    void edit({ kind: "setLayerVisible", id: layer.id, visible });
+    send(visibilityToggle(selection, selected));
   }
 
   // The right-click menu: where it is open, if it is, and whether it is the empty area's.
@@ -479,10 +457,6 @@
 
   // Opacity: live while dragging the slider, one undo entry per drag. `change` does not fire
   // when a drag ends on its starting value, so the gesture also ends on any pointer release.
-  function opacityPercent(layer: LayerView | null): number {
-    return layer ? Math.round(layer.opacity * 100) : 100;
-  }
-
   // While the user moves the slider (or steps the field), the slider and the field show their
   // value, not the document's: engine answers lag behind the input, and writing them back made
   // the slider jump backwards. The draft is dropped once the last answer has arrived.
@@ -494,11 +468,6 @@
       ? opacityDraft.percent
       : opacityPercent(selected),
   );
-
-  /** Set the opacity of `layers` (one undo entry). */
-  function opacityEdit(layers: LayerView[], opacity: number): EditRequest {
-    return batchOf(layers.map((l) => ({ kind: "setLayerOpacity", id: l.id, opacity })));
-  }
 
   function onOpacitySliderInput(value: string) {
     if (!selected) return;
@@ -538,13 +507,12 @@
     const ids = new Set(opacityFieldLayers ?? selectedIds);
     const targets = allLayers.filter((l) => ids.has(l.id));
     const shownId = opacityFieldLayers ? opacityFieldActive : activeId;
-    const n = input.valueAsNumber;
+    const clamped = typedOpacity(input.value, input.valueAsNumber);
     // Empty or invalid: restore the displayed value instead of treating it as 0.
-    if (targets.length === 0 || input.value.trim() === "" || !Number.isFinite(n)) {
+    if (targets.length === 0 || clamped === null) {
       input.value = String(opacityPercent(selected));
       return;
     }
-    const clamped = Math.min(Math.max(Math.round(n), 0), 100);
     const changed = targets.filter((l) => opacityPercent(l) !== clamped);
     if (changed.length > 0) {
       const version = ++draftVersion;
@@ -561,20 +529,7 @@
 
   /** A mode for every selected layer; "passThrough" applies to the selected groups. */
   function onBlendModeChange(value: string) {
-    const edits: EditRequest[] = [];
-    for (const layer of selection) {
-      if (value === "passThrough") {
-        if (layer.kind === "group" && !layer.passThrough) {
-          edits.push({ kind: "setGroupPassThrough", id: layer.id, passThrough: true });
-        }
-        continue;
-      }
-      edits.push({ kind: "setLayerBlendMode", id: layer.id, mode: value as BlendModeId });
-      if (layer.kind === "group" && layer.passThrough) {
-        edits.push({ kind: "setGroupPassThrough", id: layer.id, passThrough: false });
-      }
-    }
-    if (edits.length > 0) void edit(batchOf(edits));
+    send(blendModeChange(selection, value as BlendModeId | "passThrough"));
   }
 
   // Drag to reorder, with pointer events (HTML5 drag and drop is intercepted by Tauri on
@@ -824,7 +779,7 @@
           class="eye"
           title={t(layer.visible ? "layers.hide" : "layers.show")}
           aria-pressed={layer.visible}
-          onclick={() => toggleEye(layer)}
+          onclick={() => send(eyeClick(layer, selection))}
         >
           {#if layer.visible}<Icon name="eye" size={14} />{/if}
         </button>
