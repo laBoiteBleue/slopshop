@@ -631,6 +631,7 @@ const fr: Messages = {
   "menu.layer.arrange.forward": "Avancer",
   "menu.layer.arrange.backward": "Reculer",
   "menu.layer.arrange.back": "Arrière-plan",
+  "menu.layer.newFromVisible": "Créer un calque depuis les visibles",
   "menu.layer.align": "Aligner",
   "menu.layer.align.left": "Bords gauches",
   "menu.layer.align.horizontalCenters": "Centres horizontaux",

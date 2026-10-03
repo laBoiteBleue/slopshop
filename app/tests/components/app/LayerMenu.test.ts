@@ -1,9 +1,14 @@
 import { screen } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
-import { documentView, layer, layerNames, open, row, sent } from "./harness";
+import { documentView, layer, layerNames, open, respond, row, sent } from "./harness";
 
 // The Layer menu and its shortcuts, on the selected layers.
+
+respond("new_layer_from_visible", (args, doc) => {
+  doc.layers = [...doc.layers, layer(99, args.name as string)];
+  return { ...doc, revision: doc.revision + 1 };
+});
 
 test("the Layer menu: New, the fill and adjustment layers, then the commands on the layers", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
@@ -94,4 +99,16 @@ test("Layer > Align > Left Edges aligns the selected layers, Distribute waits fo
       { documentId: 1, edit: { kind: "alignLayers", ids: [1, 2], align: "left" } },
     ]),
   );
+});
+
+test("Alt+Shift+Ctrl+E stamps the visible layers into a new layer on top, selected", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Background"), layer(2, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
+  await user.click(row("Background"));
+  await user.keyboard("{Alt>}{Shift>}{Control>}e{/Control}{/Shift}{/Alt}");
+  await vi.waitFor(() =>
+    expect(sent("new_layer_from_visible")).toEqual([{ documentId: 1, name: "Layer 3" }]),
+  );
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Layer 3", "Cat", "Background"]));
+  expect(row("Layer 3")).toHaveClass("selected");
 });

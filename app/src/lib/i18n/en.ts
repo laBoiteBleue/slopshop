@@ -614,6 +614,7 @@ const en = {
   "menu.layer.arrange.forward": "Bring Forward",
   "menu.layer.arrange.backward": "Send Backward",
   "menu.layer.arrange.back": "Send to Back",
+  "menu.layer.newFromVisible": "New Layer from Visible",
   "menu.layer.align": "Align",
   "menu.layer.align.left": "Left Edges",
   "menu.layer.align.horizontalCenters": "Horizontal Centers",

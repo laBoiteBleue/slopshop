@@ -3155,6 +3155,14 @@
       bringForward: arrangeCommand("forward", "menu.layer.arrange.forward"),
       sendBackward: arrangeCommand("backward", "menu.layer.arrange.backward"),
       sendToBack: arrangeCommand("back", "menu.layer.arrange.back"),
+      newLayerFromVisible: {
+        label: t("menu.layer.newFromVisible"),
+        run: () => {
+          const name = layersPanel?.nextLayerName();
+          if (doc && name) void sync(engine.newLayerFromVisible(doc.id, name));
+        },
+        disabled: !doc,
+      },
       renameLayer: {
         label: t("menu.layer.rename"),
         run: () => !layersPanel?.busy() && layersPanel?.renameSelected(),
@@ -3658,6 +3666,8 @@
             disabled: !layersPanel?.canDistributeSelected(),
             items: DISTRIBUTES.map((d) => cmd(t(d.label), () => distributeSelected(d.id))),
           },
+          separator,
+          item("newLayerFromVisible"),
         ],
       },
       {

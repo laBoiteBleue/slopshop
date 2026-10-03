@@ -125,6 +125,13 @@ test("shortcuts are shown in each platform's way", () => {
   assert.equal(formatShortcut("mod+,", names, true), "⌘,");
 });
 
+test("New Layer from Visible is Photoshop's stamp visible, Alt+Shift+Ctrl+E", () => {
+  assert.equal(
+    commandAt(press("E", { ...ctrl, shiftKey: true, altKey: true }), false),
+    "newLayerFromVisible",
+  );
+});
+
 test("Layer > Arrange is Ctrl+[ and ], by the physical keys (^ and $ on AZERTY)", () => {
   const bracket = (key: string, code: string, modifiers: Partial<KeyPress>) => ({
     ...press(key, modifiers),
