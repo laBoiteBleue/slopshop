@@ -9,6 +9,7 @@
 
 mod ai;
 mod export;
+mod info;
 mod ipc;
 mod paint;
 mod recent;
@@ -118,6 +119,8 @@ struct OpenDocument {
     file: Option<SlopFile>,
     /// Path of that file (kept while the file is taken out for a save).
     path: Option<PathBuf>,
+    /// The file the document was opened from (an image or a `.slop`), for Document Info.
+    source: Option<PathBuf>,
     /// Revision of the document when it was opened, created or last saved.
     saved_revision: u64,
     /// A save of this document is running.
@@ -141,6 +144,7 @@ impl OpenDocument {
             layer_warnings: HashMap::new(),
             file: None,
             path: None,
+            source: None,
             saved_revision,
             saving: false,
             last_selection: None,
@@ -806,6 +810,13 @@ fn open_path(
                 detail: error.to_string(),
             },
         );
+    }
+    // Document Info names the file a new tab came from.
+    if let (Ok(view), OpenTarget::NewTab) = (&result, target)
+        && let Ok(mut documents) = state.documents()
+        && let Ok(document) = documents.get_mut(view.id)
+    {
+        document.source = Some(path.to_owned());
     }
     match &result {
         Ok(document) => emit(
@@ -2215,6 +2226,7 @@ pub fn run() {
             recent::recent_files,
             recent::clear_recent_files,
             recent::recent_thumbnail,
+            info::document_info,
             paint::sample_color,
             selection::color_range_preview,
             selection::color_range,

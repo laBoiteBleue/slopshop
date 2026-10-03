@@ -851,6 +851,30 @@ export type BrushRequest = {
 /** What a stroke paints (see `paint::PaintTarget`): masks and the selection in gray. */
 export type PaintTarget = "layer" | "mask" | "selection";
 
+/** A file a document comes from (File > Document Info); `bytes` null when it is gone. */
+export type FileInfo = { path: string; bytes: number | null };
+
+/** File > Document Info (see `info::DocumentInfo`): identifiers and numbers to translate. */
+export type DocumentInfo = {
+  name: string | null;
+  width: number;
+  height: number;
+  workingSpace: ColorSpaceId;
+  blendSpace: "perceptual" | "linear";
+  layers: { raster: number; fill: number; adjustment: number; group: number; masks: number };
+  /** The raster layers' pixel formats, the most used first. */
+  formats: {
+    bits: number;
+    float: boolean;
+    channels: "gray" | "grayAlpha" | "rgb" | "rgba";
+    space: ColorSpaceId;
+    layers: number;
+  }[];
+  memoryBytes: number;
+  source: FileInfo | null;
+  file: FileInfo | null;
+};
+
 /** A batch of a Brush or Eraser stroke (see `paint::PaintRequest`). */
 export type PaintRequest = {
   /** Batches of one stroke share its id. */
@@ -936,6 +960,8 @@ export const engine = {
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /** File > Document Info. */
+  documentInfo: (documentId: number) => invoke<DocumentInfo>("document_info", { documentId }),
   /** File > Open Recent: files and folders opened or saved, newest first (existing ones). */
   recentFiles: () => invoke<string[]>("recent_files"),
   /** File > Open Recent > Clear Recent File List. */
