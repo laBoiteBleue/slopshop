@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { hexToSrgb } from "./color";
   import { tick, untrack } from "svelte";
   import {
     BLEND_MODE_GROUPS,
@@ -37,6 +36,7 @@
     opacityPercent,
     removal,
     typedOpacity,
+    newFill,
     ungrouping,
     visibilityToggle,
     type Arrangement,
@@ -62,8 +62,11 @@
     emptyContextMenu = [],
     onlayerdrag,
     hidden = [],
+    onfillcolor,
   }: {
     doc: DocumentView;
+    /** A double-click on a fill layer's thumbnail: the app lets its color be chosen. */
+    onfillcolor?: (layer: LayerView) => void;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
     contextMenu?: MenuItem[];
     /** The right-click menu of the empty area below the layers (built by the app). */
@@ -195,10 +198,19 @@
 
   let list: HTMLUListElement;
 
-  /** A fill layer of `color` (`#rrggbb`, sent sRGB-encoded: the engine converts it). */
+  /**
+   * A solid color fill layer of `color` (`#rrggbb`: the foreground color) above the active
+   * layer, selected (Layer > New Fill Layer > Solid Color): no dialog, its color stays editable
+   * (Properties panel, double-click on its thumbnail).
+   */
   export function addFill(color: string) {
-    const name = t("layers.defaultFillName", { n: doc.layers.length + 1 });
-    edit({ kind: "addFillLayer", name, color: [...hexToSrgb(color), 1] });
+    const n = allLayers.filter((l) => l.kind === "fill").length + 1;
+    const name = t("layers.defaultFillName", { n });
+    const before = new Set(allLayers.map((l) => l.id));
+    void edit(newFill(tree, selected?.id ?? null, color, name)).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
   }
 
   // Commands of the Layer and Select menus.
@@ -822,9 +834,16 @@
             <Icon name="adjust" size={24} />
           </span>
         {:else}
+          <!-- A double-click on a fill layer's thumbnail picks its color, as in Photoshop. -->
           <span
             class="thumb"
             class:targeted={layer.mask && selected?.id === layer.id && !maskTargets.has(layer.id)}
+            role="presentation"
+            ondblclick={(e) => {
+              if (layer.kind !== "fill") return;
+              e.stopPropagation();
+              onfillcolor?.(layer);
+            }}
           >
             <LayerThumbnail {documentId} {layer} size={36} />
           </span>

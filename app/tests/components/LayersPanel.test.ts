@@ -66,14 +66,16 @@ const LAYERS = [
 
 function open(layers = LAYERS) {
   const onedit = vi.fn(() => Promise.resolve());
+  const onfillcolor = vi.fn();
   const props = {
     doc: documentOf(layers),
+    onfillcolor,
     onedit,
     onlive: vi.fn(),
     ongestureend: vi.fn(() => Promise.resolve()),
   };
   const view = render(LayersPanel, props);
-  return { ...view, props, onedit, user: userEvent.setup() };
+  return { ...view, props, onedit, onfillcolor, user: userEvent.setup() };
 }
 
 /** The row of the layer named `name`. */
@@ -209,4 +211,30 @@ test("hidden layers (Image > Adjustments' previews) are never selected, and the 
   expect(screen.queryByText("levels")).not.toBeInTheDocument();
   await rerender({ ...props, doc: documentOf(LAYERS), hidden: [] });
   expect(selectedNames()).toEqual(["Sea"]);
+});
+
+test("a new fill layer goes above the active layer, in its group, selected once added", async () => {
+  const { component, onedit, props, rerender, user } = open();
+  await user.click(row("Sky"));
+  component.addFill("#ff0000");
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "addFillLayer",
+    name: "Color Fill 1",
+    color: [1, 0, 0, 1],
+    parent: 2,
+    index: 1,
+  });
+  const fill = layer(6, "Color Fill 1", { kind: "fill" });
+  const group = { ...LAYERS[1], children: [layer(3, "Sky"), fill, layer(4, "Sea")] };
+  await rerender({ ...props, doc: documentOf([LAYERS[0], group, LAYERS[2]]) });
+  await vi.waitFor(() => expect(selectedNames()).toEqual(["Color Fill 1"]));
+});
+
+test("a double-click on a fill layer's thumbnail asks for its color, not on a pixel layer's", async () => {
+  const fill = layer(6, "Color Fill 1", { kind: "fill", swatch: [1, 0, 0, 1] });
+  const { onfillcolor, user } = open([...LAYERS, fill]);
+  await user.dblClick(row("Text").querySelector(".thumb")!);
+  expect(onfillcolor).not.toHaveBeenCalled();
+  await user.dblClick(row("Color Fill 1").querySelector(".thumb")!);
+  expect(onfillcolor).toHaveBeenCalledWith(fill);
 });

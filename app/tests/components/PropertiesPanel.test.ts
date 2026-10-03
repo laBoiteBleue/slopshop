@@ -166,3 +166,26 @@ test("Reset puts back a new layer's settings; Invert has none", async () => {
   expect(screen.getByText("No settings")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
 });
+
+test("a fill layer shows its color; a click on it asks for another", async () => {
+  const onfillcolor = vi.fn();
+  const fill: LayerView = {
+    ...adjustmentLayer("levels", []),
+    kind: "fill",
+    swatch: [0, 0.5, 1, 1],
+    adjustment: null,
+  };
+  render(PropertiesPanel, {
+    documentId: 1,
+    layer: fill,
+    onedit: vi.fn(),
+    onlive: vi.fn(),
+    ongestureend: vi.fn(),
+    onfillcolor,
+  });
+  expect(screen.getByText("Solid Color")).toBeInTheDocument();
+  const swatch = screen.getByRole("button", { name: "Color Picker (Solid Color)" });
+  expect(swatch).toHaveStyle({ background: "#0080ff" });
+  await userEvent.setup().click(swatch);
+  expect(onfillcolor).toHaveBeenCalledWith(fill);
+});

@@ -226,7 +226,16 @@ export type SelectionMode = "replace" | "add" | "subtract" | "intersect";
 export type SelectionOutline = Uint32Array[];
 
 export type EditRequest =
-  | { kind: "addFillLayer"; name: string; color: [number, number, number, number] }
+  /** `index` among the layers of `parent` (absent: on top of the top level). */
+  | {
+      kind: "addFillLayer";
+      name: string;
+      color: [number, number, number, number];
+      parent?: number | null;
+      index?: number;
+    }
+  /** A fill layer's color, sRGB-encoded RGBA in [0, 1] as `addFillLayer`'s. */
+  | { kind: "setFillColor"; id: number; color: [number, number, number, number] }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
   | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
   /** Layer > Delete Paint: the layers' (and their masks') originals show again. */

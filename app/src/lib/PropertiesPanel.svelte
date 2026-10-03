@@ -1,8 +1,10 @@
 <script lang="ts">
   // The Properties panel (Photoshop's): the parameters of the selected adjustment layer
   // (ADR 0020), as sliders with a number field each, checkboxes and color swatches. Dragging
-  // applies live, one undo entry per drag; Reset puts the neutral values back.
+  // applies live, one undo entry per drag; Reset puts the neutral values back. For a fill
+  // layer, its color: a swatch that opens the color picker.
   import type { EditRequest, LayerView } from "./engine";
+  import { fillHex } from "./layerEdits";
   import AdjustmentFields from "./AdjustmentFields.svelte";
   import { t } from "./i18n/index.svelte";
 
@@ -12,10 +14,13 @@
     onedit,
     onlive,
     ongestureend,
+    onfillcolor,
   }: {
     documentId: number;
-    /** An adjustment layer. */
+    /** An adjustment or a fill layer. */
     layer: LayerView;
+    /** The fill layer's swatch was clicked: the app lets its color be chosen. */
+    onfillcolor?: (layer: LayerView) => void;
     onedit: (documentId: number, edit: EditRequest) => void;
     onlive: (documentId: number, edit: EditRequest) => void;
     ongestureend: (documentId: number) => void;
@@ -53,7 +58,23 @@
   }
 </script>
 
-{#if adjustment}
+{#if layer.kind === "fill"}
+  <section class="panel" aria-label={t("properties.title")}>
+    <div class="tabs"><span class="tab active">{t("properties.title")}</span></div>
+    <div class="title"><span>{t("menu.layer.newFill.solidColor")}</span></div>
+    <label class="fill">
+      <span>{t("properties.fillColor")}</span>
+      <button
+        type="button"
+        class="swatch"
+        style:background={fillHex(layer)}
+        aria-label={t("colorPicker.fill")}
+        title={t("colorPicker.fill")}
+        onclick={() => onfillcolor?.(layer)}
+      ></button>
+    </label>
+  </section>
+{:else if adjustment}
   <section class="panel" aria-label={t("properties.title")}>
     <div class="tabs"><span class="tab active">{t("properties.title")}</span></div>
     <div class="title">
@@ -122,5 +143,20 @@
     margin: 0;
     padding: 4px 8px 10px;
     color: var(--text-muted);
+  }
+
+  .fill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .swatch {
+    width: 40px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 2px;
   }
 </style>

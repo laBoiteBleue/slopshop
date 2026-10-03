@@ -25,6 +25,7 @@
     type DocumentInfo,
     type DocumentView,
     type EditRequest,
+    type LayerView,
     type LayerMaskKind,
     type SelectionModify,
     type SelectionMode,
@@ -100,6 +101,8 @@
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import {
     clippingReleases,
+    fillColorEdit,
+    fillHex,
     maskEnabledToggle,
     maskRemoval,
     referenceMask,
@@ -150,10 +153,10 @@
    * selection would read the closed document (the menus did, and the update stopped there).
    */
   let layersPanel = $derived(active ? layersPanelInstance : null);
-  /** The active layer when it is an adjustment layer: the Properties panel shows it. */
-  let selectedAdjustment = $derived.by(() => {
+  /** The active layer when it is an adjustment or a fill layer: the Properties panel shows it. */
+  let selectedProperties = $derived.by(() => {
     const layer = layersPanel?.selectedLayer() ?? null;
-    return layer?.kind === "adjustment" ? layer : null;
+    return layer?.kind === "adjustment" || layer?.kind === "fill" ? layer : null;
   });
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
@@ -875,6 +878,20 @@
     apply: (hex: string) => void;
     close?: () => void;
   } | null>(null);
+
+  /** A fill layer's color, chosen in the color picker (one undo entry). */
+  function pickFillLayerColor(layer: LayerView) {
+    const doc = active;
+    if (!doc) return;
+    pickColor = {
+      title: t("colorPicker.fill"),
+      color: fillHex(layer),
+      apply: (hex) => {
+        const request = fillColorEdit(layer, hex);
+        if (request) void edit(doc.id, request);
+      },
+    };
+  }
 
   function applyFill({ contents, opacity }: FillSettings) {
     const target = fillDialog;
@@ -3917,12 +3934,14 @@
             emptyContextMenu={emptyLayersContextMenu}
             onlayerdrag={onLayerDrag}
             hidden={previewHidden}
+            onfillcolor={pickFillLayerColor}
           />
         {/key}
-        {#if selectedAdjustment}
+        {#if selectedProperties}
           <PropertiesPanel
             documentId={active.id}
-            layer={selectedAdjustment}
+            layer={selectedProperties}
+            onfillcolor={pickFillLayerColor}
             onedit={edit}
             onlive={live}
             ongestureend={endGesture}
