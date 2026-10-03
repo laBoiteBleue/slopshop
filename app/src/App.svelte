@@ -1551,6 +1551,43 @@
    * float in a new layer above it (leaving a hole), which Free Transform then transforms; Esc
    * takes it all back. Whether they floated (otherwise the layers are transformed whole).
    */
+  /**
+   * Layer > Layer via Copy (Ctrl+J) and Layer via Cut (Shift+Ctrl+J), as in Photoshop: with a
+   * selection, the active layer's selected pixels in a new layer right above it, "Layer N",
+   * where they were (Cut leaves a hole, as paint), deselected. Without a selection, or on a
+   * layer without pixels, Copy duplicates the selected layers.
+   */
+  async function layerVia(cut: boolean) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const pixels = doc.selectionKey != null && !doc.quickMask && layer?.kind === "raster";
+    if (!pixels || !layer) {
+      if (!cut) layersPanel?.duplicateSelected();
+      else showError(t("layerVia.needRaster"));
+      return;
+    }
+    const name = layersPanel?.nextLayerName() ?? "";
+    let made: [DocumentView, number] | null;
+    try {
+      made = await engine.layerVia(doc.id, layer.id, cut, name);
+    } catch (e) {
+      if (e === DOCUMENT_CLOSED) await refreshTabs();
+      else showError(String(e));
+      return;
+    }
+    if (!made) {
+      showError(t("layerVia.empty"));
+      return;
+    }
+    const [view, id] = made;
+    upsert(view);
+    if (activeId !== doc.id) return;
+    await tick();
+    layersPanel?.selectLayers([id]);
+  }
+
   async function floatSelection(doc: DocumentView): Promise<boolean> {
     const layer = layersPanel?.selectedLayer() ?? null;
     if (!layer || layer.kind !== "raster" || layersPanel?.paintsMask()) return false;
@@ -2569,6 +2606,16 @@
         run: () => layersPanel?.newLayer(),
         disabled: !doc,
       },
+      layerViaCopy: {
+        label: t("menu.layer.viaCopy"),
+        run: () => void layerVia(false),
+        disabled: selectedCount === 0,
+      },
+      layerViaCut: {
+        label: t("menu.layer.viaCut"),
+        run: () => void layerVia(true),
+        disabled: doc?.selectionKey == null || doc.quickMask || layer?.kind !== "raster",
+      },
       duplicateLayers: {
         label: t(several ? "menu.layer.duplicateLayers" : "menu.layer.duplicate"),
         run: () => layersPanel?.duplicateSelected(),
@@ -2928,6 +2975,8 @@
         label: t("menu.layer"),
         items: [
           layerCommands.newLayer,
+          item("layerViaCopy"),
+          item("layerViaCut"),
           cmd(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
           {
             kind: "submenu",

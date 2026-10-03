@@ -374,9 +374,14 @@
    * A new empty layer to paint on, above the active layer (in its group) or at the top,
    * selected (Layer > New > Layer, Shift+Ctrl+N, ADR 0027).
    */
-  export function newLayer() {
+  /** The name of the next new pixel layer: "Layer N", as Photoshop counts them. */
+  export function nextLayerName(): string {
     const n = allLayers.filter((l) => l.kind === "raster").length + 1;
-    const name = t("layers.defaultLayerName", { n });
+    return t("layers.defaultLayerName", { n });
+  }
+
+  export function newLayer() {
+    const name = nextLayerName();
     const parent = selected ? (parents.get(selected.id) ?? null) : null;
     const index = selected
       ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1

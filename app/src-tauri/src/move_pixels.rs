@@ -367,10 +367,57 @@ pub async fn float_pixels(
     .await
 }
 
+/// Layer > New > Layer via Copy (Ctrl+J) and Layer via Cut (Shift+Ctrl+J) with a selection, as
+/// in Photoshop: the selected pixels of raster layer `layer_id` in a new layer `name` right above
+/// it (normal, opaque), where they were; Cut leaves a hole there (paint, ADR 0029). Deselected,
+/// one undo entry. The document and the new layer's id; `None` when the selection holds nothing
+/// of the layer.
+#[tauri::command]
+pub async fn layer_via(
+    app: tauri::AppHandle,
+    document_id: u64,
+    layer_id: u64,
+    cut: bool,
+    name: String,
+) -> Result<Option<(DocumentView, u64)>, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        let id = LayerId::from_raw(layer_id);
+        let Some((edit, id)) = lift_edit(&mut document.session, id, cut, Look::New(name))? else {
+            return Ok(None);
+        };
+        document.session.perform(edit).map_err(|e| e.to_string())?;
+        Ok(Some((document.view(), id.get())))
+    })
+    .await
+}
+
+/// What the layer of lifted pixels looks like.
+enum Look {
+    /// The layer's own: its name, opacity, blend mode and clipping (Free Transform's float).
+    Same,
+    /// A new layer's: this name, normal, opaque, not clipped (Layer via Copy and Cut).
+    New(String),
+}
+
 /// The edit of `float_pixels`, and the new layer's id.
 fn float_edit(
     session: &mut slopshop_core::Session,
     id: LayerId,
+) -> Result<Option<(Edit, LayerId)>, String> {
+    lift_edit(session, id, true, Look::Same)
+}
+
+/// The edit putting the selected pixels of layer `id` in a new layer right above it, looking as
+/// `look` says, where they were (`cut`: leaving a hole), deselected; and the new layer's id.
+/// `None` when the selection holds nothing of the layer.
+fn lift_edit(
+    session: &mut slopshop_core::Session,
+    id: LayerId,
+    cut: bool,
+    look: Look,
 ) -> Result<Option<(Edit, LayerId)>, String> {
     let doc = session.document();
     let selection = doc.selection().ok_or("nothing is selected")?;
@@ -395,15 +442,24 @@ fn float_edit(
         .inverse()
         .ok_or("the layer's groups are not invertible")?;
     let (place, index) = doc.locate(id).ok_or("the layer is gone")?;
+    let (name, opacity, blend_mode, clipped) = match look {
+        Look::Same => (
+            layer.name.clone(),
+            layer.opacity,
+            layer.blend_mode,
+            layer.clipped,
+        ),
+        Look::New(name) => (name, 1.0, slopshop_core::BlendMode::Normal, false),
+    };
     let floating = slopshop_core::Layer {
         id: LayerId::from_raw(0),
-        name: layer.name.clone(),
+        name,
         visible: true,
-        opacity: layer.opacity,
-        blend_mode: layer.blend_mode,
+        opacity,
+        blend_mode,
         content: LayerContent::raster(extracted.image),
         mask: None,
-        clipped: layer.clipped,
+        clipped,
         transform: extracted.to_document.then(to_parent),
     };
     // The hole: the selected pixels erased, as Cut does.
@@ -424,7 +480,11 @@ fn float_edit(
         samples: Vec::new(),
         end: true,
     };
-    let hole = crate::paint::fill_edit(doc, &erase, None)?;
+    let hole = if cut {
+        crate::paint::fill_edit(doc, &erase, None)?
+    } else {
+        None
+    };
     let new_id = session.allocate_layer_id();
     let insert = Edit::InsertLayer {
         parent: place,
@@ -533,6 +593,36 @@ mod tests {
         assert_eq!(doc.layers().len(), 1);
         assert_eq!(image_of(doc, LayerId::from_raw(1)).alpha_at(6, 8), 1.0);
         assert!(doc.selection().is_some());
+    }
+
+    #[test]
+    fn layer_via_copy_and_cut_make_a_plain_layer_above() {
+        for cut in [false, true] {
+            let mut session = session();
+            let look = Look::New("Layer 2".into());
+            let (edit, id) = lift_edit(&mut session, LayerId::from_raw(1), cut, look)
+                .unwrap()
+                .unwrap();
+            session.perform(edit).unwrap();
+            let doc = session.document();
+            assert_eq!(doc.layers()[1].id, id);
+            let copy = doc.layer(id).unwrap();
+            assert_eq!(copy.name, "Layer 2");
+            assert_eq!((copy.opacity, copy.blend_mode), (1.0, BlendMode::Normal));
+            // The selected pixels, where they were.
+            assert_eq!(copy.transform, Affine::translation(4.0, 2.0));
+            let pixels = image_of(doc, id);
+            assert_eq!(pixels.alpha_at(6, 8), 1.0);
+            assert_eq!(pixels.alpha_at(5, 8), 0.0);
+            // Copy keeps the layer whole; Cut leaves a hole. Deselected either way.
+            let source = image_of(doc, LayerId::from_raw(1));
+            assert_eq!(source.alpha_at(6, 8), if cut { 0.0 } else { 1.0 });
+            assert!(!cut || doc.layer(LayerId::from_raw(1)).unwrap().is_painted());
+            assert!(doc.selection().is_none());
+            session.undo().unwrap();
+            assert_eq!(session.document().layers().len(), 1);
+            assert!(session.document().selection().is_some());
+        }
     }
 
     #[test]

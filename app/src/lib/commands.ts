@@ -46,7 +46,11 @@ export const SHORTCUTS = {
   canvasSize: ["alt+mod+c"],
   // Layer
   newLayer: ["shift+mod+n"],
-  duplicateLayers: ["mod+j"],
+  // As in Photoshop, Ctrl+J is Layer via Copy (which duplicates without a selection) and
+  // Duplicate Layer has no shortcut.
+  layerViaCopy: ["mod+j"],
+  layerViaCut: ["shift+mod+j"],
+  duplicateLayers: [],
   groupLayers: ["mod+g"],
   ungroupLayers: ["shift+mod+g"],
   clipping: ["alt+mod+g"],
