@@ -214,6 +214,8 @@ export type ColorRangeRequest = {
   excluded: [number, number][];
   fuzziness: number;
   invert: boolean;
+  /** Localized: how far from the included samples their colors are selected, pixels. */
+  localized: number | null;
   /** Sample only this layer; null: the image as displayed. */
   layerId: number | null;
 };

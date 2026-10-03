@@ -1895,7 +1895,8 @@ pub const MAX_FUZZINESS: f32 = 200.0;
 
 /// What Select > Color Range selects: the colors of the sampled pixels and those within
 /// `fuzziness` of them, partly selected as they get farther; minus the colors of the
-/// `excluded` samples (Photoshop's subtracting eyedropper); inverted on request.
+/// `excluded` samples (Photoshop's subtracting eyedropper); inverted on request. Localized,
+/// each included color is only selected near the point where it was sampled.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorRange {
     /// Colors as displayed (whole 8-bit sRGB values, straight alpha): see [`sample_colors`].
@@ -1904,29 +1905,75 @@ pub struct ColorRange {
     /// 0–200: how far from a sampled color a color is still selected, in 8-bit steps.
     pub fuzziness: f32,
     pub invert: bool,
+    pub localized: Option<Localized>,
+}
+
+/// Color Range's Localized option (Photoshop's Localized Color Clusters): where each included
+/// color was sampled, and how far from there it is still selected.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Localized {
+    /// Document points, one per included color, in the same order.
+    pub points: Vec<(f64, f64)>,
+    /// Document pixels; the selection fades linearly to nothing at that distance.
+    pub radius: f64,
 }
 
 impl ColorRange {
     /// How much `color` (as displayed) is selected, in `[0, 1]`: 1 on a sampled color, falling
     /// linearly to 0 at `fuzziness` (the largest difference over red, green, blue and alpha).
-    pub fn coverage(&self, color: [f32; 4]) -> f32 {
-        let near = |samples: &[[f32; 4]]| {
-            samples
-                .iter()
-                .map(|s| {
-                    let d = (0..4)
-                        .map(|c| (color[c] - s[c]).abs())
-                        .fold(0.0f32, f32::max);
-                    if self.fuzziness <= 0.0 {
-                        if d < 0.5 { 1.0 } else { 0.0 }
-                    } else {
-                        (1.0 - d / self.fuzziness).clamp(0.0, 1.0)
-                    }
-                })
-                .fold(0.0f32, f32::max)
+    /// Localized, each included color is also weighed by its distance from document point `at`
+    /// (when given).
+    pub fn coverage(&self, color: [f32; 4], at: Option<(f64, f64)>) -> f32 {
+        let similar = |s: &[f32; 4]| {
+            let d = (0..4)
+                .map(|c| (color[c] - s[c]).abs())
+                .fold(0.0f32, f32::max);
+            if self.fuzziness <= 0.0 {
+                if d < 0.5 { 1.0 } else { 0.0 }
+            } else {
+                (1.0 - d / self.fuzziness).clamp(0.0, 1.0)
+            }
         };
-        let value = near(&self.included) * (1.0 - near(&self.excluded));
+        let near = |i: usize| match (&self.localized, at) {
+            (Some(localized), Some((x, y))) => localized.points.get(i).map_or(0.0, |&(px, py)| {
+                let d = ((x - px).powi(2) + (y - py).powi(2)).sqrt();
+                (1.0 - d / localized.radius).clamp(0.0, 1.0) as f32
+            }),
+            _ => 1.0,
+        };
+        let included = (0..self.included.len())
+            .map(|i| similar(&self.included[i]) * near(i))
+            .fold(0.0f32, f32::max);
+        let excluded = self.excluded.iter().map(similar).fold(0.0f32, f32::max);
+        let value = included * (1.0 - excluded);
         if self.invert { 1.0 - value } else { value }
+    }
+
+    /// Whether every point of document area `[x0, y0, x1, y1]` is out of reach of the
+    /// localized samples (its coverage is then 0, or 1 inverted).
+    fn out_of_reach(&self, [x0, y0, x1, y1]: [f64; 4]) -> bool {
+        let Some(localized) = &self.localized else {
+            return false;
+        };
+        localized.points.iter().all(|&(px, py)| {
+            let dx = (x0 - px).max(px - x1).max(0.0);
+            let dy = (y0 - py).max(py - y1).max(0.0);
+            dx * dx + dy * dy >= localized.radius * localized.radius
+        })
+    }
+
+    /// Whether the settings can be used: fuzziness in range, and Localized with a positive
+    /// radius and one finite point per included color.
+    fn is_valid(&self) -> bool {
+        let fuzziness =
+            self.fuzziness.is_finite() && (0.0..=MAX_FUZZINESS).contains(&self.fuzziness);
+        let localized = self.localized.as_ref().is_none_or(|l| {
+            l.radius.is_finite()
+                && l.radius > 0.0
+                && l.points.len() == self.included.len()
+                && l.points.iter().all(|p| p.0.is_finite() && p.1.is_finite())
+        });
+        fuzziness && localized
     }
 }
 
@@ -1961,7 +2008,7 @@ pub fn color_range(
     current: Option<&RasterImage>,
     range: &ColorRange,
 ) -> Result<Option<RasterImage>, SelectionError> {
-    if !range.fuzziness.is_finite() || !(0.0..=MAX_FUZZINESS).contains(&range.fuzziness) {
+    if !range.is_valid() {
         return Err(SelectionError::InvalidShape);
     }
     let canvas = source.size();
@@ -1981,12 +2028,19 @@ pub fn color_range(
                         .iter()
                         .map(|&index| {
                             let (col, row) = (index % shape.columns, index / shape.columns);
-                            let pixels = sampler.tile(col, row, shape);
                             let (w, h) = shape.valid(col, row);
+                            let (x0, y0) = ((col * T) as f64, (row * T) as f64);
+                            // Localized, tiles out of reach are not even composited.
+                            if range.out_of_reach([x0, y0, x0 + w as f64, y0 + h as f64]) {
+                                let value = if range.invert { FULL } else { 0 };
+                                return (index, Tile::Const(value));
+                            }
+                            let pixels = sampler.tile(col, row, shape);
                             let mut values = vec![0u16; T * T];
                             for y in 0..h {
                                 for x in 0..w {
-                                    let c = range.coverage(pixels[y * T + x]);
+                                    let at = (x0 + x as f64 + 0.5, y0 + y as f64 + 0.5);
+                                    let c = range.coverage(pixels[y * T + x], Some(at));
                                     values[y * T + x] = (c * f32::from(FULL)).round() as u16;
                                 }
                             }
@@ -3768,6 +3822,7 @@ mod tests {
             excluded: Vec::new(),
             fuzziness: 40.0,
             invert: false,
+            localized: None,
         };
         // Every red pixel, the square inside the blue too; the nearby red strip partly.
         let image = color_range(&doc, None, &range).unwrap().unwrap();
@@ -3800,9 +3855,39 @@ mod tests {
         assert_eq!(image.gray_at(460, 120), 0.0);
         let bad = ColorRange {
             fuzziness: 300.0,
-            ..range
+            ..range.clone()
         };
         assert!(color_range(&doc, None, &bad).is_err());
+        // Localized around the sample at (100, 150): the red nearby only, fading with the
+        // distance; the red square inside the blue is far.
+        let localized = ColorRange {
+            localized: Some(Localized {
+                points: vec![(100.5, 150.5)],
+                radius: 100.0,
+            }),
+            ..range.clone()
+        };
+        let image = color_range(&doc, None, &localized).unwrap().unwrap();
+        assert!(image.gray_at(100, 150) > 0.99);
+        let halfway = image.gray_at(150, 150);
+        assert!(halfway > 0.45 && halfway < 0.55, "{halfway}");
+        assert_eq!(image.gray_at(250, 150), 0.0);
+        assert_eq!(image.gray_at(460, 120), 0.0);
+        // Inverted, what is out of reach is selected.
+        let inverted = ColorRange {
+            invert: true,
+            ..localized.clone()
+        };
+        let image = color_range(&doc, None, &inverted).unwrap().unwrap();
+        assert_eq!(image.gray_at(460, 120), 1.0);
+        // One point per included color, and a radius.
+        for (points, radius) in [(Vec::new(), 100.0), (vec![(1.0, 1.0)], 0.0)] {
+            let wrong = ColorRange {
+                localized: Some(Localized { points, radius }),
+                ..range.clone()
+            };
+            assert!(color_range(&doc, None, &wrong).is_err());
+        }
     }
 
     #[test]
