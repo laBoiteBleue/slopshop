@@ -1,6 +1,13 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { canvasBounds, cropEdit, outsideCanvas, rotateEdit, sizeEdit } from "../src/lib/imageEdits";
+import {
+  autoLevelsEdit,
+  canvasBounds,
+  cropEdit,
+  outsideCanvas,
+  rotateEdit,
+  sizeEdit,
+} from "../src/lib/imageEdits";
 
 const DOC = { width: 400, height: 300, resolution: 72 };
 
@@ -52,4 +59,13 @@ test("Arbitrary rotation: clockwise is positive, nothing for whole turns", () =>
   assert.equal(rotateEdit(0, true), null);
   assert.equal(rotateEdit(360, false), null);
   assert.equal(rotateEdit(Number.NaN, true), null);
+});
+
+test("Auto Tone, Contrast, Color: on the layers shown, nothing without one", () => {
+  assert.deepEqual(autoLevelsEdit([3, 5], "color"), {
+    kind: "autoLevels",
+    ids: [3, 5],
+    correction: "color",
+  });
+  assert.equal(autoLevelsEdit([], "tone"), null);
 });

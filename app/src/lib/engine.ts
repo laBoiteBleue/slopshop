@@ -105,6 +105,9 @@ export type TrimSettings = {
   right: boolean;
 };
 
+/** Image > Auto Tone, Auto Contrast, Auto Color. */
+export type AutoCorrection = "tone" | "contrast" | "color";
+
 export type ImageTurn =
   "clockwise" | "counterClockwise" | "halfTurn" | "flipHorizontal" | "flipVertical";
 
@@ -297,6 +300,8 @@ export type EditRequest =
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
   | { kind: "removeLayerMask"; id: number }
   /** Several edits as one undo entry, applied in order: all or none. */
+  /** Image > Auto Tone, Auto Contrast, Auto Color: Levels computed from the visible image. */
+  | { kind: "autoLevels"; ids: number[]; correction: AutoCorrection }
   | { kind: "batch"; edits: EditRequest[] };
 
 /** View changes; positions and deltas are in viewport device pixels. */
