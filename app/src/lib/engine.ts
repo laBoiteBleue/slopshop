@@ -1239,9 +1239,18 @@ export const engine = {
    */
   saveSelection: (documentId: number, name: string, replace: number | null) =>
     serial(() => invoke<DocumentView>("save_selection", { documentId, name, replace })),
-  /** Select > Load Selection: saved selection `id` becomes the selection (one undo entry). */
-  loadSelection: (documentId: number, id: number) =>
-    serial(() => invoke<DocumentView>("load_selection", { documentId, id })),
+  /**
+   * Select > Load Selection: saved selection `id` becomes the selection, or is added to it,
+   * subtracted from it or intersected with it (`mode`), one undo entry.
+   */
+  loadSelection: (documentId: number, id: number, mode: SelectionMode = "replace") =>
+    serial(() => invoke<DocumentView>("load_selection", { documentId, id, mode })),
+  /** A saved selection renamed, one undo entry. */
+  renameSavedSelection: (documentId: number, id: number, name: string) =>
+    serial(() => invoke<DocumentView>("rename_saved_selection", { documentId, id, name })),
+  /** A saved selection deleted, one undo entry. */
+  deleteSavedSelection: (documentId: number, id: number) =>
+    serial(() => invoke<DocumentView>("delete_saved_selection", { documentId, id })),
   /** Select > Transform Selection: the selection mapped by `matrix` and resampled. */
   transformSelection: (documentId: number, matrix: Matrix) =>
     serial(() => invoke<DocumentView>("transform_selection", { documentId, matrix })),

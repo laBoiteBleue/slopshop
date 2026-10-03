@@ -120,6 +120,9 @@
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
+  import SelectionsPanel from "./lib/SelectionsPanel.svelte";
+  import PanelDock from "./lib/PanelDock.svelte";
+  import { loadDock } from "./lib/panelDock";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush, MAX_REFINE } from "./lib/selection";
@@ -170,6 +173,15 @@
   let selectedProperties = $derived.by(() => {
     const layer = layersPanel?.selectedLayer() ?? null;
     return layer?.kind === "adjustment" || layer?.kind === "fill" ? layer : null;
+  });
+  /** The dock below Layers: the panel unfolded, if any, and its height. */
+  let dock = $state(loadDock());
+  // An adjustment or fill layer just selected shows its properties, as in Photoshop.
+  let shownProperties: number | null = null;
+  $effect(() => {
+    const id = selectedProperties?.id ?? null;
+    if (id !== null && id !== shownProperties) dock = { ...dock, open: "properties" };
+    shownProperties = id;
   });
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
@@ -4119,16 +4131,41 @@
             onfillcolor={pickFillLayerColor}
           />
         {/key}
-        {#if selectedProperties}
-          <PropertiesPanel
-            documentId={active.id}
-            layer={selectedProperties}
-            onfillcolor={pickFillLayerColor}
-            onedit={edit}
-            onlive={live}
-            ongestureend={endGesture}
-          />
-        {/if}
+        <PanelDock
+          bind:dock
+          panels={[
+            { id: "properties", icon: "sliders", label: t("properties.title") },
+            { id: "selections", icon: "marquee", label: t("selections.title") },
+          ]}
+        >
+          {#snippet content(panel)}
+            {#if panel === "properties"}
+              {#if selectedProperties}
+                <PropertiesPanel
+                  documentId={active.id}
+                  layer={selectedProperties}
+                  onfillcolor={pickFillLayerColor}
+                  onedit={edit}
+                  onlive={live}
+                  ongestureend={endGesture}
+                />
+              {:else}
+                <p class="dock-empty">{t("properties.empty")}</p>
+              {/if}
+            {:else}
+              <SelectionsPanel
+                saved={active.savedSelections}
+                selected={active.selectionKey != null}
+                onload={(id, mode) =>
+                  selectionCommand((doc) => engine.loadSelection(doc, id, mode))}
+                onsave={openSaveSelection}
+                onreplace={(id) => selectionCommand((doc) => engine.saveSelection(doc, "", id))}
+                onrename={(id, name) => void sync(engine.renameSavedSelection(active.id, id, name))}
+                ondelete={(id) => void sync(engine.deleteSavedSelection(active.id, id))}
+              />
+            {/if}
+          {/snippet}
+        </PanelDock>
       </div>
     {/if}
     {#if dragGhost}
@@ -4620,6 +4657,12 @@
 
   .sidebar > :global(:nth-child(2)) {
     flex: 1 1 0;
+  }
+
+  .dock-empty {
+    margin: 0;
+    padding: 10px;
+    color: var(--text-muted);
   }
 
   .workspace {

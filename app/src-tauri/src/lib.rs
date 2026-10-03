@@ -2091,6 +2091,8 @@ pub fn run() {
             selection::transform_selection,
             selection::save_selection,
             selection::load_selection,
+            selection::rename_saved_selection,
+            selection::delete_saved_selection,
             selection::quick_select,
             paint::paint_stroke,
             paint::fill,
