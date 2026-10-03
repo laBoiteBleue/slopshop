@@ -262,7 +262,23 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     raster node is the key of its unpainted image, `params.image` being its painted pixels (what
     it shows), and `params.mask.original` likewise for a painted mask. Both images have the same
     size and share their unpainted tiles in the file. Only painted nodes are written at v6, so
-    that readers without paint refuse them instead of losing the original.
+    that readers without paint refuse them instead of losing the original. A v6 raster's paint
+    reads as one paint entry of its stack (v7), exactly.
+  - v7 (schema 0.12, [ADR 0029](adr/0029-layer-stack.md)) gives a raster node its stack:
+    `params.image` is the original, never written, and `params.stack` lists what is applied to
+    it, bottom to top. A paint entry is `{"paint": {"color", "keep", "space"}}`: `color` the key
+    of `P`, an image of the original's format with an alpha channel, straight, holding the
+    paint's color; `keep` the key of `k`, a gray image of `P`'s sample type (`f32` for float
+    layers), linear; `space` the blend space it was laid in. The layer's result is
+    `P + k·B` over what is below (`B`), computed on premultiplied values of that space; tiles
+    the paint did not touch are `P = 0`, `k = 1` (one tile, stored once). An effect entry is
+    `{"effect": [steps]}`, steps of one kind applied in order: each an adjustment's parameters
+    (as adjustment nodes store them), `selection` (the key of a gray coverage image at the
+    document origin, or `null`), `transform` (six numbers: the layer's pixels to the document
+    when it was applied, where the selection is read) and `space`. The result is rounded to the
+    original's format after each paint and each step. The result itself is not stored: readers
+    evaluate it. Only nodes with a stack are written at v7; an entry of another kind comes from
+    a newer SlopShop.
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,

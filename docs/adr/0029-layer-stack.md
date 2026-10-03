@@ -55,6 +55,8 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
 5. **Entries are not edited and not reordered.** Deleting one recomputes what is above it;
    neighbours that become alike merge: two paints exactly (point 2), two effects of the same
    kind as one entry holding both in order (the same pixels, one mark), two Inverts cancel.
+   Contiguous entries are never alike (maintainer, 2026-10-03): painting continues the top
+   paint, and an effect of the kind of the top entry joins it when applied.
    The Restore Eraser (a new tool) brings back the original through every paint entry where it
    rubs (`P ← (1−r)·P`, `k ← (1−r)·k + r`); effects stay applied.
 6. **Evaluation** is a cache, never saved: the layer's result per tile and pyramid level, in a
@@ -68,13 +70,21 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
    (tiles no entry reaches are the original's), so that the renderer, export, thumbnails and
    tools read it unchanged; history and files still keep only entries. The GPU evaluation and
    the bounded cache come as an optimization (measured: an adjustment over a 12 MP 8-bit layer,
-   pyramid included, 0.28 s on 32 threads).
-7. **Edits**: `Edit::PushEntry`, `Edit::RemoveEntry` (its merges included) and
-   `Edit::SetTopPaint` (a stroke's end, replacing the top paint), each inverse keeping the
-   previous entries by reference. Layer > Delete Paint becomes deleting entries (the UI is the
+   pyramid included, 0.28 s on 32 threads). A stroke evaluates what is below its paint once
+   per tile, on every core, and only where the paint it continues lies (elsewhere it is what
+   the layer shows); the paint keeps those tiles for the next stroke while the stack below it
+   is the same. Measured on a 12 MP 8-bit layer, 32 threads, a 200-pixel brush: 3.3 ms a frame
+   painting the pixels themselves (ADR 0027), 6.4 ms on a stack, 6.9 ms (12.7 ms at worst)
+   continuing paint over three effects.
+7. **Edits**: one edit, `Edit::SetLayerStack` (implemented so, 2026-10-03), gives a layer a
+   stack built by the stack's own operations (an effect added, an entry deleted with its
+   merges, the top paint set by a stroke, the layer grown): its inverse keeps the previous
+   stack by reference, never evaluated pixels, and undo evaluates again only the tiles the
+   entries that differ reach. Layer > Delete Paint becomes deleting entries (the UI is the
    maintainer's call: a small mark on the layer shows that it has entries).
 8. **`.slop`**: raster nodes gain `params.stack` (paint: the keys of `P` and `k` and the blend
-   space; effect: kind, parameters, selection key and transform), a new node version. A v6
+   space; effect: kind, parameters, selection key and transform), a new node version (v7,
+   schema 0.12, `params.image` being the original). A v6
    painted image converts exactly: one paint entry with `P` the painted pixels and `k = 0` where
    they differ from the original, the identity elsewhere. PSD export writes the evaluated
    layer; PSD import has no stack.
