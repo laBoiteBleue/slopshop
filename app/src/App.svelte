@@ -83,6 +83,7 @@
   import { exportFileName, formatOfPath, formatOrder, isVectorPath } from "./lib/fileNames";
   import { cycled, moveTab as moveTabTo, tabSlot, upsert as upsertTab } from "./lib/tabs";
   import { isTextField, keyAction } from "./lib/keymap";
+  import { pasteUnfit } from "./lib/clipboard";
   import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "./lib/imageEdits";
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
@@ -2510,21 +2511,6 @@
     clipboard = await engine.clipboardContents().catch(() => null);
   }
 
-  /** Whether a paste command does not apply to what the clipboard holds (menus only). */
-  function pasteUnfit(id: CommandId): boolean {
-    if (clipboard === null) return false;
-    switch (id) {
-      case "paste":
-        return clipboard === "nothing";
-      case "pasteInPlace":
-        return clipboard !== "placed" && clipboard !== "layers";
-      case "pasteInto":
-        return clipboard === "nothing" || clipboard === "files";
-      default:
-        return false;
-    }
-  }
-
   /** The image's right-click menu, where it opened and the document point under it. */
   let canvasMenu = $state<{ x: number; y: number; at: [number, number] | null } | null>(null);
 
@@ -2548,7 +2534,7 @@
       kind: "command",
       label: t("menu.edit.pasteHere"),
       run: () => void paste("at", at),
-      disabled: at === null || pasteUnfit("paste"),
+      disabled: at === null || pasteUnfit(clipboard, "paste"),
     };
     return [
       item("cut"),
@@ -2894,7 +2880,7 @@
       run: c.run,
       shortcut: shortcuts[0],
       shortcuts,
-      disabled: c.disabled || pasteUnfit(id),
+      disabled: c.disabled || pasteUnfit(clipboard, id),
       checked: c.checked,
     };
   }
