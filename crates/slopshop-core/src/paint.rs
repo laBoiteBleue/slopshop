@@ -7,10 +7,10 @@
 //! the stroke's starting pixels and its coverage, so that dabs never re-quantize what earlier
 //! dabs wrote and the stroke's opacity is a true cap.
 //!
-//! Dabs combine as in Photoshop (Krita's "alpha darken", its Photoshop-compatible mode): each
-//! moves the stroke's coverage towards the dab's own value (its tip × the opacity) by the flow,
-//! never past it. At 100 % flow a stroke is exactly as soft as one dab; below, passing again
-//! builds up to the opacity.
+//! Dabs combine as in Photoshop (Krita's "alpha darken" since 4.2, its Photoshop-compatible
+//! mode): each moves the stroke's coverage towards the opacity by its tip × the flow, never past
+//! it. Overlapping dabs build up, so a soft stroke is smooth along its path and denser than one
+//! dab, and the opacity caps it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -833,14 +833,15 @@ fn stamp_tile(
             if d2 >= reach2 {
                 continue;
             }
-            // Towards the dab's own value by the flow, never past it (alpha darken).
-            let target = profile(d2.sqrt(), radius, inner, pixel) * f64::from(dab.opacity);
+            // Towards the opacity by the tip × the flow, never past it (alpha darken).
+            let tip = profile(d2.sqrt(), radius, inner, pixel) * flow;
+            let cap = f64::from(dab.opacity);
             let i = y * t + x;
             let c = f64::from(coverage.0[i]);
-            if target <= c {
+            if tip <= 0.0 || cap <= c {
                 continue;
             }
-            coverage.0[i] = (c + (target - c) * flow) as f32;
+            coverage.0[i] = (c + (cap - c) * tip) as f32;
             changed = union(changed, Some([x, y, x + 1, y + 1]));
         }
     }
@@ -1088,7 +1089,7 @@ mod tests {
         };
         let base = filled(Size::new(64, 64), rgba8(), &[255, 255, 255, 255]);
         let mut s = stroke(base, brush, black());
-        // One dab: 20 % of black.
+        // One dab: the flow times the opacity, 10 % of black.
         s.add(&[sample(32.0, 32.0)]);
         let after_one = pixel(&s.image().unwrap(), 32, 32)[0];
         // Back and forth over the same place: builds up, but not past 50 %.
@@ -1387,8 +1388,9 @@ mod tests {
     }
 
     #[test]
-    fn a_soft_stroke_at_full_flow_is_as_soft_as_one_dab() {
-        // Photoshop's alpha darken: dabs never build past their own value at full flow.
+    fn a_soft_stroke_builds_up_without_beads() {
+        // Regression: dabs that only kept the largest tip value showed every dab along a soft
+        // stroke, as beads.
         let brush = Brush {
             diameter: 40.0,
             hardness: 0.0,
@@ -1401,14 +1403,18 @@ mod tests {
         };
         let line = {
             let mut s = stroke(transparent(Size::new(128, 128)), brush, red());
-            s.add(&[sample(20.0, 64.0), sample(108.0, 64.0)]);
+            s.add(&[sample(10.0, 64.0), sample(118.0, 64.0)]);
             s.finish().unwrap().unwrap()
         };
-        // Across the stroke, under one of its dabs (every 10 px from 20), the same falloff as
-        // across one dab.
-        for y in 46..82 {
-            let (a, b) = (pixel(&dab, 64, y)[3], pixel(&line, 60, y)[3]);
-            assert!(a.abs_diff(b) <= 2, "y {y}: dab {a}, stroke {b}");
+        for y in [64, 70, 74, 78] {
+            // Along the stroke (dabs every 10 px), away from its ends: even.
+            let along: Vec<u8> = (40..88).map(|x| pixel(&line, x, y)[3]).collect();
+            let (lo, hi) = (along.iter().min().unwrap(), along.iter().max().unwrap());
+            assert!(hi - lo <= 4, "y {y}: from {lo} to {hi}");
+            // Overlapping dabs build up past one dab's falloff.
+            if y != 64 {
+                assert!(*lo > pixel(&dab, 64, y)[3], "y {y}");
+            }
         }
     }
 
