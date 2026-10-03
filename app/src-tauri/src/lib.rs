@@ -3580,4 +3580,132 @@ mod tests {
         assert!(!document.session.document().layer(id).unwrap().is_painted());
         assert!(document.session.can_redo());
     }
+
+    #[test]
+    fn selected_pixels_moved_off_the_canvas_are_kept() {
+        use slopshop_core::selection::{Combine, EdgeOptions, Selection, Shape, select_shape};
+        use slopshop_core::tile::TileCoord;
+        let size = Size::new(300, 200);
+        let session = super::blank_session(size, None, "Layer 1").unwrap();
+        let state = AppState::new();
+        let doc = state.add_document(session, None, Vec::new()).unwrap();
+        // Pixel (x, y) of the layer is [x, y, 9, 255] (x below 256, as bytes).
+        let mut pixels = Vec::new();
+        for y in 0..size.height {
+            for x in 0..size.width {
+                pixels.extend_from_slice(&[x as u8, y as u8, 9, 255]);
+            }
+        }
+        let image =
+            Arc::new(RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap());
+        let select = |left: f64, right: f64| {
+            let shape = Shape::Rectangle {
+                left,
+                top: 0.0,
+                right,
+                bottom: 4.0,
+            };
+            let image = select_shape(size, None, &shape, EdgeOptions::default(), Combine::Replace)
+                .unwrap()
+                .unwrap();
+            Edit::SetSelection {
+                selection: Selection::new(Arc::new(image)),
+            }
+        };
+        let id = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let id = document.session.allocate_layer_id();
+            let layer = Layer {
+                id,
+                name: "photo".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::IDENTITY,
+                content: LayerContent::raster(image),
+            };
+            let insert = Edit::InsertLayer {
+                parent: None,
+                index: 1,
+                layer,
+            };
+            document.session.perform(insert).unwrap();
+            document.session.perform(select(10.0, 20.0)).unwrap();
+            id
+        };
+        let drag = |drag: u64, dx: i64| {
+            let request = move_pixels::MovePixelsRequest {
+                drag,
+                target: paint::PaintTarget::Layer,
+                layer_id: id.get(),
+                dx,
+                dy: 0,
+                copy: false,
+                end: true,
+            };
+            move_pixels::move_pixels(&state, doc.id, &request).unwrap();
+        };
+        // The layer's image, its original's size and its transform's x offset.
+        let layer = |state: &AppState| {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let layer = document.session.document().layer(id).unwrap();
+            let LayerContent::Raster { image, original } = &layer.content else {
+                panic!("a raster layer");
+            };
+            let original = original.as_ref().unwrap().size();
+            (Arc::clone(image), original, layer.transform.e)
+        };
+        let pixel = |image: &RasterImage, x: u32, y: u32| -> Vec<u8> {
+            let coord = TileCoord {
+                col: x / 256,
+                row: y / 256,
+            };
+            let tile = image.levels()[0].tile(coord).unwrap();
+            let at = (((y % 256) * 256 + x % 256) * 4) as usize;
+            tile[at..at + 4].to_vec()
+        };
+        // Off the left edge, then something else (a new selection) ends the float.
+        drag(1, -30);
+        {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            document.session.perform(select(0.0, 300.0)).unwrap();
+        }
+        let (image, original, x) = layer(&state);
+        // One tile was added before the pixels; the layer still lies where it did.
+        assert_eq!(
+            (image.size(), original, x),
+            (Size::new(556, 200), Size::new(556, 200), -256.0)
+        );
+        assert_eq!(pixel(&image, 256 - 20, 2), [10, 2, 9, 255]);
+        assert_eq!(pixel(&image, 256 + 10, 2), [0, 0, 0, 0]);
+        assert_eq!(pixel(&image, 256 + 25, 2), [25, 2, 9, 255]);
+        // Off the right edge: the layer grows after its pixels, by a whole tile (a new float,
+        // the canvas's width: what lies off the canvas is not selected, so it stays).
+        drag(2, 40);
+        let (image, original, _) = layer(&state);
+        assert_eq!(
+            (image.size(), original),
+            (Size::new(812, 200), Size::new(812, 200))
+        );
+        assert_eq!(pixel(&image, 256 - 20, 2), [10, 2, 9, 255]);
+        assert_eq!(pixel(&image, 256 + 5, 2), [0, 0, 0, 0]);
+        assert_eq!(pixel(&image, 256 + 299 + 40, 2), [43, 2, 9, 255]);
+        // Undo brings the layer back as it was, size and place.
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        for _ in 0..3 {
+            document.session.undo().unwrap();
+        }
+        let layer = document.session.document().layer(id).unwrap();
+        let LayerContent::Raster { image, original } = &layer.content else {
+            panic!("a raster layer");
+        };
+        assert_eq!((image.size(), original.is_none()), (size, true));
+        assert_eq!(layer.transform, slopshop_core::Affine::IDENTITY);
+    }
 }

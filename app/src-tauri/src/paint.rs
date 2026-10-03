@@ -17,7 +17,7 @@ use serde::Deserialize;
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
 use slopshop_core::selection::{Selection, sample_colors, select_all};
 use slopshop_core::{
-    Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage,
+    Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage, Size,
 };
 use tauri::Manager;
 
@@ -120,8 +120,8 @@ struct ActiveStroke {
 #[derive(Debug, Clone)]
 pub struct Growth {
     pub(crate) transform: Affine,
-    original: Arc<RasterImage>,
-    mask: Option<LayerMask>,
+    pub(crate) original: Arc<RasterImage>,
+    pub(crate) mask: Option<LayerMask>,
 }
 
 #[derive(Default)]
@@ -204,51 +204,16 @@ pub(crate) fn grow(
     else {
         return Ok(None);
     };
-    // Around the pixels, transparency: they need an alpha channel first (lossless).
-    let grown = |image: &Arc<RasterImage>| -> Result<Arc<RasterImage>, String> {
-        let with_alpha = match image.with_alpha() {
-            Some(converted) => Arc::new(converted.map_err(|e| e.to_string())?),
-            None => Arc::clone(image),
-        };
-        with_alpha
-            .grown((left, top), size)
-            .ok_or("the layer cannot grow")?
-            .map(Arc::new)
-            .map_err(|e| e.to_string())
-    };
-    let shown = grown(image)?;
+    let shown = grown_pixels(image, (left, top), size)?;
     let unpainted = match original {
-        Some(original) => grown(original)?,
+        Some(original) => grown_pixels(original, (left, top), size)?,
         None => Arc::clone(&shown),
     };
     let mask = match &layer.mask {
-        Some(mask) => {
-            let image = mask
-                .image
-                .grown((left, top), size)
-                .ok_or("the mask cannot grow")?
-                .map_err(|e| e.to_string())?;
-            let original = match &mask.original {
-                Some(original) => Some(Arc::new(
-                    original
-                        .grown((left, top), size)
-                        .ok_or("the mask cannot grow")?
-                        .map_err(|e| e.to_string())?,
-                )),
-                None => None,
-            };
-            Some(LayerMask {
-                image: Arc::new(image),
-                original,
-                ..mask.clone()
-            })
-        }
+        Some(mask) => Some(grown_mask(mask, (left, top), size)?),
         None => None,
     };
-    // The grown pixels start `left` × `top` tiles before the old ones.
-    let shift = slopshop_core::raster::TILE_SIZE as f64;
-    let transform = Affine::translation(-(f64::from(left) * shift), -(f64::from(top) * shift))
-        .then(layer.transform);
+    let transform = grown_transform(layer.transform, (left, top));
     Ok(Some((
         shown,
         Growth {
@@ -257,6 +222,51 @@ pub(crate) fn grow(
             mask,
         },
     )))
+}
+
+/// A layer's pixels grown by `offset` whole tiles (columns, rows) before them to `size`:
+/// transparent around them (an alpha channel added first, lossless).
+pub(crate) fn grown_pixels(
+    image: &Arc<RasterImage>,
+    offset: (u32, u32),
+    size: Size,
+) -> Result<Arc<RasterImage>, String> {
+    let with_alpha = match image.with_alpha() {
+        Some(converted) => Arc::new(converted.map_err(|e| e.to_string())?),
+        None => Arc::clone(image),
+    };
+    with_alpha
+        .grown(offset, size)
+        .ok_or("the layer cannot grow")?
+        .map(Arc::new)
+        .map_err(|e| e.to_string())
+}
+
+/// A layer's mask grown with its pixels (see [`grown_pixels`]): hiding around them.
+pub(crate) fn grown_mask(
+    mask: &LayerMask,
+    offset: (u32, u32),
+    size: Size,
+) -> Result<LayerMask, String> {
+    let grown = |image: &RasterImage| -> Result<Arc<RasterImage>, String> {
+        image
+            .grown(offset, size)
+            .ok_or("the mask cannot grow")?
+            .map(Arc::new)
+            .map_err(|e| e.to_string())
+    };
+    Ok(LayerMask {
+        image: grown(&mask.image)?,
+        original: mask.original.as_deref().map(grown).transpose()?,
+        ..mask.clone()
+    })
+}
+
+/// A layer's transform once its pixels grew by `offset` whole tiles before them: they start
+/// that much earlier, so the layer looks the same.
+pub(crate) fn grown_transform(transform: Affine, (left, top): (u32, u32)) -> Affine {
+    let tile = f64::from(slopshop_core::raster::TILE_SIZE);
+    Affine::translation(-f64::from(left) * tile, -f64::from(top) * tile).then(transform)
 }
 
 /// A stroke on the request's target in `doc`, a layer grown to the canvas if it needs to
