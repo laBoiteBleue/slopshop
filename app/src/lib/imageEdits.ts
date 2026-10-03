@@ -54,3 +54,12 @@ export function cropEdit(size: Size, frame: Bounds): EditRequest | null {
     height: frame.bottom - frame.top,
   };
 }
+
+/**
+ * Image Rotation > Arbitrary: `angle` degrees, clockwise or not (Photoshop's dialog); null for
+ * no turn (a multiple of 360°).
+ */
+export function rotateEdit(angle: number, clockwise: boolean): EditRequest | null {
+  if (!Number.isFinite(angle) || angle % 360 === 0) return null;
+  return { kind: "rotateImageBy", degrees: clockwise ? angle : -angle };
+}

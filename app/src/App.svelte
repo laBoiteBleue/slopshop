@@ -87,7 +87,7 @@
   import { cycled, moveTab as moveTabTo, tabSlot, upsert as upsertTab } from "./lib/tabs";
   import { isTextField, keyAction } from "./lib/keymap";
   import { pasteUnfit } from "./lib/clipboard";
-  import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "./lib/imageEdits";
+  import { canvasBounds, cropEdit, outsideCanvas, rotateEdit, sizeEdit } from "./lib/imageEdits";
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { hexToSrgb } from "./lib/color";
@@ -1961,9 +1961,9 @@
     if (!dialog) return;
     rotateLast = { angle, clockwise };
     // No turn: nothing to undo, as in Photoshop.
-    if (angle % 360 === 0) return;
-    const degrees = clockwise ? angle : -angle;
-    void edit(dialog.document, { kind: "rotateImageBy", degrees }).then(() => {
+    const request = rotateEdit(angle, clockwise);
+    if (!request) return;
+    void edit(dialog.document, request).then(() => {
       if (activeId === dialog.document) void viewport?.fit();
     });
   }

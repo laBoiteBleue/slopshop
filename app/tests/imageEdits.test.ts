@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "../src/lib/imageEdits";
+import { canvasBounds, cropEdit, outsideCanvas, rotateEdit, sizeEdit } from "../src/lib/imageEdits";
 
 const DOC = { width: 400, height: 300, resolution: 72 };
 
@@ -42,4 +42,14 @@ test("a crop to the frame, nothing for the whole canvas", () => {
     height: 300,
   });
   assert.equal(cropEdit(DOC, canvasBounds(DOC)), null);
+});
+
+test("Arbitrary rotation: clockwise is positive, nothing for whole turns", () => {
+  assert.deepEqual(rotateEdit(30, true), { kind: "rotateImageBy", degrees: 30 });
+  assert.deepEqual(rotateEdit(30, false), { kind: "rotateImageBy", degrees: -30 });
+  // A negative angle typed turns the other way, as in Photoshop.
+  assert.deepEqual(rotateEdit(-45, true), { kind: "rotateImageBy", degrees: -45 });
+  assert.equal(rotateEdit(0, true), null);
+  assert.equal(rotateEdit(360, false), null);
+  assert.equal(rotateEdit(Number.NaN, true), null);
 });
