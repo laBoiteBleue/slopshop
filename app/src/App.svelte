@@ -39,7 +39,6 @@
     type GpuInfo,
     type ImageTurn,
     type Bounds,
-    type LayerView,
     type Matrix,
     type SnapTargets,
     type MovePixelsRequest,
@@ -100,6 +99,7 @@
   import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
   import PrintDialog from "./lib/PrintDialog.svelte";
   import { recentLabels } from "./lib/recent";
+  import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
@@ -712,11 +712,7 @@
    * (maintainer's choice: the whole visible image, not the selected layers).
    */
   function adjustTargets(): number[] {
-    const shown = (layers: LayerView[]): number[] =>
-      layers
-        .filter((l) => l.visible)
-        .flatMap((l) => (l.kind === "raster" ? [l.id] : shown(l.children)));
-    return active ? shown(active.layers) : [];
+    return active ? visibleRasters(active.layers) : [];
   }
 
   /** Image > Adjustments > `adjustment`: Invert at once, the others through their dialog. */
@@ -728,10 +724,14 @@
       void edit(doc.id, { kind: "applyEffect", ids, adjustment, values: [] });
       return;
     }
-    const before = new Set(walkIds(doc.layers));
+    const before = new Set(walk(doc.layers).map((l) => l.id));
     await live(doc.id, { kind: "previewEffect", ids, adjustment });
     const after = tabs.find((d) => d.id === doc.id);
-    const previews = after ? walkIds(after.layers).filter((id) => !before.has(id)) : [];
+    const previews = after
+      ? walk(after.layers)
+          .map((l) => l.id)
+          .filter((id) => !before.has(id))
+      : [];
     if (previews.length === 0) {
       void cancelGesture(doc.id);
       return;
@@ -745,11 +745,6 @@
       values: null,
       curves: null,
     };
-  }
-
-  /** Every layer id of `layers`, groups' layers included. */
-  function walkIds(layers: LayerView[]): number[] {
-    return layers.flatMap((l) => [l.id, ...walkIds(l.children)]);
   }
 
   /**
@@ -1993,16 +1988,6 @@
     panelDrag = { source: activeId, ids: drag.ids, pointerId: drag.pointerId };
     dragGhost = { document: activeId, ids: drag.ids, x: drag.x, y: drag.y };
     hoverTabAt(drag.x, drag.y);
-  }
-
-  /** A layer of a layer tree. */
-  function findLayer(layers: LayerView[], id: number): LayerView | null {
-    for (const layer of layers) {
-      if (layer.id === id) return layer;
-      const inside = findLayer(layer.children, id);
-      if (inside) return inside;
-    }
-    return null;
   }
 
   function hoverTabAt(x: number, y: number) {
