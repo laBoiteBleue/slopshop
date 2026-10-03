@@ -17,7 +17,8 @@ export type ToolId =
   | "wand"
   | "crop"
   | "brush"
-  | "eraser";
+  | "eraser"
+  | "restoreEraser";
 
 export type Tool = {
   id: ToolId;
@@ -58,7 +59,14 @@ export const SLOTS: readonly ToolSlot[] = [
   },
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
   { key: "B", tools: [{ id: "brush", icon: "brush", name: "tools.brush" }] },
-  { key: "E", tools: [{ id: "eraser", icon: "eraser", name: "tools.eraser" }] },
+  {
+    key: "E",
+    tools: [
+      { id: "eraser", icon: "eraser", name: "tools.eraser" },
+      // Brings back a layer's original through its paint (ADR 0029).
+      { id: "restoreEraser", icon: "restoreEraser", name: "tools.restoreEraser" },
+    ],
+  },
 ];
 
 export const TOOLS: readonly Tool[] = SLOTS.flatMap((slot) => slot.tools);
@@ -77,8 +85,13 @@ export function slotForLetter(letter: string | null): ToolSlot | null {
 }
 
 /** The tools that paint (ADR 0027). */
-export function isPaintTool(id: ToolId): id is "brush" | "eraser" {
-  return id === "brush" || id === "eraser";
+export function isPaintTool(id: ToolId): id is "brush" | "eraser" | "restoreEraser" {
+  return id === "brush" || isEraser(id);
+}
+
+/** The erasers: they share their options, and paint no color. */
+export function isEraser(id: ToolId): id is "eraser" | "restoreEraser" {
+  return id === "eraser" || id === "restoreEraser";
 }
 
 /** The tools that draw a selection. */

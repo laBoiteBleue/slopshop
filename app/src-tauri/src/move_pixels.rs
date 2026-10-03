@@ -464,6 +464,7 @@ fn lift_edit(
     };
     // The hole: the selected pixels erased, as Cut does.
     let erase = crate::paint::PaintRequest {
+        restore: false,
         stroke: 0,
         target: PaintTarget::Layer,
         layer_id: id.get(),

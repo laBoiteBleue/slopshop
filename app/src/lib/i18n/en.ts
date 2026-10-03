@@ -195,6 +195,7 @@ const en = {
   "tools.crop": "Crop Tool",
   "tools.brush": "Brush Tool",
   "tools.eraser": "Eraser Tool",
+  "tools.restoreEraser": "Restore Eraser Tool",
   "tools.foreground": "Set foreground color",
   "tools.background": "Set background color",
   "tools.swapColors": "Switch foreground and background colors (X)",
@@ -265,6 +266,8 @@ const en = {
   "colorPicker.a": "a:",
   "colorPicker.labB": "b:",
   "paint.hidden": "The layer is hidden: show it to paint on it.",
+  "paint.restoreLayersOnly":
+    "The Restore Eraser brings back a layer's pixels: target the layer, not its mask.",
   "move.needRaster": "Select a pixel layer or a layer mask to move the selected pixels.",
   "move.hidden": "The layer is hidden: show it to move its selected pixels.",
   "options.refineEdge": "Refine Edges",

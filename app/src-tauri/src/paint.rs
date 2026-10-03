@@ -42,6 +42,9 @@ pub struct PaintRequest {
     /// The Brush's color, sRGB-encoded RGB in `[0, 1]`; absent for the Eraser.
     #[serde(default)]
     pub color: Option<[f32; 3]>,
+    /// The Restore Eraser (ADR 0029): the layer's paint brought back towards its original.
+    #[serde(default)]
+    pub restore: bool,
     /// Pointer samples since the last batch: document pixels and pressure (`[x, y, p]`).
     pub samples: Vec<[f64; 3]>,
     /// The last batch: the stroke is committed.
@@ -336,8 +339,10 @@ fn start(
     let selection = doc.selection().map(|s| Arc::clone(s.image()));
     let (image, to_document, growth, paint, selection) = match request.target() {
         Target::Layer(id) => {
-            let (image, growth) = grow(doc, id, grow_layer)?;
+            // Restoring only reaches paint: no need to grow.
+            let (image, growth) = grow(doc, id, grow_layer && !request.restore)?;
             let paint = match request.color {
+                _ if request.restore => Paint::Restore,
                 Some([r, g, b]) => {
                     Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0))
                 }
@@ -356,6 +361,9 @@ fn start(
             )
             .map_err(|e| e.to_string())?;
             return Ok((stroke, Some(growth)));
+        }
+        _ if request.restore => {
+            return Err("the Restore Eraser brings back a layer's pixels".to_owned());
         }
         // A mask lies in its layer's pixel grid and covers what the layer can show: it does not
         // grow.
@@ -519,6 +527,7 @@ pub async fn fill(
             return Err("the opacity is between 0 and 1".to_owned());
         }
         let request = PaintRequest {
+            restore: false,
             stroke: 0,
             target,
             layer_id,
@@ -688,6 +697,7 @@ mod tests {
 
     fn request(opacity: f32) -> PaintRequest {
         PaintRequest {
+            restore: false,
             stroke: 0,
             target: PaintTarget::Layer,
             layer_id: 1,

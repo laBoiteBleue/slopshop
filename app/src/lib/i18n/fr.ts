@@ -198,6 +198,7 @@ const fr: Messages = {
   "tools.crop": "Outil Recadrage",
   "tools.brush": "Outil Pinceau",
   "tools.eraser": "Outil Gomme",
+  "tools.restoreEraser": "Outil Gomme de restauration",
   "tools.foreground": "Définir la couleur de premier plan",
   "tools.background": "Définir la couleur d'arrière-plan",
   "tools.swapColors": "Permuter les couleurs de premier plan et d'arrière-plan (X)",
@@ -269,6 +270,8 @@ const fr: Messages = {
   "colorPicker.a": "a :",
   "colorPicker.labB": "b :",
   "paint.hidden": "Le calque est masqué : affichez-le pour y peindre.",
+  "paint.restoreLayersOnly":
+    "La Gomme de restauration rétablit les pixels d'un calque : ciblez le calque, pas son masque.",
   "move.needRaster":
     "Sélectionnez un calque de pixels ou un masque de fusion pour déplacer les pixels sélectionnés.",
   "move.hidden": "Le calque est masqué : affichez-le pour déplacer ses pixels sélectionnés.",

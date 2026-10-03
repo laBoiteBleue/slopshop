@@ -140,6 +140,10 @@ built. Contributors: propose here first.
   layers, within the selection, as one undo entry; Invert applies at once. What is applied is
   kept in the layer's stack (ADR 0029), listed below the layer and deletable; the same
   adjustment applied twice in a row is one entry (×2), two Inverts cancel.
+- The Restore Eraser, in the Eraser's group (E, Shift+E to switch, the Eraser's options): it
+  brings back a layer's original through all of its paint where it rubs, the adjustments
+  applied from Image > Adjustments staying; paint fully rubbed out leaves the layer's list.
+  Photoshop has no such tool (its History Brush is the closest); on a mask it is refused.
 - Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and
   height in pixels or percent; Image Size keeps the proportions by default, Canvas Size has
   Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All

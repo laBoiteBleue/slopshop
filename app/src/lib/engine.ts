@@ -938,6 +938,8 @@ export type PaintRequest = {
   brush: BrushRequest;
   /** The Brush's color, sRGB-encoded RGB in [0, 1]; null for the Eraser. */
   color: [number, number, number] | null;
+  /** The Restore Eraser (ADR 0029): the layer's paint brought back towards its original. */
+  restore?: boolean;
   /** Pointer samples since the last batch: `[x, y, pressure]`, document pixels. */
   samples: [number, number, number][];
   /** The last batch: the stroke is committed (one undo entry). */

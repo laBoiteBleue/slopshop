@@ -307,6 +307,10 @@ impl Edit {
                     .clone()
                     .unwrap_or_else(|| crate::stack::LayerStack::new(Arc::clone(image)));
                 let shown = match shown {
+                    // Nothing applied: the original itself, not a copy of it.
+                    _ if stack.is_empty() && stack.format() == stack.original().format() => {
+                        Arc::clone(stack.original())
+                    }
                     Some(shown) => {
                         if shown.size() != stack.original().size()
                             || shown.format() != stack.format()

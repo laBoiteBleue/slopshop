@@ -231,7 +231,7 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       top), entries deleted one by one
 - [x] Image > Adjustments as effects on the selected layers, with Photoshop's shortcuts, a
       dialog previewed on the canvas
-- [ ] The Restore Eraser (in the Eraser's group)
+- [x] The Restore Eraser (in the Eraser's group)
 - [ ] The stack evaluated on the GPU into a bounded cache (ADR 0029, point 6)
 
 ## Phase 4 — Very large images

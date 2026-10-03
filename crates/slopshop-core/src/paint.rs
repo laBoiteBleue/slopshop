@@ -22,7 +22,7 @@ use crate::geom::Size;
 use crate::raster::{
     Codec, RasterError, RasterImage, TILE_SIZE, bands, pad_tile, parallel_for_each,
 };
-use crate::stack::{LayerStack, PaintOp, TopPaint};
+use crate::stack::{LayerStack, PaintOp, RestorePaint, TopPaint};
 use crate::tile::TileCoord;
 use crate::transform::Affine;
 
@@ -100,6 +100,9 @@ pub enum Paint {
     Color(LinearRgba),
     /// Lower the alpha: the Eraser.
     Erase,
+    /// Bring back what is below every paint of a layer's stack (ADR 0029): the Restore Eraser.
+    /// Only on a stack ([`Stroke::on_stack`]).
+    Restore,
     /// Move a coverage (a layer mask or the selection, gray without alpha) towards this value
     /// in `[0, 1]`: white shows or selects, black hides. The Brush paints the gray of its color
     /// ([`gray_of_srgb`]) and the Eraser 0 (ADR 0027).
@@ -136,6 +139,8 @@ pub enum PaintError {
     NotACoverage,
     Raster(RasterError),
     Stack(crate::stack::StackError),
+    /// [`Paint::Restore`] on pixels that have no stack.
+    NeedsStack,
 }
 
 impl fmt::Display for PaintError {
@@ -147,6 +152,7 @@ impl fmt::Display for PaintError {
             PaintError::NotACoverage => write!(f, "only a mask or a selection is painted in gray"),
             PaintError::Raster(e) => write!(f, "{e}"),
             PaintError::Stack(e) => write!(f, "{e}"),
+            PaintError::NeedsStack => write!(f, "only a layer's paint can be restored"),
         }
     }
 }
@@ -234,8 +240,9 @@ pub struct Stroke {
     to_working: Mat3,
     from_working: Mat3,
     coverage: BTreeMap<TileCoord, Coverage>,
-    /// Painting a layer's stack (ADR 0029): the paint laid on top of it, and what it does.
-    top: Option<(TopPaint, PaintOp)>,
+    /// Painting a layer's stack (ADR 0029): the paint laid on top of it and what it does, or
+    /// the Restore Eraser.
+    top: Option<OnStack>,
     /// Tiles whose coverage changed since the last frame, with the box of their changed pixels
     /// (`[x0, y0, x1, y1)` within the tile).
     dirty: BTreeMap<TileCoord, [usize; 4]>,
@@ -258,6 +265,9 @@ impl Stroke {
     ) -> Result<Self, PaintError> {
         if !brush.is_valid() {
             return Err(PaintError::InvalidBrush);
+        }
+        if paint == Paint::Restore {
+            return Err(PaintError::NeedsStack);
         }
         if let Paint::Color(c) = paint
             && ![c.r, c.g, c.b].iter().all(|v| v.is_finite())
@@ -328,14 +338,35 @@ impl Stroke {
         let op = match paint {
             Paint::Color(c) => PaintOp::Color(c),
             Paint::Erase => PaintOp::Erase,
+            Paint::Restore => PaintOp::Restore,
             Paint::Gray(_) => return Err(PaintError::NotACoverage),
         };
-        let mut stroke = Self::new(shown, to_document, selection, blend_space, brush, paint)?;
-        let top = TopPaint::new(stack, &stroke.base, blend_space, op == PaintOp::Erase);
+        // The base is the stroke's (the Eraser's has an alpha channel); the Restore Eraser
+        // keeps the stack's.
+        let as_base = if op == PaintOp::Restore {
+            Paint::Color(LinearRgba::new(0.0, 0.0, 0.0, 1.0))
+        } else {
+            paint
+        };
+        let mut stroke = Self::new(shown, to_document, selection, blend_space, brush, as_base)?;
+        stroke.paint = paint;
+        let top = if op == PaintOp::Restore {
+            OnStack::Restore(RestorePaint::new(stack))
+        } else {
+            OnStack::Top(
+                Box::new(TopPaint::new(
+                    stack,
+                    &stroke.base,
+                    blend_space,
+                    op == PaintOp::Erase,
+                )),
+                op,
+            )
+        };
         if stroke.base.format() != top.format() {
             return Err(PaintError::Stack(crate::stack::StackError::FormatMismatch));
         }
-        stroke.top = Some((top, op));
+        stroke.top = Some(top);
         Ok(stroke)
     }
 
@@ -550,7 +581,7 @@ impl Stroke {
         &mut self,
         dirty: &[(TileCoord, [usize; 4])],
     ) -> Result<Arc<RasterImage>, PaintError> {
-        let Some((top, op)) = &mut self.top else {
+        let Some(top) = &mut self.top else {
             return Ok(Arc::clone(&self.current));
         };
         let (coverage, selection, to_document) =
@@ -565,7 +596,10 @@ impl Stroke {
             }
             amount * selected(selection, to_document, coord, x, y)
         };
-        let tiles = top.lay(dirty, *op, amount, &self.current);
+        let tiles = match top {
+            OnStack::Top(top, op) => top.lay(dirty, *op, amount, &self.current),
+            OnStack::Restore(restore) => restore.lay(dirty, amount),
+        };
         let areas: BTreeMap<TileCoord, [usize; 4]> = dirty.iter().copied().collect();
         let replaced = tiles
             .into_iter()
@@ -582,7 +616,7 @@ impl Stroke {
     /// (what [`Self::image`] shows). `None` for a stroke on an image.
     pub fn stack(&self) -> Result<Option<LayerStack>, PaintError> {
         match &self.top {
-            Some((top, _)) => Ok(Some(top.stack()?)),
+            Some(top) => Ok(Some(top.stack()?)),
             None => Ok(None),
         }
     }
@@ -594,7 +628,7 @@ impl Stroke {
             return Ok(None);
         }
         let shown = self.image()?;
-        let Some((top, _)) = &self.top else {
+        let Some(top) = &self.top else {
             return Err(PaintError::NotACoverage);
         };
         Ok(Some((top.stack()?, shown)))
@@ -708,8 +742,8 @@ impl Stroke {
                     *v *= 1.0 - amount;
                 }
             }
-            // Painted above.
-            Paint::Gray(_) => return,
+            // Painted above; a stroke on pixels never restores (refused by `new`).
+            Paint::Gray(_) | Paint::Restore => return,
         }
         let rgb = [dst[0], dst[1], dst[2]];
         let rgb = if self.base.format().layout.is_gray() {
@@ -719,6 +753,29 @@ impl Stroke {
             mat_vec(&self.from_working, rgb)
         };
         codec.write(rgb.map(|v| v as f32), dst[3] as f32, px);
+    }
+}
+
+/// A stroke on a layer's stack: paint laid on top, or the Restore Eraser.
+#[derive(Debug)]
+enum OnStack {
+    Top(Box<TopPaint>, PaintOp),
+    Restore(RestorePaint),
+}
+
+impl OnStack {
+    fn format(&self) -> crate::color::PixelFormat {
+        match self {
+            OnStack::Top(top, _) => top.format(),
+            OnStack::Restore(restore) => restore.format(),
+        }
+    }
+
+    fn stack(&self) -> Result<LayerStack, crate::stack::StackError> {
+        match self {
+            OnStack::Top(top, _) => top.stack(),
+            OnStack::Restore(restore) => restore.stack(),
+        }
     }
 }
 
