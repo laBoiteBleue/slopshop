@@ -10,6 +10,7 @@ const fr: Messages = {
   "menu.file.openRecent": "Ouvrir les fichiers récents",
   "menu.file.clearRecent": "Effacer la liste des fichiers récents",
   "menu.file.importLayers": "Importer comme calques…",
+  "menu.file.importDevice": "Importer depuis un scanner ou un appareil photo…",
   "menu.file.close": "Fermer",
   "menu.file.closeAll": "Tout fermer",
   "menu.file.save": "Enregistrer",
@@ -308,6 +309,9 @@ const fr: Messages = {
   "print.top": "Haut",
   "print.left": "Gauche",
   "print.print": "Imprimer…",
+  "acquire.noDevice":
+    "Aucun scanner ni appareil photo n'a été trouvé. Vérifiez qu'il est branché et allumé.",
+  "acquire.failed": "Impossible d'importer depuis le périphérique : {detail}",
   "welcome.title": "Ouvrez une image ou créez un document",
   "welcome.open": "Ouvrir…",
   "welcome.new": "Nouveau document…",

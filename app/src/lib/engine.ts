@@ -978,6 +978,11 @@ export const engine = {
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /**
+   * File > Import from Device (Windows): Windows' scanning dialog, then the image in a new
+   * untitled tab. `openFailed`: the open's own events reported why.
+   */
+  acquireImage: () => invoke<"opened" | "cancelled" | "noDevice" | "openFailed">("acquire_image"),
   /** File > Print's page: a JPEG of the document as displayed, over white paper. */
   printPage: (documentId: number) => invoke<ArrayBuffer>("print_page", { documentId }),
   /** File > Document Info. */

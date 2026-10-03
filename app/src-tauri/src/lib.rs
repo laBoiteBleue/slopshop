@@ -7,6 +7,7 @@
 //! Threading: every command is `async` (so it never runs on the main/UI thread) and heavy work
 //! (GPU, decoding) runs in `spawn_blocking` or a worker thread.
 
+mod acquire;
 mod ai;
 mod export;
 mod info;
@@ -913,6 +914,24 @@ fn insert_layers(
             insert_document_layers(target, &imported.document, warnings, Some(group_name))
         }),
     }
+}
+
+/// An image just scanned (File > Import from Device) in a new tab, untitled: its temporary
+/// file is no name for it, and no source to show. False when it could not be opened (the
+/// open's events said why).
+#[cfg(windows)]
+fn open_scanned(app: &AppHandle, path: &Path) -> bool {
+    let Ok(view) = open_path(app, path, Source::File, OpenTarget::NewTab, None) else {
+        return false;
+    };
+    let state = app.state::<AppState>();
+    if let Ok(mut documents) = state.documents()
+        && let Ok(document) = documents.get_mut(view.id)
+    {
+        document.meta.name = None;
+        document.source = None;
+    }
+    true
 }
 
 /// Put an image into its target: a new tab named `tab_name`, or a new top layer (undoable);
@@ -2235,6 +2254,7 @@ pub fn run() {
             recent::recent_thumbnail,
             info::document_info,
             print::print_page,
+            acquire::acquire_image,
             paint::sample_color,
             selection::color_range_preview,
             selection::color_range,
