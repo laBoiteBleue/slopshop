@@ -173,7 +173,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Solid color fill layers: the foreground color, above the active layer, editable after
       creation (Properties panel, double-click on the thumbnail)
 - [x] Layer > Align and Distribute, shared with the Move tool's options bar
-- [ ] New Layer from Visible (stamp visible)
+- [x] New Layer from Visible (stamp visible, Alt+Shift+Ctrl+E)
 - [ ] Merge Layers, Merge Visible, Flatten, Rasterize (their submenu is an open question)
 - [ ] Layer styles (an ADR first)
 - [ ] 🔶 Stack-to-DAG evolution of the model

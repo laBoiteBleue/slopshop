@@ -256,6 +256,10 @@ built. Contributors: propose here first.
   the box of their visible pixels, a group as one; several align on the box around them all,
   a single one on the canvas, and with a selection on the selection's box. Distribute keeps the
   first and the last layer and needs three; one undo entry each.
+- Layer > New Layer from Visible (Alt+Shift+Ctrl+E, Photoshop's stamp visible, which has no
+  menu entry there): the visible layers composited over the whole canvas, the selection
+  ignored, as a new pixel layer at the top of the document (the maintainer's choice, rather
+  than above the active layer), selected; the layers stay. One undo entry.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
@@ -304,8 +308,6 @@ maintainer's answers to the audit:
 - **Decided, to build**:
   - Gradient and Pattern fill layers come with a gradient engine and patterns, not before (no
     dead entries).
-  - New Layer from Visible (Photoshop's stamp visible, Alt+Shift+Ctrl+E): the visible
-    composite as a new layer at the top of the document, the layers kept.
   - Merge Visible keeps Photoshop's Shift+Ctrl+E; Export moves to Alt+Shift+Ctrl+W
     (Photoshop's Export As).
   - Layer styles (drop shadow, glows, stroke, overlays) as in Photoshop: a list of editable
