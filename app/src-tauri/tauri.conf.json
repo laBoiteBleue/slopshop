@@ -17,7 +17,8 @@
         "height": 800,
         "minWidth": 720,
         "minHeight": 480,
-        "generalAutofillEnabled": false
+        "generalAutofillEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-print-preview"
       }
     ],
     "security": {
