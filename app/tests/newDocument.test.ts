@@ -14,19 +14,20 @@ test("a size matches its preset either way round, else it is custom", () => {
 });
 
 test("a size typed in a length keeps it when the resolution changes; in pixels it stays", () => {
-  assert.deepEqual(atResolution({ width: 600, height: 300 }, "cm", 300, 150), {
-    width: 300,
-    height: 150,
-  });
-  assert.deepEqual(atResolution({ width: 600, height: 300 }, "px", 300, 150), {
-    width: 600,
-    height: 300,
-  });
-  // Whole pixels.
-  assert.deepEqual(atResolution({ width: 100, height: 100 }, "in", 300, 72), {
-    width: 24,
-    height: 24,
-  });
+  const size = { width: 2480, height: 3508 };
+  // A4 shown as 21 × 29.7 cm.
+  const lengths = { width: 21, height: 29.7 };
+  assert.deepEqual(atResolution(size, lengths, "cm", 150), { width: 1240, height: 1754 });
+  assert.deepEqual(atResolution(size, lengths, "px", 150), size);
+  assert.deepEqual(atResolution(size, { width: NaN, height: 1 }, "cm", 150), size);
+});
+
+test("a resolution typed digit by digit does not round the size away", () => {
+  // Regression: the pixels were scaled from the previous ones at each keystroke (1, 15, 150).
+  const lengths = { width: 21, height: 29.7 };
+  let size = { width: 2480, height: 3508 };
+  for (const ppi of [1, 15, 150]) size = atResolution(size, lengths, "cm", ppi);
+  assert.deepEqual(size, { width: 1240, height: 1754 });
 });
 
 test("portrait and landscape swap the sides when needed; a square stays", () => {
