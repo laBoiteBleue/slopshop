@@ -83,6 +83,8 @@
   import { exportFileName, formatOfPath, formatOrder, isVectorPath } from "./lib/fileNames";
   import { cycled, moveTab as moveTabTo, tabSlot, upsert as upsertTab } from "./lib/tabs";
   import { isTextField, keyAction } from "./lib/keymap";
+  import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "./lib/imageEdits";
+  import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -97,7 +99,7 @@
   import ColorRangeDialog, { sampleAt, type ColorRangeState } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import SelectionDrag from "./lib/SelectionDrag.svelte";
-  import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
+  import { SNAP_CSS_PX, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import TransformFields from "./lib/TransformFields.svelte";
   import ContextMenu from "./lib/ContextMenu.svelte";
@@ -903,11 +905,6 @@
       });
   }
 
-  /** Document point (`x`, `y`) is outside the canvas of `doc`. */
-  function outsideCanvas(doc: DocumentView, x: number, y: number): boolean {
-    return x < 0 || y < 0 || x >= doc.width || y >= doc.height;
-  }
-
   function magicWand(x: number, y: number, mode: SelectionMode | null) {
     const doc = active;
     if (!doc) return;
@@ -1415,18 +1412,16 @@
    * What moving selected pixels takes, as painting does: the active layer's pixels, or its
    * mask when it is the target; null (a notice shown) when it cannot.
    */
-  function pixelTarget(): { target: "layer" | "mask"; layerId: number } | null {
-    const layer = layersPanel?.selectedLayer() ?? null;
-    const target = layersPanel?.paintsMask() ? "mask" : "layer";
-    if (!layer || (target === "layer" && layer.kind !== "raster")) {
-      showError(t("move.needRaster"));
+  function pixelTarget(): PixelTarget | null {
+    const found = movedPixels(
+      layersPanel?.selectedLayer() ?? null,
+      layersPanel?.paintsMask() ?? false,
+    );
+    if ("error" in found) {
+      showError(t(found.error));
       return null;
     }
-    if (!layer.visible) {
-      showError(t("move.hidden"));
-      return null;
-    }
-    return { target, layerId: layer.id };
+    return found;
   }
 
   /**
@@ -1435,13 +1430,13 @@
    */
   function nudgePixels(dx: number, dy: number): boolean {
     const doc = active;
-    if (!doc || doc.selectionKey == null || doc.quickMask) return false;
-    // A selection tool nudges the outline alone, as in Photoshop.
-    if (SELECTION_TOOLS.includes(tool)) {
+    if (!doc) return false;
+    const moves = nudged(tool, doc.selectionKey != null && !doc.quickMask);
+    if (moves === "layers") return false;
+    if (moves === "outline") {
       void sync(engine.translateSelection(doc.id, dx, dy));
       return true;
     }
-    if (tool !== "move") return false;
     const target = pixelTarget();
     if (target) {
       const request = { ...target, drag: nextPixelDrag++, dx, dy, copy: false, end: true };
@@ -1462,19 +1457,16 @@
   /** Send the whole pixels the drag has moved since it began, snapped (replacing the last). */
   function flushMove(drag: MoveDrag) {
     if (!drag.pixels && (!drag.ids || drag.ids.length === 0)) return;
-    let { x, y } = drag.raw;
-    let shown: Guide[] = [];
     const doc = tabs.find((d) => d.id === drag.document);
-    if (drag.targets?.moving && doc && snapping && !drag.free) {
-      const targets = [canvasBounds(doc), ...drag.targets.others];
-      const threshold = SNAP_CSS_PX * drag.docPerCss;
-      const snapped = snapMove(drag.targets.moving, x, y, targets, threshold);
-      ({ x, y } = snapped);
-      shown = snapped.guides;
-    }
-    guides = shown;
-    const tx = Math.round(x);
-    const ty = Math.round(y);
+    const snaps = doc && snapping && !drag.free;
+    const landed = landing(
+      drag.raw,
+      snaps ? (drag.targets?.moving ?? null) : null,
+      doc ? [canvasBounds(doc), ...(drag.targets?.others ?? [])] : [],
+      SNAP_CSS_PX * drag.docPerCss,
+    );
+    guides = landed.guides;
+    const { x: tx, y: ty } = landed;
     if (tx === drag.applied.x && ty === drag.applied.y) return;
     drag.applied = { x: tx, y: ty };
     if (drag.pixels) {
@@ -1514,16 +1506,7 @@
 
   // The selection's outline moved alone (Photoshop): a drag from inside the selection with the
   // Marquees, the Lasso or the Magic Wand in New Selection mode (see `SelectionDrag`), or the
-  // arrows with any selection tool. One undo entry.
-  const SELECTION_TOOLS: ToolId[] = [
-    "marquee",
-    "ellipse",
-    "lasso",
-    "polygonalLasso",
-    "objectSelection",
-    "quickSelection",
-    "wand",
-  ];
+  // arrows with any selection tool (`nudged`). One undo entry.
   /** The Polygonal Lasso places a corner at each click: no drag there. */
   const OUTLINE_DRAG_TOOLS: ToolId[] = ["marquee", "ellipse", "lasso", "wand"];
   /** The outline drag under way, if any (its id is shared with pixel drags, for `outlineShift`). */
@@ -1574,10 +1557,6 @@
   function pixelRequest(pixels: PixelDrag, drag: MoveDrag, end: boolean): MovePixelsRequest {
     const { drag: id, target, layerId, copy } = pixels;
     return { drag: id, target, layerId, copy, dx: drag.applied.x, dy: drag.applied.y, end };
-  }
-
-  function canvasBounds(doc: DocumentView): Bounds {
-    return { left: 0, top: 0, right: doc.width, bottom: doc.height };
   }
 
   function onMoveEnd() {
@@ -1870,17 +1849,12 @@
     const doc = dialog && tabs.find((d) => d.id === dialog.document);
     if (!dialog || !doc) return;
     // OK without a change: nothing to undo, as in Photoshop.
-    const same = width === doc.width && height === doc.height;
-    if (same && (dialog.mode === "canvas" || resolution === doc.resolution)) return;
-    const resized = edit(
-      dialog.document,
-      dialog.mode === "image"
-        ? { kind: "resizeImage", width, height, resolution }
-        : { kind: "canvasSize", width, height, anchor },
-    );
+    const change = sizeEdit(doc, dialog.mode, { width, height }, anchor, resolution);
+    if (!change) return;
+    const resized = edit(dialog.document, change.request);
     // The new size, fitted on screen (the maintainer's choice), unless only the resolution
     // changed or another tab is shown meanwhile.
-    if (!same) {
+    if (change.resized) {
       void resized.then(() => {
         if (activeId === dialog.document) void viewport?.fit();
       });
@@ -1933,21 +1907,10 @@
     cropping = null;
     if (!current) return;
     const doc = tabs.find((d) => d.id === current.document);
-    const unchanged =
-      doc &&
-      frame.left === 0 &&
-      frame.top === 0 &&
-      frame.right === doc.width &&
-      frame.bottom === doc.height;
-    if (unchanged) return;
+    const crop = cropEdit(doc ?? current, frame);
+    if (!crop) return;
     cropApplying = true;
-    void edit(current.document, {
-      kind: "crop",
-      x: frame.left,
-      y: frame.top,
-      width: frame.right - frame.left,
-      height: frame.bottom - frame.top,
-    }).finally(() => (cropApplying = false));
+    void edit(current.document, crop).finally(() => (cropApplying = false));
   }
 
   function rotateImage(turn: ImageTurn) {
