@@ -165,8 +165,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 
 Order (maintainer, 2026-10-01): the tools, then selections, then painting, so that the brush
 respects the selection from the start. Painting ([ADR 0027](adr/0027-painting.md)) never writes
-a layer's original pixels or mask: the paint is a painted image sharing the untouched tiles,
-removable as a whole; undo keeps the old tiles by reference.
+a layer's original pixels or mask. A layer's paint and applied effects form a stack inside it
+([ADR 0029](adr/0029-layer-stack.md)): entries removable one by one, never edited; a mask's
+paint is a painted image sharing the untouched tiles, removable as a whole.
 
 - [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move and Crop
       tools with Photoshop's keys (no Hand or Zoom tool: the wheel, Space and the middle button
@@ -219,6 +220,16 @@ removable as a whole; undo keeps the old tiles by reference.
 - [x] Move the selection's outline alone, as Photoshop: a drag from inside it with the marquees,
       the Lasso or the Magic Wand (New Selection mode), the arrows with any selection tool
 - [x] Layer via Copy (Ctrl+J) and Layer via Cut (Shift+Ctrl+J) with a selection, as Photoshop
+- [x] A layer's own stack in the engine ([ADR 0029](adr/0029-layer-stack.md)): paint as a delta
+      (`P + k·B`, touched tiles only), effects as parameters with their selection, merges of
+      alike neighbours, evaluation on the CPU tile by tile, each change reevaluating only the
+      tiles it reaches
+- [x] Layers carry their stack: strokes, Fill, Stroke, Delete and moved pixels add paint on
+      top of it (what is below the paint cached for the stroke), `.slop` node v7 (v6 paint read
+      exactly), Delete Paint empties it
+- [ ] Image > Adjustments as effects on the selected layers; the stack's mark and its entries
+      in the layers panel, deleted one by one; the Restore Eraser
+- [ ] The stack evaluated on the GPU into a bounded cache (ADR 0029, point 6)
 
 ## Phase 4 — Very large images
 
