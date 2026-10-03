@@ -186,7 +186,7 @@ the selection changes, so Object Selection's hover (`ai_object_hover`: a 256² m
 and its click or box (`ai_object_select`) only decode, in milliseconds. The
 mask becomes a selection through `selection::select_logits` (specks and pinholes dropped).
 Select > Subject (`ai_select_subject`) has BiRefNet find the main subject on the whole document
-(1024² logits) and goes through the same path. Refine Edges (an option of the tools, and `ai_refine_selection` for any selection) plans windows
+(1024² logits) and goes through the same path. Refine Edges (an option of the tools, and Select and Mask's edge detection, `ai_refine_base`) plans windows
 along the outline with `selection::plan_refinement` (512 pixels, at most 40; a longer outline
 is seen coarser), renders each, has ViTMatte (B on a GPU, S on the CPU) matte it
 with a trimap that leaves undecided a band around the outline (`RefineBand`: narrow inward,

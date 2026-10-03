@@ -17,6 +17,7 @@ mod move_pixels;
 mod paint;
 mod print;
 mod recent;
+mod refine;
 mod segment;
 mod selection;
 mod vector;
@@ -133,6 +134,8 @@ struct OpenDocument {
     last_selection: Option<slopshop_core::selection::Selection>,
     /// What the view shows over the image (Quick Mask): view state, like the viewport.
     overlays: ViewOverlays,
+    /// Select and Mask is open: the selection it refines (`refine`).
+    refine_base: Option<Arc<slopshop_core::RasterImage>>,
     /// A paint stroke under way, shown in place of its layer's pixels (view state too).
     paint_preview: Option<paint::PaintPreview>,
     /// Selected pixels the Move tool moved, floating until something else happens.
@@ -157,6 +160,7 @@ impl OpenDocument {
             saving: false,
             last_selection: None,
             overlays: ViewOverlays::default(),
+            refine_base: None,
             paint_preview: None,
             floating: None,
             move_preview: None,
@@ -2070,7 +2074,6 @@ pub fn run() {
             ai::ai_open_license,
             segment::ai_object_hover,
             segment::ai_object_select,
-            segment::ai_refine_selection,
             segment::ai_select_subject,
             segment::ai_cancel,
             layer_thumbnail,
@@ -2093,6 +2096,12 @@ pub fn run() {
             selection::load_selection,
             selection::rename_saved_selection,
             selection::delete_saved_selection,
+            refine::refine_open,
+            refine::refine_view,
+            refine::refine_preview,
+            refine::refine_close,
+            refine::refine_output,
+            segment::ai_refine_base,
             selection::quick_select,
             paint::paint_stroke,
             paint::fill,
@@ -2719,6 +2728,82 @@ mod tests {
             documents.get_mut(doc.id).unwrap().session.undo().unwrap();
         }
         assert_eq!(at(&state, 105), 1.0);
+    }
+
+    #[test]
+    fn select_and_mask_previews_then_outputs_to_a_new_layer_with_a_mask() {
+        use slopshop_core::selection::{self as sel, EdgeSettings};
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let square = sel::select_shape(
+            Size::new(6000, 4000),
+            None,
+            &sel::Shape::Rectangle {
+                left: 100.0,
+                top: 100.0,
+                right: 300.0,
+                bottom: 300.0,
+            },
+            sel::EdgeOptions::default(),
+            sel::Combine::Replace,
+        )
+        .unwrap();
+        selection::set_selection(&state, doc.id, square).unwrap();
+        let with = |f: &mut dyn FnMut(&mut OpenDocument)| {
+            let mut documents = state.documents().unwrap();
+            f(documents.get_mut(doc.id).unwrap());
+        };
+        let mut background = None;
+        with(&mut |d| {
+            d.refine_base = d
+                .session
+                .document()
+                .selection()
+                .map(|s| Arc::clone(s.image()));
+            background = Some(d.session.document().layers()[0].id);
+        });
+        let background = background.unwrap();
+        let at = |x: u32| {
+            let mut value = 0.0;
+            with(&mut |d| {
+                value = d
+                    .session
+                    .document()
+                    .selection()
+                    .map_or(0.0, |s| s.image().gray_at(x, 200));
+            });
+            value
+        };
+        // Each setting shown from the base: shifting out by 20, then by 5.
+        let shift = |px| EdgeSettings {
+            shift: px,
+            ..EdgeSettings::default()
+        };
+        refine::preview(&state, doc.id, shift(20.0), true).unwrap();
+        assert_eq!(at(85), 1.0);
+        refine::preview(&state, doc.id, shift(5.0), true).unwrap();
+        assert_eq!((at(85), at(97)), (0.0, 1.0));
+        // Out to a copy of the layer with that mask: the layer hidden, nothing selected, one
+        // undo entry back to the selection as it was.
+        let view =
+            refine::output(&state, doc.id, shift(5.0), background, true, "{name} copy").unwrap();
+        assert_eq!(view.layers.len(), 2);
+        assert_eq!(view.layers[1].name, "Background copy");
+        with(&mut |d| {
+            let document = d.session.document();
+            assert!(document.selection().is_none());
+            assert!(!document.layers()[0].visible);
+            let mask = document.layers()[1].mask.as_ref().expect("a mask");
+            assert_eq!(mask.image.gray_at(97, 200), 1.0);
+            assert_eq!(mask.image.gray_at(90, 200), 0.0);
+            assert!(d.refine_base.is_none());
+            d.session.undo().unwrap();
+            assert_eq!(d.session.document().layers().len(), 1);
+            assert!(d.session.document().layers()[0].visible);
+        });
+        assert_eq!((at(97), at(100)), (0.0, 1.0));
     }
 
     #[test]

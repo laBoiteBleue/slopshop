@@ -350,17 +350,22 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   The right column (ADR 0030, maintainer's choice of 2026-10-04): Layers on top, below it a
   dock of tab icons (Properties, Selections) whose unfolded panel's tab folds it down to the
   icons; its top edge resizes it; remembered; selecting an adjustment or fill layer unfolds
-  Properties. All
+  Properties. Select and Mask… (maintainer's choice of a light panel, 2026-10-04): a panel
+  beside the image, not a workspace: View (Marching Ants, Overlay at Quick Mask's opacity, On
+  Black, On White, Mask, drawn by the GPU over the image), Edge Detection (a radius and Detect:
+  ViTMatte mattes the edge, on request since it takes seconds), Global Refinements shown live
+  on the image (Smooth, Shift Edge in pixels, Feather, Contrast, applied in that order), Output
+  To (Selection, Layer Mask on the active layer, New Layer with Layer Mask: a copy of the
+  layer with the mask, the layer hidden); OK is one undo entry, Cancel puts the selection back;
+  its settings are kept for the next time. All
   Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
   Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
   Mask; saved selections; layers.
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Select and Mask…: a light panel beside the image (as Color Range), not a workspace: edge
-    detection radius (computed on request), Smooth, Feather, Contrast, Shift Edge applied live;
-    views: ants, overlay, on black, on white, mask; output to the selection, a layer mask, or a
-    new layer with a mask. A refine-edge brush is a later, separate step.
+  - Select and Mask: a refine-edge brush (paint where the model decides) is a later,
+    separate step.
   - The selection an Image > Adjustments effect keeps (ADR 0029) is an implicit mask dedicated
     to that effect: not exposed, not edited.
 - **Decided, not added**: Sky, Person, Hair and other subject kinds (evaluated separately if

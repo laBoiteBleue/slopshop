@@ -204,6 +204,12 @@ export type DocumentView = {
   savedSelections: SavedSelectionView[];
 };
 
+/** Select and Mask's edge settings: document pixels, Contrast in percent. */
+export type EdgeSettings = { smooth: number; feather: number; contrast: number; shift: number };
+
+/** How Select and Mask shows the selection. */
+export type SelectionViewMode = "ants" | "overlay" | "onBlack" | "onWhite" | "mask";
+
 /** A selection saved by name in the document. */
 export type SavedSelectionView = { id: number; name: string };
 
@@ -1426,11 +1432,44 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("ai_select_subject", { documentId, layerId, mode, refine, task }),
     ),
-  /** Select > Refine Edge: the selection's edge matted within `radius` pixels (ViTMatte). */
-  aiRefineSelection: (documentId: number, radius: number, layerId: number | null, task: number) =>
+  /** Select and Mask opens on the current selection (its base). */
+  refineOpen: (documentId: number) =>
+    serial(() => invoke<DocumentView>("refine_open", { documentId })),
+  /** How the selection is shown while Select and Mask is open. */
+  refineView: (documentId: number, view: SelectionViewMode) =>
+    serial(() => invoke<DocumentView>("refine_view", { documentId, view })),
+  /**
+   * The base with `settings` becomes the selection: shown while `live` (the next replaces it),
+   * else one undo entry, and the panel's session ends.
+   */
+  refinePreview: (documentId: number, settings: EdgeSettings, live: boolean) =>
+    serial(() => invoke<DocumentView>("refine_preview", { documentId, settings, live })),
+  /** Select and Mask cancelled: the selection as it was. */
+  refineClose: (documentId: number) =>
+    serial(() => invoke<DocumentView>("refine_close", { documentId })),
+  /**
+   * Select and Mask's result as a mask on `layerId` (`newLayer`: on a copy named by
+   * `nameFormat`, the layer hidden), deselected, one undo entry.
+   */
+  refineOutput: (
+    documentId: number,
+    settings: EdgeSettings,
+    layerId: number,
+    newLayer: boolean,
+    nameFormat: string,
+  ) =>
     serial(() =>
-      invoke<DocumentView>("ai_refine_selection", { documentId, radius, layerId, task }),
+      invoke<DocumentView>("refine_output", {
+        documentId,
+        settings,
+        layerId,
+        newLayer,
+        nameFormat,
+      }),
     ),
+  /** Select and Mask's edge detection: its base matted within `radius` pixels (ViTMatte). */
+  aiRefineBase: (documentId: number, radius: number, layerId: number | null, task: number) =>
+    serial(() => invoke<void>("ai_refine_base", { documentId, radius, layerId, task })),
   /** Cancels an AI request: it stops at its next step, changing nothing (code `cancelled`). */
   aiCancel: (task: number) => invoke<void>("ai_cancel", { task }),
   /**

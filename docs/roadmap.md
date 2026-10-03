@@ -215,7 +215,7 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Quick Selection (W) by color, as Photoshop's ([ADR 0026](adr/0026-quick-selection.md)):
       the region of similar colors around the stroke, up to the image's edges; Alt subtracts
 - [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
-      AI tools, and Select > Refine Edges… for any selection
+      AI tools, and Select and Mask's edge detection for any selection
 - [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
 - [x] Select menu refactor ([ergonomics](ergonomics.md#select-menu-audit-of-2026-10-04)):
       Photoshop's order, Select Subject, Select and Mask…, Quick Mask Mode; Grow and Similar on
@@ -228,8 +228,9 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Selection, transformed with the canvas
 - [x] Right panels: the folding dock of tab icons below Layers ([ADR 0030](adr/0030-panel-dock.md)),
       a Selections panel (load, add, subtract, intersect, replace, rename, delete)
-- [ ] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
+- [x] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
       outputs
+- [ ] Select and Mask: a refine-edge brush
 - Dropped (2026-10-02): Select > Semantic (SAM 3), objects named by a text prompt. A click with
   Object Selection is simpler.
 - [x] Painting decided ([ADR 0027](adr/0027-painting.md)): strokes on the CPU as a coverage,

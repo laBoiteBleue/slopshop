@@ -128,6 +128,12 @@ beforeEach(() => {
           doc.savedSelections = [...doc.savedSelections, { id: 9, name: args.name as string }];
           return { ...doc };
         }
+        case "refine_open":
+        case "refine_view":
+        case "refine_preview":
+        case "refine_close":
+        case "refine_output":
+          return { ...find() };
         case "selection_bounds":
           return { left: 10, top: 20, right: 110, bottom: 70 };
         case "undo":
@@ -645,4 +651,45 @@ test("the Selections panel loads, combines, renames and deletes saved selections
   // Delete in the panel deleted the saved selection, not a layer.
   expect(sent("perform")).toEqual([]);
   localStorage.clear();
+});
+
+test("Select and Mask opens on the selection, shows it live, and outputs it", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  const selectAndMask = async () => {
+    await user.click(screen.getByRole("menuitem", { name: "Select" }));
+    await user.click(screen.getByText("Select and Mask…", { selector: ".label" }));
+    await screen.findByText("Select and Mask", { selector: "header" });
+  };
+  await selectAndMask();
+  expect(sent("refine_open")).toEqual([{ documentId: 1 }]);
+  await vi.waitFor(() => {
+    expect(sent("refine_view")).toEqual([{ documentId: 1, view: "overlay" }]);
+    expect(sent("refine_preview")[0]).toMatchObject({ documentId: 1, live: true });
+  });
+  // Cancel: the selection as it was.
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await vi.waitFor(() => expect(sent("refine_close")).toEqual([{ documentId: 1 }]));
+  // Output to a new layer with a mask, on the active layer.
+  await selectAndMask();
+  await user.selectOptions(screen.getByRole("combobox", { name: "Output To:" }), "newLayer");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("refine_output")).toEqual([
+      {
+        documentId: 1,
+        settings: { smooth: 0, feather: 0, contrast: 0, shift: 0 },
+        layerId: 1,
+        newLayer: true,
+        nameFormat: "{name} copy",
+      },
+    ]),
+  );
+  // The output is kept for the next time; to the selection: the last preview, not live.
+  await selectAndMask();
+  await user.selectOptions(screen.getByRole("combobox", { name: "Output To:" }), "selection");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("refine_preview").at(-1)).toMatchObject({ documentId: 1, live: false }),
+  );
 });
