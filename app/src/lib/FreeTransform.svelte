@@ -7,6 +7,7 @@
   // rotates and flips about the pivot. Enter, a double-click inside or a click outside (without
   // dragging) applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
   import * as affine from "./affine";
+  import { isTextField } from "./keymap";
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
   import type { Bounds, Matrix } from "./engine";
@@ -340,13 +341,6 @@
     readout = null;
     guides = [];
     if (commit) oncommit();
-  }
-
-  function isTextField(target: EventTarget | null): boolean {
-    return (
-      target instanceof HTMLTextAreaElement ||
-      (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
-    );
   }
 
   function onKeydown(e: KeyboardEvent) {

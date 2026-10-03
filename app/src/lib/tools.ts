@@ -84,6 +84,17 @@ export function slotForLetter(letter: string | null): ToolSlot | null {
   return SLOTS.find((slot) => slot.key.toLowerCase() === letter) ?? null;
 }
 
+/**
+ * The tool a slot's key picks: the one it shows (`shown`, the last chosen), or with `next`
+ * (Shift) the variant after it, going round.
+ */
+export function slotTool(slot: ToolSlot, shown: ToolId | undefined, next: boolean): ToolId {
+  const current = shown ?? slot.tools[0].id;
+  if (!next || slot.tools.length < 2) return current;
+  const index = slot.tools.findIndex((tool) => tool.id === current);
+  return slot.tools[(index + 1) % slot.tools.length].id;
+}
+
 /** The tools that paint (ADR 0027). */
 export function isPaintTool(id: ToolId): id is "brush" | "eraser" | "restoreEraser" {
   return id === "brush" || isEraser(id);

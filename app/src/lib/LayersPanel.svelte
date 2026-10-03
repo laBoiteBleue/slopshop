@@ -36,6 +36,7 @@
     toggled,
     type LayerSelection,
   } from "./layerSelection";
+  import { isTextField } from "./keymap";
 
   let {
     doc,
@@ -452,14 +453,6 @@
     node.select();
   }
 
-  function isTextField(target: EventTarget | null): boolean {
-    return (
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement ||
-      (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
-    );
-  }
-
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && drag?.active) {
       endDrag();
@@ -468,7 +461,12 @@
     // Arrows move the selected layers by 1 pixel, 10 with Shift (the Move tool, ADR 0017).
     const arrow = ARROWS[e.key];
     if (arrow && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (e.target instanceof HTMLInputElement || isTextField(e.target)) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        isTextField(e.target) ||
+        e.target instanceof HTMLSelectElement
+      )
+        return;
       if (document.querySelector("dialog[open]") || renaming !== null) return;
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;

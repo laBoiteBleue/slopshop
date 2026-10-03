@@ -59,20 +59,8 @@
   import PreferencesDialog from "./lib/PreferencesDialog.svelte";
   import KeyboardShortcutsDialog from "./lib/KeyboardShortcutsDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
-  import {
-    hasShortcutModifier,
-    isMac,
-    isWindows,
-    modifierLabel,
-    shortcutLetter,
-  } from "./lib/platform";
-  import {
-    SHORTCUTS,
-    commandAt,
-    formatShortcut,
-    type CommandId,
-    type Shortcut,
-  } from "./lib/commands";
+  import { isMac, isWindows, modifierLabel } from "./lib/platform";
+  import { SHORTCUTS, formatShortcut, type CommandId, type Shortcut } from "./lib/commands";
   import { formatZoom } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
@@ -81,14 +69,7 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
-  import {
-    isEraser,
-    isPaintTool,
-    slotForLetter,
-    slotOf,
-    type ToolId,
-    type ToolSlot,
-  } from "./lib/tools";
+  import { isEraser, isPaintTool, slotOf, slotTool, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
@@ -101,6 +82,7 @@
   import { baseName, recentLabels } from "./lib/recent";
   import { exportFileName, formatOfPath, formatOrder, isVectorPath } from "./lib/fileNames";
   import { cycled, moveTab as moveTabTo, tabSlot, upsert as upsertTab } from "./lib/tabs";
+  import { isTextField, keyAction } from "./lib/keymap";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -507,10 +489,7 @@
 
   /** A tool's key: the slot's tool used last, or with Shift the next variant (Photoshop). */
   function selectSlot(slot: ToolSlot, next: boolean) {
-    const shown = toolChoices[slot.key] ?? slot.tools[0].id;
-    if (!next || slot.tools.length < 2) return selectTool(shown);
-    const index = slot.tools.findIndex((entry) => entry.id === shown);
-    selectTool(slot.tools[(index + 1) % slot.tools.length].id);
+    selectTool(slotTool(slot, toolChoices[slot.key], next));
   }
 
   // Selections (ADR 0024): the marquees draw shapes that the engine turns into masks.
@@ -3349,102 +3328,66 @@
 
   // --- Keyboard --------------------------------------------------------------------------------
 
-  function isTextField(target: EventTarget | null): boolean {
-    return (
-      target instanceof HTMLTextAreaElement ||
-      (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
-    );
-  }
-
   /** Edit > Keyboard Shortcuts is open. */
   let shortcutsList = $state(false);
 
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && aiTask) {
-      e.preventDefault();
-      cancelAiTask();
-      return;
-    }
-    if (e.key === "Escape" && layerTransfer) {
-      endTransfer();
-      return;
-    }
-    if (e.key === "Escape" && tabDrag) {
-      cancelTabDrag();
-      return;
-    }
-    if (e.ctrlKey && e.key === "Tab") {
-      // Ctrl+Tab everywhere, like browsers and most editors (Cmd+Tab belongs to macOS).
-      e.preventDefault();
-      cycleTabs(e.shiftKey ? -1 : 1);
-      return;
-    }
-    // The tools: a letter alone (V, M, C), Shift+letter for the next variant, as in Photoshop;
-    // not while typing.
-    if (!hasShortcutModifier(e) && !e.altKey && !isTextField(e.target)) {
-      const slot = slotForLetter(shortcutLetter(e));
-      if (slot) {
-        e.preventDefault();
-        if (!e.repeat) selectSlot(slot, e.shiftKey);
+    const action = keyAction(
+      {
+        key: e.key,
+        code: e.code,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        repeat: e.repeat,
+        inTextField: isTextField(e.target),
+        inSelect: e.target instanceof HTMLSelectElement,
+      },
+      {
+        mac: isMac,
+        tool,
+        aiTask: aiTask !== null,
+        layerTransfer: layerTransfer !== null,
+        tabDrag: tabDrag !== null,
+        dialogOpen: (modal) => !!document.querySelector(modal ? "dialog:modal" : "dialog[open]"),
+        command: (id) => commands[id],
+      },
+    );
+    if (action.kind === "none") return;
+    if (action.kind === "endLayerTransfer") return endTransfer();
+    if (action.kind === "cancelTabDrag") return cancelTabDrag();
+    e.preventDefault();
+    switch (action.kind) {
+      case "cancelAiTask":
+        return cancelAiTask();
+      case "cycleTabs":
+        return cycleTabs(action.step);
+      case "toolSlot":
+        return selectSlot(action.slot, action.next);
+      case "paintSize": {
+        const options = action.eraser ? eraserOptions : brushOptions;
+        options.size = stepBrush(options.size, action.larger);
         return;
       }
+      case "paintHardness": {
+        const options = action.eraser ? eraserOptions : brushOptions;
+        const hardness = options.hardness + (action.larger ? 0.25 : -0.25);
+        options.hardness = Math.min(Math.max(hardness, 0), 1);
+        return;
+      }
+      case "defaultColors":
+        colors = { foreground: "#000000", background: "#ffffff" };
+        return;
+      case "swapColors":
+        colors = { foreground: colors.background, background: colors.foreground };
+        return;
+      case "quickSelectionSize":
+        quick.size = stepBrush(quick.size, action.larger);
+        return;
+      case "command":
+        return commands[action.id].run();
     }
-    // [ and ] with the Brush and the Eraser: their size; with Shift, their hardness by
-    // quarters (Photoshop's steps).
-    if (
-      isPaintTool(tool) &&
-      (e.code === "BracketLeft" || e.code === "BracketRight") &&
-      !hasShortcutModifier(e) &&
-      !e.altKey &&
-      !isTextField(e.target)
-    ) {
-      e.preventDefault();
-      const options = isEraser(tool) ? eraserOptions : brushOptions;
-      const larger = e.code === "BracketRight";
-      if (e.shiftKey) {
-        options.hardness = Math.min(Math.max(options.hardness + (larger ? 0.25 : -0.25), 0), 1);
-      } else options.size = stepBrush(options.size, larger);
-      return;
-    }
-    // D: the default colors (black and white); X: swap them, as in Photoshop.
-    const colorLetter = shortcutLetter(e);
-    if (
-      (colorLetter === "d" || colorLetter === "x") &&
-      !hasShortcutModifier(e) &&
-      !e.altKey &&
-      !e.shiftKey &&
-      !isTextField(e.target)
-    ) {
-      e.preventDefault();
-      if (colorLetter === "d") colors = { foreground: "#000000", background: "#ffffff" };
-      else colors = { foreground: colors.background, background: colors.foreground };
-      return;
-    }
-    // [ and ]: the brush size, by the physical keys as in Photoshop (^ and $ on AZERTY).
-    if (
-      tool === "quickSelection" &&
-      (e.code === "BracketLeft" || e.code === "BracketRight") &&
-      !hasShortcutModifier(e) &&
-      !e.altKey &&
-      !isTextField(e.target)
-    ) {
-      e.preventDefault();
-      quick.size = stepBrush(quick.size, e.code === "BracketRight");
-      return;
-    }
-    // The commands' shortcuts (`SHORTCUTS`).
-    const id = commandAt(e, isMac);
-    if (!id) return;
-    const command = commands[id];
-    // Text fields keep their own keys (undo, copy, paste…), a list its letters and Delete, and
-    // a modal dialog all of them.
-    if (!command.whileTyping && isTextField(e.target)) return;
-    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
-    if (plain && e.target instanceof HTMLSelectElement) return;
-    if (document.querySelector(plain ? "dialog[open]" : "dialog:modal")) return;
-    e.preventDefault();
-    if ((e.repeat && !command.repeats) || command.disabled) return;
-    command.run();
   }
 
   onMount(() => {
