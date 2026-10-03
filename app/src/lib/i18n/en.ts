@@ -7,6 +7,8 @@ const en = {
   "menu.file.new": "New…",
   "menu.file.open": "Open…",
   "menu.file.openFolder": "Open Folder…",
+  "menu.file.openRecent": "Open Recent",
+  "menu.file.clearRecent": "Clear Recent File List",
   "menu.file.importLayers": "Import as Layers…",
   "menu.file.close": "Close",
   "menu.file.closeAll": "Close All",
@@ -260,6 +262,7 @@ const en = {
   "welcome.open": "Open…",
   "welcome.new": "New document…",
   "welcome.drop": "…or drop files here",
+  "welcome.recent": "Recent",
 
   "drop.newTab": "Drop to open in a new tab",
   "drop.layer": "Drop to add as a layer",
