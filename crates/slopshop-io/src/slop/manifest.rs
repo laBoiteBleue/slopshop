@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 15;
+pub(crate) const SCHEMA_MINOR: u32 = 16;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -102,8 +102,24 @@ pub(crate) struct DocumentDto {
     /// Pixels per inch (ADR 0028). Absent before schema 0.11: 72, Photoshop's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<f64>,
+    /// Selections saved by name (schema 0.16), in the order they were saved. Absent: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selections: Vec<SavedSelectionDto>,
+    /// The saved selections' id counter (schema 0.16). Absent: one above the largest id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_selection_id: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// A selection saved by name (Select > Save Selection, schema 0.16): its mask is a gray
+/// coverage image at the document origin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SavedSelectionDto {
+    pub id: u64,
+    pub name: String,
+    /// The key of its image.
+    pub image: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

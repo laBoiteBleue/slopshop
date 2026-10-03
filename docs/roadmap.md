@@ -224,7 +224,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Color Range: Localized (each sampled color near its sample), Sample All Layers
 - [x] Live preview of Select > Modify (a gesture replaced at each amount)
 - [x] Quick Mask feedback: its label, its own gray swatches as Add / Remove, overlay opacity
-- [ ] Saved selections: named objects in the document and `.slop`, Save / Load Selection
+- [x] Saved selections: named objects in the document and `.slop` (schema 0.16), Save / Load
+      Selection, transformed with the canvas
 - [ ] Right panels: the folding accordion of tab icons, then a Selections panel
 - [ ] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
       outputs

@@ -398,7 +398,8 @@ pub enum Pasted {
     /// The pasted layers, in `document` (a new tab when `new_tab`); `ids` are the new
     /// top-level layers (the group of a Paste Into).
     Layers {
-        document: DocumentView,
+        /// Boxed: a document view is much larger than the other variants.
+        document: Box<DocumentView>,
         new_tab: bool,
         ids: Vec<u64>,
     },
@@ -450,7 +451,7 @@ pub async fn paste(
         let document = state.add_document_with(session, Some(name), warnings, None)?;
         let ids = document.layers.iter().map(|l| l.id).collect();
         return Ok(Pasted::Layers {
-            document,
+            document: Box::new(document),
             new_tab: true,
             ids,
         });
@@ -458,7 +459,7 @@ pub async fn paste(
     let target = documents.get_mut(document_id)?;
     match place(target, copied, &name, kind, view, at)? {
         Some(ids) => Ok(Pasted::Layers {
-            document: target.view(),
+            document: Box::new(target.view()),
             new_tab: false,
             ids,
         }),

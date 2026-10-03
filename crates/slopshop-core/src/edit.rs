@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace};
 use crate::color::LinearRgba;
-use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
+use crate::document::{
+    Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH, SavedSelection,
+    SavedSelectionId,
+};
 use crate::geom::Size;
 use crate::raster::RasterImage;
 use crate::stack::Pixels;
@@ -124,6 +127,24 @@ pub enum Edit {
     SetSelection {
         selection: Option<crate::selection::Selection>,
     },
+    /// Select > Save Selection: keep `saved` at `index` among the saved selections. Its id comes
+    /// from [`Document::allocate_saved_selection_id`] and is not in use.
+    InsertSavedSelection {
+        index: usize,
+        saved: SavedSelection,
+    },
+    RemoveSavedSelection {
+        id: SavedSelectionId,
+    },
+    RenameSavedSelection {
+        id: SavedSelectionId,
+        name: String,
+    },
+    /// A saved selection's mask (saved again under its name; canvas operations).
+    SetSavedSelection {
+        id: SavedSelectionId,
+        selection: crate::selection::Selection,
+    },
     /// Several edits applied in order as a single unit: all of them or none.
     Batch(Vec<Edit>),
 }
@@ -178,6 +199,9 @@ pub enum EditError {
     },
     /// A resolution out of range (ADR 0028).
     InvalidResolution,
+    UnknownSavedSelection(SavedSelectionId),
+    /// A saved selection's id not handed out by this document, or already in use.
+    InvalidSavedSelectionId(SavedSelectionId),
 }
 
 impl fmt::Display for EditError {
@@ -220,6 +244,10 @@ impl fmt::Display for EditError {
             }
             EditError::NoLayers => write!(f, "no layers given"),
             EditError::InvalidResolution => write!(f, "invalid resolution"),
+            EditError::UnknownSavedSelection(id) => write!(f, "unknown {id}"),
+            EditError::InvalidSavedSelectionId(id) => {
+                write!(f, "{id} was not allocated by this document or is in use")
+            }
             EditError::InvalidTransform => {
                 write!(f, "a transform must be finite and invertible")
             }
@@ -297,6 +325,38 @@ impl Edit {
             Edit::SetSelection { selection } => Edit::SetSelection {
                 selection: doc.set_selection(selection),
             },
+            Edit::InsertSavedSelection { index, saved } => {
+                let id = saved.id;
+                let allocated = id.get() != 0 && id.get() < doc.next_saved_selection_id();
+                if !allocated || doc.saved_selection(id).is_some() {
+                    return Err(EditError::InvalidSavedSelectionId(id));
+                }
+                let len = doc.saved_selections().len();
+                if index > len {
+                    return Err(EditError::IndexOutOfRange { index, len });
+                }
+                doc.saved_selections_mut().insert(index, saved);
+                Edit::RemoveSavedSelection { id }
+            }
+            Edit::RemoveSavedSelection { id } => {
+                let list = doc.saved_selections_mut();
+                let index = list
+                    .iter()
+                    .position(|s| s.id == id)
+                    .ok_or(EditError::UnknownSavedSelection(id))?;
+                let saved = list.remove(index);
+                Edit::InsertSavedSelection { index, saved }
+            }
+            Edit::RenameSavedSelection { id, name } => {
+                let saved = saved_selection_mut(doc, id)?;
+                let name = std::mem::replace(&mut saved.name, name);
+                Edit::RenameSavedSelection { id, name }
+            }
+            Edit::SetSavedSelection { id, selection } => {
+                let saved = saved_selection_mut(doc, id)?;
+                let selection = std::mem::replace(&mut saved.selection, selection);
+                Edit::SetSavedSelection { id, selection }
+            }
             Edit::SetCanvasSize { size } => {
                 if size.is_empty() {
                     return Err(EditError::EmptyCanvas);
@@ -489,6 +549,16 @@ impl Edit {
 fn siblings(doc: &Document, parent: Option<LayerId>) -> Result<&[Layer], EditError> {
     doc.children_of(parent)
         .ok_or_else(|| parent_error(doc, parent))
+}
+
+fn saved_selection_mut(
+    doc: &mut Document,
+    id: SavedSelectionId,
+) -> Result<&mut SavedSelection, EditError> {
+    doc.saved_selections_mut()
+        .iter_mut()
+        .find(|s| s.id == id)
+        .ok_or(EditError::UnknownSavedSelection(id))
 }
 
 fn siblings_mut(doc: &mut Document, parent: Option<LayerId>) -> Result<&mut Vec<Layer>, EditError> {
@@ -742,6 +812,23 @@ impl Edit {
         let mut edits = vec![Edit::SetCanvasSize { size }];
         if doc.selection().is_some() {
             edits.push(Edit::SetSelection { selection: None });
+        }
+        // Saved selections follow the image, as Photoshop's alpha channels do (resampled like
+        // a layer, exact for whole-pixel moves); one left with nothing keeps an empty mask.
+        for saved in doc.saved_selections() {
+            let image = crate::selection::transformed(size, saved.selection.image(), by)
+                .map_err(|_| EditError::InvalidTransform)?;
+            let image = match image {
+                Some(image) => image,
+                None => crate::selection::uniform_mask(size, false)
+                    .map_err(|_| EditError::EmptyCanvas)?,
+            };
+            let selection =
+                crate::selection::Selection::new(Arc::new(image)).ok_or(EditError::InvalidMask)?;
+            edits.push(Edit::SetSavedSelection {
+                id: saved.id,
+                selection,
+            });
         }
         for layer in doc.layers() {
             let transform = layer.transform.then(by).snapped();
@@ -1580,6 +1667,154 @@ mod tests {
             Edit::crop(&doc, [0, 0, -2, 3]).and_then(|e| e.apply(&mut doc)),
             Err(EditError::EmptyCanvas)
         );
+    }
+
+    /// A selection of `rect` (left, top, right, bottom) on a canvas of `size`.
+    fn selection_of(size: Size, rect: [f64; 4]) -> crate::selection::Selection {
+        use crate::selection::{Combine, EdgeOptions, Shape, select_shape};
+        let [left, top, right, bottom] = rect;
+        let shape = Shape::Rectangle {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        let image = select_shape(size, None, &shape, EdgeOptions::default(), Combine::Replace)
+            .unwrap()
+            .unwrap();
+        crate::selection::Selection::new(Arc::new(image)).unwrap()
+    }
+
+    #[test]
+    fn saved_selections_are_kept_renamed_replaced_and_removed_undoably() {
+        let size = Size::new(100, 80);
+        let mut doc = Document::new(size);
+        let id = doc.allocate_saved_selection_id();
+        let hair = selection_of(size, [10.0, 10.0, 30.0, 30.0]);
+        let saved = SavedSelection {
+            id,
+            name: "Hair".into(),
+            selection: hair.clone(),
+        };
+        let undo_insert = Edit::InsertSavedSelection {
+            index: 0,
+            saved: saved.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.saved_selections(), std::slice::from_ref(&saved));
+        // Its id is used now, and ids are only those handed out.
+        let again = Edit::InsertSavedSelection {
+            index: 0,
+            saved: saved.clone(),
+        };
+        assert_eq!(
+            again.apply(&mut doc),
+            Err(EditError::InvalidSavedSelectionId(id))
+        );
+        let unknown = SavedSelectionId::from_raw(99);
+        let forged = Edit::InsertSavedSelection {
+            index: 0,
+            saved: SavedSelection {
+                id: unknown,
+                ..saved.clone()
+            },
+        };
+        assert_eq!(
+            forged.apply(&mut doc),
+            Err(EditError::InvalidSavedSelectionId(unknown))
+        );
+        // Renamed, replaced, each undone exactly.
+        let undo_rename = Edit::RenameSavedSelection {
+            id,
+            name: "Hair 2".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.saved_selection(id).unwrap().name, "Hair 2");
+        let shirt = selection_of(size, [40.0, 40.0, 60.0, 70.0]);
+        let undo_set = Edit::SetSavedSelection {
+            id,
+            selection: shirt.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.saved_selection(id).unwrap().selection, shirt);
+        undo_set.apply(&mut doc).unwrap();
+        assert_eq!(doc.saved_selection(id).unwrap().selection, hair);
+        undo_rename.apply(&mut doc).unwrap();
+        assert_eq!(doc.saved_selection(id).unwrap().name, "Hair");
+        // Removed, and put back where it was.
+        let undo_remove = Edit::RemoveSavedSelection { id }.apply(&mut doc).unwrap();
+        assert!(doc.saved_selections().is_empty());
+        assert_eq!(
+            Edit::RemoveSavedSelection { id }.apply(&mut doc),
+            Err(EditError::UnknownSavedSelection(id))
+        );
+        undo_remove.apply(&mut doc).unwrap();
+        assert_eq!(doc.saved_selections(), [saved]);
+        undo_insert.apply(&mut doc).unwrap();
+        assert!(doc.saved_selections().is_empty());
+        // A file's saved selections: ids unique, below the counter, not 0.
+        let restored = |id: u64, next: u64| {
+            Document::new(size).with_saved_selections(
+                vec![SavedSelection {
+                    id: SavedSelectionId::from_raw(id),
+                    name: "a".into(),
+                    selection: hair.clone(),
+                }],
+                next,
+            )
+        };
+        assert!(restored(3, 4).is_ok());
+        assert!(restored(0, 4).is_err());
+        assert!(restored(4, 4).is_err());
+    }
+
+    #[test]
+    fn saved_selections_follow_crops_and_image_size() {
+        let size = Size::new(100, 80);
+        let mut doc = Document::new(size);
+        let id = doc.allocate_saved_selection_id();
+        Edit::InsertSavedSelection {
+            index: 0,
+            saved: SavedSelection {
+                id,
+                name: "Subject".into(),
+                selection: selection_of(size, [60.0, 40.0, 90.0, 70.0]),
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let mask = |doc: &Document| Arc::clone(doc.saved_selection(id).unwrap().selection.image());
+        // Cropped to its bottom-right part: it moves with the image.
+        let crop = Edit::crop(&doc, [50, 30, 50, 50]).unwrap();
+        let undo = crop.apply(&mut doc).unwrap();
+        let cropped = mask(&doc);
+        assert_eq!(cropped.size(), Size::new(50, 50));
+        assert_eq!(cropped.gray_at(10, 10), 1.0);
+        assert_eq!(cropped.gray_at(9, 10), 0.0);
+        assert_eq!(cropped.gray_at(39, 39), 1.0);
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(mask(&doc).size(), size);
+        assert_eq!(mask(&doc).gray_at(60, 40), 1.0);
+        // Twice the size: resampled with the image.
+        Edit::resize_image(&doc, Size::new(200, 160))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let doubled = mask(&doc);
+        assert_eq!(doubled.size(), Size::new(200, 160));
+        assert!(doubled.gray_at(150, 110) > 0.99);
+        assert!(doubled.gray_at(110, 110) < 0.01);
+        // Cropped away entirely: kept, with nothing selected.
+        Edit::crop(&doc, [0, 0, 10, 10])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let empty = mask(&doc);
+        assert_eq!(empty.size(), Size::new(10, 10));
+        assert!(crate::selection::bounds(&empty).is_none());
     }
 
     #[test]

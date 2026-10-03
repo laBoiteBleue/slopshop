@@ -10,9 +10,13 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use slopshop_core::adjust::PARAM_COUNT;
 use slopshop_core::color::LinearRgba;
-use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
+use slopshop_core::document::{
+    Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH, SavedSelection,
+    SavedSelectionId,
+};
 use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
+use slopshop_core::selection::Selection;
 use slopshop_core::{BlendMode, BlendSpace};
 
 use super::format::{
@@ -292,6 +296,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
         }
     }
     let blend_space = document_blend_space(doc)?;
+    let (saved, next_saved) = saved_selections(doc, &rasters)?;
     let document = Document::restore(
         Size::new(doc.size[0], doc.size[1]),
         doc.working_space.to_space(),
@@ -300,6 +305,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
         doc.next_node_id,
     )
     .and_then(|document| document.with_resolution(document_resolution(doc)))
+    .and_then(|document| document.with_saved_selections(saved, next_saved))
     .map_err(FileError::Document)?;
     Ok((document, index, records, residue))
 }
@@ -694,6 +700,39 @@ pub(super) fn document_blend_space(doc: &DocumentDto) -> Result<BlendSpace, File
         Some(id) => BlendSpace::from_id(id)
             .ok_or_else(|| FileError::UnknownNodeType(format!("blend space {id}"))),
     }
+}
+
+/// The selections saved by name (schema 0.16) and their id counter (one above the largest id
+/// when the file does not say). Their ids are checked when the document is restored.
+fn saved_selections(
+    doc: &DocumentDto,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
+) -> Result<(Vec<SavedSelection>, u64), FileError> {
+    let saved = doc
+        .selections
+        .iter()
+        .map(|dto| {
+            let image = Hash::from_key(&dto.image)
+                .and_then(|key| rasters.get(&key))
+                .ok_or_else(|| corrupt("a saved selection with a missing image"))?;
+            let selection = Selection::new(Arc::clone(image))
+                .ok_or_else(|| corrupt("a saved selection is not gray"))?;
+            Ok(SavedSelection {
+                id: SavedSelectionId::from_raw(dto.id),
+                name: dto.name.clone(),
+                selection,
+            })
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    let next = doc.next_selection_id.unwrap_or_else(|| {
+        doc.selections
+            .iter()
+            .map(|s| s.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    });
+    Ok((saved, next))
 }
 
 /// The document's resolution, pixels per inch; 72 before schema 0.11 (ADR 0028). Out of range,

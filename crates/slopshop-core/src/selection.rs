@@ -197,17 +197,19 @@ pub fn invert(
     Ok(mask.into_image())
 }
 
-/// `current` moved by (`dx`, `dy`) whole pixels on a canvas of `canvas` pixels, what leaves the
-/// canvas dropped (the Move tool moving selected pixels): values are copied exactly, and a tile
-/// that only reads uniform tiles of one value stays uniform (shared). `None` when nothing stays
-/// selected.
+/// `current` moved by (`dx`, `dy`) whole pixels onto a canvas of `canvas` pixels (its own size,
+/// or the new one after Crop or Canvas Size), what leaves the canvas dropped (the Move tool
+/// moving selected pixels): values are copied exactly, and a tile that only reads uniform tiles
+/// of one value stays uniform (shared). `None` when nothing stays selected.
 pub fn translated(
     canvas: Size,
     current: &RasterImage,
     dx: i64,
     dy: i64,
 ) -> Result<Option<RasterImage>, SelectionError> {
-    let source = Mask::from_image(canvas, current)?;
+    // Read at its own size: the canvas may have changed since (Crop, Canvas Size).
+    let source = Mask::from_image(current.size(), current)?;
+    let from = source.size;
     let mut moved = Mask::new(canvas)?;
     let t = T as i64;
     let mut work: Vec<(usize, Tile)> = (0..moved.tiles.len())
@@ -220,17 +222,17 @@ pub fn translated(
         let (x0, y0) = ((col * T) as i64 - dx, (row * T) as i64 - dy);
         let (x1, y1) = (x0 + w as i64, y0 + h as i64);
         let inside =
-            x0 >= 0 && y0 >= 0 && x1 <= i64::from(canvas.width) && y1 <= i64::from(canvas.height);
+            x0 >= 0 && y0 >= 0 && x1 <= i64::from(from.width) && y1 <= i64::from(from.height);
         let outside =
-            x1 <= 0 || y1 <= 0 || x0 >= i64::from(canvas.width) || y0 >= i64::from(canvas.height);
+            x1 <= 0 || y1 <= 0 || x0 >= i64::from(from.width) || y0 >= i64::from(from.height);
         if outside {
             return;
         }
         // Uniform when every source tile it reads holds one constant (0 outside the canvas).
         let mut constant = None;
         let mut uniform = true;
-        'reads: for r in y0.max(0) / t..=(y1 - 1).min(i64::from(canvas.height) - 1) / t {
-            for c in x0.max(0) / t..=(x1 - 1).min(i64::from(canvas.width) - 1) / t {
+        'reads: for r in y0.max(0) / t..=(y1 - 1).min(i64::from(from.height) - 1) / t {
+            for c in x0.max(0) / t..=(x1 - 1).min(i64::from(from.width) - 1) / t {
                 let value = source.tiles[r as usize * source.columns + c as usize].constant();
                 uniform = match (value, constant) {
                     (None, _) => false,

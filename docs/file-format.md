@@ -227,6 +227,13 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   `resolution` (0.11): pixels per inch, how large the document prints ([ADR
   0028](adr/0028-resolution.md)); metadata only, in `[1, 100000]`; absent in older files,
   which read as 72 (Photoshop's default).
+  `selections` (0.16): the selections saved by name (Select > Save Selection), in the order
+  they were saved, each `{ "id": 2, "name": "Hair", "image": "b3:…" }`: a unique id below
+  `next_selection_id`, and the key of a gray coverage image (the selection's mask, at the
+  document origin, normally the canvas's size). Absent: none. `next_selection_id` (0.16): the
+  next saved selection id to allocate; absent, one above the largest id. Their images are
+  stored like the layers'. A writer of an older schema drops them (it keeps unknown fields but
+  not images no node references): before 1.0, compatibility may break.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.

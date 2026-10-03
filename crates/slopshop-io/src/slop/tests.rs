@@ -208,6 +208,12 @@ fn assert_same(a: &Document, b: &Document) {
     assert_eq!(a.resolution(), b.resolution());
     assert_eq!(a.next_layer_id(), b.next_layer_id());
     assert_same_layers(a.layers(), b.layers());
+    assert_eq!(a.next_saved_selection_id(), b.next_saved_selection_id());
+    assert_eq!(a.saved_selections().len(), b.saved_selections().len());
+    for (s, t) in a.saved_selections().iter().zip(b.saved_selections()) {
+        assert_eq!((s.id, &s.name), (t.id, &t.name));
+        assert_same_image(s.selection.image(), t.selection.image(), &s.name);
+    }
 }
 
 /// Same size, format and tile bytes at every level.
@@ -1128,6 +1134,71 @@ fn write_golden_fixture() {
     ));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     SlopFile::create(&path, &golden_document()).unwrap();
+}
+
+#[test]
+fn saved_selections_round_trip_with_their_names_order_and_ids() {
+    use slopshop_core::document::{SavedSelection, SavedSelectionId};
+    let mut doc = sample_document();
+    let size = doc.size();
+    let coverage = |x0: u32, x1: u32| -> Vec<u8> {
+        (0..size.height)
+            .flat_map(|_| {
+                (0..size.width).flat_map(move |x| {
+                    let v: u16 = if (x0..x1).contains(&x) {
+                        u16::MAX
+                    } else {
+                        x as u16 * 7
+                    };
+                    v.to_ne_bytes()
+                })
+            })
+            .collect()
+    };
+    let mask = |x0, x1| {
+        let image = RasterImage::from_pixels(
+            size,
+            slopshop_core::selection::SELECTION_FORMAT,
+            &coverage(x0, x1),
+        )
+        .unwrap();
+        Selection::new(Arc::new(image)).unwrap()
+    };
+    // Saved, then one removed: ids keep their gaps, the counter goes on.
+    for (name, x0, x1) in [("Hair", 1, 4), ("Shirt", 3, 9), ("Sky", 0, 2)] {
+        let id = doc.allocate_saved_selection_id();
+        let index = doc.saved_selections().len();
+        let saved = SavedSelection {
+            id,
+            name: name.into(),
+            selection: mask(x0, x1),
+        };
+        Edit::InsertSavedSelection { index, saved }
+            .apply(&mut doc)
+            .unwrap();
+    }
+    Edit::RemoveSavedSelection {
+        id: SavedSelectionId::from_raw(2),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("saved-selections.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let names: Vec<&str> = loaded
+        .saved_selections()
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, ["Hair", "Sky"]);
+    assert_eq!(loaded.next_saved_selection_id(), 4);
+    // A document without any writes none, and reads back none.
+    let plain = sample_document();
+    SlopFile::create(&path, &plain).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert!(loaded.saved_selections().is_empty());
+    fs::remove_file(&path).ok();
 }
 
 #[test]
