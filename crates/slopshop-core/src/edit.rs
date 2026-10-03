@@ -15,6 +15,7 @@ use crate::blend::{BlendMode, BlendSpace};
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
 use crate::geom::Size;
 use crate::raster::RasterImage;
+use crate::stack::Pixels;
 use crate::transform::Affine;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -305,11 +306,11 @@ impl Edit {
                 };
                 let before = kept
                     .clone()
-                    .unwrap_or_else(|| crate::stack::LayerStack::new(Arc::clone(image)));
+                    .unwrap_or_else(|| crate::stack::LayerStack::new(image.get()));
                 let shown = match shown {
                     // Nothing applied: the original itself, not a copy of it.
                     _ if stack.is_empty() && stack.format() == stack.original().format() => {
-                        Arc::clone(stack.original())
+                        Pixels::ready(Arc::clone(stack.original()))
                     }
                     Some(shown) => {
                         if shown.size() != stack.original().size()
@@ -317,9 +318,11 @@ impl Edit {
                         {
                             return Err(EditError::InvalidPaint);
                         }
-                        shown
+                        Pixels::ready(shown)
                     }
-                    None => stack.reevaluate(&before, image).map_err(EditError::Stack)?,
+                    // Evaluated when first asked, from what the layer shows now: the edit is
+                    // instant, and the renderer shows the stack meanwhile (ADR 0029).
+                    None => Pixels::pending(stack.clone(), Some((image.clone(), before.clone()))),
                 };
                 *image = shown;
                 *kept = (!stack.is_empty()).then_some(stack);
@@ -1994,7 +1997,7 @@ mod tests {
     /// What layer `id` shows and its stack.
     fn shown(doc: &Document, id: LayerId) -> (Arc<RasterImage>, Option<LayerStack>) {
         match &doc.layer(id).unwrap().content {
-            LayerContent::Raster { image, stack } => (Arc::clone(image), stack.clone()),
+            LayerContent::Raster { image, stack } => (image.get(), stack.clone()),
             _ => panic!("a raster layer"),
         }
     }

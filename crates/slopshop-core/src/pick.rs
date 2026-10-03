@@ -80,11 +80,12 @@ fn covers(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
     match &layer.content {
         LayerContent::Fill { color } => color.a >= PICK_COVERAGE,
         LayerContent::Raster { image, .. } => {
+            let image = image.get();
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).
             let replaced = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
-            let alpha = sample_alpha(image, transform, x, y);
+            let alpha = sample_alpha(&image, transform, x, y);
             if replaced {
-                inside(image, transform, x, y)
+                inside(&image, transform, x, y)
             } else {
                 alpha >= PICK_COVERAGE
             }
@@ -140,7 +141,7 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
         match &layer.content {
             LayerContent::Group { children, .. } => collect_bounds(children, transform, out),
             LayerContent::Raster { image, .. } => {
-                if let Some(rect) = image.content_bounds() {
+                if let Some(rect) = image.get().content_bounds() {
                     // The box around the transformed content, in whole pixels.
                     let [x0, y0, x1, y1] = transform.map_rect([
                         f64::from(rect.x),
@@ -237,7 +238,7 @@ mod tests {
             RasterImage::from_placed(Size::new(20, 20), format, rect, &pixels, &[0; 4]).unwrap();
         LayerContent::Raster {
             stack: None,
-            image: Arc::new(image),
+            image: crate::stack::Pixels::ready(Arc::new(image)),
         }
     }
 

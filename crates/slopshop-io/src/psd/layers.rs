@@ -1301,7 +1301,7 @@ fn build_layer(
     Ok(Built {
         content: LayerContent::Raster {
             stack: None,
-            image: Arc::new(image),
+            image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
         },
         mask: build_mask(record, raw, context)?,
         cropped,

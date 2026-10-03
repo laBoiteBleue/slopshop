@@ -321,14 +321,14 @@ fn write_stored(values: [f64; 4], out: &mut [u8]) {
 
 /// The pixels of a layer of one format as premultiplied working-space colors, and back.
 #[derive(Debug, Clone, Copy)]
-struct Pixels {
+struct LayerColors {
     gray: bool,
     to_working: Mat3,
     from_working: Mat3,
     luma: [f64; 3],
 }
 
-impl Pixels {
+impl LayerColors {
     fn new(format: PixelFormat) -> Self {
         let space = format.color_space;
         let gray = format.layout.is_gray();
@@ -391,7 +391,7 @@ struct PaintPixels {
     format: PixelFormat,
     /// `P`'s pixels are the blend values as they are (see [`blends_as_stored`]).
     stored: bool,
-    pixels: Pixels,
+    pixels: LayerColors,
     codec: Codec,
     keep: SampleType,
     bpp: usize,
@@ -404,7 +404,7 @@ impl PaintPixels {
         Self {
             format,
             stored: blends_as_stored(stored_format(format), space),
-            pixels: Pixels::new(format),
+            pixels: LayerColors::new(format),
             bpp: codec.bytes_per_pixel,
             codec,
             keep: keep_sample(format.sample),
@@ -667,6 +667,12 @@ impl PaintEntry {
             )?),
         );
         Ok(self.images.get_or_init(|| images).clone())
+    }
+
+    /// [`Self::images`], borrowed: made now if they are not yet; `None` if they cannot be.
+    pub fn image_refs(&self) -> Option<&(Arc<RasterImage>, Arc<RasterImage>)> {
+        self.images().ok()?;
+        self.images.get()
     }
 
     /// Paint read back from its images ([`Self::images`]) on a layer of `layer_format`.
@@ -1003,7 +1009,7 @@ impl Step<'_> {
 struct Evaluator<'a> {
     size: Size,
     original: &'a RasterImage,
-    pixels: Pixels,
+    pixels: LayerColors,
     /// The original's codec, and the result's.
     source: Codec,
     target: Codec,
@@ -1043,7 +1049,7 @@ impl<'a> Evaluator<'a> {
         Self {
             size,
             original,
-            pixels: Pixels::new(format),
+            pixels: LayerColors::new(format),
             source: Codec::new(original.stored_format()),
             target: Codec::new(stored_format(format)),
             format: stored_format(format),
@@ -1250,6 +1256,139 @@ impl<'a> Evaluator<'a> {
             .filter_map(|(coord, tile)| tile.map(|t| (coord, t)))
             .collect()
     }
+}
+
+/// What a raster layer shows: its pixels, or the result of its stack, evaluated on the CPU
+/// when first asked (ADR 0029, point 6) and kept, shared by every copy of the layer (history
+/// snapshots, the views being rendered). An edit of the stack is then instant; what needs the
+/// pixels (tools, thumbnails, export, the clipboard) evaluates them once, off the UI thread;
+/// meanwhile the renderer evaluates the stack itself on the GPU ([`Self::ready`] is `None`).
+#[derive(Debug, Clone)]
+pub struct Pixels(Arc<LazyPixels>);
+
+#[derive(Debug)]
+struct LazyPixels {
+    /// Changes with the pixels: what thumbnails and views know them by.
+    key: crate::raster::ImageId,
+    size: Size,
+    format: PixelFormat,
+    ready: OnceLock<Arc<RasterImage>>,
+    /// The stack to evaluate, and the pixels of an earlier state of it to start from (only the
+    /// tiles that differ are evaluated then); taken once evaluated.
+    pending: Mutex<Option<Recipe>>,
+    /// An evaluation was started on a thread of its own.
+    started: std::sync::atomic::AtomicBool,
+}
+
+/// A stack to evaluate, and the pixels of an earlier state of it with that state.
+type Recipe = (LayerStack, Option<(Pixels, LayerStack)>);
+
+impl Pixels {
+    /// Pixels already there.
+    pub fn ready(image: Arc<RasterImage>) -> Self {
+        let lazy = LazyPixels {
+            key: image.id(),
+            size: image.size(),
+            format: image.format(),
+            ready: OnceLock::new(),
+            pending: Mutex::new(None),
+            started: std::sync::atomic::AtomicBool::new(true),
+        };
+        let _ = lazy.ready.set(image);
+        Self(Arc::new(lazy))
+    }
+
+    /// The result of `stack`, evaluated when first asked; from `earlier` (pixels of another
+    /// state of the stack, and that state) when they are evaluated by then.
+    pub fn pending(stack: LayerStack, earlier: Option<(Pixels, LayerStack)>) -> Self {
+        Self(Arc::new(LazyPixels {
+            key: crate::raster::ImageId::next(),
+            size: stack.original().size(),
+            format: stack.format(),
+            ready: OnceLock::new(),
+            pending: Mutex::new(Some((stack, earlier))),
+            started: std::sync::atomic::AtomicBool::new(false),
+        }))
+    }
+
+    /// The pixels, evaluated now if they are not yet (on the calling thread: not the UI's).
+    pub fn get(&self) -> Arc<RasterImage> {
+        if let Some(image) = self.0.ready.get() {
+            return Arc::clone(image);
+        }
+        // A poisoned lock only means another evaluation panicked: evaluate again.
+        let mut pending = self
+            .0
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(image) = self.0.ready.get() {
+            return Arc::clone(image);
+        }
+        let image = match pending.take() {
+            Some((stack, earlier)) => evaluated(&stack, earlier),
+            // Invariant: pending until ready, and ready is checked under the lock.
+            None => unreachable!("pixels are pending until they are ready"),
+        };
+        Arc::clone(self.0.ready.get_or_init(|| image))
+    }
+
+    /// Start evaluating the pixels on a thread of their own, once, unless they are evaluated:
+    /// what shows the stack meanwhile (the renderer) gets the exact pixels soon, and what
+    /// needs them later does not wait.
+    pub fn evaluate_in_background(&self) {
+        use std::sync::atomic::Ordering;
+        if self.0.ready.get().is_some() || self.0.started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let pixels = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("stack pixels".to_owned())
+            .spawn(move || {
+                pixels.get();
+            });
+        // Without a thread, whoever needs the pixels evaluates them.
+        if spawned.is_err() {
+            self.0.started.store(false, Ordering::Release);
+        }
+    }
+
+    /// The pixels if they are evaluated, without waiting.
+    pub fn ready_image(&self) -> Option<&Arc<RasterImage>> {
+        self.0.ready.get()
+    }
+
+    /// Changes whenever the pixels do (a new `Pixels`): what thumbnails are known by.
+    pub fn key(&self) -> u64 {
+        self.0.key.get()
+    }
+
+    pub fn size(&self) -> Size {
+        self.0.size
+    }
+
+    pub fn format(&self) -> PixelFormat {
+        self.0.format
+    }
+
+    /// The same pixels (the same allocation).
+    pub fn ptr_eq(&self, other: &Pixels) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// `stack`'s result, from `earlier` when it is evaluated (else from the original).
+fn evaluated(stack: &LayerStack, earlier: Option<(Pixels, LayerStack)>) -> Arc<RasterImage> {
+    let result = match earlier {
+        Some((pixels, before)) => match pixels.ready_image() {
+            Some(shown) => stack.reevaluate(&before, shown),
+            None => stack.evaluate(),
+        },
+        None => stack.evaluate(),
+    };
+    // Invariant: a stack's tiles are of its own making (lengths and places checked when made),
+    // so evaluating it cannot fail; were it to, the original is shown rather than nothing.
+    result.unwrap_or_else(|_| Arc::clone(stack.original()))
 }
 
 impl PartialEq for LayerStack {

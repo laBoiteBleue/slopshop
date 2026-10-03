@@ -487,9 +487,9 @@ fn raster_content(
             .map_err(invalid)?;
         // The conversion is exact: the painted pixels are the stack's result.
         let shown = if image.format() == stack.format() {
-            Arc::clone(image)
+            slopshop_core::stack::Pixels::ready(Arc::clone(image))
         } else {
-            stack.evaluate().map_err(invalid)?
+            slopshop_core::stack::Pixels::pending(stack.clone(), None)
         };
         let stack = (!stack.is_empty()).then_some(stack);
         return Ok(LayerContent::Raster {
@@ -553,8 +553,10 @@ fn raster_content(
     if stack.is_empty() {
         return Ok(LayerContent::raster(Arc::clone(image)));
     }
+    // Evaluated when first asked: the document opens at once, the renderer showing the
+    // stack meanwhile (ADR 0029).
     Ok(LayerContent::Raster {
-        image: stack.evaluate().map_err(invalid)?,
+        image: slopshop_core::stack::Pixels::pending(stack.clone(), None),
         stack: Some(stack),
     })
 }

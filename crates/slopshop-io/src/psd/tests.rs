@@ -627,7 +627,9 @@ fn open_layers(name: &str, doc: &Doc) -> crate::ImportedLayers {
 
 fn raster(layer: &slopshop_core::Layer) -> &slopshop_core::RasterImage {
     match &layer.content {
-        slopshop_core::LayerContent::Raster { image, .. } => image,
+        slopshop_core::LayerContent::Raster { image, .. } => image
+            .ready_image()
+            .expect("imported pixels are there from the start"),
         other => panic!("not a raster: {other:?}"),
     }
 }

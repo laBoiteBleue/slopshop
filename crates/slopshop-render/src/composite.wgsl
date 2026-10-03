@@ -552,6 +552,35 @@ fn unpremultiply(c: vec4<f32>) -> vec3<f32> {
     return vec3<f32>(0.0);
 }
 
+// A premultiplied working-space color as premultiplied blend-space values (the encoded straight
+// color times alpha), and back (Blender::encode_premultiplied in core).
+fn to_premultiplied_blend(c: vec4<f32>, perceptual: bool) -> vec4<f32> {
+    if !perceptual {
+        return c;
+    }
+    if c.a <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(to_blend(c.rgb / c.a, true) * c.a, c.a);
+}
+
+fn from_premultiplied_blend(v: vec4<f32>, perceptual: bool) -> vec4<f32> {
+    let alpha = clamp(v.a, 0.0, 1.0);
+    if !perceptual {
+        return vec4<f32>(v.rgb, alpha);
+    }
+    if alpha <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(from_blend(v.rgb / v.a, true) * alpha, alpha);
+}
+
+// A stack's paint over what is below it (ADR 0029): P + k·B, in the blend space it was laid in.
+fn paint_over(below: vec4<f32>, p: vec4<f32>, k: f32, perceptual: bool) -> vec4<f32> {
+    let r = to_premultiplied_blend(p, perceptual) + k * to_premultiplied_blend(below, perceptual);
+    return from_premultiplied_blend(r, perceptual);
+}
+
 fn screen_channel(b: f32, s: f32) -> f32 {
     return b + s - b * s;
 }
@@ -1090,7 +1119,7 @@ fn resampled_rasters(layer: Layer, footprint: Footprint) -> array<Resampled, 2> 
     var out: array<Resampled, 2>;
     for (var part = 0u; part < 2u; part++) {
         var raster = layer;
-        var wanted = layer.kind == KIND_RASTER;
+        var wanted = samples_raster(layer);
         if part == 1u {
             raster = mask_view(layer);
             wanted = (layer.flags & FLAG_MASK) != 0u;
@@ -1102,10 +1131,22 @@ fn resampled_rasters(layer: Layer, footprint: Footprint) -> array<Resampled, 2> 
     return out;
 }
 
+// Whether a step samples its raster: a raster layer (unless its pixels are what its stack
+// steps made), a stack's original or its paint (ADR 0029).
+fn samples_raster(layer: Layer) -> bool {
+    return (layer.kind == KIND_RASTER && (layer.flags & FLAG_STACK_END) == 0u)
+        || layer.kind == KIND_STACK_BEGIN
+        || layer.kind == KIND_STACK_PAINT;
+}
+
 fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) -> vec4<f32> {
     var acc = vec4<f32>(0.0);
     var stack: array<vec4<f32>, MAX_GROUP_DEPTH>;
     var depth = 0u;
+    // A raster layer's stack being evaluated (ADR 0029): what its steps made so far, before
+    // the layer's opacity and mask, and where its original has pixels.
+    var local = vec4<f32>(0.0);
+    var local_inside = 0.0;
     for (var i = 0u; i < layer_count; i++) {
         let layer = layers[i];
         if layer.kind == KIND_GROUP_BEGIN {
@@ -1118,6 +1159,47 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             continue;
         }
         let resampled = resampled_rasters(layer, footprint);
+        // The raster's color where it is sampled (one place: see `resampled_rasters`), and the
+        // share of the footprint inside its image.
+        var sampled = layer.color;
+        var inside = 0.0;
+        if samples_raster(layer) {
+            if layer.resample_q.w != 0.0 {
+                let sample = resampled[0];
+                if footprint.exact {
+                    *count += sample.count;
+                }
+                sampled = sample.color;
+                inside = sample.inside;
+            } else {
+                if footprint.exact {
+                    sampled = texel_color(layer, footprint.texel - layer.offset, true, count);
+                } else {
+                    sampled = sample_raster(layer, footprint.lo, footprint.hi);
+                }
+                if (layer.flags & FLAG_IGNORE_ALPHA) != 0u || layer.kind == KIND_STACK_BEGIN {
+                    inside = inside_raster(layer, footprint);
+                }
+            }
+        }
+        if layer.kind == KIND_STACK_BEGIN {
+            local = sampled;
+            local_inside = inside;
+            continue;
+        }
+        if layer.kind == KIND_STACK_PAINT {
+            let k = mask_coverage(layer, footprint, resampled[1]);
+            local = paint_over(local, sampled, k, (layer.flags & FLAG_PERCEPTUAL) != 0u);
+            continue;
+        }
+        if layer.kind == KIND_STACK_EFFECT {
+            var coverage = 1.0;
+            if (layer.flags & FLAG_MASK) != 0u {
+                coverage = mask_coverage(layer, footprint, resampled[1]);
+            }
+            local = adjust_layer(layer, local, coverage);
+            continue;
+        }
         if layer.kind == KIND_ADJUST {
             var coverage = layer.opacity;
             if (layer.flags & FLAG_MASK) != 0u {
@@ -1153,25 +1235,12 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             }
             continue;
         }
-        var src = layer.color;
+        var src = sampled;
         if layer.kind == KIND_RASTER {
-            var inside = 0.0;
-            if layer.resample_q.w != 0.0 {
-                let sample = resampled[0];
-                if footprint.exact {
-                    *count += sample.count;
-                }
-                src = sample.color;
-                inside = sample.inside;
-            } else {
-                if footprint.exact {
-                    src = texel_color(layer, footprint.texel - layer.offset, true, count);
-                } else {
-                    src = sample_raster(layer, footprint.lo, footprint.hi);
-                }
-                if (layer.flags & FLAG_IGNORE_ALPHA) != 0u {
-                    inside = inside_raster(layer, footprint);
-                }
+            // Its pixels are what its stack steps made (ADR 0029).
+            if (layer.flags & FLAG_STACK_END) != 0u {
+                src = local;
+                inside = local_inside;
             }
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).
             // Only where the image is: outside it the layer stays transparent.

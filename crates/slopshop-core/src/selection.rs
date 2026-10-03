@@ -3280,7 +3280,7 @@ mod tests {
                 blend_mode: crate::blend::BlendMode::Normal,
                 content: LayerContent::Raster {
                     stack: None,
-                    image: Arc::new(image),
+                    image: crate::stack::Pixels::ready(Arc::new(image)),
                 },
                 mask: None,
                 clipped: false,

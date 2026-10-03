@@ -82,6 +82,9 @@ pub enum Step<'a> {
         /// From the layer's content (and mask) to the document: its transform composed with its
         /// groups' (ADR 0017).
         transform: Affine,
+        /// Display only: a raster layer whose pixels are what the stack steps before it made
+        /// (its stack not evaluated yet, ADR 0029), not its image.
+        stack: bool,
     },
     /// Apply an adjustment layer to the accumulator (ADR 0020), mixed with it by `opacity` × its
     /// mask (placed by `transform`).
@@ -106,6 +109,25 @@ pub enum Step<'a> {
         isolated: bool,
         atop: bool,
     },
+    /// Display only ([`display_steps`]): a raster layer whose stack is not evaluated yet (ADR
+    /// 0029) starts from its `original`, placed by `transform`, kept apart from the
+    /// accumulator; its entries follow (`StackPaint`, `StackEffect`), then its `Layer` step
+    /// blends the result as the layer's pixels.
+    StackOriginal {
+        original: &'a RasterImage,
+        transform: Affine,
+    },
+    /// Display only: paint of a stack, over what the steps since `StackOriginal` made.
+    StackPaint {
+        paint: &'a crate::stack::PaintEntry,
+        transform: Affine,
+    },
+    /// Display only: an effect of a stack, on what the steps since `StackOriginal` made; its
+    /// selection is read through `transform` then the effect's own placement.
+    StackEffect {
+        effect: &'a crate::stack::Effect,
+        transform: Affine,
+    },
 }
 
 /// The steps that composite `document`, bottom to top. Hidden layers, layers at opacity 0 and
@@ -118,10 +140,38 @@ pub fn steps(document: &Document) -> Vec<Step<'_>> {
     push_steps(
         document.layers(),
         Affine::IDENTITY,
-        document.size(),
+        Plan {
+            canvas: document.size(),
+            stacks: false,
+        },
         &mut steps,
     );
     steps
+}
+
+/// [`steps`] for the display: a raster layer whose stack is not evaluated yet (ADR 0029) is
+/// its original and its entries ([`Step::StackOriginal`] and the steps after it), evaluated by
+/// the renderer itself, before its `Layer` step. The layer's pixels are never waited for.
+pub fn display_steps(document: &Document) -> Vec<Step<'_>> {
+    let mut steps = Vec::new();
+    push_steps(
+        document.layers(),
+        Affine::IDENTITY,
+        Plan {
+            canvas: document.size(),
+            stacks: true,
+        },
+        &mut steps,
+    );
+    steps
+}
+
+/// What the steps are made for: the canvas, and whether stacks not evaluated yet are steps of
+/// their own ([`display_steps`]).
+#[derive(Debug, Clone, Copy)]
+struct Plan {
+    canvas: Size,
+    stacks: bool,
 }
 
 /// How a layer takes part in compositing.
@@ -241,8 +291,8 @@ fn hidden_layers(layers: &[Layer], parent: Affine, canvas: Size) -> Vec<bool> {
 
 /// Steps of sibling `layers` (in a space mapped to the document by `parent`): each base with the
 /// clipped layers above it (ADR 0016), except the ones hidden by an opaque layer above them.
-fn push_steps<'a>(layers: &'a [Layer], parent: Affine, canvas: Size, steps: &mut Vec<Step<'a>>) {
-    let hidden = hidden_layers(layers, parent, canvas);
+fn push_steps<'a>(layers: &'a [Layer], parent: Affine, plan: Plan, steps: &mut Vec<Step<'a>>) {
+    let hidden = hidden_layers(layers, parent, plan.canvas);
     let mut i = 0;
     while i < layers.len() {
         // A layer and the clipped layers above it (a clipped layer without a base is drawn as
@@ -260,19 +310,19 @@ fn push_steps<'a>(layers: &'a [Layer], parent: Affine, canvas: Size, steps: &mut
             continue;
         }
         if clipped.is_empty() {
-            push_layer(base, Role::Plain, parent, canvas, steps);
+            push_layer(base, Role::Plain, parent, plan, steps);
             continue;
         }
         let start = steps.len();
         steps.push(Step::Begin { isolated: true });
-        push_layer(base, Role::Base, parent, canvas, steps);
+        push_layer(base, Role::Base, parent, plan, steps);
         if steps.len() == start + 1 {
             // The base draws nothing: nothing shows through it.
             steps.truncate(start);
             continue;
         }
         for layer in clipped {
-            push_layer(layer, Role::Clipped, parent, canvas, steps);
+            push_layer(layer, Role::Clipped, parent, plan, steps);
         }
         steps.push(Step::End {
             mask: None,
@@ -299,7 +349,7 @@ fn push_layer<'a>(
     layer: &'a Layer,
     role: Role,
     parent: Affine,
-    canvas: Size,
+    plan: Plan,
     steps: &mut Vec<Step<'a>>,
 ) {
     let transform = layer.transform.then(parent);
@@ -317,6 +367,33 @@ fn push_layer<'a>(
         });
         return;
     }
+    let mut stacked = false;
+    if plan.stacks
+        && let LayerContent::Raster {
+            image,
+            stack: Some(stack),
+        } = &layer.content
+        && image.ready_image().is_none()
+    {
+        stacked = true;
+        steps.push(Step::StackOriginal {
+            original: stack.original(),
+            transform,
+        });
+        for entry in stack.entries() {
+            match entry {
+                crate::stack::Entry::Paint(paint) => {
+                    steps.push(Step::StackPaint { paint, transform });
+                }
+                crate::stack::Entry::Effect(effect) => steps.extend(
+                    effect
+                        .steps()
+                        .iter()
+                        .map(|effect| Step::StackEffect { effect, transform }),
+                ),
+            }
+        }
+    }
     let LayerContent::Group {
         children,
         pass_through,
@@ -328,6 +405,7 @@ fn push_layer<'a>(
             opacity,
             atop,
             transform,
+            stack: stacked,
         });
         return;
     };
@@ -335,12 +413,12 @@ fn push_layer<'a>(
     let passes = *pass_through && role == Role::Plain;
     let mask = enabled(layer);
     if passes && opacity >= 1.0 && mask.is_none() {
-        push_steps(children, transform, canvas, steps);
+        push_steps(children, transform, plan, steps);
         return;
     }
     let start = steps.len();
     steps.push(Step::Begin { isolated: !passes });
-    push_steps(children, transform, canvas, steps);
+    push_steps(children, transform, plan, steps);
     if steps.len() == start + 1 {
         // Nothing visible inside: the group changes nothing.
         steps.truncate(start);
@@ -465,6 +543,8 @@ fn source(
             ])
         }
         LayerContent::Raster { image, .. } => {
+            // Evaluated by `composite_region_on` before compositing.
+            let image = image.ready_image()?.as_ref();
             let matrix = image.matrix_to(&WORKING_SPACE);
             let (level, placement) = placement(image, transform)?;
             SourceContent::Raster {
@@ -609,6 +689,8 @@ fn composite_region_on(
     if region.right() > u64::from(size.width) || region.bottom() > u64::from(size.height) {
         return Err(CompositeError::RegionOutOfBounds { region, size });
     }
+    // The pixels of the layers' stacks (ADR 0029), which the steps read as they are.
+    document.evaluate_pixels();
     let expected = region.size().pixel_count() * 4;
     if out.len() as u64 != expected {
         return Err(CompositeError::BufferSizeMismatch {
@@ -629,6 +711,7 @@ fn composite_region_on(
                 opacity,
                 atop,
                 transform,
+                ..
             } => source(layer, mode, opacity, atop, transform).map(|s| Op::Layer(Box::new(s))),
             Step::Adjust {
                 layer,
@@ -655,6 +738,8 @@ fn composite_region_on(
                 isolated,
                 atop,
             }),
+            // Only the display's steps hold stacks: here every layer's pixels are evaluated.
+            Step::StackOriginal { .. } | Step::StackPaint { .. } | Step::StackEffect { .. } => None,
         })
         .collect();
     let blender = Blender::new(document.blend_space());
@@ -1003,7 +1088,9 @@ mod tests {
     fn raster(size: Size, format: PixelFormat, pixels: &[u8]) -> LayerContent {
         LayerContent::Raster {
             stack: None,
-            image: Arc::new(RasterImage::from_pixels(size, format, pixels).unwrap()),
+            image: crate::stack::Pixels::ready(Arc::new(
+                RasterImage::from_pixels(size, format, pixels).unwrap(),
+            )),
         }
     }
 
@@ -1394,7 +1481,7 @@ mod tests {
             &mut doc,
             LayerContent::Raster {
                 stack: None,
-                image: image.clone(),
+                image: crate::stack::Pixels::ready(image.clone()),
             },
             1.0,
             true,
@@ -1458,7 +1545,7 @@ mod tests {
             &mut doc,
             LayerContent::Raster {
                 stack: None,
-                image: image.clone(),
+                image: crate::stack::Pixels::ready(image.clone()),
             },
             1.0,
             true,
@@ -1865,7 +1952,7 @@ mod tests {
         let LayerContent::Raster { image, .. } = content else {
             panic!("a raster expected");
         };
-        let mut mask = crate::document::LayerMask::from_transparency(image).unwrap();
+        let mut mask = crate::document::LayerMask::from_transparency(&image.get()).unwrap();
         mask.replaces_alpha = false;
         mask
     }
@@ -2046,7 +2133,7 @@ mod tests {
                     &mut reference,
                     LayerContent::Raster {
                         stack: None,
-                        image: Arc::new(placed_image),
+                        image: crate::stack::Pixels::ready(Arc::new(placed_image)),
                     },
                     BlendMode::Screen,
                     0.9,
@@ -2242,7 +2329,7 @@ mod tests {
 
             let alphas = match &shape_layer.content {
                 LayerContent::Raster { image, .. } => (0..8)
-                    .map(|i| image.alpha_at(i % 4, i / 4))
+                    .map(|i| image.get().alpha_at(i % 4, i / 4))
                     .collect::<Vec<_>>(),
                 _ => unreachable!("a raster"),
             };

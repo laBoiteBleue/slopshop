@@ -44,7 +44,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
 fn raster_document(image: RasterImage) -> Document {
     let mut doc = Document::new(image.size());
     let image = Arc::new(image);
-    push_layer(&mut doc, LayerContent::Raster { image, stack: None }, 1.0);
+    push_layer(&mut doc, LayerContent::raster(image), 1.0);
     doc
 }
 
@@ -549,7 +549,7 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         alpha: AlphaMode::Straight,
     };
     let image = Arc::new(RasterImage::from_pixels(doc.size(), format, &bytes).unwrap());
-    push_layer(&mut doc, LayerContent::Raster { image, stack: None }, 1.0);
+    push_layer(&mut doc, LayerContent::raster(image), 1.0);
     let path = temp_path("non-finite.exr");
     let spec = ExportSpec {
         format: ExportFormat::Exr {
@@ -777,7 +777,7 @@ fn default_specs_follow_the_sources() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
-            image: p3,
+            image: slopshop_core::stack::Pixels::ready(p3),
             stack: None,
         },
         1.0,
@@ -793,7 +793,7 @@ fn default_specs_follow_the_sources() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
-            image: wide,
+            image: slopshop_core::stack::Pixels::ready(wide),
             stack: None,
         },
         1.0,
@@ -845,7 +845,7 @@ fn alpha_is_dropped_only_for_structurally_opaque_documents() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
-            image: small,
+            image: slopshop_core::stack::Pixels::ready(small),
             stack: None,
         },
         1.0,
@@ -899,7 +899,7 @@ fn flattening_over_the_matte_equals_a_fill_below() {
             &mut flattened_doc,
             LayerContent::Raster {
                 stack: None,
-                image: image.clone(),
+                image: slopshop_core::stack::Pixels::ready(image.clone()),
             },
             1.0,
         );
@@ -910,11 +910,7 @@ fn flattening_over_the_matte_equals_a_fill_below() {
 
         let mut fill_doc = document();
         push_layer(&mut fill_doc, LayerContent::Fill { color: matte }, 1.0);
-        push_layer(
-            &mut fill_doc,
-            LayerContent::Raster { image, stack: None },
-            1.0,
-        );
+        push_layer(&mut fill_doc, LayerContent::raster(image), 1.0);
         let fill_path = temp_path("matte-fill.png");
         assert_eq!(
             export(&fill_doc, &fill_path, &spec).unwrap(),
@@ -1169,7 +1165,7 @@ fn gray_documents_export_as_gray_by_default() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
-            image: gray,
+            image: slopshop_core::stack::Pixels::ready(gray),
             stack: None,
         },
         1.0,
@@ -1199,7 +1195,7 @@ fn gray_documents_export_as_gray_by_default() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
-            image: rgb,
+            image: slopshop_core::stack::Pixels::ready(rgb),
             stack: None,
         },
         1.0,
@@ -1267,7 +1263,9 @@ fn layered_document() -> Document {
         "Background",
         LayerContent::Raster {
             stack: None,
-            image: rgba(64, 48, &|x, y| [(x * 4) as u8, (y * 5) as u8, 120, 255]),
+            image: slopshop_core::stack::Pixels::ready(rgba(64, 48, &|x, y| {
+                [(x * 4) as u8, (y * 5) as u8, 120, 255]
+            })),
         },
     );
     let moved = add(
@@ -1276,9 +1274,9 @@ fn layered_document() -> Document {
         "Moved \u{e9}toile",
         LayerContent::Raster {
             stack: None,
-            image: rgba(20, 16, &|x, y| {
+            image: slopshop_core::stack::Pixels::ready(rgba(20, 16, &|x, y| {
                 [200, (x * 12) as u8, (y * 15) as u8, ((x + y) * 8) as u8]
-            }),
+            })),
         },
     );
     set(
@@ -1336,9 +1334,9 @@ fn layered_document() -> Document {
         "Inside",
         LayerContent::Raster {
             stack: None,
-            image: rgba(30, 20, &|x, _| {
+            image: slopshop_core::stack::Pixels::ready(rgba(30, 20, &|x, _| {
                 [30, 90, (x * 8) as u8, if x < 20 { 255 } else { 0 }]
-            }),
+            })),
         },
     );
     let clipped = add(
@@ -1363,7 +1361,7 @@ fn layered_document() -> Document {
         "Hidden",
         LayerContent::Raster {
             stack: None,
-            image: rgba(8, 8, &|_, _| [255, 255, 255, 255]),
+            image: slopshop_core::stack::Pixels::ready(rgba(8, 8, &|_, _| [255, 255, 255, 255])),
         },
     );
     set(
@@ -2567,14 +2565,14 @@ fn opened_samples(path: &Path) -> (Document, PixelFormat) {
             .document
             .all_layers()
             .find_map(|layer| match &layer.content {
-                LayerContent::Raster { image, .. } => Some(Arc::clone(image)),
+                LayerContent::Raster { image, .. } => Some(image.get()),
                 _ => None,
             })
             .expect("an image layer"),
     };
     let format = image.format();
     let mut doc = Document::new(image.size());
-    push_layer(&mut doc, LayerContent::Raster { image, stack: None }, 1.0);
+    push_layer(&mut doc, LayerContent::raster(image), 1.0);
     (doc, format)
 }
 

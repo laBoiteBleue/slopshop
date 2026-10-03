@@ -1162,7 +1162,7 @@ mod tests {
             unreachable!("a raster layer");
         };
         let mut moving = PixelMove::new(
-            Arc::clone(image),
+            image.get(),
             layer.transform,
             &selection,
             doc.blend_space(),

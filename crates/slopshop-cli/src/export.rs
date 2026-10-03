@@ -1208,7 +1208,7 @@ pub(crate) fn single_layer_document(image: RasterImage, name: &str) -> Result<Do
             mask: None,
             content: LayerContent::Raster {
                 stack: None,
-                image: Arc::new(image),
+                image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
             },
         },
     };

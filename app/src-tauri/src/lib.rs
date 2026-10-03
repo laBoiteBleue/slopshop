@@ -598,7 +598,7 @@ fn image_session(image: RasterImage, name: &str) -> Session {
     let size = image.size();
     let content = LayerContent::Raster {
         stack: None,
-        image: Arc::new(image),
+        image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
     };
     session_with_layer(size, name, content)
 }
@@ -986,7 +986,7 @@ fn insert_image(
                     mask: None,
                     content: LayerContent::Raster {
                         stack: None,
-                        image: Arc::new(image),
+                        image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                     },
                 },
             };
@@ -1514,10 +1514,11 @@ async fn add_mask_from_transparency(
             }
         }
     };
-    let mask = tauri::async_runtime::spawn_blocking(move || LayerMask::from_transparency(&image))
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("the layer has no transparency")?;
+    let mask =
+        tauri::async_runtime::spawn_blocking(move || LayerMask::from_transparency(&image.get()))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("the layer has no transparency")?;
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
     document
@@ -1554,8 +1555,11 @@ async fn layer_thumbnail(
             .layer(LayerId::from_raw(layer_id))
             .ok_or("unknown layer")?;
         match (&layer.content, &layer.mask, mask) {
-            (_, Some(layer_mask), true) => layer_mask.image.clone(),
+            (_, Some(layer_mask), true) => {
+                slopshop_core::stack::Pixels::ready(layer_mask.image.clone())
+            }
             (_, None, true) => return Err("the layer has no mask".to_owned()),
+            // A stack's pixels are evaluated below, off the async runtime (ADR 0029).
             (LayerContent::Raster { image, .. }, _, false) => image.clone(),
             (LayerContent::Fill { .. }, _, false) => {
                 return Err("fill layers have no thumbnail".to_owned());
@@ -1570,6 +1574,7 @@ async fn layer_thumbnail(
     };
     let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
     let thumbnail = tauri::async_runtime::spawn_blocking(move || {
+        let image = image.get();
         if mask {
             slopshop_core::thumbnail::mask_thumbnail(&image, max_side)
         } else {
@@ -2248,7 +2253,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 content: LayerContent::Raster {
                     stack: None,
-                    image: Arc::new(image),
+                    image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                 },
                 mask: Some(mask),
             },
@@ -2417,6 +2422,7 @@ mod tests {
         let LayerContent::Raster { image, stack } = &layer.content else {
             panic!("a raster layer");
         };
+        let image = image.get();
         // Grown to the canvas by whole tiles; its old pixels where they were.
         let doc_point = |x: f64, y: f64| layer.transform.inverse().unwrap().apply(x, y);
         let (x, y) = doc_point(100.5, 100.5);
@@ -2441,7 +2447,7 @@ mod tests {
         );
         assert!(
             matches!(&layer.content, LayerContent::Raster { image, stack: None }
-            if Arc::ptr_eq(image, &small))
+            if Arc::ptr_eq(&image.get(), &small))
         );
     }
 
@@ -2528,6 +2534,7 @@ mod tests {
         let LayerContent::Raster { image, stack: None } = &layer.content else {
             panic!("a raster layer without paint");
         };
+        let image = image.get();
         let (x, y) = layer.transform.inverse().unwrap().apply(50.5, 50.5);
         let tile = image.levels()[0]
             .tile(slopshop_core::tile::TileCoord {
@@ -2581,7 +2588,7 @@ mod tests {
                         blend_mode: BlendMode::Normal,
                         content: LayerContent::Raster {
                             stack: None,
-                            image: Arc::clone(&pixels),
+                            image: slopshop_core::stack::Pixels::ready(Arc::clone(&pixels)),
                         },
                         mask: Some(mask),
                     },
@@ -2602,7 +2609,7 @@ mod tests {
         assert!(mask.original.is_some());
         assert!(
             matches!(&layer.content, LayerContent::Raster { image, stack: None }
-            if Arc::ptr_eq(image, &pixels))
+            if Arc::ptr_eq(&image.get(), &pixels))
         );
         // One undo entry.
         document.session.undo().unwrap();
@@ -3481,6 +3488,7 @@ mod tests {
             let LayerContent::Raster { image, .. } = &layer.content else {
                 panic!("a raster layer");
             };
+            let image = image.get();
             let tile = image.levels()[0]
                 .tile(slopshop_core::tile::TileCoord { col: 0, row: 0 })
                 .unwrap();
@@ -3637,7 +3645,7 @@ mod tests {
                 panic!("a raster layer");
             };
             let original = stack.as_ref().unwrap().original().size();
-            (Arc::clone(image), original, layer.transform.e)
+            (image.get(), original, layer.transform.e)
         };
         let pixel = |image: &RasterImage, x: u32, y: u32| -> Vec<u8> {
             let coord = TileCoord {

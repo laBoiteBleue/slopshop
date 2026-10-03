@@ -53,7 +53,7 @@ pub enum LayerContent {
     /// had before, never written, and what was applied to them (the result shares the tiles
     /// nothing reached). `None`: nothing applied, `image` is the original.
     Raster {
-        image: Arc<RasterImage>,
+        image: crate::stack::Pixels,
         stack: Option<crate::stack::LayerStack>,
     },
     /// Other layers, bottom to top (ADR 0015). A pass-through group lets its children blend
@@ -79,7 +79,7 @@ impl PartialEq for LayerContent {
                 match (c, d) {
                     // The image is the stack's result, evaluated again by undo: the stack tells.
                     (Some(c), Some(d)) => c == d,
-                    (None, None) => Arc::ptr_eq(a, b),
+                    (None, None) => a.ptr_eq(b),
                     _ => false,
                 }
             }
@@ -111,7 +111,19 @@ fn same_image(a: &Option<Arc<RasterImage>>, b: &Option<Arc<RasterImage>>) -> boo
 impl LayerContent {
     /// Raster content showing `image`, not painted.
     pub fn raster(image: Arc<RasterImage>) -> Self {
-        Self::Raster { image, stack: None }
+        Self::Raster {
+            image: crate::stack::Pixels::ready(image),
+            stack: None,
+        }
+    }
+
+    /// A raster's pixels, evaluated now if its stack's are not yet (ADR 0029): not on the UI
+    /// thread. `None` for other layers.
+    pub fn pixels(&self) -> Option<Arc<RasterImage>> {
+        match self {
+            Self::Raster { image, .. } => Some(image.get()),
+            _ => None,
+        }
     }
 
     /// A raster's original pixels: its stack's, or the image it shows when nothing was applied.
@@ -120,7 +132,7 @@ impl LayerContent {
             Self::Raster {
                 stack: Some(stack), ..
             } => Some(stack.original()),
-            Self::Raster { image, .. } => Some(image),
+            Self::Raster { image, .. } => image.ready_image(),
             _ => None,
         }
     }
@@ -131,7 +143,7 @@ impl LayerContent {
             Self::Raster {
                 stack: Some(stack), ..
             } => Some(stack.clone()),
-            Self::Raster { image, .. } => Some(crate::stack::LayerStack::new(Arc::clone(image))),
+            Self::Raster { image, .. } => Some(crate::stack::LayerStack::new(image.get())),
             _ => None,
         }
     }
@@ -412,6 +424,24 @@ impl Document {
     /// The selection (ADR 0024), `None` when nothing is selected.
     pub fn selection(&self) -> Option<&crate::selection::Selection> {
         self.selection.as_ref()
+    }
+
+    /// Evaluate the pixels of every raster layer's stack not evaluated yet (ADR 0029): on every
+    /// core, one layer each. Not on the UI thread.
+    pub fn evaluate_pixels(&self) {
+        let mut pending: Vec<crate::stack::Pixels> = self
+            .all_layers()
+            .filter_map(|layer| match &layer.content {
+                LayerContent::Raster { image, .. } if image.ready_image().is_none() => {
+                    Some(image.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        // Each evaluation spreads over every core already: one layer at a time.
+        for pixels in &mut pending {
+            pixels.get();
+        }
     }
 
     /// The top-level layers, bottom to top (groups hold the others).
