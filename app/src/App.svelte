@@ -17,6 +17,7 @@
     onOpenEvents,
     type BrushRequest,
     type PaintTarget,
+    type DocumentInfo,
     type DocumentView,
     type EditRequest,
     type LayerMaskKind,
@@ -67,6 +68,7 @@
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
+  import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
   import { recentLabels } from "./lib/recent";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -220,6 +222,19 @@
       showError(String(e));
     } finally {
       closingAll = false;
+    }
+  }
+
+  /** File > Document Info, while shown. */
+  let documentInfo = $state<DocumentInfo | null>(null);
+
+  async function showDocumentInfo() {
+    const doc = active;
+    if (!doc) return;
+    try {
+      documentInfo = await engine.documentInfo(doc.id);
+    } catch (e) {
+      showError(String(e));
     }
   }
 
@@ -2177,6 +2192,13 @@
             !doc,
           ),
           separator,
+          cmd(
+            t("menu.file.documentInfo"),
+            () => void showDocumentInfo(),
+            keys("mod", "alt", "shift", "I"),
+            !doc,
+          ),
+          separator,
           cmd(t("menu.file.quit"), quitApp, keys("mod", "Q")),
         ],
       },
@@ -2553,6 +2575,12 @@
         if (!e.repeat) selectionCommand(command);
         return;
       }
+    }
+    // Alt+Shift+Ctrl+I: File > Document Info (Photoshop's File Info).
+    if (hasShortcutModifier(e) && e.altKey && e.shiftKey && shortcutLetter(e) === "i") {
+      e.preventDefault();
+      if (!e.repeat) void showDocumentInfo();
+      return;
     }
     // Alt+Ctrl+W: File > Close All.
     if (hasShortcutModifier(e) && e.altKey && !e.shiftKey && shortcutLetter(e) === "w") {
@@ -3090,6 +3118,10 @@
     onclose={() => (colorPicker = null)}
     sample={pickerSample}
   />
+{/if}
+
+{#if documentInfo}
+  <DocumentInfoDialog info={documentInfo} onclose={() => (documentInfo = null)} />
 {/if}
 
 {#if fillChoice}

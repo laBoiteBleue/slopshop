@@ -223,7 +223,7 @@ pub struct MaskView {
 pub const CUSTOM_SPACE: &str = "custom";
 
 /// Stable identifiers, not display text: the UI owns all user-visible (translated) strings.
-fn color_space_id(space: ColorSpace) -> &'static str {
+pub(crate) fn color_space_id(space: ColorSpace) -> &'static str {
     space.id().unwrap_or(CUSTOM_SPACE)
 }
 
