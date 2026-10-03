@@ -1416,3 +1416,43 @@ fn levels_keep_their_channels_and_write_five_values_without_them() {
     assert_same(&doc, &loaded);
     fs::remove_file(&path).ok();
 }
+
+#[test]
+fn gradient_maps_keep_their_stops_and_reverse() {
+    use slopshop_core::adjust::Adjustment;
+    use slopshop_core::gradient::{Gradient, GradientStop};
+    let gradient = Gradient::new(&[
+        GradientStop {
+            location: 0,
+            color: [10, 20, 30],
+        },
+        GradientStop {
+            location: 1500,
+            color: [200, 0, 90],
+        },
+        GradientStop {
+            location: 4096,
+            color: [255, 250, 245],
+        },
+    ])
+    .unwrap();
+    let path = temp_path("gradient-map.slop");
+    let mut doc = Document::new(Size::new(4, 4));
+    let adjustment = Adjustment::GradientMap {
+        gradient,
+        reverse: true,
+    };
+    push(
+        &mut doc,
+        "map",
+        LayerContent::Adjustment { adjustment },
+        1.0,
+    );
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    match &loaded.layers()[0].content {
+        LayerContent::Adjustment { adjustment: back } => assert_eq!(*back, adjustment),
+        _ => panic!("not an adjustment layer"),
+    }
+    fs::remove_file(&path).ok();
+}

@@ -687,6 +687,8 @@
     /** The settings chosen last (null: the neutral ones the preview started with). */
     values: number[] | null;
     curves: number[][][] | null;
+    /** Gradient Map's stops chosen last (null: the preview's). */
+    gradient: number[][] | null;
   } | null>(null);
 
   /**
@@ -755,6 +757,7 @@
       preview: true,
       values: null,
       curves: null,
+      gradient: null,
     };
   }
 
@@ -765,7 +768,7 @@
   function showAdjust(dialog: NonNullable<typeof adjustDialog>) {
     const edits: EditRequest[] = dialog.previews.flatMap((id): EditRequest[] => [
       { kind: "setLayerVisible", id, visible: dialog.preview },
-      ...(dialog.values || dialog.curves
+      ...(dialog.values || dialog.curves || dialog.gradient
         ? [
             {
               kind: "setAdjustment" as const,
@@ -773,6 +776,7 @@
               adjustment: dialog.adjustment,
               values: dialog.values ?? [],
               curves: dialog.curves ?? undefined,
+              gradient: dialog.gradient ?? adjustShown?.gradient ?? undefined,
             },
           ]
         : []),
@@ -781,9 +785,14 @@
   }
 
   /** The dialog's settings changed. */
-  function adjustLive(values: number[], curves?: number[][][]) {
+  function adjustLive(values: number[], curves?: number[][][], gradient?: number[][]) {
     if (!adjustDialog) return;
-    adjustDialog = { ...adjustDialog, values, curves: curves ?? null };
+    adjustDialog = {
+      ...adjustDialog,
+      values,
+      curves: curves ?? null,
+      gradient: gradient ?? adjustDialog.gradient,
+    };
     showAdjust(adjustDialog);
   }
 
@@ -816,6 +825,7 @@
           adjustment: dialog.adjustment,
           values,
           curves: dialog.curves ?? shown?.curves ?? undefined,
+          gradient: dialog.gradient ?? shown?.gradient ?? undefined,
         }),
       ),
     );
@@ -3167,6 +3177,7 @@
                 item("adjustInvert"),
                 dialog("posterize"),
                 dialog("threshold"),
+                dialog("gradientMap"),
               ];
             })(),
           },
@@ -3886,7 +3897,7 @@
   <AdjustDialog
     adjustment={adjustShown}
     preview={adjustDialog.preview}
-    onlive={(values) => adjustLive(values)}
+    onlive={(values, gradient) => adjustLive(values, undefined, gradient)}
     oncurves={(curves) => adjustLive([], curves)}
     onpreview={adjustPreview}
     onok={applyAdjust}

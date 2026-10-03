@@ -1383,6 +1383,31 @@ fn layered_document() -> Document {
             },
         },
     );
+    add(
+        &mut doc,
+        None,
+        "Gradient Map 1",
+        LayerContent::Adjustment {
+            adjustment: Adjustment::GradientMap {
+                gradient: slopshop_core::gradient::Gradient::new(&[
+                    slopshop_core::gradient::GradientStop {
+                        location: 0,
+                        color: [40, 10, 90],
+                    },
+                    slopshop_core::gradient::GradientStop {
+                        location: 3000,
+                        color: [250, 180, 60],
+                    },
+                    slopshop_core::gradient::GradientStop {
+                        location: 4096,
+                        color: [255, 255, 240],
+                    },
+                ])
+                .unwrap(),
+                reverse: false,
+            },
+        },
+    );
     let levels = add(
         &mut doc,
         None,

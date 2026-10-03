@@ -27,7 +27,7 @@ function adjustmentLayer(id: AdjustmentId, values: number[]): LayerView {
     transform: [1, 0, 0, 1, 0, 0],
     painted: false,
     entries: [],
-    adjustment: { id, values: padded(values), curves: null, curveSamples: null },
+    adjustment: { id, values: padded(values), curves: null, curveSamples: null, gradient: null },
   };
 }
 
@@ -83,6 +83,43 @@ test("Levels' Channel menu edits each channel's own settings", async () => {
   await typeInto(user, "Input white", "10");
   expect(sent(onedit)[11]).toBeCloseTo(32 / 255);
   expect(sent(onedit)[1]).toBe(1);
+});
+
+test("Gradient Map: Reverse keeps the stops, the editor sends them with the settings", async () => {
+  const onedit = vi.fn();
+  const stops = [
+    [0, 255, 0, 0],
+    [4096, 0, 0, 255],
+  ];
+  const layer = adjustmentLayer("gradientMap", [0]);
+  render(PropertiesPanel, {
+    documentId: 1,
+    layer: { ...layer, adjustment: { ...layer.adjustment!, gradient: stops } },
+    onedit,
+    onlive: vi.fn(),
+    ongestureend: vi.fn(),
+  });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("checkbox", { name: "Reverse" }));
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setAdjustment",
+    id: 7,
+    adjustment: "gradientMap",
+    values: padded([1]),
+    gradient: stops,
+  });
+  await user.click(screen.getByRole("button", { name: /stop 1 / }));
+  await fireEvent.change(screen.getByLabelText("Color"), { target: { value: "#ffffff" } });
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setAdjustment",
+    id: 7,
+    adjustment: "gradientMap",
+    values: padded([1]),
+    gradient: [
+      [0, 255, 255, 255],
+      [4096, 0, 0, 255],
+    ],
+  });
 });
 
 test("a slider applies live during the drag, one undo entry at its end", async () => {

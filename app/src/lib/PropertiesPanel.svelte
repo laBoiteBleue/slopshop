@@ -24,9 +24,17 @@
   const adjustment = $derived(layer.adjustment);
   let fields = $state<AdjustmentFields | null>(null);
 
-  function request(values: number[]): EditRequest | null {
+  /** The edit with these settings (Gradient Map: its stops, these or the layer's). */
+  function request(values: number[], gradient?: number[][]): EditRequest | null {
     if (!adjustment) return null;
-    return { kind: "setAdjustment", id: layer.id, adjustment: adjustment.id, values };
+    const stops = gradient ?? adjustment.gradient ?? undefined;
+    return {
+      kind: "setAdjustment",
+      id: layer.id,
+      adjustment: adjustment.id,
+      values,
+      ...(stops ? { gradient: stops } : {}),
+    };
   }
 
   /** Curves: the edit with these points (composite, red, green, blue). */
@@ -34,13 +42,13 @@
     return { kind: "setAdjustment", id: layer.id, adjustment: "curves", values: [], curves };
   }
 
-  function live(values: number[]) {
-    const edit = request(values);
+  function live(values: number[], gradient?: number[][]) {
+    const edit = request(values, gradient);
     if (edit) onlive(documentId, edit);
   }
 
-  function apply(values: number[]) {
-    const edit = request(values);
+  function apply(values: number[], gradient?: number[][]) {
+    const edit = request(values, gradient);
     if (edit) onedit(documentId, edit);
   }
 </script>

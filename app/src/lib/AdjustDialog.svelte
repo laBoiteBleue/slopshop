@@ -22,8 +22,8 @@
     adjustment: NonNullable<LayerView["adjustment"]>;
     /** The canvas shows the settings. */
     preview: boolean;
-    /** Settings changed (the canvas follows them). */
-    onlive: (values: number[]) => void;
+    /** Settings changed (the canvas follows them); Gradient Map's stops with them. */
+    onlive: (values: number[], gradient?: number[][]) => void;
     /** Curves' points changed: composite, red, green, blue. */
     oncurves: (curves: number[][][]) => void;
     onpreview: (preview: boolean) => void;
