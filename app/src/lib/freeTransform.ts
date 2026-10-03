@@ -4,9 +4,9 @@
 // skews and rotations (Shift: steps of 15°). Points are in document pixels; the box's own
 // coordinates are the document's before the transform (`matrix` maps them to where they are).
 
-import * as affine from "./affine.ts";
+import * as affine from "./affine";
 import type { Bounds, Matrix } from "./engine";
-import { snapHandle, snapMove, type AxisSnap, type Guide } from "./snap.ts";
+import { snapHandle, snapMove, type AxisSnap, type Guide } from "./snap";
 
 /** Rotation steps with Shift. */
 export const ROTATION_STEP = Math.PI / 12;
@@ -95,7 +95,7 @@ export function scaledTo(
     if (keys.shift) sx = Math.abs(uy);
   }
   const bounded = (s: number) => (Math.abs(s) < MIN_SCALE ? Math.sign(s || 1) * MIN_SCALE : s);
-  return affine.then(affine.about(affine.scaling(bounded(sx), bounded(sy)), ax, ay), start);
+  return affine.andThen(affine.about(affine.scaling(bounded(sx), bounded(sy)), ax, ay), start);
 }
 
 /**
@@ -119,7 +119,7 @@ export function skewedTo(
   const by: Matrix = horizontal
     ? [1, 0, hy !== ay ? (qx - hx) / (hy - ay) : 0, 1, 0, 0]
     : [1, hx !== ax ? (qy - hy) / (hx - ax) : 0, 0, 1, 0, 0];
-  return affine.then(affine.about(by, ax, ay), start);
+  return affine.andThen(affine.about(by, ax, ay), start);
 }
 
 /**
@@ -139,7 +139,10 @@ export function rotatedTo(
   const turned = Math.atan2(p[1] - cy, p[0] - cx) - Math.atan2(from[1] - cy, from[0] - cx);
   let total = startRotation + turned;
   if (shift) total = Math.round(total / ROTATION_STEP) * ROTATION_STEP;
-  const matrix = affine.then(start, affine.about(affine.rotation(total - startRotation), cx, cy));
+  const matrix = affine.andThen(
+    start,
+    affine.about(affine.rotation(total - startRotation), cx, cy),
+  );
   let degrees = ((((total * 180) / Math.PI) % 360) + 360) % 360;
   if (degrees > 180) degrees -= 360;
   return { matrix, degrees };

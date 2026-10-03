@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   NO_VIEW,
@@ -8,7 +8,7 @@ import {
   toViewport,
   wheelPixels,
   type View,
-} from "../src/lib/viewMapping.ts";
+} from "../src/lib/viewMapping";
 
 const closeAll = (actual: readonly number[], expected: readonly number[]) =>
   assert.ok(

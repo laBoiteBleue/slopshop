@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   SHORTCUTS,
@@ -7,7 +7,7 @@ import {
   matches,
   parseShortcut,
   type KeyPress,
-} from "../src/lib/commands.ts";
+} from "../src/lib/commands";
 
 /** A key press: `key` as typed, `code` the physical key (by default the QWERTY one). */
 function press(key: string, modifiers: Partial<KeyPress> = {}): KeyPress {

@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { compose, decompose, type Map6 } from "../src/lib/transformValues.ts";
+import { compose, decompose, type Map6 } from "../src/lib/transformValues";
 
 function close(actual: number[], expected: number[]) {
   actual.forEach((v, i) => assert.ok(Math.abs(v - expected[i]) < 1e-9, `${actual} ≠ ${expected}`));

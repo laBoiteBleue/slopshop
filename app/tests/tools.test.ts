@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   SLOTS,
@@ -10,7 +10,7 @@ import {
   slotOf,
   slotTool,
   toolInfo,
-} from "../src/lib/tools.ts";
+} from "../src/lib/tools";
 
 test("each tool is in one slot, and each slot has its own key", () => {
   const ids = TOOLS.map((tool) => tool.id);

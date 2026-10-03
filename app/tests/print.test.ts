@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { FIT_MARGIN, layoutOf, type PrintSettings } from "../src/lib/print.ts";
+import { FIT_MARGIN, layoutOf, type PrintSettings } from "../src/lib/print";
 
 const settings = (changes: Partial<PrintSettings>): PrintSettings => ({
   paper: "a4",

@@ -6,8 +6,8 @@ import type { Matrix } from "./engine";
 
 export const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-/** `m`, then `n`. */
-export function then(m: Matrix, n: Matrix): Matrix {
+/** `m`, then `n`. Not named `then`: a module exporting `then` passes for a promise. */
+export function andThen(m: Matrix, n: Matrix): Matrix {
   const [a, b, c, d, e, f] = m;
   const [na, nb, nc, nd, ne, nf] = n;
   return [
@@ -44,7 +44,7 @@ export function rotation(radians: number): Matrix {
 
 /** `m` applied about the point (`x`, `y`) instead of the origin. */
 export function about(m: Matrix, x: number, y: number): Matrix {
-  return then(then(translation(-x, -y), m), translation(x, y));
+  return andThen(andThen(translation(-x, -y), m), translation(x, y));
 }
 
 export function isIdentity(m: Matrix): boolean {

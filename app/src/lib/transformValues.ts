@@ -2,8 +2,6 @@
 // is, the width and height as shares of the original, the angle and the skew. A transform (an
 // affine map [a, b, c, d, e, f], (x, y) ↦ (a·x + c·y + e, b·x + d·y + f), as in affine.ts)
 // is taken apart into them and put back together from them.
-//
-// No imports: this module also runs under Node for its tests (`npm test`).
 
 export type Map6 = [number, number, number, number, number, number];
 

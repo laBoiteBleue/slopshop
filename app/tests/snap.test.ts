@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { snapHandle, snapMove } from "../src/lib/snap.ts";
+import { snapHandle, snapMove } from "../src/lib/snap";
 
 const box = (left: number, top: number, right: number, bottom: number) => ({
   left,

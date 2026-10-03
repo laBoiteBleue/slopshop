@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { pasteUnfit } from "../src/lib/clipboard.ts";
+import { pasteUnfit } from "../src/lib/clipboard";
 
 test("pastes are grayed by what the clipboard holds", () => {
   assert.ok(pasteUnfit("nothing", "paste"));

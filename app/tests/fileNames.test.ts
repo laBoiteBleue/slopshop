@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { exportFileName, formatOfPath, formatOrder, isVectorPath } from "../src/lib/fileNames.ts";
+import { exportFileName, formatOfPath, formatOrder, isVectorPath } from "../src/lib/fileNames";
 
 const FORMATS = {
   png: { extensions: ["png"] },

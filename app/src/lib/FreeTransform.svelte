@@ -127,7 +127,7 @@
   /** A rotation or flip of the box about the pivot (the right-click menu), as one step. */
   function turn(by: Matrix) {
     const [px, py] = affine.apply(matrix, ...pivot);
-    matrix = affine.then(matrix, affine.about(by, px, py));
+    matrix = affine.andThen(matrix, affine.about(by, px, py));
     onchange(matrix);
   }
 
@@ -193,7 +193,7 @@
         threshold,
       );
       shown = moved.guides;
-      matrix = affine.then(start, affine.translation(moved.dx, moved.dy));
+      matrix = affine.andThen(start, affine.translation(moved.dx, moved.dy));
       text = t("transform.readout.move", { dx: number(moved.dx, 0), dy: number(moved.dy, 0) });
     } else if (drag.kind === "rotate") {
       const rotated = rotatedTo(frame, start, drag.startRotation, from, p, e.shiftKey);

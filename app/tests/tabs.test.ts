@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { cycled, moveTab, tabSlot, upsert } from "../src/lib/tabs.ts";
+import { cycled, moveTab, tabSlot, upsert } from "../src/lib/tabs";
 
 test("a document view adds its tab, or updates it unless stale", () => {
   const tabs = [

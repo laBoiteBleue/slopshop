@@ -1,8 +1,8 @@
 // The math of File > New (NewDocumentDialog.svelte): sizes are whole pixels, typed in pixels
 // or a length at the resolution (ADR 0028).
 
-import { MAX_PPI, MIN_PPI, type LengthUnit } from "./units.ts";
-import { MAX_SIDE } from "./sizeDialog.ts";
+import { MAX_PPI, MIN_PPI, type LengthUnit } from "./units";
+import { MAX_SIDE } from "./sizeDialog";
 
 type Size = { width: number; height: number };
 

@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import type { LayerView } from "../src/lib/engine.ts";
+import type { LayerView } from "../src/lib/engine";
 import {
   batchOf,
   blendModeChange,
@@ -11,8 +11,8 @@ import {
   removal,
   typedOpacity,
   visibilityToggle,
-} from "../src/lib/layerEdits.ts";
-import { layerTree } from "../src/lib/layerTree.ts";
+} from "../src/lib/layerEdits";
+import { layerTree } from "../src/lib/layerTree";
 
 function layer(id: number, changes: Partial<LayerView> = {}): LayerView {
   return {

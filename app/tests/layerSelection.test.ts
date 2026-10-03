@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   NO_LAYERS,
@@ -8,7 +8,7 @@ import {
   ranged,
   selectionOf,
   toggled,
-} from "../src/lib/layerSelection.ts";
+} from "../src/lib/layerSelection";
 
 /** Every layer, bottom to top. */
 const ORDER = [1, 2, 3, 4, 5];
