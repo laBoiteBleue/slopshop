@@ -29,9 +29,13 @@ export function modeFromKeys(e: { shiftKey: boolean; altKey: boolean }): Selecti
 /** The largest brush (Quick Selection), document pixels, as Photoshop's. */
 export const MAX_BRUSH = 5000;
 
-/** The next brush size with `[` (smaller) or `]` (larger), in Photoshop-like steps. */
+/**
+ * The next brush size with `[` (smaller) or `]` (larger), in Photoshop-like steps. Going down
+ * takes the step of the range below, so that `[` undoes `]`.
+ */
 export function stepBrush(size: number, larger: boolean): number {
-  const step = size < 10 ? 1 : size < 50 ? 5 : size < 100 ? 10 : size < 500 ? 25 : 100;
+  const from = larger ? size : size - 1;
+  const step = from < 10 ? 1 : from < 50 ? 5 : from < 100 ? 10 : from < 500 ? 25 : 100;
   const next = larger ? size + step : size - step;
   return Math.min(Math.max(Math.round(next / step) * step, 1), MAX_BRUSH);
 }
