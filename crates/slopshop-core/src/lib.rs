@@ -18,10 +18,12 @@
 //! - [`copy`]: the clipboard's pixels (Copy Merged, the image other applications get) and where
 //!   Paste places what it pastes.
 //! - [`job`]: cancellation and progress of background jobs.
+//! - [`align`]: Layer > Align and Distribute.
 //! - [`trim`]: Image > Trim, the canvas reduced to the image without its uniform margins.
 //! - [`auto`]: Image > Auto Tone, Auto Contrast and Auto Color, Levels computed from the image.
 
 pub mod adjust;
+pub mod align;
 pub mod auto;
 pub mod blend;
 mod blue_noise;

@@ -3274,6 +3274,22 @@ mod tests {
             .collect();
         assert_eq!(names, ["a", "b", "inner"]);
 
+        // Fill layers have no edges: Align and Distribute move nothing, without an error.
+        apply(
+            &mut s,
+            format!(
+                r#"{{"kind":"alignLayers","ids":[{},{}],"align":"left"}}"#,
+                ids[1], ids[2]
+            ),
+        );
+        apply(
+            &mut s,
+            format!(
+                r#"{{"kind":"distributeLayers","ids":[{},{}],"distribute":"verticalSpacing"}}"#,
+                ids[1], ids[2]
+            ),
+        );
+
         for (arrange, expected) in [
             ("front", ["b", "inner", "a"]),
             ("back", ["a", "b", "inner"]),
