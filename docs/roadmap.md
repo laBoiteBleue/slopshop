@@ -174,7 +174,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       creation (Properties panel, double-click on the thumbnail)
 - [x] Layer > Align and Distribute, shared with the Move tool's options bar
 - [x] New Layer from Visible (stamp visible, Alt+Shift+Ctrl+E)
-- [ ] Merge Layers, Merge Visible, Flatten, Rasterize (their submenu is an open question)
+- [x] Layer > Bake to Pixels ([ADR 0030](adr/0030-bake-to-pixels.md)): Rasterize, Merge
+      Layers and Merge Down (Ctrl+E), Merge Visible (Shift+Ctrl+E), Flatten Image
 - [ ] Layer styles (an ADR first)
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
