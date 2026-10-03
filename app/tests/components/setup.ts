@@ -39,8 +39,9 @@ globalThis.IntersectionObserver ??= class {
 HTMLCanvasElement.prototype.getContext = (() =>
   null) as typeof HTMLCanvasElement.prototype.getContext;
 
-// Pixels for a canvas (frames): jsdom has no ImageData without the canvas package.
+// Pixels for a canvas (frames, thumbnails): jsdom has no ImageData without the canvas package.
 globalThis.ImageData ??= class {
+  readonly colorSpace = "srgb";
   constructor(
     readonly data: Uint8ClampedArray,
     readonly width: number,
