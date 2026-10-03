@@ -638,6 +638,7 @@ const fr: Messages = {
   "menu.layer.bake.mergeVisible": "Fusionner les calques visibles",
   "menu.layer.bake.flatten": "Aplatir l’image",
   "layers.flattenedName": "Arrière-plan",
+  "layers.baking": "Calcul des pixels…",
   "menu.layer.newFromVisible": "Créer un calque depuis les visibles",
   "menu.layer.align": "Aligner",
   "menu.layer.align.left": "Bords gauches",

@@ -160,3 +160,12 @@ test("an Alt+click on the line between two layers of a level picks the upper one
   assert.equal(clipLineAt(ROWS, 4, 20, 2), null);
   assert.equal(clipLineAt(ROWS, 0, 2, 20), null);
 });
+
+test("a group being baked is listed alone, as the layer it becomes", () => {
+  const inner = layer(2);
+  const baking = layer(1, { kind: "group", children: [inner], baking: true });
+  assert.deepEqual(
+    flattenRows([baking], new Set(), []).map((r) => r.layer.id),
+    [1],
+  );
+});

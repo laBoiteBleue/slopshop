@@ -11,6 +11,7 @@
     ADJUSTMENTS,
     EXPORT_FORMATS,
     engine,
+    onDocumentUpdated,
     onExportEvents,
     onAiProgress,
     onRecentFiles,
@@ -3173,7 +3174,7 @@
         label: t("menu.layer.newFromVisible"),
         run: () => {
           const name = layersPanel?.nextLayerName();
-          if (doc && name) void sync(engine.newLayerFromVisible(doc.id, name));
+          if (name) bake({ kind: "visible", name });
         },
         disabled: !doc,
       },
@@ -3885,6 +3886,11 @@
       if (destroyed) stop();
       else stopExportEvents = stop;
     });
+    let stopDocumentUpdates: (() => void) | null = null;
+    void onDocumentUpdated(upsert).then((stop) => {
+      if (destroyed) stop();
+      else stopDocumentUpdates = stop;
+    });
     let stopAiProgress: (() => void) | null = null;
     void onAiProgress(onAiTaskProgress).then((stop) => {
       if (destroyed) stop();
@@ -3949,6 +3955,7 @@
       stopEvents?.();
       stopExportEvents?.();
       stopAiProgress?.();
+      stopDocumentUpdates?.();
       stopRecentFiles?.();
       void stopDrop.then((unlisten) => unlisten());
       void stopClose.then((unlisten) => unlisten());

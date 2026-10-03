@@ -127,7 +127,7 @@ fn take(
                 None => return Ok(None),
             }
         }
-        CopyRequest::Merged { name } => match merged(renderer, document, name, true)? {
+        CopyRequest::Merged { name } => match merged(renderer, document, name)? {
             Some(layer) => vec![layer],
             None => return Ok(None),
         },
@@ -220,16 +220,14 @@ fn selected_pixels(
 }
 
 /// Edit > Copy Merged: the visible layers composited within the selection's bounds (the whole
-/// canvas without one), limited to it where it is soft, as a layer named `name`. Without
-/// `in_selection`, the whole canvas whatever the selection (New Layer from Visible).
+/// canvas without one), limited to it where it is soft, as a layer named `name`.
 fn merged(
     renderer: Option<&Renderer>,
     document: &Document,
     name: String,
-    in_selection: bool,
 ) -> Result<Option<Layer>, String> {
     let size = document.size();
-    let selection = document.selection().filter(|_| in_selection);
+    let selection = document.selection();
     let region = match selection {
         Some(selection) => match slopshop_core::selection::bounds(selection.image()) {
             Some(bounds) => bounds,
@@ -250,38 +248,6 @@ fn merged(
         .map_err(|e| e.to_string())?;
     let at = Affine::translation(f64::from(region.x), f64::from(region.y));
     Ok(Some(raster_layer(name, Arc::new(image), at)))
-}
-
-/// Layer > New Layer from Visible (Photoshop's stamp visible, Alt+Shift+Ctrl+E): the visible
-/// layers composited over the whole canvas, the selection ignored, as a new pixel layer named
-/// `name` on top of the document; the layers stay. One undo entry.
-#[tauri::command]
-pub async fn new_layer_from_visible(
-    app: AppHandle,
-    document_id: u64,
-    name: String,
-) -> Result<DocumentView, String> {
-    let document = {
-        let state = app.state::<AppState>();
-        let mut documents = state.documents()?;
-        documents.get_mut(document_id)?.session.document().clone()
-    };
-    let worker = app.clone();
-    let layer = on_worker(move || {
-        let state = worker.state::<AppState>();
-        // Without a GPU, the CPU compositor gives the same pixels, only slower.
-        let renderer = state.renderer().ok();
-        merged(renderer, &document, name, false)
-    })
-    .await?
-    .ok_or("nothing to composite")?;
-    let state = app.state::<AppState>();
-    let mut documents = state.documents()?;
-    let open = documents.get_mut(document_id)?;
-    open.session
-        .insert_layer_copies(&[layer], None)
-        .map_err(|e| e.to_string())?;
-    Ok(open.view())
 }
 
 /// `region` of `document` composited band by band (premultiplied working-space `f32`, on the
@@ -875,36 +841,6 @@ mod tests {
         select(&mut source, [0.0, 0.0, 10.0, 10.0]);
         let taken = take(None, source.document(), &Default::default(), pixels()).unwrap();
         assert!(taken.is_none());
-    }
-
-    #[test]
-    fn new_layer_from_visible_takes_the_whole_canvas_whatever_the_selection() {
-        let fill = Layer {
-            content: LayerContent::Fill {
-                color: LinearRgba::new(0.25, 0.5, 1.0, 1.0),
-            },
-            ..raster(1, Size::new(1, 1), Affine::IDENTITY)
-        };
-        let mut source = session(vec![fill]);
-        select(&mut source, [10.0, 20.0, 30.0, 25.0]);
-        let layer = merged(None, source.document(), "Visible".into(), false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(layer.name, "Visible");
-        assert_eq!(layer.transform, Affine::IDENTITY);
-        let LayerContent::Raster { image, .. } = &layer.content else {
-            panic!("a raster layer");
-        };
-        let image = image.get();
-        assert_eq!(image.size(), CANVAS);
-        assert_eq!(image.alpha_at(0, 0), 1.0);
-        // Inserted on top, the layers kept, one undo entry.
-        let before = source.document().layers().len();
-        source.insert_layer_copies(&[layer], None).unwrap();
-        assert_eq!(source.document().layers().len(), before + 1);
-        assert_eq!(source.document().layers().last().unwrap().name, "Visible");
-        assert!(source.undo().unwrap());
-        assert_eq!(source.document().layers().len(), before);
     }
 
     #[test]

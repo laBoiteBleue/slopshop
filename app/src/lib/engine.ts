@@ -44,6 +44,11 @@ export type LayerView = {
   painted: boolean;
   /** What was applied to a raster layer's pixels (ADR 0029), bottom to top. */
   entries: StackEntryView[];
+  /**
+   * Being baked into pixels (ADR 0030): a merge's group shown until its pixels come, listed as
+   * the layer it becomes. Absent: false.
+   */
+  baking?: boolean;
   /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
   /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). Curves:
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
@@ -412,7 +417,9 @@ export type BakeRequest =
   /** Several layers merge together; one merges down onto the layer below it. */
   | { kind: "merge"; ids: number[] }
   | { kind: "mergeVisible" }
-  | { kind: "flatten"; name: string };
+  | { kind: "flatten"; name: string }
+  /** New Layer from Visible: the visible layers composited into a new layer on top. */
+  | { kind: "visible"; name: string };
 
 /** Edit > Stroke: a band `width` pixels wide along the selection's outline (paint.rs). */
 export type StrokeRequest = { width: number; location: "inside" | "center" | "outside" };
@@ -1214,12 +1221,12 @@ export const engine = {
   /** What moving `ids` can snap to (bounds in document pixels). */
   moveSnapTargets: (documentId: number, ids: number[]) =>
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
-  /** Layer > Bake to Pixels (ADR 0030): one undo entry, composited on a worker. */
+  /**
+   * Layer > Bake to Pixels and New Layer from Visible (ADR 0030): resolves with what shows at
+   * once; the pixels follow (`onDocumentUpdated`), in the same undo entry.
+   */
   bakeLayers: (documentId: number, request: BakeRequest) =>
     serial(() => invoke<DocumentView>("bake_layers", { documentId, request })),
-  /** Layer > New Layer from Visible: the visible composite as a new layer on top. */
-  newLayerFromVisible: (documentId: number, name: string) =>
-    serial(() => invoke<DocumentView>("new_layer_from_visible", { documentId, name })),
   addMaskFromTransparency: (documentId: number, layerId: number) =>
     serial(() => invoke<DocumentView>("add_mask_from_transparency", { documentId, layerId })),
   /** Select `shape` combined with the selection by `mode` (ADR 0024); feather in pixels. */
@@ -1655,6 +1662,13 @@ export type AiTaskProgress = {
 /** The recent files changed (opened, saved, cleared). Resolves once the listener is registered. */
 export async function onRecentFiles(handler: (paths: string[]) => void): Promise<() => void> {
   return listen<string[]>("recent-files", (e) => handler(e.payload));
+}
+
+/** A document changed by work that ran on its own (baked pixels, ADR 0030). */
+export async function onDocumentUpdated(
+  handler: (view: DocumentView) => void,
+): Promise<() => void> {
+  return listen<DocumentView>("document-updated", (e) => handler(e.payload));
 }
 
 /** AI requests' progress. Resolves once the listener is registered. */
