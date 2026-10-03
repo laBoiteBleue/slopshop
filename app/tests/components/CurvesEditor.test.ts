@@ -177,6 +177,16 @@ test("Input and Output wait for a point to be selected, then move it as one undo
   expect(onlive).not.toHaveBeenCalled();
 });
 
+test("an emptied Input or Output field leaves the point where it was", async () => {
+  // Regression: an empty field was read as 0 and sent the point to the bottom.
+  const { user, svg, onapply } = open();
+  await user.pointer({ keys: "[MouseLeft]", target: svg, coords: at(100, 100) });
+  const shown = output().value;
+  await fireEvent.change(output(), { target: { value: "" } });
+  expect(onapply).not.toHaveBeenCalled();
+  expect(output().value).toBe(shown);
+});
+
 test("the channel menu switches to the red, green and blue curves, which are edited on their own", async () => {
   const curves = CURVES();
   curves[1] = [
