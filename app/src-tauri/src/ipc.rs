@@ -351,6 +351,14 @@ pub enum EditRequest {
         ids: Vec<u64>,
         name_format: String,
     },
+    /// Copies of layers (as `DuplicateLayers`), then `matrix` applied to the copies (as
+    /// `TransformLayers`): Photoshop's Duplicate and Transform Again (Alt+Shift+Ctrl+T), one
+    /// undo entry.
+    DuplicateTransformLayers {
+        ids: Vec<u64>,
+        name_format: String,
+        matrix: [f64; 6],
+    },
     SetGroupPassThrough {
         id: u64,
         pass_through: bool,
@@ -571,6 +579,39 @@ impl EditRequest {
                 session
                     .duplicate_layers_edit(&ids, |name| name_format.replace("{name}", name))
                     .map_err(|e| e.to_string())?
+            }
+            EditRequest::DuplicateTransformLayers {
+                ids,
+                name_format,
+                matrix,
+            } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                let duplicate = session
+                    .duplicate_layers_edit(&ids, |name| name_format.replace("{name}", name))
+                    .map_err(|e| e.to_string())?;
+                // The copies' ids, and their places once inserted, from a plan of the document.
+                let Edit::Batch(insertions) = &duplicate else {
+                    return Err("duplicating gave no copies".to_owned());
+                };
+                let copies: Vec<LayerId> = insertions
+                    .iter()
+                    .filter_map(|edit| match edit {
+                        Edit::InsertLayer { layer, .. } => Some(layer.id),
+                        _ => None,
+                    })
+                    .collect();
+                let mut plan = session.document().clone();
+                duplicate
+                    .clone()
+                    .apply(&mut plan)
+                    .map_err(|e| e.to_string())?;
+                let transform = Edit::transform_layers(
+                    &plan,
+                    &copies,
+                    slopshop_core::Affine::from_array(matrix),
+                )
+                .map_err(|e| e.to_string())?;
+                Edit::Batch(vec![duplicate, transform])
             }
             EditRequest::TranslateLayers { ids, dx, dy } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();

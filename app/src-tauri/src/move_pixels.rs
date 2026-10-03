@@ -284,3 +284,217 @@ pub async fn selection_bounds_at(
     })
     .await
 }
+
+/// Free Transform with a selection (Ctrl+T), as in Photoshop: the selected pixels of raster
+/// layer `layer_id` float in a new layer right above it (named after it, with its opacity and
+/// blend mode), where they were, and leave a hole there (paint, ADR 0029); deselected. One undo
+/// entry. The document and the new layer's id; `None` when the selection holds nothing of the
+/// layer.
+#[tauri::command]
+pub async fn float_pixels(
+    app: tauri::AppHandle,
+    document_id: u64,
+    layer_id: u64,
+) -> Result<Option<(DocumentView, u64)>, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        let Some(edit) = float_edit(&mut document.session, LayerId::from_raw(layer_id))? else {
+            return Ok(None);
+        };
+        let (edit, id) = edit;
+        document.session.perform(edit).map_err(|e| e.to_string())?;
+        Ok(Some((document.view(), id.get())))
+    })
+    .await
+}
+
+/// The edit of `float_pixels`, and the new layer's id.
+fn float_edit(
+    session: &mut slopshop_core::Session,
+    id: LayerId,
+) -> Result<Option<(Edit, LayerId)>, String> {
+    let doc = session.document();
+    let selection = doc.selection().ok_or("nothing is selected")?;
+    let layer = doc.layer(id).ok_or("the layer is gone")?;
+    let LayerContent::Raster { image, .. } = &layer.content else {
+        return Err("only a raster layer's pixels float".to_owned());
+    };
+    let parent = doc.parent_transform(id);
+    let moving = PixelMove::new(
+        Arc::clone(image),
+        layer.transform.then(parent),
+        selection,
+        doc.blend_space(),
+        MoveMode::Copy,
+        false,
+    )
+    .map_err(|e| e.to_string())?;
+    let Some(extracted) = moving.extract().map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let to_parent = parent
+        .inverse()
+        .ok_or("the layer's groups are not invertible")?;
+    let (place, index) = doc.locate(id).ok_or("the layer is gone")?;
+    let floating = slopshop_core::Layer {
+        id: LayerId::from_raw(0),
+        name: layer.name.clone(),
+        visible: true,
+        opacity: layer.opacity,
+        blend_mode: layer.blend_mode,
+        content: LayerContent::raster(extracted.image),
+        mask: None,
+        clipped: layer.clipped,
+        transform: extracted.to_document.then(to_parent),
+    };
+    // The hole: the selected pixels erased, as Cut does.
+    let erase = crate::paint::PaintRequest {
+        stroke: 0,
+        target: PaintTarget::Layer,
+        layer_id: id.get(),
+        brush: crate::paint::BrushRequest {
+            size: 1.0,
+            hardness: 1.0,
+            spacing: 1.0,
+            flow: 1.0,
+            opacity: 1.0,
+            pressure_size: false,
+            pressure_opacity: false,
+        },
+        color: None,
+        samples: Vec::new(),
+        end: true,
+    };
+    let hole = crate::paint::fill_edit(doc, &erase, None)?;
+    let new_id = session.allocate_layer_id();
+    let insert = Edit::InsertLayer {
+        parent: place,
+        index: index + 1,
+        layer: slopshop_core::Layer {
+            id: new_id,
+            ..floating
+        },
+    };
+    let mut edits = vec![insert];
+    edits.extend(hole);
+    edits.push(Edit::SetSelection { selection: None });
+    Ok(Some((Edit::Batch(edits), new_id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::EditRequest;
+    use slopshop_core::color::PixelFormat;
+    use slopshop_core::selection::{Combine, EdgeOptions, Shape, select_shape};
+    use slopshop_core::{Affine, BlendMode, Layer, Session};
+
+    const CANVAS: Size = Size::new(64, 48);
+
+    /// A session holding an opaque layer (id 1) of the canvas size moved by (4, 2), and a
+    /// selection of `[10, 10, 20, 16)`.
+    fn session() -> Session {
+        let pixels = [200u8, 100, 50, 255].repeat(CANVAS.pixel_count() as usize);
+        let image = RasterImage::from_pixels(CANVAS, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let layer = Layer {
+            id: LayerId::from_raw(1),
+            name: "photo".into(),
+            visible: true,
+            opacity: 0.5,
+            blend_mode: BlendMode::Multiply,
+            content: LayerContent::raster(Arc::new(image)),
+            mask: None,
+            clipped: false,
+            transform: Affine::translation(4.0, 2.0),
+        };
+        let document = Document::restore(
+            CANVAS,
+            slopshop_core::color::WORKING_SPACE,
+            slopshop_core::BlendSpace::Perceptual,
+            vec![layer],
+            2,
+        )
+        .unwrap();
+        let mut session = Session::new(document);
+        let shape = Shape::Rectangle {
+            left: 10.0,
+            top: 10.0,
+            right: 20.0,
+            bottom: 16.0,
+        };
+        let image = select_shape(
+            CANVAS,
+            None,
+            &shape,
+            EdgeOptions::default(),
+            Combine::Replace,
+        )
+        .unwrap()
+        .unwrap();
+        let selection = Selection::new(Arc::new(image));
+        session.perform(Edit::SetSelection { selection }).unwrap();
+        session
+    }
+
+    fn image_of(doc: &Document, id: LayerId) -> Arc<RasterImage> {
+        match &doc.layer(id).unwrap().content {
+            LayerContent::Raster { image, .. } => Arc::clone(image),
+            _ => panic!("a raster layer"),
+        }
+    }
+
+    #[test]
+    fn floating_pixels_leave_a_hole_in_one_undo_entry() {
+        let mut session = session();
+        let (edit, id) = float_edit(&mut session, LayerId::from_raw(1))
+            .unwrap()
+            .unwrap();
+        session.perform(edit).unwrap();
+        let doc = session.document();
+        // Above the layer, like it, the selected pixels where they were.
+        assert_eq!(doc.layers()[1].id, id);
+        let floating = doc.layer(id).unwrap();
+        assert_eq!(
+            (floating.opacity, floating.blend_mode),
+            (0.5, BlendMode::Multiply)
+        );
+        assert_eq!(floating.transform, Affine::translation(4.0, 2.0));
+        let pixels = image_of(doc, id);
+        assert_eq!(pixels.alpha_at(6, 8), 1.0);
+        assert_eq!(pixels.alpha_at(5, 8), 0.0);
+        assert_eq!(pixels.alpha_at(15, 13), 1.0);
+        assert_eq!(pixels.alpha_at(16, 13), 0.0);
+        // The hole, the rest kept; deselected.
+        let source = image_of(doc, LayerId::from_raw(1));
+        assert_eq!(source.alpha_at(6, 8), 0.0);
+        assert_eq!(source.alpha_at(5, 8), 1.0);
+        assert!(doc.selection().is_none());
+        session.undo().unwrap();
+        let doc = session.document();
+        assert_eq!(doc.layers().len(), 1);
+        assert_eq!(image_of(doc, LayerId::from_raw(1)).alpha_at(6, 8), 1.0);
+        assert!(doc.selection().is_some());
+    }
+
+    #[test]
+    fn duplicate_and_transform_again_is_one_undo_entry() {
+        let mut session = session();
+        let request = EditRequest::DuplicateTransformLayers {
+            ids: vec![1],
+            name_format: "{name} copy".into(),
+            matrix: [1.0, 0.0, 0.0, 1.0, 10.0, 0.0],
+        };
+        let edit = request.into_edit(&mut session).unwrap();
+        session.perform(edit).unwrap();
+        let doc = session.document();
+        assert_eq!(doc.layers().len(), 2);
+        let copy = &doc.layers()[1];
+        assert_eq!(copy.name, "photo copy");
+        assert_eq!(copy.transform, Affine::translation(14.0, 2.0));
+        assert_eq!(doc.layers()[0].transform, Affine::translation(4.0, 2.0));
+        session.undo().unwrap();
+        assert_eq!(session.document().layers().len(), 1);
+    }
+}

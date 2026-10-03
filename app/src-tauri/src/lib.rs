@@ -2053,6 +2053,7 @@ pub fn run() {
             selection::quick_select,
             paint::paint_stroke,
             paint::fill,
+            move_pixels::float_pixels,
             move_pixels::move_selected_pixels,
             move_pixels::selection_bounds_at,
             recent::recent_files,
