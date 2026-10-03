@@ -156,7 +156,7 @@ Checks (also run by CI):
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cd app && npm run format:check && npm run check && npm run build
+cd app && npm run format:check && npm run check && npm test && npm run build
 ```
 
 ## Languages
