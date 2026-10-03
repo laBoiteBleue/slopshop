@@ -19,6 +19,8 @@
   let {
     mapping,
     box,
+    matrix = $bindable(),
+    pivot = $bindable(),
     targets = [],
     onchange,
     oncommit,
@@ -27,6 +29,10 @@
     mapping: ViewMapping;
     /** The selected layers' bounds when the transform began, in document pixels. */
     box: Bounds;
+    /** Maps the box as it was to where it is now (the options bar's fields change it too). */
+    matrix: Matrix;
+    /** The reference point, in the box's coordinates: rotations and Alt scale about it. */
+    pivot: [number, number];
     /**
      * What moves and scales snap to (the canvas, the other layers), as in Photoshop; none when
      * snapping is off. Ctrl held: no snapping.
@@ -43,17 +49,12 @@
   /** Scales never reach 0 (the transform must stay invertible). */
   const MIN_SCALE = 1e-3;
 
-  /** Maps the box as it was to where it is now. */
-  let matrix = $state<Matrix>(affine.IDENTITY);
-  /** Rotation applied so far, for Shift's steps. */
-  let rotation = 0;
-
   type Drag = {
     pointerId: number;
     kind: "move" | "scale" | "rotate" | "skew" | "pivot";
     /** The handle dragged (scale). */
     handle: number;
-    /** `matrix` and `rotation` when the drag began, and the document point it began at. */
+    /** `matrix` and its angle when the drag began, and the document point it began at. */
     start: Matrix;
     startRotation: number;
     from: [number, number];
@@ -73,9 +74,6 @@
     (box.left + box.right) / 2,
     (box.top + box.bottom) / 2,
   ]);
-  /** The reference point, in the box's coordinates: rotations and Alt scale about it. */
-  // svelte-ignore state_referenced_locally
-  let pivot = $state<[number, number]>([(box.left + box.right) / 2, (box.top + box.bottom) / 2]);
   /** The right-click menu, where it opened. */
   let menuAt = $state<{ x: number; y: number } | null>(null);
   /** Handles in the box's coordinates, clockwise from the top-left corner (even: corners). */
@@ -120,7 +118,8 @@
       kind,
       handle,
       start: matrix,
-      startRotation: rotation,
+      // The box's angle, for Shift's steps (the fields may have changed it).
+      startRotation: Math.atan2(matrix[1], matrix[0]),
       from: mapping.toDocument(e.clientX, e.clientY),
       client: [e.clientX, e.clientY],
       moved: false,
@@ -190,23 +189,18 @@
   const pivotSnaps = $derived([...handles, center]);
 
   /** A rotation or flip of the box about the pivot (the right-click menu), as one step. */
-  function turn(by: Matrix, radians = 0) {
+  function turn(by: Matrix) {
     const [px, py] = affine.apply(matrix, ...pivot);
     matrix = affine.then(matrix, affine.about(by, px, py));
-    rotation += radians;
     onchange(matrix);
   }
 
   const menuItems = $derived.by((): MenuItem[] => {
     const command = (label: string, run: () => void): MenuItem => ({ kind: "command", label, run });
     return [
-      command(t("menu.edit.transform.rotate180"), () => turn(affine.rotation(Math.PI), Math.PI)),
-      command(t("menu.edit.transform.rotateCw"), () =>
-        turn(affine.rotation(Math.PI / 2), Math.PI / 2),
-      ),
-      command(t("menu.edit.transform.rotateCcw"), () =>
-        turn(affine.rotation(-Math.PI / 2), -Math.PI / 2),
-      ),
+      command(t("menu.edit.transform.rotate180"), () => turn(affine.rotation(Math.PI))),
+      command(t("menu.edit.transform.rotateCw"), () => turn(affine.rotation(Math.PI / 2))),
+      command(t("menu.edit.transform.rotateCcw"), () => turn(affine.rotation(-Math.PI / 2))),
       { kind: "separator" },
       command(t("menu.edit.transform.flipHorizontal"), () => turn(affine.scaling(-1, 1))),
       command(t("menu.edit.transform.flipVertical"), () => turn(affine.scaling(1, -1))),
@@ -275,7 +269,6 @@
       const turned = Math.atan2(p[1] - cy, p[0] - cx) - Math.atan2(from[1] - cy, from[0] - cx);
       let total = drag.startRotation + turned;
       if (e.shiftKey) total = Math.round(total / ROTATION_STEP) * ROTATION_STEP;
-      rotation = total;
       const by = affine.about(affine.rotation(total - drag.startRotation), cx, cy);
       matrix = affine.then(start, by);
       // Shown in (-180°, 180°], as Photoshop does.
