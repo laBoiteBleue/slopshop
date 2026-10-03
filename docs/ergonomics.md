@@ -210,6 +210,17 @@ built. Contributors: propose here first.
   Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
   dialog with one number of pixels, remembered for the session; the canvas edge is not an
   outline, as in Photoshop by default). Selecting is undoable; crop and size changes deselect.
+- Layer menu (2026-10-03): New (Layer, Group, Layer via Copy, Layer via Cut), then New Fill
+  Layer and New Adjustment Layer at the top level as in Photoshop (menus nest one level deep),
+  Duplicate, Delete, Rename, Show/Hide, Layer Mask, the clipping mask, Delete Paint, Group and
+  Ungroup, Arrange. Every command acts on the selected layers where that makes sense: Ungroup
+  ungroups every selected group, Disable/Enable and Delete of Layer Mask reach every selected
+  mask, and the clipping command reads Release only when every selected layer is clipped
+  (what it then does). Rename stays on the active layer. Arrange, Photoshop's shortcuts: Bring
+  to Front (Shift+Ctrl+]), Bring Forward (Ctrl+]), Send Backward (Ctrl+[), Send to Back
+  (Shift+Ctrl+[), by the physical keys (^ and $ on AZERTY); the selected layers move within
+  their own groups, a run of them as a whole, and the commands are grayed when nothing would
+  move.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
@@ -249,11 +260,8 @@ Open:
 
 - [ ] Alt+click on an eye shows only that layer (again: shows them all back).
 - [ ] Drag over several eyes to show or hide them in one stroke.
-- [ ] Ctrl+[ and Ctrl+] move the selected layers down and up; Shift+Ctrl+[ and ] to the bottom
-      and the top.
 - [ ] Alt+[ and Alt+] select the layer below and above (with Shift: add it to the selection).
 - [ ] Drag a layer onto the "+" button duplicates it, onto the trash deletes it (Photoshop).
-- [ ] Shift+Ctrl+N: new empty layer (once painting exists).
 - [ ] Scrubby labels: dragging the "Opacity" label changes the value (Photoshop).
 - [ ] Shift++ / Shift+- cycle through the blend modes of the selected layers.
 - [ ] Layer locks: transparency, pixels, position, all (padlock icons).
@@ -262,6 +270,43 @@ Open:
       only the document's notice.
 - [ ] Alt+click on the mask thumbnail shows the mask alone on the canvas.
 - [ ] Double-click the thumbnail opens the layer's properties (name, color label, blend options).
+
+### Layer menu (audit of 2026-10-03)
+
+Photoshop's Layer menu is a reference for what users expect, not a list to copy. The
+maintainer's answers to the audit:
+
+- **Decided, to build**:
+  - New Fill Layer > Solid Color: made with the foreground color, without a dialog; its color
+    stays editable (Properties panel, double-click on the thumbnail). Gradient and Pattern
+    come with a gradient engine and patterns, not before (no dead entries).
+  - Layer > Align (left, horizontal centers, right, top, vertical centers, bottom) and
+    Distribute (horizontal and vertical centers, horizontal and vertical spacing), one
+    implementation shared with buttons in the Move tool's options bar. As Photoshop: aligned
+    to the selected layers' common bounds, to the canvas for one layer, to the selection's
+    bounds when there is one.
+  - New Layer from Visible (Photoshop's stamp visible, Alt+Shift+Ctrl+E): the visible
+    composite as a new layer at the top of the document, the layers kept.
+  - Merge Visible keeps Photoshop's Shift+Ctrl+E; Export moves to Alt+Shift+Ctrl+W
+    (Photoshop's Export As).
+  - Layer styles (drop shadow, glows, stroke, overlays) as in Photoshop: a list of editable
+    effects per layer, computed after its own stack and mask (they read its final alpha and
+    draw around it), sharing the stack's primitives (blur, fills, blend modes). Not entries of
+    the stack (those are applied before the mask, inside the layer, and never edited). An ADR
+    comes first.
+  - Image > Adjustments keeps applying to every visible pixel layer; a layer's stack stays
+    listed below it in the layers panel.
+- **Decided, not added**: Apply Layer Mask (masks stay non-destructive), Smart Objects (a
+  shared, linked or replaceable source is a later document-level question, with the DAG),
+  linked layers (selection and groups cover their uses), vector masks (no vector content
+  yet: then one mask concept with several representations), Group from Layers (it is Group
+  Layers), Rasterize forced by a tool (no text or vector layer yet; to settle with the first
+  of them).
+- **Open question**: a submenu kept for what is destructive, as the maintainer suggests:
+  Rasterize, Merge Layers (Ctrl+E), Merge Visible, Flatten Image. Its name, what Rasterize
+  does on each kind of layer (a stack, a fill layer, a group; whether it bakes the transform),
+  whether Flatten keeps transparency, and whether merging an adjustment layer down makes an
+  entry of the layer's stack rather than pixels.
 
 ### Tabs and documents
 

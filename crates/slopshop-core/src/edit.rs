@@ -886,6 +886,98 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The edit that replaces the groups among `ids` by their layers (Layer > Ungroup Layers on
+    /// several layers): each as [`Edit::ungroup`], worked out on a copy as they happen, so that
+    /// groups side by side or inside one another ungroup together. Layers that are not groups
+    /// are left alone; [`EditError::NotAGroup`] when none is one.
+    pub fn ungroup_layers(doc: &Document, ids: &[LayerId]) -> Result<Edit, EditError> {
+        let first = *ids.first().ok_or(EditError::NoLayers)?;
+        let mut groups: Vec<LayerId> = Vec::new();
+        for &id in ids {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            if layer.is_group() && !groups.contains(&id) {
+                groups.push(id);
+            }
+        }
+        if groups.is_empty() {
+            return Err(EditError::NotAGroup(first));
+        }
+        let mut plan = doc.clone();
+        let mut edits = Vec::new();
+        for id in groups {
+            let edit = Edit::ungroup(&plan, id)?;
+            edit.clone().apply(&mut plan)?;
+            edits.push(edit);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
+    /// The edit that moves `ids` within their groups (Layer > Arrange, as Photoshop): to the top
+    /// or the bottom of their group, or each run of them past the next layer that does not
+    /// move. The layers of a group that move keep their order; a layer inside another of `ids`
+    /// moves with it. An empty batch when nothing moves (already at the top, for example).
+    pub fn arrange_layers(
+        doc: &Document,
+        ids: &[LayerId],
+        arrange: Arrange,
+    ) -> Result<Edit, EditError> {
+        let moving = outermost_in_order(doc, ids)?;
+        let mut parents: Vec<Option<LayerId>> = Vec::new();
+        for &id in &moving {
+            let (parent, _) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
+            if !parents.contains(&parent) {
+                parents.push(parent);
+            }
+        }
+        if parents.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        let moves = |id: &LayerId| moving.contains(id);
+        let mut plan = doc.clone();
+        let mut edits = Vec::new();
+        for parent in parents {
+            let mut order: Vec<LayerId> = siblings(doc, parent)?.iter().map(|l| l.id).collect();
+            match arrange {
+                Arrange::Front | Arrange::Back => {
+                    let (mut ends, rest): (Vec<LayerId>, Vec<LayerId>) =
+                        order.iter().partition(|id| moves(id));
+                    order = if arrange == Arrange::Front {
+                        rest.into_iter().chain(ends).collect()
+                    } else {
+                        ends.extend(rest);
+                        ends
+                    };
+                }
+                // From the top down, so that a run of moving layers passes the layer above it
+                // as a whole.
+                Arrange::Forward => {
+                    for i in (0..order.len().saturating_sub(1)).rev() {
+                        if moves(&order[i]) && !moves(&order[i + 1]) {
+                            order.swap(i, i + 1);
+                        }
+                    }
+                }
+                Arrange::Backward => {
+                    for i in 1..order.len() {
+                        if moves(&order[i]) && !moves(&order[i - 1]) {
+                            order.swap(i, i - 1);
+                        }
+                    }
+                }
+            }
+            // Bottom to top, each layer to its final place: those below it are already there.
+            for (index, &id) in order.iter().enumerate() {
+                if plan.locate(id) == Some((parent, index)) {
+                    continue;
+                }
+                let edit = Edit::MoveLayer { id, parent, index };
+                edit.clone().apply(&mut plan)?;
+                edits.push(edit);
+            }
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that moves `ids` into `parent` (`None`: the top level) at `index` among the layers
     /// of `parent` that do not move (0 = below them all), keeping their stacking order; a layer
     /// inside another of `ids` moves with it. Layers already in place are left alone: the edit
@@ -942,6 +1034,19 @@ impl Edit {
         }
         Ok(Edit::Batch(edits))
     }
+}
+
+/// Where Layer > Arrange moves layers among the layers of their group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arrange {
+    /// To the top (Bring to Front).
+    Front,
+    /// Above the layer above them (Bring Forward).
+    Forward,
+    /// Below the layer below them (Send Backward).
+    Backward,
+    /// To the bottom (Send to Back).
+    Back,
 }
 
 /// A turn or flip of the whole image (Image > Image Rotation).
@@ -1970,6 +2075,122 @@ mod tests {
         let empty = group_layer(&mut doc, "empty", Vec::new());
         assert_eq!(
             Edit::group_layers(&doc, empty, &[]),
+            Err(EditError::NoLayers)
+        );
+    }
+
+    #[test]
+    fn ungrouping_several_groups_side_by_side_and_nested_at_once() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b", "c", "d", "e"]);
+        let inner = group_layer(&mut doc, "inner", Vec::new());
+        let i = inner.id;
+        Edit::group_layers(&doc, inner, &[ids[1]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let outer = group_layer(&mut doc, "outer", Vec::new());
+        let o = outer.id;
+        Edit::group_layers(&doc, outer, &[ids[0], i])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let side = group_layer(&mut doc, "side", Vec::new());
+        let s = side.id;
+        Edit::group_layers(&doc, side, &[ids[3]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let before = tree(&doc);
+        assert_eq!(
+            before,
+            ["outer", " a", " inner", "  b", "c", "side", " d", "e"]
+        );
+
+        // A layer that is not a group is left alone; the order of the ids does not matter.
+        let edit = Edit::ungroup_layers(&doc, &[i, ids[2], s, o]).unwrap();
+        let undo = edit.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), ["a", "b", "c", "d", "e"]);
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(tree(&doc), before);
+
+        assert_eq!(
+            Edit::ungroup_layers(&doc, &[ids[2]]),
+            Err(EditError::NotAGroup(ids[2]))
+        );
+        assert_eq!(Edit::ungroup_layers(&doc, &[]), Err(EditError::NoLayers));
+    }
+
+    #[test]
+    fn arranging_moves_layers_within_their_group_as_photoshop() {
+        let arranged = |names: &[&str], picked: &[usize], arrange: Arrange| {
+            let mut doc = Document::new(Size::new(8, 8));
+            let ids = stack(&mut doc, names);
+            let picked: Vec<LayerId> = picked.iter().map(|&k| ids[k]).collect();
+            let edit = Edit::arrange_layers(&doc, &picked, arrange).unwrap();
+            let before = tree(&doc);
+            let undo = edit.apply(&mut doc).unwrap();
+            let after = tree(&doc);
+            undo.apply(&mut doc).unwrap();
+            assert_eq!(tree(&doc), before);
+            after
+        };
+        let names = ["a", "b", "c", "d", "e"];
+        // Bottom to top. The picked layers keep their order.
+        assert_eq!(
+            arranged(&names, &[0, 2], Arrange::Front),
+            ["b", "d", "e", "a", "c"]
+        );
+        assert_eq!(
+            arranged(&names, &[2, 4], Arrange::Back),
+            ["c", "e", "a", "b", "d"]
+        );
+        // A run passes the layer above it as a whole; at the top, a layer stays.
+        assert_eq!(
+            arranged(&names, &[1, 2], Arrange::Forward),
+            ["a", "d", "b", "c", "e"]
+        );
+        assert_eq!(
+            arranged(&names, &[0, 4], Arrange::Forward),
+            ["b", "a", "c", "d", "e"]
+        );
+        assert_eq!(
+            arranged(&names, &[0, 3], Arrange::Backward),
+            ["a", "b", "d", "c", "e"]
+        );
+        assert_eq!(arranged(&names, &[4], Arrange::Front), names);
+    }
+
+    #[test]
+    fn arranging_stays_within_each_group_and_moves_a_group_whole() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b", "c", "d"]);
+        let group = group_layer(&mut doc, "g", Vec::new());
+        let g = group.id;
+        Edit::group_layers(&doc, group, &[ids[0], ids[1]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["g", " a", " b", "c", "d"]);
+        // `a` inside the group, `c` outside: each goes to the top of its own group.
+        Edit::arrange_layers(&doc, &[ids[0], ids[2]], Arrange::Front)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["g", " b", " a", "d", "c"]);
+        // The group and a layer inside it: the group moves with what is inside it.
+        Edit::arrange_layers(&doc, &[ids[0], g], Arrange::Forward)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(tree(&doc), ["d", "g", " b", " a", "c"]);
+        // Nothing to move: an empty batch.
+        assert_eq!(
+            Edit::arrange_layers(&doc, &[ids[2]], Arrange::Front),
+            Ok(Edit::Batch(Vec::new()))
+        );
+        assert_eq!(
+            Edit::arrange_layers(&doc, &[], Arrange::Front),
             Err(EditError::NoLayers)
         );
     }
