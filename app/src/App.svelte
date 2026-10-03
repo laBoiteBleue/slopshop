@@ -175,23 +175,46 @@
   /** Tabs being closed: a second close request for the same tab is ignored. */
   const closing = new Set<number>();
 
-  async function closeTab(id: number) {
-    if (closing.has(id) || !tabs.some((d) => d.id === id)) return;
+  /** Close tab `id`, unsaved changes asked about first. False when the user kept it open. */
+  async function closeTab(id: number): Promise<boolean> {
+    if (closing.has(id) || !tabs.some((d) => d.id === id)) return true;
     closing.add(id);
     try {
-      if (!(await confirmClose(id))) return;
+      if (!(await confirmClose(id))) return false;
       await engine.closeDocument(id);
     } finally {
       closing.delete(id);
     }
     // Look the tab up again: other tabs may have been closed while waiting.
     const index = tabs.findIndex((d) => d.id === id);
-    if (index < 0) return;
+    if (index < 0) return true;
     tabs.splice(index, 1);
     if (activeId === id) {
       // Like browsers: the tab to the right, else the one to the left.
       activeId = (tabs[index] ?? tabs[index - 1])?.id ?? null;
       frame = null;
+    }
+    return true;
+  }
+
+  /**
+   * File > Close All (Alt+Ctrl+W): every tab, from the active one, each unsaved one asked
+   * about; Cancel stops there, as in Photoshop.
+   */
+  let closingAll = false;
+
+  async function closeAll() {
+    if (closingAll) return;
+    closingAll = true;
+    try {
+      while (tabs.length > 0) {
+        const id = activeId ?? tabs[0].id;
+        if (!(await closeTab(id))) return;
+      }
+    } catch (e) {
+      showError(String(e));
+    } finally {
+      closingAll = false;
     }
   }
 
@@ -2057,6 +2080,7 @@
           ),
           separator,
           cmd(t("menu.file.close"), () => doc && void closeTab(doc.id), keys("mod", "W"), !doc),
+          cmd(t("menu.file.closeAll"), () => void closeAll(), keys("mod", "alt", "W"), !doc),
           separator,
           cmd(t("menu.file.save"), () => saveActive(false), keys("mod", "S"), !doc || busy),
           cmd(
@@ -2448,6 +2472,12 @@
         if (!e.repeat) selectionCommand(command);
         return;
       }
+    }
+    // Alt+Ctrl+W: File > Close All.
+    if (hasShortcutModifier(e) && e.altKey && !e.shiftKey && shortcutLetter(e) === "w") {
+      e.preventDefault();
+      if (!e.repeat) void closeAll();
+      return;
     }
     if (!hasShortcutModifier(e) || e.altKey) return;
     // Letters as typed on Latin layouts (AZERTY too), see `shortcutLetter`.
