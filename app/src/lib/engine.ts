@@ -53,6 +53,8 @@ export type LayerView = {
     values: number[];
     curves: number[][][] | null;
     curveSamples: number[][] | null;
+    /** Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says). */
+    gradient: number[][] | null;
   } | null;
 };
 
@@ -70,7 +72,8 @@ export type AdjustmentId =
   | "channelMixer"
   | "invert"
   | "posterize"
-  | "threshold";
+  | "threshold"
+  | "gradientMap";
 
 /** Adjustments in the order of Photoshop's New Adjustment Layer menu. */
 export const ADJUSTMENTS: AdjustmentId[] = [
@@ -87,6 +90,7 @@ export const ADJUSTMENTS: AdjustmentId[] = [
   "invert",
   "posterize",
   "threshold",
+  "gradientMap",
 ];
 
 /** Number of parameters of an adjustment (`PARAM_COUNT` in crates/slopshop-core/src/adjust.rs). */
@@ -222,6 +226,7 @@ export type EditRequest =
       adjustment: AdjustmentId;
       values: number[];
       curves?: number[][][];
+      gradient?: number[][];
     }
   /** What Image > Adjustments will do, while its dialog is open: an adjustment layer at its
    * neutral settings clipped above each layer it applies to (a live gesture, then cancelled). */
@@ -252,6 +257,8 @@ export type EditRequest =
       values: number[];
       /** Curves only: the points of the composite, red, green and blue curves. */
       curves?: number[][][];
+      /** Gradient Map only: its stops `[location, r, g, b]`. */
+      gradient?: number[][];
     }
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }

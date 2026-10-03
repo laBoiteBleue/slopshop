@@ -913,7 +913,55 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             b.resize(b.len().next_multiple_of(4), 0);
             vec![(*b"curv", b)]
         }
+        Adjustment::GradientMap { gradient, reverse } => {
+            vec![(*b"grdm", gradient_map(&gradient, reverse))]
+        }
     }
+}
+
+/// A `grdm` block (Adobe's layout): version 1, reverse, no dither, an empty name, the color
+/// stops (location 0–4096, midpoint 50 %, a user color in RGB), two opaque transparency stops,
+/// then the noise settings Photoshop writes for a solid gradient (unused).
+fn gradient_map(gradient: &slopshop_core::gradient::Gradient, reverse: bool) -> Vec<u8> {
+    let mut b = 1u16.to_be_bytes().to_vec();
+    b.extend([u8::from(reverse), 0]);
+    // The name: an empty Unicode string.
+    b.extend(0u32.to_be_bytes());
+    b.extend((gradient.stops().len() as u16).to_be_bytes());
+    for stop in gradient.stops() {
+        b.extend(u32::from(stop.location).to_be_bytes());
+        b.extend(50u32.to_be_bytes());
+        // Mode 0: a user color; the color space 0 (RGB), three components of 16 bits, one unused.
+        b.extend(0u16.to_be_bytes());
+        b.extend(0u16.to_be_bytes());
+        for c in stop.color {
+            b.extend((u16::from(c) * 257).to_be_bytes());
+        }
+        b.extend(0u16.to_be_bytes());
+    }
+    b.extend(2u16.to_be_bytes());
+    for location in [0u32, 4096] {
+        b.extend(location.to_be_bytes());
+        b.extend(50u32.to_be_bytes());
+        b.extend(255u16.to_be_bytes());
+    }
+    // Expansion count, interpolation (smoothness: 0 for linear), length, mode, seed,
+    // showing transparency, vector color, roughness, color model, minimum and maximum colors,
+    // a dummy.
+    b.extend(2u16.to_be_bytes());
+    b.extend(0u16.to_be_bytes());
+    b.extend(32u16.to_be_bytes());
+    b.extend(0u16.to_be_bytes());
+    b.extend(0u32.to_be_bytes());
+    b.extend(0u16.to_be_bytes());
+    b.extend(0u16.to_be_bytes());
+    b.extend(2048u32.to_be_bytes());
+    b.extend(3u16.to_be_bytes());
+    b.extend([0u8; 8]);
+    b.extend([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    b.extend(0u16.to_be_bytes());
+    b.resize(b.len().next_multiple_of(4), 0);
+    b
 }
 
 fn header(out: &mut Vec<u8>, size: Size, depth: PsdDepth, format: Format) {

@@ -840,8 +840,8 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 // Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
 // `format` is the adjustment (Adjustment::index); its 20 parameters are `color`, `transfer`,
 // `transfer2`, `m0` and `m1` (p0 to p4), Photo Filter's color already linear (sRGB primaries).
-// Curves' lookup tables (composite, red, green, blue: CURVE_LUT f32 each) are in the tile
-// table from `table_offset`.
+// Curves' lookup tables (composite, red, green, blue: CURVE_LUT f32 each), and Gradient Map's
+// (red, green, blue), are in the tile table from `table_offset`.
 const ADJUST_EXPOSURE: u32 = 0u;
 const ADJUST_HUE_SATURATION: u32 = 1u;
 const ADJUST_LEVELS: u32 = 2u;
@@ -855,6 +855,7 @@ const ADJUST_COLOR_BALANCE: u32 = 9u;
 const ADJUST_PHOTO_FILTER: u32 = 10u;
 const ADJUST_CHANNEL_MIXER: u32 = 11u;
 const ADJUST_CURVES: u32 = 12u;
+const ADJUST_GRADIENT_MAP: u32 = 13u;
 
 // A curve's lookup table at `v` (clamped to [0, 1]), linearly interpolated (curve::lookup).
 fn curve_at(offset: u32, v: f32) -> f32 {
@@ -1081,6 +1082,16 @@ fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<
                 curve_at(table, curve_at(table + 3u * n, c.b)),
             );
         }
+        case ADJUST_GRADIENT_MAP: {
+            // The gradient's color at the luminance (Rec. 601 weights).
+            let n = CURVE_LUT;
+            let luminance = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+            return vec3<f32>(
+                curve_at(table, luminance),
+                curve_at(table + n, luminance),
+                curve_at(table + 2u * n, luminance),
+            );
+        }
         default: {
             return c;
         }
@@ -1105,8 +1116,10 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     if kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER {
         adjusted = adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, straight);
     } else {
-        let encoded = to_blend(straight, perceptual);
-        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, encoded), perceptual);
+        // Gradient Map works on sRGB-encoded values whatever the blend space.
+        let space = perceptual || kind == ADJUST_GRADIENT_MAP;
+        let encoded = to_blend(straight, space);
+        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, encoded), space);
     }
     return fade(below, vec4<f32>(adjusted * alpha, alpha), coverage, perceptual);
 }
