@@ -781,6 +781,8 @@ const serialView = makeQueue();
 // Live edits (slider drags) are coalesced: only the latest value still waiting is sent, and
 // only within the same document.
 let waitingLive: { documentId: number; edit: EditRequest; replace: boolean } | null = null;
+// So are the requests of a drag moving selected pixels: each holds the whole move so far.
+let waitingPixels: { documentId: number; request: MovePixelsRequest } | null = null;
 
 // Pans and zooms are coalesced into the last request still waiting in the queue (same
 // document): deltas add up, zoom factors multiply (around the latest anchor), absolute zooms
@@ -865,6 +867,22 @@ export type PaintRequest = {
   /** Pointer samples since the last batch: `[x, y, pressure]`, document pixels. */
   samples: [number, number, number][];
   /** The last batch: the stroke is committed (one undo entry). */
+  end: boolean;
+};
+
+/** A request of a Move tool drag moving selected pixels (see `move_pixels::MovePixelsRequest`). */
+export type MovePixelsRequest = {
+  /** Requests of one drag share its id. */
+  drag: number;
+  /** The layer's pixels or its mask. */
+  target: Exclude<PaintTarget, "selection">;
+  layerId: number;
+  /** The move since the drag began, whole document pixels. */
+  dx: number;
+  dy: number;
+  /** Alt: copied, not cut. */
+  copy: boolean;
+  /** The drag is over (one undo entry). */
   end: boolean;
 };
 
@@ -996,6 +1014,33 @@ export const engine = {
   /** The layer showing a pixel at document pixel (x, y): the Move tool's Auto-Select. */
   layerAt: (documentId: number, x: number, y: number) =>
     invoke<number | null>("layer_at", { documentId, x, y }),
+  /**
+   * The selection's bounds when document point (x, y) is inside it (as its outline shows),
+   * else null: a Move tool drag from there moves the selected pixels.
+   */
+  selectionBoundsAt: (documentId: number, x: number, y: number) =>
+    invoke<Bounds | null>("selection_bounds_at", { documentId, x, y }),
+  /**
+   * Move the selected pixels (the Move tool inside a selection), live; the request with `end`
+   * makes the drag one undo entry. Resolves to null when merged into a request of the same drag
+   * still waiting (which then sends this one's move).
+   */
+  movePixels: (documentId: number, request: MovePixelsRequest): Promise<DocumentView | null> => {
+    if (
+      waitingPixels &&
+      waitingPixels.documentId === documentId &&
+      waitingPixels.request.drag === request.drag
+    ) {
+      waitingPixels.request = request;
+      return Promise.resolve(null);
+    }
+    const slot = { documentId, request };
+    waitingPixels = slot;
+    return serial(() => {
+      if (waitingPixels === slot) waitingPixels = null;
+      return invoke<DocumentView>("move_selected_pixels", { documentId, request: slot.request });
+    });
+  },
   /** What moving `ids` can snap to (bounds in document pixels). */
   moveSnapTargets: (documentId: number, ids: number[]) =>
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),

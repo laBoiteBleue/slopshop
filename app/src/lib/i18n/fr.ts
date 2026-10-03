@@ -221,6 +221,9 @@ const fr: Messages = {
   "colorPicker.a": "a :",
   "colorPicker.labB": "b :",
   "paint.hidden": "Le calque est masqué : affichez-le pour y peindre.",
+  "move.needRaster":
+    "Sélectionnez un calque de pixels ou un masque de fusion pour déplacer les pixels sélectionnés.",
+  "move.hidden": "Le calque est masqué : affichez-le pour déplacer ses pixels sélectionnés.",
   "options.refineEdge": "Affiner les contours",
   "options.refineEdge.hint":
     "Affine les contours en pleine définition (cheveux, poils) : plus lent",

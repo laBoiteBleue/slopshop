@@ -10,6 +10,7 @@
 mod ai;
 mod export;
 mod ipc;
+mod move_pixels;
 mod paint;
 mod recent;
 mod segment;
@@ -128,6 +129,8 @@ struct OpenDocument {
     overlays: ViewOverlays,
     /// A paint stroke under way, shown in place of its layer's pixels (view state too).
     paint_preview: Option<paint::PaintPreview>,
+    /// Selected pixels the Move tool moved, floating until something else happens.
+    floating: Option<move_pixels::Floating>,
 }
 
 impl OpenDocument {
@@ -146,6 +149,7 @@ impl OpenDocument {
             last_selection: None,
             overlays: ViewOverlays::default(),
             paint_preview: None,
+            floating: None,
         }
     }
 
@@ -2212,6 +2216,8 @@ pub fn run() {
             selection::quick_select,
             paint::paint_stroke,
             paint::fill_selection,
+            move_pixels::move_selected_pixels,
+            move_pixels::selection_bounds_at,
             recent::recent_files,
             recent::clear_recent_files,
             recent::recent_thumbnail,
@@ -3452,5 +3458,126 @@ mod tests {
         assert_eq!(u32_at(36), 3);
         assert_eq!(f64_at(40), -12.5);
         assert_eq!(f64_at(48), 40.25);
+    }
+
+    #[test]
+    fn selected_pixels_move_float_and_undo_by_drag() {
+        use slopshop_core::selection::{Combine, EdgeOptions, Selection, Shape, select_shape};
+        let size = Size::new(300, 200);
+        let session = super::blank_session(size, None, "Layer 1").unwrap();
+        let state = AppState::new();
+        let doc = state.add_document(session, None, Vec::new()).unwrap();
+        // Pixel (x, y) of the layer is [x, y, 9, 255]; columns 10 to 20 of rows 5 to 8 selected.
+        let mut pixels = Vec::new();
+        for y in 0..size.height {
+            for x in 0..size.width {
+                pixels.extend_from_slice(&[x as u8, y as u8, 9, 255]);
+            }
+        }
+        let image =
+            Arc::new(RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap());
+        let shape = Shape::Rectangle {
+            left: 10.0,
+            top: 5.0,
+            right: 20.0,
+            bottom: 8.0,
+        };
+        let selected = select_shape(size, None, &shape, EdgeOptions::default(), Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let id = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let id = document.session.allocate_layer_id();
+            let layer = Layer {
+                id,
+                name: "photo".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::IDENTITY,
+                content: LayerContent::raster(image),
+            };
+            document
+                .session
+                .perform(Edit::InsertLayer {
+                    parent: None,
+                    index: 1,
+                    layer,
+                })
+                .unwrap();
+            document
+                .session
+                .perform(Edit::SetSelection {
+                    selection: Selection::new(Arc::new(selected)),
+                })
+                .unwrap();
+            id
+        };
+        let request = |drag: u64, dx: i64, end: bool| move_pixels::MovePixelsRequest {
+            drag,
+            target: paint::PaintTarget::Layer,
+            layer_id: id.get(),
+            dx,
+            dy: 0,
+            copy: false,
+            end,
+        };
+        let pixel = |state: &AppState, x: u32, y: u32| -> Vec<u8> {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let layer = document.session.document().layer(id).unwrap();
+            let LayerContent::Raster { image, .. } = &layer.content else {
+                panic!("a raster layer");
+            };
+            let tile = image.levels()[0]
+                .tile(slopshop_core::tile::TileCoord { col: 0, row: 0 })
+                .unwrap();
+            let at = ((y * 256 + x) * 4) as usize;
+            tile[at..at + 4].to_vec()
+        };
+        let selection_left = |state: &AppState| {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let selection = document.session.document().selection().unwrap();
+            slopshop_core::selection::bounds(selection.image())
+                .unwrap()
+                .x
+        };
+        // One drag, live then ended: the pixels and the selection move, a hole is left.
+        move_pixels::move_pixels(&state, doc.id, &request(1, 10, false)).unwrap();
+        let view = move_pixels::move_pixels(&state, doc.id, &request(1, 20, true)).unwrap();
+        assert!(view.layers.last().unwrap().painted);
+        assert_eq!(pixel(&state, 30, 5), [10, 5, 9, 255]);
+        assert_eq!(pixel(&state, 12, 6), [0, 0, 0, 0]);
+        assert_eq!(selection_left(&state), 30);
+        // The next drag moves them from where they started: what they covered comes back.
+        move_pixels::move_pixels(&state, doc.id, &request(2, 5, true)).unwrap();
+        assert_eq!(pixel(&state, 35, 5), [10, 5, 9, 255]);
+        assert_eq!(pixel(&state, 32, 5), [32, 5, 9, 255]);
+        assert_eq!(pixel(&state, 12, 6), [0, 0, 0, 0]);
+        assert_eq!(selection_left(&state), 35);
+        // One undo entry per drag.
+        {
+            let mut documents = state.documents().unwrap();
+            documents.get_mut(doc.id).unwrap().session.undo().unwrap();
+        }
+        assert_eq!(pixel(&state, 30, 5), [10, 5, 9, 255]);
+        assert_eq!(selection_left(&state), 30);
+        {
+            let mut documents = state.documents().unwrap();
+            documents.get_mut(doc.id).unwrap().session.undo().unwrap();
+        }
+        assert_eq!(pixel(&state, 12, 6), [12, 6, 9, 255]);
+        assert_eq!(selection_left(&state), 10);
+        // A drag back where it started leaves no undo entry.
+        move_pixels::move_pixels(&state, doc.id, &request(3, 4, false)).unwrap();
+        move_pixels::move_pixels(&state, doc.id, &request(3, 0, true)).unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        assert!(!document.session.document().layer(id).unwrap().is_painted());
+        assert!(document.session.can_redo());
     }
 }

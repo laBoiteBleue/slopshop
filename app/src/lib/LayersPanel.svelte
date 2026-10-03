@@ -22,6 +22,7 @@
     onlive,
     ongestureend,
     onclear,
+    onnudge,
     contextMenu = [],
     emptyContextMenu = [],
     onlayerdrag,
@@ -47,6 +48,11 @@
     ongestureend: (documentId: number) => Promise<void>;
     /** Delete with a selection: the selected pixels of the active layer are erased instead. */
     onclear?: () => void;
+    /**
+     * Arrows: the app may move the selected pixels instead of the layers (the Move tool with a
+     * selection); whether it did.
+     */
+    onnudge?: (dx: number, dy: number) => boolean;
   } = $props();
 
   // The panel shows one document for its whole life (it is keyed by document). Capture its id:
@@ -513,6 +519,7 @@
       if (document.querySelector("dialog[open]") || renaming !== null) return;
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;
+      if (onnudge?.(arrow[0] * step, arrow[1] * step)) return;
       moveSelected(arrow[0] * step, arrow[1] * step);
       return;
     }

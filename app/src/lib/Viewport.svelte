@@ -61,7 +61,7 @@
      * rounds; `docPerCss`: document pixels per CSS pixel, for snapping distances; `free`: Ctrl
      * held, no snapping), then ends.
      */
-    onmovestart?: (x: number, y: number, ctrl: boolean) => void;
+    onmovestart?: (x: number, y: number, ctrl: boolean, alt: boolean) => void;
     onmove?: (dx: number, dy: number, docPerCss: number, free: boolean) => void;
     onmoveend?: () => void;
     /** A double-click on the image with the Move tool (Free Transform, as in Photoshop). */
@@ -464,7 +464,7 @@
         container.setPointerCapture(e.pointerId);
         moving = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
         const [x, y] = toDocument(e.clientX, e.clientY);
-        onmovestart?.(x, y, hasShortcutModifier(e));
+        onmovestart?.(x, y, hasShortcutModifier(e), e.altKey);
       }
       return;
     }
