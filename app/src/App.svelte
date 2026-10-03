@@ -15,6 +15,7 @@
     onAiProgress,
     onRecentFiles,
     onOpenEvents,
+    type AdjustmentId,
     type BrushRequest,
     type StrokeRequest,
     type ClipboardContents,
@@ -84,6 +85,7 @@
   import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
+  import AdjustDialog from "./lib/AdjustDialog.svelte";
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
@@ -666,6 +668,131 @@
 
   /** Photoshop's fixed fill colors: Black, 50% Gray and White (sRGB). */
   const FILL_COLORS = { black: "#000000", gray: "#808080", white: "#ffffff" };
+
+  /**
+   * Image > Adjustments is open (ADR 0029): on document `documentId`, for layers `ids`; the
+   * canvas previews it with the adjustment layers `previews` (a live gesture, cancelled when
+   * the dialog closes), hidden from the layers panel; `preview` shows them.
+   */
+  let adjustDialog = $state<{
+    documentId: number;
+    adjustment: AdjustmentId;
+    ids: number[];
+    previews: number[];
+    preview: boolean;
+    /** The settings chosen last (null: the neutral ones the preview started with). */
+    values: number[] | null;
+    curves: number[][][] | null;
+  } | null>(null);
+
+  /** The settings the adjustment dialog shows: those of its first preview layer. */
+  let adjustShown = $derived.by(() => {
+    const dialog = adjustDialog;
+    if (!dialog) return null;
+    const doc = tabs.find((d) => d.id === dialog.documentId);
+    const first = dialog.previews[0];
+    return doc && first !== undefined ? (findLayer(doc.layers, first)?.adjustment ?? null) : null;
+  });
+
+  /** The layers Image > Adjustments applies to: the selected visible raster layers. */
+  function adjustTargets(): number[] {
+    return (layersPanel?.selectedLayers() ?? [])
+      .filter((l) => l.kind === "raster" && l.visible)
+      .map((l) => l.id);
+  }
+
+  /** Image > Adjustments > `adjustment`: Invert at once, the others through their dialog. */
+  async function openAdjust(adjustment: AdjustmentId) {
+    const doc = active;
+    const ids = adjustTargets();
+    if (!doc || ids.length === 0 || adjustDialog) return;
+    if (adjustment === "invert") {
+      void edit(doc.id, { kind: "applyEffect", ids, adjustment, values: [] });
+      return;
+    }
+    const before = new Set(walkIds(doc.layers));
+    await live(doc.id, { kind: "previewEffect", ids, adjustment });
+    const after = tabs.find((d) => d.id === doc.id);
+    const previews = after ? walkIds(after.layers).filter((id) => !before.has(id)) : [];
+    if (previews.length === 0) {
+      void cancelGesture(doc.id);
+      return;
+    }
+    adjustDialog = {
+      documentId: doc.id,
+      adjustment,
+      ids,
+      previews,
+      preview: true,
+      values: null,
+      curves: null,
+    };
+  }
+
+  /** Every layer id of `layers`, groups' layers included. */
+  function walkIds(layers: LayerView[]): number[] {
+    return layers.flatMap((l) => [l.id, ...walkIds(l.children)]);
+  }
+
+  /**
+   * The preview showing the dialog's settings, whole each time: live edits sent while the
+   * engine is busy merge into the last one, which must then say everything.
+   */
+  function showAdjust(dialog: NonNullable<typeof adjustDialog>) {
+    const edits: EditRequest[] = dialog.previews.flatMap((id): EditRequest[] => [
+      { kind: "setLayerVisible", id, visible: dialog.preview },
+      ...(dialog.values || dialog.curves
+        ? [
+            {
+              kind: "setAdjustment" as const,
+              id,
+              adjustment: dialog.adjustment,
+              values: dialog.values ?? [],
+              curves: dialog.curves ?? undefined,
+            },
+          ]
+        : []),
+    ]);
+    void live(dialog.documentId, { kind: "batch", edits });
+  }
+
+  /** The dialog's settings changed. */
+  function adjustLive(values: number[], curves?: number[][][]) {
+    if (!adjustDialog) return;
+    adjustDialog = { ...adjustDialog, values, curves: curves ?? null };
+    showAdjust(adjustDialog);
+  }
+
+  function adjustPreview(preview: boolean) {
+    if (!adjustDialog) return;
+    adjustDialog = { ...adjustDialog, preview };
+    showAdjust(adjustDialog);
+  }
+
+  /** OK: the preview goes, the adjustment is applied to the layers' stacks (one undo entry). */
+  async function applyAdjust() {
+    const dialog = adjustDialog;
+    // The settings chosen last: the engine may not show them yet.
+    const shown = adjustShown;
+    adjustDialog = null;
+    if (!dialog) return;
+    await cancelGesture(dialog.documentId);
+    const values = dialog.values ?? shown?.values;
+    if (!values) return;
+    void edit(dialog.documentId, {
+      kind: "applyEffect",
+      ids: dialog.ids,
+      adjustment: dialog.adjustment,
+      values,
+      curves: dialog.curves ?? shown?.curves ?? undefined,
+    });
+  }
+
+  function cancelAdjust() {
+    const dialog = adjustDialog;
+    adjustDialog = null;
+    if (dialog) void cancelGesture(dialog.documentId);
+  }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
   let fillDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
@@ -2572,6 +2699,10 @@
     const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const several = selectedCount > 1;
     const noSelection = doc?.selectionKey == null;
+    // Image > Adjustments: on visible raster layers, as in Photoshop (ADR 0029).
+    const adjustable = (layersPanel?.selectedLayers() ?? []).some(
+      (l) => l.kind === "raster" && l.visible,
+    );
     return {
       newDocument: { label: t("menu.file.new"), run: () => void newDocument(), whileTyping: true },
       open: { label: t("menu.file.open"), run: () => void openWithDialog(), whileTyping: true },
@@ -2678,6 +2809,36 @@
         label: t("menu.edit.preferences"),
         run: () => (preferences = true),
         whileTyping: true,
+      },
+      adjustLevels: {
+        label: `${t("adjustment.levels")}…`,
+        run: () => void openAdjust("levels"),
+        disabled: !adjustable,
+      },
+      adjustCurves: {
+        label: `${t("adjustment.curves")}…`,
+        run: () => void openAdjust("curves"),
+        disabled: !adjustable,
+      },
+      adjustHueSaturation: {
+        label: `${t("adjustment.hueSaturation")}…`,
+        run: () => void openAdjust("hueSaturation"),
+        disabled: !adjustable,
+      },
+      adjustColorBalance: {
+        label: `${t("adjustment.colorBalance")}…`,
+        run: () => void openAdjust("colorBalance"),
+        disabled: !adjustable,
+      },
+      adjustBlackWhite: {
+        label: `${t("adjustment.blackWhite")}…`,
+        run: () => void openAdjust("blackWhite"),
+        disabled: !adjustable,
+      },
+      adjustInvert: {
+        label: t("adjustment.invert"),
+        run: () => void openAdjust("invert"),
+        disabled: !adjustable,
       },
       imageSize: {
         label: t("menu.image.imageSize"),
@@ -3029,6 +3190,40 @@
       {
         label: t("menu.image"),
         items: [
+          {
+            // Photoshop's order.
+            kind: "submenu",
+            label: t("menu.image.adjustments"),
+            disabled: !doc,
+            items: (() => {
+              const adjustable = adjustTargets().length > 0;
+              const dialog = (adjustment: AdjustmentId) =>
+                cmd(
+                  `${t(`adjustment.${adjustment}`)}…`,
+                  () => void openAdjust(adjustment),
+                  undefined,
+                  !adjustable,
+                );
+              return [
+                dialog("brightnessContrast"),
+                item("adjustLevels"),
+                item("adjustCurves"),
+                dialog("exposure"),
+                separator,
+                dialog("vibrance"),
+                item("adjustHueSaturation"),
+                item("adjustColorBalance"),
+                item("adjustBlackWhite"),
+                dialog("photoFilter"),
+                dialog("channelMixer"),
+                separator,
+                item("adjustInvert"),
+                dialog("posterize"),
+                dialog("threshold"),
+              ];
+            })(),
+          },
+          separator,
           cmd(t("menu.image.crop"), cropImage, undefined, !doc),
           item("imageSize"),
           item("canvasSize"),
@@ -3643,6 +3838,7 @@
             contextMenu={layerContextMenu}
             emptyContextMenu={emptyLayersContextMenu}
             onlayerdrag={onLayerDrag}
+            hidden={adjustDialog?.documentId === active.id ? adjustDialog.previews : []}
           />
         {/key}
         {#if selectedAdjustment}
@@ -3771,6 +3967,17 @@
     y={canvasMenu.y}
     items={canvasMenuItems}
     onclose={() => (canvasMenu = null)}
+  />
+{/if}
+{#if adjustDialog && adjustShown}
+  <AdjustDialog
+    adjustment={adjustShown}
+    preview={adjustDialog.preview}
+    onlive={(values) => adjustLive(values)}
+    oncurves={(curves) => adjustLive([], curves)}
+    onpreview={adjustPreview}
+    onok={() => void applyAdjust()}
+    oncancel={cancelAdjust}
   />
 {/if}
 {#if fillDialog && !fillDialog.picking}

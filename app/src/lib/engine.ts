@@ -214,6 +214,18 @@ export type EditRequest =
   | { kind: "deletePaint"; ids: number[] }
   /** Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029). */
   | { kind: "deleteStackEntry"; id: number; index: number }
+  /** Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
+   * `ids`, within the selection (`values` and `curves` as `setAdjustment`). */
+  | {
+      kind: "applyEffect";
+      ids: number[];
+      adjustment: AdjustmentId;
+      values: number[];
+      curves?: number[][][];
+    }
+  /** What Image > Adjustments will do, while its dialog is open: an adjustment layer at its
+   * neutral settings clipped above each layer it applies to (a live gesture, then cancelled). */
+  | { kind: "previewEffect"; ids: number[]; adjustment: AdjustmentId }
   | { kind: "removeLayer"; id: number }
   | { kind: "setLayerVisible"; id: number; visible: boolean }
   | { kind: "setLayerOpacity"; id: number; opacity: number }

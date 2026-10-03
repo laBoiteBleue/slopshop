@@ -42,6 +42,12 @@ export const SHORTCUTS = {
   // ⌘, is every macOS application's settings; Ctrl+, does no harm elsewhere.
   preferences: ["mod+k", "mod+,"],
   // Image
+  adjustLevels: ["mod+l"],
+  adjustCurves: ["mod+m"],
+  adjustHueSaturation: ["mod+u"],
+  adjustColorBalance: ["mod+b"],
+  adjustBlackWhite: ["alt+shift+mod+b"],
+  adjustInvert: ["mod+i"],
   imageSize: ["alt+mod+i"],
   canvasSize: ["alt+mod+c"],
   // Layer

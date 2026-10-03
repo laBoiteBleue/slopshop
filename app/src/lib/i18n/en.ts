@@ -33,6 +33,8 @@ const en = {
   "menu.edit.stroke": "Stroke…",
   "menu.image.crop": "Crop",
   "crop.readout": "{width} × {height} px",
+  "menu.image.adjustments": "Adjustments",
+  "adjustDialog.preview": "Preview",
   "menu.image.imageSize": "Image Size…",
   "menu.image.canvasSize": "Canvas Size…",
   "menu.image.rotation": "Image Rotation",

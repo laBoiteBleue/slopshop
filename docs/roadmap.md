@@ -227,8 +227,11 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Layers carry their stack: strokes, Fill, Stroke, Delete and moved pixels add paint on
       top of it (what is below the paint cached for the stroke), `.slop` node v7 (v6 paint read
       exactly), Delete Paint empties it
-- [ ] Image > Adjustments as effects on the selected layers; the stack's mark and its entries
-      in the layers panel, deleted one by one; the Restore Eraser
+- [x] A layer's stack listed below it in the layers panel (an arrow unfolds it, newest on
+      top), entries deleted one by one
+- [x] Image > Adjustments as effects on the selected layers, with Photoshop's shortcuts, a
+      dialog previewed on the canvas
+- [ ] The Restore Eraser (in the Eraser's group)
 - [ ] The stack evaluated on the GPU into a bounded cache (ADR 0029, point 6)
 
 ## Phase 4 — Very large images

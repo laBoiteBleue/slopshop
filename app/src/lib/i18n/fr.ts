@@ -33,6 +33,8 @@ const fr: Messages = {
   "menu.edit.stroke": "Contour…",
   "menu.image.crop": "Recadrage",
   "crop.readout": "{width} × {height} px",
+  "menu.image.adjustments": "Réglages",
+  "adjustDialog.preview": "Aperçu",
   "menu.image.imageSize": "Taille de l'image…",
   "menu.image.canvasSize": "Taille de la zone de travail…",
   "menu.image.rotation": "Rotation de l'image",

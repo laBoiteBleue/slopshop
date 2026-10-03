@@ -555,6 +555,56 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The layers of `ids` that Image > Adjustments applies to (ADR 0029): visible raster
+    /// layers, as in Photoshop (groups, fills and adjustment layers are not).
+    pub fn effect_targets(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+        ids.iter()
+            .copied()
+            .filter(|&id| {
+                doc.layer(id).is_some_and(|layer| {
+                    layer.visible && matches!(layer.content, LayerContent::Raster { .. })
+                })
+            })
+            .collect()
+    }
+
+    /// Image > Adjustments (ADR 0029): `adjustment` applied to each layer of `ids` it applies to
+    /// ([`Self::effect_targets`]), within the selection, in one edit. [`EditError::NoLayers`]
+    /// when none.
+    pub fn apply_effect(
+        doc: &Document,
+        ids: &[LayerId],
+        adjustment: crate::adjust::Adjustment,
+    ) -> Result<Edit, EditError> {
+        if !adjustment.is_valid() {
+            return Err(EditError::InvalidAdjustment);
+        }
+        let mut edits = Vec::new();
+        for id in Self::effect_targets(doc, ids) {
+            let Some(layer) = doc.layer(id) else {
+                continue;
+            };
+            let Some(stack) = layer.content.stack() else {
+                continue;
+            };
+            let effect = crate::stack::Effect {
+                adjustment,
+                selection: doc.selection().cloned(),
+                to_document: layer.transform.then(doc.parent_transform(id)),
+                space: doc.blend_space(),
+            };
+            edits.push(Edit::SetLayerStack {
+                id,
+                stack: stack.with_effect(effect).map_err(EditError::Stack)?,
+                shown: None,
+            });
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that deletes entry `index` (bottom to top) of raster layer `id`'s stack (ADR
     /// 0029): the neighbours that become alike merge, and what was above it is evaluated
     /// again where it reaches.
@@ -2074,6 +2124,42 @@ mod tests {
             Edit::delete_entry(&doc, id, 3),
             Err(EditError::Stack(_))
         ));
+    }
+
+    #[test]
+    fn adjustments_apply_to_visible_raster_layers_within_the_selection() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let a = raster_layer(&mut doc, image(size, false, 10));
+        let hidden = raster_layer(&mut doc, image(size, false, 10));
+        Edit::SetLayerVisible {
+            id: hidden,
+            visible: false,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let fill = fill_layer(&mut doc, "fill");
+        let fill_id = fill.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 2,
+            layer: fill,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let ids = [a, hidden, fill_id];
+        assert_eq!(Edit::effect_targets(&doc, &ids), vec![a]);
+        let edit = Edit::apply_effect(&doc, &ids, crate::adjust::Adjustment::Invert).unwrap();
+        let undo = edit.apply(&mut doc).unwrap();
+        // 255 − 10 everywhere: no selection.
+        assert_eq!(shown(&doc, a).0.levels()[0].tiles()[0][0], 245);
+        assert!(shown(&doc, hidden).1.is_none());
+        undo.apply(&mut doc).unwrap();
+        assert!(shown(&doc, a).1.is_none());
+        assert_eq!(
+            Edit::apply_effect(&doc, &[hidden], crate::adjust::Adjustment::Invert),
+            Err(EditError::NoLayers)
+        );
     }
 
     #[test]
