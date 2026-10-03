@@ -25,12 +25,15 @@
     contextMenu = [],
     emptyContextMenu = [],
     onlayerdrag,
+    hidden = [],
   }: {
     doc: DocumentView;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
     contextMenu?: MenuItem[];
     /** The right-click menu of the empty area below the layers (built by the app). */
     emptyContextMenu?: MenuItem[];
+    /** Layers not listed: the preview of Image > Adjustments, while its dialog is open. */
+    hidden?: number[];
     /**
      * A drag of layers in progress (where the pointer is), or its end (`null`): the app lets it
      * go on to another tab.
@@ -113,6 +116,7 @@
   ): Row[] {
     for (let index = layers.length - 1; index >= 0; index--) {
       const layer = layers[index];
+      if (hidden.includes(layer.id)) continue;
       const visible = shown && layer.visible;
       // A clipped layer needs a layer below it; the base is the one the clipped layers rest on.
       const clipped = layer.clipped && index > 0;

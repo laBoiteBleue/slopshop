@@ -133,6 +133,13 @@ built. Contributors: propose here first.
   Edit > Free Transform), as in Photoshop: the selected pixels of the active layer float in a
   new layer above it, leaving a hole (paint), and are transformed; Esc takes it all back. A
   double-click on a layer still transforms the whole layer.
+- Image > Adjustments, in Photoshop's order and with its shortcuts (Levels Ctrl+L, Curves
+  Ctrl+M, Hue/Saturation Ctrl+U, Color Balance Ctrl+B, Black & White Alt+Shift+Ctrl+B, Invert
+  Ctrl+I): a dialog with the same settings as the adjustment layer's Properties, previewed on the
+  canvas while it is open (Preview turns it off); OK applies it to the selected visible pixel
+  layers, within the selection, as one undo entry; Invert applies at once. What is applied is
+  kept in the layer's stack (ADR 0029), listed below the layer and deletable; the same
+  adjustment applied twice in a row is one entry (×2), two Inverts cancel.
 - Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and
   height in pixels or percent; Image Size keeps the proportions by default, Canvas Size has
   Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All

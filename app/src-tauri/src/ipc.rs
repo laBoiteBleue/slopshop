@@ -376,6 +376,22 @@ pub enum EditRequest {
         id: u64,
         index: usize,
     },
+    /// Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
+    /// `ids`, within the selection (values and curves as `SetAdjustment`).
+    ApplyEffect {
+        ids: Vec<u64>,
+        adjustment: String,
+        values: Vec<f32>,
+        #[serde(default)]
+        curves: Option<Vec<Vec<[u8; 2]>>>,
+    },
+    /// What Image > Adjustments will do, shown while its dialog is open: above each layer it
+    /// applies to, an adjustment layer at its neutral settings clipped to it, the selection as
+    /// its mask. Meant for a live gesture that is cancelled (then `ApplyEffect`).
+    PreviewEffect {
+        ids: Vec<u64>,
+        adjustment: String,
+    },
     /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
     GroupLayers {
         ids: Vec<u64>,
@@ -530,6 +546,58 @@ impl EditRequest {
                         content: LayerContent::raster(std::sync::Arc::new(image)),
                     },
                 }
+            }
+            EditRequest::ApplyEffect {
+                ids,
+                adjustment,
+                values,
+                curves,
+            } => {
+                let mut built = Adjustment::from_params(&adjustment, &values).ok_or(format!(
+                    "unknown adjustment {adjustment} or too many values"
+                ))?;
+                if built.curves().is_some() {
+                    built = curves_adjustment(curves.as_deref())?;
+                }
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::apply_effect(session.document(), &ids, built).map_err(|e| e.to_string())?
+            }
+            EditRequest::PreviewEffect { ids, adjustment } => {
+                let adjustment = Adjustment::defaults(&adjustment)
+                    .ok_or(format!("unknown adjustment {adjustment}"))?;
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                let doc = session.document();
+                let mask = doc.selection().map(|s| slopshop_core::LayerMask {
+                    image: std::sync::Arc::clone(s.image()),
+                    enabled: true,
+                    replaces_alpha: false,
+                    original: None,
+                });
+                // Each above its layer, the highest first so that the places stay right.
+                let mut places: Vec<(Option<LayerId>, usize)> = Edit::effect_targets(doc, &ids)
+                    .into_iter()
+                    .filter_map(|id| doc.locate(id))
+                    .collect();
+                places.sort_by_key(|p| std::cmp::Reverse(p.1));
+                let mut edits = Vec::with_capacity(places.len());
+                for (parent, index) in places {
+                    edits.push(Edit::InsertLayer {
+                        parent,
+                        index: index + 1,
+                        layer: Layer {
+                            transform: slopshop_core::Affine::IDENTITY,
+                            clipped: true,
+                            id: session.allocate_layer_id(),
+                            name: adjustment.id().to_owned(),
+                            visible: true,
+                            opacity: 1.0,
+                            blend_mode: BlendMode::Normal,
+                            mask: mask.clone(),
+                            content: LayerContent::Adjustment { adjustment },
+                        },
+                    });
+                }
+                Edit::Batch(edits)
             }
             EditRequest::DeleteStackEntry { id, index } => {
                 Edit::delete_entry(session.document(), LayerId::from_raw(id), index)
