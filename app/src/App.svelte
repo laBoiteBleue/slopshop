@@ -98,7 +98,9 @@
   import RecentFiles from "./lib/RecentFiles.svelte";
   import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
   import PrintDialog from "./lib/PrintDialog.svelte";
-  import { recentLabels } from "./lib/recent";
+  import { baseName, recentLabels } from "./lib/recent";
+  import { exportFileName, formatOfPath, formatOrder, isVectorPath } from "./lib/fileNames";
+  import { cycled, moveTab as moveTabTo, tabSlot, upsert as upsertTab } from "./lib/tabs";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -196,9 +198,7 @@
    * (answers can arrive out of order).
    */
   function upsert(view: DocumentView) {
-    const index = tabs.findIndex((d) => d.id === view.id);
-    if (index < 0) tabs.push(view);
-    else if (view.revision >= tabs[index].revision) tabs[index] = view;
+    upsertTab(tabs, view);
   }
 
   function activate(id: number) {
@@ -336,9 +336,12 @@
   }
 
   function cycleTabs(step: number) {
-    if (tabs.length < 2) return;
-    const index = tabs.findIndex((d) => d.id === activeId);
-    activate(tabs[(index + step + tabs.length) % tabs.length].id);
+    const id = cycled(
+      tabs.map((d) => d.id),
+      activeId,
+      step,
+    );
+    if (id !== null) activate(id);
   }
 
   // --- Edits -----------------------------------------------------------------------------------
@@ -440,13 +443,15 @@
   /** Insertion position among all tabs for a tab dragged to `x`; `null` when dropping there
    * would leave the tab where it is (right before or after itself). */
   function tabSlotAt(x: number, draggedId: number): number | null {
-    const elements = [...tabbar.querySelectorAll<HTMLElement>(".tab[data-id]")];
-    const slot = elements.filter((el) => {
+    const middles = [...tabbar.querySelectorAll<HTMLElement>(".tab[data-id]")].map((el) => {
       const rect = el.getBoundingClientRect();
-      return rect.left + rect.width / 2 < x;
-    }).length;
-    const from = tabs.findIndex((d) => d.id === draggedId);
-    return slot === from || slot === from + 1 ? null : slot;
+      return rect.left + rect.width / 2;
+    });
+    return tabSlot(
+      middles,
+      x,
+      tabs.findIndex((d) => d.id === draggedId),
+    );
   }
 
   function onTabPointerUp(e: PointerEvent) {
@@ -466,10 +471,7 @@
   function moveTab(id: number, slot: number) {
     const from = tabs.findIndex((d) => d.id === id);
     if (from < 0) return;
-    // Position among the other tabs, as the engine counts it.
-    const index = slot > from ? slot - 1 : slot;
-    const [doc] = tabs.splice(from, 1);
-    tabs.splice(index, 0, doc);
+    const index = moveTabTo(tabs, from, slot);
     void sync(engine.moveDocument(id, index).then(() => null));
   }
 
@@ -2103,11 +2105,10 @@
    * Progress and outcomes (new tabs, updated documents, failures) arrive as events.
    */
   async function openFiles(paths: string[], target: "tab" | { layerOf: number }) {
-    const isVector = (path: string) => /\.(pdf|svgz?)$/i.test(path);
-    const others = paths.filter((path) => !isVector(path));
+    const others = paths.filter((path) => !isVectorPath(path));
     if (others.length > 0) await openPaths(others, target);
     const documentId = target === "tab" ? null : target.layerOf;
-    for (const path of paths.filter(isVector)) {
+    for (const path of paths.filter(isVectorPath)) {
       let info: VectorInfo;
       try {
         info = await engine.vectorInfo(path);
@@ -2237,7 +2238,10 @@
     if (choosingFile || exportTarget) return null;
     choosingFile = true;
     try {
-      const images = formats === "document" ? [] : exportFormatOrder();
+      const images =
+        formats === "document"
+          ? []
+          : formatOrder(Object.keys(EXPORT_FORMATS) as ExportFormat[], lastExportFormat);
       const documentFilter = { name: t("save.documentType"), extensions: [DOCUMENT_EXTENSION] };
       const imageFilters = images.map((format) => ({
         name: t(`export.format.${format}`),
@@ -2260,9 +2264,9 @@
       if (formats !== "images" && path.toLowerCase().endsWith(`.${DOCUMENT_EXTENSION}`)) {
         return path;
       }
-      const format = formats === "document" ? null : formatOfPath(path);
+      const format = formats === "document" ? null : formatOfPath(path, EXPORT_FORMATS);
       if (format === null) {
-        showError(t("export.unsupportedExtension", { name: fileNameOf(path) }));
+        showError(t("export.unsupportedExtension", { name: baseName(path) }));
         return null;
       }
       exportTarget = { documentId: doc.id, path, format };
@@ -2288,7 +2292,7 @@
       path = await chooseSaveAs(doc, documentOnly ? "document" : "all");
       if (path === null) return false;
     }
-    const name = path ? fileNameOf(path) : tabTitle(doc);
+    const name = path ? baseName(path) : tabTitle(doc);
     saving.push(id);
     try {
       const view = await engine.saveDocument(id, path);
@@ -2361,29 +2365,6 @@
 
   // --- Export ---------------------------------------------------------------------------------
 
-  /** Image formats in the order of the Save As file types: the last one used first. */
-  function exportFormatOrder(): ExportFormat[] {
-    const all = Object.keys(EXPORT_FORMATS) as ExportFormat[];
-    return [lastExportFormat, ...all.filter((f) => f !== lastExportFormat)];
-  }
-
-  function formatOfPath(path: string): ExportFormat | null {
-    const extension = path.toLowerCase().split(".").pop() ?? "";
-    const formats = Object.entries(EXPORT_FORMATS) as [ExportFormat, { extensions: string[] }][];
-    return formats.find(([, f]) => f.extensions.includes(extension))?.[0] ?? null;
-  }
-
-  /** The document name with `extension`, without characters files cannot have. */
-  function exportFileName(name: string, extension: string): string {
-    const safe = name.replace(/[\\/:*?"<>|]/g, "_");
-    const stem = safe.replace(/\.[^.]+$/, "") || safe;
-    return `${stem}.${extension}`;
-  }
-
-  function fileNameOf(path: string): string {
-    return path.split(/[\\/]/).pop() || path;
-  }
-
   function exportReason(failed: ExportFailed): string {
     return t(`export.error.${failed.code}`, { detail: failed.detail });
   }
@@ -2402,7 +2383,7 @@
       // Closed meanwhile: the user asked for that.
       if (failed.code === "documentClosed") return;
       showToast(null, {
-        title: t("export.failed", { name: fileNameOf(path), error: exportReason(failed) }),
+        title: t("export.failed", { name: baseName(path), error: exportReason(failed) }),
         lines: [],
         kind: "error",
       });
@@ -2425,7 +2406,7 @@
   function endExport(id: number | undefined, path: string | null): string {
     const job = exports.find((j) => j.id === id);
     exports = exports.filter((j) => j.id !== id);
-    return job?.name ?? (path ? fileNameOf(path) : "");
+    return job?.name ?? (path ? baseName(path) : "");
   }
 
   /** How long a toast stays, by kind; a report (`notice`) stays until dismissed. */
@@ -4091,7 +4072,7 @@
   {#key vectorImport}
     <VectorImportDialog
       path={vectorImport.path}
-      name={fileNameOf(vectorImport.path)}
+      name={baseName(vectorImport.path)}
       info={vectorImport.info}
       onopen={(pages, dpi) => settleVectorImport({ pages, dpi })}
       onclose={() => settleVectorImport(null)}
