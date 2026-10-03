@@ -63,6 +63,7 @@ function documentView(id: number, name: string | null, layers: LayerView[]): Doc
     selectionKey: null,
     canReselect: false,
     quickMask: false,
+    quickMaskOpacity: 50,
   } as DocumentView;
 }
 
@@ -114,6 +115,12 @@ beforeEach(() => {
           ]);
           documents.push(doc);
           return doc;
+        }
+        case "set_quick_mask": {
+          const doc = find();
+          doc.quickMask = args.on as boolean;
+          doc.quickMaskOpacity = args.opacity as number;
+          return { ...doc };
         }
         case "selection_bounds":
           return { left: 10, top: 20, right: 110, bottom: 70 };
@@ -460,4 +467,53 @@ test("Select > Modify shows each amount live; OK applies it, Cancel takes it bac
   expect(screen.getByRole("spinbutton", { name: "Expand By:" })).toHaveValue(25);
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   await vi.waitFor(() => expect(sent("cancel_gesture")).toEqual([{ documentId: 1 }]));
+});
+
+test("Q enters Quick Mask: named in the tab and the options bar, with its own Add / Remove colors", async () => {
+  localStorage.clear();
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  const foreground = () => screen.getByRole("button", { name: "Set foreground color" });
+  // A drawing color, kept aside while Quick Mask is on.
+  await user.keyboard("x");
+  const drawing = foreground().getAttribute("style");
+  await user.keyboard("q");
+  await vi.waitFor(() =>
+    expect(sent("set_quick_mask")).toEqual([{ documentId: 1, on: true, opacity: 50 }]),
+  );
+  await vi.waitFor(() => expect(screen.getByText("(Quick Mask)")).toBeInTheDocument());
+  expect(screen.getByRole("status")).toHaveTextContent("Quick Mask");
+  const add = screen.getByRole("button", { name: "Add" });
+  const remove = screen.getByRole("button", { name: "Remove" });
+  // Photoshop's default colors: black, the Brush removes.
+  expect(remove).toHaveAttribute("aria-pressed", "true");
+  await user.click(add);
+  expect(add).toHaveAttribute("aria-pressed", "true");
+  // X swaps the pair, D resets it.
+  await user.keyboard("x");
+  expect(remove).toHaveAttribute("aria-pressed", "true");
+  await user.keyboard("x");
+  await user.keyboard("d");
+  expect(remove).toHaveAttribute("aria-pressed", "true");
+  // Leaving it: the drawing colors as they were.
+  await user.keyboard("q");
+  await vi.waitFor(() => expect(screen.queryByText("(Quick Mask)")).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+  expect(foreground().getAttribute("style")).toBe(drawing);
+});
+
+test("Quick Mask's overlay opacity is sent as it changes, and kept for next time", async () => {
+  localStorage.clear();
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("q");
+  const label = await screen.findByText("Overlay opacity:");
+  const field = label.parentElement!.querySelector("input[type=number]") as HTMLInputElement;
+  await user.clear(field);
+  await user.type(field, "80{Enter}");
+  await vi.waitFor(() =>
+    expect(sent("set_quick_mask").at(-1)).toEqual({ documentId: 1, on: true, opacity: 80 }),
+  );
+  expect(localStorage.getItem("slopshop.quickMaskOpacity")).toBe("80");
+  localStorage.clear();
 });

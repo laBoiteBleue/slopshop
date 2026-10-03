@@ -44,6 +44,7 @@
     documentId,
     revision,
     quickMask = false,
+    quickMaskOpacity = 50,
     native = false,
     onframe,
     onmovestart,
@@ -59,6 +60,8 @@
     revision: number;
     /** Quick Mask over the image (drawn by the engine); a change triggers a new frame. */
     quickMask?: boolean;
+    /** Its opacity, percent, as the engine draws it; a change triggers a new frame. */
+    quickMaskOpacity?: number;
     /**
      * Native presentation: the engine presents to the window under this (transparent) area
      * instead of sending frames. Read once, like the document.
@@ -259,6 +262,7 @@
     // size changes.
     void currentRevision;
     void quickMask;
+    void quickMaskOpacity;
     void viewEpoch;
     void size.width;
     void size.height;

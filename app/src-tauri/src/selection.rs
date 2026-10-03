@@ -840,17 +840,19 @@ pub async fn reselect(
     Ok(document.view())
 }
 
-/// Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. View
-/// state: not an edit, not in the history.
+/// Select > Quick Mask Mode (Q): the view tints what the selection leaves out, at `opacity`
+/// percent (an app preference). View state: not an edit, not in the history.
 #[tauri::command]
 pub async fn set_quick_mask(
     state: State<'_, AppState>,
     document_id: u64,
     on: bool,
+    opacity: u8,
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
     document.overlays.quick_mask = on;
+    document.overlays.quick_mask_opacity = opacity.min(100);
     Ok(document.view())
 }
 

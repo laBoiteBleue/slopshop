@@ -61,6 +61,8 @@ pub struct DocumentView {
     pub can_reselect: bool,
     /// The view shows Quick Mask (ADR 0024): view state, not part of the document.
     pub quick_mask: bool,
+    /// Quick Mask's overlay opacity, percent.
+    pub quick_mask_opacity: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +136,7 @@ impl DocumentView {
             selection_key: doc.selection().map(|s| s.image().id().get()),
             can_reselect: false,
             quick_mask: false,
+            quick_mask_opacity: 50,
         }
     }
 }

@@ -200,11 +200,23 @@ pub struct Renderer {
 
 /// What a viewport frame shows over the image: view state, never part of the document or of
 /// the display cache.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewOverlays {
-    /// Quick Mask (ADR 0024): the area the selection leaves out tinted red, half opaque where
-    /// nothing is selected, fading where the selection is soft. Nothing without a selection.
+    /// Quick Mask (ADR 0024): the area the selection leaves out tinted red, at
+    /// `quick_mask_opacity` where nothing is selected, fading where the selection is soft.
+    /// Nothing without a selection.
     pub quick_mask: bool,
+    /// Percent, 0–100 (half opaque by default, as Photoshop).
+    pub quick_mask_opacity: u8,
+}
+
+impl Default for ViewOverlays {
+    fn default() -> Self {
+        Self {
+            quick_mask: false,
+            quick_mask_opacity: 50,
+        }
+    }
 }
 
 /// Upper bound on cached tiles per storage class.
@@ -870,19 +882,21 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("quick mask"),
                 });
-            self.record_quick_mask(&mut encoder, frame, selection.image(), tiles);
+            let opacity = f32::from(overlays.quick_mask_opacity.min(100)) / 100.0;
+            self.record_quick_mask(&mut encoder, frame, selection.image(), opacity, tiles);
         }
         finish(&mut encoder, frame.pixels);
         self.queue.submit([encoder.finish()]);
     }
 
-    /// Quick Mask (ADR 0024): the unselected area of the frame tinted red, the selection sampled
-    /// at the view's level like a layer's mask.
+    /// Quick Mask (ADR 0024): the unselected area of the frame tinted red at `opacity`, the
+    /// selection sampled at the view's level like a layer's mask.
     fn record_quick_mask(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Composited<'_>,
         selection: &RasterImage,
+        opacity: f32,
         tiles: &mut [Option<TileCache>; 4],
     ) {
         let doc_size = frame.document.size();
@@ -897,6 +911,7 @@ impl Renderer {
         // A mask with no tile in view (or none planned) reads 0: all of the view is tinted.
         let mut fields = LayerFields {
             kind: KIND_FILL,
+            opacity,
             ..LayerFields::default()
         };
         if let Some(plan) = plan.filter(|plan| !plan.range().is_empty()) {

@@ -864,7 +864,10 @@ fn render_overlays(
 fn quick_mask_tints_what_the_selection_leaves_out() {
     use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
     use std::sync::Arc;
-    let quick_mask = slopshop_render::ViewOverlays { quick_mask: true };
+    let quick_mask = slopshop_render::ViewOverlays {
+        quick_mask: true,
+        ..Default::default()
+    };
     for cached in [true, false] {
         let Some(r) = renderer() else { return };
         let r = r.with_display_cache(cached);
@@ -908,5 +911,18 @@ fn quick_mask_tints_what_the_selection_leaves_out() {
         assert_close(pixel(&masked, 450, 290), [255, 128, 128, 255]);
         // Half selected: half the tint.
         assert_close(pixel(&masked, 300, 150), [255, 191, 191, 255]);
+        // The overlay's opacity: a quarter, or fully opaque.
+        let light = slopshop_render::ViewOverlays {
+            quick_mask_opacity: 25,
+            ..quick_mask
+        };
+        let opaque = slopshop_render::ViewOverlays {
+            quick_mask_opacity: 100,
+            ..quick_mask
+        };
+        let light = render_overlays(&r, s.document(), light, size);
+        let opaque = render_overlays(&r, s.document(), opaque, size);
+        assert_close(pixel(&light, 450, 290), [255, 191, 191, 255]);
+        assert_close(pixel(&opaque, 450, 290), [255, 0, 0, 255]);
     }
 }
