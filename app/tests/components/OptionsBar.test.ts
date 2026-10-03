@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import OptionsBar from "../../src/lib/OptionsBar.svelte";
 import type { ToolId } from "../../src/lib/tools";
 
@@ -68,4 +68,53 @@ test("the Brush and the Eraser keep their own settings", async () => {
   expect(props.brush.pressureSize).toBe(false);
   expect(screen.getByText("Opacity:")).toBeInTheDocument();
   expect(screen.getByText("Flow:")).toBeInTheDocument();
+});
+
+test("Quick Mask is shown whatever the tool, with Add / Remove for the Brush's colors", async () => {
+  const onquickmask = vi.fn();
+  render(OptionsBar, {
+    tool: "move",
+    autoSelect: false,
+    selectionMode: "replace",
+    feather: 0,
+    antiAlias: true,
+    wand: { tolerance: 32, contiguous: true, sampleAll: false },
+    quick: { size: 30, sampleAll: false, objectRefine: false },
+    brush: {
+      size: 20,
+      hardness: 1,
+      opacity: 1,
+      flow: 1,
+      pressureSize: false,
+      pressureOpacity: false,
+    },
+    eraser: {
+      size: 20,
+      hardness: 1,
+      opacity: 1,
+      flow: 1,
+      pressureSize: false,
+      pressureOpacity: false,
+    },
+    quickMask: { action: null },
+    quickMaskOpacity: 50,
+    onquickmask,
+  });
+  const user = userEvent.setup();
+  expect(screen.getByRole("status")).toHaveTextContent("Quick Mask");
+  // A gray paints some of either: neither is on.
+  expect(screen.getByRole("button", { name: "Add" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "Remove" })).toHaveAttribute("aria-pressed", "false");
+  await user.click(screen.getByRole("button", { name: "Add" }));
+  await user.click(screen.getByRole("button", { name: "Remove" }));
+  expect(onquickmask.mock.calls).toEqual([["add"], ["remove"]]);
+  expect(screen.getByText("Overlay opacity:")).toBeInTheDocument();
+  // The tool's own options follow.
+  expect(check("Auto-Select")).toBeInTheDocument();
+});
+
+test("without Quick Mask, nothing of it", () => {
+  open("brush");
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
 });

@@ -212,6 +212,7 @@ impl OpenDocument {
         view.dirty = self.dirty();
         view.can_reselect = self.reselectable().is_some();
         view.quick_mask = self.overlays.quick_mask;
+        view.quick_mask_opacity = self.overlays.quick_mask_opacity;
         view
     }
 }

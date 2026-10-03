@@ -23,6 +23,9 @@
     brush = $bindable(),
     eraser = $bindable(),
     transform,
+    quickMask = null,
+    quickMaskOpacity = $bindable(50),
+    onquickmask,
   }: {
     tool: ToolId;
     /** Free Transform under way: its fields replace the tool's options, as in Photoshop. */
@@ -42,6 +45,15 @@
     /** Brush and Eraser (ADR 0027): size in document pixels, the rest as shares in [0, 1]. */
     brush: PaintOptions;
     eraser: PaintOptions;
+    /**
+     * Quick Mask on (whatever the tool): what the Brush does to the selection with its colors,
+     * shown as Add / Remove (null for a gray: some of either).
+     */
+    quickMask?: { action: "add" | "remove" | null } | null;
+    /** Quick Mask's overlay opacity, percent. */
+    quickMaskOpacity?: number;
+    /** Add or Remove chosen: the Brush's colors become white or black. */
+    onquickmask?: (action: "add" | "remove") => void;
   } = $props();
 
   type PaintOptions = {
@@ -73,6 +85,32 @@
     <Icon name={current.icon} size={16} />
   </span>
   <span class="divider"></span>
+  {#if quickMask}
+    <!-- A mode, not a tool: shown whatever the tool, so that it is never forgotten. -->
+    <span class="mode" role="status">{t("quickMask.label")}</span>
+    <div class="segmented" role="group" aria-label={t("quickMask.label")}>
+      {#each ["add", "remove"] as const as action (action)}
+        <button
+          class:on={quickMask.action === action}
+          aria-pressed={quickMask.action === action}
+          title={t(action === "add" ? "quickMask.add.hint" : "quickMask.remove.hint")}
+          onmousedown={keepFocus}
+          onclick={() => onquickmask?.(action)}
+        >
+          {t(action === "add" ? "quickMask.add" : "quickMask.remove")}
+        </button>
+      {/each}
+    </div>
+    <SliderField
+      label={t("quickMask.opacity")}
+      bind:value={quickMaskOpacity}
+      min={0}
+      max={100}
+      unit="%"
+      width={44}
+    />
+    <span class="divider"></span>
+  {/if}
 
   {#if transform}
     {@render transform()}
@@ -219,5 +257,38 @@
   .icon-btn.on {
     background: var(--selected);
     color: var(--text);
+  }
+
+  /* Quick Mask's label: the overlay's red, so that the mode reads at a glance. */
+  .mode {
+    padding: 1px 8px;
+    border-radius: 9px;
+    background: #c0392b;
+    color: #ffffff;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .segmented button {
+    padding: 2px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .segmented button + button {
+    border-left: 1px solid var(--border-strong);
+  }
+
+  .segmented button.on {
+    background: var(--accent);
+    color: #ffffff;
   }
 </style>

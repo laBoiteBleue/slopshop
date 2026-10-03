@@ -224,7 +224,11 @@ built. Contributors: propose here first.
   selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Quick Mask
   Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
-  the ants). Painting in Quick Mask comes with the brushes. Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
+  the ants). In Quick Mask the Brush paints the selection (white selects, black unselects, a
+  gray partly, the Eraser unselects) with a pair of colors of its own, black and white at first
+  (D), so that the drawing colors come back on leaving it; the options bar says "Quick Mask"
+  whatever the tool, with Add and Remove (that pair, X swapping it) and the overlay's opacity
+  (an app preference, half by default); the tab's title ends with "(Quick Mask)". Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
   Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
   dialog with one number of pixels, remembered for the session, the change shown live on the
   image while it is set, Cancel taking it back, OK one undo entry; the canvas edge is not an
@@ -334,16 +338,13 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   their colors, as Photoshop; connected pixels or the whole image); Transform Selection (Free
   Transform's box, handles, fields and right-click menu on the selection's bounds; the outline
   follows live, Enter resamples the selection as a layer is resampled, one undo entry; Esc or
-  undo leaves it as it was; the layers never change); Quick Mask Mode (Q); All
+  undo leaves it as it was; the layers never change); Quick Mask Mode (Q, with its own Add / Remove colors and overlay opacity); All
   Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
   Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
   Mask; saved selections; layers.
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Quick Mask: "Quick Mask" stays visible while it is on; its own pair of gray swatches (white
-    and black), shown in the options bar as [Add] and [Remove]; X swaps them, D resets them,
-    the drawing colors come back on leaving; an overlay opacity slider (an app preference).
   - Saved selections are named objects of the document, kept in `.slop`: Select > Save
     Selection… asks a name (an existing name offers to replace it), Select > Load Selection >
     lists them and replaces the selection. Renaming, deleting and combining (Photoshop's

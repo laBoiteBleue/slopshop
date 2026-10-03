@@ -198,6 +198,8 @@ export type DocumentView = {
   canReselect: boolean;
   /** The view shows Quick Mask (view state, not in the document or its history). */
   quickMask: boolean;
+  /** Quick Mask's overlay opacity, percent. */
+  quickMaskOpacity: number;
 };
 
 /** A shape to select, in document pixels. */
@@ -1262,9 +1264,14 @@ export const engine = {
   /** Image > Crop with a selection: the canvas becomes the selection's bounds. */
   cropToSelection: (documentId: number) =>
     serial(() => invoke<DocumentView>("crop_to_selection", { documentId })),
-  /** Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. */
-  setQuickMask: (documentId: number, on: boolean) =>
-    serial(() => invoke<DocumentView>("set_quick_mask", { documentId, on })),
+  /**
+   * Select > Quick Mask Mode (Q): the view tints what the selection leaves out, at `opacity`
+   * percent.
+   */
+  setQuickMask: (documentId: number, on: boolean, opacity: number) =>
+    serial(() =>
+      invoke<DocumentView>("set_quick_mask", { documentId, on, opacity: Math.round(opacity) }),
+    ),
   /**
    * The marching ants over a region (document pixels) at `zoom` (screen pixels per document
    * pixel), sized to the view, as polylines in document pixels.

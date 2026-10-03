@@ -73,6 +73,14 @@
   import { clampPanelWidth, loadPanelWidth } from "./lib/panelWidth";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
+  import {
+    QUICK_MASK_COLORS,
+    loadQuickMaskOpacity,
+    quickMaskAction,
+    quickMaskColors,
+    saveQuickMaskOpacity,
+    type ColorPair,
+  } from "./lib/quickMask";
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { isEraser, isPaintTool, slotOf, slotTool, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
@@ -549,6 +557,31 @@
   });
   /** The foreground (the Brush's) and background colors, `#rrggbb` sRGB. */
   let colors = $state({ foreground: "#000000", background: "#ffffff" });
+  /**
+   * Quick Mask's own pair (white selects, black unselects), so that the drawing colors are as
+   * they were on leaving it; the options bar shows it as Add / Remove.
+   */
+  let quickMaskPair = $state<ColorPair>({ ...QUICK_MASK_COLORS });
+  /** Quick Mask's overlay opacity, percent: an app preference. */
+  let quickMaskOpacity = $state(loadQuickMaskOpacity());
+  /** The colors the swatches show and the Brush paints: Quick Mask's pair while it is on. */
+  function paintColors(): ColorPair {
+    return active?.quickMask ? quickMaskPair : colors;
+  }
+  function setPaintColors(pair: ColorPair) {
+    if (active?.quickMask) quickMaskPair = pair;
+    else colors = pair;
+  }
+  // The opacity set: saved, and sent to the document in Quick Mask unless it shows it already
+  // (its answer comes back here).
+  $effect(() => saveQuickMaskOpacity(quickMaskOpacity));
+  $effect(() => {
+    const opacity = Math.round(quickMaskOpacity);
+    const doc = active;
+    if (doc?.quickMask && doc.quickMaskOpacity !== opacity) {
+      untrack(() => void sync(engine.setQuickMask(doc.id, true, opacity)));
+    }
+  });
 
   /** The width of the panels on the right, as the user left it; narrower if the window is. */
   let panelWidth = $state(loadPanelWidth());
@@ -634,7 +667,7 @@
         target,
         layerId: layer?.id ?? 0,
         brush: { ...options, spacing: 0.25 },
-        color: isEraser(tool) ? null : hexToSrgb(colors.foreground),
+        color: isEraser(tool) ? null : hexToSrgb(paintColors().foreground),
         restore: tool === "restoreEraser",
         sending: false,
         waiting: [],
@@ -1318,7 +1351,7 @@
   /** Select > Edit in Quick Mask Mode (Q): the view tints what the selection leaves out. */
   function toggleQuickMask() {
     const doc = active;
-    if (doc) selectionCommand((id) => engine.setQuickMask(id, !doc.quickMask));
+    if (doc) selectionCommand((id) => engine.setQuickMask(id, !doc.quickMask, quickMaskOpacity));
   }
 
   // Select > Modify: a dialog for the amount, remembered per change for the session.
@@ -3649,11 +3682,13 @@
         return;
       }
       case "defaultColors":
-        colors = { foreground: "#000000", background: "#ffffff" };
+        setPaintColors({ ...QUICK_MASK_COLORS });
         return;
-      case "swapColors":
-        colors = { foreground: colors.background, background: colors.foreground };
+      case "swapColors": {
+        const { foreground, background } = paintColors();
+        setPaintColors({ foreground: background, background: foreground });
         return;
+      }
       case "quickSelectionSize":
         quick.size = stepBrush(quick.size, action.larger);
         return;
@@ -3767,6 +3802,9 @@
     bind:brush={brushOptions}
     bind:eraser={eraserOptions}
     transform={transforming ? transformBar : undefined}
+    quickMask={active?.quickMask ? { action: quickMaskAction(quickMaskPair) } : null}
+    bind:quickMaskOpacity
+    onquickmask={(action) => (quickMaskPair = quickMaskColors(action))}
   />
   {#snippet transformBar()}
     {#if transforming}
@@ -3792,7 +3830,7 @@
       {tool}
       choices={toolChoices}
       onselect={selectTool}
-      bind:colors
+      bind:colors={paintColors, setPaintColors}
       onpickcolor={(which) => (colorPicker = which)}
     />
     <section class="workspace">
@@ -3848,6 +3886,9 @@
             {:else}
               <span class="tab-name">{tabTitle(doc)}</span>
             {/if}
+            {#if doc.quickMask}
+              <span class="tab-mode">({t("quickMask.label")})</span>
+            {/if}
             {#if saving.includes(doc.id)}
               <span
                 class="spinner"
@@ -3898,6 +3939,7 @@
               documentId={active.id}
               revision={active.revision}
               quickMask={active.quickMask}
+              quickMaskOpacity={active.quickMaskOpacity}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
               onmove={tool === "move" && !transforming ? onMoveDrag : undefined}
@@ -4145,9 +4187,9 @@
   {@const which = colorPicker}
   <ColorPickerDialog
     title={t(which === "foreground" ? "colorPicker.foreground" : "colorPicker.background")}
-    color={colors[which]}
+    color={paintColors()[which]}
     onapply={(hex) => {
-      colors[which] = hex;
+      setPaintColors({ ...paintColors(), [which]: hex });
       colorPicker = null;
     }}
     onclose={() => (colorPicker = null)}
@@ -4620,6 +4662,12 @@
   .tab-name {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* "(Quick Mask)" after the name, as Photoshop titles the document. */
+  .tab-mode {
+    flex: none;
+    color: #e57368;
   }
 
   .tab-rename {
