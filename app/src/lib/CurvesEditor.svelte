@@ -122,8 +122,13 @@
     onend();
   }
 
-  function onField(axis: 0 | 1, value: number) {
-    if (selected === null || !Number.isFinite(value)) return;
+  function onField(axis: 0 | 1, input: HTMLInputElement) {
+    const value = input.value.trim() === "" ? NaN : Number(input.value);
+    if (selected === null || !Number.isFinite(value)) {
+      // Empty or invalid: the point's value again, rather than 0.
+      if (current) input.value = String(current[axis]);
+      return;
+    }
     const next = [...points];
     const p: Point = [...next[selected]];
     p[axis] = value;
@@ -184,7 +189,7 @@
       max="255"
       disabled={current === null}
       value={current?.[0] ?? ""}
-      onchange={(e) => onField(0, Number((e.currentTarget as HTMLInputElement).value))}
+      onchange={(e) => onField(0, e.currentTarget)}
     />
     <label class="label" for="curves-output">{t("adjustment.curves.output")}</label>
     <input
@@ -194,7 +199,7 @@
       max="255"
       disabled={current === null}
       value={current?.[1] ?? ""}
-      onchange={(e) => onField(1, Number((e.currentTarget as HTMLInputElement).value))}
+      onchange={(e) => onField(1, e.currentTarget)}
     />
   </div>
 </div>
