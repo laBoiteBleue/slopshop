@@ -1343,13 +1343,14 @@ fn damaged_layer_trees_are_refused() {
     );
     assert_eq!(
         read(
-            &adjustment(r#""adjustment":"selectiveColor","values":[0,0,0,0,0]"#),
+            &adjustment(r#""adjustment":"colorLookup","values":[0,0,0,0,0]"#),
             "[1]"
         ),
         Err("newerVersion"),
         "an adjustment from a newer SlopShop"
     );
-    // Schema 0.8: missing values read as 0; more than 20 are refused (16 before schema 0.13).
+    // Schema 0.8: missing values read as 0; more than 37 are refused (16 before schema 0.13,
+    // 20 before 0.15).
     assert!(
         read(
             &adjustment(r#""adjustment":"exposure","values":[1,0,1]"#),
@@ -1360,7 +1361,7 @@ fn damaged_layer_trees_are_refused() {
     assert_eq!(
         read(
             &adjustment(
-                r#""adjustment":"exposure","values":[1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"#
+                r#""adjustment":"exposure","values":[1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"#
             ),
             "[1]"
         ),
@@ -1445,6 +1446,33 @@ fn gradient_maps_keep_their_stops_and_reverse() {
     push(
         &mut doc,
         "map",
+        LayerContent::Adjustment { adjustment },
+        1.0,
+    );
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    match &loaded.layers()[0].content {
+        LayerContent::Adjustment { adjustment: back } => assert_eq!(*back, adjustment),
+        _ => panic!("not an adjustment layer"),
+    }
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn selective_color_keeps_its_ranges_and_method() {
+    use slopshop_core::adjust::{Adjustment, SELECTIVE_RANGES};
+    let mut ranges = [[0i16; 4]; SELECTIVE_RANGES];
+    ranges[3] = [-100, 50, 25, 100];
+    ranges[7] = [5, 0, -5, 0];
+    let adjustment = Adjustment::SelectiveColor {
+        ranges,
+        absolute: true,
+    };
+    let path = temp_path("selective-color.slop");
+    let mut doc = Document::new(Size::new(4, 4));
+    push(
+        &mut doc,
+        "selective",
         LayerContent::Adjustment { adjustment },
         1.0,
     );

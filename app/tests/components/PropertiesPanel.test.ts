@@ -122,6 +122,18 @@ test("Gradient Map: Reverse keeps the stops, the editor sends them with the sett
   });
 });
 
+test("Selective Color: the Colors menu chooses the range, the method is Relative or Absolute", async () => {
+  const { onedit, user } = open("selectiveColor", []);
+  await user.selectOptions(screen.getByRole("combobox", { name: "Colors" }), "Blues");
+  await typeInto(user, "Cyan", "30");
+  // Blues are the fifth range: values 16–19.
+  expect(sent(onedit)[16]).toBe(30);
+  expect(sent(onedit)[0]).toBe(0);
+  expect(screen.getByRole("radio", { name: "Relative" })).toBeChecked();
+  await user.click(screen.getByRole("radio", { name: "Absolute" }));
+  expect(sent(onedit)[36]).toBe(1);
+});
+
 test("a slider applies live during the drag, one undo entry at its end", async () => {
   const { onlive, ongestureend, onedit } = open("hueSaturation", []);
   const slider = screen.getByRole("slider", { name: "Hue" });

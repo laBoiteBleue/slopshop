@@ -1066,10 +1066,16 @@ fn adjustment_layers_are_imported_with_their_settings() {
         adjustment("Invert 1", b"nvrt", Vec::new()),
         adjustment("Posterize 1", b"post", be16(&[4, 0])),
         adjustment("Threshold 1", b"thrs", be16(&[128, 0])),
-        adjustment("Selective Color 1", b"selc", vec![0; 8]),
+        adjustment("Selective Color 1", b"selc", {
+            // Absolute; the unused record, then reds and blacks set, the others 0.
+            let mut b = be16(&[1, 1, 0, 0, 0, 0, 20, -10, 0, 5]);
+            b.extend(be16(&[0; 4 * 7]));
+            b.extend(be16(&[0, 0, 0, -30]));
+            b
+        }),
     ];
     let opened = open_layers("adjustments.psd", &doc);
-    // Colorize and Selective Color are not reproduced yet.
+    // Colorize is not reproduced yet.
     assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
     let adjustments: Vec<(String, Adjustment)> = opened
         .document
@@ -1094,7 +1100,8 @@ fn adjustment_layers_are_imported_with_their_settings() {
             "Hue/Saturation 1",
             "Invert 1",
             "Posterize 1",
-            "Threshold 1"
+            "Threshold 1",
+            "Selective Color 1"
         ]
     );
     let find = |name: &str| {
@@ -1150,6 +1157,16 @@ fn adjustment_layers_are_imported_with_their_settings() {
         find("Threshold 1"),
         Adjustment::Threshold {
             level: 128.0 / 255.0
+        }
+    );
+    let mut ranges = [[0i16; 4]; slopshop_core::adjust::SELECTIVE_RANGES];
+    ranges[0] = [20, -10, 0, 5];
+    ranges[8] = [0, 0, 0, -30];
+    assert_eq!(
+        find("Selective Color 1"),
+        Adjustment::SelectiveColor {
+            ranges,
+            absolute: true
         }
     );
     // Levels with a channel of its own: the green one, exactly.

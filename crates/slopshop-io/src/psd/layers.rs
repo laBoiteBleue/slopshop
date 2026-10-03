@@ -870,6 +870,18 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
         ),
         b"nvrt" => (Adjustment::Invert, false),
         b"grdm" => gradient_map(block)?,
+        // Version, the method (0 relative, 1 absolute), then ten records of cyan, magenta,
+        // yellow and black (-100 to 100): an unused one, then the ranges in Photoshop's order.
+        b"selc" => {
+            let absolute = u16_at(2)? == 1;
+            let mut ranges = [[0i16; 4]; slopshop_core::adjust::SELECTIVE_RANGES];
+            for (r, range) in ranges.iter_mut().enumerate() {
+                for (i, v) in range.iter_mut().enumerate() {
+                    *v = i16_at(4 + 8 * (r + 1) + 2 * i)?.clamp(-100, 100);
+                }
+            }
+            (Adjustment::SelectiveColor { ranges, absolute }, false)
+        }
         // The number of levels.
         b"post" => (
             Adjustment::Posterize {

@@ -3285,6 +3285,7 @@
                 dialog("posterize"),
                 dialog("threshold"),
                 dialog("gradientMap"),
+                dialog("selectiveColor"),
               ];
             })(),
           },

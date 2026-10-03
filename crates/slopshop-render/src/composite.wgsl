@@ -840,8 +840,9 @@ fn dissolve(src: vec4<f32>, footprint: Footprint) -> vec4<f32> {
 // Adjustment layers (ADR 0020): the same math as slopshop_core::adjust, in f32. The layer's
 // `format` is the adjustment (Adjustment::index); its 20 parameters are `color`, `transfer`,
 // `transfer2`, `m0` and `m1` (p0 to p4), Photo Filter's color already linear (sRGB primaries).
-// Curves' lookup tables (composite, red, green, blue: CURVE_LUT f32 each), and Gradient Map's
-// (red, green, blue), are in the tile table from `table_offset`.
+// Curves' lookup tables (composite, red, green, blue: CURVE_LUT f32 each), Gradient Map's
+// (red, green, blue) and Selective Color's 37 parameters are in the tile table from
+// `table_offset`.
 const ADJUST_EXPOSURE: u32 = 0u;
 const ADJUST_HUE_SATURATION: u32 = 1u;
 const ADJUST_LEVELS: u32 = 2u;
@@ -856,6 +857,7 @@ const ADJUST_PHOTO_FILTER: u32 = 10u;
 const ADJUST_CHANNEL_MIXER: u32 = 11u;
 const ADJUST_CURVES: u32 = 12u;
 const ADJUST_GRADIENT_MAP: u32 = 13u;
+const ADJUST_SELECTIVE_COLOR: u32 = 14u;
 
 // A curve's lookup table at `v` (clamped to [0, 1]), linearly interpolated (curve::lookup).
 fn curve_at(offset: u32, v: f32) -> f32 {
@@ -974,6 +976,46 @@ fn levels(v: vec3<f32>, ib: vec3<f32>, iw: vec3<f32>, gamma: vec3<f32>, ob: vec3
     return ob + t * (ow - ob);
 }
 
+// Selective Color's parameter `k` (Adjustment::params order), from the tile table.
+fn selective_param(table: u32, k: u32) -> f32 {
+    return bitcast<f32>(tile_table[table + k]);
+}
+
+// Selective Color (slopshop_core::adjust::selective_color): each range's weight, then each
+// component moved by its ink and black, the ranges added up.
+fn selective_color(c: vec3<f32>, table: u32) -> vec3<f32> {
+    let v = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    let mx = max(v.r, max(v.g, v.b));
+    let mn = min(v.r, min(v.g, v.b));
+    let md = v.r + v.g + v.b - mx - mn;
+    var w: array<f32, 9>;
+    w[0] = select(0.0, mx - md, v.r == mx);
+    w[1] = select(0.0, md - mn, v.b == mn);
+    w[2] = select(0.0, mx - md, v.g == mx);
+    w[3] = select(0.0, md - mn, v.r == mn);
+    w[4] = select(0.0, mx - md, v.b == mx);
+    w[5] = select(0.0, md - mn, v.g == mn);
+    w[6] = select(0.0, 2.0 * mn - 1.0, mn > 0.5);
+    w[7] = 1.0 - abs(mx - 0.5) - abs(mn - 0.5);
+    w[8] = select(0.0, 1.0 - 2.0 * mx, mx < 0.5);
+    let absolute = selective_param(table, 36u) != 0.0;
+    var out = v;
+    for (var i = 0u; i < 3u; i++) {
+        var change = 0.0;
+        for (var r = 0u; r < 9u; r++) {
+            let ink = selective_param(table, 4u * r + i) / 100.0;
+            let black = selective_param(table, 4u * r + 3u) / 100.0;
+            if w[r] <= 0.0 || (ink == 0.0 && black == 0.0) {
+                continue;
+            }
+            let m = select(1.0 - v[i], 1.0, absolute);
+            change += clamp(((-1.0 - ink) * black - ink) * m, -v[i], 1.0 - v[i]) * w[r];
+        }
+        out[i] = clamp(v[i] + change, 0.0, 1.0);
+    }
+    return out;
+}
+
 fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, p4: vec4<f32>, table: u32, c: vec3<f32>) -> vec3<f32> {
     switch kind {
         case ADJUST_EXPOSURE: {
@@ -1082,6 +1124,9 @@ fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<
                 curve_at(table, curve_at(table + 3u * n, c.b)),
             );
         }
+        case ADJUST_SELECTIVE_COLOR: {
+            return selective_color(c, table);
+        }
         case ADJUST_GRADIENT_MAP: {
             // The gradient's color at the luminance (Rec. 601 weights).
             let n = CURVE_LUT;
@@ -1116,8 +1161,9 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     if kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER {
         adjusted = adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, straight);
     } else {
-        // Gradient Map works on sRGB-encoded values whatever the blend space.
-        let space = perceptual || kind == ADJUST_GRADIENT_MAP;
+        // Gradient Map and Selective Color work on sRGB-encoded values whatever the blend
+        // space.
+        let space = perceptual || kind == ADJUST_GRADIENT_MAP || kind == ADJUST_SELECTIVE_COLOR;
         let encoded = to_blend(straight, space);
         adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, encoded), space);
     }

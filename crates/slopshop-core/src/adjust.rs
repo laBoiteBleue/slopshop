@@ -9,7 +9,11 @@ use crate::curve::{Curve, lookup};
 use crate::gradient::Gradient;
 
 /// Number of parameters of an adjustment ([`Adjustment::params`]).
-pub const PARAM_COUNT: usize = 20;
+pub const PARAM_COUNT: usize = 37;
+
+/// Selective Color's ranges, in Photoshop's order: reds, yellows, greens, cyans, blues,
+/// magentas, whites, neutrals, blacks.
+pub const SELECTIVE_RANGES: usize = 9;
 
 /// One set of Levels settings: input black, input white, gamma, output black, output white.
 pub type LevelsChannel = [f32; 5];
@@ -108,13 +112,22 @@ pub enum Adjustment {
     /// document's blend space, so that the gradient's colors come out as chosen. The gradient
     /// is its own data, not in [`Adjustment::params`] (as Curves').
     GradientMap { gradient: Gradient, reverse: bool },
+    /// Photoshop's Selective Color: for each range ([`SELECTIVE_RANGES`] of them), cyan,
+    /// magenta, yellow and black in % (-100 to 100, integers), added (`absolute`) or in
+    /// proportion to what is there (relative). Adobe does not publish the math: Clément
+    /// Bœsch's measured model ("Understanding selective coloring in Adobe Photoshop", 2017).
+    /// On sRGB-encoded values whatever the blend space, as Gradient Map.
+    SelectiveColor {
+        ranges: [[i16; 4]; SELECTIVE_RANGES],
+        absolute: bool,
+    },
 }
 
 impl Adjustment {
     /// Every adjustment, with the parameters a new layer gets (Photoshop's defaults): neutral
     /// ones, except for Invert, Posterize, Threshold, Black & White, Photo Filter and Gradient
     /// Map, which change the image by nature.
-    pub const DEFAULTS: [Adjustment; 14] = [
+    pub const DEFAULTS: [Adjustment; 15] = [
         Adjustment::Exposure {
             exposure: 0.0,
             offset: 0.0,
@@ -180,6 +193,10 @@ impl Adjustment {
             gradient: Gradient::BLACK_TO_WHITE,
             reverse: false,
         },
+        Adjustment::SelectiveColor {
+            ranges: [[0; 4]; SELECTIVE_RANGES],
+            absolute: false,
+        },
     ];
 
     /// Stable identifier (files, IPC).
@@ -199,6 +216,7 @@ impl Adjustment {
             Adjustment::ChannelMixer { .. } => "channelMixer",
             Adjustment::Curves { .. } => "curves",
             Adjustment::GradientMap { .. } => "gradientMap",
+            Adjustment::SelectiveColor { .. } => "selectiveColor",
         }
     }
 
@@ -224,6 +242,7 @@ impl Adjustment {
             Adjustment::ChannelMixer { .. } => 11,
             Adjustment::Curves { .. } => 12,
             Adjustment::GradientMap { .. } => 13,
+            Adjustment::SelectiveColor { .. } => 14,
         }
     }
 
@@ -241,6 +260,7 @@ impl Adjustment {
             Adjustment::ColorBalance { .. } => 10,
             Adjustment::PhotoFilter { .. } => 5,
             Adjustment::ChannelMixer { .. } => 13,
+            Adjustment::SelectiveColor { .. } => 37,
         }
     }
 
@@ -287,6 +307,13 @@ impl Adjustment {
             } => vec![vibrance, saturation],
             Adjustment::Invert | Adjustment::Curves { .. } => vec![],
             Adjustment::GradientMap { reverse, .. } => vec![flag(reverse)],
+            // The ranges' cyan, magenta, yellow and black, then the method.
+            Adjustment::SelectiveColor { ranges, absolute } => ranges
+                .iter()
+                .flatten()
+                .map(|&v| f32::from(v))
+                .chain([flag(absolute)])
+                .collect(),
             Adjustment::Posterize { levels } => vec![levels],
             Adjustment::Threshold { level } => vec![level],
             Adjustment::BlackWhite {
@@ -400,6 +427,13 @@ impl Adjustment {
                 gradient,
                 reverse: flag(p[0]),
             },
+            // Percentages are whole (out of range ones are refused by is_valid).
+            Adjustment::SelectiveColor { .. } => Adjustment::SelectiveColor {
+                ranges: std::array::from_fn(|r| {
+                    std::array::from_fn(|i| p[4 * r + i].round().clamp(-1000.0, 1000.0) as i16)
+                }),
+                absolute: flag(p[4 * SELECTIVE_RANGES]),
+            },
         })
     }
 
@@ -485,6 +519,9 @@ impl Adjustment {
                 .all(|&v| within(v, -200.0, 200.0)),
             // Valid by construction (Curve::new, Gradient::new).
             Adjustment::Curves { .. } | Adjustment::GradientMap { .. } => true,
+            Adjustment::SelectiveColor { ranges, .. } => {
+                ranges.iter().flatten().all(|v| (-100..=100).contains(v))
+            }
         }
     }
 
@@ -526,9 +563,13 @@ impl Adjustment {
         }
     }
 
-    /// Runs on sRGB-encoded values whatever the document's blend space: Gradient Map.
+    /// Runs on sRGB-encoded values whatever the document's blend space: Gradient Map and
+    /// Selective Color.
     pub fn is_perceptual(&self) -> bool {
-        matches!(self, Adjustment::GradientMap { .. })
+        matches!(
+            self,
+            Adjustment::GradientMap { .. } | Adjustment::SelectiveColor { .. }
+        )
     }
 
     /// Runs in linear light whatever the document's blend space (ADR 0020).
@@ -731,6 +772,9 @@ impl Adjustment {
                 let luminance = LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
                 [0, 1, 2].map(|i| lookup(&luts[i], luminance))
             }
+            Adjustment::SelectiveColor { ranges, absolute } => {
+                selective_color(c, &ranges, absolute)
+            }
         }
     }
 }
@@ -772,6 +816,52 @@ static SRGB_MATRICES: LazyLock<(Mat3, Mat3)> = LazyLock::new(|| {
 /// A Photo Filter color (sRGB-encoded) as the linear sRGB values it multiplies.
 pub fn filter_color(color: [f32; 3]) -> [f64; 3] {
     color.map(|v| f64::from(TransferFunction::Srgb.decode(v)))
+}
+
+/// How much of each Selective Color range a color is (Bœsch's model, on `[0, 1]` values):
+/// reds, greens and blues where that component is the largest (largest - middle), cyans,
+/// magentas and yellows where red, green or blue is the smallest (middle - smallest), whites
+/// above ½ (2·smallest - 1), blacks below ½ (1 - 2·largest), neutrals everywhere
+/// (1 - |largest - ½| - |smallest - ½|).
+pub fn selective_weights([r, g, b]: [f64; 3]) -> [f64; SELECTIVE_RANGES] {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let mid = r + g + b - max - min;
+    let largest = |v: f64| if v == max { max - mid } else { 0.0 };
+    let smallest = |v: f64| if v == min { mid - min } else { 0.0 };
+    [
+        largest(r),
+        smallest(b),
+        largest(g),
+        smallest(r),
+        largest(b),
+        smallest(g),
+        if min > 0.5 { 2.0 * min - 1.0 } else { 0.0 },
+        1.0 - (max - 0.5).abs() - (min - 0.5).abs(),
+        if max < 0.5 { 1.0 - 2.0 * max } else { 0.0 },
+    ]
+}
+
+/// Selective Color on `[0, 1]` values: cyan acts on red, magenta on green, yellow on blue;
+/// each range moves a component by `((-1 - ink)·black - ink)·m` (m: 1, or what is left of the
+/// component, `1 - v`, when relative), kept within the component's room, times the range's
+/// weight; the ranges add up.
+fn selective_color(c: [f64; 3], ranges: &[[i16; 4]; SELECTIVE_RANGES], absolute: bool) -> [f64; 3] {
+    let v = c.map(|x| x.clamp(0.0, 1.0));
+    let weights = selective_weights(v);
+    std::array::from_fn(|i| {
+        let mut change = 0.0;
+        for (range, &weight) in ranges.iter().zip(&weights) {
+            if weight <= 0.0 || (range[i] == 0 && range[3] == 0) {
+                continue;
+            }
+            let ink = f64::from(range[i]) / 100.0;
+            let black = f64::from(range[3]) / 100.0;
+            let m = if absolute { 1.0 } else { 1.0 - v[i] };
+            change += (((-1.0 - ink) * black - ink) * m).clamp(-v[i], 1.0 - v[i]) * weight;
+        }
+        (v[i] + change).clamp(0.0, 1.0)
+    })
 }
 
 /// Black & White's gray: the smallest component, plus what the two others add, weighted by
@@ -905,7 +995,7 @@ mod tests {
             );
             assert_eq!(!close(a.apply(c), c), changes, "{a:?}");
         }
-        assert_eq!(Adjustment::defaults("selectiveColor"), None);
+        assert_eq!(Adjustment::defaults("colorLookup"), None);
     }
 
     #[test]
@@ -1031,6 +1121,69 @@ mod tests {
         assert!(!invalid.is_valid());
     }
 
+    /// Selective Color with `settings` (cyan, magenta, yellow, black) on range `range`.
+    fn selective(range: usize, settings: [i16; 4], absolute: bool) -> Adjustment {
+        let mut ranges = [[0; 4]; SELECTIVE_RANGES];
+        ranges[range] = settings;
+        Adjustment::SelectiveColor { ranges, absolute }
+    }
+
+    #[test]
+    fn selective_color_weighs_each_range_as_measured() {
+        // Pure red: all red, nothing else; a mid gray: all neutral.
+        assert_eq!(
+            selective_weights([1.0, 0.0, 0.0]),
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(selective_weights([0.5; 3])[7], 1.0);
+        // Yellow (red and green largest, blue smallest): yellows only.
+        assert_eq!(
+            selective_weights([1.0, 1.0, 0.0])[..6],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        // Light and dark grays: whites and blacks, partly neutral.
+        let light = selective_weights([0.8; 3]);
+        assert!((light[6] - 0.6).abs() < 1e-12 && (light[7] - 0.4).abs() < 1e-12);
+        let dark = selective_weights([0.1; 3]);
+        assert!((dark[8] - 0.8).abs() < 1e-12 && (dark[7] - 0.2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn selective_color_moves_each_component_by_its_ink() {
+        // Absolute cyan +100 % in the reds: a pure red loses all its red.
+        assert!(close(
+            selective(0, [100, 0, 0, 0], true).apply([1.0, 0.0, 0.0]),
+            [0.0; 3]
+        ));
+        // Relative: in proportion to what is left, nothing on a full component.
+        assert!(close(
+            selective(0, [100, 0, 0, 0], false).apply([1.0, 0.0, 0.0]),
+            [1.0, 0.0, 0.0]
+        ));
+        // Relative magenta +50 % in the neutrals: a mid gray loses a quarter of its green.
+        assert!(close(
+            selective(7, [0, 50, 0, 0], false).apply([0.5; 3]),
+            [0.5, 0.25, 0.5]
+        ));
+        // Black +100 %, absolute, in the neutrals: a mid gray goes black.
+        assert!(close(
+            selective(7, [0, 0, 0, 100], true).apply([0.5; 3]),
+            [0.0; 3]
+        ));
+        // Nothing set: nothing changes; out of range: refused.
+        let c = [0.3, 0.6, 0.2];
+        assert!(close(
+            Adjustment::defaults("selectiveColor").unwrap().apply(c),
+            c
+        ));
+        assert!(!selective(2, [0, 101, 0, 0], true).is_valid());
+        // The parameters: the ranges' four values, then the method.
+        let a = selective(8, [-20, 10, 0, 35], true);
+        let params = a.params();
+        assert_eq!(&params[32..37], &[-20.0, 10.0, 0.0, 35.0, 1.0]);
+        assert_eq!(Adjustment::from_params("selectiveColor", &params), Some(a));
+    }
+
     #[test]
     fn gradient_map_replaces_each_color_by_the_gradient_at_its_luminance() {
         use crate::gradient::{Gradient, GradientStop};
@@ -1134,7 +1287,7 @@ mod tests {
             Adjustment::from_params("posterize", &[6.0, 0.0, 0.0, 0.0, 0.0]),
             Some(Adjustment::Posterize { levels: 6.0 })
         );
-        assert_eq!(Adjustment::from_params("invert", &[0.0; 21]), None);
+        assert_eq!(Adjustment::from_params("invert", &[0.0; 38]), None);
     }
 
     #[test]

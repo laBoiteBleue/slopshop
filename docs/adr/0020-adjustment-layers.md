@@ -40,7 +40,13 @@ node model the document is heading to (ADR 0009).
    sRGB 8-bit colors), interpolated linearly, the luminance (Rec. 601 weights) mapped through
    three lookup tables like Curves'; it always runs on sRGB-encoded values, whatever the blend
    space, so that the gradient's colors come out as chosen (Photoshop's smoothness is not
-   reproduced). Others follow on the same model.
+   reproduced). Then Selective Color (2026-10-03): for each of Photoshop's nine ranges, cyan,
+   magenta, yellow and black (−100…100 %), relative or absolute; Adobe does not publish its
+   math, which follows Clément Bœsch's measured model ("Understanding selective coloring in
+   Adobe Photoshop", 2017: each range's weight from the largest, middle and smallest
+   components, each component moved by `((−1 − ink)·black − ink)·m`, the ranges added up).
+   Its 37 parameters (`PARAM_COUNT` grew to 37) go to the GPU in the tile table; it runs on
+   sRGB-encoded values, as Gradient Map. Others follow on the same model.
 5. **Blend mode**: normal only for now; the others (luminosity, color…) come later.
 6. **Both compositors**: a step of the shared step list (`Step::Adjust`), computed identically
    by the CPU reference and the GPU (tested against each other).

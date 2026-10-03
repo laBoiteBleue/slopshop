@@ -1408,6 +1408,17 @@ fn layered_document() -> Document {
             },
         },
     );
+    add(
+        &mut doc,
+        None,
+        "Selective Color 1",
+        LayerContent::Adjustment {
+            adjustment: Adjustment::SelectiveColor {
+                ranges: [[15, -25, 40, 10]; slopshop_core::adjust::SELECTIVE_RANGES],
+                absolute: false,
+            },
+        },
+    );
     let levels = add(
         &mut doc,
         None,

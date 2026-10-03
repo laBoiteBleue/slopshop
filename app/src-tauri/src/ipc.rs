@@ -7,7 +7,7 @@
 //! Layer ids travel as JSON numbers: exact up to 2^53, far beyond what a session allocates.
 
 use serde::{Deserialize, Serialize};
-use slopshop_core::adjust::{Adjustment, PARAM_COUNT};
+use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::curve::Curve;
 use slopshop_core::stack::Entry;
@@ -185,7 +185,7 @@ impl LayerView {
             adjustment: match &layer.content {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView {
                     id: adjustment.id(),
-                    values: adjustment.params(),
+                    values: adjustment.params().to_vec(),
                     curves: adjustment
                         .curves()
                         .map(|curves| curves.map(|c| c.points().to_vec())),
@@ -247,7 +247,7 @@ impl LayerView {
 #[serde(rename_all = "camelCase")]
 pub struct AdjustmentView {
     pub id: &'static str,
-    pub values: [f32; PARAM_COUNT],
+    pub values: Vec<f32>,
     /// Curves' points `[input, output]` on 0–255: composite, red, green, blue.
     pub curves: Option<[Vec<[u8; 2]>; 4]>,
     /// Each curve's output at `i / CURVE_SAMPLES` (0 to 1), for the editor to draw.

@@ -916,6 +916,19 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::GradientMap { gradient, reverse } => {
             vec![(*b"grdm", gradient_map(&gradient, reverse))]
         }
+        // Version 1, the method (0 relative, 1 absolute), then ten records of cyan, magenta,
+        // yellow and black: an unused one, then the ranges in Photoshop's order.
+        Adjustment::SelectiveColor { ranges, absolute } => {
+            let mut b = 1u16.to_be_bytes().to_vec();
+            b.extend(u16::from(absolute).to_be_bytes());
+            b.extend([0u8; 8]);
+            for range in ranges {
+                for v in range {
+                    b.extend(v.to_be_bytes());
+                }
+            }
+            vec![(*b"selc", b)]
+        }
     }
 }
 
