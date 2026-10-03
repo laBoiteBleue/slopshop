@@ -191,6 +191,8 @@ pub enum PasteMode {
     /// Edit > Paste Into: where it was copied when that meets the selection (its bounds), else
     /// in the middle of it.
     Into { selection: [f64; 4] },
+    /// Paste Here (the image's right-click menu): centered on the point clicked.
+    At { point: [f64; 2] },
 }
 
 /// The whole-pixel offset (dx, dy) that places pasted content, as Photoshop does. `bounds`:
@@ -204,9 +206,15 @@ pub fn paste_offset(
     view: Option<[f64; 4]>,
     canvas: Size,
 ) -> (i64, i64) {
+    let center = |[x0, y0, x1, y1]: [f64; 4]| ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    if let PasteMode::At { point: [px, py] } = mode {
+        let (bx, by) = center(bounds);
+        return ((px - bx).round() as i64, (py - by).round() as i64);
+    }
     let canvas = [0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)];
     let area = match mode {
         PasteMode::Into { selection } => selection,
+        PasteMode::At { .. } => canvas,
         PasteMode::Paste | PasteMode::InPlace => view
             .and_then(|view| intersection(view, canvas))
             .unwrap_or(canvas),
@@ -214,7 +222,6 @@ pub fn paste_offset(
     if placed && (mode == PasteMode::InPlace || intersection(bounds, area).is_some()) {
         return (0, 0);
     }
-    let center = |[x0, y0, x1, y1]: [f64; 4]| ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let ((ax, ay), (bx, by)) = (center(area), center(bounds));
     ((ax - bx).round() as i64, (ay - by).round() as i64)
 }
@@ -293,6 +300,16 @@ mod tests {
         assert_eq!(paste_offset(bounds, true, into, None, CANVAS), (600, 600));
         let meeting = [650.0, 650.0, 750.0, 750.0];
         assert_eq!(paste_offset(meeting, true, into, None, CANVAS), (0, 0));
+    }
+
+    #[test]
+    fn paste_here_centers_on_the_point_whatever_was_copied() {
+        let at = PasteMode::At {
+            point: [300.0, 200.0],
+        };
+        let bounds = [0.0, 0.0, 100.0, 50.0];
+        assert_eq!(paste_offset(bounds, true, at, None, CANVAS), (250, 175));
+        assert_eq!(paste_offset(bounds, false, at, None, CANVAS), (250, 175));
     }
 
     #[test]
