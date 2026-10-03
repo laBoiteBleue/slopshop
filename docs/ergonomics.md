@@ -211,8 +211,10 @@ built. Contributors: propose here first.
   default, as in Photoshop); Anti-alias softens its edge by about a pixel.
   Select > Color Range: a panel beside the image (not modal): click colors on the image or on its
   preview (Shift adds one, Alt takes one away, or the three eyedroppers), Fuzziness 0–200,
-  Invert; the preview shows the selection it would make, live; Enter applies, Esc cancels; a
-  current selection limits it, as in Photoshop.
+  Invert; Localized (each color selected only near where it was sampled, fading to nothing at
+  its Range, a quarter of the image at first); Sample All Layers (unchecked: the active layer);
+  the preview shows the selection it would make, live; Enter applies, Esc cancels; a current
+  selection limits it, as in Photoshop. Its settings are kept for the next time.
   Moving the outline alone, as in Photoshop: with the marquees, the Lasso or the Magic Wand in
   New Selection mode, a drag from inside the selection (without Shift or Alt; the pointer is the
   arrow there) moves the outline, its pixels staying where they are (Shift during the drag: by
@@ -338,7 +340,6 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Color Range: Localized (a radius around the sampled points) and Sample All Layers.
   - Quick Mask: "Quick Mask" stays visible while it is on; its own pair of gray swatches (white
     and black), shown in the options bar as [Add] and [Remove]; X swaps them, D resets them,
     the drawing colors come back on leaving; an overlay opacity slider (an app preference).

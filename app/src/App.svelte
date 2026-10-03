@@ -120,7 +120,11 @@
   import ObjectSelectionTool, { type ObjectHover } from "./lib/ObjectSelectionTool.svelte";
   import AiDownloadDialog from "./lib/AiDownloadDialog.svelte";
   import { failureMessage } from "./lib/ai";
-  import ColorRangeDialog, { sampleAt, type ColorRangeState } from "./lib/ColorRangeDialog.svelte";
+  import ColorRangeDialog, {
+    colorRangeRequest,
+    sampleAt,
+    type ColorRangeState,
+  } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import SelectionDrag from "./lib/SelectionDrag.svelte";
   import { SNAP_CSS_PX, type Guide } from "./lib/snap";
@@ -1353,6 +1357,14 @@
   /** Edit > Preferences (Ctrl+K) is open. */
   let preferences = $state(false);
 
+  /** Color Range's settings, kept from one use to the next (as Photoshop does). */
+  let colorRangeSettings: {
+    fuzziness: number;
+    invert: boolean;
+    localized: boolean;
+    sampleAll: boolean;
+  } = { fuzziness: 40, invert: false, localized: false, sampleAll: false };
+
   function openColorRange() {
     const doc = active;
     if (!doc) return;
@@ -1361,25 +1373,22 @@
       document: doc.id,
       included: [],
       excluded: [],
-      fuzziness: 40,
-      invert: false,
       eyedropper: "pick",
+      ...colorRangeSettings,
+      // A quarter of the image's larger side, at first.
+      radius: Math.max(1, Math.round(Math.max(doc.width, doc.height) / 4)),
+      layerId: layersPanel?.selectedLayer()?.id ?? null,
     };
   }
 
   function applyColorRange() {
     const range = colorRange;
     colorRange = null;
-    if (!range || (range.included.length === 0 && !range.invert)) return;
-    void sync(
-      engine.colorRange(range.document, {
-        included: $state.snapshot(range.included),
-        excluded: $state.snapshot(range.excluded),
-        fuzziness: range.fuzziness,
-        invert: range.invert,
-        layerId: null,
-      }),
-    );
+    if (!range) return;
+    const { fuzziness, invert, localized, sampleAll } = range;
+    colorRangeSettings = { fuzziness, invert, localized, sampleAll };
+    if (range.included.length === 0 && !range.invert) return;
+    void sync(engine.colorRange(range.document, colorRangeRequest(range)));
   }
 
   $effect(() => {

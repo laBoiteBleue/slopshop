@@ -408,3 +408,24 @@ test("Escape leaves the selection as it was", async () => {
   expect(sent("transform_selection")).toEqual([]);
   expect(sent("cancel_gesture")).toEqual([]);
 });
+
+test("Color Range samples the active layer, and keeps its settings for the next time", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  const openColorRange = async () => {
+    await user.click(screen.getByRole("menuitem", { name: "Select" }));
+    await user.click(screen.getByText("Color Range…", { selector: ".label" }));
+  };
+  await openColorRange();
+  await user.click(screen.getByRole("checkbox", { name: "Invert" }));
+  await user.click(screen.getByRole("checkbox", { name: "Localized" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(sent("color_range")).toHaveLength(1));
+  expect(sent("color_range")[0]).toMatchObject({
+    documentId: 1,
+    request: { invert: true, localized: 100, layerId: 1 },
+  });
+  await openColorRange();
+  expect(screen.getByRole("checkbox", { name: "Invert" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Localized" })).toBeChecked();
+});

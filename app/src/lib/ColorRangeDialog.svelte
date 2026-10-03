@@ -1,4 +1,6 @@
 <script lang="ts" module>
+  import type { ColorRangeRequest } from "./engine";
+
   /** Select > Color Range's samples and settings (document pixels). */
   export type ColorRangeState = {
     document: number;
@@ -8,7 +10,25 @@
     invert: boolean;
     /** What a click samples: a new color, one more, or one to take away. */
     eyedropper: "pick" | "add" | "subtract";
+    /** Localized: each color selected only within `radius` document pixels of its sample. */
+    localized: boolean;
+    radius: number;
+    /** The image as displayed, rather than the active layer (`layerId`, null without one). */
+    sampleAll: boolean;
+    layerId: number | null;
   };
+
+  /** What the engine is asked for, from the dialog's state. */
+  export function colorRangeRequest(range: ColorRangeState): ColorRangeRequest {
+    return {
+      included: range.included.map(([x, y]) => [x, y]),
+      excluded: range.excluded.map(([x, y]) => [x, y]),
+      fuzziness: range.fuzziness,
+      invert: range.invert,
+      localized: range.localized ? range.radius : null,
+      layerId: range.sampleAll ? null : range.layerId,
+    };
+  }
 
   /** A sample at (x, y), as the eyedropper (or Shift / Alt) says. */
   export function sampleAt(
@@ -30,11 +50,13 @@
 
 <script lang="ts">
   // Select > Color Range, as in Photoshop: click colors on the image or on the preview (Shift:
-  // add one, Alt: take one away); Fuzziness widens them; Invert. The panel stays beside the
-  // image (not modal) so that the image can be clicked. The preview is the selection it would
-  // make, computed by the engine on the document fitted in a small frame.
+  // add one, Alt: take one away); Fuzziness widens them; Localized keeps each color near where
+  // it was sampled; Invert. The panel stays beside the image (not modal) so that the image can
+  // be clicked. The preview is the selection it would make, computed by the engine on the
+  // document fitted in a small frame.
   import { onMount } from "svelte";
   import { engine } from "./engine";
+  import SliderField from "./SliderField.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
@@ -79,13 +101,7 @@
     try {
       const bytes = await engine.colorRangePreview(
         range.document,
-        {
-          included: $state.snapshot(range.included),
-          excluded: $state.snapshot(range.excluded),
-          fuzziness: range.fuzziness,
-          invert: range.invert,
-          layerId: null,
-        },
+        colorRangeRequest(range),
         PREVIEW,
       );
       if (id === request && canvas) {
@@ -115,6 +131,9 @@
     void range.excluded.length;
     void range.fuzziness;
     void range.invert;
+    void range.localized;
+    void range.radius;
+    void range.sampleAll;
     void refresh();
   });
 
@@ -164,6 +183,24 @@
       <span>{t("colorRange.fuzziness")}</span>
       <input type="range" min="0" max="200" step="1" bind:value={range.fuzziness} />
       <input type="number" min="0" max="200" step="1" bind:value={range.fuzziness} />
+    </label>
+    <label class="check">
+      <input type="checkbox" bind:checked={range.localized} />
+      {t("colorRange.localized")}
+    </label>
+    {#if range.localized}
+      <SliderField
+        label={t("colorRange.radius")}
+        bind:value={range.radius}
+        min={1}
+        max={Math.max(width, height)}
+        unit="px"
+        log
+      />
+    {/if}
+    <label class="check">
+      <input type="checkbox" bind:checked={range.sampleAll} disabled={range.layerId === null} />
+      {t("colorRange.sampleAll")}
     </label>
     <canvas
       bind:this={canvas}

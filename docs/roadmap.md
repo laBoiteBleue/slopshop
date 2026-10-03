@@ -221,7 +221,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Photoshop's order, Select Subject, Select and Mask…, Quick Mask Mode; Grow and Similar on
       the Magic Wand's engine
 - [x] Transform Selection on Free Transform's handles (the selection resampled as a layer is)
-- [ ] Color Range: Localized, Sample All Layers; live preview of Select > Modify
+- [x] Color Range: Localized (each sampled color near its sample), Sample All Layers
+- [ ] Live preview of Select > Modify
 - [ ] Quick Mask feedback: its label, its own gray swatches as Add / Remove, overlay opacity
 - [ ] Saved selections: named objects in the document and `.slop`, Save / Load Selection
 - [ ] Right panels: the folding accordion of tab icons, then a Selections panel

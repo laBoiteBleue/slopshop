@@ -524,6 +524,9 @@ pub struct ColorRangeRequest {
     excluded: Vec<[u32; 2]>,
     fuzziness: f32,
     invert: bool,
+    /// Localized: how far from the included samples (document pixels) their colors are
+    /// selected.
+    localized: Option<f64>,
     layer_id: Option<u64>,
 }
 
@@ -534,12 +537,28 @@ impl ColorRangeRequest {
         doc: &slopshop_core::Document,
     ) -> Result<(slopshop_core::Document, selection::ColorRange), String> {
         let source = sampled_document(doc, self.layer_id)?;
-        let points = |p: &[[u32; 2]]| p.iter().map(|[x, y]| (*x, *y)).collect::<Vec<_>>();
+        let size = source.size();
+        // Samples on the canvas only, so that colors and points stay paired.
+        let points = |p: &[[u32; 2]]| {
+            p.iter()
+                .filter(|[x, y]| *x < size.width && *y < size.height)
+                .map(|[x, y]| (*x, *y))
+                .collect::<Vec<_>>()
+        };
+        let included = points(&self.included);
+        let localized = self.localized.map(|radius| selection::Localized {
+            points: included
+                .iter()
+                .map(|&(x, y)| (f64::from(x) + 0.5, f64::from(y) + 0.5))
+                .collect(),
+            radius,
+        });
         let range = selection::ColorRange {
-            included: selection::sample_colors(&source, &points(&self.included)),
+            included: selection::sample_colors(&source, &included),
             excluded: selection::sample_colors(&source, &points(&self.excluded)),
             fuzziness: self.fuzziness,
             invert: self.invert,
+            localized,
         };
         Ok((source, range))
     }
@@ -597,7 +616,11 @@ pub async fn color_range_preview(
             .map(|selection| selection::sample_grid(selection, area, w, h));
         for (i, px) in frame.data.as_chunks::<4>().0.iter().enumerate() {
             let color = [f32::from(px[0]), f32::from(px[1]), f32::from(px[2]), 255.0];
-            let mut c = range.coverage(color);
+            let at = (
+                ((i % w) as f64 + 0.5) * scale,
+                ((i / w) as f64 + 0.5) * scale,
+            );
+            let mut c = range.coverage(color, Some(at));
             if let Some(within) = &within {
                 c *= within.get(i).copied().unwrap_or(0.0);
             }

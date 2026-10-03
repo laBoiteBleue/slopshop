@@ -2,7 +2,10 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import ColorRangeDialog, { type ColorRangeState } from "../../src/lib/ColorRangeDialog.svelte";
+import ColorRangeDialog, {
+  colorRangeRequest,
+  type ColorRangeState,
+} from "../../src/lib/ColorRangeDialog.svelte";
 import { reactive } from "./reactive.svelte";
 
 /** The previews the engine was asked for. */
@@ -24,7 +27,7 @@ beforeEach(() => {
 afterEach(() => clearMocks());
 
 /** Select > Color Range on a 1000 × 500 px document, as the app starts it. */
-function open() {
+function open(layerId: number | null = 5) {
   const range = reactive<ColorRangeState>({
     document: 3,
     included: [],
@@ -32,6 +35,10 @@ function open() {
     fuzziness: 40,
     invert: false,
     eyedropper: "pick",
+    localized: false,
+    radius: 250,
+    sampleAll: false,
+    layerId,
   });
   const onapply = vi.fn();
   const onclose = vi.fn();
@@ -55,7 +62,14 @@ test("the engine draws the preview of what the settings would select", async () 
   expect(previews[0]).toMatchObject({
     documentId: 3,
     maxSide: 220,
-    request: { included: [], excluded: [], fuzziness: 40, invert: false, layerId: null },
+    request: {
+      included: [],
+      excluded: [],
+      fuzziness: 40,
+      invert: false,
+      localized: null,
+      layerId: 5,
+    },
   });
 });
 
@@ -157,4 +171,55 @@ test("Escape and Cancel close it, but Enter in a number field is left to the fie
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(onclose).toHaveBeenCalledTimes(3);
+});
+
+test("Localized keeps the colors near their samples, within the radius shown then", async () => {
+  const { range, user } = open();
+  expect(screen.queryByText("Range:")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: "Localized" }));
+  expect(screen.getByText("Range:")).toBeInTheDocument();
+  await vi.waitFor(() => expect(lastRequest()).toMatchObject({ localized: 250 }));
+  const radius = screen.getAllByRole("spinbutton").at(-1)!;
+  await user.clear(radius);
+  await user.type(radius, "80{Tab}");
+  expect(range.radius).toBe(80);
+  await vi.waitFor(() => expect(lastRequest()).toMatchObject({ localized: 80 }));
+  await user.click(screen.getByRole("checkbox", { name: "Localized" }));
+  await vi.waitFor(() => expect(lastRequest()).toMatchObject({ localized: null }));
+});
+
+test("the active layer is sampled, or the image as displayed with Sample All Layers", async () => {
+  const { user } = open();
+  await vi.waitFor(() => expect(lastRequest()).toMatchObject({ layerId: 5 }));
+  await user.click(screen.getByRole("checkbox", { name: "Sample All Layers" }));
+  await vi.waitFor(() => expect(lastRequest()).toMatchObject({ layerId: null }));
+});
+
+test("without an active layer, the image as displayed is sampled", async () => {
+  open(null);
+  expect(screen.getByRole("checkbox", { name: "Sample All Layers" })).toBeDisabled();
+  await vi.waitFor(() => expect(lastRequest()).toMatchObject({ layerId: null }));
+});
+
+test("colorRangeRequest sends what the dialog shows", () => {
+  const range: ColorRangeState = {
+    document: 1,
+    included: [[1, 2]],
+    excluded: [[3, 4]],
+    fuzziness: 12,
+    invert: true,
+    eyedropper: "add",
+    localized: true,
+    radius: 30,
+    sampleAll: true,
+    layerId: 9,
+  };
+  expect(colorRangeRequest(range)).toEqual({
+    included: [[1, 2]],
+    excluded: [[3, 4]],
+    fuzziness: 12,
+    invert: true,
+    localized: 30,
+    layerId: null,
+  });
 });
