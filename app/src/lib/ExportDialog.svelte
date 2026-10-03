@@ -164,7 +164,22 @@
               aria-label={t("export.quality")}
               bind:value={spec.quality}
             />
-            <input id="export-quality" type="number" min="1" max="100" bind:value={spec.quality} />
+            <!-- Not bound: an erased field reads as null, which would take the quality away
+              (and this very field with it) while the user is typing another one. -->
+            <input
+              id="export-quality"
+              type="number"
+              min="1"
+              max="100"
+              value={spec.quality}
+              oninput={(e) => {
+                const quality = e.currentTarget.valueAsNumber;
+                if (spec && Number.isFinite(quality)) spec.quality = quality;
+              }}
+              onchange={(e) => {
+                if (spec) e.currentTarget.valueAsNumber = spec.quality ?? DEFAULT_QUALITY;
+              }}
+            />
           </div>
         {/if}
 
