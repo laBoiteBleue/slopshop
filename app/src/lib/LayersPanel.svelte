@@ -51,6 +51,7 @@
     type LayerSelection,
   } from "./layerSelection";
   import { isTextField } from "./keymap";
+  import { canDistribute } from "./align";
 
   let {
     doc,
@@ -402,6 +403,11 @@
   export function arrangeSelected(arrangement: Arrangement) {
     if (!canArrange(tree, selection, arrangement)) return;
     void edit({ kind: "arrangeLayers", ids: selectedIds, arrange: arrangement });
+  }
+
+  /** Layer > Distribute applies: three selected layers, a group counting as one. */
+  export function canDistributeSelected(): boolean {
+    return canDistribute(tree, selection);
   }
 
   /** Whether Layer > Arrange's `arrangement` moves some selected layer. */

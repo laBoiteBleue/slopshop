@@ -107,6 +107,7 @@
   } from "./lib/imageEdits";
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
+  import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./lib/align";
   import {
     clippingReleases,
     fillColorEdit,
@@ -3221,6 +3222,20 @@
     };
   });
 
+  /** Layer > Align and the Move tool's buttons, on the selected layers (one undo entry). */
+  function alignSelected(align: AlignId) {
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (active && ids.length > 0) void edit(active.id, { kind: "alignLayers", ids, align });
+  }
+
+  /** Layer > Distribute and the Move tool's buttons, on the selected layers. */
+  function distributeSelected(distribute: DistributeId) {
+    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    if (active && layersPanel?.canDistributeSelected()) {
+      void edit(active.id, { kind: "distributeLayers", ids, distribute });
+    }
+  }
+
   /** `item` under another label (in a submenu that already says "New"). */
   function relabeled(item: MenuItem, label: string): MenuItem {
     return item.kind === "separator" ? item : { ...item, label };
@@ -3631,6 +3646,18 @@
               item("sendToBack"),
             ],
           },
+          {
+            kind: "submenu",
+            label: t("menu.layer.align"),
+            disabled: selectedCount === 0,
+            items: ALIGNS.map((a) => cmd(t(a.label), () => alignSelected(a.id))),
+          },
+          {
+            kind: "submenu",
+            label: t("menu.layer.distribute"),
+            disabled: !layersPanel?.canDistributeSelected(),
+            items: DISTRIBUTES.map((d) => cmd(t(d.label), () => distributeSelected(d.id))),
+          },
         ],
       },
       {
@@ -3897,6 +3924,10 @@
     quickMask={active?.quickMask ? { action: quickMaskAction(quickMaskPair) } : null}
     bind:quickMaskOpacity
     onquickmask={(action) => (quickMaskPair = quickMaskColors(action))}
+    alignable={(layersPanel?.selectedLayers().length ?? 0) > 0}
+    distributable={layersPanel?.canDistributeSelected() ?? false}
+    onalign={alignSelected}
+    ondistribute={distributeSelected}
   />
   {#snippet transformBar()}
     {#if transforming}

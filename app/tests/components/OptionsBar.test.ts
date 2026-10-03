@@ -4,7 +4,7 @@ import { expect, test, vi } from "vitest";
 import OptionsBar from "../../src/lib/OptionsBar.svelte";
 import type { ToolId } from "../../src/lib/tools";
 
-function open(tool: ToolId) {
+function open(tool: ToolId, more: Record<string, unknown> = {}) {
   const paint = () => ({
     size: 20,
     hardness: 1,
@@ -23,6 +23,7 @@ function open(tool: ToolId) {
     quick: { size: 30, sampleAll: false, objectRefine: false },
     brush: paint(),
     eraser: paint(),
+    ...more,
   };
   render(OptionsBar, props);
   return { props, user: userEvent.setup() };
@@ -117,4 +118,16 @@ test("without Quick Mask, nothing of it", () => {
   open("brush");
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+});
+
+test("the Move tool's align and distribute buttons, grayed until enough layers are selected", async () => {
+  const onalign = vi.fn();
+  const ondistribute = vi.fn();
+  const { user } = open("move", { alignable: true, distributable: false, onalign, ondistribute });
+  await user.click(screen.getByRole("button", { name: "Align horizontal centers" }));
+  expect(onalign).toHaveBeenCalledWith("horizontalCenters");
+  const spacing = screen.getByRole("button", { name: "Distribute vertical spacing" });
+  expect(spacing).toBeDisabled();
+  await user.click(spacing);
+  expect(ondistribute).not.toHaveBeenCalled();
 });

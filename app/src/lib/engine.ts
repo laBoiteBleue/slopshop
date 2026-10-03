@@ -305,6 +305,18 @@ export type EditRequest =
   | { kind: "groupLayers"; ids: number[]; name: string }
   /** The groups among `ids` replaced by their layers (Layer > Ungroup Layers). */
   | { kind: "ungroup"; ids: number[] }
+  /** Layer > Align and the Move tool's buttons (slopshop_core::align). */
+  | {
+      kind: "alignLayers";
+      ids: number[];
+      align: "left" | "horizontalCenters" | "right" | "top" | "verticalCenters" | "bottom";
+    }
+  /** Layer > Distribute: the first and the last layer stay. */
+  | {
+      kind: "distributeLayers";
+      ids: number[];
+      distribute: "horizontalCenters" | "verticalCenters" | "horizontalSpacing" | "verticalSpacing";
+    }
   /** Layer > Arrange: `ids` moved within their groups. */
   | { kind: "arrangeLayers"; ids: number[]; arrange: "front" | "forward" | "backward" | "back" }
   /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */

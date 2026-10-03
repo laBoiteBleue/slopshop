@@ -20,6 +20,19 @@
       "M8.5 4.5a3.5 3.5 0 0 1 7 0v2a3.5 3.5 0 0 1-7 0Z M8.5 17.5a3.5 3.5 0 0 1 7 0v2a3.5 3.5 0 0 1-7 0Z M5 12h3 M16 12h3",
     // Tools.
     pointer: "M6 3v15.5l4.2-4 2.9 6.5 2.7-1.2-2.9-6.4H18Z",
+    // Align and Distribute (the Move tool's options): boxes against a line, or evenly spaced.
+    alignLeft: "M4 3v18 M8 6h12v4H8Z M8 14h7v4H8Z",
+    alignHorizontalCenters: "M12 3v18 M6 6h12v4H6Z M8.5 14h7v4h-7Z",
+    alignRight: "M20 3v18 M4 6h12v4H4Z M9 14h7v4H9Z",
+    alignTop: "M3 4h18 M6 8h4v12H6Z M14 8h4v7h-4Z",
+    alignVerticalCenters: "M3 12h18 M6 6h4v12H6Z M14 8.5h4v7h-4Z",
+    alignBottom: "M3 20h18 M6 4h4v12H6Z M14 9h4v7h-4Z",
+    distributeHorizontalCenters:
+      "M3 8h4v8H3Z M10 6h4v12h-4Z M17 9h4v6h-4Z M5 3v2 M12 2v2 M19 4v3 M5 19v2 M12 20v2 M19 17v3",
+    distributeVerticalCenters:
+      "M8 3h8v4H8Z M6 10h12v4H6Z M9 17h6v4H9Z M3 5h2 M2 12h2 M4 19h3 M19 5h2 M20 12h2 M17 19h3",
+    distributeHorizontalSpacing: "M3 4v16 M21 4v16 M9 7h6v10H9Z M5 12h2 M17 12h2",
+    distributeVerticalSpacing: "M4 3h16 M4 21h16 M7 9h10v6H7Z M12 5v2 M12 17v2",
     crop: "M7 2v15h15 M2 7h15v15",
     marquee: "M4 4h3 M10 4h4 M17 4h3v3 M20 10v4 M20 17v3h-3 M14 20h-4 M7 20H4v-3 M4 14v-4 M4 7V4",
     ellipse:
