@@ -69,7 +69,7 @@
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
   import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
-  import { printImage } from "./lib/print";
+  import PrintDialog from "./lib/PrintDialog.svelte";
   import { recentLabels } from "./lib/recent";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
@@ -239,21 +239,11 @@
     }
   }
 
-  /** File > Print (Ctrl+P): the document as displayed, through the system's print dialog. */
-  let printing = false;
+  /** File > Print (Ctrl+P): the print settings of this document, while shown. */
+  let printDialog = $state<number | null>(null);
 
-  async function printDocument() {
-    const doc = active;
-    if (!doc || printing) return;
-    printing = true;
-    try {
-      const page = await engine.printPage(doc.id);
-      await printImage(page, tabTitle(doc), doc.width > doc.height);
-    } catch (e) {
-      showError(String(e));
-    } finally {
-      printing = false;
-    }
+  function printDocument() {
+    if (active) printDialog = active.id;
   }
 
   /** File > New asks for the size and the background first (Photoshop's New dialog). */
@@ -2210,7 +2200,7 @@
             !doc,
           ),
           separator,
-          cmd(t("menu.file.print"), () => void printDocument(), keys("mod", "P"), !doc),
+          cmd(t("menu.file.print"), printDocument, keys("mod", "P"), !doc),
           cmd(
             t("menu.file.documentInfo"),
             () => void showDocumentInfo(),
@@ -2622,7 +2612,7 @@
     }
     if (key === "p" && !e.shiftKey) {
       e.preventDefault();
-      if (!e.repeat) void printDocument();
+      if (!e.repeat) printDocument();
       return;
     }
     if (key === "k" && !e.shiftKey) {
@@ -3142,6 +3132,19 @@
     onclose={() => (colorPicker = null)}
     sample={pickerSample}
   />
+{/if}
+
+{#if printDialog !== null}
+  {@const doc = tabs.find((d) => d.id === printDialog)}
+  {#if doc}
+    <PrintDialog
+      documentId={doc.id}
+      title={tabTitle(doc)}
+      width={doc.width}
+      height={doc.height}
+      onclose={() => (printDialog = null)}
+    />
+  {/if}
 {/if}
 
 {#if documentInfo}
