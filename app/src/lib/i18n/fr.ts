@@ -26,6 +26,7 @@ const fr: Messages = {
   "menu.edit.copy": "Copier",
   "menu.edit.paste": "Coller",
   "menu.edit.copyMerged": "Copier avec fusion",
+  "menu.edit.pasteHere": "Coller ici",
   "menu.edit.pasteInPlace": "Coller en place",
   "menu.edit.pasteInto": "Coller dans la sélection",
   "menu.edit.fill": "Remplir…",

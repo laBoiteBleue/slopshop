@@ -2080,6 +2080,7 @@ pub fn run() {
             clipboard::paste,
             clipboard::copy,
             clipboard::clipboard_size,
+            clipboard::clipboard_contents,
             save_document,
             quit,
             export::export_defaults,

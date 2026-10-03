@@ -99,12 +99,19 @@
   const outline = $derived([0, 2, 4, 6].map((i) => `${screen[i][0]},${screen[i][1]}`).join(" "));
 
   const RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"];
-  /** A resize cursor along the direction from the center to handle `i`, as shown. */
+  /** Ctrl (⌘) is held: side handles skew, their arrows turn along the side. */
+  let skewKey = $state(false);
+
+  /**
+   * A resize cursor along the direction from the center to handle `i`, as shown; for a side
+   * handle that skews (Ctrl held, or a skew under way), a quarter turn: along the side it slides.
+   */
   function cursorFor(i: number): string {
     const [x, y] = screen[i];
     const angle = (Math.atan2(y - screenCenter[1], x - screenCenter[0]) * 180) / Math.PI;
     const step = Math.round((((angle % 180) + 180) % 180) / 45) % 4;
-    return RESIZE_CURSORS[step];
+    const skews = i % 2 === 1 && (drag ? drag.kind === "skew" : skewKey);
+    return RESIZE_CURSORS[skews ? (step + 2) % 4 : step];
   }
 
   function begin(e: PointerEvent, kind: Drag["kind"], handle = 0) {
@@ -343,6 +350,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    skewKey = hasShortcutModifier(e);
     if (isTextField(e.target)) return;
     if (e.key === "Enter") {
       e.preventDefault();
@@ -358,7 +366,11 @@
     "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M7 15a7 7 0 1 1 7 6' fill='none' stroke='black' stroke-width='4'/%3E%3Cpath d='M7 15a7 7 0 1 1 7 6' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M3 13h8l-4 5z' fill='white' stroke='black'/%3E%3C/svg%3E\") 12 12, crosshair";
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window
+  onkeydown={onKeydown}
+  onkeyup={(e) => (skewKey = hasShortcutModifier(e))}
+  onblur={() => (skewKey = false)}
+/>
 
 <svg
   class="free-transform"
@@ -373,7 +385,10 @@
     e.preventDefault();
     menuAt = { x: e.clientX, y: e.clientY };
   }}
-  onpointermove={onPointerMove}
+  onpointermove={(e) => {
+    skewKey = hasShortcutModifier(e);
+    onPointerMove(e);
+  }}
   onpointerup={onPointerUp}
   onpointercancel={onPointerUp}
 >

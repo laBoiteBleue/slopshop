@@ -26,6 +26,7 @@ const en = {
   "menu.edit.copy": "Copy",
   "menu.edit.paste": "Paste",
   "menu.edit.copyMerged": "Copy Merged",
+  "menu.edit.pasteHere": "Paste Here",
   "menu.edit.pasteInPlace": "Paste in Place",
   "menu.edit.pasteInto": "Paste Into",
   "menu.edit.fill": "Fill…",

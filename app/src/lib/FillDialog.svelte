@@ -23,15 +23,22 @@
 <script lang="ts">
   // Edit > Fill (Shift+F5), laid out as Photoshop's Fill dialog (Contents, then Opacity; OK and
   // Cancel on the right): the selection of the active layer, or the whole layer without one,
-  // painted with a color (paint, ADR 0027 and 0029). Enter applies, Esc cancels.
+  // painted with a color (paint, ADR 0027 and 0029). Choosing Color… opens the color picker at
+  // once, as in Photoshop; its color then shows next to the list. Enter applies, Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
   import SliderField from "./SliderField.svelte";
 
   let {
+    color,
+    onpickcolor,
     onchoose,
     onclose,
   }: {
+    /** The color of Color…, `#rrggbb` sRGB. */
+    color: string;
+    /** Color… chosen, or its swatch clicked: the app shows the picker, then this dialog again. */
+    onpickcolor: (settings: FillSettings) => void;
     onchoose: (settings: FillSettings) => void;
     onclose: () => void;
   } = $props();
@@ -56,6 +63,11 @@
     return () => window.removeEventListener("keydown", keys, true);
   });
 
+  function pickColor() {
+    last = { contents: "color", opacity };
+    onpickcolor(last);
+  }
+
   function submit(e: SubmitEvent) {
     e.preventDefault();
     last = { contents, opacity };
@@ -76,11 +88,27 @@
     <div class="fields">
       <label for="fill-contents">{t("fillChoice.contents")}</label>
       <!-- svelte-ignore a11y_autofocus -->
-      <select id="fill-contents" bind:value={contents} autofocus>
+      <select
+        id="fill-contents"
+        bind:value={contents}
+        onchange={() => contents === "color" && pickColor()}
+        autofocus
+      >
         {#each CONTENTS as entry (entry.value)}
           <option value={entry.value}>{t(entry.label)}</option>
         {/each}
       </select>
+      {#if contents === "color"}
+        <span></span>
+        <button
+          type="button"
+          class="swatch"
+          style:background={color}
+          title={t("fillChoice.colorTitle")}
+          aria-label={t("fillChoice.colorTitle")}
+          onclick={pickColor}
+        ></button>
+      {/if}
       <div class="row">
         <SliderField
           label={t("fillChoice.opacity")}
@@ -140,6 +168,15 @@
 
   label {
     color: var(--text-muted);
+  }
+
+  .swatch {
+    width: 40px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border-dark);
+    border-radius: 2px;
+    cursor: pointer;
   }
 
   /* The slider field brings its own (scrubby) label. */

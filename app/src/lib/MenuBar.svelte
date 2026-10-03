@@ -22,7 +22,14 @@
 <script lang="ts">
   // The window's menu bar (ADR 0013): opens on click, then follows the pointer from menu to
   // menu, like desktop menu bars. Keyboard: arrows move, Enter activates, Escape closes.
-  let { menus }: { menus: Menu[] } = $props();
+  let {
+    menus,
+    onopen,
+  }: {
+    menus: Menu[];
+    /** A menu opened (its index): the owner may refresh what it shows. */
+    onopen?: (index: number) => void;
+  } = $props();
 
   /** The open menu, and the highlighted entry of it and of its open submenu. */
   let open = $state<number | null>(null);
@@ -34,6 +41,7 @@
   const selectable = (item: MenuItem) => item.kind !== "separator" && !item.disabled;
 
   function openMenu(index: number | null) {
+    if (index !== null && index !== open) onopen?.(index);
     open = index;
     highlighted = null;
     submenu = null;

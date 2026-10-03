@@ -319,8 +319,11 @@ export type CopyRequest =
   | { kind: "pixels"; layerId: number; target: "layer" | "mask" }
   | { kind: "merged"; name: string };
 
-/** Edit > Paste, Paste in Place or Paste Into. */
-export type PasteKind = "paste" | "inPlace" | "into";
+/** Edit > Paste, Paste in Place or Paste Into, or Paste Here (at a point). */
+export type PasteKind = "paste" | "inPlace" | "into" | "at";
+
+/** What the clipboard holds (ClipboardContents in clipboard.rs). */
+export type ClipboardContents = "nothing" | "files" | "image" | "placed" | "layers";
 
 /** What an open found in folders and zip archives (OpenSummary in lib.rs). */
 export type OpenSummary = {
@@ -1199,7 +1202,10 @@ export const engine = {
     name: string,
     kind: PasteKind,
     view: [number, number, number, number] | null,
-  ) => serial(() => invoke<Pasted>("paste", { documentId, name, kind, view })),
+    at: [number, number] | null = null,
+  ) => serial(() => invoke<Pasted>("paste", { documentId, name, kind, view, at })),
+  /** What a paste would bring, for the menus to gray what does not apply. */
+  clipboardContents: () => invoke<ClipboardContents>("clipboard_contents"),
   /**
    * Edit > Copy (layers, or the selected pixels of a layer or its mask) and Copy Merged: kept
    * whole for Paste, and an 8-bit image of it for other applications. Resolves with whether

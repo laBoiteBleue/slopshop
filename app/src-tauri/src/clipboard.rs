@@ -381,6 +381,8 @@ pub enum PasteKind {
     Paste,
     InPlace,
     Into,
+    /// Paste Here (the image's right-click menu): centered on the point clicked.
+    At,
 }
 
 /// The outcome of `paste`.
@@ -409,7 +411,8 @@ pub enum Pasted {
 /// Paste into `document_id` (or a new document without one): SlopShop's copy while the system
 /// clipboard still holds its image, else what another application put there. `name` names an
 /// image from elsewhere and the group of a Paste Into; `view` is the part of the document
-/// shown, `[x0, y0, x1, y1)`, where a paste out of sight lands (see `paste_offset`).
+/// shown, `[x0, y0, x1, y1)`, where a paste out of sight lands (see `paste_offset`); `at` the
+/// point of a Paste Here.
 #[tauri::command]
 pub async fn paste(
     app: AppHandle,
@@ -417,6 +420,7 @@ pub async fn paste(
     name: String,
     kind: PasteKind,
     view: Option<[f64; 4]>,
+    at: Option<[f64; 2]>,
 ) -> Result<Pasted, String> {
     let system = on_worker(read_system).await?;
     let state = app.state::<AppState>();
@@ -452,7 +456,7 @@ pub async fn paste(
         });
     };
     let target = documents.get_mut(document_id)?;
-    match place(target, copied, &name, kind, view)? {
+    match place(target, copied, &name, kind, view, at)? {
         Some(ids) => Ok(Pasted::Layers {
             document: target.view(),
             new_tab: false,
@@ -491,11 +495,16 @@ fn place(
     name: &str,
     kind: PasteKind,
     view: Option<[f64; 4]>,
+    at: Option<[f64; 2]>,
 ) -> Result<Option<Vec<u64>>, String> {
     let document = target.session.document();
     let canvas = document.size();
     let mode = match kind {
         PasteKind::Paste => PasteMode::Paste,
+        PasteKind::At => match at {
+            Some(point) => PasteMode::At { point },
+            None => PasteMode::Paste,
+        },
         PasteKind::InPlace => PasteMode::InPlace,
         PasteKind::Into => {
             let Some(selection) = document.selection() else {
@@ -616,6 +625,51 @@ pub async fn clipboard_size(app: AppHandle) -> Result<Option<(u32, u32)>, String
     Ok(size.map(|s| (s.width, s.height)))
 }
 
+/// What the clipboard holds, for the menus to gray the pastes that do not apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipboardContents {
+    Nothing,
+    /// Files copied in the file manager.
+    Files,
+    /// An image another application copied: it has no place.
+    Image,
+    /// SlopShop's own copy, with a place (pixels).
+    Placed,
+    /// SlopShop's own copy without pixels (adjustment layers).
+    Layers,
+}
+
+/// What a paste would bring (see `paste`).
+#[tauri::command]
+pub async fn clipboard_contents(app: AppHandle) -> Result<ClipboardContents, String> {
+    let system = on_worker(read_system).await?;
+    let state = app.state::<AppState>();
+    let ours = state
+        .layer_clipboard
+        .lock()
+        .map_err(|_| "clipboard state is poisoned".to_owned())?
+        .clone();
+    let own = |copied: &Copied| {
+        if copied.bounds.is_some() {
+            ClipboardContents::Placed
+        } else {
+            ClipboardContents::Layers
+        }
+    };
+    Ok(match (system, ours) {
+        (SystemContent::Files(_), _) => ClipboardContents::Files,
+        (SystemContent::Image(size, bytes), Some(copied))
+            if copied.fingerprint == Some(fingerprint(size, &bytes)) =>
+        {
+            own(&copied)
+        }
+        (SystemContent::Image(..), _) => ClipboardContents::Image,
+        (SystemContent::Nothing, Some(copied)) => own(&copied),
+        (SystemContent::Nothing, None) => ClipboardContents::Nothing,
+    })
+}
+
 /// A new document holding `copied`, of its size (see `document_size`), its content at the
 /// origin.
 fn new_document(
@@ -722,7 +776,7 @@ mod tests {
         let paste = |kind, view| {
             let mut documents = state.documents().unwrap();
             let target = documents.get_mut(id).unwrap();
-            place(target, copied.clone(), "Pasted", kind, view).unwrap()
+            place(target, copied.clone(), "Pasted", kind, view, None).unwrap()
         };
         // In sight: where it was.
         paste(PasteKind::Paste, Some([50.0, 50.0, 100.0, 80.0])).unwrap();
@@ -830,10 +884,18 @@ mod tests {
         let mut documents = state.documents().unwrap();
         let target = documents.get_mut(id).unwrap();
         // Without a selection: nothing.
-        let none = place(target, copied.clone(), "Pasted", PasteKind::Into, None).unwrap();
+        let none = place(
+            target,
+            copied.clone(),
+            "Pasted",
+            PasteKind::Into,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(none.is_none());
         select(&mut target.session, [50.0, 40.0, 60.0, 50.0]);
-        let ids = place(target, copied, "Pasted", PasteKind::Into, None)
+        let ids = place(target, copied, "Pasted", PasteKind::Into, None, None)
             .unwrap()
             .unwrap();
         let document = target.session.document();
@@ -858,7 +920,15 @@ mod tests {
             let mut documents = state.documents().unwrap();
             let target = documents.get_mut(id).unwrap();
             let view = Some([0.0, 0.0, 100.0, 80.0]);
-            place(target, image.clone(), "Pasted", PasteKind::Paste, view).unwrap();
+            place(
+                target,
+                image.clone(),
+                "Pasted",
+                PasteKind::Paste,
+                view,
+                None,
+            )
+            .unwrap();
         }
         assert_eq!(top_transform(&state, id), Affine::translation(40.0, 35.0));
         let (session, _) = new_document(image).unwrap();

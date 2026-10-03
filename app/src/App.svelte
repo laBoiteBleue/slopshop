@@ -17,6 +17,7 @@
     onOpenEvents,
     type BrushRequest,
     type StrokeRequest,
+    type ClipboardContents,
     type CopyRequest,
     type PasteKind,
     type PaintTarget,
@@ -106,6 +107,7 @@
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import TransformFields from "./lib/TransformFields.svelte";
+  import ContextMenu from "./lib/ContextMenu.svelte";
   import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
@@ -665,8 +667,8 @@
   /** Photoshop's fixed fill colors: Black, 50% Gray and White (sRGB). */
   const FILL_COLORS = { black: "#000000", gray: "#808080", white: "#ffffff" };
 
-  /** Edit > Fill is open, for this layer. */
-  let fillDialog = $state<PaintedLayer | null>(null);
+  /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
+  let fillDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
   /** Edit > Stroke is open, for this layer, with its color; hidden while the color is picked. */
   let strokeDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
   /** A color picked for Fill or Stroke. */
@@ -681,20 +683,35 @@
     const target = fillDialog;
     fillDialog = null;
     if (!target) return;
-    if (contents === "color") {
-      // Photoshop's "Color...": the color picker, then the fill.
-      pickColor = {
-        title: t("fillChoice.colorTitle"),
-        color: colors.foreground,
-        apply: (hex) => paintPixels(target, hex, opacity),
-      };
-      return;
-    }
     const hex =
-      contents === "foreground" || contents === "background"
-        ? colors[contents]
-        : FILL_COLORS[contents];
+      contents === "color"
+        ? target.color
+        : contents === "foreground" || contents === "background"
+          ? colors[contents]
+          : FILL_COLORS[contents];
     paintPixels(target, hex, opacity);
+  }
+
+  function openFill() {
+    const target = paintedLayer();
+    if (target) fillDialog = { ...target, color: colors.foreground, picking: false };
+  }
+
+  /** Fill's Color…: the picker, then the Fill dialog again with the color chosen. */
+  function pickFillColor() {
+    const dialog = fillDialog;
+    if (!dialog) return;
+    fillDialog = { ...dialog, picking: true };
+    pickColor = {
+      title: t("fillChoice.colorTitle"),
+      color: dialog.color,
+      apply: (hex) => {
+        if (fillDialog) fillDialog = { ...fillDialog, color: hex, picking: false };
+      },
+      close: () => {
+        if (fillDialog) fillDialog = { ...fillDialog, picking: false };
+      },
+    };
   }
 
   function openStroke() {
@@ -2391,12 +2408,12 @@
    * the active document or, without one, a new tab. The pasted layers are selected; files copied
    * in the file manager are placed like dropped ones, in the middle of the view.
    */
-  async function paste(kind: PasteKind) {
+  async function paste(kind: PasteKind, at: [number, number] | null = null) {
     const doc = active;
     commitTransform();
     const view = doc ? (viewport?.visibleRect() ?? null) : null;
     try {
-      const pasted = await engine.paste(doc?.id ?? null, t("paste.layerName"), kind, view);
+      const pasted = await engine.paste(doc?.id ?? null, t("paste.layerName"), kind, view, at);
       if (pasted.kind === "layers") {
         upsert(pasted.document);
         if (pasted.newTab) activate(pasted.document.id);
@@ -2406,9 +2423,11 @@
         }
       } else if (pasted.kind === "files") {
         if (doc) {
-          const center: [number, number] = view
-            ? [(view[0] + view[2]) / 2, (view[1] + view[3]) / 2]
-            : [doc.width / 2, doc.height / 2];
+          const center: [number, number] =
+            at ??
+            (view
+              ? [(view[0] + view[2]) / 2, (view[1] + view[3]) / 2]
+              : [doc.width / 2, doc.height / 2]);
           void placeDropped(doc.id, pasted.paths, center);
         } else void openFiles(pasted.paths, "tab");
       } else if (pasted.kind === "noSelection") {
@@ -2421,6 +2440,75 @@
       else showError(t("paste.failed", { error: String(e) }));
     }
   }
+
+  /** What the clipboard held when last looked at (menus opening): grays the pastes that do not
+   * apply. `null`: not known yet (nothing grayed). Shortcuts ignore it and always try. */
+  let clipboard = $state<ClipboardContents | null>(null);
+
+  async function refreshClipboard() {
+    clipboard = await engine.clipboardContents().catch(() => null);
+  }
+
+  /** Whether a paste command does not apply to what the clipboard holds (menus only). */
+  function pasteUnfit(id: CommandId): boolean {
+    if (clipboard === null) return false;
+    switch (id) {
+      case "paste":
+        return clipboard === "nothing";
+      case "pasteInPlace":
+        return clipboard !== "placed" && clipboard !== "layers";
+      case "pasteInto":
+        return clipboard === "nothing" || clipboard === "files";
+      default:
+        return false;
+    }
+  }
+
+  /** The image's right-click menu, where it opened and the document point under it. */
+  let canvasMenu = $state<{ x: number; y: number; at: [number, number] | null } | null>(null);
+
+  function openCanvasMenu(e: MouseEvent) {
+    // Free Transform's box has its own menu.
+    if (e.defaultPrevented || !active || transforming) return;
+    e.preventDefault();
+    canvasMenu = {
+      x: e.clientX,
+      y: e.clientY,
+      at: viewport?.documentPointAt(e.clientX, e.clientY) ?? null,
+    };
+    void refreshClipboard();
+  }
+
+  /** The image's right-click menu: the most used commands, with their shortcuts. */
+  let canvasMenuItems = $derived.by((): MenuItem[] => {
+    const at = canvasMenu?.at ?? null;
+    const separator = { kind: "separator" as const };
+    const here: MenuItem = {
+      kind: "command",
+      label: t("menu.edit.pasteHere"),
+      run: () => void paste("at", at),
+      disabled: at === null || pasteUnfit("paste"),
+    };
+    return [
+      item("cut"),
+      item("copy"),
+      item("copyMerged"),
+      separator,
+      here,
+      item("paste"),
+      item("pasteInPlace"),
+      item("pasteInto"),
+      separator,
+      item("freeTransform"),
+      separator,
+      item("selectAll"),
+      item("deselect"),
+      item("inverse"),
+      separator,
+      item("fill"),
+      command(t("menu.edit.stroke"), openStroke, undefined, active?.selectionKey == null),
+    ];
+  });
 
   // --- Menu bar (ADR 0013) ------------------------------------------------------------------------
 
@@ -2563,7 +2651,7 @@
       },
       fill: {
         label: t("menu.edit.fill"),
-        run: () => (fillDialog = paintedLayer()),
+        run: openFill,
         disabled: !doc,
       },
       freeTransform: {
@@ -2713,7 +2801,7 @@
       run: c.run,
       shortcut: shortcuts[0],
       shortcuts,
-      disabled: c.disabled,
+      disabled: c.disabled || pasteUnfit(id),
       checked: c.checked,
     };
   }
@@ -3263,7 +3351,7 @@
 <div class="app">
   <header class="menubar">
     <img class="logo" src="/favicon.svg" alt="" draggable="false" />
-    <MenuBar {menus} />
+    <MenuBar {menus} onopen={() => void refreshClipboard()} />
     <span class="brand">SlopShop</span>
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
@@ -3285,6 +3373,7 @@
       <TransformFields
         matrix={transforming.matrix}
         pivot={transforming.pivot}
+        canvas={active ?? { width: 1, height: 1 }}
         onchange={onTransformChange}
       />
     {/if}
@@ -3394,7 +3483,12 @@
         {/each}
       </div>
 
-      <div class="stage" class:see-through={nativeCanvas && active}>
+      <div
+        class="stage"
+        class:see-through={nativeCanvas && active}
+        role="presentation"
+        oncontextmenu={openCanvasMenu}
+      >
         {#if active}
           {#key active.id}
             <Viewport
@@ -3671,8 +3765,21 @@
   <DocumentInfoDialog info={documentInfo} onclose={() => (documentInfo = null)} />
 {/if}
 
-{#if fillDialog}
-  <FillDialog onchoose={applyFill} onclose={() => (fillDialog = null)} />
+{#if canvasMenu}
+  <ContextMenu
+    x={canvasMenu.x}
+    y={canvasMenu.y}
+    items={canvasMenuItems}
+    onclose={() => (canvasMenu = null)}
+  />
+{/if}
+{#if fillDialog && !fillDialog.picking}
+  <FillDialog
+    color={fillDialog.color}
+    onpickcolor={pickFillColor}
+    onchoose={applyFill}
+    onclose={() => (fillDialog = null)}
+  />
 {/if}
 {#if strokeDialog && !strokeDialog.picking}
   <StrokeDialog
@@ -3688,12 +3795,15 @@
     title={picking.title}
     color={picking.color}
     onapply={(hex) => {
+      // Taken before clearing: `picking` follows `pickColor`.
+      const chosen = pickColor;
       pickColor = null;
-      picking.apply(hex);
+      chosen?.apply(hex);
     }}
     onclose={() => {
+      const chosen = pickColor;
       pickColor = null;
-      picking.close?.();
+      chosen?.close?.();
     }}
     sample={pickerSample}
   />
