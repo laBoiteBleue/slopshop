@@ -3397,6 +3397,25 @@ mod tests {
         let swatch = view.layers[1].swatch;
         assert!((swatch[1] - 0.5).abs() < 1e-5, "swatch {swatch:?}");
 
+        // Its color changes, as sent; undo brings the pink back.
+        let id = view.layers[1].id;
+        let json = format!(r#"{{"kind":"setFillColor","id":{id},"color":[0.0,0.25,1.0,1.0]}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let swatch = DocumentView::new(&s, &meta(), Vec::new()).layers[1].swatch;
+        assert!((swatch[1] - 0.25).abs() < 1e-5, "swatch {swatch:?}");
+        s.undo().unwrap();
+
+        // Placed below the pink layer.
+        let json = r#"{"kind":"addFillLayer","name":"Below","color":[0,0,0,1],"index":1}"#;
+        let request: EditRequest = serde_json::from_str(json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[1].name, "Below");
+        s.undo().unwrap();
+
         s.undo().unwrap();
         assert_eq!(DocumentView::new(&s, &meta(), Vec::new()).layers.len(), 1);
     }

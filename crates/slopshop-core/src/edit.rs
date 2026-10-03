@@ -12,6 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace};
+use crate::color::LinearRgba;
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH};
 use crate::geom::Size;
 use crate::raster::RasterImage;
@@ -99,6 +100,11 @@ pub enum Edit {
         id: LayerId,
         painted: Option<Arc<RasterImage>>,
     },
+    /// A fill layer's color (Layer > New Fill Layer > Solid Color, then the Properties panel).
+    SetFillColor {
+        id: LayerId,
+        color: LinearRgba,
+    },
     /// Replace an adjustment layer's adjustment (its kind or its parameters, ADR 0020).
     SetAdjustment {
         id: LayerId,
@@ -149,6 +155,8 @@ pub enum EditError {
     Stack(crate::stack::StackError),
     /// The layer has no mask.
     NoMask(LayerId),
+    /// The layer is not a fill layer.
+    NotAFill(LayerId),
     /// The layer is not a group (as a parent, or for a group edit).
     NotAGroup(LayerId),
     /// A group cannot go inside itself or one of its descendants.
@@ -202,6 +210,7 @@ impl fmt::Display for EditError {
                 )
             }
             EditError::NotRaster(id) => write!(f, "{id} is not a raster layer"),
+            EditError::NotAFill(id) => write!(f, "{id} is not a fill layer"),
             EditError::Stack(e) => write!(f, "{e}"),
             EditError::NoMask(id) => write!(f, "{id} has no mask"),
             EditError::NotAGroup(id) => write!(f, "{id} is not a group"),
@@ -396,6 +405,20 @@ impl Edit {
                 Edit::SetLayerTransform {
                     id,
                     transform: previous,
+                }
+            }
+            Edit::SetFillColor { id, color } => {
+                if !color.is_finite() {
+                    return Err(EditError::InvalidColor);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Fill { color: current } = &mut layer.content else {
+                    return Err(EditError::NotAFill(id));
+                };
+                let previous = std::mem::replace(current, color);
+                Edit::SetFillColor {
+                    id,
+                    color: previous,
                 }
             }
             Edit::SetAdjustment { id, adjustment } => {
@@ -1171,7 +1194,6 @@ pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
 mod tests {
     use super::*;
     use crate::blend::BlendSpace;
-    use crate::color::LinearRgba;
     use crate::stack::{Effect, LayerStack, PaintEntry, PaintOp};
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
@@ -2076,6 +2098,50 @@ mod tests {
         assert_eq!(
             Edit::group_layers(&doc, empty, &[]),
             Err(EditError::NoLayers)
+        );
+    }
+
+    #[test]
+    fn a_fill_layer_changes_color_and_undoes() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["fill"]);
+        let color = |doc: &Document| match doc.layer(ids[0]).unwrap().content {
+            LayerContent::Fill { color } => color,
+            _ => unreachable!("a fill layer"),
+        };
+        let before = color(&doc);
+        let blue = LinearRgba::new(0.0, 0.0, 1.0, 1.0);
+        let undo = Edit::SetFillColor {
+            id: ids[0],
+            color: blue,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(color(&doc), blue);
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(color(&doc), before);
+
+        let nan = LinearRgba::new(f32::NAN, 0.0, 0.0, 1.0);
+        assert_eq!(
+            Edit::SetFillColor {
+                id: ids[0],
+                color: nan
+            }
+            .apply(&mut doc),
+            Err(EditError::InvalidColor)
+        );
+        let group = group_layer(&mut doc, "g", Vec::new());
+        let g = group.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: group,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            Edit::SetFillColor { id: g, color: blue }.apply(&mut doc),
+            Err(EditError::NotAFill(g))
         );
     }
 
