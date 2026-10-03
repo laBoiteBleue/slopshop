@@ -9,6 +9,7 @@ const fr: Messages = {
   "menu.file.openFolder": "Ouvrir un dossier…",
   "menu.file.importLayers": "Importer comme calques…",
   "menu.file.close": "Fermer",
+  "menu.file.closeAll": "Tout fermer",
   "menu.file.save": "Enregistrer",
   "menu.file.export": "Exporter…",
   "menu.file.saveAs": "Enregistrer sous…",

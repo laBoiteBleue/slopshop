@@ -9,6 +9,7 @@ const en = {
   "menu.file.openFolder": "Open Folder…",
   "menu.file.importLayers": "Import as Layers…",
   "menu.file.close": "Close",
+  "menu.file.closeAll": "Close All",
   "menu.file.save": "Save",
   "menu.file.export": "Export…",
   "menu.file.saveAs": "Save As…",
