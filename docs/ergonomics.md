@@ -34,7 +34,9 @@ built. Contributors: propose here first.
 
 ## Done
 
-- Menu bar in Photoshop's order with its shortcuts; Save As lists every format and continues as
+- Menu bar in Photoshop's order with its shortcuts, each defined once for the menus and the
+  keyboard, on macOS with ⌘ and Apple's symbols; Edit > Keyboard Shortcuts (Alt+Shift+Ctrl+K)
+  lists them all, with a filter (read only); Redo is Shift+Ctrl+Z or Ctrl+Y; Save As lists every format and continues as
   an export; Export (Shift+Ctrl+E); Import as Layers (Shift+Ctrl+O).
 - One instance: opening a file while the app runs focuses it; the window remembers its size and
   place.
@@ -194,7 +196,8 @@ built. Contributors: propose here first.
 - [ ] Quick Export as PNG (Alt+Shift+Ctrl+W) with the last settings, no dialog.
 - [ ] Drag an image straight from a web browser (deferred: needs a native drop target).
 - [ ] Notices grouped per document, dismissed with one click, never modal.
-- [ ] Preferences: interface size, theme, language (today in Edit > Language), tile cache size.
+- [ ] Preferences: interface size, theme, tile cache size (the language is there already).
+- [ ] Customizable keyboard shortcuts in Edit > Keyboard Shortcuts (the list exists).
 
 ### Tools (when they arrive)
 
