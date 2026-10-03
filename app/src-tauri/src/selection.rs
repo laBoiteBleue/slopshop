@@ -744,14 +744,18 @@ pub async fn transform_selection(
 }
 
 /// Select > Modify (`kind`: `feather`, `expand`, `contract`, `border`, `smooth`) by `amount`
-/// pixels, as one undo entry; nothing left selected deselects.
+/// pixels; nothing left selected deselects. While the dialog is open (`live`), the change is
+/// shown and replaced by the next one (a gesture: Cancel takes it back); the last one, not
+/// live, is one undo entry.
 #[tauri::command]
 pub async fn modify_selection(
-    state: State<'_, AppState>,
+    app: tauri::AppHandle,
     document_id: u64,
     kind: String,
     amount: f64,
+    live: bool,
 ) -> Result<DocumentView, String> {
+    use tauri::Manager;
     let how = match kind.as_str() {
         "feather" => selection::Modify::Feather(amount),
         "expand" => selection::Modify::Expand(amount),
@@ -760,12 +764,41 @@ pub async fn modify_selection(
         "smooth" => selection::Modify::Smooth(amount),
         other => return Err(format!("unknown selection change {other}")),
     };
-    let (canvas, current) = snapshot(&state, document_id)?;
+    on_worker(move || modify(&app.state::<AppState>(), document_id, how, live)).await
+}
+
+/// [`modify_selection`]'s work, on a worker thread.
+pub(crate) fn modify(
+    state: &AppState,
+    document_id: u64,
+    how: selection::Modify,
+    live: bool,
+) -> Result<DocumentView, String> {
+    // The change applies to the selection before the previous ones shown.
+    let (canvas, current) = {
+        let mut documents = state.documents()?;
+        let session = &mut documents.get_mut(document_id)?.session;
+        session.cancel_gesture().map_err(|e| e.to_string())?;
+        let doc = session.document();
+        (doc.size(), doc.selection().map(|s| Arc::clone(s.image())))
+    };
     let current = current.ok_or("nothing is selected")?;
-    let image =
-        on_worker(move || selection::modify(canvas, &current, how).map_err(|e| e.to_string()))
-            .await?;
-    set_selection(&state, document_id, image)
+    let image = selection::modify(canvas, &current, how).map_err(|e| e.to_string())?;
+    let selection = match image {
+        Some(image) => Some(Selection::new(Arc::new(image)).ok_or("a selection is gray")?),
+        None => None,
+    };
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let session = &mut document.session;
+    session.cancel_gesture().map_err(|e| e.to_string())?;
+    session
+        .perform_in_gesture(Edit::SetSelection { selection })
+        .map_err(|e| e.to_string())?;
+    if !live {
+        session.end_gesture();
+    }
+    Ok(document.view())
 }
 
 /// Select > Deselect: the selection is kept for Reselect.

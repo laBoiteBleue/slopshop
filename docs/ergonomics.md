@@ -226,7 +226,8 @@ built. Contributors: propose here first.
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
   the ants). Painting in Quick Mask comes with the brushes. Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
   Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
-  dialog with one number of pixels, remembered for the session; the canvas edge is not an
+  dialog with one number of pixels, remembered for the session, the change shown live on the
+  image while it is set, Cancel taking it back, OK one undo entry; the canvas edge is not an
   outline, as in Photoshop by default). Selecting is undoable; crop and size changes deselect.
 - Layer menu (2026-10-03): New (Layer, Group, Layer via Copy, Layer via Cut), then New Fill
   Layer and New Adjustment Layer at the top level as in Photoshop (menus nest one level deep),

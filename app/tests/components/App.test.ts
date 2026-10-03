@@ -429,3 +429,35 @@ test("Color Range samples the active layer, and keeps its settings for the next 
   expect(screen.getByRole("checkbox", { name: "Invert" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: "Localized" })).toBeChecked();
 });
+
+test("Select > Modify shows each amount live; OK applies it, Cancel takes it back", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await screen.findByText("cat.jpg");
+  const expand = async () => {
+    await user.click(screen.getByRole("menuitem", { name: "Select" }));
+    await user.hover(screen.getByText("Modify", { selector: ".label" }));
+    await user.click(screen.getByText("Expand…", { selector: ".label" }));
+  };
+  await expand();
+  const field = screen.getByRole("spinbutton", { name: "Expand By:" });
+  await user.clear(field);
+  await user.type(field, "25");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("modify_selection").at(-1)).toEqual({
+      documentId: 1,
+      kind: "expand",
+      amount: 25,
+      live: false,
+    }),
+  );
+  const shown = sent("modify_selection").filter((a) => a.live);
+  expect(shown[0]).toMatchObject({ amount: 10 });
+  expect(shown.at(-1)).toMatchObject({ amount: 25 });
+  expect(sent("cancel_gesture")).toEqual([]);
+  // Opened again at 25; Cancel takes the preview back.
+  await expand();
+  expect(screen.getByRole("spinbutton", { name: "Expand By:" })).toHaveValue(25);
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await vi.waitFor(() => expect(sent("cancel_gesture")).toEqual([{ documentId: 1 }]));
+});
