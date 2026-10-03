@@ -22,6 +22,8 @@ pub struct DocumentInfo {
     /// Identifiers translated by the UI, as in the document view.
     pub working_space: &'static str,
     pub blend_space: &'static str,
+    /// Pixels per inch (ADR 0028).
+    pub resolution: f64,
     pub layers: LayerCounts,
     /// The pixel formats of the raster layers, the most used first.
     pub formats: Vec<FormatCount>,
@@ -128,6 +130,7 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
         height: doc.size().height,
         working_space: color_space_id(doc.working_space()),
         blend_space: doc.blend_space().id(),
+        resolution: doc.resolution(),
         layers,
         formats: formats
             .into_iter()

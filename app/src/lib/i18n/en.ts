@@ -274,6 +274,7 @@ const en = {
   "documentInfo.name": "Name",
   "documentInfo.size": "Dimensions",
   "documentInfo.sizeValue": "{width} × {height} px ({megapixels} megapixels)",
+  "documentInfo.resolutionValue": "{ppi} ppi (prints at {width} × {height} cm)",
   "documentInfo.colorSpace": "Color space",
   "documentInfo.raster": "Pixel layers",
   "documentInfo.fill": "Fill layers",
