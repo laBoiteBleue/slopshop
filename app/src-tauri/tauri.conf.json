@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "cargo build -p slopshop-raw && cargo build -p slopshop-ai --features helper && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "cargo build --release -p slopshop-raw && cargo build --release -p slopshop-ai --features helper && npm run build",
+    "beforeBuildCommand": "npm test && cargo build --release -p slopshop-raw && cargo build --release -p slopshop-ai --features helper && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
