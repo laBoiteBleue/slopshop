@@ -38,6 +38,14 @@ document.
    builds the edit from the composited image. The app composites the scratch on the GPU (the
    CPU compositor otherwise), on a worker, in Copy Merged's format (half floats, working
    space, premultiplied).
+5. **It shows at once** (the maintainer's request, 2026-10-04): a merge first moves its layers
+   into an isolated group in the place of the result, each placed so that it shows where it
+   did (`merge_preview`), and New Layer from Visible puts copies of the visible layers (their
+   pixels shared) in a group on top: the GPU draws the same pixels at once. That group is then
+   rasterized: its pixels replace it in the same undo entry when nothing happened meanwhile
+   (`Session::perform_after`), in an entry of their own otherwise, and not at all when the
+   group was undone or changed. The layers panel lists the group as the layer it becomes
+   (its thumbnail once the pixels come).
 
 ## Alternatives
 
