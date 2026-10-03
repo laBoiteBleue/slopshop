@@ -160,8 +160,11 @@
     apply(selectionOf(ids, active));
   }
 
+  /** Layers not shown in the list (the previews of Image > Adjustments): never selected. */
+  let hiddenSet = $derived(new Set(hidden));
+
   $effect(() => {
-    const order = allLayers.map((l) => l.id);
+    const order = allLayers.map((l) => l.id).filter((id) => !hiddenSet.has(id));
     const known = knownIds;
     knownIds = new Set(order);
     untrack(() => apply(afterLayersChange(current(), known, order)));
