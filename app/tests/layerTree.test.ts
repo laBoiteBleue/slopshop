@@ -4,6 +4,7 @@ import type { LayerView } from "../src/lib/engine.ts";
 import {
   canDropInto,
   carriesPaint,
+  clipLineAt,
   dropTarget,
   findLayer,
   flattenRows,
@@ -145,4 +146,17 @@ test("a group cannot be dropped inside itself", () => {
   assert.equal(canDropInto(nested, inner, [2]), false);
   assert.equal(canDropInto(nested, inner, [3]), true);
   assert.equal(canDropInto(TREE, layer(5), [1]), false);
+});
+
+test("an Alt+click on the line between two layers of a level picks the upper one", () => {
+  // Rows: 5, 2, 4, 3, 1. Near the top of row 3 (layer 3): the line between 4 and 3.
+  assert.equal(clipLineAt(ROWS, 3, 2, 20)?.id, 4);
+  // Near the bottom of row 2 (layer 4): the same line.
+  assert.equal(clipLineAt(ROWS, 2, 20, 2)?.id, 4);
+  // In the middle of a row: no line.
+  assert.equal(clipLineAt(ROWS, 3, 10, 10), null);
+  // Between a group and its first layer, or past the last row: no.
+  assert.equal(clipLineAt(ROWS, 2, 2, 20), null);
+  assert.equal(clipLineAt(ROWS, 4, 20, 2), null);
+  assert.equal(clipLineAt(ROWS, 0, 2, 20), null);
 });

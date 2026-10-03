@@ -48,6 +48,29 @@ export function flattenRows(
   return out;
 }
 
+/** How close to the line between two rows an Alt+click is on it, CSS pixels. */
+const CLIP_LINE = 7;
+
+/**
+ * An Alt+click on row `row`, `fromTop` and `fromBottom` CSS pixels from its edges: on the line
+ * with the row above or below it, the upper of the two layers, whose clipping it toggles (as in
+ * Photoshop); null elsewhere, or between layers of different levels.
+ */
+export function clipLineAt(
+  rows: Row[],
+  row: number,
+  fromTop: number,
+  fromBottom: number,
+): LayerView | null {
+  const upper = fromTop < CLIP_LINE ? row - 1 : fromBottom < CLIP_LINE ? row : null;
+  if (upper === null) return null;
+  const [above, below] = [rows[upper], rows[upper + 1]];
+  if (!above || !below || above.parent !== below.parent || above.depth !== below.depth) {
+    return null;
+  }
+  return above.layer;
+}
+
 /** Every layer, depth first, each group before its layers, bottom to top (as the engine). */
 export function walk(layers: LayerView[]): LayerView[] {
   return layers.flatMap((layer) => [layer, ...walk(layer.children)]);

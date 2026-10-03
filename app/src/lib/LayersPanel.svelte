@@ -19,6 +19,7 @@
     ancestors,
     canDropInto,
     carriesPaint,
+    clipLineAt,
     dropTarget,
     flattenRows,
     insertionPoint,
@@ -575,17 +576,10 @@
     // one, or releases it (Photoshop).
     if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const edge = 7;
-      const upper = e.clientY - r.top < edge ? row - 1 : r.bottom - e.clientY < edge ? row : null;
-      const above = upper !== null ? rows[upper] : undefined;
-      const below = upper !== null ? rows[upper + 1] : undefined;
-      if (above && below && above.parent === below.parent && below.depth === above.depth) {
+      const upper = clipLineAt(rows, row, e.clientY - r.top, r.bottom - e.clientY);
+      if (upper) {
         e.preventDefault();
-        void edit({
-          kind: "setLayerClipped",
-          id: above.layer.id,
-          clipped: !above.layer.clipped,
-        });
+        void edit({ kind: "setLayerClipped", id: upper.id, clipped: !upper.clipped });
         return;
       }
     }
