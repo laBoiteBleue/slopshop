@@ -104,6 +104,7 @@
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
+  import TransformFields from "./lib/TransformFields.svelte";
   import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
@@ -1369,6 +1370,8 @@
     /** What the box snaps to: the canvas and the other visible layers. */
     targets: Bounds[];
     matrix: Matrix;
+    /** The reference point, in the box's coordinates (the center at first). */
+    pivot: [number, number];
     /**
      * Layers just placed (files dropped on the image): their placement, applied before the
      * box's matrix and in the same undo entry, and the insertions that Esc takes back.
@@ -1421,6 +1424,7 @@
       box,
       targets: [canvasBounds(doc), ...targets.others],
       matrix: affine.IDENTITY,
+      pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
       placed,
     };
     if (placed) onTransformChange(affine.IDENTITY);
@@ -3130,7 +3134,17 @@
     bind:quick
     bind:brush={brushOptions}
     bind:eraser={eraserOptions}
+    transform={transforming ? transformBar : undefined}
   />
+  {#snippet transformBar()}
+    {#if transforming}
+      <TransformFields
+        matrix={transforming.matrix}
+        pivot={transforming.pivot}
+        onchange={onTransformChange}
+      />
+    {/if}
+  {/snippet}
 
   <main
     class:has-panel={active !== null}
@@ -3275,6 +3289,8 @@
                   <FreeTransform
                     {mapping}
                     box={transforming.box}
+                    bind:matrix={transforming.matrix}
+                    bind:pivot={transforming.pivot}
                     targets={snapping ? transforming.targets : []}
                     onchange={onTransformChange}
                     oncommit={commitTransform}

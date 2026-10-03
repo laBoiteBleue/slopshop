@@ -10,6 +10,7 @@
   import { keepFocus } from "./platform";
   import SliderField from "./SliderField.svelte";
   import BrushPicker from "./BrushPicker.svelte";
+  import type { Snippet } from "svelte";
 
   let {
     tool,
@@ -21,8 +22,11 @@
     quick = $bindable(),
     brush = $bindable(),
     eraser = $bindable(),
+    transform,
   }: {
     tool: ToolId;
+    /** Free Transform under way: its fields replace the tool's options, as in Photoshop. */
+    transform?: Snippet;
     /** Move tool: a drag takes the layer under the pointer (Ctrl inverts it). */
     autoSelect: boolean;
     /** Selection tools: how a new shape combines with the selection (keys override it). */
@@ -68,7 +72,9 @@
   </span>
   <span class="divider"></span>
 
-  {#if tool === "move"}
+  {#if transform}
+    {@render transform()}
+  {:else if tool === "move"}
     <label class="option">
       <input type="checkbox" bind:checked={autoSelect} />
       {t("options.autoSelect")}
