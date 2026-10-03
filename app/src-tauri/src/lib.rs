@@ -2123,6 +2123,7 @@ pub fn run() {
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,
+            clipboard::new_layer_from_visible,
             clipboard::clipboard_size,
             clipboard::clipboard_contents,
             save_document,
