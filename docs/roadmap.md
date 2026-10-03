@@ -229,7 +229,7 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       exactly), Delete Paint empties it
 - [x] A layer's stack listed below it in the layers panel (an arrow unfolds it, newest on
       top), entries deleted one by one
-- [x] Image > Adjustments as effects on the selected layers, with Photoshop's shortcuts, a
+- [x] Image > Adjustments as effects on every visible pixel layer, with Photoshop's shortcuts, a
       dialog previewed on the canvas
 - [x] The Restore Eraser (in the Eraser's group)
 - [ ] The stack evaluated on the GPU into a bounded cache (ADR 0029, point 6)

@@ -707,11 +707,16 @@
     return doc && first !== undefined ? (findLayer(doc.layers, first)?.adjustment ?? null) : null;
   });
 
-  /** The layers Image > Adjustments applies to: the selected visible raster layers. */
+  /**
+   * The layers Image > Adjustments applies to: every pixel layer shown, its groups shown too
+   * (maintainer's choice: the whole visible image, not the selected layers).
+   */
   function adjustTargets(): number[] {
-    return (layersPanel?.selectedLayers() ?? [])
-      .filter((l) => l.kind === "raster" && l.visible)
-      .map((l) => l.id);
+    const shown = (layers: LayerView[]): number[] =>
+      layers
+        .filter((l) => l.visible)
+        .flatMap((l) => (l.kind === "raster" ? [l.id] : shown(l.children)));
+    return active ? shown(active.layers) : [];
   }
 
   /** Image > Adjustments > `adjustment`: Invert at once, the others through their dialog. */
@@ -782,23 +787,30 @@
     showAdjust(adjustDialog);
   }
 
-  /** OK: the preview goes, the adjustment is applied to the layers' stacks (one undo entry). */
-  async function applyAdjust() {
+  /**
+   * OK: the adjustment applied to the layers' stacks (one undo entry) in place of the preview,
+   * in one go: the canvas goes from the preview straight to the result.
+   */
+  function applyAdjust() {
     const dialog = adjustDialog;
     // The settings chosen last: the engine may not show them yet.
     const shown = adjustShown;
     adjustDialog = null;
     if (!dialog) return;
-    await cancelGesture(dialog.documentId);
     const values = dialog.values ?? shown?.values;
-    if (!values) return;
-    void edit(dialog.documentId, {
-      kind: "applyEffect",
-      ids: dialog.ids,
-      adjustment: dialog.adjustment,
-      values,
-      curves: dialog.curves ?? shown?.curves ?? undefined,
-    });
+    if (!values) {
+      void cancelGesture(dialog.documentId);
+      return;
+    }
+    void sync(
+      engine.replaceGesture(dialog.documentId, {
+        kind: "applyEffect",
+        ids: dialog.ids,
+        adjustment: dialog.adjustment,
+        values,
+        curves: dialog.curves ?? shown?.curves ?? undefined,
+      }),
+    );
   }
 
   function cancelAdjust() {
@@ -2713,10 +2725,8 @@
     const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const several = selectedCount > 1;
     const noSelection = doc?.selectionKey == null;
-    // Image > Adjustments: on visible raster layers, as in Photoshop (ADR 0029).
-    const adjustable = (layersPanel?.selectedLayers() ?? []).some(
-      (l) => l.kind === "raster" && l.visible,
-    );
+    // Image > Adjustments: on the pixel layers shown (ADR 0029).
+    const adjustable = adjustTargets().length > 0;
     return {
       newDocument: { label: t("menu.file.new"), run: () => void newDocument(), whileTyping: true },
       open: { label: t("menu.file.open"), run: () => void openWithDialog(), whileTyping: true },
@@ -3990,7 +4000,7 @@
     onlive={(values) => adjustLive(values)}
     oncurves={(curves) => adjustLive([], curves)}
     onpreview={adjustPreview}
-    onok={() => void applyAdjust()}
+    onok={applyAdjust}
     oncancel={cancelAdjust}
   />
 {/if}

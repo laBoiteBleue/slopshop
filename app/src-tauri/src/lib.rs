@@ -1653,6 +1653,26 @@ async fn cancel_gesture(
     Ok(document.view())
 }
 
+/// Revert the gesture in progress without a history entry, then apply `edit` as one undo entry,
+/// in one go: the view goes from what the gesture showed straight to the edit's result (Image >
+/// Adjustments: its preview, then the effect).
+#[tauri::command]
+async fn replace_gesture(
+    state: State<'_, AppState>,
+    document_id: u64,
+    edit: EditRequest,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    document
+        .session
+        .cancel_gesture()
+        .map_err(|e| e.to_string())?;
+    let edit = edit.into_edit(&mut document.session)?;
+    document.session.perform(edit).map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
 #[tauri::command]
 async fn end_gesture(state: State<'_, AppState>, document_id: u64) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
@@ -2026,6 +2046,7 @@ pub fn run() {
             perform_live,
             end_gesture,
             cancel_gesture,
+            replace_gesture,
             undo,
             redo,
             gpu_info,
