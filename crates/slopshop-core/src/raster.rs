@@ -859,7 +859,7 @@ fn checked_level(
     Ok(RasterLevel { size, grid, tiles })
 }
 
-fn stored_format(format: PixelFormat) -> PixelFormat {
+pub(crate) fn stored_format(format: PixelFormat) -> PixelFormat {
     let layout = match format.layout {
         ChannelLayout::Rgb => ChannelLayout::Rgba,
         other => other,

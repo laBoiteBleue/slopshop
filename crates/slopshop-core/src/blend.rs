@@ -331,6 +331,30 @@ impl Blender {
         self.fade(below, &above, coverage)
     }
 
+    /// A premultiplied working-space color as premultiplied blend-space values: the encoded
+    /// straight color times alpha, where a layer's paint is `P + k·B` (ADR 0029).
+    pub(crate) fn encode_premultiplied(&self, color: &[f64; 4]) -> [f64; 4] {
+        if self.space == BlendSpace::Linear {
+            return *color;
+        }
+        let alpha = color[3];
+        let [r, g, b] = self.encode(unpremultiply(color));
+        [r * alpha, g * alpha, b * alpha, alpha]
+    }
+
+    /// The inverse of [`Self::encode_premultiplied`], alpha clamped to `[0, 1]`.
+    pub(crate) fn decode_premultiplied(&self, values: &[f64; 4]) -> [f64; 4] {
+        let alpha = values[3].clamp(0.0, 1.0);
+        if self.space == BlendSpace::Linear {
+            return [values[0], values[1], values[2], alpha];
+        }
+        if alpha <= 0.0 {
+            return [0.0; 4];
+        }
+        let [r, g, b] = self.decode([values[0], values[1], values[2]].map(|v| v / values[3]));
+        [r * alpha, g * alpha, b * alpha, alpha]
+    }
+
     /// Straight working-space color → blend-space values.
     fn encode(&self, color: [f64; 3]) -> [f64; 3] {
         let color = match &self.to_blend {
