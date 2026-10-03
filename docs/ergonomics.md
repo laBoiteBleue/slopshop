@@ -142,6 +142,14 @@ built. Contributors: propose here first.
   Invert applies at once. What is applied is
   kept in the layer's stack (ADR 0029), listed below the layer and deletable; the same
   adjustment applied twice in a row is one entry (×2), two Inverts cancel.
+- Image > Auto Tone (Shift+Ctrl+L), Auto Contrast (Alt+Shift+Ctrl+L), Auto Color
+  (Shift+Ctrl+B), Photoshop's three classic algorithms, 0.1 % clipped at each end: Auto
+  Contrast stretches the three channels alike (colors keep their relations), Auto Tone each
+  channel on its own, Auto Color maps each channel from the average of the darkest to the
+  average of the lightest pixels and makes the nearly gray midtones gray. The visible image is
+  analyzed once (within the selection when there is one; maintainer's choice, 2026-10-03) and
+  the Levels found are applied to every pixel layer shown, as Image > Adjustments does: an entry
+  of each layer's stack, deletable, never recomputed. Nothing to change: nothing done.
 - The Restore Eraser, in the Eraser's group (E, Shift+E to switch, the Eraser's options): it
   brings back a layer's original through all of its paint where it rubs, the adjustments
   applied from Image > Adjustments staying; paint fully rubbed out leaves the layer's list.
@@ -154,8 +162,9 @@ built. Contributors: propose here first.
   flip the canvas. All undoable, and nothing is cut: pixels outside the canvas are kept,
   resizing and arbitrary turns resample when shown (the layers keep their pixels, and Free
   Transform can still change the turn).
-- Image menu in Photoshop's order: Adjustments; Image Size, Canvas Size, Image Rotation, Crop,
-  Trim…, Reveal All; then the document's Blend Space. Image > Trim…, Photoshop's dialog: Based
+- Image menu in Photoshop's order: Adjustments; Auto Tone, Auto Contrast, Auto Color; Image
+  Size, Canvas Size, Image Rotation, Crop, Trim…, Reveal All; then the document's Blend Space.
+  Image > Trim…, Photoshop's dialog: Based
   On transparent pixels, the top-left or the bottom-right pixel's color (an exact match, as
   composited), Trim Away top, bottom, left, right; remembered for the session. Image > Reveal
   All grows the canvas to every layer's pixels, hidden layers included, within their masks
@@ -222,11 +231,6 @@ built. Contributors: propose here first.
 
 Decided, not built yet:
 
-- [x] Image > Auto Tone (Shift+Ctrl+L), Auto Contrast (Alt+Shift+Ctrl+L), Auto Color
-      (Shift+Ctrl+B), Photoshop's three classic algorithms (clip 0.1 % per channel; the same
-      clip on all channels together; dark and light colors with neutral midtones): the image
-      analyzed once, the result applied as a Levels entry of the layers' stacks with the
-      computed values (Levels gains per-channel settings, as Photoshop's, for it).
 - [x] Gradient Map and Selective Color, as adjustment layers and in Image > Adjustments (the
       same engine); Selective Color approximates Photoshop's unpublished math.
 

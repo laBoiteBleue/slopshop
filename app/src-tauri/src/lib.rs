@@ -3317,6 +3317,27 @@ mod tests {
     }
 
     #[test]
+    fn auto_levels_requests_do_nothing_on_a_flat_image_and_know_their_corrections() {
+        let mut s = blank_session();
+        let ids: Vec<u64> = s.document().layers().iter().map(|l| l.id.get()).collect();
+        let request = |correction: &str| {
+            serde_json::from_str::<EditRequest>(&format!(
+                r#"{{"kind":"autoLevels","ids":{ids:?},"correction":"{correction}"}}"#
+            ))
+            .unwrap()
+        };
+        // A white canvas: nothing to stretch, an empty edit (no undo entry).
+        for correction in ["tone", "contrast", "color"] {
+            let edit = request(correction).into_edit(&mut s).unwrap();
+            assert!(
+                matches!(edit, Edit::Batch(ref e) if e.is_empty()),
+                "{correction}"
+            );
+        }
+        assert!(request("equalize").into_edit(&mut s).is_err());
+    }
+
+    #[test]
     fn transform_requests_replace_the_gesture_so_far() {
         let mut s = blank_session();
         let id = s.document().layers()[0].id;
