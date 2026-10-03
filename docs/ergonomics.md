@@ -41,9 +41,7 @@ built. Contributors: propose here first.
 - One instance: opening a file while the app runs focuses it; the window remembers its size and
   place.
 - Drop files on the image or the layers panel: layers; elsewhere: new tabs. Folders and zips open
-  like several files. Paste (Ctrl+V) an image or a file as a layer;
-  Copy and Cut (Ctrl+C, Ctrl+X) the selected layers, Paste them on top of any document or as a new
-  one. Several images in one file (PDF pages, DICOM slices, animation frames) open
+  like several files. Several images in one file (PDF pages, DICOM slices, animation frames) open
   as one document: one isolated group, the first image shown, the others hidden; the eye of a
   layer in a multi-selection shows or hides the whole selection.
 - A layered file imported into a document arrives as one group named after it.
@@ -90,6 +88,20 @@ built. Contributors: propose here first.
   height as another layer (a magenta measure across the middle of both, with end ticks like the serifs of an I). Ctrl held: freely; View > Snap turns
   it off. Pixels are
   never resampled into the layer: the transform stays editable.
+- Clipboard, as in Photoshop. Copy (Ctrl+C): with a selection, the selected pixels of the
+  active raster layer (or of its mask when it is the target) with their alpha and place; without
+  one, the selected layers whole (groups, masks, clipping, adjustments, transforms, paint: nothing
+  rasterized). Cut (Ctrl+X): the same, then the pixels are erased (as paint, ADR 0027) or the
+  layers deleted, one undo entry. Copy Merged (Shift+Ctrl+C): the visible layers composited in
+  the selection, or the whole canvas without one. Other applications get an 8-bit image of any
+  copy; SlopShop pastes its own while the system clipboard still holds that image. Paste
+  (Ctrl+V): where it was copied when that is in sight, else in the middle of the view; an image
+  from elsewhere in the middle of the view; files copied in the file manager are placed like
+  dropped ones; the pasted layers are selected. Paste in Place (Shift+Ctrl+V): where it was
+  copied, always. Paste Into (Alt+Shift+Ctrl+V): in a new group whose mask is the selection (the
+  content stays whole behind the mask and moves under it), deselected. Without a document, a
+  paste opens a new one of the size of what was copied; File > New offers that size as its
+  Clipboard preset.
 - Edit > Transform: Rotate 180°, 90° clockwise and counter clockwise, Flip Horizontal and
   Vertical, about the center of the selected layers, exact (pixels are copied, not resampled).
 - Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and

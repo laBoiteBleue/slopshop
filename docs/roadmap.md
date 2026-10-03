@@ -100,7 +100,10 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Paste (Ctrl+V): a copied image becomes a layer (or a new tab), copied files open like
       dropped ones
 - [x] Copy, Cut and Paste layers (Ctrl+C, Ctrl+X, Ctrl+V): on top of any document, or as a new
-      one (Paste as New Document); the pixels are shared, so copying costs nothing
+      one; the pixels are shared, so copying costs nothing
+- [x] Clipboard as in Photoshop: Copy and Cut of the selected pixels, Copy Merged, Paste in
+      Place, Paste Into (a group masked by the selection), pastes placed where they were copied
+      or in the view, an 8-bit image for other applications, File > New's Clipboard preset
 - [x] File > New, as Photoshop's New dialog: a name, presets, the size and its orientation, the
       background contents (white, black, the background color, transparent)
 - [ ] Drop images from a web page (browsers drag URLs or virtual files, not file paths)
