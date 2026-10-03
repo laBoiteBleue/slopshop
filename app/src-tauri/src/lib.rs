@@ -2052,7 +2052,7 @@ pub fn run() {
             selection::magic_wand,
             selection::quick_select,
             paint::paint_stroke,
-            paint::fill_selection,
+            paint::fill,
             move_pixels::move_selected_pixels,
             move_pixels::selection_bounds_at,
             recent::recent_files,

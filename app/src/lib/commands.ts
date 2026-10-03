@@ -34,6 +34,7 @@ export const SHORTCUTS = {
   paste: ["mod+v"],
   pasteInPlace: ["shift+mod+v"],
   pasteInto: ["alt+shift+mod+v"],
+  fill: ["shift+f5", "shift+backspace"],
   freeTransform: ["mod+t"],
   keyboardShortcuts: ["alt+shift+mod+k"],
   // ⌘, is every macOS application's settings; Ctrl+, does no harm elsewhere.

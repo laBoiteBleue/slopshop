@@ -16,6 +16,7 @@
     onRecentFiles,
     onOpenEvents,
     type BrushRequest,
+    type StrokeRequest,
     type CopyRequest,
     type PasteKind,
     type PaintTarget,
@@ -81,7 +82,8 @@
   import OptionsBar from "./lib/OptionsBar.svelte";
   import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
-  import FillChoiceDialog, { type FillContents } from "./lib/FillChoiceDialog.svelte";
+  import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
+  import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
@@ -618,47 +620,106 @@
     sendPaint(run);
   }
 
-  /** Delete with a selection: what to do with the selected pixels is asked first. */
-  let fillChoice = $state<{ documentId: number; layerId: number; mask: boolean } | null>(null);
+  // --- Edit > Fill and Stroke, Delete with a selection: paint (ADR 0027, 0029) -----------------
 
-  function clearSelection() {
+  /** The layer pixels (or the mask, when it is the target) that Fill, Stroke and Delete paint. */
+  type PaintedLayer = { documentId: number; layerId: number; mask: boolean };
+
+  /** The active layer as a `PaintedLayer`; `null`, with a notice, when it has no pixels. */
+  function paintedLayer(): PaintedLayer | null {
     const doc = active;
-    if (!doc) return;
+    if (!doc) return null;
     commitTransform();
     const layer = layersPanel?.selectedLayer() ?? null;
-    // The mask when it is the target: hidden there, or filled with a color's gray.
     const mask = layersPanel?.paintsMask() ?? false;
     if (!layer || (!mask && layer.kind !== "raster")) {
       showError(t("paint.needRaster"));
-      return;
+      return null;
     }
-    fillChoice = { documentId: doc.id, layerId: layer.id, mask };
+    return { documentId: doc.id, layerId: layer.id, mask };
+  }
+
+  /**
+   * `target` painted with `hex` (erased when `null`) at `opacity`: in the selection, along its
+   * outline with `stroke`, or everywhere without a selection. One undo entry.
+   */
+  function paintPixels(
+    target: PaintedLayer,
+    hex: string | null,
+    opacity = 1,
+    stroke: StrokeRequest | null = null,
+  ) {
+    const color = hex === null ? null : hexToSrgb(hex);
+    const kind = target.mask ? "mask" : "layer";
+    void sync(engine.fill(target.documentId, target.layerId, kind, color, opacity, stroke));
+  }
+
+  /** Delete with a selection: the selected pixels erased, as Photoshop's Clear. */
+  function clearPixels() {
+    const target = paintedLayer();
+    if (target) paintPixels(target, null);
   }
 
   /** Photoshop's fixed fill colors: Black, 50% Gray and White (sRGB). */
   const FILL_COLORS = { black: "#000000", gray: "#808080", white: "#ffffff" };
 
-  /** The choice made: erase (alpha only) or fill with a color (ADR 0027). */
-  function applyFillChoice(contents: FillContents) {
-    const target = fillChoice;
-    fillChoice = null;
+  /** Edit > Fill is open, for this layer. */
+  let fillDialog = $state<PaintedLayer | null>(null);
+  /** Edit > Stroke is open, for this layer, with its color; hidden while the color is picked. */
+  let strokeDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
+  /** A color picked for Fill or Stroke. */
+  let pickColor = $state<{
+    title: string;
+    color: string;
+    apply: (hex: string) => void;
+    close?: () => void;
+  } | null>(null);
+
+  function applyFill({ contents, opacity }: FillSettings) {
+    const target = fillDialog;
+    fillDialog = null;
     if (!target) return;
-    const color =
-      contents === "erase"
-        ? null
-        : hexToSrgb(
-            contents === "foreground" || contents === "background"
-              ? colors[contents]
-              : FILL_COLORS[contents],
-          );
-    void sync(
-      engine.fillSelection(
-        target.documentId,
-        target.layerId,
-        target.mask ? "mask" : "layer",
-        color,
-      ),
-    );
+    if (contents === "color") {
+      // Photoshop's "Color...": the color picker, then the fill.
+      pickColor = {
+        title: t("fillChoice.colorTitle"),
+        color: colors.foreground,
+        apply: (hex) => paintPixels(target, hex, opacity),
+      };
+      return;
+    }
+    const hex =
+      contents === "foreground" || contents === "background"
+        ? colors[contents]
+        : FILL_COLORS[contents];
+    paintPixels(target, hex, opacity);
+  }
+
+  function openStroke() {
+    const target = paintedLayer();
+    if (target) strokeDialog = { ...target, color: colors.foreground, picking: false };
+  }
+
+  function applyStroke({ width, location, opacity }: StrokeSettings) {
+    const target = strokeDialog;
+    strokeDialog = null;
+    if (target) paintPixels(target, target.color, opacity, { width, location });
+  }
+
+  function pickStrokeColor() {
+    const dialog = strokeDialog;
+    if (!dialog) return;
+    strokeDialog = { ...dialog, picking: true };
+    pickColor = {
+      title: t("stroke.colorTitle"),
+      color: dialog.color,
+      apply: (hex) => {
+        if (strokeDialog) strokeDialog = { ...strokeDialog, color: hex, picking: false };
+      },
+      close: () => {
+        if (strokeDialog) strokeDialog = { ...strokeDialog, picking: false };
+      },
+    };
   }
 
   /** Sends the samples waiting, or leaves them for when the batch in flight returns. */
@@ -2091,7 +2152,7 @@
     if (!cut) return;
     if (pixels) {
       // Erased as the Eraser does (paint, ADR 0027): Delete Paint brings them back.
-      void sync(engine.fillSelection(doc.id, layer.id, mask ? "mask" : "layer", null));
+      paintPixels({ documentId: doc.id, layerId: layer.id, mask }, null);
     } else layersPanel?.deleteSelected();
   }
 
@@ -2192,7 +2253,7 @@
   /** The Delete key: the selected pixels with a selection (Photoshop's Clear), else the layers. */
   function deleteKey() {
     if (layersPanel?.busy()) return;
-    if (active?.selectionKey != null) clearSelection();
+    if (active?.selectionKey != null) clearPixels();
     else layersPanel?.deleteSelected();
   }
 
@@ -2283,6 +2344,11 @@
         label: t("menu.edit.pasteInto"),
         run: () => void paste("into"),
         disabled: noSelection,
+      },
+      fill: {
+        label: t("menu.edit.fill"),
+        run: () => (fillDialog = paintedLayer()),
+        disabled: !doc,
       },
       freeTransform: {
         label: t("menu.edit.freeTransform"),
@@ -2596,6 +2662,9 @@
           item("paste"),
           item("pasteInPlace"),
           item("pasteInto"),
+          separator,
+          item("fill"),
+          cmd(t("menu.edit.stroke"), openStroke, undefined, !doc || doc.selectionKey == null),
           separator,
           item("freeTransform"),
           {
@@ -3341,8 +3410,32 @@
   <DocumentInfoDialog info={documentInfo} onclose={() => (documentInfo = null)} />
 {/if}
 
-{#if fillChoice}
-  <FillChoiceDialog onchoose={applyFillChoice} onclose={() => (fillChoice = null)} />
+{#if fillDialog}
+  <FillDialog onchoose={applyFill} onclose={() => (fillDialog = null)} />
+{/if}
+{#if strokeDialog && !strokeDialog.picking}
+  <StrokeDialog
+    color={strokeDialog.color}
+    onpickcolor={pickStrokeColor}
+    onchoose={applyStroke}
+    onclose={() => (strokeDialog = null)}
+  />
+{/if}
+{#if pickColor}
+  {@const picking = pickColor}
+  <ColorPickerDialog
+    title={picking.title}
+    color={picking.color}
+    onapply={(hex) => {
+      pickColor = null;
+      picking.apply(hex);
+    }}
+    onclose={() => {
+      pickColor = null;
+      picking.close?.();
+    }}
+    sample={pickerSample}
+  />
 {/if}
 {#if newDialog}
   <NewDocumentDialog
