@@ -19,12 +19,14 @@
 //!   Paste places what it pastes.
 //! - [`job`]: cancellation and progress of background jobs.
 //! - [`align`]: Layer > Align and Distribute.
+//! - [`bake`]: Layer > Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten (ADR 0030).
 //! - [`trim`]: Image > Trim, the canvas reduced to the image without its uniform margins.
 //! - [`auto`]: Image > Auto Tone, Auto Contrast and Auto Color, Levels computed from the image.
 
 pub mod adjust;
 pub mod align;
 pub mod auto;
+pub mod bake;
 pub mod blend;
 mod blue_noise;
 pub mod color;
