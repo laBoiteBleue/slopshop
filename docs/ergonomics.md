@@ -37,7 +37,8 @@ built. Contributors: propose here first.
 - Menu bar in Photoshop's order with its shortcuts, each defined once for the menus and the
   keyboard, on macOS with ⌘ and Apple's symbols; Edit > Keyboard Shortcuts (Alt+Shift+Ctrl+K)
   lists them all, with a filter (read only); Redo is Shift+Ctrl+Z or Ctrl+Y; Save As lists every format and continues as
-  an export; Export (Shift+Ctrl+E); Import as Layers (Shift+Ctrl+O).
+  an export; Export (Alt+Shift+Ctrl+W, Photoshop's Export As: Shift+Ctrl+E is Merge Visible);
+  Import as Layers (Shift+Ctrl+O).
 - One instance: opening a file while the app runs focuses it; the window remembers its size and
   place.
 - Drop files on the image or the layers panel: layers; elsewhere: new tabs. Folders and zips open
@@ -260,6 +261,16 @@ built. Contributors: propose here first.
   menu entry there): the visible layers composited over the whole canvas, the selection
   ignored, as a new pixel layer at the top of the document (the maintainer's choice, rather
   than above the active layer), selected; the layers stay. One undo entry.
+- Layer > Bake to Pixels ("Figer en pixels", [ADR 0030](adr/0030-bake-to-pixels.md)), what
+  loses editability on purpose, in one place, one undo entry each. Rasterize: the selected
+  layers keep their place, transform, opacity, mode, mask and clipping, their content becomes
+  pixels (a stack its result, a fill its color over the canvas, a group its layers
+  composited). Merge Layers (Ctrl+E; with one layer, Merge Down onto the visible layer below
+  it, named after it): the layers composited as they show into one layer in the place of the
+  topmost, hidden ones dropped, nothing cut outside the canvas; an adjustment layer merged
+  down bakes into the pixels below. Merge Visible (Shift+Ctrl+E): every visible layer, hidden
+  ones staying. Flatten Image: every layer into one named Background, hidden ones dropped,
+  transparency kept. Grayed when there is nothing to bake.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
@@ -308,8 +319,6 @@ maintainer's answers to the audit:
 - **Decided, to build**:
   - Gradient and Pattern fill layers come with a gradient engine and patterns, not before (no
     dead entries).
-  - Merge Visible keeps Photoshop's Shift+Ctrl+E; Export moves to Alt+Shift+Ctrl+W
-    (Photoshop's Export As).
   - Layer styles (drop shadow, glows, stroke, overlays) as in Photoshop: a list of editable
     effects per layer, computed after its own stack and mask (they read its final alpha and
     draw around it), sharing the stack's primitives (blur, fills, blend modes). Not entries of
@@ -323,11 +332,9 @@ maintainer's answers to the audit:
   yet: then one mask concept with several representations), Group from Layers (it is Group
   Layers), Rasterize forced by a tool (no text or vector layer yet; to settle with the first
   of them).
-- **Open question**: a submenu kept for what is destructive, as the maintainer suggests:
-  Rasterize, Merge Layers (Ctrl+E), Merge Visible, Flatten Image. Its name, what Rasterize
-  does on each kind of layer (a stack, a fill layer, a group; whether it bakes the transform),
-  whether Flatten keeps transparency, and whether merging an adjustment layer down makes an
-  entry of the layer's stack rather than pixels.
+- **Decided** (2026-10-04, [ADR 0030](adr/0030-bake-to-pixels.md)): what is destructive
+  goes in one submenu, Layer > Bake to Pixels; Rasterize keeps the transform; Flatten keeps
+  transparency; merging an adjustment layer down bakes it into pixels.
 
 ### Select menu (audit of 2026-10-04)
 

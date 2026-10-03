@@ -35,5 +35,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0028 | [Document resolution (pixels per inch)](0028-resolution.md) | accepted |
 | 0029 | [A layer's own stack: paint and applied effects](0029-layer-stack.md) | accepted |
 | 0030 | [The panels dock](0030-panel-dock.md) | accepted |
+| 0031 | [Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten](0031-bake-to-pixels.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
