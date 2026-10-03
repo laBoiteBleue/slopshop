@@ -82,7 +82,9 @@ built. Contributors: propose here first.
   handle skew (Alt: about the reference point). The reference point (the small circle, at the
   center at first) can be dragged anywhere, snapping to the handles and the center; rotations
   and Alt scaling turn about it. A right-click on the box: Rotate 180°, 90° both ways, Flip
-  Horizontal and Vertical about the reference point, Apply, Cancel. A readout next to the pointer
+  Horizontal and Vertical about the reference point, Apply, Cancel. The options bar shows Photoshop's
+  fields meanwhile: X and Y of the reference point, W and H in % (linked by a chain), the angle
+  and the skew; a value typed transforms the box at once. A readout next to the pointer
   shows the move, the size in % or the angle. Enter, a double-click inside or a click outside
   (without dragging) applies it as one undo entry; Esc or Ctrl+Z cancels it; Ctrl+T again,
   another edit or another tab applies it, without a question or buttons (undo is there for
@@ -203,8 +205,6 @@ built. Contributors: propose here first.
 
 ### Canvas and view
 
-- [ ] Free Transform: an options bar with X, Y, W, H and angle fields and a link to keep the
-      proportions (Photoshop's).
 - [ ] Arrow keys move the Free Transform box, as in Photoshop.
 - [ ] Smart guides also show equal spacing between three layers or more (Photoshop's distance
       marks), and the distance to the nearest layer while Alt-dragging.
