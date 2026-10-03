@@ -989,6 +989,43 @@ pub fn modify(
     Ok(result.into_image())
 }
 
+/// Where Edit > Stroke draws its band, relative to the selection's outline (Photoshop's
+/// Location).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrokeLocation {
+    Inside,
+    Center,
+    Outside,
+}
+
+/// Edit > Stroke: the band `width` pixels wide along the outline of `selection` (where its
+/// coverage crosses one half), inside, centered on or outside it, anti-aliased like Select >
+/// Modify > Border. `None`: nothing to stroke.
+pub fn stroke_band(
+    canvas: Size,
+    selection: &RasterImage,
+    width: f64,
+    location: StrokeLocation,
+) -> Result<Option<RasterImage>, SelectionError> {
+    if !width.is_finite() || !(0.0..=MAX_MODIFY).contains(&width) {
+        return Err(SelectionError::InvalidShape);
+    }
+    if width == 0.0 {
+        return Ok(None);
+    }
+    if location == StrokeLocation::Center {
+        return modify(canvas, selection, Modify::Border(width));
+    }
+    let mask = Mask::from_image(canvas, selection)?;
+    // Coverage 1 within the band, a one-pixel anti-aliased ramp at each of its edges.
+    let band = if location == StrokeLocation::Inside {
+        by_distance(&mask, width, move |h| (0.5 - h).min(width + h + 0.5))
+    } else {
+        by_distance(&mask, width, move |h| (h + 0.5).min(width - h + 0.5))
+    };
+    Ok(band.into_image())
+}
+
 /// A new mask whose coverage is `cover(h)` (clamped to `[0, 1]`), `h` being the signed
 /// distance from each pixel center to the outline of `mask` (negative inside), exact up to
 /// `reach` pixels (and beyond it only known to be farther).
@@ -3130,6 +3167,39 @@ mod tests {
         assert_eq!(still.gray_at(0, 0), 1.0);
         assert!(
             modify(canvas, &all, Modify::Border(10.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn strokes_lie_inside_centered_on_or_outside_the_outline() {
+        let canvas = Size::new(400, 300);
+        let square = select(canvas, &rect(100.0, 100.0, 200.0, 200.0));
+        let band = |location| {
+            stroke_band(canvas, &square, 4.0, location)
+                .unwrap()
+                .unwrap()
+        };
+        let inside = band(StrokeLocation::Inside);
+        assert_eq!(inside.gray_at(100, 150), 1.0);
+        assert_eq!(inside.gray_at(103, 150), 1.0);
+        assert_eq!(inside.gray_at(104, 150), 0.0);
+        assert_eq!(inside.gray_at(99, 150), 0.0);
+        assert_eq!(inside.gray_at(150, 150), 0.0);
+        let outside = band(StrokeLocation::Outside);
+        assert_eq!(outside.gray_at(96, 150), 1.0);
+        assert_eq!(outside.gray_at(99, 150), 1.0);
+        assert_eq!(outside.gray_at(95, 150), 0.0);
+        assert_eq!(outside.gray_at(100, 150), 0.0);
+        assert_eq!(outside.gray_at(10, 10), 0.0);
+        let center = band(StrokeLocation::Center);
+        assert_eq!(center.gray_at(98, 150), 1.0);
+        assert_eq!(center.gray_at(101, 150), 1.0);
+        assert_eq!(center.gray_at(97, 150), 0.0);
+        assert_eq!(center.gray_at(102, 150), 0.0);
+        assert!(
+            stroke_band(canvas, &square, 0.0, StrokeLocation::Inside)
                 .unwrap()
                 .is_none()
         );
