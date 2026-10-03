@@ -42,9 +42,6 @@
     { value: "transparent", label: "newDocument.background.transparent" },
   ];
 
-  /** Largest side, in pixels (as the engine accepts). */
-  const MAX_SIDE = 300_000;
-
   /** As Photoshop's New dialog, the last settings come back (for the session). */
   let last = {
     width: 6000,
@@ -74,6 +71,7 @@
     toPixels,
     toPpi,
   } from "./units";
+  import { atResolution, isValidNew, matchingPreset, oriented } from "./newDocument";
 
   const LENGTH_LABELS: Record<LengthUnit, MessageKey> = {
     px: "sizeDialog.unit.px",
@@ -148,27 +146,15 @@
   function onResolution() {
     const next = toPpi(Number(rField), resolutionUnit);
     if (!Number.isFinite(next) || next < MIN_PPI || next > MAX_PPI) return;
-    if (unit !== "px") {
-      width = Math.round((width * next) / resolution);
-      height = Math.round((height * next) / resolution);
-    }
+    ({ width, height } = atResolution({ width, height }, unit, resolution, next));
     resolution = next;
   }
   let dialog: HTMLDialogElement;
   let form: HTMLFormElement;
 
-  const valid = $derived(
-    [width, height].every((side) => Number.isInteger(side) && side >= 1 && side <= MAX_SIDE) &&
-      resolution >= MIN_PPI &&
-      resolution <= MAX_PPI,
-  );
+  const valid = $derived(isValidNew({ width, height }, resolution));
   /** The preset matching the size, either way round; none is Custom. */
-  const preset = $derived(
-    presets.find(
-      (p) =>
-        (p.width === width && p.height === height) || (p.width === height && p.height === width),
-    )?.id ?? "custom",
-  );
+  const preset = $derived(matchingPreset(presets, { width, height }));
   const portrait = $derived(height > width);
 
   function choosePreset(id: string) {
@@ -180,10 +166,10 @@
 
   /** Portrait or landscape: the sides swap if needed. */
   function orient(toPortrait: boolean) {
-    if (toPortrait !== portrait && width !== height) {
-      [width, height] = [height, width];
-      sync();
-    }
+    const next = oriented({ width, height }, toPortrait);
+    if (next.width === width) return;
+    ({ width, height } = next);
+    sync();
   }
 
   function submit(e: SubmitEvent) {
