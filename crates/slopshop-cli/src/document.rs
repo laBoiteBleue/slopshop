@@ -61,7 +61,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
             mask: None,
             content: LayerContent::Raster {
                 stack: None,
-                image: Arc::new(image),
+                image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
             },
         };
         Edit::InsertLayer {
@@ -202,11 +202,12 @@ fn pixel_bytes(document: &Document) -> u64 {
     let mut seen = Vec::new();
     let mut total = 0;
     for layer in document.all_layers() {
-        if let LayerContent::Raster { image, .. } = &layer.content
-            && !seen.contains(&image.id())
-        {
-            seen.push(image.id());
-            total += image.memory_bytes();
+        if let LayerContent::Raster { image, .. } = &layer.content {
+            let image = image.get();
+            if !seen.contains(&image.id()) {
+                seen.push(image.id());
+                total += image.memory_bytes();
+            }
         }
     }
     total

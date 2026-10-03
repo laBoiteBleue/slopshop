@@ -68,7 +68,7 @@ pub(crate) fn grouped(
             image_name,
             LayerContent::Raster {
                 stack: None,
-                image: Arc::new(imported.image),
+                image: slopshop_core::stack::Pixels::ready(Arc::new(imported.image)),
             },
         );
         image.visible = index == 0;

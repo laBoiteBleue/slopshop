@@ -204,6 +204,7 @@ impl Renderer {
 
         // The CPU compositor's steps (ADR 0015): layers at opacity 0 are left out by both, so
         // that both count the same non-finite values.
+        document.evaluate_pixels();
         let layers = steps(document);
         let tiles_per_chunk = self.tiles_per_chunk(&layers, region)?;
         let chunks = self.fitted_chunks(

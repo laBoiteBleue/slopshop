@@ -92,7 +92,7 @@ fn target_image(doc: &Document, target: Target) -> Result<Arc<RasterImage>, Stri
         Target::Layer(id) => {
             let layer = doc.layer(id).ok_or("the moved layer is gone")?;
             match &layer.content {
-                LayerContent::Raster { image, .. } => Ok(Arc::clone(image)),
+                LayerContent::Raster { image, .. } => Ok(image.get()),
                 _ => Err("only raster layers have pixels to move".to_owned()),
             }
         }
@@ -427,7 +427,7 @@ fn lift_edit(
     };
     let parent = doc.parent_transform(id);
     let moving = PixelMove::new(
-        Arc::clone(image),
+        image.get(),
         layer.transform.then(parent),
         selection,
         doc.blend_space(),
@@ -558,7 +558,7 @@ mod tests {
 
     fn image_of(doc: &Document, id: LayerId) -> Arc<RasterImage> {
         match &doc.layer(id).unwrap().content {
-            LayerContent::Raster { image, .. } => Arc::clone(image),
+            LayerContent::Raster { image, .. } => image.get(),
             _ => panic!("a raster layer"),
         }
     }

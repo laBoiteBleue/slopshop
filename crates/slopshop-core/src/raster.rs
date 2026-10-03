@@ -36,7 +36,7 @@ pub const MAX_FINITE_SAMPLE: f32 = 65504.0;
 pub struct ImageId(u64);
 
 impl ImageId {
-    fn next() -> Self {
+    pub(crate) fn next() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }

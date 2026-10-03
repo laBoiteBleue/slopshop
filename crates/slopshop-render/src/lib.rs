@@ -27,7 +27,7 @@ use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
 use slopshop_core::color::{
     AlphaMode, ColorSpace, Mat3, PixelFormat, TransferFunction, WORKING_SPACE,
 };
-use slopshop_core::composite::{Step, steps};
+use slopshop_core::composite::{Step, display_steps};
 use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::resample::{self, Filter, Resampling};
@@ -184,6 +184,9 @@ pub struct Renderer {
     /// Viewport frames go through the display cache (else they composite every visible layer
     /// for every pixel, as before ADR 0022). `SLOPSHOP_DISPLAY_CACHE=0` turns it off.
     use_display_cache: bool,
+    /// Evaluate the pixels of shown stacks on threads of their own (ADR 0029); off in tests
+    /// that look at the shader's evaluation.
+    evaluate_stacks: bool,
     display_capacity: u32,
     caches: Mutex<GpuCaches>,
     tile_capacity: [u32; 4],
@@ -218,6 +221,12 @@ const KIND_GROUP_END: u32 = 3;
 /// An adjustment layer (ADR 0020): `format` holds the adjustment's index, `color` and
 /// `transfer.x` its parameters.
 const KIND_ADJUST: u32 = 4;
+/// A stack's original, kept apart from the accumulator (ADR 0029, see `Step::StackOriginal`).
+const KIND_STACK_BEGIN: u32 = 5;
+/// A stack's paint: the raster is `P`, the mask `k`.
+const KIND_STACK_PAINT: u32 = 6;
+/// A stack's effect: an adjustment's fields, the selection as the mask.
+const KIND_STACK_EFFECT: u32 = 7;
 /// Layer flags (see composite.wgsl).
 const FLAG_PREMULTIPLIED: u32 = 1;
 /// Gray source: green and blue of its GPU texels are copies of red ([`gpu_texels`]).
@@ -232,6 +241,8 @@ const FLAG_IGNORE_ALPHA: u32 = 16;
 const FLAG_ISOLATED: u32 = 32;
 /// Blended atop the accumulator, keeping its coverage: a clipped layer (ADR 0016).
 const FLAG_ATOP: u32 = 64;
+/// A raster layer whose pixels are what its stack steps made, not its texels (ADR 0029).
+const FLAG_STACK_END: u32 = 128;
 /// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
 const BLEND_SHIFT: u32 = 8;
 /// Filters of resampled rasters (`resample_q.w` in composite.wgsl; 0: a whole-pixel offset).
@@ -442,6 +453,7 @@ impl Renderer {
             quick_mask_pipeline,
             quick_mask_bind_group_layout,
             use_display_cache: std::env::var("SLOPSHOP_DISPLAY_CACHE").as_deref() != Ok("0"),
+            evaluate_stacks: true,
             display_capacity: cache::cache_capacity(required_limits.max_texture_array_layers),
             max_output_bytes,
             max_dispatch_pixels,
@@ -742,6 +754,10 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let start = Instant::now();
+        // Stacks not evaluated yet are shown by the shader, close to their pixels (exact but for
+        // rounding at 100 %, evaluated on coarser levels when zoomed out): their pixels are
+        // evaluated meanwhile, and the frame asks to be shown again until they are (ADR 0029).
+        let stacks_pending = start_stack_evaluations(document, self.evaluate_stacks);
         let uploads = |caches: &GpuCaches| -> u64 {
             caches.tiles.iter().flatten().map(TileCache::uploads).sum()
         };
@@ -754,6 +770,7 @@ impl Renderer {
                 self.composite_cached(document, view, output, &output_buffer, options, caches);
             if let Some((encoder, cached_stats)) = cached {
                 stats = cached_stats;
+                stats.incomplete |= stacks_pending;
                 stats.prepare = start.elapsed();
                 stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
                 let frame = Composited {
@@ -768,6 +785,7 @@ impl Renderer {
         }
 
         let layers = self.prepare_layers(document, view, output, &mut caches.tiles);
+        stats.incomplete = stacks_pending;
         stats.prepare = start.elapsed();
         stats.layers = layers.count;
         stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
@@ -988,7 +1006,8 @@ impl Renderer {
         caches: &mut [Option<TileCache>; 4],
     ) -> PreparedLayers {
         let visible_doc = visible_document_rect(document.size(), view, output);
-        let steps = steps(document);
+        // Stacks not evaluated yet are evaluated by the shader (ADR 0029).
+        let steps = display_steps(document);
 
         // Plan the pyramid level of every raster layer together, so that all visible tiles
         // fit in the cache: coarser levels rather than missing layers.
@@ -1108,15 +1127,45 @@ impl Renderer {
     }
 }
 
+/// Start evaluating, each on a thread of its own, the pixels of the shown layers whose stack
+/// the display evaluates (ADR 0029); whether there are any.
+fn start_stack_evaluations(document: &Document, start: bool) -> bool {
+    let mut pending = false;
+    for step in display_steps(document) {
+        if let Step::Layer {
+            layer, stack: true, ..
+        } = step
+            && let LayerContent::Raster { image, .. } = &layer.content
+        {
+            if start {
+                image.evaluate_in_background();
+            }
+            pending = true;
+        }
+    }
+    pending
+}
+
 /// The rasters a step samples, with their transforms to the document: a raster layer's image,
 /// then its (or a group's) enabled mask.
 fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
     match step {
         Step::Layer {
-            layer, transform, ..
+            layer,
+            transform,
+            stack,
+            ..
         } => {
             let content = match &layer.content {
-                LayerContent::Raster { image, .. } => Some((image.as_ref(), *transform)),
+                // Pixels made by the stack steps before it (ADR 0029): planned as its original,
+                // which tells where they are; not sampled.
+                LayerContent::Raster {
+                    stack: Some(layer_stack),
+                    ..
+                } if *stack => Some((layer_stack.original().as_ref(), *transform)),
+                LayerContent::Raster { image, .. } => image
+                    .ready_image()
+                    .map(|image| (image.as_ref(), *transform)),
                 _ => None,
             };
             [
@@ -1133,6 +1182,27 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
             mask_transform,
             ..
         } => [None, mask.map(|m| (m.image.as_ref(), *mask_transform))],
+        Step::StackOriginal {
+            original,
+            transform,
+        } => [Some((*original, *transform)), None],
+        // `P`, then `k` read as a mask: both in the layer's pixels.
+        Step::StackPaint { paint, transform } => match paint.image_refs() {
+            Some((color, keep)) => [
+                Some((color.as_ref(), *transform)),
+                Some((keep.as_ref(), *transform)),
+            ],
+            None => [None, None],
+        },
+        // The selection, at the document's pixels when the effect was applied: from there to
+        // the layer's pixels then, then to the document now.
+        Step::StackEffect { effect, transform } => [
+            None,
+            effect.selection.as_ref().and_then(|selection| {
+                let placed = effect.to_document.inverse()?.then(*transform);
+                Some((selection.image().as_ref(), placed))
+            }),
+        ],
     }
 }
 
@@ -1172,18 +1242,80 @@ fn encode_layers(
         0
     };
     let mut tables = tables.into_iter();
+    // Whether the stack steps under way are encoded (their original is in this view).
+    let mut stack_shown = false;
     for (i, step) in steps.iter().enumerate() {
         let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
         let table = tables.next().unwrap_or_default();
         let mask_table = tables.next().unwrap_or_default();
-        let (layer, mode, opacity, atop) = match step {
+        let (layer, mode, opacity, atop, stacked) = match step {
             Step::Layer {
                 layer,
                 mode,
                 opacity,
                 atop,
+                stack,
                 ..
-            } => (*layer, *mode, *opacity, *atop),
+            } => (*layer, *mode, *opacity, *atop, *stack),
+            Step::StackOriginal { .. } => {
+                // Nothing of the layer in this view: its stack steps are left out with it.
+                let Some(plan) = plan else {
+                    stack_shown = false;
+                    continue;
+                };
+                stack_shown = true;
+                let mut fields = LayerFields {
+                    kind: KIND_STACK_BEGIN,
+                    ..LayerFields::default()
+                };
+                set_raster_fields(&mut fields, plan, &mut prepared.tile_table, table);
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
+            Step::StackPaint { paint, .. } => {
+                let (true, Some(color), Some(keep)) = (stack_shown, plan, mask_plan) else {
+                    continue;
+                };
+                let mut fields = LayerFields {
+                    kind: KIND_STACK_PAINT,
+                    flags: if paint.space() == BlendSpace::Perceptual {
+                        FLAG_PERCEPTUAL
+                    } else {
+                        0
+                    },
+                    ..LayerFields::default()
+                };
+                set_raster_fields(&mut fields, color, &mut prepared.tile_table, table);
+                set_mask_fields(&mut fields, keep, &mut prepared.tile_table, mask_table);
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
+            Step::StackEffect { effect, .. } => {
+                // Its selection has nothing in this view: it changes nothing here.
+                if !stack_shown || (effect.selection.is_some() && mask_plan.is_none()) {
+                    continue;
+                }
+                let perceptual = if effect.space == BlendSpace::Perceptual {
+                    FLAG_PERCEPTUAL
+                } else {
+                    0
+                };
+                let mut fields = adjustment_fields(
+                    &effect.adjustment,
+                    1.0,
+                    perceptual,
+                    &mut prepared.tile_table,
+                );
+                fields.kind = KIND_STACK_EFFECT;
+                if let Some(mask) = mask_plan {
+                    set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
+                }
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
             Step::Adjust {
                 layer,
                 adjustment,
@@ -1194,34 +1326,8 @@ fn encode_layers(
                 if enabled_mask(layer).is_some() && mask_plan.is_none() {
                     continue;
                 }
-                // The 16 parameters in fields an adjustment has no other use for.
-                let mut p = adjustment.params();
-                if let Adjustment::PhotoFilter { color, .. } = adjustment {
-                    // The shader multiplies by the linear sRGB color.
-                    let filter = slopshop_core::adjust::filter_color(*color);
-                    p[..3].copy_from_slice(&filter.map(|v| v as f32));
-                }
-                let vec4 = |at: usize| [p[at], p[at + 1], p[at + 2], p[at + 3]];
-                let mut fields = LayerFields {
-                    kind: KIND_ADJUST,
-                    flags: perceptual,
-                    opacity: *opacity,
-                    format: adjustment.index(),
-                    color: vec4(0),
-                    transfer: vec4(4),
-                    transfer2: vec4(8),
-                    matrix: [vec4(12), [0.0; 4], [0.0; 4]],
-                    ..LayerFields::default()
-                };
-                // Curves' lookup tables (composite, red, green, blue), after the tile slots.
-                if let Some(curves) = adjustment.curves() {
-                    fields.table_offset = prepared.tile_table.len() as u32;
-                    for curve in &curves {
-                        prepared
-                            .tile_table
-                            .extend(curve.lut().iter().map(|v| v.to_bits()));
-                    }
-                }
+                let mut fields =
+                    adjustment_fields(adjustment, *opacity, perceptual, &mut prepared.tile_table);
                 if let Some(mask) = mask_plan {
                     set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
                 }
@@ -1283,31 +1389,19 @@ fn encode_layers(
             LayerContent::Raster { .. } => {
                 // Not visible in this view or region: nothing to sample.
                 let Some(plan) = plan else { continue };
+                if stacked && !stack_shown {
+                    continue;
+                }
                 fields.kind = KIND_RASTER;
                 fields.opacity = opacity;
-                fields.offset = plan.offset();
-                fields.resample = resample_fields(plan);
-                let range = plan.range();
-                let size = plan.image.levels()[plan.level].size();
-                fields.level_scale = plan.factor() as f32;
-                fields.table_offset = prepared.tile_table.len() as u32;
-                fields.tile_origin = [range.x, range.y];
-                fields.tile_count = [range.width, range.height];
-                fields.level_size = [size.width, size.height];
-                fields.format = plan.format.index() as u32;
-                let stored = plan.image.stored_format();
-                if stored.alpha == AlphaMode::Premultiplied {
-                    fields.flags |= FLAG_PREMULTIPLIED;
-                }
-                if stored.layout.is_gray() {
-                    fields.flags |= FLAG_GRAY;
-                }
-                (fields.transfer, fields.transfer2) = transfer_fields(stored.color_space.transfer);
-                fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
+                set_raster_fields(&mut fields, plan, &mut prepared.tile_table, table);
                 if replaces_alpha {
                     fields.flags |= FLAG_IGNORE_ALPHA;
                 }
-                prepared.tile_table.extend(table);
+                // Its pixels are what its stack steps made (ADR 0029).
+                if stacked {
+                    fields.flags |= FLAG_STACK_END;
+                }
             }
             // Groups and adjustments are steps of their own.
             LayerContent::Group { .. } | LayerContent::Adjustment { .. } => continue,
@@ -1319,6 +1413,73 @@ fn encode_layers(
         prepared.count += 1;
     }
     prepared
+}
+
+/// Describe a raster's plan in `fields` (where it is, how its texels decode), its tile slots
+/// appended to `tile_table`.
+fn set_raster_fields(
+    fields: &mut LayerFields,
+    plan: &RasterPlan<'_>,
+    tile_table: &mut Vec<u32>,
+    slots: Vec<u32>,
+) {
+    fields.offset = plan.offset();
+    fields.resample = resample_fields(plan);
+    let range = plan.range();
+    let size = plan.image.levels()[plan.level].size();
+    fields.level_scale = plan.factor() as f32;
+    fields.table_offset = tile_table.len() as u32;
+    fields.tile_origin = [range.x, range.y];
+    fields.tile_count = [range.width, range.height];
+    fields.level_size = [size.width, size.height];
+    fields.format = plan.format.index() as u32;
+    let stored = plan.image.stored_format();
+    if stored.alpha == AlphaMode::Premultiplied {
+        fields.flags |= FLAG_PREMULTIPLIED;
+    }
+    if stored.layout.is_gray() {
+        fields.flags |= FLAG_GRAY;
+    }
+    (fields.transfer, fields.transfer2) = transfer_fields(stored.color_space.transfer);
+    fields.matrix = matrix_rows(&plan.image.matrix_to(&WORKING_SPACE));
+    tile_table.extend(slots);
+}
+
+/// The fields of an adjustment (an adjustment layer at `opacity`, or a stack's effect): its
+/// 16 parameters in fields it has no other use for, Curves' lookup tables appended to
+/// `tile_table`.
+fn adjustment_fields(
+    adjustment: &Adjustment,
+    opacity: f32,
+    flags: u32,
+    tile_table: &mut Vec<u32>,
+) -> LayerFields {
+    let mut p = adjustment.params();
+    if let Adjustment::PhotoFilter { color, .. } = adjustment {
+        // The shader multiplies by the linear sRGB color.
+        let filter = slopshop_core::adjust::filter_color(*color);
+        p[..3].copy_from_slice(&filter.map(|v| v as f32));
+    }
+    let vec4 = |at: usize| [p[at], p[at + 1], p[at + 2], p[at + 3]];
+    let mut fields = LayerFields {
+        kind: KIND_ADJUST,
+        flags,
+        opacity,
+        format: adjustment.index(),
+        color: vec4(0),
+        transfer: vec4(4),
+        transfer2: vec4(8),
+        matrix: [vec4(12), [0.0; 4], [0.0; 4]],
+        ..LayerFields::default()
+    };
+    // Curves' lookup tables (composite, red, green, blue), after the tile slots.
+    if let Some(curves) = adjustment.curves() {
+        fields.table_offset = tile_table.len() as u32;
+        for curve in &curves {
+            tile_table.extend(curve.lut().iter().map(|v| v.to_bits()));
+        }
+    }
+    fields
 }
 
 /// Describe an enabled mask's plan in `fields`, its tile slots appended to `tile_table`.
@@ -1410,6 +1571,13 @@ impl Renderer {
     /// Composite viewport frames through the display cache (ADR 0022) or directly. For tests
     /// and comparisons; resets the caches.
     #[doc(hidden)]
+    /// Whether the pixels of the shown stacks are evaluated on threads of their own while the
+    /// shader shows them (ADR 0029). For tests of the shader's evaluation.
+    pub fn with_stack_evaluation(mut self, enabled: bool) -> Self {
+        self.evaluate_stacks = enabled;
+        self
+    }
+
     pub fn with_display_cache(mut self, enabled: bool) -> Self {
         self.use_display_cache = enabled;
         self.caches = Mutex::new(GpuCaches::default());
@@ -1654,6 +1822,10 @@ fn shader_source() -> String {
     constants += &format!("const KIND_GROUP_BEGIN: u32 = {KIND_GROUP_BEGIN}u;\n");
     constants += &format!("const KIND_GROUP_END: u32 = {KIND_GROUP_END}u;\n");
     constants += &format!("const KIND_ADJUST: u32 = {KIND_ADJUST}u;\n");
+    constants += &format!("const KIND_STACK_BEGIN: u32 = {KIND_STACK_BEGIN}u;\n");
+    constants += &format!("const KIND_STACK_PAINT: u32 = {KIND_STACK_PAINT}u;\n");
+    constants += &format!("const KIND_STACK_EFFECT: u32 = {KIND_STACK_EFFECT}u;\n");
+    constants += &format!("const FLAG_STACK_END: u32 = {FLAG_STACK_END}u;\n");
     constants += &format!(
         "const CURVE_LUT: u32 = {}u;\n",
         slopshop_core::curve::CURVE_LUT
@@ -1934,7 +2106,7 @@ mod tests {
             mask: None,
             content: LayerContent::Raster {
                 stack: None,
-                image: image.into(),
+                image: slopshop_core::stack::Pixels::ready(image.into()),
             },
         };
         slopshop_core::Edit::InsertLayer {
@@ -1973,7 +2145,7 @@ mod tests {
             mask: None,
             content: LayerContent::Raster {
                 stack: None,
-                image: image.into(),
+                image: slopshop_core::stack::Pixels::ready(image.into()),
             },
         };
         slopshop_core::Edit::InsertLayer {
@@ -2001,6 +2173,7 @@ mod tests {
         let LayerContent::Raster { image, .. } = &document.layers()[0].content else {
             panic!("a raster layer");
         };
+        let image = image.get();
         let mut tiles = image.levels()[0].tiles().to_vec();
         tiles[4] = vec![7u8; tiles[4].len()].into();
         let painted = RasterImage::from_level0_tiles(image.size(), image.format(), tiles)
@@ -2010,7 +2183,7 @@ mod tests {
             id: repainted.allocate_layer_id(),
             content: LayerContent::Raster {
                 stack: None,
-                image: painted.into(),
+                image: slopshop_core::stack::Pixels::ready(painted.into()),
             },
             ..document.layers()[0].clone()
         };

@@ -155,12 +155,16 @@ impl LayerView {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
             LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
             LayerContent::Adjustment { .. } => ("adjustment", [0.0; 4], 0, false),
+            // Never waits for a stack's pixels (ADR 0029): the original's color meanwhile.
             LayerContent::Raster { image, .. } => (
                 "raster",
                 image
-                    .average_color(&WORKING_SPACE)
-                    .working_to_srgb_encoded(),
-                image.id().get(),
+                    .ready_image()
+                    .or_else(|| layer.content.original())
+                    .map_or([0.0; 4], |i| {
+                        i.average_color(&WORKING_SPACE).working_to_srgb_encoded()
+                    }),
+                image.key(),
                 image.format().layout.has_alpha(),
             ),
         };

@@ -502,7 +502,7 @@ mod tests {
                 mask: None,
                 content: LayerContent::Raster {
                     stack: None,
-                    image: Arc::new(image),
+                    image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                 },
             },
         }

@@ -112,7 +112,7 @@ fn sample_document() -> Document {
         "photo",
         LayerContent::Raster {
             stack: None,
-            image: rgb8.clone(),
+            image: slopshop_core::stack::Pixels::ready(rgb8.clone()),
         },
         0.8,
     );
@@ -121,7 +121,12 @@ fn sample_document() -> Document {
         "rgba16",
         LayerContent::Raster {
             stack: None,
-            image: image(size, ChannelLayout::Rgba, SampleType::U16, pixels(8, 3)),
+            image: slopshop_core::stack::Pixels::ready(image(
+                size,
+                ChannelLayout::Rgba,
+                SampleType::U16,
+                pixels(8, 3),
+            )),
         },
         1.0,
     );
@@ -131,12 +136,12 @@ fn sample_document() -> Document {
         "gray f16",
         LayerContent::Raster {
             stack: None,
-            image: image(
+            image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(40, 520),
                 ChannelLayout::GrayAlpha,
                 SampleType::F16,
                 noise(40 * 520 * 4, 5),
-            ),
+            )),
         },
         0.5,
     );
@@ -145,12 +150,12 @@ fn sample_document() -> Document {
         "rgba f32",
         LayerContent::Raster {
             stack: None,
-            image: image(
+            image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(17, 9),
                 ChannelLayout::Rgba,
                 SampleType::F32,
                 noise(17 * 9 * 16, 7),
-            ),
+            )),
         },
         1.0,
     );
@@ -159,7 +164,7 @@ fn sample_document() -> Document {
         &mut doc,
         "photo (copie)",
         LayerContent::Raster {
-            image: rgb8,
+            image: slopshop_core::stack::Pixels::ready(rgb8),
             stack: None,
         },
         0.25,
@@ -295,7 +300,7 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
                 LayerContent::Raster { image: i, stack: s },
                 LayerContent::Raster { image: j, stack: t },
             ) => {
-                assert_same_image(i, j, &x.name);
+                assert_same_image(&i.get(), &j.get(), &x.name);
                 assert_same_stack(s.as_ref(), t.as_ref(), &x.name);
             }
             (
@@ -338,16 +343,16 @@ fn documents_round_trip_bit_exact() {
     assert_same(&doc, &loaded);
     assert_eq!(file.generation(), 1);
     // The shared image is one image again.
-    let photos: Vec<&Arc<RasterImage>> = loaded
+    let photos: Vec<Arc<RasterImage>> = loaded
         .layers()
         .iter()
         .filter_map(|l| match &l.content {
-            LayerContent::Raster { image, .. } if l.name.starts_with("photo") => Some(image),
+            LayerContent::Raster { image, .. } if l.name.starts_with("photo") => Some(image.get()),
             _ => None,
         })
         .collect();
     assert_eq!(photos.len(), 2);
-    assert!(Arc::ptr_eq(photos[0], photos[1]));
+    assert!(Arc::ptr_eq(&photos[0], &photos[1]));
     fs::remove_file(&path).ok();
 }
 
@@ -386,7 +391,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         "original",
         LayerContent::Raster {
             stack: None,
-            image: Arc::clone(&original),
+            image: slopshop_core::stack::Pixels::ready(Arc::clone(&original)),
         },
         1.0,
     );
@@ -399,7 +404,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         "shared",
         LayerContent::Raster {
             stack: None,
-            image: Arc::new(shared),
+            image: slopshop_core::stack::Pixels::ready(Arc::new(shared)),
         },
         1.0,
     );
@@ -434,7 +439,7 @@ fn a_new_layer_appends_only_its_tiles_and_the_session_carries_on() {
         &mut doc,
         "nouveau",
         LayerContent::Raster {
-            image: added,
+            image: slopshop_core::stack::Pixels::ready(added),
             stack: None,
         },
         1.0,
@@ -467,12 +472,12 @@ fn removed_data_is_compacted_away_once_it_dominates() {
         "gros",
         LayerContent::Raster {
             stack: None,
-            image: image(
+            image: slopshop_core::stack::Pixels::ready(image(
                 size,
                 ChannelLayout::Rgba,
                 SampleType::U8,
                 noise(600 * 600 * 4, 13),
-            ),
+            )),
         },
         1.0,
     );
@@ -514,12 +519,12 @@ fn two_generations(name: &str) -> (PathBuf, Document, Document, Vec<u8>, Vec<u8>
         "ajout",
         LayerContent::Raster {
             stack: None,
-            image: image(
+            image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(300, 10),
                 ChannelLayout::Rgb,
                 SampleType::U8,
                 noise(300 * 10 * 3, 17),
-            ),
+            )),
         },
         1.0,
     );
@@ -616,12 +621,12 @@ fn damaged_files_are_errors_never_panics() {
         "image",
         LayerContent::Raster {
             stack: None,
-            image: image(
+            image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(40, 30),
                 ChannelLayout::Rgb,
                 SampleType::U8,
                 noise(40 * 30 * 3, 19),
-            ),
+            )),
         },
         1.0,
     );
@@ -770,7 +775,7 @@ fn golden_document_v0_10() -> Document {
     let raster = doc
         .all_layers()
         .find_map(|l| match &l.content {
-            LayerContent::Raster { image, .. } => Some((l.id, Arc::clone(image))),
+            LayerContent::Raster { image, .. } => Some((l.id, image.get())),
             _ => None,
         })
         .expect("a raster layer");
@@ -939,7 +944,9 @@ fn golden_document_v0_4() -> Document {
     let mut doc = golden_document_v0_3();
     let tint = doc.layers()[2].id;
     let masked_by = match &doc.layers()[1].content {
-        LayerContent::Raster { image, .. } => slopshop_core::LayerMask::from_transparency(image),
+        LayerContent::Raster { image, .. } => {
+            slopshop_core::LayerMask::from_transparency(&image.get())
+        }
         _ => None,
     };
     let folder = doc.allocate_layer_id();
@@ -1000,7 +1007,7 @@ fn golden_document_v0_3() -> Document {
     let ramp = image(size, ChannelLayout::GrayAlpha, SampleType::F16, ramp);
     let raster = |image: &Arc<RasterImage>| LayerContent::Raster {
         stack: None,
-        image: image.clone(),
+        image: slopshop_core::stack::Pixels::ready(image.clone()),
     };
     push(&mut doc, "Gradient", raster(&gradient), 1.0);
     push(&mut doc, "Ramp", raster(&ramp), 0.75);
@@ -1010,7 +1017,7 @@ fn golden_document_v0_3() -> Document {
     // A mask from transparency (schema 0.3) on the half-float gray + alpha layer, disabled.
     let ramp_layer = doc.layers()[1].clone();
     if let LayerContent::Raster { image, .. } = &ramp_layer.content {
-        let mut mask = slopshop_core::LayerMask::from_transparency(image).unwrap();
+        let mut mask = slopshop_core::LayerMask::from_transparency(&image.get()).unwrap();
         mask.enabled = false;
         Edit::SetLayerMask {
             id: ramp_layer.id,
@@ -1185,7 +1192,7 @@ fn masks_round_trip_and_share_their_tiles() {
     let mut doc = sample_document();
     for layer in doc.layers().to_vec() {
         if let LayerContent::Raster { image, .. } = &layer.content
-            && let Some(mask) = slopshop_core::LayerMask::from_transparency(image)
+            && let Some(mask) = slopshop_core::LayerMask::from_transparency(&image.get())
         {
             Edit::SetLayerMask {
                 id: layer.id,

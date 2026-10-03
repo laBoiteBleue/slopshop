@@ -199,7 +199,7 @@ fn selected_pixels(
     let layer = document.layer(layer_id).ok_or("the layer is gone")?;
     let image = match (target, &layer.content) {
         (PaintTarget::Mask, _) => Arc::clone(&layer.mask.as_ref().ok_or("no mask")?.image),
-        (PaintTarget::Layer, LayerContent::Raster { image, .. }) => Arc::clone(image),
+        (PaintTarget::Layer, LayerContent::Raster { image, .. }) => image.get(),
         _ => return Err("only a raster layer's pixels or a mask are copied".to_owned()),
     };
     // A mask's grays are copied as a gray layer, given an alpha channel like any layer's.
@@ -829,6 +829,7 @@ mod tests {
         let LayerContent::Raster { image, .. } = &layer.content else {
             panic!("a raster layer");
         };
+        let image = image.get();
         assert_eq!(image.alpha_at(10, 10), 1.0);
         assert_eq!(image.alpha_at(9, 10), 0.0);
         assert_eq!(image.alpha_at(19, 14), 1.0);
@@ -862,7 +863,9 @@ mod tests {
         };
         assert_eq!(image.size(), Size::new(20, 5));
         assert_eq!(image.format(), slopshop_core::copy::MERGED_FORMAT);
-        let color = image.average_color(&slopshop_core::color::WORKING_SPACE);
+        let color = image
+            .get()
+            .average_color(&slopshop_core::color::WORKING_SPACE);
         assert!((color.b - 1.0).abs() < 1e-3 && (color.r - 0.25).abs() < 1e-3);
         // Without a selection, the whole canvas.
         source

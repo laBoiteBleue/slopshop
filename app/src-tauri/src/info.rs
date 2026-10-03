@@ -104,7 +104,10 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                     Some((_, n)) => *n += 1,
                     None => formats.push((format, 1)),
                 }
-                count(image);
+                // Pixels not evaluated yet hold no memory (ADR 0029).
+                if let Some(image) = image.ready_image() {
+                    count(image);
+                }
                 if let Some(stack) = stack {
                     count(stack.original());
                     for entry in stack.entries() {
@@ -209,7 +212,7 @@ mod tests {
         );
         let raster = |id| {
             let content = LayerContent::Raster {
-                image: Arc::clone(&rgba),
+                image: slopshop_core::stack::Pixels::ready(Arc::clone(&rgba)),
                 stack: None,
             };
             layer(id, content, None)

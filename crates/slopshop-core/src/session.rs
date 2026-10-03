@@ -485,7 +485,7 @@ mod tests {
                     mask: None,
                     content: LayerContent::Raster {
                         stack: None,
-                        image: image.clone(),
+                        image: crate::stack::Pixels::ready(image.clone()),
                     },
                 },
             })
@@ -506,7 +506,7 @@ mod tests {
         let LayerContent::Raster { image: copied, .. } = &layers[2].content else {
             panic!("raster expected");
         };
-        assert!(Arc::ptr_eq(copied, &image));
+        assert!(Arc::ptr_eq(&copied.get(), &image));
         // One undo removes both copies.
         target.undo().unwrap();
         assert_eq!(names(&target), ["background"]);

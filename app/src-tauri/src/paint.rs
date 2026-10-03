@@ -237,9 +237,10 @@ pub(crate) fn grow(
     let growth = grow
         .then(|| canvas_growth(image.size(), layer.transform.then(parent), doc.size()))
         .flatten();
+    let image = image.get();
     let Some((offset, size)) = growth else {
         return Ok((
-            Arc::clone(image),
+            image,
             Growth {
                 transform: layer.transform,
                 stack,
@@ -248,7 +249,7 @@ pub(crate) fn grow(
         ));
     };
     grown(
-        image,
+        &image,
         &Growth {
             transform: layer.transform,
             stack,
@@ -729,7 +730,7 @@ mod tests {
         else {
             panic!("a raster layer");
         };
-        Arc::clone(image)
+        image.get()
     }
 
     #[test]

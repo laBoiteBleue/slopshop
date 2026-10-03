@@ -14,7 +14,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
-use slopshop_core::composite::{Step, steps};
+use slopshop_core::composite::{Step, display_steps};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{BlendSpace, Document, Size};
@@ -191,13 +191,20 @@ fn steps_reaching(steps: &[Step<'_>], reaches: &[Option<Area>], area: Area) -> V
     let mut groups: Vec<(usize, bool)> = Vec::new();
     // Whether the accumulator may hold something in `area`.
     let mut content = false;
+    // The stack steps of the next layer (ADR 0029): kept with it.
+    let mut stack: Vec<usize> = Vec::new();
     for (i, step) in steps.iter().enumerate() {
         match step {
+            Step::StackOriginal { .. } | Step::StackPaint { .. } | Step::StackEffect { .. } => {
+                stack.push(i);
+            }
             Step::Layer { .. } => {
                 if reaches[i].is_some_and(|reach| overlaps(reach, area)) {
+                    kept.append(&mut stack);
                     kept.push(i);
                     content = true;
                 }
+                stack.clear();
             }
             Step::Adjust { .. } => {
                 if content {
@@ -344,7 +351,8 @@ impl Renderer {
         let level = display_level(view.scale, levels);
         let scene = Scene {
             document,
-            steps: steps(document),
+            // Stacks not evaluated yet are evaluated by the shader (ADR 0029).
+            steps: display_steps(document),
             visible: visible_document_rect(doc, view, output),
             center: view.output_to_document(
                 f64::from(output.width) / 2.0,

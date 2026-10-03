@@ -175,7 +175,8 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
                     }
                 }
             }
-            LayerContent::Raster { image, .. } => out.push(Arc::clone(image)),
+            // Without a stack: the pixels themselves, always there.
+            LayerContent::Raster { image, .. } => out.push(image.get()),
             _ => {}
         }
         if let Some(mask) = &layer.mask {
@@ -530,7 +531,7 @@ fn build_manifest(
                 )
             }
             LayerContent::Raster { image, .. } => {
-                let key = key_of(image).map(Hash::to_key).unwrap_or_default();
+                let key = key_of(&image.get()).map(Hash::to_key).unwrap_or_default();
                 (NODE_RASTER, json!({ "image": key }))
             }
             LayerContent::Fill { color } => (
