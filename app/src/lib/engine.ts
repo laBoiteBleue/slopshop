@@ -1221,6 +1221,15 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode }),
     ),
+  /**
+   * Select > Grow (`contiguous`) and Similar: the Magic Wand's tolerance around the selection's
+   * colors, added to it; it samples as the Magic Wand does.
+   */
+  growSelection: (
+    documentId: number,
+    options: { tolerance: number; contiguous: boolean; antiAlias: boolean },
+    layerId: number | null,
+  ) => serial(() => invoke<DocumentView>("grow_selection", { documentId, ...options, layerId })),
   /** Select > Color Range's preview: width, height and 8-bit coverage per pixel. */
   colorRangePreview: async (documentId: number, request: ColorRangeRequest, maxSide: number) => {
     const buffer = await invoke<ArrayBuffer>("color_range_preview", {

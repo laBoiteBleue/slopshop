@@ -1410,6 +1410,17 @@
     void sync(run(doc.id));
   }
 
+  /**
+   * Select > Grow (`contiguous`) and Similar: the Magic Wand's options around the selection's
+   * colors, sampling what the Magic Wand samples.
+   */
+  function growSelection(contiguous: boolean) {
+    const layer = wand.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
+    selectionCommand((id) =>
+      engine.growSelection(id, { tolerance: wand.tolerance, contiguous, antiAlias }, layer),
+    );
+  }
+
   // The Move tool (ADR 0017): a left drag on the image moves the selected layers live, in whole
   // document pixels, one undo entry per drag. As in Photoshop: Auto-Select (the options bar)
   // takes the layer under the pointer, Ctrl inverting it; the moving layers snap to the canvas
@@ -3437,8 +3448,15 @@
           item("reselect"),
           item("inverse"),
           separator,
-          cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
           cmd(t("menu.select.subject"), selectSubject, undefined, !doc),
+          cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
+          cmd(
+            t("menu.select.refineEdge"),
+            () => openModify("refine"),
+            undefined,
+            doc?.selectionKey == null,
+          ),
+          separator,
           {
             kind: "submenu",
             label: t("menu.select.modify"),
@@ -3451,13 +3469,19 @@
               item("feather"),
             ],
           },
+          separator,
           cmd(
-            t("menu.select.refineEdge"),
-            () => openModify("refine"),
+            t("menu.select.grow"),
+            () => growSelection(true),
             undefined,
             doc?.selectionKey == null,
           ),
-          separator,
+          cmd(
+            t("menu.select.similar"),
+            () => growSelection(false),
+            undefined,
+            doc?.selectionKey == null,
+          ),
           item("quickMask"),
           separator,
           item("selectAllLayers"),
