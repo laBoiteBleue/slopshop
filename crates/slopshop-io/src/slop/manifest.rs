@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 10;
+pub(crate) const SCHEMA_MINOR: u32 = 11;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -95,6 +95,9 @@ pub(crate) struct DocumentDto {
     /// in linear light.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend_space: Option<String>,
+    /// Pixels per inch (ADR 0028). Absent before schema 0.11: 72, Photoshop's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<f64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

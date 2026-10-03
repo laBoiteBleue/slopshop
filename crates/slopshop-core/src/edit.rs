@@ -51,6 +51,10 @@ pub enum Edit {
     SetBlendSpace {
         space: BlendSpace,
     },
+    /// The document's resolution, pixels per inch (ADR 0028): metadata, the pixels stay.
+    SetResolution {
+        ppi: f64,
+    },
     /// The canvas size (Canvas Size, Image Size, Crop, ADR 0017): layers keep their pixels and
     /// transforms; what falls outside the canvas is kept, not cut.
     SetCanvasSize {
@@ -159,6 +163,8 @@ pub enum EditError {
     InvalidTransform,
     /// A canvas without pixels.
     EmptyCanvas,
+    /// A resolution out of range (ADR 0028).
+    InvalidResolution,
 }
 
 impl fmt::Display for EditError {
@@ -198,6 +204,7 @@ impl fmt::Display for EditError {
                 write!(f, "{depth} nested groups (at most {MAX_GROUP_DEPTH})")
             }
             EditError::NoLayers => write!(f, "no layers given"),
+            EditError::InvalidResolution => write!(f, "invalid resolution"),
             EditError::InvalidTransform => {
                 write!(f, "a transform must be finite and invertible")
             }
@@ -261,6 +268,14 @@ impl Edit {
             Edit::SetBlendSpace { space } => Edit::SetBlendSpace {
                 space: doc.set_blend_space(space),
             },
+            Edit::SetResolution { ppi } => {
+                if !crate::document::valid_resolution(ppi) {
+                    return Err(EditError::InvalidResolution);
+                }
+                Edit::SetResolution {
+                    ppi: doc.set_resolution(ppi),
+                }
+            }
             Edit::SetSelection { selection } => Edit::SetSelection {
                 selection: doc.set_selection(selection),
             },
@@ -1128,6 +1143,33 @@ mod tests {
             Edit::crop(&doc, [0, 0, -2, 3]).and_then(|e| e.apply(&mut doc)),
             Err(EditError::EmptyCanvas)
         );
+    }
+
+    #[test]
+    fn resolution_is_undoable_metadata() {
+        use crate::document::DEFAULT_RESOLUTION;
+        let mut doc = Document::new(Size::new(10, 10));
+        assert_eq!(doc.resolution(), DEFAULT_RESOLUTION);
+        let inverse = Edit::SetResolution { ppi: 300.0 }.apply(&mut doc).unwrap();
+        assert_eq!(doc.resolution(), 300.0);
+        assert_eq!(
+            inverse,
+            Edit::SetResolution {
+                ppi: DEFAULT_RESOLUTION
+            }
+        );
+        for wrong in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e9] {
+            assert_eq!(
+                Edit::SetResolution { ppi: wrong }.apply(&mut doc),
+                Err(EditError::InvalidResolution)
+            );
+            assert!(
+                Document::new(Size::new(1, 1))
+                    .with_resolution(wrong)
+                    .is_err()
+            );
+        }
+        assert_eq!(doc.resolution(), 300.0);
     }
 
     #[test]

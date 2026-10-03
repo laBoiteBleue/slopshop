@@ -187,7 +187,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     },
     "next_node_id": 8,
     "stack": [3, 7],
-    "blend_space": "perceptual"
+    "blend_space": "perceptual",
+    "resolution": 300
   },
   "nodes": {
     "3": { "type": "slopshop.raster", "version": 3, "name": "Background", "visible": true,
@@ -223,6 +224,9 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   used exactly once, in the stack or as the input of a group: they form a tree.
   `blend_space` (0.2): where layers blend, `perceptual` or `linear` ([ADR
   0012](adr/0012-blend-modes.md)); absent in 0.1 files, which read as `linear`.
+  `resolution` (0.11): pixels per inch, how large the document prints ([ADR
+  0028](adr/0028-resolution.md)); metadata only, in `[1, 100000]`; absent in older files,
+  which read as 72 (Photoshop's default).
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.
