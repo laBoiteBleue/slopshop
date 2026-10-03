@@ -298,10 +298,20 @@ pub fn named_space(id: &str) -> Option<ColorSpace> {
     rename_all_fields = "camelCase"
 )]
 pub enum EditRequest {
-    /// Add a fill layer on top of the stack. `color` is sRGB-encoded RGBA in `[0, 1]`, as
-    /// produced by UI color pickers; it is explicitly converted to the working space.
+    /// Add a fill layer at `index` among the layers of `parent` (absent: the top level; no
+    /// index: on top). `color` is sRGB-encoded RGBA in `[0, 1]`, as produced by UI color
+    /// pickers; it is explicitly converted to the working space.
     AddFillLayer {
         name: String,
+        color: [f32; 4],
+        #[serde(default)]
+        parent: Option<u64>,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// A fill layer's color, sRGB-encoded RGBA in `[0, 1]` as `AddFillLayer`'s.
+    SetFillColor {
+        id: u64,
         color: [f32; 4],
     },
     RemoveLayer {
@@ -529,11 +539,25 @@ impl EditRequest {
     /// unknown blend mode or blend space identifier.
     pub fn into_edit(self, session: &mut Session) -> Result<Edit, String> {
         Ok(match self {
-            EditRequest::AddFillLayer { name, color } => {
+            EditRequest::AddFillLayer {
+                name,
+                color,
+                parent,
+                index,
+            } => {
                 let [r, g, b, a] = color;
+                let parent = parent.map(LayerId::from_raw);
+                let index = match index {
+                    Some(index) => index,
+                    None => session
+                        .document()
+                        .children_of(parent)
+                        .ok_or("unknown parent")?
+                        .len(),
+                };
                 Edit::InsertLayer {
-                    parent: None,
-                    index: session.document().layers().len(),
+                    parent,
+                    index,
                     layer: Layer {
                         transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
@@ -547,6 +571,13 @@ impl EditRequest {
                             color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                         },
                     },
+                }
+            }
+            EditRequest::SetFillColor { id, color } => {
+                let [r, g, b, a] = color;
+                Edit::SetFillColor {
+                    id: LayerId::from_raw(id),
+                    color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                 }
             }
             EditRequest::RemoveLayer { id } => Edit::RemoveLayer {
