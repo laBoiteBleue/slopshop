@@ -21,8 +21,8 @@ use super::format::{
 };
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED, NODE_VERSION_TRANSFORMED, NodeDto,
-    PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_TRANSFORMED,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -323,8 +323,9 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
+    let known_raster = (1..=NODE_VERSION_STACK).contains(&node.version);
     let content = match node.kind.as_str() {
-        NODE_RASTER if known_version => {
+        NODE_RASTER if known_raster => {
             let key = node
                 .params
                 .get("image")
@@ -334,10 +335,7 @@ pub(super) fn read_node(
             let image = rasters
                 .get(&key)
                 .ok_or_else(|| corrupt("raster node with a missing image"))?;
-            LayerContent::Raster {
-                image: image.clone(),
-                original: painted_original(node, &node.params, rasters)?,
-            }
+            raster_content(node, manifest, image, rasters)?
         }
         NODE_FILL if known_version => {
             let color = node
@@ -376,29 +374,9 @@ pub(super) fn read_node(
             }
         }
         NODE_ADJUSTMENT if (3..=NODE_VERSION_PAINTED).contains(&node.version) => {
-            let id = node
-                .params
-                .get("adjustment")
-                .and_then(Value::as_str)
-                .ok_or_else(|| corrupt("adjustment node without an adjustment"))?;
-            let values: Vec<f32> = node
-                .params
-                .get("values")
-                .and_then(Value::as_array)
-                .and_then(|v| {
-                    v.iter()
-                        .map(|v| v.as_f64().map(|v| v as f32))
-                        .collect::<Option<Vec<f32>>>()
-                })
-                .filter(|v| v.len() <= PARAM_COUNT)
-                .ok_or_else(|| corrupt("adjustment node without its values"))?;
-            // An adjustment this version does not know comes from a newer SlopShop.
-            let mut adjustment = slopshop_core::adjust::Adjustment::from_params(id, &values)
-                .ok_or_else(|| FileError::UnknownNodeType(format!("adjustment {id}")))?;
-            if adjustment.curves().is_some() {
-                adjustment = node_curves(node)?;
+            LayerContent::Adjustment {
+                adjustment: adjustment_of(&node.params)?,
             }
-            LayerContent::Adjustment { adjustment }
         }
         _ => return Err(FileError::UnknownNodeType(versioned())),
     };
@@ -446,13 +424,147 @@ fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
     Ok(transform)
 }
 
+/// An adjustment from its parameters (an adjustment node's, or an effect's): `adjustment`, its
+/// `values` and, for Curves, `curves`. Parameters out of range are refused when the document
+/// is restored.
+fn adjustment_of(
+    params: &Map<String, Value>,
+) -> Result<slopshop_core::adjust::Adjustment, FileError> {
+    let id = params
+        .get("adjustment")
+        .and_then(Value::as_str)
+        .ok_or_else(|| corrupt("adjustment without its kind"))?;
+    let values: Vec<f32> = params
+        .get("values")
+        .and_then(Value::as_array)
+        .and_then(|v| {
+            v.iter()
+                .map(|v| v.as_f64().map(|v| v as f32))
+                .collect::<Option<Vec<f32>>>()
+        })
+        .filter(|v| v.len() <= PARAM_COUNT)
+        .ok_or_else(|| corrupt("adjustment without its values"))?;
+    // An adjustment this version does not know comes from a newer SlopShop.
+    let adjustment = slopshop_core::adjust::Adjustment::from_params(id, &values)
+        .ok_or_else(|| FileError::UnknownNodeType(format!("adjustment {id}")))?;
+    if adjustment.curves().is_some() {
+        return curves_of(params);
+    }
+    Ok(adjustment)
+}
+
+/// A raster node's content: its image, and its stack (version 7, ADR 0029), or its paint as a
+/// stack (version 6, ADR 0027: converted exactly), evaluated.
+fn raster_content(
+    node: &NodeDto,
+    manifest: &Manifest,
+    image: &Arc<RasterImage>,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
+) -> Result<LayerContent, FileError> {
+    use slopshop_core::stack::{Effect, EffectEntry, Entry, LayerStack, PaintEntry};
+    let invalid = |e: slopshop_core::stack::StackError| corrupt(&format!("invalid stack: {e}"));
+    let image_at = |value: Option<&Value>, what: &str| {
+        value
+            .and_then(Value::as_str)
+            .and_then(Hash::from_key)
+            .and_then(|key| rasters.get(&key))
+            .cloned()
+            .ok_or_else(|| corrupt(&format!("{what} with a missing image")))
+    };
+    let space_of = |value: Option<&Value>| {
+        let id = value
+            .and_then(Value::as_str)
+            .ok_or_else(|| corrupt("stack entry without a blend space"))?;
+        BlendSpace::from_id(id)
+            .ok_or_else(|| FileError::UnknownNodeType(format!("blend space {id}")))
+    };
+    // Version 6: the painted pixels over the original.
+    if let Some(original) = painted_original(node, &node.params, rasters)? {
+        let space = document_blend_space(&manifest.document)?;
+        let paint = PaintEntry::from_painted(&original, image, space).map_err(invalid)?;
+        let stack = LayerStack::new(original)
+            .with_top_paint(Arc::new(paint))
+            .map_err(invalid)?;
+        // The conversion is exact: the painted pixels are the stack's result.
+        let shown = if image.format() == stack.format() {
+            Arc::clone(image)
+        } else {
+            stack.evaluate().map_err(invalid)?
+        };
+        let stack = (!stack.is_empty()).then_some(stack);
+        return Ok(LayerContent::Raster {
+            image: shown,
+            stack,
+        });
+    }
+    let entries = match node.params.get("stack") {
+        None | Some(Value::Null) => return Ok(LayerContent::raster(Arc::clone(image))),
+        Some(Value::Array(entries)) if node.version >= NODE_VERSION_STACK => entries,
+        Some(_) => return Err(corrupt("invalid stack")),
+    };
+    let mut stack = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if let Some(paint) = entry.get("paint").and_then(Value::as_object) {
+            let color = image_at(paint.get("color"), "paint")?;
+            let keep = image_at(paint.get("keep"), "paint")?;
+            let paint = PaintEntry::from_images(
+                image.format(),
+                &color,
+                &keep,
+                space_of(paint.get("space"))?,
+            )
+            .map_err(invalid)?;
+            stack.push(Entry::Paint(Arc::new(paint)));
+        } else if let Some(steps) = entry.get("effect").and_then(Value::as_array) {
+            let mut effect = Vec::with_capacity(steps.len());
+            for step in steps {
+                let params = step.as_object().ok_or_else(|| corrupt("invalid effect"))?;
+                let selection = match params.get("selection") {
+                    None | Some(Value::Null) => None,
+                    value => Some(
+                        slopshop_core::selection::Selection::new(image_at(value, "effect")?)
+                            .ok_or_else(|| corrupt("an effect's selection is not gray"))?,
+                    ),
+                };
+                let numbers: Vec<f64> = params
+                    .get("transform")
+                    .and_then(Value::as_array)
+                    .map(|v| v.iter().filter_map(Value::as_f64).collect())
+                    .unwrap_or_default();
+                let to_document: [f64; 6] = numbers
+                    .try_into()
+                    .map_err(|_| corrupt("an effect's transform has six numbers"))?;
+                effect.push(Arc::new(Effect {
+                    adjustment: adjustment_of(params)?,
+                    selection,
+                    to_document: slopshop_core::Affine::from_array(to_document),
+                    space: space_of(params.get("space"))?,
+                }));
+            }
+            stack.push(Entry::Effect(Arc::new(
+                EffectEntry::new(effect).map_err(invalid)?,
+            )));
+        } else {
+            // An entry this version does not know comes from a newer SlopShop.
+            return Err(FileError::UnknownNodeType("stack entry".to_owned()));
+        }
+    }
+    let stack = LayerStack::with_entries(Arc::clone(image), stack).map_err(invalid)?;
+    if stack.is_empty() {
+        return Ok(LayerContent::raster(Arc::clone(image)));
+    }
+    Ok(LayerContent::Raster {
+        image: stack.evaluate().map_err(invalid)?,
+        stack: Some(stack),
+    })
+}
+
 /// Curves' points (schema 0.9): four lists of `[input, output]` on 0–255 (composite, red,
 /// green, blue), each 2 to 16 points with increasing inputs.
-fn node_curves(node: &NodeDto) -> Result<slopshop_core::adjust::Adjustment, FileError> {
+fn curves_of(params: &Map<String, Value>) -> Result<slopshop_core::adjust::Adjustment, FileError> {
     use slopshop_core::curve::Curve;
     let invalid = || corrupt("curves adjustment without valid curves");
-    let lists = node
-        .params
+    let lists = params
         .get("curves")
         .and_then(Value::as_array)
         .filter(|lists| lists.len() == 4)

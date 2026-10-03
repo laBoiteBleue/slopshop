@@ -27,7 +27,7 @@ pub struct DocumentInfo {
     pub layers: LayerCounts,
     /// The pixel formats of the raster layers, the most used first.
     pub formats: Vec<FormatCount>,
-    /// RAM held by the document's pixels (layers, their originals and masks, the selection),
+    /// RAM held by the document's pixels (layers, their originals, paint and masks, the selection),
     /// each image counted once however many layers share it.
     pub memory_bytes: u64,
     /// The file the document was opened from (an image, or a `.slop`), if any.
@@ -88,6 +88,8 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
     let mut formats: Vec<(PixelFormat, u32)> = Vec::new();
     let mut seen = HashSet::new();
     let mut memory_bytes = 0;
+    // Paint tiles (ADR 0029) are not images: counted apart.
+    let mut paint_bytes = 0;
     let mut count = |image: &Arc<RasterImage>| {
         if seen.insert(image.id()) {
             memory_bytes += image.memory_bytes();
@@ -95,7 +97,7 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
     };
     for layer in doc.all_layers() {
         match &layer.content {
-            LayerContent::Raster { image, original } => {
+            LayerContent::Raster { image, stack } => {
                 layers.raster += 1;
                 let format = image.format();
                 match formats.iter_mut().find(|(f, _)| *f == format) {
@@ -103,8 +105,13 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                     None => formats.push((format, 1)),
                 }
                 count(image);
-                if let Some(original) = original {
-                    count(original);
+                if let Some(stack) = stack {
+                    count(stack.original());
+                    for entry in stack.entries() {
+                        if let slopshop_core::stack::Entry::Paint(paint) = entry {
+                            paint_bytes += paint.memory_bytes();
+                        }
+                    }
                 }
             }
             LayerContent::Fill { .. } => layers.fill += 1,
@@ -142,7 +149,7 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                 layers,
             })
             .collect(),
-        memory_bytes,
+        memory_bytes: memory_bytes + paint_bytes,
         source: None,
         file: None,
     }
@@ -203,7 +210,7 @@ mod tests {
         let raster = |id| {
             let content = LayerContent::Raster {
                 image: Arc::clone(&rgba),
-                original: None,
+                stack: None,
             };
             layer(id, content, None)
         };

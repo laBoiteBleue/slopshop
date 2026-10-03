@@ -8,6 +8,8 @@ use slopshop_core::color::{
 use slopshop_core::document::{Layer, LayerContent};
 use slopshop_core::geom::Size;
 use slopshop_core::raster::RasterImage;
+use slopshop_core::selection::Selection;
+use slopshop_core::stack::{Effect, Entry, LayerStack, PaintEntry, PaintOp};
 use slopshop_core::{BlendMode, BlendSpace, Document, Edit};
 
 use super::format::{HEADER_LEN, SLOT_LEN, SLOT_OFFSETS, Slot};
@@ -109,7 +111,7 @@ fn sample_document() -> Document {
         &mut doc,
         "photo",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: rgb8.clone(),
         },
         0.8,
@@ -118,7 +120,7 @@ fn sample_document() -> Document {
         &mut doc,
         "rgba16",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: image(size, ChannelLayout::Rgba, SampleType::U16, pixels(8, 3)),
         },
         1.0,
@@ -128,7 +130,7 @@ fn sample_document() -> Document {
         &mut doc,
         "gray f16",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: image(
                 Size::new(40, 520),
                 ChannelLayout::GrayAlpha,
@@ -142,7 +144,7 @@ fn sample_document() -> Document {
         &mut doc,
         "rgba f32",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: image(
                 Size::new(17, 9),
                 ChannelLayout::Rgba,
@@ -158,7 +160,7 @@ fn sample_document() -> Document {
         "photo (copie)",
         LayerContent::Raster {
             image: rgb8,
-            original: None,
+            stack: None,
         },
         0.25,
     );
@@ -224,6 +226,43 @@ fn assert_same_original(a: Option<&Arc<RasterImage>>, b: Option<&Arc<RasterImage
     }
 }
 
+/// Both `None`, or the same original and entries (ADR 0029).
+fn assert_same_stack(a: Option<&LayerStack>, b: Option<&LayerStack>, what: &str) {
+    let (a, b) = match (a, b) {
+        (None, None) => return,
+        (Some(a), Some(b)) => (a, b),
+        _ => panic!("{what}: stack presence differs"),
+    };
+    assert_same_image(a.original(), b.original(), &format!("{what} original"));
+    assert_eq!(a.entries().len(), b.entries().len(), "{what}");
+    for (e, f) in a.entries().iter().zip(b.entries()) {
+        match (e, f) {
+            (Entry::Paint(p), Entry::Paint(q)) => {
+                assert_eq!(p.space(), q.space(), "{what}");
+                let ((pc, pk), (qc, qk)) = (p.images().unwrap(), q.images().unwrap());
+                assert_same_image(&pc, &qc, &format!("{what} paint"));
+                assert_same_image(&pk, &qk, &format!("{what} paint"));
+            }
+            (Entry::Effect(p), Entry::Effect(q)) => {
+                assert_eq!(p.steps().len(), q.steps().len(), "{what}");
+                for (s, t) in p.steps().iter().zip(q.steps()) {
+                    assert_eq!(s.adjustment, t.adjustment, "{what}");
+                    assert_eq!(s.to_document, t.to_document, "{what}");
+                    assert_eq!(s.space, t.space, "{what}");
+                    match (&s.selection, &t.selection) {
+                        (None, None) => {}
+                        (Some(s), Some(t)) => {
+                            assert_same_image(s.image(), t.image(), &format!("{what} selection"))
+                        }
+                        _ => panic!("{what}: an effect's selection differs"),
+                    }
+                }
+            }
+            _ => panic!("{what}: entries differ"),
+        }
+    }
+}
+
 fn assert_same_layers(a: &[Layer], b: &[Layer]) {
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b) {
@@ -253,18 +292,11 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
                 assert_eq!(bits(c), bits(d), "{}", x.name);
             }
             (
-                LayerContent::Raster {
-                    image: i,
-                    original: o,
-                },
-                LayerContent::Raster {
-                    image: j,
-                    original: q,
-                },
+                LayerContent::Raster { image: i, stack: s },
+                LayerContent::Raster { image: j, stack: t },
             ) => {
                 assert_same_image(i, j, &x.name);
-                let what = format!("{} original", x.name);
-                assert_same_original(o.as_ref(), q.as_ref(), &what);
+                assert_same_stack(s.as_ref(), t.as_ref(), &x.name);
             }
             (
                 LayerContent::Group {
@@ -353,7 +385,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         &mut doc,
         "original",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: Arc::clone(&original),
         },
         1.0,
@@ -366,7 +398,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         &mut doc,
         "shared",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: Arc::new(shared),
         },
         1.0,
@@ -403,7 +435,7 @@ fn a_new_layer_appends_only_its_tiles_and_the_session_carries_on() {
         "nouveau",
         LayerContent::Raster {
             image: added,
-            original: None,
+            stack: None,
         },
         1.0,
     );
@@ -434,7 +466,7 @@ fn removed_data_is_compacted_away_once_it_dominates() {
         &mut doc,
         "gros",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: image(
                 size,
                 ChannelLayout::Rgba,
@@ -481,7 +513,7 @@ fn two_generations(name: &str) -> (PathBuf, Document, Document, Vec<u8>, Vec<u8>
         &mut second,
         "ajout",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: image(
                 Size::new(300, 10),
                 ChannelLayout::Rgb,
@@ -583,7 +615,7 @@ fn damaged_files_are_errors_never_panics() {
         &mut doc,
         "image",
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: image(
                 Size::new(40, 30),
                 ChannelLayout::Rgb,
@@ -672,9 +704,68 @@ fn save_as_writes_a_compact_copy_and_continues_with_it() {
     fs::remove_file(&copy).ok();
 }
 
-/// The document of the golden fixture of schema 0.10: the schema 0.9 one with paint on the
-/// first raster layer and on the first mask (ADR 0027).
+/// The document of the golden fixture of schema 0.12: the schema 0.10 one with an Invert
+/// within a selection then paint over it on its first raster layer (ADR 0029).
 fn golden_document() -> Document {
+    let mut doc = golden_document_v0_10();
+    let (id, stack) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { .. } => Some((l.id, l.content.stack()?)),
+            _ => None,
+        })
+        .expect("a raster layer");
+    let size = doc.size();
+    // A selection of a rectangle, its edge soft.
+    let coverage: Vec<u8> = (0..size.height)
+        .flat_map(|y| {
+            (0..size.width).flat_map(move |x| {
+                let v: u16 = match (x, y) {
+                    (2..9, 1..6) => u16::MAX,
+                    (9, 1..6) => 30000,
+                    _ => 0,
+                };
+                v.to_ne_bytes()
+            })
+        })
+        .collect();
+    let selection =
+        RasterImage::from_pixels(size, slopshop_core::selection::SELECTION_FORMAT, &coverage)
+            .unwrap();
+    let inverted = stack
+        .with_effect(Effect {
+            adjustment: slopshop_core::adjust::Adjustment::Invert,
+            selection: Selection::new(Arc::new(selection)),
+            to_document: slopshop_core::Affine::IDENTITY,
+            space: doc.blend_space(),
+        })
+        .unwrap();
+    let empty = PaintEntry::empty(
+        inverted.original().format(),
+        inverted.original().size(),
+        doc.blend_space(),
+    );
+    let coord = slopshop_core::tile::TileCoord { col: 0, row: 0 };
+    let tile = empty.painted_tile(
+        coord,
+        PaintOp::Color(LinearRgba::new(0.2, 0.5, 0.1, 1.0)),
+        |x, y| ((x + y) % 5) as f32 / 4.0,
+    );
+    let paint = empty.with_tiles(vec![(coord, tile)]).unwrap();
+    Edit::SetLayerStack {
+        id,
+        stack: inverted.with_top_paint(Arc::new(paint)).unwrap(),
+        shown: None,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    doc
+}
+
+/// The document of the golden fixture of schema 0.10: the schema 0.9 one with paint on the
+/// first raster layer and on the first mask (ADR 0027), the layer's paint read as a stack
+/// (ADR 0029).
+fn golden_document_v0_10() -> Document {
     let mut doc = golden_document_v0_9();
     let raster = doc
         .all_layers()
@@ -693,9 +784,14 @@ fn golden_document() -> Document {
         tiles[0] = Arc::clone(tiles.last().unwrap());
         Arc::new(RasterImage::from_level0_tiles(image.size(), image.format(), tiles).unwrap())
     };
-    Edit::SetLayerPaint {
+    let paint =
+        PaintEntry::from_painted(&raster.1, &painted(&raster.1), doc.blend_space()).unwrap();
+    Edit::SetLayerStack {
         id: raster.0,
-        painted: Some(painted(&raster.1)),
+        stack: LayerStack::new(Arc::clone(&raster.1))
+            .with_top_paint(Arc::new(paint))
+            .unwrap(),
+        shown: None,
     }
     .apply(&mut doc)
     .unwrap();
@@ -903,7 +999,7 @@ fn golden_document_v0_3() -> Document {
         .collect();
     let ramp = image(size, ChannelLayout::GrayAlpha, SampleType::F16, ramp);
     let raster = |image: &Arc<RasterImage>| LayerContent::Raster {
-        original: None,
+        stack: None,
         image: image.clone(),
     };
     push(&mut doc, "Gradient", raster(&gradient), 1.0);
@@ -1008,6 +1104,8 @@ fn golden_fixtures_still_open_identically() {
     let (loaded, _) = SlopFile::open(&golden_path("0.9")).unwrap();
     assert_same(&golden_document_v0_9(), &loaded);
     let (loaded, _) = SlopFile::open(&golden_path("0.10")).unwrap();
+    assert_same(&golden_document_v0_10(), &loaded);
+    let (loaded, _) = SlopFile::open(&golden_path("0.12")).unwrap();
     assert_same(&golden_document(), &loaded);
 }
 

@@ -66,13 +66,7 @@ fn layer(s: &mut Session, content: LayerContent) -> Layer {
 }
 
 fn raster(s: &mut Session, image: Arc<RasterImage>) -> Layer {
-    layer(
-        s,
-        LayerContent::Raster {
-            image,
-            original: None,
-        },
-    )
+    layer(s, LayerContent::Raster { image, stack: None })
 }
 
 fn push(s: &mut Session, layer: Layer) -> LayerId {

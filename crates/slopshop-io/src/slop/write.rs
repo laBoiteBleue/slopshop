@@ -7,9 +7,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
+use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::SampleType;
 use slopshop_core::document::{Document, LayerContent};
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
+use slopshop_core::stack::{Entry, StackError};
 
 use super::format::{
     Codec, Encoding, Filter, HEADER_LEN, Hash, Header, IndexEntry, Kind, RECORD_HEADER_LEN,
@@ -18,8 +20,8 @@ use super::format::{
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
     NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED,
-    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, Schema,
-    Writer,
+    NODE_VERSION_STACK, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -136,26 +138,56 @@ fn kept_images(
     mut images: HashMap<ImageId, Arc<ImageRecord>>,
     document: &Document,
 ) -> HashMap<ImageId, Arc<ImageRecord>> {
-    let present: HashSet<ImageId> = rasters(document).map(|image| image.id()).collect();
+    // The stacks' images were made by the save: a failure here only costs hashing again.
+    let present: HashSet<ImageId> = rasters(document)
+        .unwrap_or_default()
+        .iter()
+        .map(|image| image.id())
+        .collect();
     images.retain(|id, _| present.contains(id));
     images
 }
 
-/// Every image of the document: layer rasters and masks, groups included, painted ones with
-/// their originals (ADR 0027).
-fn rasters(document: &Document) -> impl Iterator<Item = &Arc<RasterImage>> {
-    document.all_layers().flat_map(|layer| {
-        let (image, original) = match &layer.content {
-            LayerContent::Raster { image, original } => (Some(image), original.as_ref()),
-            _ => (None, None),
-        };
-        let mask = layer.mask.as_ref();
-        image
-            .into_iter()
-            .chain(original)
-            .chain(mask.map(|m| &m.image))
-            .chain(mask.and_then(|m| m.original.as_ref()))
-    })
+/// Every image the file stores: layer rasters (with a stack, its original, the images of its
+/// paint and the selections of its effects, never its evaluated result, ADR 0029) and masks
+/// (painted ones with their originals, ADR 0027), groups included.
+fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
+    let mut out = Vec::new();
+    for layer in document.all_layers() {
+        match &layer.content {
+            LayerContent::Raster {
+                stack: Some(stack), ..
+            } => {
+                out.push(Arc::clone(stack.original()));
+                for entry in stack.entries() {
+                    match entry {
+                        Entry::Paint(paint) => {
+                            let (color, keep) = paint.images().map_err(stack_error)?;
+                            out.extend([color, keep]);
+                        }
+                        Entry::Effect(effect) => out.extend(
+                            effect
+                                .steps()
+                                .iter()
+                                .filter_map(|s| s.selection.as_ref())
+                                .map(|s| Arc::clone(s.image())),
+                        ),
+                    }
+                }
+            }
+            LayerContent::Raster { image, .. } => out.push(Arc::clone(image)),
+            _ => {}
+        }
+        if let Some(mask) = &layer.mask {
+            out.push(Arc::clone(&mask.image));
+            out.extend(mask.original.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn stack_error(e: StackError) -> FileError {
+    FileError::Corrupt(format!("cannot store a layer's stack: {e}"))
 }
 
 fn write_slot(file: &mut File, slot: &Slot) -> Result<(), FileError> {
@@ -180,8 +212,9 @@ fn write_generation(
 
     // The hashes of the tiles of the images already known, by tile allocation: a new image
     // sharing tiles with them (a painted image and its original, ADR 0027) hashes only its own.
+    let rasters = rasters(document)?;
     let mut known: HashMap<usize, Hash> = HashMap::new();
-    for image in rasters(document) {
+    for image in &rasters {
         if let Some(record) = state.images.get(&image.id()) {
             for (level, (_, hashes)) in image.levels().iter().zip(&record.levels) {
                 for (tile, hash) in level.tiles().iter().zip(hashes) {
@@ -193,7 +226,7 @@ fn write_generation(
 
     // Every image once, hashed unless already known.
     let mut images: Vec<(&Arc<RasterImage>, Arc<ImageRecord>)> = Vec::new();
-    for image in rasters(document) {
+    for image in &rasters {
         if images.iter().any(|(known, _)| known.id() == image.id()) {
             continue;
         }
@@ -428,6 +461,20 @@ pub(super) fn image_key(image: &RasterImage, level0_table: Hash) -> Hash {
     Hash(*hasher.finalize().as_bytes())
 }
 
+/// An adjustment's parameters, as adjustment nodes and effects store them.
+fn adjustment_params(adjustment: &Adjustment) -> Value {
+    // At least five values: what readers of schema 0.7 expect.
+    let used = adjustment.param_count().max(5);
+    let values = &adjustment.params()[..used];
+    let mut params = json!({ "adjustment": adjustment.id(), "values": values });
+    // Schema 0.9: Curves' points, composite, red, green, blue.
+    if let Some(curves) = adjustment.curves() {
+        let points: Vec<&[[u8; 2]]> = curves.iter().map(|c| c.points()).collect();
+        params["curves"] = json!(points);
+    }
+    params
+}
+
 fn build_manifest(
     document: &Document,
     images: &[(&Arc<RasterImage>, Arc<ImageRecord>)],
@@ -444,13 +491,47 @@ fn build_manifest(
         let id = layer.id.get();
         let mut inputs = Vec::new();
         let (kind, params) = match &layer.content {
-            LayerContent::Raster { image, original } => {
+            LayerContent::Raster {
+                stack: Some(stack), ..
+            } => {
+                let key = |image: &Arc<RasterImage>| key_of(image).map(Hash::to_key);
+                let entries: Vec<Value> = stack
+                    .entries()
+                    .iter()
+                    .map(|entry| match entry {
+                        Entry::Paint(paint) => {
+                            let images = paint.images().ok();
+                            json!({ "paint": {
+                                "color": images.as_ref().and_then(|(c, _)| key(c)),
+                                "keep": images.as_ref().and_then(|(_, k)| key(k)),
+                                "space": paint.space().id(),
+                            }})
+                        }
+                        Entry::Effect(effect) => {
+                            let steps: Vec<Value> = effect
+                                .steps()
+                                .iter()
+                                .map(|step| {
+                                    let mut value = adjustment_params(&step.adjustment);
+                                    value["selection"] =
+                                        json!(step.selection.as_ref().and_then(|s| key(s.image())));
+                                    value["transform"] = json!(step.to_document.to_array());
+                                    value["space"] = json!(step.space.id());
+                                    value
+                                })
+                                .collect();
+                            json!({ "effect": steps })
+                        }
+                    })
+                    .collect();
+                (
+                    NODE_RASTER,
+                    json!({ "image": key(stack.original()), "stack": entries }),
+                )
+            }
+            LayerContent::Raster { image, .. } => {
                 let key = key_of(image).map(Hash::to_key).unwrap_or_default();
-                let mut params = json!({ "image": key });
-                if let Some(original) = original {
-                    params["original"] = json!(key_of(original).map(Hash::to_key));
-                }
-                (NODE_RASTER, params)
+                (NODE_RASTER, json!({ "image": key }))
             }
             LayerContent::Fill { color } => (
                 NODE_FILL,
@@ -464,16 +545,7 @@ fn build_manifest(
                 (NODE_GROUP, json!({ "pass_through": pass_through }))
             }
             LayerContent::Adjustment { adjustment } => {
-                // At least five values: what readers of schema 0.7 expect.
-                let used = adjustment.param_count().max(5);
-                let values = &adjustment.params()[..used];
-                let mut params = json!({ "adjustment": adjustment.id(), "values": values });
-                // Schema 0.9: Curves' points, composite, red, green, blue.
-                if let Some(curves) = adjustment.curves() {
-                    let points: Vec<&[[u8; 2]]> = curves.iter().map(|c| c.points()).collect();
-                    params["curves"] = json!(points);
-                }
-                (NODE_ADJUSTMENT, params)
+                (NODE_ADJUSTMENT, adjustment_params(adjustment))
             }
         };
         let mut params = match params {
@@ -506,7 +578,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer.is_painted() {
+                version: if matches!(layer.content, LayerContent::Raster { stack: Some(_), .. }) {
+                    NODE_VERSION_STACK
+                } else if layer.is_painted() {
                     NODE_VERSION_PAINTED
                 } else if !layer.transform.is_identity() {
                     NODE_VERSION_TRANSFORMED

@@ -3,19 +3,21 @@
 //! A stroke is sent in batches of pointer samples while it is painted. Each batch extends the
 //! engine's stroke and its result is shown as a preview in place of the layer's pixels (view
 //! state, like the Quick Mask overlay: no history entry, no revision). The last batch commits
-//! the stroke as one edit, `Edit::SetLayerPaint`: one undo entry, the layer's original kept.
-//! A layer's mask is painted the same way (`Edit::SetMaskPaint`), and the selection in Quick
-//! Mask (`Edit::SetSelection`): both in gray, white showing or selecting, black hiding.
+//! the stroke as one edit: on a layer, its paint on top of the layer's stack (ADR 0029,
+//! `Edit::SetLayerStack`), continuing the top paint; one undo entry, the layer's original kept.
+//! A layer's mask is painted into its painted image (`Edit::SetMaskPaint`), and the selection
+//! in Quick Mask (`Edit::SetSelection`): both in gray, white showing or selecting, black hiding.
 //!
 //! A stroke reaches the whole canvas: a layer that does not cover it grows first, by whole
-//! tiles before it (its pixels, original and mask move with it, its transform compensates), so
-//! the layer looks the same until painted; the growth is part of the stroke's undo entry.
+//! tiles before it (its stack and mask move with it, its transform compensates), so the layer
+//! looks the same until painted; the growth is part of the stroke's undo entry.
 
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
 use slopshop_core::selection::{Selection, sample_colors, select_all};
+use slopshop_core::stack::LayerStack;
 use slopshop_core::{
     Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage, Size,
 };
@@ -115,13 +117,22 @@ struct ActiveStroke {
     growth: Option<Growth>,
 }
 
-/// A layer grown to cover the canvas (see the module documentation): its new transform, its
-/// grown original (the unpainted pixels) and its grown mask, if any.
+/// A layer as a stroke or a move found it, grown to cover the canvas if it needed to (see the
+/// module documentation): its transform, its stack and its mask, if any.
 #[derive(Debug, Clone)]
 pub struct Growth {
     pub(crate) transform: Affine,
-    pub(crate) original: Arc<RasterImage>,
+    pub(crate) stack: LayerStack,
     pub(crate) mask: Option<LayerMask>,
+}
+
+/// What a stroke or a move leaves on its target.
+#[derive(Debug, Clone)]
+pub(crate) enum Painted {
+    /// A mask's or the selection's painted image (ADR 0027).
+    Image(Arc<RasterImage>),
+    /// A layer's stack and, when known, what the layer shows with it (ADR 0029).
+    Stack(LayerStack, Option<Arc<RasterImage>>),
 }
 
 #[derive(Default)]
@@ -133,7 +144,7 @@ pub struct PaintState {
 #[derive(Debug, Clone)]
 pub struct PaintPreview {
     target: Target,
-    pub image: Arc<RasterImage>,
+    painted: Painted,
     pub growth: Option<Growth>,
 }
 
@@ -141,87 +152,131 @@ impl PaintPreview {
     /// `doc` (a snapshot being rendered) showing the stroke.
     pub fn apply_to(&self, doc: &mut Document) {
         // The layer may have gone meanwhile: then nothing to show.
-        let _ = paint_edit(self.target, Arc::clone(&self.image), self.growth.as_ref()).apply(doc);
+        let _ = paint_edit(self.target, self.painted.clone(), self.growth.as_ref()).apply(doc);
     }
 }
 
-/// The edit that gives `target` the painted `image`, a layer grown first by `growth` if any.
-pub(crate) fn paint_edit(target: Target, image: Arc<RasterImage>, growth: Option<&Growth>) -> Edit {
-    let layer = match target {
-        Target::Layer(id) => id,
-        Target::Mask(id) => {
+/// The edit that gives `target` what was `painted` on it, a layer grown first by `growth`.
+pub(crate) fn paint_edit(target: Target, painted: Painted, growth: Option<&Growth>) -> Edit {
+    let (layer, stack, shown) = match (target, painted) {
+        (Target::Mask(id), Painted::Image(image)) => {
             return Edit::SetMaskPaint {
                 id,
                 painted: Some(image),
             };
         }
         // A stroke paints a gray image of the selection's: always a selection.
-        Target::Selection => {
+        (Target::Selection, Painted::Image(image)) => {
             return Edit::SetSelection {
                 selection: Selection::new(image),
             };
         }
+        (Target::Layer(id), Painted::Stack(stack, shown)) => (id, stack, shown),
+        // Strokes and moves give layers stacks, masks and the selection images.
+        _ => return Edit::Batch(Vec::new()),
     };
-    let Some(growth) = growth else {
-        return Edit::SetLayerPaint {
-            id: layer,
-            painted: Some(image),
-        };
-    };
-    let mut edits = vec![
-        Edit::SetLayerPixels {
-            id: layer,
-            image,
-            original: Some(Arc::clone(&growth.original)),
-        },
-        Edit::SetLayerTransform {
+    // What the layer shows, when it is the stack's result as is (an Eraser that erased
+    // nothing leaves no alpha channel to show): evaluated again otherwise.
+    let shown =
+        shown.filter(|s| s.format() == stack.format() && s.size() == stack.original().size());
+    let mut edits = vec![Edit::SetLayerStack {
+        id: layer,
+        stack,
+        shown,
+    }];
+    if let Some(growth) = growth {
+        edits.push(Edit::SetLayerTransform {
             id: layer,
             transform: growth.transform,
-        },
-    ];
-    if let Some(mask) = &growth.mask {
-        edits.push(Edit::SetLayerMask {
-            id: layer,
-            mask: Some(mask.clone()),
         });
+        if let Some(mask) = &growth.mask {
+            edits.push(Edit::SetLayerMask {
+                id: layer,
+                mask: Some(mask.clone()),
+            });
+        }
     }
     Edit::Batch(edits)
 }
 
-/// The growth of layer `id` that lets a stroke reach the whole canvas of `doc`, if it needs one
-/// (see the module documentation): its pixels to paint, and the growth.
+/// What `stroke` painted on `target` so far: a layer's stack and what it shows, or an image.
+fn painted_so_far(target: Target, stroke: &mut Stroke) -> Result<Painted, String> {
+    let image = stroke.image().map_err(|e| e.to_string())?;
+    Ok(match target {
+        Target::Layer(_) => Painted::Stack(
+            stroke
+                .stack()
+                .map_err(|e| e.to_string())?
+                .ok_or("a layer's stroke paints its stack")?,
+            Some(image),
+        ),
+        _ => Painted::Image(image),
+    })
+}
+
+/// Raster layer `id` of `doc` as a stroke or a move works on it (see the module
+/// documentation): what it shows, and its transform, stack and mask, grown to cover the canvas
+/// if it needs to (`grow`).
 pub(crate) fn grow(
     doc: &Document,
     id: LayerId,
-) -> Result<Option<(Arc<RasterImage>, Growth)>, String> {
+    grow: bool,
+) -> Result<(Arc<RasterImage>, Growth), String> {
     let layer = doc.layer(id).ok_or("the painted layer is gone")?;
-    let LayerContent::Raster { image, original } = &layer.content else {
-        return Ok(None);
+    let LayerContent::Raster { image, .. } = &layer.content else {
+        return Err("only raster layers can be painted".to_owned());
     };
+    let stack = layer
+        .content
+        .stack()
+        .ok_or("only raster layers can be painted")?;
     let parent = doc.parent_transform(id);
-    let Some(((left, top), size)) =
-        canvas_growth(image.size(), layer.transform.then(parent), doc.size())
-    else {
-        return Ok(None);
+    let growth = grow
+        .then(|| canvas_growth(image.size(), layer.transform.then(parent), doc.size()))
+        .flatten();
+    let Some((offset, size)) = growth else {
+        return Ok((
+            Arc::clone(image),
+            Growth {
+                transform: layer.transform,
+                stack,
+                mask: layer.mask.clone(),
+            },
+        ));
     };
-    let shown = grown_pixels(image, (left, top), size)?;
-    let unpainted = match original {
-        Some(original) => grown_pixels(original, (left, top), size)?,
-        None => Arc::clone(&shown),
-    };
+    grown(
+        image,
+        &Growth {
+            transform: layer.transform,
+            stack,
+            mask: layer.mask.clone(),
+        },
+        offset,
+        size,
+    )
+}
+
+/// `layer` (showing `image`) grown by `offset` whole tiles before its pixels to `size`: what it
+/// shows and its growth.
+pub(crate) fn grown(
+    image: &Arc<RasterImage>,
+    layer: &Growth,
+    offset: (u32, u32),
+    size: Size,
+) -> Result<(Arc<RasterImage>, Growth), String> {
+    let shown = grown_pixels(image, offset, size)?;
     let mask = match &layer.mask {
-        Some(mask) => Some(grown_mask(mask, (left, top), size)?),
+        Some(mask) => Some(grown_mask(mask, offset, size)?),
         None => None,
     };
-    let transform = grown_transform(layer.transform, (left, top));
-    Ok(Some((
+    Ok((
         shown,
         Growth {
-            transform,
-            original: unpainted,
+            transform: grown_transform(layer.transform, offset),
+            stack: layer.stack.grown(offset, size).map_err(|e| e.to_string())?,
             mask,
         },
-    )))
+    ))
 }
 
 /// A layer's pixels grown by `offset` whole tiles (columns, rows) before them to `size`:
@@ -281,24 +336,26 @@ fn start(
     let selection = doc.selection().map(|s| Arc::clone(s.image()));
     let (image, to_document, growth, paint, selection) = match request.target() {
         Target::Layer(id) => {
-            let layer = doc.layer(id).ok_or("the painted layer is gone")?;
-            let LayerContent::Raster { image, .. } = &layer.content else {
-                return Err("only raster layers can be painted".to_owned());
-            };
-            let (image, growth) = match grow_layer.then(|| grow(doc, id)).transpose()?.flatten() {
-                Some((grown, growth)) => (grown, Some(growth)),
-                None => (Arc::clone(image), None),
-            };
-            // Into the parent, then into the document.
-            let transform = growth.as_ref().map_or(layer.transform, |g| g.transform);
+            let (image, growth) = grow(doc, id, grow_layer)?;
             let paint = match request.color {
                 Some([r, g, b]) => {
                     Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0))
                 }
                 None => Paint::Erase,
             };
-            let to_document = transform.then(doc.parent_transform(id));
-            (image, to_document, growth, paint, selection)
+            // Into the parent, then into the document.
+            let to_document = growth.transform.then(doc.parent_transform(id));
+            let stroke = Stroke::on_stack(
+                &growth.stack,
+                image,
+                to_document,
+                selection,
+                doc.blend_space(),
+                request.brush.brush(),
+                paint,
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok((stroke, Some(growth)));
         }
         // A mask lies in its layer's pixel grid and covers what the layer can show: it does not
         // grow.
@@ -382,25 +439,25 @@ pub(crate) fn paint(
             })
             .collect();
         active.stroke.add(&samples);
-        let painted = active.stroke.has_paint();
-        let image = active.stroke.image().map_err(|e| e.to_string())?;
+        let has_paint = active.stroke.has_paint();
+        let painted = painted_so_far(active.target, &mut active.stroke)?;
         let computed = started.elapsed();
 
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
         let view = if request.end {
             document.paint_preview = None;
-            if painted {
+            if has_paint {
                 document
                     .session
-                    .perform(paint_edit(active.target, image, active.growth.as_ref()))
+                    .perform(paint_edit(active.target, painted, active.growth.as_ref()))
                     .map_err(|e| e.to_string())?;
             }
             Some(document.view())
         } else {
             document.paint_preview = Some(PaintPreview {
                 target: active.target,
-                image,
+                painted,
                 growth: active.growth.clone(),
             });
             *state.paint.stroke.lock().map_err(|e| e.to_string())? = Some(active);
@@ -503,10 +560,11 @@ pub(crate) fn fill_edit(
         },
     };
     painting.fill();
-    Ok(painting
-        .finish()
-        .map_err(|e| e.to_string())?
-        .map(|image| paint_edit(request.target(), image, growth.as_ref())))
+    if !painting.has_paint() {
+        return Ok(None);
+    }
+    let painted = painted_so_far(request.target(), &mut painting)?;
+    Ok(Some(paint_edit(request.target(), painted, growth.as_ref())))
 }
 
 /// `doc` with the band `stroke` draws along its selection's outline as its selection, for Fill

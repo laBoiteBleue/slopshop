@@ -236,7 +236,7 @@ mod tests {
         let image =
             RasterImage::from_placed(Size::new(20, 20), format, rect, &pixels, &[0; 4]).unwrap();
         LayerContent::Raster {
-            original: None,
+            stack: None,
             image: Arc::new(image),
         }
     }

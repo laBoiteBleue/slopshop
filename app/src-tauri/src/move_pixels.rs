@@ -1,9 +1,10 @@
 //! The Move tool dragged from inside a selection moves the selected pixels, as in Photoshop:
 //! those of the active layer, or of its mask when the mask is the target. They leave a hole
 //! (Alt copies them instead) and the selection follows them. Each request of a drag replaces
-//! the drag's live edit (one undo entry per drag); the result is the layer's painted image
-//! (ADR 0027), so the original stays intact. A layer grows with the pixels that land beyond
-//! it (off the canvas too), its original, mask and transform with it, so nothing is lost.
+//! the drag's live edit (one undo entry per drag); on a layer the moved pixels become paint on
+//! top of its stack, their values baked (ADR 0029), so the original stays intact; a mask gets
+//! them as its painted image (ADR 0027). A layer grows with the pixels that land beyond it (off
+//! the canvas too), its stack, mask and transform with it, so nothing is lost.
 //!
 //! As in Photoshop, the pixels float until something else happens: the next drag moves them
 //! from where they started, so what they covered at an intermediate place comes back. A drag
@@ -19,14 +20,14 @@ use std::sync::Arc;
 use serde::Deserialize;
 use slopshop_core::move_pixels::{Lifted, MoveMode, Moved, PixelMove, show_floating};
 use slopshop_core::selection::{Selection, translated};
-use slopshop_core::{Affine, Document, Edit, LayerContent, LayerId, LayerMask, RasterImage, Size};
+use slopshop_core::{
+    Affine, BlendSpace, Document, Edit, LayerContent, LayerId, LayerMask, RasterImage, Size,
+};
 use tauri::Manager;
 
 use crate::AppState;
 use crate::ipc::DocumentView;
-use crate::paint::{
-    Growth, PaintTarget, Target, grow, grown_mask, grown_pixels, grown_transform, paint_edit,
-};
+use crate::paint::{Growth, PaintTarget, Painted, Target, grow, grown, paint_edit};
 use crate::selection::on_worker;
 
 /// A request of a drag moving selected pixels.
@@ -47,6 +48,10 @@ pub struct MovePixelsRequest {
     pub end: bool,
 }
 
+/// A float's layer grown with its pixels: tiles added before them, size, the pixels the move
+/// started from grown alike, and the layer grown.
+type GrownFloat = ((u32, u32), Size, Arc<RasterImage>, Growth);
+
 /// Selected pixels floating (see the module documentation).
 pub struct Floating {
     target: Target,
@@ -54,13 +59,13 @@ pub struct Floating {
     /// The selection the pixels started from.
     selection: Arc<RasterImage>,
     /// A layer as the float found it (grown to the canvas if it needed to, as for painting):
-    /// its original, mask and transform, which every move sets again, grown if it grew.
+    /// its stack, mask and transform, which every move sets again, grown if it grew.
     lifted: Option<Growth>,
     /// A layer's pixels split for drags (computed at the first drag that shows them).
     pixels: Option<Lifted>,
-    /// `lifted` grown with the pixels of the last move that grew (tiles before, size), kept
-    /// while the next ones grow the same.
-    grown: Option<((u32, u32), Size, Growth)>,
+    /// `lifted` grown with the pixels of the last move that grew (tiles before, size), and the
+    /// pixels the move started from grown alike, kept while the next ones grow the same.
+    grown: Option<GrownFloat>,
     /// The move the ended drags add up to, document pixels.
     offset: (i64, i64),
     /// What the last ended drag left: the target's pixels and the selection.
@@ -105,21 +110,10 @@ fn target_image(doc: &Document, target: Target) -> Result<Arc<RasterImage>, Stri
 fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> {
     let selection = doc.selection().ok_or("nothing is selected")?;
     let (image, lifted, id) = match target {
-        Target::Layer(id) => match grow(doc, id)? {
-            Some((grown, growth)) => (grown, Some(growth), id),
-            None => {
-                let layer = doc.layer(id).ok_or("the moved layer is gone")?;
-                let LayerContent::Raster { image, original } = &layer.content else {
-                    return Err("only raster layers have pixels to move".to_owned());
-                };
-                let lifted = Growth {
-                    transform: layer.transform,
-                    original: Arc::clone(original.as_ref().unwrap_or(image)),
-                    mask: layer.mask.clone(),
-                };
-                (Arc::clone(image), Some(lifted), id)
-            }
-        },
+        Target::Layer(id) => {
+            let (image, growth) = grow(doc, id, true)?;
+            (image, Some(growth), id)
+        }
         Target::Mask(id) => (target_image(doc, target)?, None, id),
         Target::Selection => return Err("the selection cannot move its own pixels".to_owned()),
     };
@@ -148,33 +142,37 @@ fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> 
     })
 }
 
-/// The edit that gives `floating`'s target the `moved` pixels: a layer gets them with its
-/// original, mask and transform as the float found it, grown with the pixels if they grew.
-fn moved_edit(floating: &mut Floating, moved: &Moved) -> Result<Edit, String> {
+/// The edit that gives `floating`'s target the `moved` pixels: a layer gets them baked on top
+/// of its stack (blending in `space`), with its mask and transform as the float found it,
+/// grown with the pixels if they grew.
+fn moved_edit(floating: &mut Floating, moved: &Moved, space: BlendSpace) -> Result<Edit, String> {
     let image = Arc::clone(&moved.image);
     let Some(lifted) = &floating.lifted else {
-        return Ok(paint_edit(floating.target, image, None));
+        return Ok(paint_edit(floating.target, Painted::Image(image), None));
     };
     let size = image.size();
     let offset = moved.grown.unwrap_or((0, 0));
-    let growth = match &floating.grown {
-        _ if offset == (0, 0) && size == lifted.original.size() => lifted.clone(),
-        Some((o, s, growth)) if (*o, *s) == (offset, size) => growth.clone(),
+    let base = floating.moving.base();
+    let (before, growth) = match &floating.grown {
+        _ if offset == (0, 0) && size == base.size() => (Arc::clone(base), lifted.clone()),
+        Some((o, s, before, growth)) if (*o, *s) == (offset, size) => {
+            (Arc::clone(before), growth.clone())
+        }
         _ => {
-            let growth = Growth {
-                transform: grown_transform(lifted.transform, offset),
-                original: grown_pixels(&lifted.original, offset, size)?,
-                mask: lifted
-                    .mask
-                    .as_ref()
-                    .map(|mask| grown_mask(mask, offset, size))
-                    .transpose()?,
-            };
-            floating.grown = Some((offset, size, growth.clone()));
-            growth
+            let (before, growth) = grown(base, lifted, offset, size)?;
+            floating.grown = Some((offset, size, Arc::clone(&before), growth.clone()));
+            (before, growth)
         }
     };
-    Ok(paint_edit(floating.target, image, Some(&growth)))
+    let stack = growth
+        .stack
+        .with_painted(&before, &image, space)
+        .map_err(|e| e.to_string())?;
+    Ok(paint_edit(
+        floating.target,
+        Painted::Stack(stack, None),
+        Some(&growth),
+    ))
 }
 
 /// What a document shows of a drag under way: layer `id` with its pixels floating.
@@ -229,7 +227,7 @@ pub(crate) fn move_pixels(
         PaintTarget::Selection => return Err("the selection cannot move its own pixels".into()),
     };
     // The float is taken out while the pixels are computed: frames keep rendering meanwhile.
-    let (mut floating, canvas) = {
+    let (mut floating, canvas, blend_space) = {
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
         let previous = document.floating.take();
@@ -243,7 +241,7 @@ pub(crate) fn move_pixels(
             Some(f) if !request.copy && f.drag.is_none() && f.continues(doc, target) => f,
             _ => lift(doc, target, request.copy)?,
         };
-        (floating, doc.size())
+        (floating, doc.size(), doc.blend_space())
     };
     floating.drag = Some(request.drag);
     let (dx, dy) = (
@@ -274,7 +272,7 @@ pub(crate) fn move_pixels(
         .map_err(|e| e.to_string())?
         .and_then(|image| Selection::new(Arc::new(image)));
     let edit = Edit::Batch(vec![
-        moved_edit(&mut floating, &moved)?,
+        moved_edit(&mut floating, &moved, blend_space)?,
         Edit::SetSelection {
             selection: selection.clone(),
         },
@@ -296,7 +294,9 @@ pub(crate) fn move_pixels(
         if shifted {
             session.end_gesture();
             floating.offset = (dx, dy);
-            floating.shown = Some((moved.image, selection));
+            // What the layer shows now: its stack's result, evaluated by the edit.
+            let shown = target_image(session.document(), floating.target)?;
+            floating.shown = Some((shown, selection));
         }
     }
     document.floating = Some(floating);
