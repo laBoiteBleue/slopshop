@@ -10,6 +10,7 @@
 //! - [`selection`]: selections as coverage masks: shapes, combining, feather, outlines;
 //!   [`quick_select`]: Quick Selection by color (a minimum cut).
 //! - [`session`]: a document plus its undo/redo history.
+//! - [`stack`]: a raster layer's own stack of paint and applied effects (ADR 0029).
 //! - [`view`]: mapping between output (screen) pixels and document pixels.
 //! - [`transform`] and [`resample`]: layer transforms and how transformed layers are sampled.
 //! - [`composite`]: CPU reference compositor, at full resolution (export oracle and fallback).
@@ -39,6 +40,7 @@ pub mod raster;
 pub mod resample;
 pub mod selection;
 pub mod session;
+pub mod stack;
 pub mod thumbnail;
 pub mod tile;
 pub mod transform;
