@@ -37,6 +37,7 @@
     type ExportSpec,
     type ExportStarted,
     type GpuInfo,
+    type AutoCorrection,
     type ImageTurn,
     type Bounds,
     type Matrix,
@@ -84,7 +85,13 @@
   import { cycled, moveTab as moveTabTo, tabSlot, upsert as upsertTab } from "./lib/tabs";
   import { isTextField, keyAction } from "./lib/keymap";
   import { pasteUnfit } from "./lib/clipboard";
-  import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "./lib/imageEdits";
+  import {
+    autoLevelsEdit,
+    canvasBounds,
+    cropEdit,
+    outsideCanvas,
+    sizeEdit,
+  } from "./lib/imageEdits";
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { hexToSrgb } from "./lib/color";
@@ -716,6 +723,15 @@
    */
   function adjustTargets(): number[] {
     return active ? visibleRasters(active.layers) : [];
+  }
+
+  /**
+   * Image > Auto Tone, Auto Contrast, Auto Color: Levels computed by the engine from the visible
+   * image, applied as Image > Adjustments are (nothing done when there is nothing to change).
+   */
+  function autoLevels(correction: AutoCorrection) {
+    const request = active && autoLevelsEdit(adjustTargets(), correction);
+    if (active && request) void edit(active.id, request);
   }
 
   /** Image > Adjustments > `adjustment`: Invert at once, the others through their dialog. */
@@ -2780,6 +2796,21 @@
         run: () => void openAdjust("invert"),
         disabled: !adjustable,
       },
+      autoTone: {
+        label: t("menu.image.autoTone"),
+        run: () => autoLevels("tone"),
+        disabled: !adjustable,
+      },
+      autoContrast: {
+        label: t("menu.image.autoContrast"),
+        run: () => autoLevels("contrast"),
+        disabled: !adjustable,
+      },
+      autoColor: {
+        label: t("menu.image.autoColor"),
+        run: () => autoLevels("color"),
+        disabled: !adjustable,
+      },
       imageSize: {
         label: t("menu.image.imageSize"),
         run: () => openSizeDialog("image"),
@@ -3163,6 +3194,10 @@
               ];
             })(),
           },
+          separator,
+          item("autoTone"),
+          item("autoContrast"),
+          item("autoColor"),
           separator,
           cmd(t("menu.image.crop"), cropImage, undefined, !doc),
           item("imageSize"),

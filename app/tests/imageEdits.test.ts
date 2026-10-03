@@ -1,6 +1,12 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "../src/lib/imageEdits";
+import {
+  autoLevelsEdit,
+  canvasBounds,
+  cropEdit,
+  outsideCanvas,
+  sizeEdit,
+} from "../src/lib/imageEdits";
 
 const DOC = { width: 400, height: 300, resolution: 72 };
 
@@ -42,4 +48,13 @@ test("a crop to the frame, nothing for the whole canvas", () => {
     height: 300,
   });
   assert.equal(cropEdit(DOC, canvasBounds(DOC)), null);
+});
+
+test("Auto Tone, Contrast, Color: on the layers shown, nothing without one", () => {
+  assert.deepEqual(autoLevelsEdit([3, 5], "color"), {
+    kind: "autoLevels",
+    ids: [3, 5],
+    correction: "color",
+  });
+  assert.equal(autoLevelsEdit([], "tone"), null);
 });
