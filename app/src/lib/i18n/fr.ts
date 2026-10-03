@@ -647,7 +647,8 @@ const fr: Messages = {
   "layers.blendSpace.linear": "Linéaire (physique, HDR)",
   "layers.delete": "Supprimer le calque",
   "layers.deleteSelected": "Supprimer les calques",
-  "layers.fillColor": "Couleur de remplissage",
+  "layers.newLayer": "Nouveau calque",
+  "panels.resize": "Redimensionner les panneaux",
   "layers.addFill": "Ajouter un calque de remplissage",
   "layers.clippedHint":
     "Écrêté sur le calque inférieur (Alt+clic sur la ligne entre eux pour annuler)",

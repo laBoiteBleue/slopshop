@@ -155,6 +155,17 @@ test("the delete button removes a group with its layers in one edit", async () =
   expect(onedit).toHaveBeenLastCalledWith(1, { kind: "removeLayer", id: 2 });
 });
 
+test("the + button adds an empty layer above the active one, and no color is asked", async () => {
+  const { onedit, user } = open();
+  await user.click(row("Sea"));
+  await user.click(screen.getByTitle("New layer"));
+  expect(onedit).toHaveBeenLastCalledWith(
+    1,
+    expect.objectContaining({ kind: "addEmptyLayer", parent: 2 }),
+  );
+  expect(document.querySelector('input[type="color"]')).toBeNull();
+});
+
 test("the blend mode and the opacity field apply to every selected layer", async () => {
   const { onedit, user } = open();
   await user.keyboard("[ControlLeft>]");
