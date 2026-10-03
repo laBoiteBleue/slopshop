@@ -133,6 +133,18 @@ test("a JPEG has a quality and a chroma subsampling, which grayscale makes point
   expect(exported(onexport)).toMatchObject({ quality: 90, gray: true });
 });
 
+test("the quality can be erased and typed again", async () => {
+  const { onexport, user } = open({ defaults: JPEG });
+  await loaded();
+  const quality = () => screen.getByRole("spinbutton", { name: "Quality" });
+  await user.clear(quality());
+  // The field stays while it is empty: it is being edited.
+  await user.type(quality(), "75");
+  expect(quality()).toHaveValue(75);
+  await user.click(exportButton());
+  expect(exported(onexport)).toMatchObject({ quality: 75 });
+});
+
 test("WebP's lossless mode has no quality, and lossy takes the default one back", async () => {
   const webp: ExportSpec = { ...PNG, format: "webp", compression: "lossy", quality: 60 };
   const { onexport, user } = open({ defaults: webp });
