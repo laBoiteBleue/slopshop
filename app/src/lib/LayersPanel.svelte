@@ -452,6 +452,11 @@
   }
 
   /** Select one layer (e.g. picked on the image), unfolding the groups around it. */
+  /** Select `ids`, the topmost active (layers just placed). */
+  export function selectLayers(ids: number[]) {
+    select(ids, topmost(ids));
+  }
+
   export function selectOnly(id: number) {
     const next = new Set(collapsed);
     for (let at = parents.get(id); at !== undefined; at = parents.get(at)) next.delete(at);
