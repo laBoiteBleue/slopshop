@@ -285,6 +285,40 @@ fn half_step(sample: SampleType) -> f64 {
     }
 }
 
+/// Whether pixels of `format` hold the very values `space` blends: 8-bit sRGB color with
+/// straight alpha in a perceptual document, the common case. They are then read and written as
+/// they are, without decoding and encoding their transfer curve: the same values, much faster.
+fn blends_as_stored(format: PixelFormat, space: BlendSpace) -> bool {
+    format.sample == SampleType::U8
+        && !format.layout.is_gray()
+        && format.layout.has_alpha()
+        && format.alpha == crate::color::AlphaMode::Straight
+        && format.color_space == crate::color::ColorSpace::SRGB
+        && space == BlendSpace::Perceptual
+}
+
+/// An 8-bit straight RGBA pixel (see [`blends_as_stored`]) as premultiplied blend values.
+fn read_stored(px: &[u8]) -> [f64; 4] {
+    let a = f64::from(px[3]) / 255.0;
+    let v = |i: usize| f64::from(px[i]) / 255.0 * a;
+    [v(0), v(1), v(2), a]
+}
+
+/// Premultiplied blend values as an 8-bit straight RGBA pixel (see [`blends_as_stored`]),
+/// rounded and clamped as the codec writes them.
+fn write_stored(values: [f64; 4], out: &mut [u8]) {
+    let alpha = values[3].clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        out[..4].fill(0);
+        return;
+    }
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    for (n, sample) in out[..3].iter_mut().enumerate() {
+        *sample = byte(values[n] / values[3]);
+    }
+    out[3] = byte(alpha);
+}
+
 /// The pixels of a layer of one format as premultiplied working-space colors, and back.
 #[derive(Debug, Clone, Copy)]
 struct Pixels {
@@ -355,6 +389,8 @@ fn contains(size: Size, coord: TileCoord) -> bool {
 struct PaintPixels {
     /// `P`'s format.
     format: PixelFormat,
+    /// `P`'s pixels are the blend values as they are (see [`blends_as_stored`]).
+    stored: bool,
     pixels: Pixels,
     codec: Codec,
     keep: SampleType,
@@ -367,6 +403,7 @@ impl PaintPixels {
         let codec = Codec::new(format);
         Self {
             format,
+            stored: blends_as_stored(stored_format(format), space),
             pixels: Pixels::new(format),
             bpp: codec.bytes_per_pixel,
             codec,
@@ -377,9 +414,11 @@ impl PaintPixels {
 
     /// `P` (premultiplied blend-space values) and `k` of pixel `i`.
     fn read(&self, color: &[u8], keep: &[u8], i: usize) -> ([f64; 4], f64) {
-        let p = self
-            .pixels
-            .read(&self.codec, &color[i * self.bpp..(i + 1) * self.bpp]);
+        let px = &color[i * self.bpp..(i + 1) * self.bpp];
+        if self.stored {
+            return (read_stored(px), read_keep(self.keep, keep, i));
+        }
+        let p = self.pixels.read(&self.codec, px);
         (
             self.blender.encode_premultiplied(&p),
             read_keep(self.keep, keep, i),
@@ -387,6 +426,11 @@ impl PaintPixels {
     }
 
     fn write(&self, p: [f64; 4], k: f64, color: &mut [u8], keep: &mut [u8], i: usize) {
+        if self.stored {
+            write_stored(p, &mut color[i * self.bpp..(i + 1) * self.bpp]);
+            write_keep(self.keep, k, keep, i);
+            return;
+        }
         let p = self.blender.decode_premultiplied(&p);
         self.pixels
             .write(&self.codec, p, &mut color[i * self.bpp..(i + 1) * self.bpp]);
@@ -1114,6 +1158,9 @@ impl<'a> Evaluator<'a> {
                     f64::from(coord.col * TILE_SIZE),
                     f64::from(coord.row * TILE_SIZE),
                 );
+                // Adjustments in linear light decode the pixels whatever they are.
+                let stored = blends_as_stored(self.format, effect.space)
+                    && !prepared.adjustment().is_linear();
                 for y in first..last {
                     for x in 0..width {
                         let coverage = match selection {
@@ -1129,6 +1176,21 @@ impl<'a> Evaluator<'a> {
                             continue;
                         }
                         let px = &mut rows[((y - first) * t + x) * bpp..][..bpp];
+                        if stored {
+                            // The straight color is the blend values: adjusted, then mixed by
+                            // the coverage (the same alpha on both sides).
+                            if px[3] == 0 {
+                                continue;
+                            }
+                            let below = [px[0], px[1], px[2]].map(|v| f64::from(v) / 255.0);
+                            let adjusted = prepared.apply(below);
+                            let coverage = coverage.min(1.0);
+                            for (n, sample) in px[..3].iter_mut().enumerate() {
+                                let v = below[n] + (adjusted[n] - below[n]) * coverage;
+                                *sample = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                            }
+                            continue;
+                        }
                         let b = self.pixels.read(&self.target, px);
                         let r = blender.adjust(prepared, &b, coverage);
                         self.pixels.write(&self.target, r, px);
@@ -1161,10 +1223,18 @@ impl<'a> Evaluator<'a> {
             return;
         }
         let (p, k) = math.read(color, keep, i);
-        let b = math
-            .blender
-            .encode_premultiplied(&self.pixels.read(&self.target, below));
+        let stored = blends_as_stored(self.format, math.blender.space());
+        let b = if stored {
+            read_stored(below)
+        } else {
+            math.blender
+                .encode_premultiplied(&self.pixels.read(&self.target, below))
+        };
         let r = std::array::from_fn(|n| p[n] + k * b[n]);
+        if stored {
+            write_stored(r, out);
+            return;
+        }
         let r = math.blender.decode_premultiplied(&r);
         self.pixels.write(&self.target, r, out);
     }

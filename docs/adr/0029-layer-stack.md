@@ -45,8 +45,9 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
 3. **Tools that read pixels bake what they read.** Moving selected pixels (and later Smudge,
    Clone, AI fill) write into `P` the values they took from below: deleting an effect under
    them does not change those values.
-4. **Effects are parameters.** Image > Adjustments adds an effect entry to each selected
-   visible raster layer (one undo entry); its parameters are those of the adjustment layers
+4. **Effects are parameters.** Image > Adjustments adds an effect entry to each visible raster
+   layer (one undo entry; every one shown, not only the selected ones: the maintainer's
+   choice, 2026-10-03); its parameters are those of the adjustment layers
    (ADR 0020), the math is the same, applied to the layer's own color, before its mask,
    opacity and blend mode. The selection limits it: the entry keeps the selection by reference
    (no copy) with the layer's transform at that moment, so the effect stays where it was

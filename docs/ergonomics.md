@@ -136,8 +136,10 @@ built. Contributors: propose here first.
 - Image > Adjustments, in Photoshop's order and with its shortcuts (Levels Ctrl+L, Curves
   Ctrl+M, Hue/Saturation Ctrl+U, Color Balance Ctrl+B, Black & White Alt+Shift+Ctrl+B, Invert
   Ctrl+I): a dialog with the same settings as the adjustment layer's Properties, previewed on the
-  canvas while it is open (Preview turns it off); OK applies it to the selected visible pixel
-  layers, within the selection, as one undo entry; Invert applies at once. What is applied is
+  canvas while it is open (Preview turns it off); OK applies it to every pixel layer shown (the
+  whole visible image, not only the selected layers: maintainer's choice), within the
+  selection, as one undo entry, the canvas going from the preview straight to the result;
+  Invert applies at once. What is applied is
   kept in the layer's stack (ADR 0029), listed below the layer and deletable; the same
   adjustment applied twice in a row is one entry (×2), two Inverts cancel.
 - The Restore Eraser, in the Eraser's group (E, Shift+E to switch, the Eraser's options): it

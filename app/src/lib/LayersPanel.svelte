@@ -1019,7 +1019,8 @@
           >
             {layer.name}
           </button>
-          {#if layer.painted}
+          <!-- The arrow tells a layer's pixels were painted; the mark is left for its mask. -->
+          {#if layer.painted && layer.entries.length === 0}
             <span class="painted" title={t("layers.painted")}>
               <Icon name="brush" size={12} />
             </span>

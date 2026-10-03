@@ -1401,6 +1401,9 @@ export const engine = {
   /** Revert the gesture in progress, leaving no undo entry (Esc during a transform). */
   cancelGesture: (documentId: number) =>
     serial(() => invoke<DocumentView>("cancel_gesture", { documentId })),
+  /** Revert the gesture in progress and apply `edit` (one undo entry), in one go. */
+  replaceGesture: (documentId: number, edit: EditRequest) =>
+    serial(() => invoke<DocumentView>("replace_gesture", { documentId, edit })),
   undo: (documentId: number) => serial(() => invoke<DocumentView>("undo", { documentId })),
   redo: (documentId: number) => serial(() => invoke<DocumentView>("redo", { documentId })),
   gpuInfo: () => invoke<GpuInfo>("gpu_info"),
