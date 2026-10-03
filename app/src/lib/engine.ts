@@ -960,6 +960,8 @@ export const engine = {
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /** File > Print's page: a JPEG of the document as displayed, over white paper. */
+  printPage: (documentId: number) => invoke<ArrayBuffer>("print_page", { documentId }),
   /** File > Document Info. */
   documentInfo: (documentId: number) => invoke<DocumentInfo>("document_info", { documentId }),
   /** File > Open Recent: files and folders opened or saved, newest first (existing ones). */

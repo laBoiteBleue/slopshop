@@ -15,6 +15,7 @@ const en = {
   "menu.file.save": "Save",
   "menu.file.export": "Export…",
   "menu.file.saveAs": "Save As…",
+  "menu.file.print": "Print…",
   "menu.file.documentInfo": "Document Info…",
   "menu.file.quit": "Exit",
   "menu.edit": "Edit",

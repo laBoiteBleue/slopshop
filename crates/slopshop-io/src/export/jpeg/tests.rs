@@ -321,3 +321,17 @@ fn unsupported_targets_are_rejected() {
     }
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn small_images_encode_in_memory() {
+    let size = Size::new(40, 24);
+    let rgb: Vec<u8> = (0..size.height)
+        .flat_map(|y| (0..size.width).flat_map(move |x| [(x * 6) as u8, (y * 10) as u8, 128]))
+        .collect();
+    let bytes = encode_srgb8(&rgb, size, 95).unwrap();
+    let mut decoder = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&bytes));
+    let decoded = decoder.decode().unwrap();
+    assert_eq!(decoder.dimensions(), Some((40, 24)));
+    assert!(psnr(&rgb, &decoded) > 35.0, "{}", psnr(&rgb, &decoded));
+    assert!(encode_srgb8(&rgb[3..], size, 95).is_err());
+}

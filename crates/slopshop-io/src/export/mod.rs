@@ -106,6 +106,7 @@ use self::hdr::HdrWriter;
 use self::ico::IcoWriter;
 use self::jpeg::JpegWriter;
 pub use self::jpeg::MAX_SIDE as JPEG_MAX_SIDE;
+pub use self::jpeg::encode_srgb8 as encode_jpeg_srgb8;
 use self::jpeg2000::Jpeg2000Writer;
 use self::jxl::JxlWriter;
 pub use self::jxl::MAX_SIDE as JXL_MAX_SIDE;
