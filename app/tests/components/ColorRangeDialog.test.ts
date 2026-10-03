@@ -150,9 +150,11 @@ test("Escape and Cancel close it, but Enter in a number field is left to the fie
   await user.type(screen.getByRole("spinbutton"), "{Enter}");
   expect(onapply).not.toHaveBeenCalled();
   expect(onclose).not.toHaveBeenCalled();
-  // Out of the field, the keys are the dialog's.
+  // Regression: Escape did nothing while the field had the focus.
+  await user.keyboard("{Escape}");
+  expect(onclose).toHaveBeenCalledOnce();
   await user.tab();
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(onclose).toHaveBeenCalledTimes(2);
+  expect(onclose).toHaveBeenCalledTimes(3);
 });

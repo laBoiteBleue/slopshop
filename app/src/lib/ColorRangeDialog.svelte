@@ -126,10 +126,11 @@
   }
 
   onMount(() => {
-    // Enter applies and Esc cancels, before the app's own shortcuts see them.
+    // Enter applies (except in a number field, which takes its value) and Esc cancels, before
+    // the app's own shortcuts see them.
     const keys = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement && e.target.type === "number") return;
-      if (e.key === "Enter") onapply();
+      const field = e.target instanceof HTMLInputElement && e.target.type === "number";
+      if (e.key === "Enter" && !field) onapply();
       else if (e.key === "Escape") onclose();
       else return;
       e.preventDefault();
