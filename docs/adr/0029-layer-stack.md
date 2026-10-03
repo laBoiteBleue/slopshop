@@ -76,7 +76,17 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
    the layer shows); the paint keeps those tiles for the next stroke while the stack below it
    is the same. Measured on a 12 MP 8-bit layer, 32 threads, a 200-pixel brush: 3.3 ms a frame
    painting the pixels themselves (ADR 0027), 6.4 ms on a stack, 6.9 ms (12.7 ms at worst)
-   continuing paint over three effects.
+   continuing paint over three effects. *GPU (2026-10-03, maintainer's request)*: an edit of a
+   stack evaluates nothing: the layer's pixels (`stack::Pixels`) are a cache filled when first
+   asked, by what needs them (tools, thumbnails, the clipboard, export) or by a thread of their
+   own the display starts; meanwhile the shader evaluates the stack itself (the original, then
+   each paint `P + k·B` and each effect within its selection, before the layer's mask, opacity
+   and mode), and the display cache keeps the composited tiles. At 100 % it shows the CPU's
+   pixels but for rounding (the CPU rounds after each entry); zoomed out it evaluates the stack
+   on the coarser level of each image, close but for the edges of paint under nonlinear
+   effects; the frame asks to be shown again until the exact pixels are there, then shows
+   them. Applying an effect, deleting an entry, undo and redo are instant whatever the image.
+   Export evaluates the pixels first (exact).
 7. **Edits**: one edit, `Edit::SetLayerStack` (implemented so, 2026-10-03), gives a layer a
    stack built by the stack's own operations (an effect added, an entry deleted with its
    merges, the top paint set by a stroke, the layer grown): its inverse keeps the previous
