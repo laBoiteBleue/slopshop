@@ -649,6 +649,12 @@ const fr: Messages = {
   "layers.defaultFillName": "Remplissage {n}",
   "layers.defaultLayerName": "Calque {n}",
   "layers.painted": "Peint : Calque > Supprimer la peinture rétablit l'original",
+  "layers.entries.show": "Afficher ce qui a été appliqué au calque",
+  "layers.entries.hide": "Masquer ce qui a été appliqué au calque",
+  "layers.entry.paint": "Peinture",
+  "layers.entry.count": "{name} ×{n}",
+  "layers.entry.delete": "Supprimer",
+  "layers.entry.deleteHint": "Supprimer (ce qui a été appliqué au-dessus suit)",
 
   "viewport.renderFailed": "Échec du rendu : {error}",
 
