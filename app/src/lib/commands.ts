@@ -19,7 +19,8 @@ export const SHORTCUTS = {
   closeAll: ["alt+mod+w"],
   save: ["mod+s"],
   saveAs: ["shift+mod+s"],
-  export: ["shift+mod+e"],
+  // Photoshop's Export As: Shift+Ctrl+E is Merge Visible there.
+  export: ["alt+shift+mod+w"],
   print: ["mod+p"],
   documentInfo: ["alt+shift+mod+i"],
   quit: ["mod+q"],
@@ -67,6 +68,9 @@ export const SHORTCUTS = {
   sendToBack: ["shift+mod+["],
   // Photoshop's stamp visible.
   newLayerFromVisible: ["alt+shift+mod+e"],
+  // Merge Down with one layer, Merge Layers with several (Layer > Bake to Pixels).
+  mergeLayers: ["mod+e"],
+  mergeVisible: ["shift+mod+e"],
   renameLayer: ["f2"],
   deleteLayers: ["delete", "backspace"],
   // Select

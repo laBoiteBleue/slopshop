@@ -24,6 +24,7 @@
     type PaintTarget,
     type DocumentInfo,
     type DocumentView,
+    type BakeRequest,
     type EditRequest,
     type LayerView,
     type LayerMaskKind,
@@ -108,6 +109,7 @@
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./lib/align";
+  import { canFlatten, canMergeVisible, canRasterize } from "./lib/bake";
   import {
     clippingReleases,
     fillColorEdit,
@@ -2948,6 +2950,8 @@
     const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const several = selectedCount > 1;
     const noSelection = doc?.selectionKey == null;
+    // Ctrl+E: Merge Layers with several, Merge Down with one (Photoshop).
+    const merging = layersPanel?.mergeKindSelected() ?? null;
     // Image > Adjustments: on the pixel layers shown (ADR 0029).
     const adjustable = adjustTargets().length > 0;
     return {
@@ -3155,6 +3159,16 @@
       bringForward: arrangeCommand("forward", "menu.layer.arrange.forward"),
       sendBackward: arrangeCommand("backward", "menu.layer.arrange.backward"),
       sendToBack: arrangeCommand("back", "menu.layer.arrange.back"),
+      mergeLayers: {
+        label: t(merging === "down" ? "menu.layer.bake.mergeDown" : "menu.layer.bake.merge"),
+        run: () => bake({ kind: "merge", ids: selectedIds() }),
+        disabled: merging === null,
+      },
+      mergeVisible: {
+        label: t("menu.layer.bake.mergeVisible"),
+        run: () => bake({ kind: "mergeVisible" }),
+        disabled: !doc || !canMergeVisible(doc.layers),
+      },
       newLayerFromVisible: {
         label: t("menu.layer.newFromVisible"),
         run: () => {
@@ -3242,6 +3256,16 @@
     if (active && layersPanel?.canDistributeSelected()) {
       void edit(active.id, { kind: "distributeLayers", ids, distribute });
     }
+  }
+
+  /** The ids of the selected layers, bottom to top. */
+  function selectedIds(): number[] {
+    return layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+  }
+
+  /** Layer > Bake to Pixels: `request` on the active document (one undo entry). */
+  function bake(request: BakeRequest) {
+    if (active) void sync(engine.bakeLayers(active.id, request));
   }
 
   /** `item` under another label (in a submenu that already says "New"). */
@@ -3668,6 +3692,28 @@
           },
           separator,
           item("newLayerFromVisible"),
+          {
+            kind: "submenu",
+            label: t("menu.layer.bake"),
+            disabled: !doc,
+            items: [
+              cmd(
+                t("menu.layer.bake.rasterize"),
+                () => bake({ kind: "rasterize", ids: selectedIds() }),
+                undefined,
+                !canRasterize(layersPanel?.selectedLayers() ?? []),
+              ),
+              separator,
+              item("mergeLayers"),
+              item("mergeVisible"),
+              cmd(
+                t("menu.layer.bake.flatten"),
+                () => bake({ kind: "flatten", name: t("layers.flattenedName") }),
+                undefined,
+                !doc || !canFlatten(doc.layers),
+              ),
+            ],
+          },
         ],
       },
       {

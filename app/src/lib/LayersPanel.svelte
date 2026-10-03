@@ -52,6 +52,7 @@
   } from "./layerSelection";
   import { isTextField } from "./keymap";
   import { canDistribute } from "./align";
+  import { mergeKind } from "./bake";
 
   let {
     doc,
@@ -403,6 +404,11 @@
   export function arrangeSelected(arrangement: Arrangement) {
     if (!canArrange(tree, selection, arrangement)) return;
     void edit({ kind: "arrangeLayers", ids: selectedIds, arrange: arrangement });
+  }
+
+  /** What Ctrl+E does with the selected layers: merge them, merge down, or nothing. */
+  export function mergeKindSelected(): "layers" | "down" | null {
+    return mergeKind(tree, selection);
   }
 
   /** Layer > Distribute applies: three selected layers, a group counting as one. */

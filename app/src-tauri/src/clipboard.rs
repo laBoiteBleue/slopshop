@@ -287,7 +287,7 @@ pub async fn new_layer_from_visible(
 /// `region` of `document` composited band by band (premultiplied working-space `f32`, on the
 /// GPU when there is one), each band given to `each` with its rectangle and its first row
 /// within the region. Blocking.
-fn composite_bands(
+pub(crate) fn composite_bands(
     renderer: Option<&Renderer>,
     document: &Document,
     region: Rect,
