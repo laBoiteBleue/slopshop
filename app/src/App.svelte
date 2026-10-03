@@ -1517,12 +1517,19 @@
     // OK without a change: nothing to undo, as in Photoshop.
     const same = width === doc.width && height === doc.height;
     if (same && (dialog.mode === "canvas" || resolution === doc.resolution)) return;
-    void edit(
+    const resized = edit(
       dialog.document,
       dialog.mode === "image"
         ? { kind: "resizeImage", width, height, resolution }
         : { kind: "canvasSize", width, height, anchor },
     );
+    // The new size, fitted on screen (the maintainer's choice), unless only the resolution
+    // changed or another tab is shown meanwhile.
+    if (!same) {
+      void resized.then(() => {
+        if (activeId === dialog.document) void viewport?.fit();
+      });
+    }
   }
 
   // The Crop tool (C, ADR 0017): a frame on the image while the tool is active; applying it
