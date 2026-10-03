@@ -1,5 +1,5 @@
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { cleanup, render, screen, within } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "../../src/App.svelte";
@@ -205,4 +205,18 @@ test("Delete removes the selected layer, without a selection of pixels", async (
     }),
   );
   await vi.waitFor(() => expect(layerNames()).toEqual(["Background"]));
+});
+
+test("the panels open at the width saved last, and their left edge resizes them", async () => {
+  localStorage.setItem("slopshop.panelWidth", "420");
+  open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  const edge = await screen.findByRole("separator", { name: "Resize the panels" });
+  const main = document.querySelector("main") as HTMLElement;
+  expect(main.style.getPropertyValue("--panel-width")).toBe("420px");
+  await fireEvent.pointerDown(edge, { pointerId: 1, button: 0, clientX: 600 });
+  await fireEvent.pointerMove(edge, { pointerId: 1, clientX: 550 });
+  await fireEvent.pointerUp(edge, { pointerId: 1, clientX: 550 });
+  expect(main.style.getPropertyValue("--panel-width")).toBe("470px");
+  expect(localStorage.getItem("slopshop.panelWidth")).toBe("470");
+  localStorage.clear();
 });

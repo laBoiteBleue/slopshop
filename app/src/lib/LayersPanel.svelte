@@ -190,13 +190,12 @@
     );
   }
 
-  let newColor = $state("#ffffff");
   let list: HTMLUListElement;
 
-  /** `#rrggbb` → sRGB-encoded RGBA in [0, 1]. The engine converts it to its working space. */
-  export function addFill() {
+  /** A fill layer of `color` (`#rrggbb`, sent sRGB-encoded: the engine converts it). */
+  export function addFill(color: string) {
     const name = t("layers.defaultFillName", { n: doc.layers.length + 1 });
-    edit({ kind: "addFillLayer", name, color: [...hexToSrgb(newColor), 1] });
+    edit({ kind: "addFillLayer", name, color: [...hexToSrgb(color), 1] });
   }
 
   // Commands of the Layer and Select menus.
@@ -930,11 +929,10 @@
   {/if}
 
   <div class="footer">
-    <input type="color" bind:value={newColor} title={t("layers.fillColor")} />
     <button class="icon-btn" title={t("layers.newGroup")} onclick={newGroup}>
       <Icon name="folderPlus" />
     </button>
-    <button class="icon-btn" title={t("layers.addFill")} onclick={addFill}>
+    <button class="icon-btn" title={t("layers.newLayer")} onclick={newLayer}>
       <Icon name="plus" />
     </button>
     <button
@@ -1194,15 +1192,6 @@
     padding: 0 6px;
     border-top: 1px solid var(--border-dark);
     background: var(--panel-header);
-  }
-
-  .footer input[type="color"] {
-    width: 22px;
-    height: 18px;
-    margin-right: auto;
-    padding: 0;
-    border: 1px solid var(--border-strong);
-    background: none;
   }
 
   /* A layer's stack (ADR 0029): an arrow unfolds its entries below it. */

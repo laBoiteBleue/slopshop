@@ -66,6 +66,8 @@
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import PropertiesPanel from "./lib/PropertiesPanel.svelte";
+  import PanelResizer from "./lib/PanelResizer.svelte";
+  import { clampPanelWidth, loadPanelWidth } from "./lib/panelWidth";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
@@ -522,6 +524,11 @@
   });
   /** The foreground (the Brush's) and background colors, `#rrggbb` sRGB. */
   let colors = $state({ foreground: "#000000", background: "#ffffff" });
+
+  /** The width of the panels on the right, as the user left it; narrower if the window is. */
+  let panelWidth = $state(loadPanelWidth());
+  let windowWidth = $state(window.innerWidth);
+  const shownPanelWidth = $derived(clampPanelWidth(panelWidth, windowWidth));
   /** The color the color picker is open for. */
   let colorPicker = $state<"foreground" | "background" | null>(null);
 
@@ -3018,7 +3025,7 @@
     const doc = active;
     return [
       layerCommands.newLayer,
-      command(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
+      command(t("layers.addFill"), () => layersPanel?.addFill(colors.foreground), undefined, !doc),
       layerCommands.newGroup,
       { kind: "separator" },
       item("paste"),
@@ -3200,7 +3207,7 @@
           layerCommands.newLayer,
           item("layerViaCopy"),
           item("layerViaCut"),
-          cmd(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
+          cmd(t("layers.addFill"), () => layersPanel?.addFill(colors.foreground), undefined, !doc),
           {
             kind: "submenu",
             label: t("menu.layer.newAdjustment"),
@@ -3445,7 +3452,7 @@
   });
 </script>
 
-<svelte:window {onkeydown} onblur={cancelTabDrag} />
+<svelte:window {onkeydown} onblur={cancelTabDrag} bind:innerWidth={windowWidth} />
 
 <div class="app">
   <header class="menubar">
@@ -3480,6 +3487,7 @@
 
   <main
     class:has-panel={active !== null}
+    style:--panel-width="{shownPanelWidth}px"
     class:transferring={layerTransfer !== null}
     bind:this={mainElement}
     onpointermove={onTransferMove}
@@ -3731,6 +3739,7 @@
     {#if active}
       <!-- Properties (the selected adjustment layer's, ADR 0020) below Layers: the list never moves. -->
       <div class="sidebar">
+        <PanelResizer bind:width={panelWidth} />
         {#key active.id}
           <LayersPanel
             bind:this={layersPanelInstance}
@@ -4205,7 +4214,7 @@
   }
 
   main.has-panel {
-    grid-template-columns: 40px 1fr 260px;
+    grid-template-columns: 40px 1fr var(--panel-width);
   }
 
   /* Native presentation: the canvas area shows the window surface drawn by the engine. */
@@ -4214,13 +4223,14 @@
   }
 
   .sidebar {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
   }
 
-  .sidebar > :global(:first-child) {
+  .sidebar > :global(:nth-child(2)) {
     flex: 1 1 0;
   }
 
