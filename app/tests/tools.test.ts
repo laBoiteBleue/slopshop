@@ -8,6 +8,7 @@ import {
   isSelectionTool,
   slotForLetter,
   slotOf,
+  slotTool,
   toolInfo,
 } from "../src/lib/tools.ts";
 
@@ -34,4 +35,13 @@ test("tool kinds", () => {
   assert.ok(isEraser("restoreEraser") && !isEraser("brush"));
   assert.ok(isSelectionTool("wand") && isSelectionTool("polygonalLasso"));
   assert.ok(!isSelectionTool("move") && !isSelectionTool("crop") && !isPaintTool("move"));
+});
+
+test("a slot's key picks the tool it shows, Shift the next variant", () => {
+  const slot = slotOf("marquee");
+  assert.equal(slotTool(slot, undefined, false), "marquee");
+  assert.equal(slotTool(slot, "ellipse", false), "ellipse");
+  assert.equal(slotTool(slot, "marquee", true), "ellipse");
+  assert.equal(slotTool(slot, "ellipse", true), "marquee");
+  assert.equal(slotTool(slotOf("move"), undefined, true), "move");
 });

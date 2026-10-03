@@ -134,7 +134,8 @@ merge on green CI, or stop for the maintainer when the change needs their decisi
   correctness). Bug fixes come with a regression test.
 - UI logic (geometry, key handling, state rules) lives in plain `.ts` modules under
   `app/src/lib`, tested by `npm test`; components keep presentation and wiring. A tested module
-  imports other app files with `import type` only: Node erases those, but cannot load the rest.
+  imports app modules with their `.ts` extension (Node does not resolve extensionless paths),
+  and Svelte files with `import type` only.
 - GPU tests skip when no adapter is available, except when `SLOPSHOP_REQUIRE_GPU=1` (CI).
 
 ## Skills and documentation

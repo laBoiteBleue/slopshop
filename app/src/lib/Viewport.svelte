@@ -38,6 +38,7 @@
     wheelPixels,
     type View,
   } from "./viewMapping";
+  import { isTextField } from "./keymap";
 
   let {
     documentId,
@@ -436,13 +437,6 @@
   // Hand tool: drag with the middle button, or hold Space and drag.
   let spaceHeld = $state(false);
   let panning = $state<{ pointerId: number; x: number; y: number } | null>(null);
-
-  function isTextField(target: EventTarget | null): boolean {
-    return (
-      target instanceof HTMLTextAreaElement ||
-      (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
-    );
-  }
 
   // Move tool: a left drag (without Space) moves the selected layers.
   let moving = $state<{ pointerId: number; x: number; y: number } | null>(null);
