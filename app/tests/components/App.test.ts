@@ -10,8 +10,12 @@ import type { DocumentView, EditRequest, LayerView } from "../../src/lib/engine"
 
 class FixedSizeObserver {
   constructor(private readonly callback: ResizeObserverCallback) {}
-  observe() {
-    const entry = { contentRect: { width: 200, height: 100 } } as ResizeObserverEntry;
+  observe(target: Element) {
+    // With its target: Svelte's size bindings (the selection outline's) key entries by it.
+    const entry = {
+      target,
+      contentRect: { width: 200, height: 100 },
+    } as unknown as ResizeObserverEntry;
     this.callback([entry], this as unknown as ResizeObserver);
   }
   unobserve() {}
@@ -295,4 +299,78 @@ test("the clipping command says Release only when every selected layer is clippe
   await user.click(row("Shade"));
   await user.click(screen.getByRole("menuitem", { name: "Layer" }));
   expect(screen.getByText("Release Clipping Mask")).toBeInTheDocument();
+});
+
+/** The labels of the open menu's first level, separators as "—". */
+const menuLabels = () =>
+  [...document.querySelectorAll(".dropdown:not(.nested) > *")].map((el) =>
+    el.classList.contains("separator") ? "—" : el.querySelector(".label")?.textContent,
+  );
+
+test("the Select menu: the basics, then by subject and color, Modify, Grow and Similar", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  expect(menuLabels()).toEqual([
+    "All",
+    "Deselect",
+    "Reselect",
+    "Inverse",
+    "—",
+    "Select Subject",
+    "Color Range…",
+    "Select and Mask…",
+    "—",
+    "Modify",
+    "—",
+    "Grow",
+    "Similar",
+    "Quick Mask Mode",
+    "—",
+    "All Layers",
+    "Deselect Layers",
+  ]);
+});
+
+test("Select > Grow and Similar use the Magic Wand's tolerance on its sampled layer", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Grow", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Similar", { selector: ".label" }));
+  await vi.waitFor(() =>
+    expect(sent("grow_selection")).toEqual([
+      { documentId: 1, tolerance: 32, contiguous: true, antiAlias: true, layerId: 1 },
+      { documentId: 1, tolerance: 32, contiguous: false, antiAlias: true, layerId: 1 },
+    ]),
+  );
+});
+
+test("Grow and Similar wait for a selection", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  const grow = screen.getByText("Grow", { selector: ".label" }).closest("[role=menuitem]");
+  expect(grow).toHaveAttribute("aria-disabled", "true");
+});
+
+test("Photoshop's selection shortcuts: All, Deselect, Reselect, Inverse", async () => {
+  const user = open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat")]),
+    selectionKey: 7,
+    canReselect: true,
+  });
+  await screen.findByText("cat.jpg");
+  await user.keyboard("{Control>}a{/Control}");
+  await user.keyboard("{Control>}d{/Control}");
+  await user.keyboard("{Shift>}{Control>}d{/Control}{/Shift}");
+  await user.keyboard("{Shift>}{Control>}i{/Control}{/Shift}");
+  await vi.waitFor(() =>
+    expect(
+      calls
+        .map((c) => c.cmd)
+        .filter((c) => ["select_all", "deselect", "reselect", "invert_selection"].includes(c)),
+    ).toEqual(["select_all", "deselect", "reselect", "invert_selection"]),
+  );
 });

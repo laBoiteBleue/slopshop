@@ -214,6 +214,16 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Refine Edges at full resolution (ViTMatte on windows along the outline): an option of the
       AI tools, and Select > Refine Edges… for any selection
 - [x] Select > Subject (BiRefNet; the lite model on the processor), refined like the tools
+- [x] Select menu refactor ([ergonomics](ergonomics.md#select-menu-audit-of-2026-10-04)):
+      Photoshop's order, Select Subject, Select and Mask…, Quick Mask Mode; Grow and Similar on
+      the Magic Wand's engine
+- [ ] Transform Selection on Free Transform's handles
+- [ ] Color Range: Localized, Sample All Layers; live preview of Select > Modify
+- [ ] Quick Mask feedback: its label, its own gray swatches as Add / Remove, overlay opacity
+- [ ] Saved selections: named objects in the document and `.slop`, Save / Load Selection
+- [ ] Right panels: the folding accordion of tab icons, then a Selections panel
+- [ ] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
+      outputs
 - Dropped (2026-10-02): Select > Semantic (SAM 3), objects named by a text prompt. A click with
   Object Selection is simpler.
 - [x] Painting decided ([ADR 0027](adr/0027-painting.md)): strokes on the CPU as a coverage,

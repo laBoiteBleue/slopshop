@@ -1232,7 +1232,7 @@ pub fn magic_wand(
     if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
         return Err(SelectionError::InvalidShape);
     }
-    let mut mask = Mask::new(canvas)?;
+    let mask = Mask::new(canvas)?;
     if seed.0 >= canvas.width || seed.1 >= canvas.height {
         return finish(canvas, current, mask, combine);
     }
@@ -1240,17 +1240,161 @@ pub fn magic_wand(
     let (col, row) = (seed.0 as usize / T, seed.1 as usize / T);
     let reference = sampler.tile(col, row, &mask)[(seed.1 as usize % T) * T + seed.0 as usize % T];
     let tolerance = options.tolerance;
-    let similar =
-        move |p: [f32; 4]| (0..4).all(|c| (p[c] - reference[c]).abs() <= tolerance + 1e-3);
+    let seeds = vec![(
+        row * mask.columns + col,
+        vec![(seed.0 as usize % T, seed.1 as usize % T)],
+    )];
+    let similar = move |p: [f32; 4]| within(p, reference, reference, tolerance);
+    let mask = wand_mask(&sampler, mask, seeds, options, &similar);
+    finish(canvas, current, mask, combine)
+}
+
+/// Whether `color` is within `tolerance` of the range from `low` to `high` on each of red,
+/// green, blue and alpha (as displayed): the Magic Wand's test, around one color (`low` and
+/// `high` the same) or around the range of a selection's colors (Grow, Similar).
+fn within(color: [f32; 4], low: [f32; 4], high: [f32; 4], tolerance: f32) -> bool {
+    let tolerance = tolerance + 1e-3;
+    (0..4).all(|c| color[c] >= low[c] - tolerance && color[c] <= high[c] + tolerance)
+}
+
+/// Select > Grow (`options.contiguous`) and Select > Similar (not contiguous), as in Photoshop:
+/// the Magic Wand from every selected pixel (half covered or more) at once, its tolerance taken
+/// around the range of their colors (each channel's lowest and highest value), the pixels found
+/// added to `current`. `source` is the composited document, or one holding only the layer to
+/// sample, as for the Magic Wand.
+pub fn grow(
+    source: &crate::document::Document,
+    current: &RasterImage,
+    options: WandOptions,
+) -> Result<Option<RasterImage>, SelectionError> {
+    let canvas = source.size();
+    if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
+        return Err(SelectionError::InvalidShape);
+    }
+    let selected = Mask::from_image(canvas, current)?;
+    let sampler = WandSampler::new(source);
+    // Each tile's selected colors' range, and its selected pixels next to an unselected one
+    // (the fill reaches the others from them), on every core.
+    let tiles: Vec<usize> = (0..selected.tiles.len())
+        .filter(|&i| !matches!(selected.tiles[i], Tile::Const(v) if v < HALF))
+        .collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = tiles.len().div_ceil(threads).max(1);
+    let (shape, sampler_ref) = (&selected, &sampler);
+    let mut found: Vec<GrowTile> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = tiles
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&index| grow_seeds(sampler_ref, shape, index))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: reading colors does not panic.
+            found.extend(
+                worker
+                    .join()
+                    .expect("grow worker panicked")
+                    .into_iter()
+                    .flatten(),
+            );
+        }
+    });
+    let mut low = [f32::MAX; 4];
+    let mut high = [f32::MIN; 4];
+    let mut seeds = Vec::new();
+    for tile in found {
+        for c in 0..4 {
+            low[c] = low[c].min(tile.low[c]);
+            high[c] = high[c].max(tile.high[c]);
+        }
+        if !tile.seeds.is_empty() {
+            seeds.push((tile.index, tile.seeds));
+        }
+    }
+    let mut mask = Mask::new(canvas)?;
+    if low[0] <= high[0] {
+        let tolerance = options.tolerance;
+        let similar = move |p: [f32; 4]| within(p, low, high, tolerance);
+        mask = wand_mask(&sampler, mask, seeds, options, &similar);
+    }
+    finish(canvas, Some(current), mask, Combine::Add)
+}
+
+/// What [`grow`] reads of a tile of the selection.
+struct GrowTile {
+    index: usize,
+    /// The selected pixels that have an unselected neighbor, in the tile.
+    seeds: Vec<(usize, usize)>,
+    /// The lowest and highest selected colors, channel by channel.
+    low: [f32; 4],
+    high: [f32; 4],
+}
+
+/// Tile `index` of `selected` for [`grow`]; `None` if none of its pixels is selected.
+fn grow_seeds(sampler: &WandSampler<'_>, selected: &Mask, index: usize) -> Option<GrowTile> {
+    let (col, row) = (index % selected.columns, index / selected.columns);
+    let (w, h) = selected.valid(col, row);
+    let values = selected.tiles[index].values();
+    let pixels = sampler.tile(col, row, selected);
+    let (x0, y0) = ((col * T) as i64, (row * T) as i64);
+    let inside = |x: i64, y: i64| selected.get(x, y) >= HALF;
+    let mut low = [f32::MAX; 4];
+    let mut high = [f32::MIN; 4];
+    let mut seeds = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            if values[y * T + x] < HALF {
+                continue;
+            }
+            let color = pixels[y * T + x];
+            for c in 0..4 {
+                low[c] = low[c].min(color[c]);
+                high[c] = high[c].max(color[c]);
+            }
+            let (gx, gy) = (x0 + x as i64, y0 + y as i64);
+            let in_canvas = |x: i64, y: i64| {
+                (0..i64::from(selected.size.width)).contains(&x)
+                    && (0..i64::from(selected.size.height)).contains(&y)
+            };
+            let edge = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                .iter()
+                .any(|&(dx, dy)| in_canvas(gx + dx, gy + dy) && !inside(gx + dx, gy + dy));
+            if edge {
+                seeds.push((x, y));
+            }
+        }
+    }
+    (low[0] <= high[0]).then_some(GrowTile {
+        index,
+        seeds,
+        low,
+        high,
+    })
+}
+
+/// The Magic Wand's selection of the pixels whose color `similar` accepts: those connected to
+/// `seeds` (a tile's index and positions in it) when `options.contiguous`, else every one,
+/// anti-aliased on request. `mask` is empty, the size of the canvas.
+fn wand_mask(
+    sampler: &WandSampler<'_>,
+    mut mask: Mask,
+    seeds: Vec<(usize, Vec<(usize, usize)>)>,
+    options: WandOptions,
+    similar: &(impl Fn([f32; 4]) -> bool + Sync),
+) -> Mask {
     if options.contiguous {
-        flood(&sampler, &mut mask, seed, &similar);
+        flood(sampler, &mut mask, seeds, similar);
     } else {
         let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
         let per_thread = tiles.len().div_ceil(threads).max(1);
         let shape = &mask;
-        let sampler = &sampler;
-        let similar = &similar;
         let mut done: Vec<(usize, Tile)> = Vec::new();
         std::thread::scope(|scope| {
             let workers: Vec<_> = tiles
@@ -1290,7 +1434,7 @@ pub fn magic_wand(
     if options.anti_alias {
         mask = soften(&mask);
     }
-    finish(canvas, current, mask, combine)
+    mask
 }
 
 /// The composited colors of a document, tile by tile, as displayed: whole 8-bit sRGB values
@@ -1367,24 +1511,21 @@ fn srgb_byte(v: f32) -> u8 {
     thresholds.partition_point(|&t| t <= v) as u8
 }
 
-/// The contiguous fill from `seed`, tile by tile: each tile is filled from the pixels where the
-/// fill entered it (a scanline fill), and passes on the pixels where it leaves it. The tiles a
-/// wave of the fill reaches are composited together, on every core, and kept in a bounded cache
-/// (8-bit colors: 256 KB a tile).
+/// The contiguous fill from `seeds` (a tile's index and positions in it), tile by tile: each
+/// tile is filled from the pixels where the fill entered it (a scanline fill), and passes on the
+/// pixels where it leaves it. The tiles a wave of the fill reaches are composited together, on
+/// every core, and kept in a bounded cache (8-bit colors: 256 KB a tile).
 fn flood(
     sampler: &WandSampler<'_>,
     mask: &mut Mask,
-    seed: (u32, u32),
+    seeds: Vec<(usize, Vec<(usize, usize)>)>,
     similar: &(impl Fn([f32; 4]) -> bool + Sync),
 ) {
     let (columns, rows) = (mask.columns, mask.rows);
     let mut selected: HashMap<usize, Vec<u16>> = HashMap::new();
     let mut cache: HashMap<usize, (u64, Vec<[u8; 4]>)> = HashMap::new();
     let mut clock = 0u64;
-    let mut pending: Vec<(usize, Vec<(usize, usize)>)> = vec![(
-        (seed.1 as usize / T) * columns + seed.0 as usize / T,
-        vec![(seed.0 as usize % T, seed.1 as usize % T)],
-    )];
+    let mut pending = seeds;
     while !pending.is_empty() {
         clock += 1;
         // This wave: at most half the cache's tiles, so that they all stay cached meanwhile.
@@ -3344,6 +3485,66 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn grow_and_similar_extend_the_selection_by_its_colors() {
+        let doc = wand_document();
+        let canvas = Size::new(600, 300);
+        let options = |tolerance: f32, contiguous: bool| WandOptions {
+            tolerance,
+            contiguous,
+            anti_alias: false,
+        };
+        let inside_red = select(canvas, &rect(100.0, 100.0, 120.0, 120.0));
+        // Grow: the connected red, not the slightly different strip nor the square in the blue.
+        let grown = grow(&doc, &inside_red, options(4.0, true))
+            .unwrap()
+            .unwrap();
+        assert_eq!(grown.gray_at(0, 299), 1.0);
+        assert_eq!(grown.gray_at(299, 20), 1.0);
+        assert_eq!(grown.gray_at(100, 10), 0.0);
+        assert_eq!(grown.gray_at(460, 120), 0.0);
+        assert_eq!(grown.gray_at(300, 150), 0.0);
+        // A wider tolerance takes the strip too.
+        let wider = grow(&doc, &inside_red, options(32.0, true))
+            .unwrap()
+            .unwrap();
+        assert_eq!(wider.gray_at(100, 10), 1.0);
+        // Similar: the red square inside the blue as well.
+        let similar = grow(&doc, &inside_red, options(4.0, false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(similar.gray_at(460, 120), 1.0);
+        assert_eq!(similar.gray_at(449, 120), 0.0);
+        assert_eq!(similar.gray_at(100, 10), 0.0);
+        // A selection over red and blue takes the range between them: both colors.
+        let across = select(canvas, &rect(290.0, 200.0, 310.0, 210.0));
+        let both = grow(&doc, &across, options(4.0, true)).unwrap().unwrap();
+        assert_eq!(both.gray_at(10, 290), 1.0);
+        assert_eq!(both.gray_at(590, 290), 1.0);
+        assert_eq!(both.gray_at(100, 10), 0.0);
+        // Added to the selection: what the grown area does not reach is kept.
+        let blue = select(canvas, &rect(500.0, 10.0, 520.0, 30.0));
+        let two = finish(
+            canvas,
+            Some(&inside_red),
+            Mask::from_image(canvas, &blue).unwrap(),
+            Combine::Add,
+        )
+        .unwrap()
+        .unwrap();
+        let kept = grow(&doc, &two, options(4.0, true)).unwrap().unwrap();
+        assert_eq!(kept.gray_at(510, 20), 1.0);
+        assert_eq!(kept.gray_at(0, 299), 1.0);
+        // Nothing half selected: nothing grows, the soft selection stays.
+        let dot = select(canvas, &rect(100.0, 100.0, 101.0, 101.0));
+        let faint = modify(canvas, &dot, Modify::Feather(8.0)).unwrap().unwrap();
+        assert!(faint.gray_at(100, 100) < 0.5);
+        let same = grow(&doc, &faint, options(4.0, true)).unwrap().unwrap();
+        assert_eq!(same.gray_at(0, 299), 0.0);
+        assert_eq!(same.gray_at(100, 100), faint.gray_at(100, 100));
+        assert!(grow(&doc, &inside_red, options(300.0, true)).is_err());
     }
 
     #[test]

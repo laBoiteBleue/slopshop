@@ -67,6 +67,9 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
   corners are round and their cost does not grow with the canvas; a soft selection gets a crisp,
   anti-aliased edge at that distance. Smooth blurs and brings the edge back to one pixel;
   Feather blurs.
+- Select > Grow and Similar are the Magic Wand started from every selected pixel at once (half
+  covered or more), its tolerance taken around the range of their colors (each channel's lowest
+  and highest), as in Photoshop: one engine for the three, the same sampling and color test.
 - Quick Mask (Q) shows soft edges: a view overlay the GPU draws over the finished frame (after
   the display cache, in the encoded display space as Photoshop does), sampling the selection's
   pyramid like a layer's mask.

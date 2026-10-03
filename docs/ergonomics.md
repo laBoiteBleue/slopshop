@@ -217,8 +217,8 @@ built. Contributors: propose here first.
   steps of 45°); a click there stays the tool's click. With any selection tool, the arrows nudge
   the outline by 1 pixel, 10 with Shift. One undo entry each.
   Options bar: the four modes, Feather (px), Anti-alias for the ellipse and the lassos. Marching ants follow the
-  selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Edit in Quick
-  Mask Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
+  selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Quick Mask
+  Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
   the ants). Painting in Quick Mask comes with the brushes. Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
   Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
@@ -316,6 +316,47 @@ maintainer's answers to the audit:
   does on each kind of layer (a stack, a fill layer, a group; whether it bakes the transform),
   whether Flatten keeps transparency, and whether merging an adjustment layer down makes an
   entry of the layer's stack rather than pixels.
+
+### Select menu (audit of 2026-10-04)
+
+Photoshop's reflexes (Ctrl+A, Ctrl+D, Shift+Ctrl+D, Shift+Ctrl+I, Q, Select Subject, Color
+Range, Select and Mask, Transform Selection) on a cleaner model: a selection is a continuous
+coverage (ADR 0024), saved selections are named objects of the document, not alpha channels.
+The menu names intentions, never a technology (no "AI" category). The maintainer's answers:
+
+- **Done**: All (the whole canvas), Deselect, Reselect, Inverse; Select Subject (the existing
+  BiRefNet + ViTMatte path); Color Range…; Modify > Border, Smooth, Expand, Contract, Feather;
+  Grow and Similar (the Magic Wand from every selected pixel, its tolerance around the range of
+  their colors, as Photoshop; connected pixels or the whole image); Quick Mask Mode (Q); All
+  Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
+  Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
+  Mask; saved selections; layers.
+- **Decided, to build**:
+  - French labels follow Photoshop FR where a Photoshop user would look: Grow is
+    « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
+  - Transform Selection: Free Transform's box and handles on the selection's outline, which
+    moves live; Enter resamples the selection (one undo entry). The selection's geometry only,
+    never the layers' pixels.
+  - Color Range: Localized (a radius around the sampled points) and Sample All Layers.
+  - Quick Mask: "Quick Mask" stays visible while it is on; its own pair of gray swatches (white
+    and black), shown in the options bar as [Add] and [Remove]; X swaps them, D resets them,
+    the drawing colors come back on leaving; an overlay opacity slider (an app preference).
+  - Saved selections are named objects of the document, kept in `.slop`: Select > Save
+    Selection… asks a name (an existing name offers to replace it), Select > Load Selection >
+    lists them and replaces the selection. Renaming, deleting and combining (Photoshop's
+    Ctrl/Shift/Alt+click on a thumbnail) come with a Selections panel. The `.slop`
+    compatibility may break until version 1 (maintainer, 2026-10-04).
+  - Select and Mask…: a light panel beside the image (as Color Range), not a workspace: edge
+    detection radius (computed on request), Smooth, Feather, Contrast, Shift Edge applied live;
+    views: ants, overlay, on black, on white, mask; output to the selection, a layer mask, or a
+    new layer with a mask. A refine-edge brush is a later, separate step.
+  - Right panels: Layers stays; the other panels form a closable accordion that folds down to
+    their tab icons, a click on an icon unfolding that panel (maintainer, 2026-10-04; details
+    left to the implementation).
+  - The selection an Image > Adjustments effect keeps (ADR 0029) is an implicit mask dedicated
+    to that effect: not exposed, not edited.
+- **Decided, not added**: Sky, Person, Hair and other subject kinds (evaluated separately if
+  ever useful); Find Layers, Similar Layers, Isolate Layers (the Layers panel's business).
 
 ### Tabs and documents
 

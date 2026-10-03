@@ -176,6 +176,36 @@ pub async fn magic_wand(
     set_selection(&state, document_id, image)
 }
 
+/// Select > Grow (`contiguous`) and Select > Similar: the Magic Wand's tolerance and
+/// anti-aliasing around the selection's colors, added to it as one undo entry. It samples as
+/// the Magic Wand does: the composited document, or with `layer_id` only that layer.
+#[tauri::command]
+pub async fn grow_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    tolerance: f32,
+    contiguous: bool,
+    anti_alias: bool,
+    layer_id: Option<u64>,
+) -> Result<DocumentView, String> {
+    let (source, current) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document();
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        (sampled_document(doc, layer_id)?, current)
+    };
+    let current = current.ok_or("nothing is selected")?;
+    let options = selection::WandOptions {
+        tolerance,
+        contiguous,
+        anti_alias,
+    };
+    let image =
+        on_worker(move || selection::grow(&source, &current, options).map_err(|e| e.to_string()))
+            .await?;
+    set_selection(&state, document_id, image)
+}
+
 /// Quick Selection works on the region in view at most this many pixels on a side (the colors
 /// as shown, rendered by the GPU): the cut costs time in proportion to its pixels.
 const QUICK_SIDE: f64 = 1600.0;
