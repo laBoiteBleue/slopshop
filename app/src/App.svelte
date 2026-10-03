@@ -4,7 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { message, open as openDialog, save } from "@tauri-apps/plugin-dialog";
-  import { onMount, untrack } from "svelte";
+  import { tick, onMount, untrack } from "svelte";
   import {
     DOCUMENT_CLOSED,
     DOCUMENT_EXTENSION,
@@ -1164,32 +1164,62 @@
     /** What the box snaps to: the canvas and the other visible layers. */
     targets: Bounds[];
     matrix: Matrix;
+    /**
+     * Layers just placed (files dropped on the image): their placement, applied before the
+     * box's matrix and in the same undo entry, and the insertions that Esc takes back.
+     */
+    placed: { matrix: Matrix; insertions: number } | null;
   };
   let transforming = $state<Transforming | null>(null);
 
-  async function startFreeTransform() {
+  /**
+   * Free Transform of the selected layers or, for files just dropped on the image, of the new
+   * layers `place.ids`, first centered on `place.at` and scaled down to fit the canvas when
+   * larger (Photoshop's Place, with its default "Resize Image During Place").
+   */
+  async function startFreeTransform(
+    place: { ids: number[]; at: [number, number]; insertions: number } | null = null,
+  ) {
     const doc = active;
     if (!doc || transforming) return;
     if (tool === "crop") tool = "move";
-    const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
+    const ids = place?.ids ?? layersPanel?.selectedLayers().map((l) => l.id) ?? [];
     if (ids.length === 0) return;
     const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
     // Nothing to transform (empty layers), or the user moved on meanwhile.
     if (!targets?.moving || active?.id !== doc.id || transforming) return;
+    let box = targets.moving;
+    let placed: Transforming["placed"] = null;
+    if (place) {
+      const [width, height] = [box.right - box.left, box.bottom - box.top];
+      const fit = Math.min(1, doc.width / width, doc.height / height);
+      const [cx, cy] = [(box.left + box.right) / 2, (box.top + box.bottom) / 2];
+      const matrix = affine.then(
+        affine.about(affine.scaling(fit, fit), cx, cy),
+        affine.translation(place.at[0] - cx, place.at[1] - cy),
+      );
+      const [left, top] = affine.apply(matrix, box.left, box.top);
+      const [right, bottom] = affine.apply(matrix, box.right, box.bottom);
+      box = { left, top, right, bottom };
+      placed = { matrix, insertions: place.insertions };
+    }
     transforming = {
       document: doc.id,
       ids,
-      box: targets.moving,
+      box,
       targets: [canvasBounds(doc), ...targets.others],
       matrix: affine.IDENTITY,
+      placed,
     };
+    if (placed) onTransformChange(affine.IDENTITY);
   }
 
   function onTransformChange(matrix: Matrix) {
     const current = transforming;
     if (!current) return;
     current.matrix = matrix;
-    const request: EditRequest = { kind: "transformLayers", ids: current.ids, matrix };
+    const total = current.placed ? affine.then(current.placed.matrix, matrix) : matrix;
+    const request: EditRequest = { kind: "transformLayers", ids: current.ids, matrix: total };
     void sync(engine.performLive(current.document, request, true));
   }
 
@@ -1197,15 +1227,49 @@
     const current = transforming;
     if (!current) return;
     transforming = null;
-    if (affine.isIdentity(current.matrix)) void cancelGesture(current.document);
+    const total = current.placed
+      ? affine.then(current.placed.matrix, current.matrix)
+      : current.matrix;
+    if (affine.isIdentity(total)) void cancelGesture(current.document);
     else void endGesture(current.document);
   }
 
+  /** Esc: the layers as they were; layers just placed are taken back, as in Photoshop. */
   function cancelTransform() {
     const current = transforming;
     if (!current) return;
     transforming = null;
     void cancelGesture(current.document);
+    for (let i = 0; i < (current.placed?.insertions ?? 0); i++) {
+      void sync(engine.undo(current.document));
+    }
+  }
+
+  /**
+   * Files dropped on the image (or on the layers panel): new layers, placed under the pointer
+   * (the canvas center from the panel), in Free Transform.
+   */
+  async function placeDropped(documentId: number, paths: string[], at: [number, number] | null) {
+    const before = tabs.find((d) => d.id === documentId);
+    if (!before) return;
+    const known = new Set(before.layers.map((l) => l.id));
+    await openFiles(paths, { layerOf: documentId });
+    const doc = await engine.document(documentId).catch(() => null);
+    if (!doc) return;
+    upsert(doc);
+    const ids = doc.layers.filter((l) => !known.has(l.id)).map((l) => l.id);
+    if (ids.length === 0 || activeId !== documentId) return;
+    // Each file that opened is one new top-level layer (a group for a layered file) and one
+    // undo entry.
+    const insertions = ids.length;
+    await tick();
+    layersPanel?.selectLayers(ids);
+    commitTransform();
+    await startFreeTransform({
+      ids,
+      at: at ?? [doc.width / 2, doc.height / 2],
+      insertions,
+    });
   }
 
   $effect(() => {
@@ -2627,10 +2691,14 @@
         const target = dropTargetAt(payload.position);
         dropTarget = null;
         if (payload.paths.length === 0) return;
-        void openFiles(
-          payload.paths,
-          target === "layer" && active ? { layerOf: active.id } : "tab",
-        );
+        if (target === "layer" && active) {
+          // Under the pointer on the image; centered from the layers panel.
+          const scale = isWindows ? window.devicePixelRatio : 1;
+          const [x, y] = [payload.position.x / scale, payload.position.y / scale];
+          const onImage = document.elementFromPoint(x, y)?.closest(".stage") != null;
+          const at = onImage ? (viewport?.documentPointAt(x, y) ?? null) : null;
+          void placeDropped(active.id, payload.paths, at);
+        } else void openFiles(payload.paths, "tab");
       }
     });
     const stopClose = listen("close-requested", () => void confirmQuit());
