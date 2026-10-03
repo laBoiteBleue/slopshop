@@ -260,7 +260,8 @@ built. Contributors: propose here first.
 - Layer > New Layer from Visible (Alt+Shift+Ctrl+E, Photoshop's stamp visible, which has no
   menu entry there): the visible layers composited over the whole canvas, the selection
   ignored, as a new pixel layer at the top of the document (the maintainer's choice, rather
-  than above the active layer), selected; the layers stay. One undo entry.
+  than above the active layer), selected; the layers stay. One undo entry. It shows at once,
+  its pixels following, as a merge.
 - Layer > Bake to Pixels ("Figer en pixels", [ADR 0030](adr/0030-bake-to-pixels.md)), what
   loses editability on purpose, in one place, one undo entry each. Rasterize: the selected
   layers keep their place, transform, opacity, mode, mask and clipping, their content becomes
@@ -270,7 +271,9 @@ built. Contributors: propose here first.
   topmost, hidden ones dropped, nothing cut outside the canvas; an adjustment layer merged
   down bakes into the pixels below. Merge Visible (Shift+Ctrl+E): every visible layer, hidden
   ones staying. Flatten Image: every layer into one named Background, hidden ones dropped,
-  transparency kept. Grayed when there is nothing to bake.
+  transparency kept. Grayed when there is nothing to bake. A merge shows at once (its layers
+  drawn as one while the pixels are composited, listed as the new layer; the maintainer's
+  idea), and the pixels replace them in the same undo entry.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
