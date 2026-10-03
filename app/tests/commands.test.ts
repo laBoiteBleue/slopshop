@@ -42,6 +42,15 @@ test("Copy Merged, Paste in Place and Paste Into are Photoshop's", () => {
   );
 });
 
+test("Transform Again and Duplicate and Transform Again are Photoshop's", () => {
+  assert.equal(commandAt(press("t", ctrl), false), "freeTransform");
+  assert.equal(commandAt(press("T", { ...ctrl, shiftKey: true }), false), "repeatTransform");
+  assert.equal(
+    commandAt(press("T", { ...ctrl, shiftKey: true, altKey: true }), false),
+    "duplicateRepeat",
+  );
+});
+
 test("macOS: Cmd is the modifier, Ctrl is not", () => {
   assert.equal(commandAt(press("z", cmd), true), "undo");
   assert.equal(commandAt(press("z", { ...cmd, shiftKey: true }), true), "redo");

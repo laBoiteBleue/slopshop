@@ -8,9 +8,18 @@
   import { modifierLabel } from "./platform";
   import { t } from "./i18n/index.svelte";
 
-  let { menus, onclose }: { menus: Menu[]; onclose: () => void } = $props();
-
   type Entry = { label: string; keys: string[] };
+
+  let {
+    menus,
+    extra = [],
+    onclose,
+  }: {
+    menus: Menu[];
+    /** Commands with a shortcut but without a menu entry (Duplicate and Transform Again). */
+    extra?: Entry[];
+    onclose: () => void;
+  } = $props();
   type Section = { title: string; entries: Entry[] };
 
   let dialog: HTMLDialogElement;
@@ -34,6 +43,7 @@
       })),
     );
     const other: Entry[] = [
+      ...extra,
       { label: t("shortcuts.pan"), keys: [t("shortcuts.spaceDrag")] },
       { label: t("shortcuts.apply"), keys: [t("shortcuts.enter")] },
       { label: t("shortcuts.cancel"), keys: [t("shortcuts.escape")] },
