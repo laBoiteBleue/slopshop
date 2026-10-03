@@ -48,3 +48,14 @@ globalThis.ImageData ??= class {
     readonly height: number,
   ) {}
 } as unknown as typeof ImageData;
+
+// Size observers (`bind:clientWidth`): a browser reports every observed element once at the
+// start; nothing is ever laid out in a simulated DOM, so there is never a resize after that.
+globalThis.ResizeObserver ??= class {
+  constructor(private readonly callback: ResizeObserverCallback) {}
+  observe(target: Element) {
+    queueMicrotask(() => this.callback([{ target } as ResizeObserverEntry], this));
+  }
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
