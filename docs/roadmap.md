@@ -131,6 +131,12 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       layers (nothing cut, nothing rewritten)
 - [x] Crop tool (C): a frame on the image with handles, snapping, Enter applies; nothing is
       deleted
+- [x] Image > Image Rotation > Arbitrary: the layers turned by any angle through their
+      transforms, the canvas grown to hold them (Photoshop's Rotate Canvas)
+- [x] Image > Trim (transparent or corner-colored margins, composited in bands from the edges)
+      and Reveal All (the canvas grown to every layer's pixels), both crops
+- [ ] Image > Auto Tone, Auto Contrast, Auto Color (Levels per channel first)
+- [ ] Gradient Map and Selective Color adjustments
 - Dropped (2026-10-02): a detail option for enlargements (Photoshop's Preserve Details
   crispness). A sharpening kernel folded into the resampling filter, clamped to the local range,
   gained about 2% of error against originals reduced 4× and enlarged back: edges are crisper,

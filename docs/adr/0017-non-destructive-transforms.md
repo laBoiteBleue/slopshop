@@ -24,7 +24,8 @@ pixels must stay intact whatever the user does, and the result must stay fast at
    then, edits accept integer translations only).
 3. **Image operations are transforms.** Image Size scales the top-level layers' transforms and
    the canvas; Canvas Size and Crop change the canvas and translate the layers; Rotate Image
-   rotates them. One undoable batch each; pixels outside the canvas are kept, not cut.
+   rotates them (by quarter turns exactly, or by any angle with the canvas grown to hold the
+   turned one); Trim and Reveal All are crops computed from the image. One undoable batch each; pixels outside the canvas are kept, not cut.
 4. **No render cache yet.** Sampling through a transform costs the same per frame as sampling
    without one; caches keyed by (node, region, level, revision) come with nodes that are costly
    to evaluate (filters, AI).

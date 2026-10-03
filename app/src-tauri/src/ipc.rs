@@ -469,6 +469,23 @@ pub enum EditRequest {
     RotateImage {
         turn: String,
     },
+    /// Image > Image Rotation > Arbitrary: the whole image turned by `degrees` clockwise, the
+    /// canvas grown to hold it.
+    RotateImageBy {
+        degrees: f64,
+    },
+    /// Image > Reveal All: the canvas grown to every layer's pixels (nothing when they are all
+    /// on it).
+    RevealAll,
+    /// Image > Trim: the margins of `basis` (`transparent`, `topLeft` or `bottomRight`) taken
+    /// off the sides asked (nothing when there are none).
+    Trim {
+        basis: String,
+        top: bool,
+        bottom: bool,
+        left: bool,
+        right: bool,
+    },
     /// `mode`: a blend mode identifier (`BlendMode::id`).
     SetLayerBlendMode {
         id: u64,
@@ -783,6 +800,42 @@ impl EditRequest {
                     other => return Err(format!("unknown image turn {other}")),
                 };
                 Edit::rotate_image(session.document(), turn).map_err(|e| e.to_string())?
+            }
+            EditRequest::RotateImageBy { degrees } => {
+                Edit::rotate_image_by(session.document(), degrees).map_err(|e| e.to_string())?
+            }
+            // Nothing to do: an empty batch, which leaves no undo entry.
+            EditRequest::RevealAll => {
+                Edit::reveal_all(session.document(), crate::NEW_DOCUMENT_MAX_SIDE)
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(Edit::Batch(Vec::new()))
+            }
+            EditRequest::Trim {
+                basis,
+                top,
+                bottom,
+                left,
+                right,
+            } => {
+                use slopshop_core::trim::{TrimBasis, TrimSides, trim_area};
+                let basis = match basis.as_str() {
+                    "transparent" => TrimBasis::Transparent,
+                    "topLeft" => TrimBasis::TopLeftColor,
+                    "bottomRight" => TrimBasis::BottomRightColor,
+                    other => return Err(format!("unknown trim basis {other}")),
+                };
+                let sides = TrimSides {
+                    top,
+                    bottom,
+                    left,
+                    right,
+                };
+                match trim_area(session.document(), basis, sides).map_err(|e| e.to_string())? {
+                    Some(area) => {
+                        Edit::crop(session.document(), area).map_err(|e| e.to_string())?
+                    }
+                    None => Edit::Batch(Vec::new()),
+                }
             }
             EditRequest::SetLayerClipped { id, clipped } => Edit::SetLayerClipped {
                 id: LayerId::from_raw(id),

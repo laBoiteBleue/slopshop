@@ -148,11 +148,23 @@ built. Contributors: propose here first.
   Photoshop has no such tool (its History Brush is the closest); on a mask it is refused.
 - Image > Image Size (Alt+Ctrl+I) and Canvas Size (Alt+Ctrl+C), Photoshop's dialogs: width and
   height in pixels or percent; Image Size keeps the proportions by default, Canvas Size has
-  Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, flip the canvas. All
-  undoable, and nothing is cut: pixels outside the canvas are kept, resizing resamples when
-  shown.
+  Relative and a 3×3 anchor. Image > Image Rotation: 180°, 90° both ways, Arbitrary… (Photoshop's
+  dialog: an angle, clockwise or counter clockwise, remembered for the session; the canvas grows
+  to hold the turned image, centered, the corners transparent; the view fits the new canvas),
+  flip the canvas. All undoable, and nothing is cut: pixels outside the canvas are kept,
+  resizing and arbitrary turns resample when shown (the layers keep their pixels, and Free
+  Transform can still change the turn).
+- Image menu in Photoshop's order: Adjustments; Image Size, Canvas Size, Image Rotation, Crop,
+  Trim…, Reveal All; then the document's Blend Space. Image > Trim…, Photoshop's dialog: Based
+  On transparent pixels, the top-left or the bottom-right pixel's color (an exact match, as
+  composited), Trim Away top, bottom, left, right; remembered for the session. Image > Reveal
+  All grows the canvas to every layer's pixels, hidden layers included, within their masks
+  (fills count only within a mask), in whole pixels; refused beyond 300,000 pixels a side. Both
+  are crops: nothing is deleted, one undo entry, nothing done (and no undo entry) when there is
+  nothing to trim or reveal, or when the whole canvas is margin.
 - Adjustment layers (Layer > New Adjustment Layer, in Photoshop's order): Brightness/Contrast,
-  Levels, Exposure, Vibrance, Hue/Saturation, Invert, Posterize, Threshold, placed
+  Levels, Curves, Exposure, Vibrance, Hue/Saturation, Color Balance, Black & White, Photo
+  Filter, Channel Mixer, Invert, Posterize, Threshold, placed
   above the active layer (in its folder) and selected. A Properties panel below Layers (the
   list never moves; the maintainer's choice) shows the selected adjustment's parameters: sliders applied live (one undo entry
   per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays
@@ -165,8 +177,8 @@ built. Contributors: propose here first.
   a double-click inside or a click outside applies; Esc starts the frame over. As in Photoshop,
   the tool stays active: a new frame starts on the cropped canvas (and follows an undo); another
   tool drops the frame. Whole pixels only, and nothing
-  is deleted: cropped pixels stay outside the canvas. Image > Crop to a selection comes with
-  selections.
+  is deleted: cropped pixels stay outside the canvas. With a selection, Image > Crop crops to its
+  bounds (see Selections).
 
 - Selections (ADR 0024): Rectangular and Elliptical Marquee (M): drag on the image, whole
   pixels, a size readout; Shift at the press adds, Alt subtracts, both intersect, otherwise the
@@ -205,6 +217,33 @@ built. Contributors: propose here first.
   the Crop tool).
 
 ## Proposed
+
+### Image menu (maintainer's decisions, 2026-10-03)
+
+Decided, not built yet:
+
+- [x] Image > Auto Tone (Shift+Ctrl+L), Auto Contrast (Alt+Shift+Ctrl+L), Auto Color
+      (Shift+Ctrl+B), Photoshop's three classic algorithms (clip 0.1 % per channel; the same
+      clip on all channels together; dark and light colors with neutral midtones): the image
+      analyzed once, the result applied as a Levels entry of the layers' stacks with the
+      computed values (Levels gains per-channel settings, as Photoshop's, for it).
+- [x] Gradient Map and Selective Color, as adjustment layers and in Image > Adjustments (the
+      same engine); Selective Color approximates Photoshop's unpublished math.
+
+Decided, nothing to build:
+
+- No Image > Mode: a document has no mode or depth (each layer keeps its own format, the
+  composite is float), CMYK and Lab are refused at import. Image > Blend Space is the
+  document's one color setting.
+- Entries of a layer's stack stay not editable, deletable (ADR 0029).
+- An adjustment applied with a selection keeps it as a soft mask: a feathered selection
+  applies it partly (ADR 0029).
+
+Open:
+
+- Converting layers to a deeper format (an 8-bit layer is rounded after each entry of its
+  stack, so stacked adjustments can band).
+- Showing or editing the selection an applied adjustment keeps.
 
 ### Layers panel
 
