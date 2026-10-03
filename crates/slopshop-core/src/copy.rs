@@ -6,7 +6,7 @@ use crate::color::{AlphaMode, ChannelLayout, PixelFormat, SampleType, WORKING_SP
 use crate::convert::{ConversionReport, ConvertError, ConvertOptions, Converter, WHITE_MATTE};
 use crate::geom::{Rect, Size};
 use crate::paint::MaskReader;
-use crate::raster::{Codec, RasterError, RasterImage};
+use crate::raster::{Codec, RasterError, RasterImage, parallel_for_each};
 use crate::selection::Selection;
 
 /// The pixels of a Copy Merged: the working space in half floats, premultiplied. It holds every
@@ -125,16 +125,20 @@ impl Rows {
         }
         let start = out.len();
         out.resize(start + pixels.len() / 4 * bpp, 0);
-        // What is lost is the point of the target: nothing is reported.
-        let mut report = ConversionReport::default();
-        for (y, (src, dst)) in pixels
+        // Rows on every core: a 12 MP copy took 0.4 s on one.
+        let mut rows: Vec<(u32, &[f32], &mut [u8])> = pixels
             .chunks_exact(width * 4)
             .zip(out[start..].chunks_exact_mut(width * bpp))
             .enumerate()
-        {
-            self.converter
-                .convert_row(src, 0, first_row + y as u32, dst, &mut report)?;
-        }
+            .map(|(y, (src, dst))| (first_row + y as u32, src, dst))
+            .collect();
+        parallel_for_each(&mut rows, |(y, src, dst)| {
+            // What is lost is the point of the target: nothing is reported.
+            let mut report = ConversionReport::default();
+            self.converter.convert_row(src, 0, *y, dst, &mut report)
+        })
+        .into_iter()
+        .collect::<Result<(), _>>()?;
         Ok(())
     }
 }
