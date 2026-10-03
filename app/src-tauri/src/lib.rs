@@ -2661,6 +2661,62 @@ mod tests {
     }
 
     #[test]
+    fn select_modify_shows_each_amount_then_applies_once() {
+        use slopshop_core::selection::{self as sel, Modify};
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let square = sel::select_shape(
+            Size::new(6000, 4000),
+            None,
+            &sel::Shape::Rectangle {
+                left: 100.0,
+                top: 100.0,
+                right: 300.0,
+                bottom: 300.0,
+            },
+            sel::EdgeOptions::default(),
+            sel::Combine::Replace,
+        )
+        .unwrap();
+        selection::set_selection(&state, doc.id, square).unwrap();
+        let at = |state: &AppState, x: u32| {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let doc = document.session.document();
+            doc.selection().map_or(0.0, |s| s.image().gray_at(x, 200))
+        };
+        // Each amount shown replaces the previous one: both from the selection before.
+        selection::modify(&state, doc.id, Modify::Expand(20.0), true).unwrap();
+        assert_eq!(at(&state, 85), 1.0);
+        selection::modify(&state, doc.id, Modify::Expand(5.0), true).unwrap();
+        assert_eq!(at(&state, 85), 0.0);
+        assert_eq!(at(&state, 97), 1.0);
+        // Cancel: as it was.
+        {
+            let mut documents = state.documents().unwrap();
+            documents
+                .get_mut(doc.id)
+                .unwrap()
+                .session
+                .cancel_gesture()
+                .unwrap();
+        }
+        assert_eq!(at(&state, 97), 0.0);
+        // Shown then applied: one undo entry, back to the square.
+        selection::modify(&state, doc.id, Modify::Contract(50.0), true).unwrap();
+        selection::modify(&state, doc.id, Modify::Contract(10.0), false).unwrap();
+        assert_eq!(at(&state, 105), 0.0);
+        assert_eq!(at(&state, 115), 1.0);
+        {
+            let mut documents = state.documents().unwrap();
+            documents.get_mut(doc.id).unwrap().session.undo().unwrap();
+        }
+        assert_eq!(at(&state, 105), 1.0);
+    }
+
+    #[test]
     fn the_eyedropper_samples_the_colors_shown() {
         let state = AppState::new();
         let doc = state

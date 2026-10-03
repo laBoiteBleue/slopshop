@@ -1253,9 +1253,12 @@ export const engine = {
   /** Select > Color Range: the sampled colors, within the selection if any. */
   colorRange: (documentId: number, request: ColorRangeRequest) =>
     serial(() => invoke<DocumentView>("color_range", { documentId, request })),
-  /** Select > Modify: the whole selection changed by `amount` pixels. */
-  modifySelection: (documentId: number, kind: SelectionModify, amount: number) =>
-    serial(() => invoke<DocumentView>("modify_selection", { documentId, kind, amount })),
+  /**
+   * Select > Modify: the whole selection changed by `amount` pixels. `live`: shown, and replaced
+   * by the next call (`cancelGesture` takes it back); otherwise one undo entry.
+   */
+  modifySelection: (documentId: number, kind: SelectionModify, amount: number, live = false) =>
+    serial(() => invoke<DocumentView>("modify_selection", { documentId, kind, amount, live })),
   /** Image > Crop with a selection: the canvas becomes the selection's bounds. */
   cropToSelection: (documentId: number) =>
     serial(() => invoke<DocumentView>("crop_to_selection", { documentId })),

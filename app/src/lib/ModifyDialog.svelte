@@ -1,7 +1,8 @@
 <script lang="ts">
   // Select > Modify, as in Photoshop: one number of pixels (Border's width, Smooth's sample
-  // radius, Expand's and Contract's amounts, Feather's radius), applied to the whole selection.
-  // Also Select > Refine Edge's radius (the band ViTMatte decides around the outline).
+  // radius, Expand's and Contract's amounts, Feather's radius), applied to the whole selection,
+  // shown live on the image while it changes (`onpreview`). Also Select > Refine Edge's radius
+  // (the band ViTMatte decides around the outline), not previewed: it runs a model.
   import { onMount, untrack } from "svelte";
   import type { SelectionModify } from "./engine";
   import { t } from "./i18n/index.svelte";
@@ -13,6 +14,7 @@
     max,
     onapply,
     onclose,
+    onpreview,
   }: {
     kind: SelectionModify | "refine";
     /** The value used last for this kind. */
@@ -21,6 +23,8 @@
     max: number;
     onapply: (value: number) => void;
     onclose: () => void;
+    /** Each valid amount as it changes, the first one included. */
+    onpreview?: (value: number) => void;
   } = $props();
 
   const TITLES: Record<SelectionModify | "refine", MessageKey> = {
@@ -43,6 +47,11 @@
   let amount = $state(untrack(() => value));
   let dialog: HTMLDialogElement;
   const valid = $derived(Number.isFinite(amount) && amount > 0 && amount <= max);
+
+  $effect(() => {
+    const value = amount;
+    if (valid) untrack(() => onpreview?.(value));
+  });
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -111,8 +120,9 @@
     box-shadow: 0 10px 32px #0009;
   }
 
+  /* Clear: the change is seen on the image. */
   dialog::backdrop {
-    background: #00000055;
+    background: transparent;
   }
 
   header {

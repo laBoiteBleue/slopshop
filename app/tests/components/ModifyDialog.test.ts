@@ -79,3 +79,25 @@ test("Cancel and Escape close without applying, and the app's keys wait meanwhil
   expect(onclose).toHaveBeenCalledTimes(2);
   expect(onapply).not.toHaveBeenCalled();
 });
+
+test("every valid amount is previewed as it changes, the first one included", async () => {
+  const onpreview = vi.fn();
+  render(ModifyDialog, {
+    kind: "contract",
+    value: 10,
+    max: 100,
+    onapply: vi.fn(),
+    onclose: vi.fn(),
+    onpreview,
+  });
+  const user = userEvent.setup();
+  expect(onpreview).toHaveBeenLastCalledWith(10);
+  const field = amount("Contract By:");
+  await user.clear(field);
+  await user.type(field, "7");
+  expect(onpreview).toHaveBeenLastCalledWith(7);
+  // Invalid amounts are not shown.
+  await user.type(field, "00");
+  expect(onpreview).toHaveBeenLastCalledWith(70);
+  expect(onpreview).not.toHaveBeenCalledWith(700);
+});

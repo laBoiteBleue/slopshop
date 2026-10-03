@@ -1333,15 +1333,46 @@
   });
 
   function openModify(kind: SelectionModify | "refine") {
+    commitTransform();
     if (active?.selectionKey != null) modifyDialog = { kind, document: active.id };
+  }
+
+  /**
+   * Select > Modify's amount shown live while the dialog is open: one request at a time, the
+   * latest amount wins; each replaces the previous one in the engine.
+   */
+  let modifyPreview: { busy: boolean; next: number | null } = { busy: false, next: null };
+  function previewModify(amount: number) {
+    const dialog = modifyDialog;
+    if (!dialog || dialog.kind === "refine") return;
+    const kind = dialog.kind;
+    if (modifyPreview.busy) {
+      modifyPreview.next = amount;
+      return;
+    }
+    modifyPreview.busy = true;
+    void sync(engine.modifySelection(dialog.document, kind, amount, true)).finally(() => {
+      modifyPreview.busy = false;
+      const next = modifyPreview.next;
+      modifyPreview.next = null;
+      if (next !== null && modifyDialog === dialog) previewModify(next);
+    });
+  }
+
+  /** Cancel: the selection as it was before the dialog. */
+  function closeModify() {
+    const dialog = modifyDialog;
+    modifyDialog = null;
+    modifyPreview.next = null;
+    if (dialog && dialog.kind !== "refine") void cancelGesture(dialog.document);
   }
 
   function applyModify(amount: number) {
     const dialog = modifyDialog;
     modifyDialog = null;
+    modifyPreview.next = null;
     if (!dialog) return;
     modifyAmounts[dialog.kind] = amount;
-    commitTransform();
     const kind = dialog.kind;
     if (kind === "refine") {
       void runAi("ai.task.refine", (task) =>
@@ -4213,7 +4244,8 @@
         ? MAX_REFINE
         : MAX_MODIFY}
     onapply={applyModify}
-    onclose={() => (modifyDialog = null)}
+    onclose={closeModify}
+    onpreview={previewModify}
   />
 {/if}
 

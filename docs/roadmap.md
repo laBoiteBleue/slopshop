@@ -222,7 +222,7 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       the Magic Wand's engine
 - [x] Transform Selection on Free Transform's handles (the selection resampled as a layer is)
 - [x] Color Range: Localized (each sampled color near its sample), Sample All Layers
-- [ ] Live preview of Select > Modify
+- [x] Live preview of Select > Modify (a gesture replaced at each amount)
 - [ ] Quick Mask feedback: its label, its own gray swatches as Add / Remove, overlay opacity
 - [ ] Saved selections: named objects in the document and `.slop`, Save / Load Selection
 - [ ] Right panels: the folding accordion of tab icons, then a Selections panel
