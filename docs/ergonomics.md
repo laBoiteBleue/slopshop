@@ -73,7 +73,10 @@ built. Contributors: propose here first.
   those of the active layer, or of its mask when the mask is the target, with the selection,
   leaving a hole (transparent, or hidden in a mask); Alt copies them; arrows nudge them. As in
   Photoshop they float until something else happens: moving them again brings back what they
-  covered. Pixels moved off the canvas are kept: the layer grows to hold them. The move is kept as the layer's paint (ADR 0027): Delete Paint restores the original.
+  covered. Pixels moved off the canvas are kept: the layer grows to hold them. During the drag
+  the pixels float in the view, as fluid as moving a layer whatever the image; the move is
+  computed once, on release. The move is kept as the layer's paint (ADR 0027): Delete Paint
+  restores the original.
 - Free Transform (Ctrl+T, Edit > Free Transform, or a double-click on a layer in the image): a
   box around the selected layers with eight
   handles. Drag inside to move (Shift: along one axis); a corner scales keeping the proportions

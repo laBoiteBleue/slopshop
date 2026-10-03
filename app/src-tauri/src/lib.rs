@@ -137,6 +137,8 @@ struct OpenDocument {
     paint_preview: Option<paint::PaintPreview>,
     /// Selected pixels the Move tool moved, floating until something else happens.
     floating: Option<move_pixels::Floating>,
+    /// A drag of selected pixels under way, shown floating (view state too).
+    move_preview: Option<move_pixels::MovePreview>,
 }
 
 impl OpenDocument {
@@ -157,16 +159,21 @@ impl OpenDocument {
             overlays: ViewOverlays::default(),
             paint_preview: None,
             floating: None,
+            move_preview: None,
         }
     }
 
-    /// The document as the view shows it, with the paint stroke under way if any, and the
+    /// The document as the view shows it, with the paint stroke or the pixels moved under way
+    /// if any, and the
     /// document's revision (the preview is not a revision). Cheap: raster pixels are shared,
     /// never copied.
     fn snapshot(&self) -> (slopshop_core::Document, u64) {
         let mut doc = self.session.document().clone();
         let revision = doc.revision();
         if let Some(preview) = &self.paint_preview {
+            preview.apply_to(&mut doc);
+        }
+        if let Some(preview) = &self.move_preview {
             preview.apply_to(&mut doc);
         }
         (doc, revision)
@@ -3387,10 +3394,41 @@ mod tests {
                 .unwrap()
                 .x
         };
-        // One drag, live then ended: the pixels and the selection move, a hole is left.
-        move_pixels::move_pixels(&state, doc.id, &request(1, 10, false)).unwrap();
-        let view = move_pixels::move_pixels(&state, doc.id, &request(1, 20, true)).unwrap();
+        // While dragged, the pixels only float in the view: the document does not change.
+        let revision = {
+            let mut documents = state.documents().unwrap();
+            documents
+                .get_mut(doc.id)
+                .unwrap()
+                .session
+                .document()
+                .revision()
+        };
+        let live = move_pixels::move_pixels(&state, doc.id, &request(1, 10, false)).unwrap();
+        assert!(live.is_none());
+        {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            assert_eq!(document.session.document().revision(), revision);
+            assert!(!document.session.document().layer(id).unwrap().is_painted());
+            let (shown, shown_revision) = document.snapshot();
+            assert_eq!(shown_revision, revision);
+            let floating = shown.layer(id).unwrap();
+            let LayerContent::Group { children, .. } = &floating.content else {
+                panic!("the layer floats as a group");
+            };
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[1].transform.e, 10.0);
+        }
+        // The end moves them: the pixels and the selection, a hole left, the view as it was.
+        let view = move_pixels::move_pixels(&state, doc.id, &request(1, 20, true))
+            .unwrap()
+            .unwrap();
         assert!(view.layers.last().unwrap().painted);
+        {
+            let mut documents = state.documents().unwrap();
+            assert!(documents.get_mut(doc.id).unwrap().move_preview.is_none());
+        }
         assert_eq!(pixel(&state, 30, 5), [10, 5, 9, 255]);
         assert_eq!(pixel(&state, 12, 6), [0, 0, 0, 0]);
         assert_eq!(selection_left(&state), 30);
