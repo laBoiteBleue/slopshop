@@ -6,13 +6,15 @@
 //! The result is a new image sharing every tile the move does not reach, computed from the
 //! image the move started from, so moving again from there never compounds. It becomes the
 //! layer's painted image (ADR 0027): the layer's original stays intact, and Delete Paint brings
-//! it back.
+//! it back. A layer's image grows, by whole tiles, to keep the pixels that land beyond it (off
+//! the canvas too, as Photoshop keeps them); a mask keeps its size, as it covers its layer.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace, Blender};
 use crate::color::{ChannelLayout, IDENTITY, Mat3, WORKING_SPACE, mat_vec};
+use crate::geom::Size;
 use crate::paint::{MaskReader, PaintError};
 use crate::raster::{Codec, RasterImage, TILE_SIZE, pad_tile, parallel_for_each};
 use crate::selection::{SELECTION_FORMAT, Selection};
@@ -30,21 +32,45 @@ pub enum MoveMode {
     Copy,
 }
 
-/// The selected pixels of one image, ready to be moved by any offset.
+/// Most pixels an image grows to so as to keep moved pixels (as for strokes).
+const MAX_GROWN_PIXELS: u64 = 1 << 31;
+
+/// How an image grows: whole tiles (columns, rows) added before its pixels, and its new size.
+type Growth = ((u32, u32), Size);
+
+/// A moved image.
+#[derive(Debug, Clone)]
+pub struct Moved {
+    pub image: Arc<RasterImage>,
+    /// Whole tiles (columns, rows) the image grew by before the base's pixels to keep what
+    /// landed beyond it, if it grew (its size tells how much it grew after them).
+    pub grown: Option<(u32, u32)>,
+}
+
+/// An image the move works on and where it lies.
 #[derive(Debug)]
-pub struct PixelMove {
-    /// The pixels the move starts from (with an alpha channel added for a layer's).
+struct Placement {
     base: Arc<RasterImage>,
     to_document: Affine,
-    to_image: Affine,
-    selection: Arc<RasterImage>,
-    selection_codec: Codec,
     /// `to_document` when it only moves by whole pixels, and the selection is stored as
     /// selections are: rows of the selection are then read directly.
     shift: Option<(i64, i64)>,
     /// The selection's bounds in the image's pixels, `[x0, y0, x1, y1)` within it; `None` when
     /// it selects nothing of the image.
     area: Option<[i64; 4]>,
+}
+
+/// The selected pixels of one image, ready to be moved by any offset.
+#[derive(Debug)]
+pub struct PixelMove {
+    /// The pixels the move starts from (with an alpha channel added for a layer's).
+    placement: Arc<Placement>,
+    /// The base grown to keep the pixels of the last move that needed it: its growth (tiles
+    /// before, size), kept while the next moves need the same.
+    grown: Option<((u32, u32), Size, Arc<Placement>)>,
+    to_image: Affine,
+    selection: Arc<RasterImage>,
+    selection_codec: Codec,
     mode: MoveMode,
     /// The image is a coverage (a layer mask): the hole hides instead of being transparent.
     coverage: bool,
@@ -115,14 +141,17 @@ impl PixelMove {
             && selection.stored_format() == SELECTION_FORMAT)
             .then_some((e as i64, f as i64));
         Ok(Self {
-            shift,
             codec: Codec::new(base.stored_format()),
             selection_codec: Codec::new(selection.stored_format()),
             selection,
-            base,
-            to_document,
+            placement: Arc::new(Placement {
+                base,
+                to_document,
+                shift,
+                area,
+            }),
+            grown: None,
             to_image,
-            area,
             mode,
             coverage,
             blender: Blender::new(blend_space),
@@ -133,7 +162,7 @@ impl PixelMove {
 
     /// The pixels the move starts from.
     pub fn base(&self) -> &Arc<RasterImage> {
-        &self.base
+        &self.placement.base
     }
 
     /// The whole image pixels the pixels move by for a move of (`dx`, `dy`) document pixels:
@@ -145,17 +174,34 @@ impl PixelMove {
     }
 
     /// The image with the selected pixels moved by (`dx`, `dy`) document pixels (see
-    /// [`Self::image_offset`]); what lands outside the image is dropped. Every tile the move
-    /// does not reach is shared with the base; the others are computed on every core.
-    pub fn image(&self, dx: i64, dy: i64) -> Result<Arc<RasterImage>, PaintError> {
+    /// [`Self::image_offset`]). A layer's image grows to keep what lands beyond it (see
+    /// [`Moved::grown`]); a mask drops it. Every tile the move does not reach is shared with
+    /// the base; the others are computed on every core.
+    pub fn image(&mut self, dx: i64, dy: i64) -> Result<Moved, PaintError> {
         let (ox, oy) = self.image_offset(dx, dy);
-        let Some([x0, y0, x1, y1]) = self.area else {
-            return Ok(Arc::clone(&self.base));
+        let unmoved = Moved {
+            image: Arc::clone(&self.placement.base),
+            grown: None,
+        };
+        let Some([x0, y0, x1, y1]) = self.placement.area else {
+            return Ok(unmoved);
         };
         if (ox, oy) == (0, 0) {
-            return Ok(Arc::clone(&self.base));
+            return Ok(unmoved);
         }
-        let size = self.base.size();
+        let growth = if self.coverage {
+            None
+        } else {
+            self.growth([x0 + ox, y0 + oy, x1 + ox, y1 + oy])
+        };
+        let (placement, growth) = match growth {
+            None => (Arc::clone(&self.placement), None),
+            Some((offset, size)) => self.grown_placement(offset, size)?,
+        };
+        let Some([x0, y0, x1, y1]) = placement.area else {
+            return Ok(unmoved);
+        };
+        let size = placement.base.size();
         let (width, height) = (i64::from(size.width), i64::from(size.height));
         // Where the pixels land, within the image.
         let to = [
@@ -183,27 +229,111 @@ impl PixelMove {
         if self.mode == MoveMode::Cut {
             reach([x0, y0, x1, y1]);
         }
-        let level = &self.base.levels()[0];
+        let level = &placement.base.levels()[0];
         let mut work: Vec<(TileCoord, Vec<u8>)> = reached
             .into_iter()
             .filter_map(|coord| Some((coord, level.tile(coord)?.to_vec())))
             .collect();
         parallel_for_each(&mut work, |(coord, tile)| {
-            self.move_tile(*coord, tile, (ox, oy), to);
+            self.move_tile(&placement, *coord, tile, (ox, oy), to);
         });
         let replaced = work
             .into_iter()
             .map(|(coord, tile)| (coord, Arc::from(tile)))
             .collect();
-        Ok(Arc::new(self.base.with_tiles(replaced)?))
+        Ok(Moved {
+            image: Arc::new(placement.base.with_tiles(replaced)?),
+            grown: growth.map(|(offset, _)| offset),
+        })
     }
 
-    /// Recompute tile `coord` (`tile` holding the base's) for a move of `offset` image pixels,
-    /// the pixels landing within `to`; then pad it.
-    fn move_tile(&self, coord: TileCoord, tile: &mut [u8], offset: (i64, i64), to: [i64; 4]) {
-        let [x0, y0, x1, y1] = self.area.unwrap_or_default();
-        let size = self.base.size();
-        let level = &self.base.levels()[0];
+    /// How the base must grow for pixels landing in `to` (`[x0, y0, x1, y1)`, image pixels)
+    /// to be kept: whole tiles before it (columns, rows) and its new size. `None` when they
+    /// fit, or when it would grow beyond [`MAX_GROWN_PIXELS`] (what lands beyond is dropped).
+    fn growth(&self, [x0, y0, x1, y1]: [i64; 4]) -> Option<Growth> {
+        let size = self.placement.base.size();
+        let (width, height) = (i64::from(size.width), i64::from(size.height));
+        if x0 >= 0 && y0 >= 0 && x1 <= width && y1 <= height {
+            return None;
+        }
+        // By steps of a quarter of the image in whole tiles, on both sides (transparent margins,
+        // off the canvas): growing rebuilds the image's pyramid, so a drag does it rarely.
+        let t = TILE_SIZE as i64;
+        let steps = |beyond: i64, extent: i64| {
+            let step = (extent as u64).div_ceil(4 * t as u64).max(1) * t as u64;
+            (beyond.max(0) as u64).div_ceil(step) as i64 * step as i64
+        };
+        let left = steps(-x0, width) / t;
+        let top = steps(-y0, height) / t;
+        let grown_width = left * t + width + steps(x1 - width, width);
+        let grown_height = top * t + height + steps(y1 - height, height);
+        let fits = u32::try_from(grown_width).is_ok()
+            && u32::try_from(grown_height).is_ok()
+            && (grown_width as u64) * (grown_height as u64) <= MAX_GROWN_PIXELS;
+        fits.then(|| {
+            (
+                (left as u32, top as u32),
+                Size::new(grown_width as u32, grown_height as u32),
+            )
+        })
+    }
+
+    /// The base grown by `offset` whole tiles before it to `size` (zeros around it: transparent),
+    /// kept for the next moves; or the one kept, when it holds as much around the base. With
+    /// the growth it has.
+    fn grown_placement(
+        &mut self,
+        offset: (u32, u32),
+        size: Size,
+    ) -> Result<(Arc<Placement>, Option<Growth>), PaintError> {
+        let t = TILE_SIZE;
+        // What a growth adds after the base's pixels, in pixels.
+        let after = |(o, s): Growth| {
+            let base = self.placement.base.size();
+            (
+                u64::from(s.width) - u64::from(o.0 * t) - u64::from(base.width),
+                u64::from(s.height) - u64::from(o.1 * t) - u64::from(base.height),
+            )
+        };
+        if let Some((o, s, placement)) = &self.grown {
+            let (kept, needed) = (after((*o, *s)), after((offset, size)));
+            if o.0 >= offset.0 && o.1 >= offset.1 && kept.0 >= needed.0 && kept.1 >= needed.1 {
+                return Ok((Arc::clone(placement), Some((*o, *s))));
+            }
+        }
+        let base = &self.placement;
+        let grown = match base.base.grown(offset, size) {
+            Some(grown) => Arc::new(grown?),
+            None => return Ok((Arc::clone(base), None)),
+        };
+        let t = TILE_SIZE as i64;
+        let (left, top) = (i64::from(offset.0) * t, i64::from(offset.1) * t);
+        let placement = Arc::new(Placement {
+            base: grown,
+            // A grown pixel lies where the base's pixel `left`, `top` before it does.
+            to_document: Affine::translation(-left as f64, -top as f64).then(base.to_document),
+            shift: base.shift.map(|(x, y)| (x - left, y - top)),
+            area: base
+                .area
+                .map(|[x0, y0, x1, y1]| [x0 + left, y0 + top, x1 + left, y1 + top]),
+        });
+        self.grown = Some((offset, size, Arc::clone(&placement)));
+        Ok((placement, Some((offset, size))))
+    }
+
+    /// Recompute tile `coord` of `placement`'s base (`tile` holding its pixels) for a move of
+    /// `offset` image pixels, the pixels landing within `to`; then pad it.
+    fn move_tile(
+        &self,
+        placement: &Placement,
+        coord: TileCoord,
+        tile: &mut [u8],
+        offset: (i64, i64),
+        to: [i64; 4],
+    ) {
+        let [x0, y0, x1, y1] = placement.area.unwrap_or_default();
+        let size = placement.base.size();
+        let level = &placement.base.levels()[0];
         let bpp = self.codec.bytes_per_pixel;
         let width = (size.width - coord.col * TILE_SIZE).min(TILE_SIZE) as usize;
         let height = (size.height - coord.row * TILE_SIZE).min(TILE_SIZE) as usize;
@@ -225,12 +355,12 @@ impl PixelMove {
             lands.fill(0.0);
             if cut && (y0..y1).contains(&y) && !leaving.is_empty() {
                 let span = leaving.clone();
-                self.coverage_row(left + span.start as i64, y, &mut leaves[span]);
+                self.coverage_row(placement, left + span.start as i64, y, &mut leaves[span]);
             }
             if (to[1]..to[3]).contains(&y) && !landing.is_empty() {
                 let span = landing.clone();
                 let from = left + span.start as i64 - offset.0;
-                self.coverage_row(from, y - offset.1, &mut lands[span]);
+                self.coverage_row(placement, from, y - offset.1, &mut lands[span]);
             }
             let sy = y - offset.1;
             for tx in leaving.start.min(landing.start)..leaving.end.max(landing.end) {
@@ -267,16 +397,16 @@ impl PixelMove {
     /// The selection's coverage of image pixels `x..x + out.len()` of row `y`. A layer only
     /// moved by whole pixels reads the selection's tiles directly; any other transform maps
     /// each pixel's center into the document.
-    fn coverage_row(&self, x: i64, y: i64, out: &mut [f32]) {
+    fn coverage_row(&self, placement: &Placement, x: i64, y: i64, out: &mut [f32]) {
         let size = self.selection.size();
         let (width, height) = (i64::from(size.width), i64::from(size.height));
-        let Some((sx, sy)) = self.shift else {
+        let Some((sx, sy)) = placement.shift else {
             let reader = MaskReader {
                 image: &self.selection,
                 codec: &self.selection_codec,
             };
             for (i, v) in out.iter_mut().enumerate() {
-                let (dx, dy) = self
+                let (dx, dy) = placement
                     .to_document
                     .apply((x + i as i64) as f64 + 0.5, y as f64 + 0.5);
                 *v = reader.at(dx.floor(), dy.floor());
@@ -448,7 +578,8 @@ mod tests {
         let base = gradient(canvas);
         let moved = pixel_move(Arc::clone(&base), Affine::IDENTITY, &selection)
             .image(300, 100)
-            .unwrap();
+            .unwrap()
+            .image;
         // Moved exactly.
         assert_eq!(pixel(&moved, 310, 110), [10, 10, 7, 255]);
         assert_eq!(pixel(&moved, 319, 114), [19, 14, 7, 255]);
@@ -469,7 +600,7 @@ mod tests {
     fn a_copy_keeps_the_pixels_where_they_were() {
         let canvas = Size::new(64, 64);
         let selection = rectangle(canvas, 4.0, 4.0, 8.0, 8.0);
-        let moving = PixelMove::new(
+        let mut moving = PixelMove::new(
             gradient(canvas),
             Affine::IDENTITY,
             &selection,
@@ -478,7 +609,7 @@ mod tests {
             false,
         )
         .unwrap();
-        let moved = moving.image(2, 0).unwrap();
+        let moved = moving.image(2, 0).unwrap().image;
         assert_eq!(pixel(&moved, 4, 4), [4, 4, 7, 255]);
         assert_eq!(pixel(&moved, 6, 4), [4, 4, 7, 255]);
         assert_eq!(pixel(&moved, 9, 7), [7, 7, 7, 255]);
@@ -491,7 +622,8 @@ mod tests {
         let selection = rectangle(canvas, 4.0, 4.0, 12.0, 8.0);
         let moved = pixel_move(gradient(canvas), Affine::IDENTITY, &selection)
             .image(3, 0)
-            .unwrap();
+            .unwrap()
+            .image;
         // Within the overlap, the pixel from 3 to the left; the start of the hole is empty.
         assert_eq!(pixel(&moved, 8, 5), [5, 5, 7, 255]);
         assert_eq!(pixel(&moved, 14, 5), [11, 5, 7, 255]);
@@ -506,7 +638,8 @@ mod tests {
         let selection = rectangle(canvas, 10.0, 10.0, 12.0, 11.0);
         let moved = pixel_move(gradient(canvas), Affine::translation(5.0, 3.0), &selection)
             .image(1, 2)
-            .unwrap();
+            .unwrap()
+            .image;
         assert_eq!(pixel(&moved, 5, 7), [0, 0, 0, 0]);
         assert_eq!(pixel(&moved, 6, 9), [5, 7, 7, 255]);
         assert_eq!(pixel(&moved, 7, 9), [6, 7, 7, 255]);
@@ -516,9 +649,9 @@ mod tests {
     fn a_scaled_layer_moves_by_its_own_pixels() {
         let canvas = Size::new(64, 64);
         let selection = rectangle(canvas, 0.0, 0.0, 8.0, 8.0);
-        let moving = pixel_move(gradient(canvas), Affine::scale(2.0, 2.0), &selection);
+        let mut moving = pixel_move(gradient(canvas), Affine::scale(2.0, 2.0), &selection);
         assert_eq!(moving.image_offset(10, -4), (5, -2));
-        let moved = moving.image(10, 0).unwrap();
+        let moved = moving.image(10, 0).unwrap().image;
         // Document pixels 0..8 are image pixels 0..4.
         assert_eq!(pixel(&moved, 5, 0), [0, 0, 7, 255]);
         assert_eq!(pixel(&moved, 8, 3), [3, 3, 7, 255]);
@@ -541,7 +674,8 @@ mod tests {
         );
         let moved = pixel_move(base, Affine::IDENTITY, &selection)
             .image(0, 10)
-            .unwrap();
+            .unwrap()
+            .image;
         // Half left (32767 / 65535 of it selected): alpha halved, colors untouched.
         assert_eq!(pixel(&moved, 8, 5), [200, 100, 50, 127]);
         // Half landed over an opaque pixel of the same color.
@@ -560,7 +694,7 @@ mod tests {
         values[2 * 32 + 2] = 100;
         let base = Arc::new(RasterImage::from_pixels(canvas, gray, &values).unwrap());
         let selection = rectangle(canvas, 2.0, 2.0, 4.0, 4.0);
-        let moving = PixelMove::new(
+        let mut moving = PixelMove::new(
             base,
             Affine::IDENTITY,
             &selection,
@@ -569,7 +703,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let moved = moving.image(10, 0).unwrap();
+        let moved = moving.image(10, 0).unwrap().image;
         assert_eq!(pixel(&moved, 12, 2), [100]);
         assert_eq!(pixel(&moved, 13, 3), [255]);
         assert_eq!(pixel(&moved, 2, 2), [0]);
@@ -581,23 +715,67 @@ mod tests {
         let canvas = Size::new(32, 32);
         let base = gradient(canvas);
         let selection = rectangle(canvas, 2.0, 2.0, 4.0, 4.0);
-        let moving = pixel_move(Arc::clone(&base), Affine::IDENTITY, &selection);
-        assert!(Arc::ptr_eq(&moving.image(0, 0).unwrap(), moving.base()));
+        let mut moving = pixel_move(Arc::clone(&base), Affine::IDENTITY, &selection);
+        let unmoved = moving.image(0, 0).unwrap();
+        assert!(Arc::ptr_eq(&unmoved.image, moving.base()) && unmoved.grown.is_none());
         // A layer placed away from the selection.
-        let away = pixel_move(base, Affine::translation(100.0, 0.0), &selection);
-        assert!(Arc::ptr_eq(&away.image(5, 5).unwrap(), away.base()));
+        let mut away = pixel_move(base, Affine::translation(100.0, 0.0), &selection);
+        let unmoved = away.image(5, 5).unwrap().image;
+        assert!(Arc::ptr_eq(&unmoved, away.base()));
     }
 
     #[test]
-    fn pixels_moved_beyond_the_image_are_dropped() {
+    fn a_layer_grows_to_keep_pixels_moved_beyond_it() {
         let canvas = Size::new(32, 32);
         let selection = rectangle(canvas, 28.0, 0.0, 32.0, 2.0);
-        let moved = pixel_move(gradient(canvas), Affine::IDENTITY, &selection)
-            .image(2, 0)
-            .unwrap();
-        assert_eq!(pixel(&moved, 30, 0), [28, 0, 7, 255]);
-        assert_eq!(pixel(&moved, 31, 1), [29, 1, 7, 255]);
-        assert_eq!(pixel(&moved, 28, 0), [0, 0, 0, 0]);
+        let mut moving = pixel_move(gradient(canvas), Affine::IDENTITY, &selection);
+        // Beyond the right edge: the image grows after its pixels.
+        let moved = moving.image(2, 0).unwrap();
+        assert_eq!(moved.grown, Some((0, 0)));
+        assert_eq!(moved.image.size(), Size::new(32 + TILE_SIZE, 32));
+        // Moving further within that growth keeps it.
+        let further = moving.image(9, 0).unwrap();
+        assert_eq!(
+            (further.grown, further.image.size()),
+            (moved.grown, moved.image.size())
+        );
+        assert_eq!(pixel(&moved.image, 32, 0), [30, 0, 7, 255]);
+        assert_eq!(pixel(&moved.image, 33, 1), [31, 1, 7, 255]);
+        assert_eq!(pixel(&moved.image, 28, 0), [0, 0, 0, 0]);
+        assert_eq!(pixel(&moved.image, 32, 2), [0, 0, 0, 0]);
+        // Beyond the left edge: whole tiles before them, the base's pixels shifted.
+        let moved = moving.image(-40, 0).unwrap();
+        assert_eq!(moved.grown, Some((1, 0)));
+        let t = TILE_SIZE;
+        assert_eq!(moved.image.size(), Size::new(t + 32, 32));
+        assert_eq!(pixel(&moved.image, t - 12, 0), [28, 0, 7, 255]);
+        assert_eq!(pixel(&moved.image, t + 28, 1), [0, 0, 0, 0]);
+        assert_eq!(pixel(&moved.image, t + 27, 1), [27, 1, 7, 255]);
+        assert_eq!(pixel(&moved.image, t - 20, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_mask_keeps_its_size() {
+        let canvas = Size::new(32, 32);
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            ..PixelFormat::RGBA8_SRGB
+        };
+        let base = Arc::new(RasterImage::from_pixels(canvas, gray, &[255; 32 * 32]).unwrap());
+        let selection = rectangle(canvas, 28.0, 0.0, 32.0, 2.0);
+        let mut moving = PixelMove::new(
+            base,
+            Affine::IDENTITY,
+            &selection,
+            BlendSpace::Perceptual,
+            MoveMode::Cut,
+            true,
+        )
+        .unwrap();
+        let moved = moving.image(2, 0).unwrap();
+        assert_eq!((moved.grown, moved.image.size()), (None, canvas));
+        assert_eq!(pixel(&moved.image, 31, 0), [255]);
+        assert_eq!(pixel(&moved.image, 29, 0), [0]);
     }
 
     /// Timing of a move of a large selection on a photo-sized layer (run with `--release
@@ -630,13 +808,20 @@ mod tests {
         .unwrap()
         .unwrap();
         let selection = Selection::new(Arc::new(image)).unwrap();
-        let moving = pixel_move(base, Affine::IDENTITY, &selection);
+        let mut moving = pixel_move(base, Affine::IDENTITY, &selection);
         let started = std::time::Instant::now();
         let frames = 20;
         for i in 0..frames {
             moving.image(7 * i64::from(i + 1), 3).unwrap();
         }
         let per_frame = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        let started = std::time::Instant::now();
+        for i in 0..frames {
+            // Across the right edge, 37 px a frame.
+            moving.image(1000 + 37 * i64::from(i), 3).unwrap();
+        }
+        let beyond = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        println!("moved across the edge: {beyond:.1} ms per frame");
         let started = std::time::Instant::now();
         for i in 0..frames {
             crate::selection::translated(canvas, selection.image(), 7 * i64::from(i + 1), 3)
