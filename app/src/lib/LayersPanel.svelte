@@ -15,6 +15,18 @@
   import type { MenuItem } from "./MenuBar.svelte";
   import LayerThumbnail from "./LayerThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
+  import {
+    ancestors,
+    canDropInto,
+    carriesPaint,
+    dropTarget,
+    flattenRows,
+    insertionPoint,
+    layerTree,
+    outermost,
+    slotAt,
+    topmost,
+  } from "./layerTree";
 
   let {
     doc,
@@ -64,20 +76,7 @@
   const gestureEnd = () => ongestureend(documentId);
 
   // Panels list layers top to bottom, like every image editor. Groups (ADR 0015) show their
-  // layers indented below them, unless folded.
-  type Row = {
-    layer: LayerView;
-    /** Groups around the layer. */
-    depth: number;
-    /** Its group, null at the top level. */
-    parent: number | null;
-    /** Its index among its siblings (0 = bottom). */
-    index: number;
-    /** Visible, and so are all its groups. */
-    shown: boolean;
-    /** Clipped to the layer below it, or the base of the clipped layers above it (ADR 0016). */
-    clipping: "clipped" | "base" | null;
-  };
+  // layers indented below them, unless folded (see layerTree.ts).
   /** Groups folded in the panel (UI state, like the selection). */
   let collapsed = $state<Set<number>>(new Set());
   /** Layers whose stack entries are shown below them (ADR 0029; UI state, folded at first). */
@@ -106,73 +105,9 @@
   /** The right-click menu of an entry, where it is open. */
   let entryMenu = $state<{ x: number; y: number; layer: LayerView; index: number } | null>(null);
 
-  /** Rows as displayed, top to bottom: each group above its layers, unless folded. */
-  function flatten(
-    layers: LayerView[],
-    depth: number,
-    parent: number | null,
-    shown: boolean,
-    out: Row[],
-  ): Row[] {
-    for (let index = layers.length - 1; index >= 0; index--) {
-      const layer = layers[index];
-      if (hidden.includes(layer.id)) continue;
-      const visible = shown && layer.visible;
-      // A clipped layer needs a layer below it; the base is the one the clipped layers rest on.
-      const clipped = layer.clipped && index > 0;
-      const base = !clipped && layers[index + 1]?.clipped === true;
-      const clipping = clipped ? "clipped" : base ? "base" : null;
-      out.push({ layer, depth, parent, index, shown: visible, clipping });
-      if (layer.kind === "group" && !collapsed.has(layer.id)) {
-        flatten(layer.children, depth + 1, layer.id, visible, out);
-      }
-    }
-    return out;
-  }
-  let rows = $derived(flatten(doc.layers, 0, null, true, []));
-
-  /** Every layer, depth first, each group before its layers, bottom to top (as the engine). */
-  function walk(layers: LayerView[], out: LayerView[]): LayerView[] {
-    for (const layer of layers) {
-      out.push(layer);
-      walk(layer.children, out);
-    }
-    return out;
-  }
-  let allLayers = $derived(walk(doc.layers, []));
-  /** The group of each layer that is in one. */
-  let parents = $derived.by(() => {
-    const map = new Map<number, number>();
-    for (const layer of allLayers) {
-      for (const child of layer.children) map.set(child.id, layer.id);
-    }
-    return map;
-  });
-
-  /** The layers directly inside `parent` (null: the top level), bottom to top. */
-  function childrenOf(parent: number | null): LayerView[] {
-    if (parent === null) return doc.layers;
-    return allLayers.find((l) => l.id === parent)?.children ?? [];
-  }
-
-  /** Whether `id` is `ancestor` or inside it. */
-  function within(id: number, ancestor: number): boolean {
-    for (let at: number | undefined = id; at !== undefined; at = parents.get(at)) {
-      if (at === ancestor) return true;
-    }
-    return false;
-  }
-
-  /** `ids` without those inside another of them (they go with it). */
-  function outermost(ids: number[]): number[] {
-    const set = new Set(ids);
-    return ids.filter((id) => {
-      for (let at = parents.get(id); at !== undefined; at = parents.get(at)) {
-        if (set.has(at)) return false;
-      }
-      return true;
-    });
-  }
+  let rows = $derived(flattenRows(doc.layers, collapsed, hidden));
+  let tree = $derived(layerTree(doc.layers));
+  let allLayers = $derived(tree.all);
 
   function toggleFold(id: number) {
     const next = new Set(collapsed);
@@ -199,12 +134,6 @@
     anchorId = active;
   }
 
-  /** The topmost of `ids` in the stack. */
-  function topmost(ids: number[]): number | null {
-    const set = new Set(ids);
-    return allLayers.findLast((l) => set.has(l.id))?.id ?? null;
-  }
-
   $effect(() => {
     const ids = allLayers.map((l) => l.id);
     const created = ids.filter((id) => !knownIds.has(id));
@@ -225,7 +154,7 @@
         select(top === null ? [] : [top], top);
       } else if (kept.length < selectedIds.length) {
         selectedIds = kept;
-        if (activeId === null || !present.has(activeId)) activeId = topmost(kept);
+        if (activeId === null || !present.has(activeId)) activeId = topmost(tree, kept);
         if (anchorId === null || !present.has(anchorId)) anchorId = activeId;
       }
     });
@@ -239,7 +168,7 @@
   function toggleSelected(id: number) {
     if (selectedSet.has(id)) {
       selectedIds = selectedIds.filter((s) => s !== id);
-      if (activeId === id) activeId = topmost(selectedIds);
+      if (activeId === id) activeId = topmost(tree, selectedIds);
       anchorId = activeId;
     } else {
       selectedIds = [...selectedIds, id];
@@ -315,7 +244,10 @@
   export function deleteSelected() {
     if (selection.length === 0) return;
     // A group takes its layers with it.
-    const ids = outermost(selection.map((l) => l.id));
+    const ids = outermost(
+      tree,
+      selection.map((l) => l.id),
+    );
     void edit(batchOf(ids.map((id) => ({ kind: "removeLayer", id }))));
   }
 
@@ -400,22 +332,19 @@
     menuAt = { x: e.clientX, y: e.clientY, empty: true };
   }
 
-  /**
-   * A new empty layer to paint on, above the active layer (in its group) or at the top,
-   * selected (Layer > New > Layer, Shift+Ctrl+N, ADR 0027).
-   */
   /** The name of the next new pixel layer: "Layer N", as Photoshop counts them. */
   export function nextLayerName(): string {
     const n = allLayers.filter((l) => l.kind === "raster").length + 1;
     return t("layers.defaultLayerName", { n });
   }
 
+  /**
+   * A new empty layer to paint on, above the active layer (in its group) or at the top,
+   * selected (Layer > New > Layer, Shift+Ctrl+N, ADR 0027).
+   */
   export function newLayer() {
     const name = nextLayerName();
-    const parent = selected ? (parents.get(selected.id) ?? null) : null;
-    const index = selected
-      ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
-      : doc.layers.length;
+    const { parent, index } = insertionPoint(tree, selected?.id ?? null);
     const before = new Set(allLayers.map((l) => l.id));
     void edit({ kind: "addEmptyLayer", name, parent, index }).then(() => {
       const added = allLayers.find((l) => !before.has(l.id));
@@ -425,8 +354,7 @@
 
   /** The selected layers, or layers inside them, carry paint (Layer > Delete Paint). */
   export function selectionPainted(): boolean {
-    const painted = (layer: LayerView): boolean => layer.painted || layer.children.some(painted);
-    return selection.some(painted);
+    return carriesPaint(selection);
   }
 
   /** Layer > Delete Paint: the selected layers' originals (pixels and masks) show again. */
@@ -439,10 +367,7 @@
   export function newGroup() {
     const n = allLayers.filter((l) => l.kind === "group").length + 1;
     const name = t("layers.defaultGroupName", { n });
-    const parent = selected ? (parents.get(selected.id) ?? null) : null;
-    const index = selected
-      ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
-      : doc.layers.length;
+    const { parent, index } = insertionPoint(tree, selected?.id ?? null);
     void edit({ kind: "addGroup", name, parent, index });
   }
 
@@ -453,10 +378,7 @@
   export function addAdjustment(adjustment: AdjustmentId) {
     const label = t(`adjustment.${adjustment}`);
     const n = allLayers.filter((l) => l.adjustment?.id === adjustment).length + 1;
-    const parent = selected ? (parents.get(selected.id) ?? null) : null;
-    const index = selected
-      ? childrenOf(parent).findIndex((l) => l.id === selected?.id) + 1
-      : doc.layers.length;
+    const { parent, index } = insertionPoint(tree, selected?.id ?? null);
     const before = new Set(allLayers.map((l) => l.id));
     const name = t("layers.defaultAdjustmentName", { name: label, n });
     void edit({ kind: "addAdjustmentLayer", name, adjustment, parent, index }).then(() => {
@@ -493,15 +415,15 @@
     select([], null);
   }
 
-  /** Select one layer (e.g. picked on the image), unfolding the groups around it. */
   /** Select `ids`, the topmost active (layers just placed). */
   export function selectLayers(ids: number[]) {
-    select(ids, topmost(ids));
+    select(ids, topmost(tree, ids));
   }
 
+  /** Select one layer (e.g. picked on the image), unfolding the groups around it. */
   export function selectOnly(id: number) {
     const next = new Set(collapsed);
-    for (let at = parents.get(id); at !== undefined; at = parents.get(at)) next.delete(at);
+    for (const at of ancestors(tree, id)) next.delete(at);
     if (next.size !== collapsed.size) collapsed = next;
     select([id], id);
   }
@@ -759,12 +681,15 @@
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
     const items = [...list.querySelectorAll<HTMLElement>("li[data-row]")];
-    drag.slot = items.filter((el) => {
-      const r = el.getBoundingClientRect();
-      return r.top + r.height / 2 < e.clientY;
-    }).length;
+    drag.slot = slotAt(
+      items.map((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top + r.height / 2;
+      }),
+      e.clientY,
+    );
     onlayerdrag?.({
-      ids: outermost(movingIds(drag.id)),
+      ids: outermost(tree, movingIds(drag.id)),
       pointerId: drag.pointerId,
       x: e.clientX,
       y: e.clientY,
@@ -775,10 +700,7 @@
       const r = el.getBoundingClientRect();
       if (e.clientY < r.top + r.height / 4 || e.clientY > r.bottom - r.height / 4) continue;
       const group = rows[Number(el.dataset.row)]?.layer;
-      const moving = movingIds(drag.id);
-      if (group?.kind === "group" && !moving.some((id) => within(group.id, id))) {
-        drag.into = group.id;
-      }
+      if (group && canDropInto(tree, group, movingIds(drag.id))) drag.into = group.id;
     }
   }
 
@@ -808,31 +730,10 @@
       return;
     }
     if (!inList) return;
-    const ids = outermost(movingIds(id));
-    const target = dropTarget(new Set(ids), into, slot);
+    const ids = outermost(tree, movingIds(id));
+    const target = dropTarget(tree, rows, new Set(ids), into, slot);
     // The engine leaves layers already in place alone (no undo entry when nothing moves).
     if (target) void edit({ kind: "moveLayers", ids, ...target });
-  }
-
-  /**
-   * Where a drop puts the `moving` layers: into group `into` (at its top), else just above the
-   * row at `slot` (below the last row: the bottom of the stack). `index` counts the layers of
-   * `parent` that stay. Null for a drop inside one of the moving groups.
-   */
-  function dropTarget(
-    moving: Set<number>,
-    into: number | null,
-    slot: number,
-  ): { parent: number | null; index: number } | null {
-    const staying = (layers: LayerView[]) => layers.filter((l) => !moving.has(l.id));
-    if (into !== null) return { parent: into, index: staying(childrenOf(into)).length };
-    const row = rows[slot];
-    if (!row) return { parent: null, index: 0 };
-    if (row.parent !== null && [...moving].some((id) => within(row.parent as number, id))) {
-      return null;
-    }
-    const index = staying(childrenOf(row.parent).slice(0, row.index + 1)).length;
-    return { parent: row.parent, index };
   }
 </script>
 
