@@ -164,6 +164,11 @@ built. Contributors: propose here first.
   preview (Shift adds one, Alt takes one away, or the three eyedroppers), Fuzziness 0–200,
   Invert; the preview shows the selection it would make, live; Enter applies, Esc cancels; a
   current selection limits it, as in Photoshop.
+  Moving the outline alone, as in Photoshop: with the marquees, the Lasso or the Magic Wand in
+  New Selection mode, a drag from inside the selection (without Shift or Alt; the pointer is the
+  arrow there) moves the outline, its pixels staying where they are (Shift during the drag: by
+  steps of 45°); a click there stays the tool's click. With any selection tool, the arrows nudge
+  the outline by 1 pixel, 10 with Shift. One undo entry each.
   Options bar: the four modes, Feather (px), Anti-alias for the ellipse and the lassos. Marching ants follow the
   selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Edit in Quick
   Mask Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading

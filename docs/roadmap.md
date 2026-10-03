@@ -216,6 +216,8 @@ removable as a whole; undo keeps the old tiles by reference.
       layer grows); kept as paint (the original intact)
 - [x] Selected pixels float in the view during the drag (an isolated group of the layer with
       its hole and the moved pixels), the move computed once on release
+- [x] Move the selection's outline alone, as Photoshop: a drag from inside it with the marquees,
+      the Lasso or the Magic Wand (New Selection mode), the arrows with any selection tool
 
 ## Phase 4 — Very large images
 

@@ -102,6 +102,7 @@
   import { failureMessage } from "./lib/ai";
   import ColorRangeDialog, { sampleAt, type ColorRangeState } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
+  import SelectionDrag from "./lib/SelectionDrag.svelte";
   import { SNAP_CSS_PX, snapMove, type Guide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import TransformFields from "./lib/TransformFields.svelte";
@@ -1288,7 +1289,13 @@
    */
   function nudgePixels(dx: number, dy: number): boolean {
     const doc = active;
-    if (tool !== "move" || !doc || doc.selectionKey == null || doc.quickMask) return false;
+    if (!doc || doc.selectionKey == null || doc.quickMask) return false;
+    // A selection tool nudges the outline alone, as in Photoshop.
+    if (SELECTION_TOOLS.includes(tool)) {
+      void sync(engine.translateSelection(doc.id, dx, dy));
+      return true;
+    }
+    if (tool !== "move") return false;
     const target = pixelTarget();
     if (target) {
       const request = { ...target, drag: nextPixelDrag++, dx, dy, copy: false, end: true };
@@ -1328,7 +1335,7 @@
       drag.pixels.sent = true;
       // A layer's pixels float in the view: the outline follows them on screen.
       if (drag.pixels.target === "layer") {
-        pixelShift = { drag: drag.pixels.drag, document: drag.document, x: tx, y: ty };
+        outlineShift = { drag: drag.pixels.drag, document: drag.document, x: tx, y: ty };
       }
       void sendPixels(drag.document, pixelRequest(drag.pixels, drag, false));
       return;
@@ -1338,8 +1345,11 @@
     void sync(engine.performLive(drag.document, move, true));
   }
 
-  /** How far the outline is drawn from the selection while a layer's pixels float. */
-  let pixelShift = $state<{ drag: number; document: number; x: number; y: number } | null>(null);
+  /**
+   * How far the outline is drawn from the selection while it is dragged: with a layer's pixels
+   * floating, or alone with a selection tool.
+   */
+  let outlineShift = $state<{ drag: number; document: number; x: number; y: number } | null>(null);
 
   /**
    * A request of a pixel drag: the document once it changed; while a layer's pixels float only
@@ -1355,6 +1365,65 @@
       else showError(String(e));
     }
   }
+
+  // The selection's outline moved alone (Photoshop): a drag from inside the selection with the
+  // Marquees, the Lasso or the Magic Wand in New Selection mode (see `SelectionDrag`), or the
+  // arrows with any selection tool. One undo entry.
+  const SELECTION_TOOLS: ToolId[] = [
+    "marquee",
+    "ellipse",
+    "lasso",
+    "polygonalLasso",
+    "objectSelection",
+    "quickSelection",
+    "wand",
+  ];
+  /** The Polygonal Lasso places a corner at each click: no drag there. */
+  const OUTLINE_DRAG_TOOLS: ToolId[] = ["marquee", "ellipse", "lasso", "wand"];
+  /** The outline drag under way, if any (its id is shared with pixel drags, for `outlineShift`). */
+  let outlineDrag: number | null = null;
+
+  function shiftOutline(dx: number, dy: number) {
+    const doc = active;
+    if (!doc) return;
+    outlineDrag ??= nextPixelDrag++;
+    outlineShift = { drag: outlineDrag, document: doc.id, x: dx, y: dy };
+  }
+
+  function moveOutline(dx: number, dy: number) {
+    const doc = active;
+    const id = outlineDrag;
+    outlineDrag = null;
+    const done = () => {
+      if (outlineShift?.drag === id) outlineShift = null;
+    };
+    if (!doc || (dx === 0 && dy === 0)) {
+      done();
+      return;
+    }
+    // The outline stays moved until the moved selection arrives.
+    void sync(engine.translateSelection(doc.id, dx, dy)).finally(done);
+  }
+
+  /** A click inside the selection with an outline tool: the tool's own click. */
+  function outlineClick(x: number, y: number) {
+    if (tool === "wand") magicWand(Math.floor(x), Math.floor(y), null);
+    else selectionCommand(engine.deselect);
+  }
+
+  /** What `SelectionDrag` needs, the same for every outline tool. */
+  const outlineDragProps = $derived({
+    documentId: active?.id ?? 0,
+    selectionKey: active?.selectionKey ?? null,
+    enabled:
+      OUTLINE_DRAG_TOOLS.includes(tool) &&
+      selectionMode === "replace" &&
+      active?.selectionKey != null &&
+      !active.quickMask,
+    onshift: shiftOutline,
+    onmove: moveOutline,
+    onclick: outlineClick,
+  });
 
   function pixelRequest(pixels: PixelDrag, drag: MoveDrag, end: boolean): MovePixelsRequest {
     const { drag: id, target, layerId, copy } = pixels;
@@ -1375,7 +1444,7 @@
         const id = drag.pixels.drag;
         // The outline stays moved until the moved selection arrives.
         void sendPixels(drag.document, pixelRequest(drag.pixels, drag, true)).finally(() => {
-          if (pixelShift?.drag === id) pixelShift = null;
+          if (outlineShift?.drag === id) outlineShift = null;
         });
       }
       return;
@@ -3296,8 +3365,8 @@
                 {#if active?.selectionKey != null}
                   <SelectionOutline
                     hidden={active.quickMask}
-                    shift={pixelShift?.document === active.id
-                      ? [pixelShift.x, pixelShift.y]
+                    shift={outlineShift?.document === active.id
+                      ? [outlineShift.x, outlineShift.y]
                       : undefined}
                     {mapping}
                     documentId={active.id}
@@ -3337,7 +3406,9 @@
                     }}
                   ></div>
                 {:else if tool === "wand"}
-                  <WandTool {mapping} mode={selectionMode} onpick={magicWand} />
+                  <SelectionDrag {mapping} {...outlineDragProps}>
+                    <WandTool {mapping} mode={selectionMode} onpick={magicWand} />
+                  </SelectionDrag>
                 {:else if tool === "objectSelection"}
                   <ObjectSelectionTool
                     {mapping}
@@ -3361,21 +3432,25 @@
                     onstroke={quickStroke}
                   />
                 {:else if tool === "lasso" || tool === "polygonalLasso"}
-                  <LassoTool
-                    {mapping}
-                    polygonal={tool === "polygonalLasso"}
-                    mode={selectionMode}
-                    onselect={selectShape}
-                    ondeselect={() => selectionCommand(engine.deselect)}
-                  />
+                  <SelectionDrag {mapping} {...outlineDragProps}>
+                    <LassoTool
+                      {mapping}
+                      polygonal={tool === "polygonalLasso"}
+                      mode={selectionMode}
+                      onselect={selectShape}
+                      ondeselect={() => selectionCommand(engine.deselect)}
+                    />
+                  </SelectionDrag>
                 {:else if tool === "marquee" || tool === "ellipse"}
-                  <MarqueeTool
-                    {mapping}
-                    kind={tool === "marquee" ? "rectangle" : "ellipse"}
-                    mode={selectionMode}
-                    onselect={selectShape}
-                    ondeselect={() => selectionCommand(engine.deselect)}
-                  />
+                  <SelectionDrag {mapping} {...outlineDragProps}>
+                    <MarqueeTool
+                      {mapping}
+                      kind={tool === "marquee" ? "rectangle" : "ellipse"}
+                      mode={selectionMode}
+                      onselect={selectShape}
+                      ondeselect={() => selectionCommand(engine.deselect)}
+                    />
+                  </SelectionDrag>
                 {/if}
               {/snippet}
             </Viewport>
