@@ -9,7 +9,8 @@
   // does while its frame renders: rebuilding it on every view change made the ants lag behind
   // the image. After a zoom, it is rebuilt once the view rests (crisp lines again).
   import { untrack } from "svelte";
-  import { engine, type SelectionOutline } from "./engine";
+  import * as affine from "./affine";
+  import { engine, type Matrix, type SelectionOutline } from "./engine";
   import type { ViewMapping } from "./Viewport.svelte";
 
   let {
@@ -20,6 +21,7 @@
     height,
     hidden = false,
     shift,
+    matrix,
   }: {
     mapping: ViewMapping;
     /** Read once: the overlay is recreated with the viewport for another document. */
@@ -32,6 +34,8 @@
     hidden?: boolean;
     /** Drawn moved by this much, document pixels (selected pixels floating in a drag). */
     shift?: [number, number];
+    /** Drawn mapped by this matrix, document pixels (Select > Transform Selection, live). */
+    matrix?: Matrix;
   } = $props();
 
   const docId = untrack(() => documentId);
@@ -131,11 +135,12 @@
   }
 
   /** Polylines as an SVG path in viewport pixels, on pixel centers for crisp lines. */
-  function toPath(lines: SelectionOutline, m: ViewMapping): string {
+  function toPath(lines: SelectionOutline, m: ViewMapping, by?: Matrix): string {
     const parts: string[] = [];
     for (const line of lines) {
       for (let i = 0; i < line.length; i += 2) {
-        const [x, y] = m.toViewport(line[i], line[i + 1]);
+        const [dx, dy] = by ? affine.apply(by, line[i], line[i + 1]) : [line[i], line[i + 1]];
+        const [x, y] = m.toViewport(dx, dy);
         parts.push(`${i === 0 ? "M" : "L"}${Math.round(x) + 0.5} ${Math.round(y) + 0.5}`);
       }
     }
@@ -176,6 +181,11 @@
     };
   });
 
+  /** Transformed live: drawn again at each change (an outline is a few thousand points). */
+  const mappedPath = $derived(
+    matrix && current && !affine.isIdentity(matrix) ? toPath(current, mapping, matrix) : null,
+  );
+
   // A new outline: a new path, for the current view.
   $effect(() => {
     void current;
@@ -198,7 +208,10 @@
   aria-hidden="true"
 >
   <svg>
-    {#if built && placed}
+    {#if mappedPath !== null}
+      <path class="under" d={mappedPath} />
+      <path class="ants" d={mappedPath} />
+    {:else if built && placed}
       <!-- Lines keep one pixel while scaled; only then, as Chromium stops repainting the
            animated dashes of non-scaling strokes until their transform changes. -->
       <g transform={placed.transform}>

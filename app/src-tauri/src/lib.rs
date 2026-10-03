@@ -2086,6 +2086,8 @@ pub fn run() {
             selection::modify_selection,
             selection::magic_wand,
             selection::grow_selection,
+            selection::selection_bounds,
+            selection::transform_selection,
             selection::quick_select,
             paint::paint_stroke,
             paint::fill,

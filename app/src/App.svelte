@@ -1692,6 +1692,11 @@
      * box's matrix and in the same undo entry, and the insertions that Esc takes back.
      */
     placed: { matrix: Matrix; insertions: number } | null;
+    /**
+     * Select > Transform Selection: the box transforms the selection's outline (drawn live),
+     * not layers; Enter resamples the selection.
+     */
+    selection: boolean;
   };
   let transforming = $state<Transforming | null>(null);
 
@@ -1741,14 +1746,40 @@
       matrix: affine.IDENTITY,
       pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
       placed,
+      selection: false,
     };
     if (placed) onTransformChange(affine.IDENTITY);
+  }
+
+  /**
+   * Select > Transform Selection, as in Photoshop: Free Transform's box on the selection's
+   * bounds; the outline follows live and Enter resamples the selection (one undo entry), the
+   * layers untouched.
+   */
+  async function startSelectionTransform() {
+    const doc = active;
+    if (!doc || transforming || doc.selectionKey == null || doc.quickMask) return;
+    if (tool === "crop") tool = "move";
+    const box = await engine.selectionBounds(doc.id).catch(() => null);
+    if (!box || active?.id !== doc.id || transforming) return;
+    transforming = {
+      document: doc.id,
+      ids: [],
+      box,
+      targets: [canvasBounds(doc)],
+      matrix: affine.IDENTITY,
+      pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
+      placed: null,
+      selection: true,
+    };
   }
 
   function onTransformChange(matrix: Matrix) {
     const current = transforming;
     if (!current) return;
     current.matrix = matrix;
+    // The selection's outline follows the matrix; nothing is sent until Enter.
+    if (current.selection) return;
     const total = current.placed ? affine.andThen(current.placed.matrix, matrix) : matrix;
     const request: EditRequest = { kind: "transformLayers", ids: current.ids, matrix: total };
     void sync(engine.performLive(current.document, request, true));
@@ -1758,6 +1789,12 @@
     const current = transforming;
     if (!current) return;
     transforming = null;
+    if (current.selection) {
+      if (!affine.isIdentity(current.matrix)) {
+        void sync(engine.transformSelection(current.document, current.matrix));
+      }
+      return;
+    }
     const total = current.placed
       ? affine.andThen(current.placed.matrix, current.matrix)
       : current.matrix;
@@ -1872,6 +1909,7 @@
     const current = transforming;
     if (!current) return;
     transforming = null;
+    if (current.selection) return;
     void cancelGesture(current.document);
     for (let i = 0; i < (current.placed?.insertions ?? 0); i++) {
       void sync(engine.undo(current.document));
@@ -3482,6 +3520,15 @@
             undefined,
             doc?.selectionKey == null,
           ),
+          cmd(
+            t("menu.select.transform"),
+            () => {
+              commitTransform();
+              void startSelectionTransform();
+            },
+            undefined,
+            doc?.selectionKey == null || doc.quickMask,
+          ),
           item("quickMask"),
           separator,
           item("selectAllLayers"),
@@ -3830,6 +3877,9 @@
                     selectionKey={active.selectionKey}
                     width={active.width}
                     height={active.height}
+                    matrix={transforming?.selection && transforming.document === active.id
+                      ? transforming.matrix
+                      : undefined}
                   />
                 {/if}
                 {#if cropping && cropping.document === active?.id}

@@ -674,6 +674,52 @@ pub async fn translate_selection(
     set_selection(&state, document_id, image)
 }
 
+/// The selection's bounds (every pixel selected even partly), `None` without a selection: the
+/// box of Select > Transform Selection.
+#[tauri::command]
+pub async fn selection_bounds(
+    state: State<'_, AppState>,
+    document_id: u64,
+) -> Result<Option<crate::BoundsDto>, String> {
+    let (_, current) = snapshot(&state, document_id)?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    on_worker(move || {
+        Ok(selection::bounds(&current).map(|b| crate::BoundsDto {
+            left: i64::from(b.x),
+            top: i64::from(b.y),
+            right: b.right() as i64,
+            bottom: b.bottom() as i64,
+        }))
+    })
+    .await
+}
+
+/// Select > Transform Selection: the selection mapped by `matrix` (document pixels, `[a, b, c,
+/// d, e, f]`) and resampled, its pixels untouched: one undo entry. What leaves the canvas is
+/// dropped; nothing left selected deselects.
+#[tauri::command]
+pub async fn transform_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    matrix: [f64; 6],
+) -> Result<DocumentView, String> {
+    let transform = slopshop_core::Affine::from_array(matrix);
+    if !transform.is_finite() {
+        return Err("the transform is not finite".into());
+    }
+    let (canvas, current) = snapshot(&state, document_id)?;
+    let Some(current) = current.filter(|_| !transform.is_identity()) else {
+        return Ok(state.documents()?.get_mut(document_id)?.view());
+    };
+    let image = on_worker(move || {
+        selection::transformed(canvas, &current, transform).map_err(|e| e.to_string())
+    })
+    .await?;
+    set_selection(&state, document_id, image)
+}
+
 /// Select > Modify (`kind`: `feather`, `expand`, `contract`, `border`, `smooth`) by `amount`
 /// pixels, as one undo entry; nothing left selected deselects.
 #[tauri::command]

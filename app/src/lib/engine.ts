@@ -1221,6 +1221,12 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode }),
     ),
+  /** The selection's bounds (pixels selected even partly), `null` without one. */
+  selectionBounds: (documentId: number) =>
+    invoke<Bounds | null>("selection_bounds", { documentId }),
+  /** Select > Transform Selection: the selection mapped by `matrix` and resampled. */
+  transformSelection: (documentId: number, matrix: Matrix) =>
+    serial(() => invoke<DocumentView>("transform_selection", { documentId, matrix })),
   /**
    * Select > Grow (`contiguous`) and Similar: the Magic Wand's tolerance around the selection's
    * colors, added to it; it samples as the Magic Wand does.

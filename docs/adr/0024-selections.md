@@ -70,6 +70,9 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
 - Select > Grow and Similar are the Magic Wand started from every selected pixel at once (half
   covered or more), its tolerance taken around the range of their colors (each channel's lowest
   and highest), as in Photoshop: one engine for the three, the same sampling and color test.
+- Select > Transform Selection reuses Free Transform's box (the UI) and the layers' resampling
+  (ADR 0018, EWA from the matching pyramid level, exact for whole-pixel moves): soft edges stay
+  soft, and a tile reading only uniform tiles of one value stays uniform.
 - Quick Mask (Q) shows soft edges: a view overlay the GPU draws over the finished frame (after
   the display cache, in the encoded display space as Photoshop does), sampling the selection's
   pyramid like a layer's mask.
