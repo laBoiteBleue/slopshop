@@ -936,6 +936,22 @@ export const engine = {
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /** File > Open Recent: files and folders opened or saved, newest first (existing ones). */
+  recentFiles: () => invoke<string[]>("recent_files"),
+  /** File > Open Recent > Clear Recent File List. */
+  clearRecentFiles: () => invoke<void>("clear_recent_files"),
+  /**
+   * The welcome page's thumbnail of a recent entry (RGBA8 sRGB); rejects when there is none
+   * (folders, archives).
+   */
+  recentThumbnail: async (path: string) => {
+    const buffer = await invoke<ArrayBuffer>("recent_thumbnail", { path });
+    const view = new DataView(buffer);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
+    return new ImageData(pixels, width, height);
+  },
   /** The import dialog was cancelled. */
   closeVector: (path: string) => invoke<void>("close_vector", { path }),
   /**
@@ -1299,6 +1315,11 @@ export type AiTaskProgress = {
   done: number;
   total: number;
 };
+
+/** The recent files changed (opened, saved, cleared). Resolves once the listener is registered. */
+export async function onRecentFiles(handler: (paths: string[]) => void): Promise<() => void> {
+  return listen<string[]>("recent-files", (e) => handler(e.payload));
+}
 
 /** AI requests' progress. Resolves once the listener is registered. */
 export async function onAiProgress(

@@ -13,6 +13,7 @@
     engine,
     onExportEvents,
     onAiProgress,
+    onRecentFiles,
     onOpenEvents,
     type BrushRequest,
     type PaintTarget,
@@ -65,6 +66,8 @@
   import FillChoiceDialog, { type FillContents } from "./lib/FillChoiceDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
+  import RecentFiles from "./lib/RecentFiles.svelte";
+  import { recentLabels } from "./lib/recent";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
@@ -88,6 +91,8 @@
   let activeId = $state<number | null>(null);
   let active = $derived(tabs.find((d) => d.id === activeId) ?? null);
   let ready = $state(false);
+  /** File > Open Recent and the welcome page: files and folders, newest first (engine's list). */
+  let recentFiles = $state<string[]>([]);
   /** Native presentation: the engine draws the canvas area under the page (ADR 0002). */
   let nativeCanvas = $state(false);
 
@@ -2072,6 +2077,18 @@
           cmd(t("menu.file.new"), newDocument, keys("mod", "N")),
           cmd(t("menu.file.open"), () => void openWithDialog(), keys("mod", "O")),
           cmd(t("menu.file.openFolder"), () => void openFolderWithDialog()),
+          {
+            kind: "submenu",
+            label: t("menu.file.openRecent"),
+            disabled: recentFiles.length === 0,
+            items: [
+              ...recentLabels(recentFiles).map((label, i) =>
+                cmd(label, () => void openFiles([recentFiles[i]], "tab")),
+              ),
+              separator,
+              cmd(t("menu.file.clearRecent"), () => void engine.clearRecentFiles()),
+            ],
+          },
           cmd(
             t("menu.file.importLayers"),
             () => doc && void openWithDialog(doc.id),
@@ -2571,6 +2588,12 @@
       if (destroyed) stop();
       else stopAiProgress = stop;
     });
+    let stopRecentFiles: (() => void) | null = null;
+    void onRecentFiles((paths) => (recentFiles = paths)).then(async (stop) => {
+      if (destroyed) return stop();
+      stopRecentFiles = stop;
+      recentFiles = await engine.recentFiles().catch(() => []);
+    });
     // Subscribe first, then catch up with what happened before (e.g. startup files).
     void onOpenEvents({
       started: onOpenStarted,
@@ -2620,6 +2643,7 @@
       stopEvents?.();
       stopExportEvents?.();
       stopAiProgress?.();
+      stopRecentFiles?.();
       void stopDrop.then((unlisten) => unlisten());
       void stopClose.then((unlisten) => unlisten());
     };
@@ -2862,6 +2886,9 @@
               <button class="btn" onclick={newDocument}>{t("welcome.new")}</button>
             </div>
             <p class="muted">{t("welcome.drop")}</p>
+            {#if recentFiles.length > 0}
+              <RecentFiles paths={recentFiles} onopen={(path) => void openFiles([path], "tab")} />
+            {/if}
           </div>
         {/if}
         {#if dropTarget}

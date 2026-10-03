@@ -7,6 +7,8 @@ const fr: Messages = {
   "menu.file.new": "Nouveau…",
   "menu.file.open": "Ouvrir…",
   "menu.file.openFolder": "Ouvrir un dossier…",
+  "menu.file.openRecent": "Ouvrir les fichiers récents",
+  "menu.file.clearRecent": "Effacer la liste des fichiers récents",
   "menu.file.importLayers": "Importer comme calques…",
   "menu.file.close": "Fermer",
   "menu.file.closeAll": "Tout fermer",
@@ -263,6 +265,7 @@ const fr: Messages = {
   "welcome.open": "Ouvrir…",
   "welcome.new": "Nouveau document…",
   "welcome.drop": "…ou déposez des fichiers ici",
+  "welcome.recent": "Récents",
 
   "drop.newTab": "Déposez pour ouvrir dans un nouvel onglet",
   "drop.layer": "Déposez pour ajouter comme calque",
