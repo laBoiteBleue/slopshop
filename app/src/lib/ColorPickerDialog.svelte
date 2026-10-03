@@ -199,15 +199,21 @@
     }
   }
 
-  function setFromChannels(values: Partial<Record<ColorChannel, number>>) {
-    const all = { [channel]: valueOf(channel), ...values };
-    if (FAMILY[channel] === "hsb") {
+  /** Set `values`, channels of one family (HSB directly: hue survives grays). */
+  function setChannels(values: Partial<Record<ColorChannel, number>>) {
+    const channels = Object.keys(values) as ColorChannel[];
+    if (FAMILY[channels[0]] === "hsb") {
       const next: Hsb = [...hsb];
-      for (const [c, v] of Object.entries(all)) next[INDEX[c as ColorChannel]] = v as number;
+      for (const c of channels) next[INDEX[c]] = values[c] as number;
       hsb = next;
     } else {
-      setRgb(colorWith(all));
+      setRgb(colorWith(values));
     }
+  }
+
+  /** Set channels of the square or the slider, the slider's channel kept as it is. */
+  function setFromChannels(values: Partial<Record<ColorChannel, number>>) {
+    setChannels({ [channel]: valueOf(channel), ...values });
   }
 
   /** The fields: label, channel, shown scale (degrees, percents, bytes) and unit. */
@@ -226,7 +232,8 @@
   function typed(c: ColorChannel, scale: number, v: number) {
     if (!Number.isFinite(v)) return;
     const axis = RANGES[c];
-    setFromChannels({ [c]: Math.min(Math.max(v / scale, axis.min), axis.max) });
+    // A field sets its own channel, whatever the slider shows.
+    setChannels({ [c]: Math.min(Math.max(v / scale, axis.min), axis.max) });
   }
 
   /** The pointer is over the image: the eyedropper shows. */

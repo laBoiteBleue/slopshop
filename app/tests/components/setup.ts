@@ -3,8 +3,11 @@
 import "@testing-library/jest-dom/vitest";
 import "@testing-library/svelte/vitest";
 
-// Modal dialogs (jsdom/jsdom#3294): opened and closed as a browser does, without the top layer.
+// Dialogs (jsdom/jsdom#3294): opened and closed as a browser does, without the top layer.
 HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+  this.open = true;
+};
+HTMLDialogElement.prototype.show ??= function (this: HTMLDialogElement) {
   this.open = true;
 };
 HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement, value?: string) {
@@ -31,3 +34,7 @@ globalThis.IntersectionObserver ??= class {
     return [];
   }
 } as unknown as typeof IntersectionObserver;
+
+// Canvases: jsdom draws nothing (and complains); the components already handle no context.
+HTMLCanvasElement.prototype.getContext = (() =>
+  null) as typeof HTMLCanvasElement.prototype.getContext;
