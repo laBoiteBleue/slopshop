@@ -16,6 +16,33 @@ pub struct Bounds {
 }
 
 impl Bounds {
+    /// The box around `rect` (in a layer's pixels) placed by `transform`, in whole pixels.
+    fn placed(rect: crate::geom::Rect, transform: Affine) -> Bounds {
+        let [x0, y0, x1, y1] = transform.map_rect([
+            f64::from(rect.x),
+            f64::from(rect.y),
+            rect.right() as f64,
+            rect.bottom() as f64,
+        ]);
+        Bounds {
+            left: x0.floor() as i64,
+            top: y0.floor() as i64,
+            right: x1.ceil() as i64,
+            bottom: y1.ceil() as i64,
+        }
+    }
+
+    /// The common part, `None` when there is none.
+    fn intersection(self, other: Bounds) -> Option<Bounds> {
+        let b = Bounds {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+        (b.left < b.right && b.top < b.bottom).then_some(b)
+    }
+
     fn union(self, other: Bounds) -> Bounds {
         Bounds {
             left: self.left.min(other.left),
@@ -142,27 +169,95 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
             LayerContent::Group { children, .. } => collect_bounds(children, transform, out),
             LayerContent::Raster { image, .. } => {
                 if let Some(rect) = image.get().content_bounds() {
-                    // The box around the transformed content, in whole pixels.
-                    let [x0, y0, x1, y1] = transform.map_rect([
-                        f64::from(rect.x),
-                        f64::from(rect.y),
-                        rect.right() as f64,
-                        rect.bottom() as f64,
-                    ]);
-                    out.push((
-                        layer.id,
-                        Bounds {
-                            left: x0.floor() as i64,
-                            top: y0.floor() as i64,
-                            right: x1.ceil() as i64,
-                            bottom: y1.ceil() as i64,
-                        },
-                    ));
+                    out.push((layer.id, Bounds::placed(rect, transform)));
                 }
             }
             LayerContent::Fill { .. } | LayerContent::Adjustment { .. } => {}
         }
     }
+}
+
+/// Where some layer has pixels that can show, hidden layers included: the pixels that are not
+/// fully transparent, within their layer's enabled mask (and their groups'), in whole document
+/// pixels. Fill layers count only within a mask (they have no edges); adjustment layers have
+/// no pixels. What Image > Reveal All brings onto the canvas. `None`: no such pixel.
+pub fn content_extent(document: &Document) -> Option<Bounds> {
+    layers_extent(document.layers(), Affine::IDENTITY).within
+}
+
+/// Where layers have pixels.
+#[derive(Default)]
+struct Extent {
+    /// Pixels with edges.
+    within: Option<Bounds>,
+    /// A fill, which has none (until a mask gives it some).
+    everywhere: bool,
+}
+
+impl Extent {
+    fn within(bounds: Bounds) -> Extent {
+        Extent {
+            within: Some(bounds),
+            everywhere: false,
+        }
+    }
+
+    fn union(self, other: Extent) -> Extent {
+        Extent {
+            within: match (self.within, other.within) {
+                (Some(a), Some(b)) => Some(a.union(b)),
+                (a, b) => a.or(b),
+            },
+            everywhere: self.everywhere || other.everywhere,
+        }
+    }
+}
+
+fn layers_extent(layers: &[Layer], parent: Affine) -> Extent {
+    layers
+        .iter()
+        .map(|layer| layer_extent(layer, layer.transform.then(parent)))
+        .fold(Extent::default(), Extent::union)
+}
+
+fn layer_extent(layer: &Layer, transform: Affine) -> Extent {
+    let mask = layer.mask.as_ref().filter(|m| m.enabled);
+    let own = match &layer.content {
+        LayerContent::Fill { .. } => Extent {
+            within: None,
+            everywhere: true,
+        },
+        LayerContent::Adjustment { .. } => Extent::default(),
+        LayerContent::Group { children, .. } => layers_extent(children, transform),
+        LayerContent::Raster { image, .. } => {
+            // A mask made from the layer's transparency replaces its alpha (ADR 0014).
+            let rect = if mask.is_some_and(|m| m.replaces_alpha) {
+                Some(image.size().bounds())
+            } else {
+                image.get().content_bounds()
+            };
+            rect.map_or(Extent::default(), |r| {
+                Extent::within(Bounds::placed(r, transform))
+            })
+        }
+    };
+    let Some(mask) = mask else {
+        return own;
+    };
+    // Outside its image, a mask hides the layer.
+    let Some(shows) = mask
+        .image
+        .coverage_bounds()
+        .map(|r| Bounds::placed(r, transform))
+    else {
+        return Extent::default();
+    };
+    if own.everywhere {
+        return Extent::within(shows);
+    }
+    own.within
+        .and_then(|b| b.intersection(shows))
+        .map_or(Extent::default(), Extent::within)
 }
 
 /// The union of the bounds of `ids` and of everything inside those that are groups: what the
@@ -427,5 +522,84 @@ mod tests {
                 bottom: 8
             })
         );
+    }
+
+    /// A gray mask of a 20 × 20 layer showing `rect` only.
+    fn mask_showing(rect: Rect) -> LayerMask {
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let pixels = vec![255u8; rect.size().pixel_count() as usize];
+        let image = RasterImage::from_placed(Size::new(20, 20), gray, rect, &pixels, &[0]).unwrap();
+        LayerMask {
+            original: None,
+            image: Arc::new(image),
+            enabled: true,
+            replaces_alpha: false,
+        }
+    }
+
+    #[test]
+    fn the_content_extent_holds_every_pixel_that_can_show() {
+        let mut doc = Document::new(Size::new(20, 20));
+        assert_eq!(content_extent(&doc), None);
+        // A fill has no edges: it does not count, and does not hide the others.
+        let fill = layer(
+            &mut doc,
+            LayerContent::Fill {
+                color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+            },
+        );
+        push(&mut doc, fill);
+        assert_eq!(content_extent(&doc), None);
+        // Moved partly off the canvas, and hidden: it counts.
+        let mut moved = layer(&mut doc, square(Rect::new(2, 2, 10, 10)));
+        moved.transform = Affine::translation(-7.0, 15.0);
+        moved.visible = false;
+        push(&mut doc, moved);
+        let extent = |left, top, right, bottom| {
+            Some(Bounds {
+                left,
+                top,
+                right,
+                bottom,
+            })
+        };
+        assert_eq!(content_extent(&doc), extent(-5, 17, 5, 27));
+        // A mask hides part of a layer: only what it shows counts.
+        let mut masked = layer(&mut doc, square(Rect::new(0, 0, 20, 20)));
+        masked.transform = Affine::translation(10.0, -10.0);
+        masked.mask = Some(mask_showing(Rect::new(5, 5, 5, 5)));
+        let masked = push(&mut doc, masked);
+        assert_eq!(content_extent(&doc), extent(-5, -5, 20, 27));
+        // A disabled mask hides nothing.
+        Edit::SetLayerMaskEnabled {
+            id: masked,
+            enabled: false,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(content_extent(&doc), extent(-5, -10, 30, 27));
+        // A fill inside a masked group shows within the mask.
+        let inner = layer(
+            &mut doc,
+            LayerContent::Fill {
+                color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
+            },
+        );
+        let mut group = layer(
+            &mut doc,
+            LayerContent::Group {
+                children: vec![inner],
+                pass_through: false,
+            },
+        );
+        group.mask = Some(mask_showing(Rect::new(0, 0, 1, 1)));
+        group.transform = Affine::translation(-40.0, 0.0);
+        push(&mut doc, group);
+        assert_eq!(content_extent(&doc), extent(-40, -10, 30, 27));
     }
 }

@@ -163,6 +163,11 @@ pub enum EditError {
     InvalidTransform,
     /// A canvas without pixels.
     EmptyCanvas,
+    /// A canvas wider or taller than allowed (Reveal All), in pixels.
+    CanvasTooLarge {
+        width: u64,
+        height: u64,
+    },
     /// A resolution out of range (ADR 0028).
     InvalidResolution,
 }
@@ -210,6 +215,9 @@ impl fmt::Display for EditError {
                 write!(f, "a transform must be finite and invertible")
             }
             EditError::EmptyCanvas => write!(f, "a canvas must have pixels"),
+            EditError::CanvasTooLarge { width, height } => {
+                write!(f, "a canvas of {width} × {height} pixels is too large")
+            }
         }
     }
 }
@@ -760,6 +768,37 @@ impl Edit {
         Edit::reframe_image(doc, size, Affine::translation(-x as f64, -y as f64))
     }
 
+    /// The edit that grows the canvas to show every layer's pixels (Image > Reveal All): the
+    /// canvas and the extent of [`crate::pick::content_extent`] (hidden layers included, masks
+    /// applied), in whole pixels; layers move by whole pixels, nothing is resampled. `None` when
+    /// everything is on the canvas already. [`EditError::CanvasTooLarge`] beyond `max_side`
+    /// pixels a side.
+    pub fn reveal_all(doc: &Document, max_side: u32) -> Result<Option<Edit>, EditError> {
+        let size = doc.size();
+        let Some(extent) = crate::pick::content_extent(doc) else {
+            return Ok(None);
+        };
+        let left = extent.left.min(0);
+        let top = extent.top.min(0);
+        let right = extent.right.max(i64::from(size.width));
+        let bottom = extent.bottom.max(i64::from(size.height));
+        if left == 0
+            && top == 0
+            && right == i64::from(size.width)
+            && bottom == i64::from(size.height)
+        {
+            return Ok(None);
+        }
+        let (width, height) = (right - left, bottom - top);
+        if width > i64::from(max_side) || height > i64::from(max_side) {
+            return Err(EditError::CanvasTooLarge {
+                width: width as u64,
+                height: height as u64,
+            });
+        }
+        Edit::crop(doc, [left, top, width, height]).map(Some)
+    }
+
     /// The edit that turns or flips the whole image (Image > Image Rotation): exact, pixels are
     /// copied, never resampled; a quarter turn swaps the canvas's sides.
     pub fn rotate_image(doc: &Document, turn: ImageTurn) -> Result<Edit, EditError> {
@@ -779,6 +818,52 @@ impl Edit {
             _ => size,
         };
         Edit::reframe_image(doc, turned, Affine { a, b, c, d, e, f })
+    }
+
+    /// The edit that turns the whole image by `degrees` clockwise (Image > Image Rotation >
+    /// Arbitrary): as in Photoshop, the canvas grows to hold the turned canvas, centered on it.
+    /// The layers turn through their transforms: nothing is resampled into their pixels (they
+    /// are resampled when shown, ADR 0018) and what falls outside the canvas is kept. Multiples
+    /// of 90° are the exact quarter turns of [`Self::rotate_image`].
+    pub fn rotate_image_by(doc: &Document, degrees: f64) -> Result<Edit, EditError> {
+        if !degrees.is_finite() {
+            return Err(EditError::InvalidTransform);
+        }
+        let turn = degrees.rem_euclid(360.0);
+        if turn == 0.0 {
+            return Edit::reframe_image(doc, doc.size(), Affine::IDENTITY);
+        }
+        for (quarter, exact) in [
+            (90.0, ImageTurn::Clockwise),
+            (180.0, ImageTurn::HalfTurn),
+            (270.0, ImageTurn::CounterClockwise),
+        ] {
+            if turn == quarter {
+                return Edit::rotate_image(doc, exact);
+            }
+        }
+        let (sin, cos) = turn.to_radians().sin_cos();
+        let size = doc.size();
+        let (w, h) = (f64::from(size.width), f64::from(size.height));
+        // The turned canvas's bounding box, in whole pixels (a side within rounding noise of a
+        // whole number is that number).
+        let side = |v: f64| {
+            let whole = (v - 1e-9).ceil().max(1.0);
+            u32::try_from(whole as u64).map_err(|_| EditError::InvalidTransform)
+        };
+        let width = side(w * cos.abs() + h * sin.abs())?;
+        let height = side(w * sin.abs() + h * cos.abs())?;
+        // About the center: the old canvas's center goes to the new one's.
+        let (cx, cy) = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+        let by = Affine {
+            a: cos,
+            b: sin,
+            c: -sin,
+            d: cos,
+            e: cx - (cos * w / 2.0 - sin * h / 2.0),
+            f: cy - (sin * w / 2.0 + cos * h / 2.0),
+        };
+        Edit::reframe_image(doc, Size::new(width, height), by)
     }
 
     /// The edit that replaces group `id` by its layers, in its place and order: Layer > Ungroup
@@ -1203,6 +1288,135 @@ mod tests {
         }
         assert_eq!(doc.size(), Size::new(8, 6));
         assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
+    }
+
+    #[test]
+    fn an_arbitrary_rotation_grows_the_canvas_around_the_turned_image() {
+        let mut doc = Document::new(Size::new(10, 10));
+        let ids = stack(&mut doc, &["a"]);
+        let place =
+            |doc: &Document, x: f64, y: f64| doc.layer(ids[0]).unwrap().transform.apply(x, y);
+        let undo = Edit::rotate_image_by(&doc, 45.0)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // 10·√2 = 14.14…: the canvas holds the turned one, whole pixels.
+        assert_eq!(doc.size(), Size::new(15, 15));
+        let close = |(x, y): (f64, f64), (ex, ey): (f64, f64)| {
+            assert!((x - ex).abs() < 1e-9 && (y - ey).abs() < 1e-9, "{x}, {y}");
+        };
+        // The center stays the center; the top-left corner goes up, on the vertical axis.
+        close(place(&doc, 5.0, 5.0), (7.5, 7.5));
+        close(place(&doc, 0.0, 0.0), (7.5, 7.5 - 50f64.sqrt()));
+        // Clockwise: the top-right corner goes to the right.
+        close(place(&doc, 10.0, 0.0), (7.5 + 50f64.sqrt(), 7.5));
+        // One edit, undone as one: the canvas and the layer come back exactly.
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.size(), Size::new(10, 10));
+        assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
+
+        // A wide canvas turned by 30°: w·cos + h·sin by w·sin + h·cos.
+        let mut doc = Document::new(Size::new(20, 10));
+        let ids = stack(&mut doc, &["a"]);
+        Edit::rotate_image_by(&doc, -30.0)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(23, 19));
+        let transform = doc.layer(ids[0]).unwrap().transform;
+        // Counter clockwise: the top-right corner goes up.
+        let (_, y) = transform.apply(20.0, 0.0);
+        let (_, y0) = transform.apply(0.0, 0.0);
+        assert!(y < y0);
+    }
+
+    #[test]
+    fn reveal_all_grows_the_canvas_to_every_layer_by_whole_pixels() {
+        let mut doc = Document::new(Size::new(10, 10));
+        // Nothing outside: nothing to do.
+        stack(&mut doc, &["background"]);
+        let id = raster_layer(&mut doc, image(Size::new(4, 4), false, 255));
+        assert_eq!(Edit::reveal_all(&doc, 100), Ok(None));
+        // Moved past the top-left corner: the canvas grows there, the layers follow.
+        Edit::SetLayerTransform {
+            id,
+            transform: Affine::translation(-3.0, -2.0),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let undo = Edit::reveal_all(&doc, 100)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(13, 12));
+        assert!(doc.layer(id).unwrap().transform.is_identity());
+        assert_eq!(Edit::reveal_all(&doc, 100), Ok(None));
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.size(), Size::new(10, 10));
+        // Half a pixel past the bottom-right corner: whole pixels, the layer not resampled.
+        Edit::SetLayerTransform {
+            id,
+            transform: Affine::translation(9.5, 9.5),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::reveal_all(&doc, 100)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(14, 14));
+        assert_eq!(
+            doc.layer(id).unwrap().transform,
+            Affine::translation(9.5, 9.5)
+        );
+        // Too far: refused.
+        Edit::SetLayerTransform {
+            id,
+            transform: Affine::translation(500.0, 0.0),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            Edit::reveal_all(&doc, 100),
+            Err(EditError::CanvasTooLarge {
+                width: 504,
+                height: 14
+            })
+        );
+    }
+
+    #[test]
+    fn arbitrary_rotations_by_quarter_turns_are_exact() {
+        let mut doc = Document::new(Size::new(8, 6));
+        let ids = stack(&mut doc, &["a"]);
+        for (degrees, turn) in [
+            (90.0, ImageTurn::Clockwise),
+            (-90.0, ImageTurn::CounterClockwise),
+            (270.0, ImageTurn::CounterClockwise),
+            (180.0, ImageTurn::HalfTurn),
+            (-180.0, ImageTurn::HalfTurn),
+        ] {
+            assert_eq!(
+                Edit::rotate_image_by(&doc, degrees).unwrap(),
+                Edit::rotate_image(&doc, turn).unwrap(),
+                "{degrees}"
+            );
+        }
+        let undo = Edit::rotate_image_by(&doc, 360.0)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.size(), Size::new(8, 6));
+        assert!(doc.layer(ids[0]).unwrap().transform.is_identity());
+        undo.apply(&mut doc).unwrap();
+        for wrong in [f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                Edit::rotate_image_by(&doc, wrong),
+                Err(EditError::InvalidTransform)
+            );
+        }
     }
 
     #[test]
