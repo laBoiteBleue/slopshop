@@ -289,12 +289,26 @@ impl LayerMask {
     }
 }
 
+/// Pixels per inch of a document whose file does not say (Photoshop's default too).
+pub const DEFAULT_RESOLUTION: f64 = 72.0;
+
+/// Resolutions accepted, pixels per inch (ADR 0028).
+pub const RESOLUTION_RANGE: std::ops::RangeInclusive<f64> = 1.0..=100_000.0;
+
+/// `ppi` can be a document's resolution.
+pub fn valid_resolution(ppi: f64) -> bool {
+    RESOLUTION_RANGE.contains(&ppi)
+}
+
 #[derive(Debug, Clone)]
 pub struct Document {
     size: Size,
     working_space: ColorSpace,
     /// Where layers are blended (ADR 0012).
     blend_space: BlendSpace,
+    /// Pixels per inch: how large the document prints (ADR 0028). Metadata only: the pixels do
+    /// not depend on it.
+    resolution: f64,
     /// Bottom to top.
     layers: Vec<Layer>,
     /// What the next operation applies to (ADR 0024): a gray coverage mask at the origin;
@@ -312,6 +326,7 @@ impl Document {
             size,
             working_space: WORKING_SPACE,
             blend_space: BlendSpace::default(),
+            resolution: DEFAULT_RESOLUTION,
             layers: Vec::new(),
             selection: None,
             next_layer_id: 1,
@@ -340,6 +355,7 @@ impl Document {
             size,
             working_space,
             blend_space,
+            resolution: DEFAULT_RESOLUTION,
             layers,
             selection: None,
             next_layer_id,
@@ -349,6 +365,20 @@ impl Document {
 
     pub fn size(&self) -> Size {
         self.size
+    }
+
+    /// Pixels per inch (ADR 0028).
+    pub fn resolution(&self) -> f64 {
+        self.resolution
+    }
+
+    /// The document with `ppi` as its resolution (a file's, when it is read).
+    pub fn with_resolution(mut self, ppi: f64) -> Result<Self, RestoreError> {
+        if !valid_resolution(ppi) {
+            return Err(RestoreError::InvalidResolution);
+        }
+        self.resolution = ppi;
+        Ok(self)
     }
 
     /// The id the next allocated layer will get: every id below it was handed out already.
@@ -478,6 +508,10 @@ impl Document {
         std::mem::replace(&mut self.size, size)
     }
 
+    pub(crate) fn set_resolution(&mut self, ppi: f64) -> f64 {
+        std::mem::replace(&mut self.resolution, ppi)
+    }
+
     pub(crate) fn set_blend_space(&mut self, space: BlendSpace) -> BlendSpace {
         std::mem::replace(&mut self.blend_space, space)
     }
@@ -585,11 +619,14 @@ pub enum RestoreError {
     InvalidTransform(LayerId),
     /// Painted pixels of another size than the original (ADR 0027).
     InvalidPaint(LayerId),
+    /// A resolution that is not a finite number of pixels per inch in range (ADR 0028).
+    InvalidResolution,
 }
 
 impl fmt::Display for RestoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            RestoreError::InvalidResolution => write!(f, "invalid resolution"),
             RestoreError::UnsupportedWorkingSpace(space) => {
                 write!(f, "unsupported working space {space:?}")
             }

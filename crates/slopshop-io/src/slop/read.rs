@@ -299,6 +299,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
         layers,
         doc.next_node_id,
     )
+    .and_then(|document| document.with_resolution(document_resolution(doc)))
     .map_err(FileError::Document)?;
     Ok((document, index, records, residue))
 }
@@ -548,6 +549,13 @@ pub(super) fn document_blend_space(doc: &DocumentDto) -> Result<BlendSpace, File
         Some(id) => BlendSpace::from_id(id)
             .ok_or_else(|| FileError::UnknownNodeType(format!("blend space {id}"))),
     }
+}
+
+/// The document's resolution, pixels per inch; 72 before schema 0.11 (ADR 0028). Out of range,
+/// it is refused when the document is restored.
+pub(super) fn document_resolution(doc: &DocumentDto) -> f64 {
+    doc.resolution
+        .unwrap_or(slopshop_core::document::DEFAULT_RESOLUTION)
 }
 
 /// The raw payload of the record a slot refers to, checked against its kind and hash.

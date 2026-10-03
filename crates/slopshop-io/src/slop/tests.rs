@@ -86,6 +86,8 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
 fn sample_document() -> Document {
     let size = Size::new(300, 270);
     let mut doc = Document::new(size);
+    // Not the default: the resolution must round-trip (ADR 0028).
+    Edit::SetResolution { ppi: 240.0 }.apply(&mut doc).unwrap();
     push(
         &mut doc,
         "fond",
@@ -196,6 +198,7 @@ fn assert_same(a: &Document, b: &Document) {
     assert_eq!(a.size(), b.size());
     assert_eq!(a.working_space(), b.working_space());
     assert_eq!(a.blend_space(), b.blend_space());
+    assert_eq!(a.resolution(), b.resolution());
     assert_eq!(a.next_layer_id(), b.next_layer_id());
     assert_same_layers(a.layers(), b.layers());
 }
@@ -1066,6 +1069,15 @@ fn blend_modes_and_space_round_trip_and_unknown_ones_are_refused() {
         Ok(BlendSpace::Perceptual)
     );
     assert_eq!(space(r#","blend_space":"cmyk""#), Err("newerVersion"));
+    // Resolution: 72 ppi before schema 0.11 (ADR 0028).
+    let resolution = |extra: &str| {
+        let json = format!(
+            r#"{{"size":[1,1],"working_space":{{"primaries":{{"r":[0.708,0.292],"g":[0.17,0.797],"b":[0.131,0.046],"w":[0.3127,0.329]}},"transfer":{{"kind":"linear"}}}},"next_node_id":1,"stack":[]{extra}}}"#
+        );
+        read::document_resolution(&serde_json::from_str(&json).unwrap())
+    };
+    assert_eq!(resolution(""), 72.0);
+    assert_eq!(resolution(r#","resolution":300.5"#), 300.5);
     fs::remove_file(&path).ok();
 }
 

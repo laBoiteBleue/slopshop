@@ -560,6 +560,7 @@ fn build_manifest(
             next_node_id: document.next_layer_id(),
             stack: document.layers().iter().map(|l| l.id.get()).collect(),
             blend_space: Some(document.blend_space().id().to_owned()),
+            resolution: Some(document.resolution()),
             extra: residue.document.clone(),
         },
         nodes,
