@@ -249,6 +249,13 @@ built. Contributors: propose here first.
   dialog. Its color stays editable: the Properties panel shows it
   as a swatch, and a click on the swatch or a double-click on the layer's thumbnail opens the
   color picker (one undo entry). Named "Color Fill 1" as in Photoshop.
+- Layer > Align (Left Edges, Horizontal Centers, Right Edges, Top Edges, Vertical Centers,
+  Bottom Edges) and Distribute (Horizontal and Vertical Centers, Horizontal and Vertical
+  Spacing: Photoshop's four edge distributions left out, rarely useful), also as buttons in the
+  Move tool's options bar, as in Photoshop: one implementation in the engine. Layers count by
+  the box of their visible pixels, a group as one; several align on the box around them all,
+  a single one on the canvas, and with a selection on the selection's box. Distribute keeps the
+  first and the last layer and needs three; one undo entry each.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
@@ -297,11 +304,6 @@ maintainer's answers to the audit:
 - **Decided, to build**:
   - Gradient and Pattern fill layers come with a gradient engine and patterns, not before (no
     dead entries).
-  - Layer > Align (left, horizontal centers, right, top, vertical centers, bottom) and
-    Distribute (horizontal and vertical centers, horizontal and vertical spacing), one
-    implementation shared with buttons in the Move tool's options bar. As Photoshop: aligned
-    to the selected layers' common bounds, to the canvas for one layer, to the selection's
-    bounds when there is one.
   - New Layer from Visible (Photoshop's stamp visible, Alt+Shift+Ctrl+E): the visible
     composite as a new layer at the top of the document, the layers kept.
   - Merge Visible keeps Photoshop's Shift+Ctrl+E; Export moves to Alt+Shift+Ctrl+W
