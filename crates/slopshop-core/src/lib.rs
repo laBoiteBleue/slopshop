@@ -18,8 +18,10 @@
 //! - [`copy`]: the clipboard's pixels (Copy Merged, the image other applications get) and where
 //!   Paste places what it pastes.
 //! - [`job`]: cancellation and progress of background jobs.
+//! - [`auto`]: Image > Auto Tone, Auto Contrast and Auto Color, Levels computed from the image.
 
 pub mod adjust;
+pub mod auto;
 pub mod blend;
 mod blue_noise;
 pub mod color;

@@ -142,6 +142,14 @@ built. Contributors: propose here first.
   Invert applies at once. What is applied is
   kept in the layer's stack (ADR 0029), listed below the layer and deletable; the same
   adjustment applied twice in a row is one entry (×2), two Inverts cancel.
+- Image > Auto Tone (Shift+Ctrl+L), Auto Contrast (Alt+Shift+Ctrl+L), Auto Color
+  (Shift+Ctrl+B), Photoshop's three classic algorithms, 0.1 % clipped at each end: Auto
+  Contrast stretches the three channels alike (colors keep their relations), Auto Tone each
+  channel on its own, Auto Color maps each channel from the average of the darkest to the
+  average of the lightest pixels and makes the nearly gray midtones gray. The visible image is
+  analyzed once (within the selection when there is one; maintainer's choice, 2026-10-03) and
+  the Levels found are applied to every pixel layer shown, as Image > Adjustments does: an entry
+  of each layer's stack, deletable, never recomputed. Nothing to change: nothing done.
 - The Restore Eraser, in the Eraser's group (E, Shift+E to switch, the Eraser's options): it
   brings back a layer's original through all of its paint where it rubs, the adjustments
   applied from Image > Adjustments staying; paint fully rubbed out leaves the layer's list.

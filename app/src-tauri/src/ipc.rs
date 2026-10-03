@@ -389,6 +389,14 @@ pub enum EditRequest {
         #[serde(default)]
         curves: Option<Vec<Vec<[u8; 2]>>>,
     },
+    /// Image > Auto Tone, Auto Contrast and Auto Color (`correction`: `tone`, `contrast` or
+    /// `color`):
+    /// the visible image analyzed, the Levels found applied as `ApplyEffect` does to `ids`.
+    /// Nothing to analyze or to change: nothing done.
+    AutoLevels {
+        ids: Vec<u64>,
+        correction: String,
+    },
     /// What Image > Adjustments will do, shown while its dialog is open: above each layer it
     /// applies to, an adjustment layer at its neutral settings clipped to it, the selection as
     /// its mask. Meant for a live gesture that is cancelled (then `ApplyEffect`).
@@ -565,6 +573,22 @@ impl EditRequest {
                 }
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::apply_effect(session.document(), &ids, built).map_err(|e| e.to_string())?
+            }
+            EditRequest::AutoLevels { ids, correction } => {
+                use slopshop_core::auto::{AutoKind, auto_levels};
+                let kind = match correction.as_str() {
+                    "tone" => AutoKind::Tone,
+                    "contrast" => AutoKind::Contrast,
+                    "color" => AutoKind::Color,
+                    other => return Err(format!("unknown automatic correction {other}")),
+                };
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                match auto_levels(session.document(), kind).map_err(|e| e.to_string())? {
+                    Some(levels) => Edit::apply_effect(session.document(), &ids, levels)
+                        .map_err(|e| e.to_string())?,
+                    // An empty batch leaves no undo entry.
+                    None => Edit::Batch(Vec::new()),
+                }
             }
             EditRequest::PreviewEffect { ids, adjustment } => {
                 let adjustment = Adjustment::defaults(&adjustment)

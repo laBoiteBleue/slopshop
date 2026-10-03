@@ -1,7 +1,7 @@
 // The edits of the Image menu and the Crop tool, from what the dialogs and the frame give:
 // none when nothing would change (OK without a change leaves nothing to undo, as in Photoshop).
 
-import type { Bounds, EditRequest } from "./engine";
+import type { AutoCorrection, Bounds, EditRequest } from "./engine";
 
 type Size = { width: number; height: number };
 
@@ -53,4 +53,12 @@ export function cropEdit(size: Size, frame: Bounds): EditRequest | null {
     width: frame.right - frame.left,
     height: frame.bottom - frame.top,
   };
+}
+
+/**
+ * Image > Auto Tone, Auto Contrast or Auto Color on the layers `ids` (every pixel layer shown):
+ * the engine analyzes the visible image; null without a layer to apply it to.
+ */
+export function autoLevelsEdit(ids: number[], correction: AutoCorrection): EditRequest | null {
+  return ids.length > 0 ? { kind: "autoLevels", ids, correction } : null;
 }

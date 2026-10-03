@@ -46,6 +46,9 @@ export const SHORTCUTS = {
   adjustColorBalance: ["mod+b"],
   adjustBlackWhite: ["alt+shift+mod+b"],
   adjustInvert: ["mod+i"],
+  autoTone: ["shift+mod+l"],
+  autoContrast: ["alt+shift+mod+l"],
+  autoColor: ["shift+mod+b"],
   imageSize: ["alt+mod+i"],
   canvasSize: ["alt+mod+c"],
   // Layer
