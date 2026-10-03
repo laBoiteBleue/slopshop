@@ -61,6 +61,7 @@ fn exr_spec(sample: ExrSample, space: ColorSpace, keep_alpha: bool) -> ExportSpe
         // A synthetic source, not a document: flattened in linear light, as the expected
         // samples are computed.
         blend_space: BlendSpace::Linear,
+        resolution: None,
     }
 }
 

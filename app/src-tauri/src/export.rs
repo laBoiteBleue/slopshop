@@ -315,6 +315,7 @@ pub(crate) async fn export_document(
         .map_err(|e| ExportFailed::new(None, &e))?;
     // Not an export setting: transparency is flattened where the document blends.
     spec.blend_space = document.blend_space();
+    spec.resolution = Some(document.resolution());
     let (id, cancel) = state.exports.start();
     let started = ExportStarted {
         id,

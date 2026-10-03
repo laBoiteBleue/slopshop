@@ -1387,8 +1387,9 @@ impl ExportSpecDto {
             matte: LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0),
             dither: self.dither,
             gray: self.gray,
-            // The document's, set by the caller: the UI does not choose it.
+            // The document's, set by the caller: the UI does not choose them.
             blend_space: BlendSpace::default(),
+            resolution: None,
         })
     }
 }
@@ -1519,6 +1520,7 @@ mod tests {
                 dither: false,
                 gray: false,
                 blend_space: BlendSpace::default(),
+                resolution: None,
             }
         );
         assert_eq!(
@@ -1540,6 +1542,11 @@ mod tests {
     #[test]
     fn default_specs_round_trip() {
         let document = Document::new(Size::new(8, 8));
+        // The resolution is the document's, set by the caller, not the UI's.
+        let unplaced = |kind| ExportSpec {
+            resolution: None,
+            ..default_spec(kind, &document)
+        };
         for format in [
             ExportFormatId::Png,
             ExportFormatId::Tiff,
@@ -1565,7 +1572,7 @@ mod tests {
             ExportFormatId::Pdf,
             ExportFormatId::Jpeg2000,
         ] {
-            let spec = default_spec(format.kind(), &document);
+            let spec = unplaced(format.kind());
             let dto = ExportSpecDto::new(&spec);
             assert_eq!(dto.format, format);
             assert_eq!(dto.to_spec(None).unwrap(), spec, "{format:?}");
@@ -1589,7 +1596,7 @@ mod tests {
                 depth: PngDepth::U16,
                 compression: Jpeg2000Compression::Lossy { quality: 42 },
             },
-            ..default_spec(ExportFormatKind::Jpeg2000, &document)
+            ..unplaced(ExportFormatKind::Jpeg2000)
         };
         let dto = ExportSpecDto::new(&lossy);
         assert_eq!(dto.quality, Some(42));
@@ -1605,6 +1612,7 @@ mod tests {
             dither: true,
             gray: false,
             blend_space: BlendSpace::default(),
+            resolution: None,
         };
         assert_eq!(ExportSpecDto::new(&tiff).to_spec(None).unwrap(), tiff);
     }
@@ -1928,6 +1936,7 @@ mod tests {
             dither: true,
             gray: false,
             blend_space: BlendSpace::default(),
+            resolution: None,
         };
         let dto = ExportSpecDto::new(&spec);
         assert_eq!(dto.space, CUSTOM_SPACE);

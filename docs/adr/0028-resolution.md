@@ -23,8 +23,11 @@ the print dialog had to ask for one every time, and files lost theirs on the way
    read as 72. A compatible addition: an older SlopShop keeps the field as unknown data.
 5. **Pixels per inch internally, both units in the UI**: Photoshop shows pixels/inch or
    pixels/cm; sizes in cm, mm or inches are always computed from pixels and resolution.
-6. **Image files**: readers and writers carry the resolution where the format has one (a
-   follow-up: JPEG, PNG, TIFF, PSD first).
+6. **Image files**: readers and writers carry the resolution where the format has one: JPEG
+   (JFIF density, else EXIF `XResolution` on reading; JFIF on writing, in whole pixels per
+   inch), PNG (`pHYs`, whole pixels per meter), TIFF (`XResolution` and `ResolutionUnit`),
+   PSD (ResolutionInfo, resource 1005). It is read from the header apart from the pixels, and
+   only for a new document: a file opened as a layer does not change the document's.
 
 ## Alternatives
 

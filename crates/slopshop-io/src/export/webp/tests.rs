@@ -44,6 +44,7 @@ fn webp_spec(compression: WebpCompression, keep_alpha: bool) -> ExportSpec {
         // A synthetic source, not a document: flattened in linear light, as the expected
         // samples are computed.
         blend_space: BlendSpace::Linear,
+        resolution: None,
     }
 }
 

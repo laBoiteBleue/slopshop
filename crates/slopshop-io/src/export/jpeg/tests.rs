@@ -50,6 +50,7 @@ fn jpeg_spec(quality: u8, subsampling: JpegSubsampling) -> ExportSpec {
         // A synthetic source, not a document: flattened in linear light, as the expected
         // samples are computed.
         blend_space: BlendSpace::Linear,
+        resolution: None,
     }
 }
 
@@ -174,7 +175,7 @@ fn rows_must_come_in_order() {
     let path = temp_path("rows.jpg");
     let new_writer = || {
         let file = File::create(&path).unwrap();
-        JpegWriter::new(file, size, target, 90, JpegSubsampling::S420).unwrap()
+        JpegWriter::new(file, size, target, 90, JpegSubsampling::S420, None).unwrap()
     };
 
     let mut writer = new_writer();
@@ -312,7 +313,7 @@ fn unsupported_targets_are_rejected() {
         (rgb8, Size::new(2, 2), 101, "invalidSpec"),
     ] {
         let file = File::create(&path).unwrap();
-        let result = JpegWriter::new(file, size, format, quality, JpegSubsampling::S444);
+        let result = JpegWriter::new(file, size, format, quality, JpegSubsampling::S444, None);
         assert_eq!(
             result.err().map(|e| e.code()),
             Some(code),

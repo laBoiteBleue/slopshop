@@ -875,7 +875,16 @@ fn insert_imported(
     target: OpenTarget,
 ) -> Result<DocumentView, String> {
     let warnings: Vec<_> = imported.warnings.iter().map(|w| w.id()).collect();
-    insert_image(state, name, layer_name, imported.image, warnings, target)
+    match (target, imported.resolution) {
+        // A new document takes the file's resolution (ADR 0028); out of range, the default.
+        (OpenTarget::NewTab, Some(ppi)) => {
+            let session = image_session(imported.image, layer_name);
+            let resolved = session.document().clone().with_resolution(ppi);
+            let session = resolved.map_or(session, Session::new);
+            state.add_document(session, Some(name.to_owned()), warnings)
+        }
+        _ => insert_image(state, name, layer_name, imported.image, warnings, target),
+    }
 }
 
 /// Put a layered file (Photoshop) into its target: a new tab, or its layers on top of the

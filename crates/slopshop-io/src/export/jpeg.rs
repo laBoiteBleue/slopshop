@@ -104,6 +104,7 @@ impl JpegWriter {
         target: PixelFormat,
         quality: u8,
         subsampling: JpegSubsampling,
+        resolution: Option<f64>,
     ) -> Result<Self, ExportError> {
         let gray = target.layout == ChannelLayout::Gray;
         if !(gray || target.layout == ChannelLayout::Rgb) || target.sample != SampleType::U8 {
@@ -137,6 +138,7 @@ impl JpegWriter {
             subsampling,
             profile,
             gray,
+            resolution,
         };
         let encoder = thread::Builder::new()
             .name("jpeg-writer".to_owned())
@@ -247,6 +249,8 @@ struct Settings {
     subsampling: JpegSubsampling,
     profile: Vec<u8>,
     gray: bool,
+    /// Pixels per inch, in JFIF's density (ADR 0028).
+    resolution: Option<f64>,
 }
 
 /// The encoding thread: header, ICC profile, then every row pulled from the bands received.
@@ -268,6 +272,11 @@ fn encode(
         JpegSubsampling::S420 => SamplingFactor::F_2_2,
     });
     encoder.set_chroma_subsampling_method(ChromaSubsamplingMethod::Average);
+    if let Some(ppi) = settings.resolution {
+        // JFIF stores whole pixels per inch.
+        let ppi = ppi.round().clamp(1.0, f64::from(u16::MAX)) as u16;
+        encoder.set_density(jpeg_encoder::PixelDensity::dpi(ppi));
+    }
     encoder
         .add_icc_profile(&settings.profile)
         .map_err(encode_error)?;

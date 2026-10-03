@@ -73,6 +73,7 @@ fn png_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool) -> ExportSpec 
         dither: true,
         gray: false,
         blend_space: BlendSpace::default(),
+        resolution: None,
     }
 }
 
@@ -574,6 +575,7 @@ fn non_finite_samples_replaced_by_the_source_are_reported() {
         dither: false,
         gray: false,
         blend_space: BlendSpace::default(),
+        resolution: None,
     };
     let report = export(&doc, &path, &spec).unwrap();
     std::fs::remove_file(&path).ok();
@@ -607,6 +609,7 @@ fn unsupported_spaces_are_rejected_before_writing() {
             dither: false,
             gray: false,
             blend_space: BlendSpace::default(),
+            resolution: None,
         };
         let result = export_image(
             &path,
@@ -676,6 +679,7 @@ fn target_formats_follow_the_format_conventions() {
         dither: false,
         gray: false,
         blend_space: BlendSpace::default(),
+        resolution: None,
     };
     let alpha = |format| spec(format).target_format().alpha;
     let tiff = |sample| ExportFormat::Tiff {
@@ -717,6 +721,14 @@ fn raster(size: Size, layout: ChannelLayout, sample: SampleType, space: ColorSpa
 
 #[test]
 fn default_specs_follow_the_sources() {
+    // The document's resolution (ADR 0028), checked apart from the rest.
+    let placed = |spec: ExportSpec| {
+        assert_eq!(spec.resolution, Some(72.0));
+        ExportSpec {
+            resolution: None,
+            ..spec
+        }
+    };
     use ChannelLayout::{Rgb, Rgba};
     use ExportFormatKind::{Exr, Png, Tiff};
     let size = Size::new(4, 4);
@@ -724,7 +736,7 @@ fn default_specs_follow_the_sources() {
     // An opaque 8-bit sRGB photo.
     let doc = raster_document(raster(size, Rgb, SampleType::U8, ColorSpace::SRGB));
     let png = default_spec(Png, &doc);
-    assert_eq!(png, png_spec(PngDepth::U8, ColorSpace::SRGB, false));
+    assert_eq!(placed(png), png_spec(PngDepth::U8, ColorSpace::SRGB, false));
     let tiff = default_spec(Tiff, &doc);
     assert_eq!(
         (tiff.format, tiff.space, tiff.keep_alpha),
@@ -752,7 +764,10 @@ fn default_specs_follow_the_sources() {
     // 16-bit Display P3 with alpha: kept in P3 at 16 bits.
     let doc = raster_document(raster(size, Rgba, SampleType::U16, ColorSpace::DISPLAY_P3));
     let png = default_spec(Png, &doc);
-    assert_eq!(png, png_spec(PngDepth::U16, ColorSpace::DISPLAY_P3, true));
+    assert_eq!(
+        placed(png),
+        png_spec(PngDepth::U16, ColorSpace::DISPLAY_P3, true)
+    );
     assert_eq!(default_spec(Tiff, &doc).space, ColorSpace::DISPLAY_P3);
 
     // 16-bit PQ: PNG can tag it (cICP), TIFF cannot.
@@ -973,6 +988,7 @@ fn gray_spec(format: ExportFormat, space: ColorSpace, keep_alpha: bool) -> Expor
         dither: true,
         gray: true,
         blend_space: BlendSpace::default(),
+        resolution: None,
     }
 }
 
@@ -1725,6 +1741,7 @@ fn bmp_and_tga_round_trip_bit_exact() {
                 dither: true,
                 gray: false,
                 blend_space: BlendSpace::default(),
+                resolution: None,
             };
             let path = temp_path(&format!("simple-{i}-{keep_alpha}.{extension}"));
             let report = export(&doc, &path, &spec).unwrap();
@@ -1789,6 +1806,7 @@ fn netpbm_round_trips_are_exact() {
             dither: true,
             gray,
             blend_space: BlendSpace::default(),
+            resolution: None,
         };
         let path = temp_path(&format!("netpbm.{extension}"));
         export(&doc, &path, &spec).unwrap();
@@ -1902,6 +1920,7 @@ fn avif_spec(depth: AvifDepth, quality: u8, space: ColorSpace) -> ExportSpec {
         dither: false,
         gray: false,
         blend_space: BlendSpace::default(),
+        resolution: None,
     }
 }
 
@@ -2037,6 +2056,7 @@ fn jxl_spec(depth: PngDepth, space: ColorSpace, keep_alpha: bool, gray: bool) ->
         dither: false,
         gray,
         blend_space: BlendSpace::default(),
+        resolution: None,
     }
 }
 
@@ -2152,6 +2172,7 @@ fn simple_spec(format: ExportFormat, space: ColorSpace, keep_alpha: bool) -> Exp
         dither: true,
         gray: false,
         blend_space: BlendSpace::default(),
+        resolution: None,
     }
 }
 
@@ -3166,4 +3187,66 @@ fn jpeg2000_refuses_what_it_cannot_store() {
     assert!(supports_gray(kind, &ColorSpace::SRGB));
     assert!(!supports_space(kind, &ColorSpace::DISPLAY_P3));
     assert_eq!(max_side(kind), Some(65_535));
+}
+
+#[test]
+fn the_resolution_survives_a_round_trip() {
+    // A document at 240 ppi (ADR 0028), written and read back in every format that stores one.
+    let mut doc = fill_document(Size::new(30, 20), LinearRgba::new(0.2, 0.4, 0.6, 1.0));
+    Edit::SetResolution { ppi: 240.0 }.apply(&mut doc).unwrap();
+    for (name, format) in [
+        (
+            "resolution.png",
+            ExportFormat::Png {
+                depth: PngDepth::U8,
+                compression: PngCompression::Fast,
+            },
+        ),
+        (
+            "resolution.jpg",
+            ExportFormat::Jpeg {
+                quality: 90,
+                subsampling: JpegSubsampling::S444,
+            },
+        ),
+        (
+            "resolution.tif",
+            ExportFormat::Tiff {
+                sample: TiffSample::U8,
+                compression: TiffCompression::None,
+            },
+        ),
+    ] {
+        let path = temp_path(name);
+        let spec = default_spec(format.kind(), &doc);
+        let spec = ExportSpec { format, ..spec };
+        export(&doc, &path, &spec).unwrap();
+        let read = crate::open_image(&path).unwrap().resolution;
+        let read = read.unwrap_or_else(|| panic!("{name}: no resolution read"));
+        std::fs::remove_file(&path).ok();
+        // pHYs stores whole pixels per meter: 240 ppi is 9449 px/m.
+        assert!((read - 240.0).abs() < 0.01, "{name}: {read}");
+    }
+    let path = temp_path("resolution.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U8,
+        space: ColorSpace::SRGB,
+        dither: false,
+        large: false,
+    };
+    export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let read = match crate::open_file(&path).unwrap() {
+        crate::Opened::Layers(opened) => opened.document.resolution(),
+        crate::Opened::Image(image) => image.resolution.unwrap(),
+    };
+    std::fs::remove_file(&path).ok();
+    assert_eq!(read, 240.0);
 }

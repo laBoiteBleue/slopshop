@@ -38,6 +38,8 @@ mod layers;
 const SIGNATURE: &[u8; 4] = b"8BPS";
 const RESOURCE_SIGNATURE: &[u8; 4] = b"8BIM";
 const RESOURCE_ICC: u16 = 1039;
+/// ResolutionInfo: the horizontal resolution first, pixels per inch in 16.16 fixed point.
+const RESOURCE_RESOLUTION: u16 = 1005;
 const RESOURCE_TRANSPARENCY_INDEX: u16 = 1047;
 const RESOURCE_VERSION_INFO: u16 = 1057;
 
@@ -122,6 +124,8 @@ struct Header {
     color_data: Vec<u8>,
     icc_profile: Option<Vec<u8>>,
     transparent_index: Option<u16>,
+    /// Pixels per inch (ADR 0028).
+    resolution: Option<f64>,
     /// The composite is real (else Photoshop wrote a blank one: "Maximize Compatibility" off).
     real_merged_data: bool,
 }
@@ -246,6 +250,7 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
         color_data,
         icc_profile: None,
         transparent_index: None,
+        resolution: None,
         real_merged_data: true,
     };
     if channels < header.color_channels() {
@@ -254,6 +259,10 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
     for (id, data) in resource_blocks(&resources)? {
         match id {
             RESOURCE_ICC => header.icc_profile = Some(data.to_vec()),
+            RESOURCE_RESOLUTION if data.len() >= 4 => {
+                let fixed = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                header.resolution = Some(f64::from(fixed) / 65536.0);
+            }
             RESOURCE_TRANSPARENCY_INDEX if data.len() >= 2 => {
                 header.transparent_index = Some(u16::from_be_bytes([data[0], data[1]]));
             }
@@ -263,6 +272,15 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
         }
     }
     Ok(header)
+}
+
+/// The resolution a Photoshop file declares, pixels per inch (ADR 0028).
+pub(crate) fn resolution(path: &Path) -> Option<f64> {
+    let mut input = Input {
+        r: BufReader::new(File::open(path).ok()?),
+        big: false,
+    };
+    read_header(&mut input).ok()?.resolution
 }
 
 /// The flattened composite image.

@@ -80,17 +80,37 @@ impl TiffWriter {
         size: Size,
         target: PixelFormat,
         compression: TiffCompression,
+        resolution: Option<f64>,
     ) -> Result<Self, ExportError> {
-        Self::with_big_tiff_threshold(file, size, target, compression, BIG_TIFF_THRESHOLD)
+        Self::with_options(
+            file,
+            size,
+            target,
+            compression,
+            BIG_TIFF_THRESHOLD,
+            resolution,
+        )
     }
 
     /// [`Self::new`], BigTIFF being chosen above `threshold` bytes (tests force it with 0).
+    #[cfg(test)]
     pub(super) fn with_big_tiff_threshold(
         file: File,
         size: Size,
         target: PixelFormat,
         compression: TiffCompression,
         threshold: u64,
+    ) -> Result<Self, ExportError> {
+        Self::with_options(file, size, target, compression, threshold, None)
+    }
+
+    fn with_options(
+        file: File,
+        size: Size,
+        target: PixelFormat,
+        compression: TiffCompression,
+        threshold: u64,
+        resolution: Option<f64>,
     ) -> Result<Self, ExportError> {
         // Samples come little-endian from the converter, and tiff declares the byte order of
         // the machine in the header.
@@ -99,7 +119,8 @@ impl TiffWriter {
                 "TIFF export needs a little-endian machine".to_owned(),
             ));
         }
-        let layout = Layout::new(size, target, compression)?;
+        let mut layout = Layout::new(size, target, compression)?;
+        layout.resolution = resolution;
         let profile = if layout.gray {
             icc::write_gray_trc(&target.color_space)
         } else {
@@ -212,6 +233,8 @@ struct Layout {
     compression: TiffCompression,
     row_bytes: usize,
     strip_rows: u32,
+    /// Pixels per inch (ADR 0028); `None`: only the (square) aspect ratio is declared.
+    resolution: Option<f64>,
 }
 
 impl Layout {
@@ -250,6 +273,7 @@ impl Layout {
             compression,
             row_bytes,
             strip_rows: strip_rows(row_bytes as u64),
+            resolution: None,
         })
     }
 
@@ -476,11 +500,15 @@ fn write_tags<W: Write + Seek, K: TiffKind>(
     )?;
     write_tag(dir, Tag::SamplesPerPixel, layout.channels)?;
     write_tag(dir, Tag::RowsPerStrip, layout.strip_rows)?;
-    // Baseline TIFF requires a resolution: the document has no physical size (yet), so only
-    // the (square) aspect ratio is declared.
-    write_tag(dir, Tag::XResolution, Rational { n: 1, d: 1 })?;
-    write_tag(dir, Tag::YResolution, Rational { n: 1, d: 1 })?;
-    write_tag(dir, Tag::ResolutionUnit, ResolutionUnit::None)?;
+    // Baseline TIFF requires a resolution: the document's (ADR 0028), to a thousandth of a
+    // pixel per inch; without one, only the (square) aspect ratio.
+    let ((n, d), unit) = match layout.resolution {
+        Some(ppi) => (((ppi * 1000.0).round() as u32, 1000), ResolutionUnit::Inch),
+        None => ((1, 1), ResolutionUnit::None),
+    };
+    write_tag(dir, Tag::XResolution, Rational { n, d })?;
+    write_tag(dir, Tag::YResolution, Rational { n, d })?;
+    write_tag(dir, Tag::ResolutionUnit, unit)?;
     write_tag(dir, Tag::PlanarConfiguration, PlanarConfiguration::Chunky)?;
     write_tag(dir, Tag::Predictor, layout.predictor())?;
     if let Some(alpha) = layout.alpha {
