@@ -38,3 +38,12 @@ globalThis.IntersectionObserver ??= class {
 // Canvases: jsdom draws nothing (and complains); the components already handle no context.
 HTMLCanvasElement.prototype.getContext = (() =>
   null) as typeof HTMLCanvasElement.prototype.getContext;
+
+// Pixels for a canvas (frames): jsdom has no ImageData without the canvas package.
+globalThis.ImageData ??= class {
+  constructor(
+    readonly data: Uint8ClampedArray,
+    readonly width: number,
+    readonly height: number,
+  ) {}
+} as unknown as typeof ImageData;
