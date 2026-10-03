@@ -205,8 +205,11 @@ removable as a whole; undo keeps the old tiles by reference.
 - [x] Tiles keyed by identity in the GPU cache and the `.slop` writer; painted images in `.slop`
 - [x] Brush (B) and Eraser (E) in the app: options bar, colors and picker, pen pressure, brush
       outline, new empty layer (Shift+Ctrl+N), Delete Paint and the painted-layer mark
-- [x] Delete with a selection, as Photoshop's Fill dialog: transparency, the foreground or
-      background color, black, 50% gray or white, as paint
+- [x] Delete with a selection erases the selected pixels (Photoshop's Clear), as paint
+- [x] Edit > Fill (Shift+F5): the foreground or background color, a color picked, black, 50%
+      gray or white, at an opacity, in the selection or the whole layer; Edit > Stroke: a band
+      inside, centered on or outside the selection's outline, its width, color and opacity; both
+      as paint (not editable afterwards, ADR 0029)
 - [x] Move tool inside a selection, as Photoshop: the selected pixels of the active layer (or of
       its targeted mask) move with the selection, leaving a hole; Alt copies them; arrows nudge
       them; they float until something else happens; pixels moved off the canvas are kept (the
