@@ -31,8 +31,8 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
 4. **The selection is in the history**: `Edit::SetSelection` (select, deselect), undoable like
    any edit; its inverse keeps the previous mask by reference. Operations that change the canvas
    (crop, canvas or image size, rotation) deselect, as Photoshop does.
-5. **Not saved in `.slop`**, as Photoshop does not save the active selection. A later "Save
-   Selection" (alpha channels) will store it explicitly. Saving it now as a compatible addition
+5. **Not saved in `.slop`**, as Photoshop does not save the active selection. Select > Save
+   Selection stores it explicitly (amended below). Saving it now as a compatible addition
    would also break: an older SlopShop resaving the file keeps unknown fields but drops images
    no layer references.
 6. **The marching ants are computed at the screen's resolution**: the engine follows the pixel
@@ -79,3 +79,18 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
 - The brush will respect the selection: it multiplies the stroke's coverage by the mask.
 - Rasterizing touches every pixel of the shape's bounds once (0.65 s for an ellipse filling a
   600 MP canvas); interior tiles could be detected without being filled if that matters.
+
+## Amendment (2026-10-04): saved selections
+
+Maintainer's decisions of the Select menu audit: a saved selection is a **named object of the
+document**, not an alpha channel shown as a channel. `Document::saved_selections` holds them
+(stable `SavedSelectionId`s, never reused, in the order they were saved); inserting, removing,
+renaming and replacing one are `Edit`s with exact inverses, so each is one undo entry. Canvas
+operations (Crop, Canvas Size, Image Size, Image Rotation, Trim, Reveal All) transform them
+with the image in the same undo entry, as Photoshop's channels follow the image: resampled like
+a layer, exact for whole-pixel moves; one left with nothing keeps an empty mask. They are saved
+in `.slop` (schema 0.16, `document.selections`): the maintainer allows breaking compatibility
+until 1.0, so no compatibility flag protects them from older writers. Select > Save Selection
+asks a name (an existing name replaces that saved selection), Select > Load Selection lists
+them and replaces the selection; renaming, deleting and combining (add, subtract, intersect)
+come with a Selections panel.

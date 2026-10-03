@@ -338,18 +338,20 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   their colors, as Photoshop; connected pixels or the whole image); Transform Selection (Free
   Transform's box, handles, fields and right-click menu on the selection's bounds; the outline
   follows live, Enter resamples the selection as a layer is resampled, one undo entry; Esc or
-  undo leaves it as it was; the layers never change); Quick Mask Mode (Q, with its own Add / Remove colors and overlay opacity); All
+  undo leaves it as it was; the layers never change); Quick Mask Mode (Q, with its own Add / Remove colors and overlay opacity); Save Selection… (a
+  name, "Selection 1" at first; a name already used says it will be replaced) and Load
+  Selection (the saved selections by name; a click makes one the selection): named objects of
+  the document, kept in `.slop` and following crops, canvas and image size changes and
+  rotations, each change one undo entry (the `.slop` compatibility may break until version 1,
+  maintainer, 2026-10-04); All
   Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
   Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
   Mask; saved selections; layers.
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Saved selections are named objects of the document, kept in `.slop`: Select > Save
-    Selection… asks a name (an existing name offers to replace it), Select > Load Selection >
-    lists them and replaces the selection. Renaming, deleting and combining (Photoshop's
-    Ctrl/Shift/Alt+click on a thumbnail) come with a Selections panel. The `.slop`
-    compatibility may break until version 1 (maintainer, 2026-10-04).
+  - Saved selections: renaming, deleting and combining (Photoshop's Ctrl/Shift/Alt+click on
+    a thumbnail) come with a Selections panel.
   - Select and Mask…: a light panel beside the image (as Color Range), not a workspace: edge
     detection radius (computed on request), Smooth, Feather, Contrast, Shift Edge applied live;
     views: ants, overlay, on black, on white, mask; output to the selection, a layer mask, or a

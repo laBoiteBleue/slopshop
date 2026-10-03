@@ -21,7 +21,7 @@ use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
     NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED,
     NODE_VERSION_STACK, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR, Schema, Writer,
+    SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -150,9 +150,13 @@ fn kept_images(
 
 /// Every image the file stores: layer rasters (with a stack, its original, the images of its
 /// paint and the selections of its effects, never its evaluated result, ADR 0029) and masks
-/// (painted ones with their originals, ADR 0027), groups included.
+/// (painted ones with their originals, ADR 0027), groups included; and the saved selections.
 fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
-    let mut out = Vec::new();
+    let mut out: Vec<Arc<RasterImage>> = document
+        .saved_selections()
+        .iter()
+        .map(|s| Arc::clone(s.selection.image()))
+        .collect();
     for layer in document.all_layers() {
         match &layer.content {
             LayerContent::Raster {
@@ -658,6 +662,18 @@ fn build_manifest(
             stack: document.layers().iter().map(|l| l.id.get()).collect(),
             blend_space: Some(document.blend_space().id().to_owned()),
             resolution: Some(document.resolution()),
+            selections: document
+                .saved_selections()
+                .iter()
+                .map(|s| SavedSelectionDto {
+                    id: s.id.get(),
+                    name: s.name.clone(),
+                    image: key_of(s.selection.image())
+                        .map(Hash::to_key)
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            next_selection_id: Some(document.next_saved_selection_id()),
             extra: residue.document.clone(),
         },
         nodes,

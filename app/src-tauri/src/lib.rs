@@ -2089,6 +2089,8 @@ pub fn run() {
             selection::grow_selection,
             selection::selection_bounds,
             selection::transform_selection,
+            selection::save_selection,
+            selection::load_selection,
             selection::quick_select,
             paint::paint_stroke,
             paint::fill,

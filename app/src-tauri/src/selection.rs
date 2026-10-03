@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
-use slopshop_core::{Edit, LayerContent, LayerId, LayerMask, RasterImage, Rect, Size};
+use slopshop_core::{
+    Edit, LayerContent, LayerId, LayerMask, RasterImage, Rect, SavedSelection, SavedSelectionId,
+    Size,
+};
 use tauri::State;
 use tauri::ipc::Response;
 
@@ -798,6 +801,68 @@ pub(crate) fn modify(
     if !live {
         session.end_gesture();
     }
+    Ok(document.view())
+}
+
+/// Select > Save Selection: the selection kept by `name` in the document (and its file), one
+/// undo entry; with `replace`, that saved selection gets it instead (saved again under an
+/// existing name).
+#[tauri::command]
+pub async fn save_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    name: String,
+    replace: Option<u64>,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let session = &mut document.session;
+    let selection = session
+        .document()
+        .selection()
+        .cloned()
+        .ok_or("nothing is selected")?;
+    let edit = match replace {
+        Some(raw) => Edit::SetSavedSelection {
+            id: SavedSelectionId::from_raw(raw),
+            selection,
+        },
+        None => {
+            let index = session.document().saved_selections().len();
+            let id = session.allocate_saved_selection_id();
+            Edit::InsertSavedSelection {
+                index,
+                saved: SavedSelection {
+                    id,
+                    name,
+                    selection,
+                },
+            }
+        }
+    };
+    session.perform(edit).map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
+/// Select > Load Selection: the saved selection `id` becomes the selection, one undo entry.
+#[tauri::command]
+pub async fn load_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    id: u64,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let session = &mut document.session;
+    let saved = session
+        .document()
+        .saved_selection(SavedSelectionId::from_raw(id))
+        .ok_or("unknown saved selection")?;
+    // One that selects nothing (cropped away) deselects.
+    let selection = selection::bounds(saved.selection.image()).map(|_| saved.selection.clone());
+    session
+        .perform(Edit::SetSelection { selection })
+        .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
 

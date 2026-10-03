@@ -63,6 +63,16 @@ pub struct DocumentView {
     pub quick_mask: bool,
     /// Quick Mask's overlay opacity, percent.
     pub quick_mask_opacity: u8,
+    /// The selections saved by name (Select > Save Selection), in the order they were saved.
+    pub saved_selections: Vec<SavedSelectionView>,
+}
+
+/// A selection saved by name: what Select > Load Selection lists.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSelectionView {
+    pub id: u64,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +147,14 @@ impl DocumentView {
             can_reselect: false,
             quick_mask: false,
             quick_mask_opacity: 50,
+            saved_selections: doc
+                .saved_selections()
+                .iter()
+                .map(|s| SavedSelectionView {
+                    id: s.id.get(),
+                    name: s.name.clone(),
+                })
+                .collect(),
         }
     }
 }

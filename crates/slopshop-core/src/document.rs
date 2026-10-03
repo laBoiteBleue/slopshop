@@ -38,6 +38,37 @@ impl fmt::Display for LayerId {
     }
 }
 
+/// Stable identifier of a saved selection within a document. Never reused, even after undo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SavedSelectionId(u64);
+
+impl SavedSelectionId {
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Rebuild an id received from outside (the UI, a file); edits validate it.
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+impl fmt::Display for SavedSelectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "saved selection#{}", self.0)
+    }
+}
+
+/// A selection kept by name in the document and its file (Select > Save Selection), a document
+/// object of its own rather than an alpha channel. Canvas operations transform it with the
+/// image (Crop, Canvas Size, Image Size, Image Rotation).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedSelection {
+    pub id: SavedSelectionId,
+    pub name: String,
+    pub selection: crate::selection::Selection,
+}
+
 /// Deepest nesting of groups (ADR 0015): no layer is inside more groups than this. Photoshop
 /// allows 10; the GPU compositor keeps one accumulator per level.
 pub const MAX_GROUP_DEPTH: usize = 16;
@@ -340,6 +371,9 @@ pub struct Document {
     /// What the next operation applies to (ADR 0024): a gray coverage mask at the origin;
     /// `None` when nothing is selected. Not saved with the document.
     selection: Option<crate::selection::Selection>,
+    /// Selections kept by name, in the order they were saved; saved with the document.
+    saved_selections: Vec<SavedSelection>,
+    next_saved_selection_id: u64,
     next_layer_id: u64,
     revision: u64,
 }
@@ -355,6 +389,8 @@ impl Document {
             resolution: DEFAULT_RESOLUTION,
             layers: Vec::new(),
             selection: None,
+            saved_selections: Vec::new(),
+            next_saved_selection_id: 1,
             next_layer_id: 1,
             revision: 0,
         }
@@ -384,6 +420,8 @@ impl Document {
             resolution: DEFAULT_RESOLUTION,
             layers,
             selection: None,
+            saved_selections: Vec::new(),
+            next_saved_selection_id: 1,
             next_layer_id,
             revision: 0,
         })
@@ -405,6 +443,48 @@ impl Document {
         }
         self.resolution = ppi;
         Ok(self)
+    }
+
+    /// The document with the saved selections of a file, and the id counter they come with:
+    /// ids unique and below it (not 0), gray masks.
+    pub fn with_saved_selections(
+        mut self,
+        saved: Vec<SavedSelection>,
+        next_id: u64,
+    ) -> Result<Self, RestoreError> {
+        let mut seen = HashSet::with_capacity(saved.len());
+        for s in &saved {
+            let id = s.id.get();
+            let gray = s.selection.image().format().layout.is_gray();
+            if id == 0 || id >= next_id || !seen.insert(id) || !gray {
+                return Err(RestoreError::InvalidSavedSelection(s.id));
+            }
+        }
+        self.saved_selections = saved;
+        self.next_saved_selection_id = next_id;
+        Ok(self)
+    }
+
+    /// The selections saved by name, in the order they were saved.
+    pub fn saved_selections(&self) -> &[SavedSelection] {
+        &self.saved_selections
+    }
+
+    pub fn saved_selection(&self, id: SavedSelectionId) -> Option<&SavedSelection> {
+        self.saved_selections.iter().find(|s| s.id == id)
+    }
+
+    /// The id the next saved selection will get: every id below it was handed out already.
+    pub fn next_saved_selection_id(&self) -> u64 {
+        self.next_saved_selection_id
+    }
+
+    /// Reserve a fresh id for a selection about to be saved with an edit (not a document
+    /// change: ids are never reused).
+    pub fn allocate_saved_selection_id(&mut self) -> SavedSelectionId {
+        let id = SavedSelectionId(self.next_saved_selection_id);
+        self.next_saved_selection_id += 1;
+        id
     }
 
     /// The id the next allocated layer will get: every id below it was handed out already.
@@ -567,6 +647,10 @@ impl Document {
         std::mem::replace(&mut self.selection, selection)
     }
 
+    pub(crate) fn saved_selections_mut(&mut self) -> &mut Vec<SavedSelection> {
+        &mut self.saved_selections
+    }
+
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
         find_mut(&mut self.layers, id)
     }
@@ -665,12 +749,16 @@ pub enum RestoreError {
     InvalidPaint(LayerId),
     /// A resolution that is not a finite number of pixels per inch in range (ADR 0028).
     InvalidResolution,
+    /// A saved selection whose id is 0, repeated or not below the counter, or whose mask is
+    /// not gray.
+    InvalidSavedSelection(SavedSelectionId),
 }
 
 impl fmt::Display for RestoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RestoreError::InvalidResolution => write!(f, "invalid resolution"),
+            RestoreError::InvalidSavedSelection(id) => write!(f, "{id} is invalid"),
             RestoreError::UnsupportedWorkingSpace(space) => {
                 write!(f, "unsupported working space {space:?}")
             }

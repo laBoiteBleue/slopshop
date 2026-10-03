@@ -49,6 +49,11 @@ impl Session {
         self.document.allocate_layer_id()
     }
 
+    /// See [`Document::allocate_saved_selection_id`].
+    pub fn allocate_saved_selection_id(&mut self) -> crate::document::SavedSelectionId {
+        self.document.allocate_saved_selection_id()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty() || !self.gesture.is_empty()
     }

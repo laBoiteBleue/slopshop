@@ -64,6 +64,7 @@ function documentView(id: number, name: string | null, layers: LayerView[]): Doc
     canReselect: false,
     quickMask: false,
     quickMaskOpacity: 50,
+    savedSelections: [],
   } as DocumentView;
 }
 
@@ -120,6 +121,11 @@ beforeEach(() => {
           const doc = find();
           doc.quickMask = args.on as boolean;
           doc.quickMaskOpacity = args.opacity as number;
+          return { ...doc };
+        }
+        case "save_selection": {
+          const doc = find();
+          doc.savedSelections = [...doc.savedSelections, { id: 9, name: args.name as string }];
           return { ...doc };
         }
         case "selection_bounds":
@@ -337,6 +343,9 @@ test("the Select menu: the basics, then by subject and color, Modify, Grow and S
     "Transform Selection",
     "Quick Mask Mode",
     "—",
+    "Save Selection…",
+    "Load Selection",
+    "—",
     "All Layers",
     "Deselect Layers",
   ]);
@@ -516,4 +525,41 @@ test("Quick Mask's overlay opacity is sent as it changes, and kept for next time
   );
   expect(localStorage.getItem("slopshop.quickMaskOpacity")).toBe("80");
   localStorage.clear();
+});
+
+test("Select > Save Selection names it; Load Selection lists the saved ones and loads one", async () => {
+  const user = open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat")]),
+    selectionKey: 7,
+    savedSelections: [{ id: 4, name: "Hair" }],
+  });
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Save Selection…", { selector: ".label" }));
+  const dialog = screen.getByRole("dialog", { name: "Save Selection" });
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("save_selection")).toEqual([{ documentId: 1, name: "Selection 1", replace: null }]),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.hover(screen.getByText("Load Selection", { selector: ".label" }));
+  const nested = () =>
+    [...document.querySelectorAll(".dropdown.nested .label")].map((el) => el.textContent);
+  await vi.waitFor(() => expect(nested()).toEqual(["Hair", "Selection 1"]));
+  await user.click(screen.getByText("Hair", { selector: ".label" }));
+  await vi.waitFor(() => expect(sent("load_selection")).toEqual([{ documentId: 1, id: 4 }]));
+});
+
+test("Load Selection waits for a saved selection", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  const load = screen
+    .getByText("Load Selection", { selector: ".label" })
+    .closest("[role=menuitem]");
+  expect(load).toHaveAttribute("aria-disabled", "true");
+  const save = screen
+    .getByText("Save Selection…", { selector: ".label" })
+    .closest("[role=menuitem]");
+  expect(save).toHaveAttribute("aria-disabled", "true");
 });

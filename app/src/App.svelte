@@ -119,6 +119,7 @@
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
+  import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush, MAX_REFINE } from "./lib/selection";
@@ -1414,6 +1415,20 @@
     } else {
       void sync(engine.modifySelection(dialog.document, kind, amount));
     }
+  }
+
+  /** Select > Save Selection is asking a name, for this document. */
+  let saveSelectionFor = $state<number | null>(null);
+
+  function openSaveSelection() {
+    commitTransform();
+    if (active?.selectionKey != null) saveSelectionFor = active.id;
+  }
+
+  function saveSelection(name: string, replace: number | null) {
+    const id = saveSelectionFor;
+    saveSelectionFor = null;
+    if (id !== null) void sync(engine.saveSelection(id, name, replace));
   }
 
   // Select > Color Range: a panel beside the image, whose clicks sample colors.
@@ -3604,6 +3619,16 @@
           ),
           item("quickMask"),
           separator,
+          cmd(t("menu.select.save"), openSaveSelection, undefined, doc?.selectionKey == null),
+          {
+            kind: "submenu",
+            label: t("menu.select.load"),
+            disabled: !doc || doc.savedSelections.length === 0,
+            items: (doc?.savedSelections ?? []).map((saved) =>
+              cmd(saved.name, () => selectionCommand((id) => engine.loadSelection(id, saved.id))),
+            ),
+          },
+          separator,
           item("selectAllLayers"),
           cmd(
             t("menu.select.deselectLayers"),
@@ -4276,6 +4301,14 @@
     onclose={() => (newDialog = false)}
   />
 {/if}
+{#if saveSelectionFor !== null && saveSelectionFor === activeId && active}
+  <SaveSelectionDialog
+    saved={active.savedSelections}
+    onapply={saveSelection}
+    onclose={() => (saveSelectionFor = null)}
+  />
+{/if}
+
 {#if modifyDialog && modifyDialog.document === activeId}
   <ModifyDialog
     kind={modifyDialog.kind}

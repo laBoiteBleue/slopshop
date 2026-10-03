@@ -200,7 +200,12 @@ export type DocumentView = {
   quickMask: boolean;
   /** Quick Mask's overlay opacity, percent. */
   quickMaskOpacity: number;
+  /** Selections saved by name (Select > Save Selection), in the order they were saved. */
+  savedSelections: SavedSelectionView[];
 };
+
+/** A selection saved by name in the document. */
+export type SavedSelectionView = { id: number; name: string };
 
 /** A shape to select, in document pixels. */
 export type SelectionShape =
@@ -1228,6 +1233,15 @@ export const engine = {
   /** The selection's bounds (pixels selected even partly), `null` without one. */
   selectionBounds: (documentId: number) =>
     invoke<Bounds | null>("selection_bounds", { documentId }),
+  /**
+   * Select > Save Selection: the selection kept by `name` (one undo entry); with `replace`,
+   * that saved selection gets it instead.
+   */
+  saveSelection: (documentId: number, name: string, replace: number | null) =>
+    serial(() => invoke<DocumentView>("save_selection", { documentId, name, replace })),
+  /** Select > Load Selection: saved selection `id` becomes the selection (one undo entry). */
+  loadSelection: (documentId: number, id: number) =>
+    serial(() => invoke<DocumentView>("load_selection", { documentId, id })),
   /** Select > Transform Selection: the selection mapped by `matrix` and resampled. */
   transformSelection: (documentId: number, matrix: Matrix) =>
     serial(() => invoke<DocumentView>("transform_selection", { documentId, matrix })),
