@@ -47,6 +47,14 @@ pub struct Moved {
     pub grown: Option<(u32, u32)>,
 }
 
+/// Selected pixels taken out of an image ([`PixelMove::extract`]).
+#[derive(Debug, Clone)]
+pub struct Extracted {
+    pub image: Arc<RasterImage>,
+    /// Where the image lies in the document: the base's place, moved to the first tile taken.
+    pub to_document: Affine,
+}
+
 /// An image the move works on and where it lies.
 #[derive(Debug)]
 struct Placement {
@@ -245,6 +253,96 @@ impl PixelMove {
             image: Arc::new(placement.base.with_tiles(replaced)?),
             grown: growth.map(|(offset, _)| offset),
         })
+    }
+
+    /// The selected pixels alone (Edit > Copy with a selection): the base's tiles the selection
+    /// reaches, each pixel's alpha scaled by the selection's coverage, in the base's format, and
+    /// where they lie in the document. Tiles wholly selected are shared with the base, so no
+    /// pixel is resampled or copied needlessly; the image starts at a tile of the base, so it
+    /// may hold transparent pixels around the selection. `None` when nothing of the base is
+    /// selected. Only for a layer's pixels (not `coverage`).
+    pub fn extract(&self) -> Result<Option<Extracted>, PaintError> {
+        if self.coverage {
+            return Err(PaintError::NotACoverage);
+        }
+        let placement = &self.placement;
+        let Some([x0, y0, x1, y1]) = placement.area else {
+            return Ok(None);
+        };
+        let t = i64::from(TILE_SIZE);
+        let size = placement.base.size();
+        let (first_col, first_row) = (x0 / t, y0 / t);
+        let (cols, rows) = ((x1 - 1) / t - first_col + 1, (y1 - 1) / t - first_row + 1);
+        let level = &placement.base.levels()[0];
+        // Every tile of the area exists: the area lies within the base (a missing one would
+        // make `from_level0_tiles` fail on the count).
+        let mut work: Vec<(TileCoord, Arc<[u8]>)> = (0..rows)
+            .flat_map(|row| (0..cols).map(move |col| (col, row)))
+            .filter_map(|(col, row)| {
+                let coord = TileCoord {
+                    col: (first_col + col) as u32,
+                    row: (first_row + row) as u32,
+                };
+                Some((coord, Arc::clone(level.tile(coord)?)))
+            })
+            .collect();
+        parallel_for_each(&mut work, |(coord, tile)| {
+            *tile = self.extract_tile(*coord, tile, [x0, y0, x1, y1]);
+        });
+        let tiles = work.into_iter().map(|(_, tile)| tile).collect();
+        let (left, top) = (first_col * t, first_row * t);
+        let extracted = Size::new(
+            ((first_col + cols) * t).min(i64::from(size.width)) as u32 - left as u32,
+            ((first_row + rows) * t).min(i64::from(size.height)) as u32 - top as u32,
+        );
+        let image = RasterImage::from_level0_tiles(extracted, placement.base.format(), tiles)?;
+        Ok(Some(Extracted {
+            image: Arc::new(image),
+            to_document: Affine::translation(left as f64, top as f64).then(placement.to_document),
+        }))
+    }
+
+    /// Tile `coord` of the base (`tile`) with each pixel's alpha scaled by the selection's
+    /// coverage (`area` its bounds): the base's tile itself when it is wholly selected.
+    fn extract_tile(&self, coord: TileCoord, tile: &Arc<[u8]>, area: [i64; 4]) -> Arc<[u8]> {
+        let placement = &self.placement;
+        let size = placement.base.size();
+        let bpp = self.codec.bytes_per_pixel;
+        let width = (size.width - coord.col * TILE_SIZE).min(TILE_SIZE) as usize;
+        let height = (size.height - coord.row * TILE_SIZE).min(TILE_SIZE) as usize;
+        let (left, top) = (
+            i64::from(coord.col * TILE_SIZE),
+            i64::from(coord.row * TILE_SIZE),
+        );
+        let mut coverage = vec![0.0f32; width];
+        let mut out: Option<Vec<u8>> = None;
+        for ty in 0..height {
+            let y = top + ty as i64;
+            coverage.fill(0.0);
+            if (area[1]..area[3]).contains(&y) {
+                self.coverage_row(placement, left, y, &mut coverage);
+            }
+            for (tx, &c) in coverage.iter().enumerate() {
+                if c >= 1.0 {
+                    continue;
+                }
+                let pixels = out.get_or_insert_with(|| tile.to_vec());
+                let px = &mut pixels[(ty * T + tx) * bpp..][..bpp];
+                if c <= 0.0 {
+                    self.codec.write([0.0; 3], 0.0, px);
+                } else if !self.codec.scale_alpha(px, c) {
+                    let (color, alpha) = self.codec.read_mapped(px, &mut |v| v);
+                    self.codec.write(color, alpha * c, px);
+                }
+            }
+        }
+        match out {
+            Some(mut pixels) => {
+                pad_tile(&mut pixels, width, height, bpp);
+                Arc::from(pixels)
+            }
+            None => Arc::clone(tile),
+        }
     }
 
     /// How the base must grow for pixels landing in `to` (`[x0, y0, x1, y1)`, image pixels)
@@ -614,6 +712,50 @@ mod tests {
         assert_eq!(pixel(&moved, 6, 4), [4, 4, 7, 255]);
         assert_eq!(pixel(&moved, 9, 7), [7, 7, 7, 255]);
         assert_eq!(pixel(&moved, 10, 7), [10, 7, 7, 255]);
+    }
+
+    #[test]
+    fn extracted_pixels_keep_their_place_and_their_alpha() {
+        let canvas = Size::new(600, 300);
+        let selection = rectangle(canvas, 300.0, 10.0, 310.0, 15.5);
+        // The layer's pixel (x, y) lies at (x + 5, y + 3) in the document.
+        let moving = pixel_move(gradient(canvas), Affine::translation(5.0, 3.0), &selection);
+        let extracted = moving.extract().unwrap().unwrap();
+        // From the layer's tile column 1 (x 256..512) and row 0, placed where they were.
+        assert_eq!(extracted.image.size(), Size::new(256, 256));
+        assert_eq!(extracted.to_document.apply(0.0, 0.0), (261.0, 3.0));
+        // Document (300, 10) is layer pixel (295, 7), extracted pixel (39, 7).
+        assert_eq!(pixel(&extracted.image, 39, 7), [39, 7, 7, 255]);
+        assert_eq!(pixel(&extracted.image, 48, 11), [48, 11, 7, 255]);
+        // Half covered on the last row, transparent outside.
+        assert_eq!(pixel(&extracted.image, 48, 12)[3], 128);
+        assert_eq!(pixel(&extracted.image, 38, 7), [0, 0, 0, 0]);
+        assert_eq!(pixel(&extracted.image, 49, 7), [0, 0, 0, 0]);
+        assert_eq!(pixel(&extracted.image, 39, 13), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn wholly_selected_tiles_are_shared_and_nothing_selected_is_none() {
+        let canvas = Size::new(600, 300);
+        let base = gradient(canvas);
+        let all = rectangle(canvas, 0.0, 0.0, 600.0, 300.0);
+        let extracted = pixel_move(Arc::clone(&base), Affine::IDENTITY, &all)
+            .extract()
+            .unwrap()
+            .unwrap();
+        assert_eq!(extracted.image.size(), canvas);
+        let tile = |image: &RasterImage| {
+            Arc::clone(
+                image.levels()[0]
+                    .tile(TileCoord { col: 1, row: 0 })
+                    .unwrap(),
+            )
+        };
+        assert!(Arc::ptr_eq(&tile(&base), &tile(&extracted.image)));
+        // A selection off the layer.
+        let off = rectangle(canvas, 10.0, 10.0, 20.0, 20.0);
+        let moving = pixel_move(base, Affine::translation(100.0, 100.0), &off);
+        assert!(moving.extract().unwrap().is_none());
     }
 
     #[test]

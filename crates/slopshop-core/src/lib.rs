@@ -14,6 +14,8 @@
 //! - [`transform`] and [`resample`]: layer transforms and how transformed layers are sampled.
 //! - [`composite`]: CPU reference compositor, at full resolution (export oracle and fallback).
 //! - [`convert`]: working-space pixels to a target pixel format, counting every lossy event.
+//! - [`copy`]: the clipboard's pixels (Copy Merged, the image other applications get) and where
+//!   Paste places what it pastes.
 //! - [`job`]: cancellation and progress of background jobs.
 
 pub mod adjust;
@@ -22,6 +24,7 @@ mod blue_noise;
 pub mod color;
 pub mod composite;
 pub mod convert;
+pub mod copy;
 pub mod curve;
 pub mod document;
 pub mod edit;
