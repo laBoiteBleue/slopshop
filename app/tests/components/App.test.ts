@@ -693,3 +693,21 @@ test("Select and Mask opens on the selection, shows it live, and outputs it", as
     expect(sent("refine_preview").at(-1)).toMatchObject({ documentId: 1, live: false }),
   );
 });
+
+test("Layer > Align > Left Edges aligns the selected layers, Distribute waits for three", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Background"), layer(2, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
+  await user.keyboard("[ControlLeft>]");
+  await user.click(row("Background"));
+  await user.keyboard("[/ControlLeft]");
+  await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+  const distribute = screen.getByText("Distribute", { selector: ".label" }).closest("li");
+  expect(distribute).toHaveAttribute("aria-disabled", "true");
+  await user.hover(screen.getByText("Align", { selector: ".label" }));
+  await user.click(screen.getByText("Left Edges"));
+  await vi.waitFor(() =>
+    expect(sent("perform")).toEqual([
+      { documentId: 1, edit: { kind: "alignLayers", ids: [1, 2], align: "left" } },
+    ]),
+  );
+});

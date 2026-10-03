@@ -11,6 +11,7 @@
   import SliderField from "./SliderField.svelte";
   import BrushPicker from "./BrushPicker.svelte";
   import type { Snippet } from "svelte";
+  import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./align";
 
   let {
     tool,
@@ -26,12 +27,22 @@
     quickMask = null,
     quickMaskOpacity = $bindable(50),
     onquickmask,
+    alignable = false,
+    distributable = false,
+    onalign,
+    ondistribute,
   }: {
     tool: ToolId;
     /** Free Transform under way: its fields replace the tool's options, as in Photoshop. */
     transform?: Snippet;
     /** Move tool: a drag takes the layer under the pointer (Ctrl inverts it). */
     autoSelect: boolean;
+    /** Move tool: the selected layers can be aligned (one at least), distributed (three). */
+    alignable?: boolean;
+    distributable?: boolean;
+    /** Move tool's buttons: Layer > Align and Distribute on the selected layers. */
+    onalign?: (align: AlignId) => void;
+    ondistribute?: (distribute: DistributeId) => void;
     /** Selection tools: how a new shape combines with the selection (keys override it). */
     selectionMode: SelectionMode;
     /** Selection tools: Gaussian softening of the edge, in pixels. */
@@ -119,6 +130,33 @@
       <input type="checkbox" bind:checked={autoSelect} />
       {t("options.autoSelect")}
     </label>
+    <span class="divider"></span>
+    <!-- Layer > Align and Distribute, as Photoshop shows them here. -->
+    {#each ALIGNS as entry (entry.id)}
+      <button
+        class="icon-btn"
+        onmousedown={keepFocus}
+        title={t(entry.hint)}
+        aria-label={t(entry.hint)}
+        disabled={!alignable}
+        onclick={() => onalign?.(entry.id)}
+      >
+        <Icon name={entry.icon} />
+      </button>
+    {/each}
+    <span class="divider"></span>
+    {#each DISTRIBUTES as entry (entry.id)}
+      <button
+        class="icon-btn"
+        onmousedown={keepFocus}
+        title={t(entry.hint)}
+        aria-label={t(entry.hint)}
+        disabled={!distributable}
+        onclick={() => ondistribute?.(entry.id)}
+      >
+        <Icon name={entry.icon} />
+      </button>
+    {/each}
   {:else if paint}
     <BrushPicker bind:size={paint.size} bind:hardness={paint.hardness} />
     <span class="divider"></span>
