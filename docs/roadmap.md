@@ -232,7 +232,10 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Image > Adjustments as effects on every visible pixel layer, with Photoshop's shortcuts, a
       dialog previewed on the canvas
 - [x] The Restore Eraser (in the Eraser's group)
-- [ ] The stack evaluated on the GPU into a bounded cache (ADR 0029, point 6)
+- [x] The stack evaluated by the shader while the layer's pixels are evaluated on a thread of
+      their own (ADR 0029, point 6): applying, deleting and undoing are instant
+- [ ] macOS and Linux (frames over the IPC): show the exact pixels again once they are
+      evaluated (Windows presents again until they are)
 
 ## Phase 4 — Very large images
 
