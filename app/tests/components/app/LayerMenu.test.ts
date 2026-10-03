@@ -1,15 +1,20 @@
-import { screen } from "@testing-library/svelte";
+import { emit } from "@tauri-apps/api/event";
+import { screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
 import { documentView, layer, layerNames, open, respond, row, sent } from "./harness";
 
 // The Layer menu and its shortcuts, on the selected layers.
 
-respond("new_layer_from_visible", (args, doc) => {
-  doc.layers = [...doc.layers, layer(99, args.name as string)];
+respond("bake_layers", (args, doc) => {
+  // New Layer from Visible: its preview at once, a group shown as the layer it becomes.
+  const request = args.request as { kind: string; name?: string };
+  if (request.kind === "visible") {
+    const preview = { ...layer(99, request.name ?? ""), kind: "group" as const };
+    doc.layers = [...doc.layers, { ...preview, baking: true, children: doc.layers }];
+  }
   return { ...doc, revision: doc.revision + 1 };
 });
-respond("bake_layers", (_, doc) => ({ ...doc, revision: doc.revision + 1 }));
 
 test("the Layer menu: New, the fill and adjustment layers, then the commands on the layers", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
@@ -102,16 +107,31 @@ test("Layer > Align > Left Edges aligns the selected layers, Distribute waits fo
   );
 });
 
-test("Alt+Shift+Ctrl+E stamps the visible layers into a new layer on top, selected", async () => {
+test("Alt+Shift+Ctrl+E shows the new layer at once, its pixels following", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Background"), layer(2, "Cat")]));
   await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
   await user.click(row("Background"));
   await user.keyboard("{Alt>}{Shift>}{Control>}e{/Control}{/Shift}{/Alt}");
   await vi.waitFor(() =>
-    expect(sent("new_layer_from_visible")).toEqual([{ documentId: 1, name: "Layer 3" }]),
+    expect(sent("bake_layers")).toEqual([
+      { documentId: 1, request: { kind: "visible", name: "Layer 3" } },
+    ]),
   );
+  // At once: listed as the layer it becomes (no folder, its layers not listed), selected.
   await vi.waitFor(() => expect(layerNames()).toEqual(["Layer 3", "Cat", "Background"]));
   expect(row("Layer 3")).toHaveClass("selected");
+  expect(within(row("Layer 3")).getByTitle("Computing its pixels…")).toBeInTheDocument();
+  // The pixels come: the document is sent again.
+  const done = documentView(1, "cat.jpg", [
+    layer(1, "Background"),
+    layer(2, "Cat"),
+    layer(99, "Layer 3"),
+  ]);
+  await emit("document-updated", { ...done, revision: 5 });
+  await vi.waitFor(() =>
+    expect(within(row("Layer 3")).queryByTitle("Computing its pixels…")).toBeNull(),
+  );
+  expect(layerNames()).toEqual(["Layer 3", "Cat", "Background"]);
 });
 
 test("Ctrl+E merges the selected layers; with one, the menu says Merge Down", async () => {

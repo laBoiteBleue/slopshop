@@ -143,6 +143,9 @@ struct OpenDocument {
     floating: Option<move_pixels::Floating>,
     /// A drag of selected pixels under way, shown floating (view state too).
     move_preview: Option<move_pixels::MovePreview>,
+    /// Layers whose pixels are being composited (Layer > Bake to Pixels, ADR 0030): a merge's
+    /// group, shown as the layer it becomes until its pixels replace it.
+    baking: std::collections::HashSet<LayerId>,
 }
 
 impl OpenDocument {
@@ -165,6 +168,7 @@ impl OpenDocument {
             paint_preview: None,
             floating: None,
             move_preview: None,
+            baking: std::collections::HashSet::new(),
         }
     }
 
@@ -218,7 +222,18 @@ impl OpenDocument {
         view.can_reselect = self.reselectable().is_some();
         view.quick_mask = self.overlays.quick_mask;
         view.quick_mask_opacity = self.overlays.quick_mask_opacity;
+        if !self.baking.is_empty() {
+            mark_baking(&mut view.layers, &self.baking);
+        }
         view
+    }
+}
+
+/// Flag the layers of `views` (at any depth) being baked.
+fn mark_baking(views: &mut [ipc::LayerView], baking: &std::collections::HashSet<LayerId>) {
+    for view in views {
+        view.baking = baking.contains(&LayerId::from_raw(view.id));
+        mark_baking(&mut view.children, baking);
     }
 }
 
@@ -1014,7 +1029,7 @@ fn panic_detail(panic: &(dyn std::any::Any + Send), fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_owned())
 }
 
-fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: &T) {
+pub(crate) fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: &T) {
     if let Err(e) = app.emit(event, payload.clone()) {
         eprintln!("cannot emit {event}: {e}");
     }
@@ -2124,7 +2139,6 @@ pub fn run() {
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,
-            clipboard::new_layer_from_visible,
             bake::bake_layers,
             clipboard::clipboard_size,
             clipboard::clipboard_contents,

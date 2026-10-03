@@ -827,7 +827,10 @@
             <Icon name="clip" size={14} />
           </span>
         {/if}
-        {#if layer.kind === "group"}
+        {#if layer.baking}
+          <!-- Being baked (ADR 0030): the layer it becomes, its thumbnail once its pixels come. -->
+          <span class="thumb baking" title={t("layers.baking")}></span>
+        {:else if layer.kind === "group"}
           <button
             class="fold"
             title={t(collapsed.has(layer.id) ? "layers.expand" : "layers.collapse")}
@@ -1179,6 +1182,11 @@
 
   .eye:hover {
     background: var(--hover);
+  }
+
+  .thumb.baking {
+    background: var(--panel-header);
+    opacity: 0.6;
   }
 
   .thumb {

@@ -621,6 +621,7 @@ const en = {
   "menu.layer.bake.mergeVisible": "Merge Visible",
   "menu.layer.bake.flatten": "Flatten Image",
   "layers.flattenedName": "Background",
+  "layers.baking": "Computing its pixels…",
   "menu.layer.newFromVisible": "New Layer from Visible",
   "menu.layer.align": "Align",
   "menu.layer.align.left": "Left Edges",
