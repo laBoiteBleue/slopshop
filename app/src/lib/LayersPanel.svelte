@@ -30,13 +30,16 @@
   } from "./layerTree";
   import {
     blendModeChange,
+    canArrange,
     clippingToggle,
     eyeClick,
     opacityEdit,
     opacityPercent,
     removal,
     typedOpacity,
+    ungrouping,
     visibilityToggle,
+    type Arrangement,
   } from "./layerEdits";
   import {
     afterLayersChange,
@@ -369,14 +372,29 @@
     void edit({ kind: "groupLayers", ids: selectedIds, name: t("layers.defaultGroupName", { n }) });
   }
 
-  /** Replace the active group by its layers, which become the selection (Shift+Ctrl+G). */
+  /** Replace the selected groups by their layers, which become the selection (Shift+Ctrl+G). */
   export function ungroupSelected() {
-    const group = selected;
-    if (group?.kind !== "group") return;
-    const children = group.children.map((l) => l.id);
-    void edit({ kind: "ungroup", id: group.id }).then(() => {
-      if (children.length > 0) select(children, children[children.length - 1]);
+    const ungrouped = ungrouping(selection);
+    if (!ungrouped) return;
+    void edit(ungrouped.request).then(() => {
+      if (ungrouped.layers.length > 0) selectLayers(ungrouped.layers);
     });
+  }
+
+  /** Some selected layer is a group (Layer > Ungroup Layers). */
+  export function selectionHasGroup(): boolean {
+    return selection.some((l) => l.kind === "group");
+  }
+
+  /** Layer > Arrange: the selected layers moved within their groups (one undo entry). */
+  export function arrangeSelected(arrangement: Arrangement) {
+    if (!canArrange(tree, selection, arrangement)) return;
+    void edit({ kind: "arrangeLayers", ids: selectedIds, arrange: arrangement });
+  }
+
+  /** Whether Layer > Arrange's `arrangement` moves some selected layer. */
+  export function canArrangeSelected(arrangement: Arrangement): boolean {
+    return canArrange(tree, selection, arrangement);
   }
 
   export function selectAllLayers() {

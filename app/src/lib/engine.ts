@@ -270,7 +270,10 @@ export type EditRequest =
     }
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }
-  | { kind: "ungroup"; id: number }
+  /** The groups among `ids` replaced by their layers (Layer > Ungroup Layers). */
+  | { kind: "ungroup"; ids: number[] }
+  /** Layer > Arrange: `ids` moved within their groups. */
+  | { kind: "arrangeLayers"; ids: number[]; arrange: "front" | "forward" | "backward" | "back" }
   /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */
   | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
   /** Copies as `duplicateLayers`, then `matrix` applied to them (Duplicate and Transform Again). */

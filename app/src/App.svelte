@@ -98,6 +98,13 @@
   } from "./lib/imageEdits";
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
+  import {
+    clippingReleases,
+    maskEnabledToggle,
+    maskRemoval,
+    referenceMask,
+    type Arrangement,
+  } from "./lib/layerEdits";
   import { hexToSrgb } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
@@ -2901,13 +2908,21 @@
       ungroupLayers: {
         label: t("menu.layer.ungroup"),
         run: () => layersPanel?.ungroupSelected(),
-        disabled: layer?.kind !== "group",
+        disabled: !layersPanel?.selectionHasGroup(),
       },
       clipping: {
-        label: t(layer?.clipped ? "menu.layer.releaseClipping" : "menu.layer.createClipping"),
+        label: t(
+          clippingReleases(layersPanel?.selectedLayers() ?? [])
+            ? "menu.layer.releaseClipping"
+            : "menu.layer.createClipping",
+        ),
         run: () => layersPanel?.toggleClippingSelected(),
         disabled: selectedCount === 0,
       },
+      bringToFront: arrangeCommand("front", "menu.layer.arrange.front"),
+      bringForward: arrangeCommand("forward", "menu.layer.arrange.forward"),
+      sendBackward: arrangeCommand("backward", "menu.layer.arrange.backward"),
+      sendToBack: arrangeCommand("back", "menu.layer.arrange.back"),
       renameLayer: {
         label: t("menu.layer.rename"),
         run: () => !layersPanel?.busy() && layersPanel?.renameSelected(),
@@ -2975,6 +2990,20 @@
     };
   });
 
+  /** `item` under another label (in a submenu that already says "New"). */
+  function relabeled(item: MenuItem, label: string): MenuItem {
+    return item.kind === "separator" ? item : { ...item, label };
+  }
+
+  /** Layer > Arrange's commands, grayed when they would move nothing. */
+  function arrangeCommand(arrangement: Arrangement, label: MessageKey) {
+    return {
+      label: t(label),
+      run: () => layersPanel?.arrangeSelected(arrangement),
+      disabled: !layersPanel?.canArrangeSelected(arrangement),
+    };
+  }
+
   /** The menu entry of a command that has a shortcut. */
   function item(id: CommandId): MenuItem {
     const c = commands[id];
@@ -2994,7 +3023,9 @@
   let layerCommands = $derived.by(() => {
     const doc = active;
     const layer = layersPanel?.selectedLayer() ?? null;
-    const maskless = (layersPanel?.selectedLayers() ?? []).filter((l) => !l.mask);
+    const selection = layersPanel?.selectedLayers() ?? [];
+    const maskless = selection.filter((l) => !l.mask);
+    const mask = referenceMask(selection, layer);
     /** A new mask on the selected layers without one; from the selection, only with one. */
     const maskCommand = (kind: LayerMaskKind, label: MessageKey) =>
       command(
@@ -3050,24 +3081,24 @@
         undefined,
         !layer || !layer.hasAlpha || layer.mask !== null,
       ),
+      // On every selected layer with a mask, as the new masks.
       maskToggle: command(
-        t(layer?.mask?.enabled === false ? "menu.layer.maskEnable" : "menu.layer.maskDisable"),
-        () =>
-          doc &&
-          layer?.mask &&
-          void edit(doc.id, {
-            kind: "setLayerMaskEnabled",
-            id: layer.id,
-            enabled: !layer.mask.enabled,
-          }),
+        t(mask?.enabled === false ? "menu.layer.maskEnable" : "menu.layer.maskDisable"),
+        () => {
+          const request = maskEnabledToggle(selection, layer);
+          if (doc && request) void edit(doc.id, request);
+        },
         undefined,
-        !layer?.mask,
+        !mask,
       ),
       maskDelete: command(
         t("menu.layer.maskDelete"),
-        () => doc && layer && void edit(doc.id, { kind: "removeLayerMask", id: layer.id }),
+        () => {
+          const request = maskRemoval(selection);
+          if (doc && request) void edit(doc.id, request);
+        },
         undefined,
-        !layer?.mask,
+        !mask,
       ),
     };
   });
@@ -3296,10 +3327,29 @@
       {
         label: t("menu.layer"),
         items: [
-          layerCommands.newLayer,
-          item("layerViaCopy"),
-          item("layerViaCut"),
-          cmd(t("layers.addFill"), () => layersPanel?.addFill(colors.foreground), undefined, !doc),
+          {
+            kind: "submenu",
+            label: t("menu.layer.new"),
+            disabled: !doc,
+            items: [
+              relabeled(layerCommands.newLayer, t("menu.layer.new.layer")),
+              relabeled(layerCommands.newGroup, t("menu.layer.new.group")),
+              separator,
+              item("layerViaCopy"),
+              item("layerViaCut"),
+            ],
+          },
+          // At the top level, as in Photoshop: menus nest one level deep.
+          {
+            kind: "submenu",
+            label: t("menu.layer.newFill"),
+            disabled: !doc,
+            items: [
+              cmd(t("menu.layer.newFill.solidColor"), () =>
+                layersPanel?.addFill(colors.foreground),
+              ),
+            ],
+          },
           {
             kind: "submenu",
             label: t("menu.layer.newAdjustment"),
@@ -3310,6 +3360,12 @@
               ),
             ),
           },
+          separator,
+          layerCommands.duplicate,
+          layerCommands.delete,
+          layerCommands.rename,
+          layerCommands.visibility,
+          separator,
           {
             kind: "submenu",
             label: t("menu.layer.mask"),
@@ -3320,22 +3376,28 @@
               layerCommands.maskRevealSelection,
               layerCommands.maskHideSelection,
               layerCommands.maskFromTransparency,
+              separator,
               layerCommands.maskToggle,
               layerCommands.maskDelete,
             ],
           },
-          separator,
-          layerCommands.newGroup,
-          layerCommands.group,
-          layerCommands.ungroup,
-          separator,
           layerCommands.clipping,
           layerCommands.deletePaint,
           separator,
-          layerCommands.duplicate,
-          layerCommands.rename,
-          layerCommands.visibility,
-          layerCommands.delete,
+          layerCommands.group,
+          layerCommands.ungroup,
+          separator,
+          {
+            kind: "submenu",
+            label: t("menu.layer.arrange"),
+            disabled: selectedCount === 0,
+            items: [
+              item("bringToFront"),
+              item("bringForward"),
+              item("sendBackward"),
+              item("sendToBack"),
+            ],
+          },
         ],
       },
       {

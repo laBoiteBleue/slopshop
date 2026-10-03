@@ -4,12 +4,18 @@ import type { LayerView } from "../src/lib/engine";
 import {
   batchOf,
   blendModeChange,
+  canArrange,
+  clippingReleases,
   clippingToggle,
   eyeClick,
+  maskEnabledToggle,
+  maskRemoval,
   opacityEdit,
   opacityPercent,
+  referenceMask,
   removal,
   typedOpacity,
+  ungrouping,
   visibilityToggle,
 } from "../src/lib/layerEdits";
 import { layerTree } from "../src/lib/layerTree";
@@ -123,4 +129,67 @@ test("the opacity field takes whole percents within range; empty or invalid rest
   assert.equal(opacityPercent(layer(1, { opacity: 0.555 })), 56);
   assert.equal(opacityPercent(null), 100);
   assert.deepEqual(opacityEdit([layer(1)], 0.5), { kind: "setLayerOpacity", id: 1, opacity: 0.5 });
+});
+
+test("the clipping command releases only when every selected layer is clipped", () => {
+  assert.equal(clippingReleases([layer(1, { clipped: true }), layer(2)]), false);
+  assert.equal(clippingReleases([layer(1, { clipped: true }), layer(2, { clipped: true })]), true);
+  assert.equal(clippingReleases([]), false);
+});
+
+test("arranging is possible while a selected layer can pass a layer of its group", () => {
+  const [a, b, c] = [layer(1), layer(2), layer(3)];
+  const inner = layer(5);
+  const group = layer(4, { kind: "group", children: [inner] });
+  const tree = layerTree([a, b, c, group]);
+  // `c` and the group are on top of the top level: up moves nothing.
+  assert.equal(canArrange(tree, [c, group], "forward"), false);
+  assert.equal(canArrange(tree, [c, group], "front"), false);
+  assert.equal(canArrange(tree, [c, group], "backward"), true);
+  assert.equal(canArrange(tree, [a], "back"), false);
+  assert.equal(canArrange(tree, [a], "front"), true);
+  // Alone in its group, a layer has nowhere to go; inside a moving group, it goes with it.
+  assert.equal(canArrange(tree, [inner], "front"), false);
+  assert.equal(canArrange(tree, [inner], "back"), false);
+  assert.equal(canArrange(tree, [group, inner], "back"), true);
+  assert.equal(canArrange(tree, [], "front"), false);
+});
+
+test("ungrouping replaces every selected group, their layers selected", () => {
+  const inner = layer(5, { kind: "group", children: [layer(6)] });
+  const outer = layer(4, { kind: "group", children: [layer(3), inner] });
+  const side = layer(8, { kind: "group", children: [layer(7)] });
+  assert.deepEqual(ungrouping([outer, inner, side, layer(1)]), {
+    request: { kind: "ungroup", ids: [4, 5, 8] },
+    // The inner group goes too: its layer, not itself, is selected.
+    layers: [3, 6, 7],
+  });
+  assert.equal(ungrouping([layer(1)]), null);
+});
+
+test("masks are disabled, enabled and deleted on every selected layer that has one", () => {
+  const on = layer(1, { mask: { enabled: true, contentKey: 1 } });
+  const off = layer(2, { mask: { enabled: false, contentKey: 2 } });
+  const bare = layer(3);
+  // The active layer's mask says what happens; without one, the first selected mask.
+  assert.equal(referenceMask([on, off, bare], bare), on.mask);
+  assert.deepEqual(maskEnabledToggle([on, off, bare], on), {
+    kind: "setLayerMaskEnabled",
+    id: 1,
+    enabled: false,
+  });
+  assert.deepEqual(maskEnabledToggle([on, off, bare], off), {
+    kind: "setLayerMaskEnabled",
+    id: 2,
+    enabled: true,
+  });
+  assert.deepEqual(maskRemoval([on, bare, off]), {
+    kind: "batch",
+    edits: [
+      { kind: "removeLayerMask", id: 1 },
+      { kind: "removeLayerMask", id: 2 },
+    ],
+  });
+  assert.equal(maskEnabledToggle([bare], bare), null);
+  assert.equal(maskRemoval([bare]), null);
 });

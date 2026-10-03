@@ -11,7 +11,8 @@ import {
 
 /** A key press: `key` as typed, `code` the physical key (by default the QWERTY one). */
 function press(key: string, modifiers: Partial<KeyPress> = {}): KeyPress {
-  const code = /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : "";
+  const brackets: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight" };
+  const code = /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : (brackets[key] ?? "");
   return {
     key,
     code,
@@ -122,4 +123,28 @@ test("shortcuts are shown in each platform's way", () => {
   assert.equal(formatShortcut("mod++", names, false), "Ctrl++");
   assert.equal(formatShortcut("alt+shift+mod+k", names, true), "⌥⇧⌘K");
   assert.equal(formatShortcut("mod+,", names, true), "⌘,");
+});
+
+test("Layer > Arrange is Ctrl+[ and ], by the physical keys (^ and $ on AZERTY)", () => {
+  const bracket = (key: string, code: string, modifiers: Partial<KeyPress>) => ({
+    ...press(key, modifiers),
+    code,
+  });
+  assert.equal(commandAt(bracket("]", "BracketRight", ctrl), false), "bringForward");
+  assert.equal(commandAt(bracket("$", "BracketRight", ctrl), false), "bringForward");
+  assert.equal(commandAt(bracket("[", "BracketLeft", ctrl), false), "sendBackward");
+  assert.equal(
+    commandAt(bracket("}", "BracketRight", { ...ctrl, shiftKey: true }), false),
+    "bringToFront",
+  );
+  assert.equal(
+    commandAt(bracket("£", "BracketRight", { ...ctrl, shiftKey: true }), false),
+    "bringToFront",
+  );
+  assert.equal(
+    commandAt(bracket("{", "BracketLeft", { ...cmd, shiftKey: true }), true),
+    "sendToBack",
+  );
+  // Alone, the brackets are the brushes' (keymap.ts), not a command.
+  assert.equal(commandAt(bracket("]", "BracketRight", {}), false), null);
 });

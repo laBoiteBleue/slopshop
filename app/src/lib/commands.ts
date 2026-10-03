@@ -5,7 +5,7 @@
 /**
  * A shortcut as written in the table: modifiers then one key, joined by "+", lower case:
  * "mod+shift+z", "shift+f6", "q". `mod` is Ctrl, or ⌘ on macOS. Keys are a letter, a digit,
- * "+", "-", ",", or a `KeyboardEvent.key` name ("f2", "delete", "backspace").
+ * "+", "-", ",", "[", "]", or a `KeyboardEvent.key` name ("f2", "delete", "backspace").
  */
 export type Shortcut = string;
 
@@ -61,6 +61,10 @@ export const SHORTCUTS = {
   groupLayers: ["mod+g"],
   ungroupLayers: ["shift+mod+g"],
   clipping: ["alt+mod+g"],
+  bringToFront: ["shift+mod+]"],
+  bringForward: ["mod+]"],
+  sendBackward: ["mod+["],
+  sendToBack: ["shift+mod+["],
   renameLayer: ["f2"],
   deleteLayers: ["delete", "backspace"],
   // Select
@@ -133,6 +137,10 @@ export function matches(shortcut: Shortcut, press: KeyPress, mac: boolean): bool
   if (/^[0-9]$/.test(s.key)) {
     return press.key === s.key || press.code === `Digit${s.key}` || press.code === `Numpad${s.key}`;
   }
+  // [ and ] are the physical keys, as Photoshop reads them (^ and $ on AZERTY, which types
+  // brackets with AltGr only).
+  if (s.key === "[") return press.code === "BracketLeft";
+  if (s.key === "]") return press.code === "BracketRight";
   if (s.key === "+") return press.key === "+" || press.key === "=" || press.code === "NumpadAdd";
   if (s.key === "-") {
     return press.key === "-" || press.key === "_" || press.code === "NumpadSubtract";

@@ -2,7 +2,7 @@
 // all of them (a batch), and nothing for layers already as asked. Null: nothing to send.
 
 import type { BlendModeId, EditRequest, LayerView } from "./engine";
-import { outermost, type LayerTree } from "./layerTree";
+import { childrenOf, outermost, type LayerTree } from "./layerTree";
 
 /** One edit, or one batch (a single undo entry) for several. */
 export function batchOf(edits: EditRequest[]): EditRequest {
@@ -22,13 +22,80 @@ export function removal(tree: LayerTree, layers: LayerView[]): EditRequest | nul
   return batchOrNone(ids.map((id): EditRequest => ({ kind: "removeLayer", id })));
 }
 
+/** Whether the clipping command releases `layers` (all clipped) rather than clips them. */
+export function clippingReleases(layers: LayerView[]): boolean {
+  return layers.length > 0 && layers.every((l) => l.clipped);
+}
+
 /** Clip `layers` to the layers below them, or release them when all are clipped. */
 export function clippingToggle(layers: LayerView[]): EditRequest | null {
-  const release = layers.length > 0 && layers.every((l) => l.clipped);
+  const release = clippingReleases(layers);
   return batchOrNone(
     layers
       .filter((l) => l.clipped === release)
       .map((l): EditRequest => ({ kind: "setLayerClipped", id: l.id, clipped: !release })),
+  );
+}
+
+/** Where Layer > Arrange moves the selected layers among the layers of their group. */
+export type Arrangement = "front" | "forward" | "backward" | "back";
+
+/**
+ * Whether `arrangement` moves something (Photoshop grays it otherwise): one of `layers` has a
+ * layer of its group that does not move above it (front, forward) or below it (backward, back).
+ */
+export function canArrange(
+  tree: LayerTree,
+  layers: LayerView[],
+  arrangement: Arrangement,
+): boolean {
+  const ids = outermost(
+    tree,
+    layers.map((l) => l.id),
+  );
+  const moving = new Set(ids);
+  const up = arrangement === "front" || arrangement === "forward";
+  return ids.some((id) => {
+    const siblings = childrenOf(tree, tree.parents.get(id) ?? null);
+    const at = siblings.findIndex((l) => l.id === id);
+    const passed = up ? siblings.slice(at + 1) : siblings.slice(0, at);
+    return passed.some((l) => !moving.has(l.id));
+  });
+}
+
+/** The groups among `layers` replaced by their layers, which become the selection. */
+export function ungrouping(layers: LayerView[]): { request: EditRequest; layers: number[] } | null {
+  const groups = layers.filter((l) => l.kind === "group");
+  if (groups.length === 0) return null;
+  const ungrouped = new Set(groups.map((g) => g.id));
+  return {
+    request: { kind: "ungroup", ids: groups.map((g) => g.id) },
+    layers: groups.flatMap((g) => g.children.map((l) => l.id)).filter((id) => !ungrouped.has(id)),
+  };
+}
+
+/** The mask the Layer menu speaks of: the active layer's, else the first selected one's. */
+export function referenceMask(selection: LayerView[], active: LayerView | null): LayerView["mask"] {
+  return active?.mask ?? selection.find((l) => l.mask)?.mask ?? null;
+}
+
+/** Disable the masks of `selection`, or enable them all when the reference mask is disabled. */
+export function maskEnabledToggle(
+  selection: LayerView[],
+  active: LayerView | null,
+): EditRequest | null {
+  const enabled = referenceMask(selection, active)?.enabled === false;
+  return batchOrNone(
+    selection
+      .filter((l) => l.mask && l.mask.enabled !== enabled)
+      .map((l): EditRequest => ({ kind: "setLayerMaskEnabled", id: l.id, enabled })),
+  );
+}
+
+/** Delete the masks of `layers`. */
+export function maskRemoval(layers: LayerView[]): EditRequest | null {
+  return batchOrNone(
+    layers.filter((l) => l.mask).map((l): EditRequest => ({ kind: "removeLayerMask", id: l.id })),
   );
 }
 
