@@ -51,7 +51,12 @@ afterEach(() => {
 });
 
 function open(
-  props: Partial<{ hidden: boolean; shift: [number, number]; selectionKey: number }> = {},
+  props: Partial<{
+    hidden: boolean;
+    shift: [number, number];
+    selectionKey: number;
+    matrix: [number, number, number, number, number, number];
+  }> = {},
 ) {
   return render(SelectionOutline, {
     mapping: MAPPING,
@@ -100,4 +105,18 @@ test("the outline is drawn moved while the selected pixels float in a drag", asy
   const { container } = open({ shift: [5, 3] });
   await waitFor(() => expect(container.querySelector("g")).toBeInTheDocument());
   expect(container.querySelector("g")).toHaveAttribute("transform", "translate(5 3)");
+});
+
+test("a matrix (Transform Selection) draws the outline mapped by it, live", async () => {
+  const { container, rerender } = open({ matrix: [2, 0, 0, 2, 5, 0] });
+  await waitFor(() => expect(container.querySelector("path.ants")).toBeInTheDocument());
+  expect(container.querySelector("path.ants")).toHaveAttribute(
+    "d",
+    "M25.5 20.5L105.5 20.5L105.5 100.5",
+  );
+  await rerender({ matrix: [1, 0, 0, 1, 0, 0] });
+  expect(container.querySelector("path.ants")).toHaveAttribute(
+    "d",
+    "M10.5 10.5L50.5 10.5L50.5 50.5",
+  );
 });

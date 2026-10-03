@@ -262,6 +262,141 @@ pub fn translated(
     Ok(moved.into_image())
 }
 
+/// Select > Transform Selection: `current` mapped by `transform` (document pixels to document
+/// pixels) on a canvas of `canvas` pixels, resampled as a transformed layer is (ADR 0018: from
+/// the pyramid level matching the scale, exact for whole-pixel moves), so that soft edges stay
+/// soft; what leaves the canvas is dropped. A tile whose samples only read uniform tiles of one
+/// value stays uniform (shared). `None` when nothing stays selected; an error for a transform
+/// that cannot be inverted.
+pub fn transformed(
+    canvas: Size,
+    current: &RasterImage,
+    transform: Affine,
+) -> Result<Option<RasterImage>, SelectionError> {
+    if let Some((dx, dy)) = transform.integer_translation() {
+        return translated(canvas, current, dx, dy);
+    }
+    // Selections made here are in that format already; anything else is read into it first.
+    let normalized;
+    let current = if current.stored_format() == SELECTION_FORMAT {
+        current
+    } else {
+        match Mask::from_image(current.size(), current)?.into_image() {
+            Some(image) => {
+                normalized = image;
+                &normalized
+            }
+            None => return Ok(None),
+        }
+    };
+    let Some(selected) = bounds(current) else {
+        return Ok(None);
+    };
+    let resampling = crate::resample::Resampling::new(transform, 1.0, current.levels().len())
+        .ok_or(SelectionError::InvalidShape)?;
+    let level = current
+        .levels()
+        .get(resampling.level)
+        .ok_or(SelectionError::InvalidShape)?;
+    let texels = level.size();
+    let table = crate::resample::weight_table();
+    let factor = f64::from(1u32 << resampling.level.min(31));
+    // Where the selection lands, with a pixel of margin for the filter.
+    let [lx0, ly0, lx1, ly1] = transform.map_rect([
+        f64::from(selected.x),
+        f64::from(selected.y),
+        f64::from(selected.x) + f64::from(selected.width),
+        f64::from(selected.y) + f64::from(selected.height),
+    ]);
+    let landing = [lx0 - 2.0, ly0 - 2.0, lx1 + 2.0, ly1 + 2.0];
+    let texel = |i: i64, j: i64| -> Option<f64> {
+        if i < 0 || j < 0 || i >= i64::from(texels.width) || j >= i64::from(texels.height) {
+            return None;
+        }
+        let (x, y) = (i as u32, j as u32);
+        let coord = TileCoord {
+            col: x / TILE_SIZE,
+            row: y / TILE_SIZE,
+        };
+        let at = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * 2;
+        let value = level
+            .tile(coord)
+            .and_then(|tile| tile.get(at..at + 2))
+            .map_or(0, |b| u16::from_ne_bytes([b[0], b[1]]));
+        Some(f64::from(value) / f64::from(FULL))
+    };
+    let mut out = Mask::new(canvas)?;
+    let mut work: Vec<(usize, Tile)> = (0..out.tiles.len())
+        .map(|index| (index, Tile::Const(0)))
+        .collect();
+    let shape = &out;
+    crate::raster::parallel_for_each(&mut work, |(index, tile)| {
+        let (col, row) = (*index % shape.columns, *index / shape.columns);
+        let (w, h) = shape.valid(col, row);
+        let area = [
+            (col * T) as f64,
+            (row * T) as f64,
+            (col * T + w) as f64,
+            (row * T + h) as f64,
+        ];
+        let misses = area[2] <= landing[0]
+            || area[3] <= landing[1]
+            || area[0] >= landing[2]
+            || area[1] >= landing[3];
+        if misses {
+            return;
+        }
+        // Uniform when every texel its samples read is in uniform tiles of one value.
+        let [sx0, sy0, sx1, sy1] = resampling.source_area(area).map(|v| v / factor);
+        let inside = sx0 >= 0.0
+            && sy0 >= 0.0
+            && sx1 <= f64::from(texels.width)
+            && sy1 <= f64::from(texels.height);
+        if inside {
+            let tiles_of = |a: f64, b: f64| {
+                (a as u32 / TILE_SIZE)..=((b as u32).saturating_sub(1) / TILE_SIZE)
+            };
+            let mut constant = None;
+            let mut uniform = true;
+            'reads: for r in tiles_of(sy0, sy1) {
+                for c in tiles_of(sx0, sx1) {
+                    let value = level
+                        .tile(TileCoord { col: c, row: r })
+                        .map_or(Some(0), |t| uniform_value(t));
+                    uniform = match (value, constant) {
+                        (None, _) => false,
+                        (Some(v), None) => {
+                            constant = Some(v);
+                            true
+                        }
+                        (Some(v), Some(previous)) => v == previous,
+                    };
+                    if !uniform {
+                        break 'reads;
+                    }
+                }
+            }
+            if uniform && let Some(v) = constant {
+                *tile = Tile::Const(v);
+                return;
+            }
+        }
+        let mut values = vec![0u16; T * T];
+        for y in 0..h {
+            for x in 0..w {
+                let point = ((col * T + x) as f64 + 0.5, (row * T + y) as f64 + 0.5);
+                let (sample, _) =
+                    resampling.sample(table, point, |i, j| texel(i, j).map(|v| [v, 0.0, 0.0, 0.0]));
+                values[y * T + x] = (sample[0].clamp(0.0, 1.0) * f64::from(FULL)).round() as u16;
+            }
+        }
+        pad(&mut values, w, h);
+        *tile = computed_tile(values);
+    });
+    out.tiles = work.into_iter().map(|(_, tile)| tile).collect();
+    Ok(out.into_image())
+}
+
 /// The coverage (0–1) of `selection` at the centers of a `width × height` grid stretched over
 /// `area` of the canvas: the nearest pixel of the finest pyramid level whose pixels are no
 /// larger than the grid's (a level's pixel averages the ones it covers). Reads the tiles
@@ -3545,6 +3680,48 @@ mod tests {
         assert_eq!(same.gray_at(0, 299), 0.0);
         assert_eq!(same.gray_at(100, 100), faint.gray_at(100, 100));
         assert!(grow(&doc, &inside_red, options(300.0, true)).is_err());
+    }
+
+    #[test]
+    fn transforming_a_selection_resamples_its_coverage() {
+        let canvas = Size::new(1000, 700);
+        let square = select(canvas, &rect(100.0, 100.0, 200.0, 200.0));
+        // Twice as large, resampled as a layer is: the outline (half covered) doubles, the
+        // edge a little soft.
+        let doubled = transformed(canvas, &square, Affine::scale(2.0, 2.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(doubled.gray_at(250, 250), 1.0);
+        for (x, inside) in [(199, false), (200, true), (399, true), (400, false)] {
+            assert_eq!(doubled.gray_at(x, 300) >= 0.5, inside, "at {x}");
+        }
+        assert_eq!(doubled.gray_at(150, 150), 0.0);
+        assert_eq!(doubled.gray_at(450, 300), 0.0);
+        // Turned by 45° about its center: inside stays selected, the edges are soft.
+        let center = Affine::translation(-150.0, -150.0)
+            .then(Affine::rotation(std::f64::consts::FRAC_PI_4))
+            .then(Affine::translation(150.0, 150.0));
+        let turned = transformed(canvas, &square, center).unwrap().unwrap();
+        assert_eq!(turned.gray_at(150, 150), 1.0);
+        // A corner now points up, about 70.7 pixels above the center.
+        assert_eq!(turned.gray_at(150, 82), 1.0);
+        assert_eq!(turned.gray_at(105, 105), 0.0);
+        let soft = (60..90)
+            .map(|y| turned.gray_at(150, y))
+            .filter(|v| *v > 0.0 && *v < 1.0);
+        assert!(soft.count() >= 1);
+        // A whole-pixel move is exact.
+        let moved = transformed(canvas, &square, Affine::translation(30.0, -20.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(bounds(&moved), Some(Rect::new(130, 80, 100, 100)));
+        // Off the canvas: nothing selected; flattened: refused.
+        assert!(
+            transformed(canvas, &square, Affine::translation(5000.5, 0.0))
+                .unwrap()
+                .is_none()
+        );
+        assert!(transformed(canvas, &square, Affine::scale(0.0, 1.0)).is_err());
     }
 
     #[test]

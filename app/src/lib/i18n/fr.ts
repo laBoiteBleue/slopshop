@@ -206,6 +206,7 @@ const fr: Messages = {
   "menu.select.quickMask": "Mode Masque rapide",
   "menu.select.grow": "Généraliser",
   "menu.select.similar": "Similaire",
+  "menu.select.transform": "Transformer la sélection",
   "menu.view.zoomIn": "Zoom avant",
   "menu.view.zoomOut": "Zoom arrière",
   "menu.view.fit": "Taille écran",

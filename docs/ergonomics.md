@@ -328,16 +328,16 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
 - **Done**: All (the whole canvas), Deselect, Reselect, Inverse; Select Subject (the existing
   BiRefNet + ViTMatte path); Color Range…; Modify > Border, Smooth, Expand, Contract, Feather;
   Grow and Similar (the Magic Wand from every selected pixel, its tolerance around the range of
-  their colors, as Photoshop; connected pixels or the whole image); Quick Mask Mode (Q); All
+  their colors, as Photoshop; connected pixels or the whole image); Transform Selection (Free
+  Transform's box, handles, fields and right-click menu on the selection's bounds; the outline
+  follows live, Enter resamples the selection as a layer is resampled, one undo entry; Esc or
+  undo leaves it as it was; the layers never change); Quick Mask Mode (Q); All
   Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
   Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
   Mask; saved selections; layers.
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Transform Selection: Free Transform's box and handles on the selection's outline, which
-    moves live; Enter resamples the selection (one undo entry). The selection's geometry only,
-    never the layers' pixels.
   - Color Range: Localized (a radius around the sampled points) and Sample All Layers.
   - Quick Mask: "Quick Mask" stays visible while it is on; its own pair of gray swatches (white
     and black), shown in the options bar as [Add] and [Remove]; X swaps them, D resets them,

@@ -203,6 +203,7 @@ const en = {
   "menu.select.quickMask": "Quick Mask Mode",
   "menu.select.grow": "Grow",
   "menu.select.similar": "Similar",
+  "menu.select.transform": "Transform Selection",
   "menu.view.zoomIn": "Zoom In",
   "menu.view.zoomOut": "Zoom Out",
   "menu.view.fit": "Fit on Screen",

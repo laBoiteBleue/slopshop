@@ -115,6 +115,8 @@ beforeEach(() => {
           documents.push(doc);
           return doc;
         }
+        case "selection_bounds":
+          return { left: 10, top: 20, right: 110, bottom: 70 };
         case "undo":
           return { ...find(), revision: find().revision + 1, canUndo: false };
         case "perform": {
@@ -325,6 +327,7 @@ test("the Select menu: the basics, then by subject and color, Modify, Grow and S
     "—",
     "Grow",
     "Similar",
+    "Transform Selection",
     "Quick Mask Mode",
     "—",
     "All Layers",
@@ -373,4 +376,35 @@ test("Photoshop's selection shortcuts: All, Deselect, Reselect, Inverse", async 
         .filter((c) => ["select_all", "deselect", "reselect", "invert_selection"].includes(c)),
     ).toEqual(["select_all", "deselect", "reselect", "invert_selection"]),
   );
+});
+
+test("Select > Transform Selection turns the selection's outline, then Enter resamples it", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Transform Selection", { selector: ".label" }));
+  await vi.waitFor(() => expect(document.querySelectorAll(".handle")).toHaveLength(8));
+  const svg = document.querySelector(".handle")!.closest("svg")!;
+  await user.pointer({ keys: "[MouseRight]", target: svg, coords: { clientX: 5, clientY: 5 } });
+  await user.click(screen.getByText("Flip Horizontal"));
+  // Live: only the outline moves, nothing is sent to the layers.
+  expect(sent("perform_live")).toEqual([]);
+  await user.keyboard("{Enter}");
+  // Flipped about the box's center (x = 60).
+  await vi.waitFor(() =>
+    expect(sent("transform_selection")).toEqual([{ documentId: 1, matrix: [-1, 0, 0, 1, 120, 0] }]),
+  );
+  expect(document.querySelectorAll(".handle")).toHaveLength(0);
+});
+
+test("Escape leaves the selection as it was", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Transform Selection", { selector: ".label" }));
+  await vi.waitFor(() => expect(document.querySelectorAll(".handle")).toHaveLength(8));
+  await user.keyboard("{Escape}");
+  await vi.waitFor(() => expect(document.querySelectorAll(".handle")).toHaveLength(0));
+  expect(sent("transform_selection")).toEqual([]);
+  expect(sent("cancel_gesture")).toEqual([]);
 });
