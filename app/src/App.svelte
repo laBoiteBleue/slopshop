@@ -47,14 +47,28 @@
     type AiFeature,
     type AiFailure,
   } from "./lib/engine";
-  import { getLocale, locales, setLocale, t, type Locale } from "./lib/i18n/index.svelte";
+  import { t } from "./lib/i18n/index.svelte";
   import type { MessageKey } from "./lib/i18n/en";
   import ExportDialog from "./lib/ExportDialog.svelte";
   import VectorImportDialog from "./lib/VectorImportDialog.svelte";
   import SizeDialog from "./lib/SizeDialog.svelte";
   import PreferencesDialog from "./lib/PreferencesDialog.svelte";
+  import KeyboardShortcutsDialog from "./lib/KeyboardShortcutsDialog.svelte";
   import MenuBar, { type Menu, type MenuItem } from "./lib/MenuBar.svelte";
-  import { hasShortcutModifier, isWindows, modifierLabel, shortcutLetter } from "./lib/platform";
+  import {
+    hasShortcutModifier,
+    isMac,
+    isWindows,
+    modifierLabel,
+    shortcutLetter,
+  } from "./lib/platform";
+  import {
+    SHORTCUTS,
+    commandAt,
+    formatShortcut,
+    type CommandId,
+    type Shortcut,
+  } from "./lib/commands";
   import { formatZoom } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
@@ -2073,15 +2087,15 @@
 
   // --- Menu bar (ADR 0013) ------------------------------------------------------------------------
 
-  /** A shortcut as shown in menus: `mod` (Ctrl or ⌘), `shift` and a key. */
-  function keys(...parts: string[]): string {
-    const names: Record<string, string> = {
-      mod: modifierLabel,
+  /** A shortcut as shown in menus and in Edit > Keyboard Shortcuts. */
+  function shortcutText(shortcut: Shortcut): string {
+    const names = {
       shift: t("key.shift"),
       alt: t("key.alt"),
       delete: t("key.delete"),
+      backspace: t("key.backspace"),
     };
-    return parts.map((p) => names[p] ?? p).join("+");
+    return formatShortcut(shortcut, names, isMac);
   }
 
   /** Close the window: unsaved documents are asked about first (close-requested). */
@@ -2100,6 +2114,237 @@
     return { kind: "command", label, run, shortcut, disabled };
   }
 
+  /** A command that has a shortcut (its keys are in `SHORTCUTS`, see `commands`). */
+  type AppCommand = {
+    label: string;
+    run: () => void;
+    disabled?: boolean;
+    checked?: boolean;
+    /**
+     * Its shortcut acts while a text field has the focus (the File commands); the others leave
+     * their keys to the field (its own undo, copy, paste…).
+     */
+    whileTyping?: boolean;
+    /** A held key runs it again (undo, zoom); the others act once per press. */
+    repeats?: boolean;
+  };
+
+  /** The Delete key: the selected pixels with a selection (Photoshop's Clear), else the layers. */
+  function deleteKey() {
+    if (layersPanel?.busy()) return;
+    if (active?.selectionKey != null) clearSelection();
+    else layersPanel?.deleteSelected();
+  }
+
+  /**
+   * The commands that have a shortcut, defined once: the menus show them, the keyboard runs
+   * them (`onkeydown`), Edit > Keyboard Shortcuts lists them.
+   */
+  let commands = $derived.by((): Record<CommandId, AppCommand> => {
+    const doc = active;
+    const busy = doc !== null && saving.includes(doc.id);
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const selectedCount = layersPanel?.selectedLayers().length ?? 0;
+    const several = selectedCount > 1;
+    const noSelection = doc?.selectionKey == null;
+    return {
+      newDocument: { label: t("menu.file.new"), run: newDocument, whileTyping: true },
+      open: { label: t("menu.file.open"), run: () => void openWithDialog(), whileTyping: true },
+      importLayers: {
+        label: t("menu.file.importLayers"),
+        run: () => doc && void openWithDialog(doc.id),
+        disabled: !doc,
+        whileTyping: true,
+      },
+      close: {
+        label: t("menu.file.close"),
+        run: () => doc && void closeTab(doc.id),
+        disabled: !doc,
+        whileTyping: true,
+      },
+      closeAll: {
+        label: t("menu.file.closeAll"),
+        run: () => void closeAll(),
+        disabled: !doc,
+        whileTyping: true,
+      },
+      save: {
+        label: t("menu.file.save"),
+        run: () => saveActive(false),
+        disabled: !doc || busy,
+        whileTyping: true,
+      },
+      saveAs: {
+        label: t("menu.file.saveAs"),
+        run: () => saveActive(true),
+        disabled: !doc || busy,
+        whileTyping: true,
+      },
+      export: {
+        label: t("menu.file.export"),
+        run: () => doc && void chooseSaveAs(doc, "images"),
+        disabled: !doc,
+        whileTyping: true,
+      },
+      print: { label: t("menu.file.print"), run: printDocument, disabled: !doc, whileTyping: true },
+      documentInfo: {
+        label: t("menu.file.documentInfo"),
+        run: () => void showDocumentInfo(),
+        disabled: !doc,
+        whileTyping: true,
+      },
+      quit: { label: t("menu.file.quit"), run: quitApp, whileTyping: true },
+      // Undo during a Free Transform cancels it, even with nothing in the history yet.
+      undo: {
+        label: t("menu.edit.undo"),
+        run: undo,
+        disabled: !transforming && !doc?.canUndo,
+        repeats: true,
+      },
+      redo: { label: t("menu.edit.redo"), run: redo, disabled: !doc?.canRedo, repeats: true },
+      cut: {
+        label: t("menu.edit.cut"),
+        run: () => void copyLayers(true),
+        disabled: !doc || selectedCount === 0,
+      },
+      copy: {
+        label: t("menu.edit.copy"),
+        run: () => void copyLayers(false),
+        disabled: !doc || selectedCount === 0,
+      },
+      paste: { label: t("menu.edit.paste"), run: () => void paste(false) },
+      freeTransform: {
+        label: t("menu.edit.freeTransform"),
+        run: () => (transforming ? commitTransform() : void startFreeTransform()),
+        disabled: !doc || selectedCount === 0,
+      },
+      keyboardShortcuts: {
+        label: t("menu.edit.keyboardShortcuts"),
+        run: () => (shortcutsList = true),
+        whileTyping: true,
+      },
+      preferences: {
+        label: t("menu.edit.preferences"),
+        run: () => (preferences = true),
+        whileTyping: true,
+      },
+      imageSize: {
+        label: t("menu.image.imageSize"),
+        run: () => openSizeDialog("image"),
+        disabled: !doc,
+      },
+      canvasSize: {
+        label: t("menu.image.canvasSize"),
+        run: () => openSizeDialog("canvas"),
+        disabled: !doc,
+      },
+      newLayer: {
+        label: t("menu.layer.newLayer"),
+        run: () => layersPanel?.newLayer(),
+        disabled: !doc,
+      },
+      duplicateLayers: {
+        label: t(several ? "menu.layer.duplicateLayers" : "menu.layer.duplicate"),
+        run: () => layersPanel?.duplicateSelected(),
+        disabled: selectedCount === 0,
+      },
+      groupLayers: {
+        label: t("menu.layer.group"),
+        run: () => layersPanel?.groupSelected(),
+        disabled: selectedCount === 0,
+      },
+      ungroupLayers: {
+        label: t("menu.layer.ungroup"),
+        run: () => layersPanel?.ungroupSelected(),
+        disabled: layer?.kind !== "group",
+      },
+      clipping: {
+        label: t(layer?.clipped ? "menu.layer.releaseClipping" : "menu.layer.createClipping"),
+        run: () => layersPanel?.toggleClippingSelected(),
+        disabled: selectedCount === 0,
+      },
+      renameLayer: {
+        label: t("menu.layer.rename"),
+        run: () => !layersPanel?.busy() && layersPanel?.renameSelected(),
+        disabled: !layer,
+      },
+      deleteLayers: {
+        label: t(several ? "layers.deleteSelected" : "layers.delete"),
+        run: deleteKey,
+        disabled: !doc || (noSelection && selectedCount === 0),
+      },
+      selectAll: {
+        label: t("menu.select.all"),
+        run: () => selectionCommand(engine.selectAll),
+        disabled: !doc,
+      },
+      deselect: {
+        label: t("menu.select.deselect"),
+        run: () => selectionCommand(engine.deselect),
+        disabled: noSelection,
+      },
+      reselect: {
+        label: t("menu.select.reselect"),
+        run: () => selectionCommand(engine.reselect),
+        disabled: !doc?.canReselect,
+      },
+      inverse: {
+        label: t("menu.select.inverse"),
+        run: () => selectionCommand(engine.invertSelection),
+        disabled: !doc,
+      },
+      feather: {
+        label: t("menu.select.modify.feather"),
+        run: () => openModify("feather"),
+        disabled: noSelection,
+      },
+      quickMask: {
+        label: t("menu.select.quickMask"),
+        run: toggleQuickMask,
+        disabled: !doc,
+        checked: doc?.quickMask ?? false,
+      },
+      selectAllLayers: {
+        label: t("menu.select.allLayers"),
+        run: () => layersPanel?.selectAllLayers(),
+        disabled: !doc || doc.layers.length === 0,
+      },
+      zoomIn: {
+        label: t("menu.view.zoomIn"),
+        run: () => void viewport?.stepZoom(true),
+        disabled: !doc,
+        repeats: true,
+      },
+      zoomOut: {
+        label: t("menu.view.zoomOut"),
+        run: () => void viewport?.stepZoom(false),
+        disabled: !doc,
+        repeats: true,
+      },
+      fitOnScreen: { label: t("menu.view.fit"), run: () => void viewport?.fit(), disabled: !doc },
+      actualSize: {
+        label: t("menu.view.actualSize"),
+        run: () => void viewport?.zoomTo(1),
+        disabled: !doc,
+      },
+    };
+  });
+
+  /** The menu entry of a command that has a shortcut. */
+  function item(id: CommandId): MenuItem {
+    const c = commands[id];
+    const shortcuts = SHORTCUTS[id].map(shortcutText);
+    return {
+      kind: "command",
+      label: c.label,
+      run: c.run,
+      shortcut: shortcuts[0],
+      shortcuts,
+      disabled: c.disabled,
+      checked: c.checked,
+    };
+  }
+
   /** Commands on the selected layers: the Layer menu's, also the layers' context menu. */
   let layerCommands = $derived.by(() => {
     const doc = active;
@@ -2116,13 +2361,8 @@
     const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const several = selectedCount > 1;
     return {
-      duplicate: command(
-        t(several ? "menu.layer.duplicateLayers" : "menu.layer.duplicate"),
-        () => layersPanel?.duplicateSelected(),
-        keys("mod", "J"),
-        selectedCount === 0,
-      ),
-      rename: command(t("menu.layer.rename"), () => layersPanel?.renameSelected(), "F2", !layer),
+      duplicate: item("duplicateLayers"),
+      rename: item("renameLayer"),
       visibility: command(
         t(
           layer?.visible === false
@@ -2137,43 +2377,24 @@
         undefined,
         selectedCount === 0,
       ),
-      delete: command(
-        t(several ? "layers.deleteSelected" : "layers.delete"),
-        () => layersPanel?.deleteSelected(),
-        keys("delete"),
-        selectedCount === 0,
-      ),
+      // The entry deletes the layers; the Delete key clears the selected pixels when there is a
+      // selection (`deleteKey`).
+      delete: {
+        ...item("deleteLayers"),
+        run: () => layersPanel?.deleteSelected(),
+        disabled: selectedCount === 0,
+      },
       newGroup: command(t("menu.layer.newGroup"), () => layersPanel?.newGroup(), undefined, !doc),
-      newLayer: command(
-        t("menu.layer.newLayer"),
-        () => layersPanel?.newLayer(),
-        keys("shift", "mod", "N"),
-        !doc,
-      ),
+      newLayer: item("newLayer"),
       deletePaint: command(
         t("menu.layer.deletePaint"),
         () => layersPanel?.deletePaintSelected(),
         undefined,
         !layersPanel?.selectionPainted(),
       ),
-      group: command(
-        t("menu.layer.group"),
-        () => layersPanel?.groupSelected(),
-        keys("mod", "G"),
-        selectedCount === 0,
-      ),
-      clipping: command(
-        t(layer?.clipped ? "menu.layer.releaseClipping" : "menu.layer.createClipping"),
-        () => layersPanel?.toggleClippingSelected(),
-        keys("alt", "mod", "G"),
-        selectedCount === 0,
-      ),
-      ungroup: command(
-        t("menu.layer.ungroup"),
-        () => layersPanel?.ungroupSelected(),
-        keys("shift", "mod", "G"),
-        layer?.kind !== "group",
-      ),
+      group: item("groupLayers"),
+      clipping: item("clipping"),
+      ungroup: item("ungroupLayers"),
       maskRevealAll: maskCommand("revealAll", "menu.layer.maskRevealAll"),
       maskHideAll: maskCommand("hideAll", "menu.layer.maskHideAll"),
       maskRevealSelection: maskCommand("revealSelection", "menu.layer.maskRevealSelection"),
@@ -2238,20 +2459,14 @@
       command(t("layers.addFill"), () => layersPanel?.addFill(), undefined, !doc),
       layerCommands.newGroup,
       { kind: "separator" },
-      command(t("menu.edit.paste"), () => void paste(false), keys("mod", "V")),
+      item("paste"),
       { kind: "separator" },
-      command(
-        t("menu.select.allLayers"),
-        () => layersPanel?.selectAllLayers(),
-        keys("alt", "mod", "A"),
-        !doc || doc.layers.length === 0,
-      ),
+      item("selectAllLayers"),
     ];
   });
 
   let menus = $derived.by((): Menu[] => {
     const doc = active;
-    const busy = doc !== null && saving.includes(doc.id);
     const layer = layersPanel?.selectedLayer() ?? null;
     const selectedCount = layersPanel?.selectedLayers().length ?? 0;
     const cmd = (label: string, run: () => void, shortcut?: string, disabled = false) => ({
@@ -2266,8 +2481,8 @@
       {
         label: t("menu.file"),
         items: [
-          cmd(t("menu.file.new"), newDocument, keys("mod", "N")),
-          cmd(t("menu.file.open"), () => void openWithDialog(), keys("mod", "O")),
+          item("newDocument"),
+          item("open"),
           cmd(t("menu.file.openFolder"), () => void openFolderWithDialog()),
           {
             kind: "submenu",
@@ -2281,70 +2496,35 @@
               cmd(t("menu.file.clearRecent"), () => void engine.clearRecentFiles()),
             ],
           },
-          cmd(
-            t("menu.file.importLayers"),
-            () => doc && void openWithDialog(doc.id),
-            keys("mod", "shift", "O"),
-            !doc,
-          ),
+          item("importLayers"),
           // Windows' scanning dialog (WIA); not available on other systems yet.
           ...(isWindows ? [cmd(t("menu.file.importDevice"), () => void acquireImage())] : []),
           separator,
-          cmd(t("menu.file.close"), () => doc && void closeTab(doc.id), keys("mod", "W"), !doc),
-          cmd(t("menu.file.closeAll"), () => void closeAll(), keys("mod", "alt", "W"), !doc),
+          item("close"),
+          item("closeAll"),
           separator,
-          cmd(t("menu.file.save"), () => saveActive(false), keys("mod", "S"), !doc || busy),
-          cmd(
-            t("menu.file.saveAs"),
-            () => saveActive(true),
-            keys("mod", "shift", "S"),
-            !doc || busy,
-          ),
-          cmd(
-            t("menu.file.export"),
-            () => doc && void chooseSaveAs(doc, "images"),
-            keys("mod", "shift", "E"),
-            !doc,
-          ),
+          item("save"),
+          item("saveAs"),
+          item("export"),
           separator,
-          cmd(t("menu.file.print"), printDocument, keys("mod", "P"), !doc),
-          cmd(
-            t("menu.file.documentInfo"),
-            () => void showDocumentInfo(),
-            keys("mod", "alt", "shift", "I"),
-            !doc,
-          ),
+          item("print"),
+          item("documentInfo"),
           separator,
-          cmd(t("menu.file.quit"), quitApp, keys("mod", "Q")),
+          item("quit"),
         ],
       },
       {
         label: t("menu.edit"),
         items: [
-          cmd(t("menu.edit.undo"), () => void undo(), keys("mod", "Z"), !doc?.canUndo),
-          cmd(t("menu.edit.redo"), () => void redo(), keys("mod", "shift", "Z"), !doc?.canRedo),
+          item("undo"),
+          item("redo"),
           separator,
-          cmd(
-            t("menu.edit.cut"),
-            () => void copyLayers(true),
-            keys("mod", "X"),
-            !doc || selectedCount === 0,
-          ),
-          cmd(
-            t("menu.edit.copy"),
-            () => void copyLayers(false),
-            keys("mod", "C"),
-            !doc || selectedCount === 0,
-          ),
-          cmd(t("menu.edit.paste"), () => void paste(false), keys("mod", "V")),
+          item("cut"),
+          item("copy"),
+          item("paste"),
           cmd(t("menu.edit.pasteNewDocument"), () => void paste(true)),
           separator,
-          cmd(
-            t("menu.edit.freeTransform"),
-            () => (transforming ? commitTransform() : void startFreeTransform()),
-            keys("mod", "T"),
-            !doc || selectedCount === 0,
-          ),
+          item("freeTransform"),
           {
             kind: "submenu",
             label: t("menu.edit.transform"),
@@ -2374,35 +2554,16 @@
             ],
           },
           separator,
-          {
-            kind: "submenu",
-            label: t("menu.edit.language"),
-            items: Object.entries(locales).map(([code, { name }]) => ({
-              kind: "command" as const,
-              label: name,
-              checked: getLocale() === code,
-              run: () => setLocale(code as Locale),
-            })),
-          },
-          cmd(t("menu.edit.preferences"), () => (preferences = true), keys("mod", "K")),
+          item("keyboardShortcuts"),
+          item("preferences"),
         ],
       },
       {
         label: t("menu.image"),
         items: [
-          cmd(t("menu.image.crop"), cropImage, "C", !doc),
-          cmd(
-            t("menu.image.imageSize"),
-            () => openSizeDialog("image"),
-            keys("alt", "mod", "I"),
-            !doc,
-          ),
-          cmd(
-            t("menu.image.canvasSize"),
-            () => openSizeDialog("canvas"),
-            keys("alt", "mod", "C"),
-            !doc,
-          ),
+          cmd(t("menu.image.crop"), cropImage, undefined, !doc),
+          item("imageSize"),
+          item("canvasSize"),
           {
             kind: "submenu",
             label: t("menu.image.rotation"),
@@ -2476,30 +2637,10 @@
       {
         label: t("menu.select"),
         items: [
-          cmd(
-            t("menu.select.all"),
-            () => selectionCommand(engine.selectAll),
-            keys("mod", "A"),
-            !doc,
-          ),
-          cmd(
-            t("menu.select.deselect"),
-            () => selectionCommand(engine.deselect),
-            keys("mod", "D"),
-            doc?.selectionKey == null,
-          ),
-          cmd(
-            t("menu.select.reselect"),
-            () => selectionCommand(engine.reselect),
-            keys("shift", "mod", "D"),
-            !doc?.canReselect,
-          ),
-          cmd(
-            t("menu.select.inverse"),
-            () => selectionCommand(engine.invertSelection),
-            keys("shift", "mod", "I"),
-            !doc,
-          ),
+          item("selectAll"),
+          item("deselect"),
+          item("reselect"),
+          item("inverse"),
           separator,
           cmd(t("menu.select.colorRange"), openColorRange, undefined, !doc),
           cmd(t("menu.select.subject"), selectSubject, undefined, !doc),
@@ -2512,11 +2653,7 @@
               cmd(t("menu.select.modify.smooth"), () => openModify("smooth")),
               cmd(t("menu.select.modify.expand"), () => openModify("expand")),
               cmd(t("menu.select.modify.contract"), () => openModify("contract")),
-              cmd(
-                t("menu.select.modify.feather"),
-                () => openModify("feather"),
-                keys("shift", "F6"),
-              ),
+              item("feather"),
             ],
           },
           cmd(
@@ -2526,17 +2663,9 @@
             doc?.selectionKey == null,
           ),
           separator,
-          {
-            ...cmd(t("menu.select.quickMask"), toggleQuickMask, "Q", !doc),
-            checked: doc?.quickMask ?? false,
-          },
+          item("quickMask"),
           separator,
-          cmd(
-            t("menu.select.allLayers"),
-            () => layersPanel?.selectAllLayers(),
-            keys("alt", "mod", "A"),
-            !doc,
-          ),
+          item("selectAllLayers"),
           cmd(
             t("menu.select.deselectLayers"),
             () => layersPanel?.deselectLayers(),
@@ -2548,12 +2677,12 @@
       {
         label: t("menu.view"),
         items: [
-          cmd(t("menu.view.zoomIn"), () => void viewport?.stepZoom(true), keys("mod", "+"), !doc),
-          cmd(t("menu.view.zoomOut"), () => void viewport?.stepZoom(false), keys("mod", "-"), !doc),
+          item("zoomIn"),
+          item("zoomOut"),
           separator,
-          cmd(t("menu.view.fit"), () => void viewport?.fit(), keys("mod", "0"), !doc),
+          item("fitOnScreen"),
           { ...cmd(t("menu.view.snap"), () => (snapping = !snapping)), checked: snapping },
-          cmd(t("menu.view.actualSize"), () => void viewport?.zoomTo(1), keys("mod", "1"), !doc),
+          item("actualSize"),
         ],
       },
       {
@@ -2571,6 +2700,9 @@
       (target instanceof HTMLInputElement && ["text", "number", "search"].includes(target.type))
     );
   }
+
+  /** Edit > Keyboard Shortcuts is open. */
+  let shortcutsList = $state(false);
 
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && aiTask) {
@@ -2591,16 +2723,6 @@
       e.preventDefault();
       cycleTabs(e.shiftKey ? -1 : 1);
       return;
-    }
-    // Alt+Ctrl: Image Size (I) and Canvas Size (C), by the letter (see `shortcutLetter`: AltGr
-    // may type another character, then the physical key counts).
-    if (hasShortcutModifier(e) && e.altKey && !e.shiftKey && !isTextField(e.target)) {
-      const letter = shortcutLetter(e);
-      if (letter === "i" || letter === "c") {
-        e.preventDefault();
-        if (!e.repeat) openSizeDialog(letter === "i" ? "image" : "canvas");
-        return;
-      }
     }
     // The tools: a letter alone (V, M, C), Shift+letter for the next variant, as in Photoshop;
     // not while typing.
@@ -2655,132 +2777,19 @@
       quick.size = stepBrush(quick.size, e.code === "BracketRight");
       return;
     }
-    // Shift+F6: Select > Modify > Feather, as in Photoshop.
-    if (e.key === "F6" && e.shiftKey && !hasShortcutModifier(e) && !e.altKey) {
-      e.preventDefault();
-      if (!e.repeat) openModify("feather");
-      return;
-    }
-    // Q: Quick Mask, a letter alone like the tools.
-    if (
-      shortcutLetter(e) === "q" &&
-      !hasShortcutModifier(e) &&
-      !e.altKey &&
-      !e.shiftKey &&
-      !isTextField(e.target)
-    ) {
-      e.preventDefault();
-      if (!e.repeat) toggleQuickMask();
-      return;
-    }
-    // Select > Deselect, Reselect, Inverse and All (Ctrl+D, Shift+Ctrl+D, Shift+Ctrl+I, Ctrl+A);
-    // not while typing.
-    if (hasShortcutModifier(e) && !e.altKey && !isTextField(e.target) && active) {
-      const command =
-        shortcutLetter(e) === "d"
-          ? e.shiftKey
-            ? engine.reselect
-            : engine.deselect
-          : shortcutLetter(e) === "i" && e.shiftKey
-            ? engine.invertSelection
-            : shortcutLetter(e) === "a" && !e.shiftKey
-              ? engine.selectAll
-              : null;
-      if (command) {
-        e.preventDefault();
-        if (!e.repeat) selectionCommand(command);
-        return;
-      }
-    }
-    // Alt+Shift+Ctrl+I: File > Document Info (Photoshop's File Info).
-    if (hasShortcutModifier(e) && e.altKey && e.shiftKey && shortcutLetter(e) === "i") {
-      e.preventDefault();
-      if (!e.repeat) void showDocumentInfo();
-      return;
-    }
-    // Alt+Ctrl+W: File > Close All.
-    if (hasShortcutModifier(e) && e.altKey && !e.shiftKey && shortcutLetter(e) === "w") {
-      e.preventDefault();
-      if (!e.repeat) void closeAll();
-      return;
-    }
-    if (!hasShortcutModifier(e) || e.altKey) return;
-    // Letters as typed on Latin layouts (AZERTY too), see `shortcutLetter`.
-    const key = shortcutLetter(e) ?? e.key.toLowerCase();
-    if (e.shiftKey && key === "e") {
-      e.preventDefault();
-      if (!e.repeat && active) void chooseSaveAs(active, "images");
-      return;
-    }
-    if (key === "s") {
-      e.preventDefault();
-      if (!e.repeat) saveActive(e.shiftKey);
-      return;
-    }
-    if (key === "p" && !e.shiftKey) {
-      e.preventDefault();
-      if (!e.repeat) printDocument();
-      return;
-    }
-    if (key === "k" && !e.shiftKey) {
-      e.preventDefault();
-      preferences = true;
-      return;
-    }
-    if (key === "q" && !e.shiftKey) {
-      e.preventDefault();
-      if (!e.repeat) quitApp();
-      return;
-    }
-    if (key === "o") {
-      e.preventDefault();
-      if (!e.shiftKey) void openWithDialog();
-      else if (active && !e.repeat) void openWithDialog(active.id);
-      return;
-    }
-    if (key === "n" && !e.shiftKey) {
-      e.preventDefault();
-      newDocument();
-      return;
-    }
-    if (key === "n" && e.shiftKey) {
-      e.preventDefault();
-      if (!e.repeat && active) layersPanel?.newLayer();
-      return;
-    }
-    if (key === "w" && !e.shiftKey) {
-      e.preventDefault();
-      // A held key must not close tab after tab.
-      if (!e.repeat && activeId !== null) void closeTab(activeId);
-      return;
-    }
-    // Text fields keep their own undo and paste.
-    if (e.target instanceof HTMLInputElement && ["text", "number"].includes(e.target.type)) return;
-    if (key === "v" && !e.shiftKey) {
-      e.preventDefault();
-      if (!e.repeat) void paste(false);
-      return;
-    }
-    if ((key === "c" || key === "x") && !e.shiftKey) {
-      e.preventDefault();
-      if (!e.repeat) void copyLayers(key === "x");
-      return;
-    }
-    if (key === "t" && !e.shiftKey) {
-      e.preventDefault();
-      if (!e.repeat) {
-        if (transforming) commitTransform();
-        else void startFreeTransform();
-      }
-      return;
-    }
-    if (key === "z" && !e.shiftKey) {
-      e.preventDefault();
-      void undo();
-    } else if ((key === "z" && e.shiftKey) || key === "y") {
-      e.preventDefault();
-      void redo();
-    }
+    // The commands' shortcuts (`SHORTCUTS`).
+    const id = commandAt(e, isMac);
+    if (!id) return;
+    const command = commands[id];
+    // Text fields keep their own keys (undo, copy, paste…), a list its letters and Delete, and
+    // a modal dialog all of them.
+    if (!command.whileTyping && isTextField(e.target)) return;
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (plain && e.target instanceof HTMLSelectElement) return;
+    if (document.querySelector(plain ? "dialog[open]" : "dialog:modal")) return;
+    e.preventDefault();
+    if ((e.repeat && !command.repeats) || command.disabled) return;
+    command.run();
   }
 
   onMount(() => {
@@ -3133,7 +3142,6 @@
             onedit={edit}
             onlive={live}
             ongestureend={endGesture}
-            onclear={clearSelection}
             onnudge={nudgePixels}
             contextMenu={layerContextMenu}
             emptyContextMenu={emptyLayersContextMenu}
@@ -3282,6 +3290,10 @@
 
 {#if preferences}
   <PreferencesDialog onclose={() => (preferences = false)} />
+{/if}
+
+{#if shortcutsList}
+  <KeyboardShortcutsDialog {menus} onclose={() => (shortcutsList = false)} />
 {/if}
 
 {#if aiDownload}

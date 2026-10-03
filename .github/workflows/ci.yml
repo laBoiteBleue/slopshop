@@ -41,7 +41,7 @@ jobs:
           fi
 
   frontend:
-    name: Frontend (format, type-check, build)
+    name: Frontend (format, type-check, tests, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -56,6 +56,7 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run check
+      - run: npm test
       - run: npm run build
 
   dependencies:

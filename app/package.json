@@ -10,7 +10,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",
