@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use slopshop_core::adjust::{Adjustment, PARAM_COUNT};
 use slopshop_core::color::{ColorSpace, WORKING_SPACE};
 use slopshop_core::curve::Curve;
+use slopshop_core::stack::Entry;
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
     BlendMode, BlendSpace, Document, Edit, ImageTurn, Layer, LayerContent, LayerId, LinearRgba,
@@ -94,6 +95,20 @@ pub struct LayerView {
     pub transform: [f64; 6],
     /// Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it.
     pub painted: bool,
+    /// What was applied to a raster layer's pixels (ADR 0029), bottom to top.
+    pub entries: Vec<EntryView>,
+}
+
+/// An entry of a raster layer's stack (ADR 0029).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryView {
+    /// `paint` or `effect`.
+    pub kind: &'static str,
+    /// An effect's adjustment (`Adjustment::id`), translated by the UI.
+    pub adjustment: Option<&'static str>,
+    /// How many times an effect of this kind was applied in a row (1 for paint).
+    pub count: usize,
 }
 
 impl DocumentView {
@@ -193,6 +208,27 @@ impl LayerView {
             clipped: layer.clipped,
             transform: layer.transform.to_array(),
             painted: layer.is_painted(),
+            entries: match &layer.content {
+                LayerContent::Raster {
+                    stack: Some(stack), ..
+                } => stack
+                    .entries()
+                    .iter()
+                    .map(|entry| match entry {
+                        Entry::Paint(_) => EntryView {
+                            kind: "paint",
+                            adjustment: None,
+                            count: 1,
+                        },
+                        Entry::Effect(effect) => EntryView {
+                            kind: "effect",
+                            adjustment: Some(effect.kind()),
+                            count: effect.steps().len(),
+                        },
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
         }
     }
 }
@@ -334,6 +370,11 @@ pub enum EditRequest {
     /// Delete Paint, ADR 0027).
     DeletePaint {
         ids: Vec<u64>,
+    },
+    /// Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029).
+    DeleteStackEntry {
+        id: u64,
+        index: usize,
     },
     /// Put layers into a new group in the place of the topmost of them (Layer > Group Layers).
     GroupLayers {
@@ -489,6 +530,10 @@ impl EditRequest {
                         content: LayerContent::raster(std::sync::Arc::new(image)),
                     },
                 }
+            }
+            EditRequest::DeleteStackEntry { id, index } => {
+                Edit::delete_entry(session.document(), LayerId::from_raw(id), index)
+                    .map_err(|e| e.to_string())?
             }
             EditRequest::DeletePaint { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();

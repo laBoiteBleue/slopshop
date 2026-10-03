@@ -55,7 +55,12 @@ built. Contributors: propose here first.
   selection, Layer via Copy puts the selected pixels in a new layer, Layer via Cut (Shift+Ctrl+J)
   too, leaving a hole as paint); right-click menu; drag layers onto another tab to copy them there, with a
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
-  layers; clipped layers indented with an arrow, the base underlined).
+  layers; clipped layers indented with an arrow, the base underlined). What was applied to a
+  layer's pixels (paint, and later Image > Adjustments; ADR 0029) is listed below it, as
+  Photoshop lists smart filters: an arrow at the end of the row unfolds the list (folded at
+  first), newest on top: Paint, or the adjustment's name (×2 when applied twice in a row).
+  Entries are not edited: the trash shown on hover, or a right-click > Delete, deletes one;
+  what was applied above it follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
   startup), the marquees (M), the lassos (L), the Magic Wand (W) and Crop (C); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with

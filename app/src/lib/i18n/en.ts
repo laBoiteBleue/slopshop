@@ -631,6 +631,12 @@ const en = {
   "layers.defaultFillName": "Fill {n}",
   "layers.defaultLayerName": "Layer {n}",
   "layers.painted": "Painted: Layer > Delete Paint brings back the original",
+  "layers.entries.show": "Show what was applied to the layer",
+  "layers.entries.hide": "Hide what was applied to the layer",
+  "layers.entry.paint": "Paint",
+  "layers.entry.count": "{name} ×{n}",
+  "layers.entry.delete": "Delete",
+  "layers.entry.deleteHint": "Delete (what was applied above it follows)",
 
   "viewport.renderFailed": "Render failed: {error}",
 

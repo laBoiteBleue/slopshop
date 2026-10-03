@@ -7,6 +7,15 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+/** An entry of a raster layer's stack (ADR 0029): paint, or an applied adjustment. */
+export type StackEntryView = {
+  kind: "paint" | "effect";
+  /** An effect's adjustment. */
+  adjustment: AdjustmentId | null;
+  /** How many times an effect of this kind was applied in a row (1 for paint). */
+  count: number;
+};
+
 export type LayerView = {
   id: number;
   name: string;
@@ -33,6 +42,8 @@ export type LayerView = {
   transform: [number, number, number, number, number, number];
   /** Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it. */
   painted: boolean;
+  /** What was applied to a raster layer's pixels (ADR 0029), bottom to top. */
+  entries: StackEntryView[];
   /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
   /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). Curves:
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
@@ -201,6 +212,8 @@ export type EditRequest =
   | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
   /** Layer > Delete Paint: the layers' (and their masks') originals show again. */
   | { kind: "deletePaint"; ids: number[] }
+  /** Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029). */
+  | { kind: "deleteStackEntry"; id: number; index: number }
   | { kind: "removeLayer"; id: number }
   | { kind: "setLayerVisible"; id: number; visible: boolean }
   | { kind: "setLayerOpacity"; id: number; opacity: number }

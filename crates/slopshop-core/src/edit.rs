@@ -555,6 +555,24 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The edit that deletes entry `index` (bottom to top) of raster layer `id`'s stack (ADR
+    /// 0029): the neighbours that become alike merge, and what was above it is evaluated
+    /// again where it reaches.
+    pub fn delete_entry(doc: &Document, id: LayerId, index: usize) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let LayerContent::Raster {
+            stack: Some(stack), ..
+        } = &layer.content
+        else {
+            return Err(EditError::NotRaster(id));
+        };
+        Ok(Edit::SetLayerStack {
+            id,
+            stack: stack.without(index).map_err(EditError::Stack)?,
+            shown: None,
+        })
+    }
+
     /// The edit that gives raster layer `id` `stack` with the change from `before` (what it
     /// shows) to `after` baked on top as paint (ADR 0029): what tools that read pixels leave,
     /// moved pixels. `stack` is the layer's, grown first if the pixels grew.
@@ -2012,6 +2030,50 @@ mod tests {
         undo_first.apply(&mut doc).unwrap();
         let (image_now, kept) = shown(&doc, id);
         assert!(Arc::ptr_eq(&image_now, &original) && kept.is_none());
+    }
+
+    #[test]
+    fn deleting_an_entry_merges_its_neighbours_and_undoes() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let original = image(size, false, 10);
+        let id = raster_layer(&mut doc, Arc::clone(&original));
+        let invert = Effect {
+            adjustment: crate::adjust::Adjustment::Invert,
+            selection: None,
+            to_document: Affine::IDENTITY,
+            space: BlendSpace::Perceptual,
+        };
+        let painted = painted_stack(&original, 1.0);
+        let stack = painted
+            .with_effect(invert)
+            .unwrap()
+            .with_top_paint(Arc::clone(
+                match painted_stack(&original, 0.5).entries().last() {
+                    Some(crate::stack::Entry::Paint(paint)) => paint,
+                    _ => panic!("a paint entry"),
+                },
+            ))
+            .unwrap();
+        Edit::SetLayerStack {
+            id,
+            stack: stack.clone(),
+            shown: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let undo = Edit::delete_entry(&doc, id, 1)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // The two paints merged.
+        assert_eq!(shown(&doc, id).1.unwrap().entries().len(), 1);
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(shown(&doc, id).1, Some(stack));
+        assert!(matches!(
+            Edit::delete_entry(&doc, id, 3),
+            Err(EditError::Stack(_))
+        ));
     }
 
     #[test]

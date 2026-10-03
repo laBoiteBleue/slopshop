@@ -8,6 +8,7 @@
     type EditRequest,
     type LayerView,
     type AdjustmentId,
+    type StackEntryView,
   } from "./engine";
   import ContextMenu from "./ContextMenu.svelte";
   import Icon from "./Icon.svelte";
@@ -76,6 +77,31 @@
   };
   /** Groups folded in the panel (UI state, like the selection). */
   let collapsed = $state<Set<number>>(new Set());
+  /** Layers whose stack entries are shown below them (ADR 0029; UI state, folded at first). */
+  let unfolded = $state<Set<number>>(new Set());
+
+  function toggleEntries(id: number) {
+    const next = new Set(unfolded);
+    if (!next.delete(id)) next.add(id);
+    unfolded = next;
+  }
+
+  /** The label of an entry: paint, or the adjustment applied (×n when applied in a row). */
+  function entryLabel(entry: StackEntryView): string {
+    const name =
+      entry.kind === "paint" || entry.adjustment === null
+        ? t("layers.entry.paint")
+        : t(`adjustment.${entry.adjustment}`);
+    return entry.count > 1 ? t("layers.entry.count", { name, n: entry.count }) : name;
+  }
+
+  /** Delete entry `index` (bottom to top) of `layer`'s stack. */
+  function deleteEntry(layer: LayerView, index: number) {
+    void edit({ kind: "deleteStackEntry", id: layer.id, index });
+  }
+
+  /** The right-click menu of an entry, where it is open. */
+  let entryMenu = $state<{ x: number; y: number; layer: LayerView; index: number } | null>(null);
 
   /** Rows as displayed, top to bottom: each group above its layers, unless folded. */
   function flatten(
@@ -994,8 +1020,48 @@
               <Icon name="brush" size={12} />
             </span>
           {/if}
+          {#if layer.entries.length > 0}
+            <button
+              class="entries-fold"
+              title={t(unfolded.has(layer.id) ? "layers.entries.hide" : "layers.entries.show")}
+              aria-expanded={unfolded.has(layer.id)}
+              onpointerdown={(e) => e.stopPropagation()}
+              onclick={() => toggleEntries(layer.id)}
+            >
+              <Icon name={unfolded.has(layer.id) ? "chevronDown" : "chevronRight"} size={12} />
+            </button>
+          {/if}
         {/if}
       </li>
+      {#if layer.entries.length > 0 && unfolded.has(layer.id)}
+        <!-- Its stack, newest on top, as Photoshop lists smart filters (ADR 0029). -->
+        {#each layer.entries.toReversed() as entry, shownAt (shownAt)}
+          {@const index = layer.entries.length - 1 - shownAt}
+          <li
+            class="entry"
+            class:hidden-layer={!shown}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              entryMenu = { x: e.clientX, y: e.clientY, layer, index };
+            }}
+          >
+            <span class="entry-indent" style:width="{30 + depth * 16 + 24}px"></span>
+            <span class="entry-icon">
+              <Icon name={entry.kind === "paint" ? "brush" : "adjust"} size={12} />
+            </span>
+            <span class="entry-name">{entryLabel(entry)}</span>
+            <button
+              class="entry-delete"
+              title={t("layers.entry.deleteHint")}
+              aria-label={t("layers.entry.delete")}
+              onclick={() => deleteEntry(layer, index)}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </li>
+        {/each}
+      {/if}
     {:else}
       <li class="empty">{t("layers.empty")}</li>
     {/each}
@@ -1003,6 +1069,17 @@
 
   {#if menuAt && menuItems.length > 0}
     <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onclose={() => (menuAt = null)} />
+  {/if}
+  {#if entryMenu}
+    {@const { layer, index } = entryMenu}
+    <ContextMenu
+      x={entryMenu.x}
+      y={entryMenu.y}
+      items={[
+        { kind: "command", label: t("layers.entry.delete"), run: () => deleteEntry(layer, index) },
+      ]}
+      onclose={() => (entryMenu = null)}
+    />
   {/if}
 
   <div class="footer">
@@ -1279,6 +1356,67 @@
     padding: 0;
     border: 1px solid var(--border-strong);
     background: none;
+  }
+
+  /* A layer's stack (ADR 0029): an arrow unfolds its entries below it. */
+  .entries-fold {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 16px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+  }
+
+  .entries-fold:hover {
+    color: var(--text);
+  }
+
+  li.entry {
+    height: 24px;
+    gap: 6px;
+    font-size: 0.92em;
+    color: var(--text-muted);
+  }
+
+  .entry-indent {
+    flex: none;
+  }
+
+  .entry-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+  }
+
+  .entry-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .entry-delete {
+    display: grid;
+    place-items: center;
+    flex: none;
+    padding: 2px;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    visibility: hidden;
+  }
+
+  li.entry:hover .entry-delete {
+    visibility: visible;
+  }
+
+  .entry-delete:hover {
+    color: var(--text);
   }
 
   /* Paint on the layer (ADR 0027): its original is kept, Delete Paint brings it back. */
