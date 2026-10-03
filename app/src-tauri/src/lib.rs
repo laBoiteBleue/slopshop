@@ -2287,6 +2287,7 @@ mod tests {
             (layer, document.session.document().revision())
         };
         let batch = |samples: Vec<[f64; 3]>, end: bool| paint::PaintRequest {
+            restore: false,
             stroke: 7,
             target: paint::PaintTarget::Layer,
             layer_id: layer,
@@ -2370,6 +2371,7 @@ mod tests {
             id
         };
         let request = paint::PaintRequest {
+            restore: false,
             stroke: 1,
             target: paint::PaintTarget::Layer,
             layer_id: id.get(),
@@ -2429,6 +2431,7 @@ mod tests {
         color: Option<[f32; 3]>,
     ) -> paint::PaintRequest {
         paint::PaintRequest {
+            restore: false,
             stroke: 1,
             target,
             layer_id: layer.get(),
@@ -2445,6 +2448,80 @@ mod tests {
             samples: vec![[50.5, 50.5, 1.0]],
             end: true,
         }
+    }
+
+    #[test]
+    fn the_restore_eraser_brings_back_the_original_pixels() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let size = Size::new(200, 200);
+        let pixels = Arc::new(
+            RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &[200; 200 * 200 * 4]).unwrap(),
+        );
+        let id = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let id = document.session.allocate_layer_id();
+            let index = document.session.document().layers().len();
+            document
+                .session
+                .perform(Edit::InsertLayer {
+                    parent: None,
+                    index,
+                    layer: Layer {
+                        transform: slopshop_core::Affine::IDENTITY,
+                        clipped: false,
+                        id,
+                        name: "painted".to_owned(),
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        content: LayerContent::raster(Arc::clone(&pixels)),
+                        mask: None,
+                    },
+                })
+                .unwrap();
+            id
+        };
+        let view = paint::paint(
+            &state,
+            doc.id,
+            dab(id, paint::PaintTarget::Layer, Some([1.0, 0.0, 0.0])),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(view.layers.last().unwrap().entries.len(), 1);
+        // A larger restore over the dab: the paint is gone, the original shows again.
+        let mut restore = dab(id, paint::PaintTarget::Layer, None);
+        restore.stroke = 2;
+        restore.restore = true;
+        restore.brush.size = 40.0;
+        let view = paint::paint(&state, doc.id, restore).unwrap().unwrap();
+        assert!(view.layers.last().unwrap().entries.is_empty());
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let layer = document.session.document().layer(id).unwrap();
+        // The layer grew to the canvas at the first stroke: its pixels where they were.
+        let LayerContent::Raster { image, stack: None } = &layer.content else {
+            panic!("a raster layer without paint");
+        };
+        let (x, y) = layer.transform.inverse().unwrap().apply(50.5, 50.5);
+        let tile = image.levels()[0]
+            .tile(slopshop_core::tile::TileCoord {
+                col: x as u32 / 256,
+                row: y as u32 / 256,
+            })
+            .unwrap();
+        let at = (((y as usize) % 256) * 256 + (x as usize) % 256) * 4;
+        assert_eq!(&tile[at..at + 4], &[200, 200, 200, 200]);
+        // On a mask, it is refused.
+        drop(documents);
+        let mut on_mask = dab(id, paint::PaintTarget::Mask, None);
+        on_mask.stroke = 3;
+        on_mask.restore = true;
+        assert!(paint::paint(&state, doc.id, on_mask).is_err());
     }
 
     #[test]

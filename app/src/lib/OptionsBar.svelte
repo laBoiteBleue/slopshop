@@ -54,7 +54,9 @@
   };
 
   /** The painting tool's options, edited in place. */
-  const paint = $derived(tool === "eraser" ? eraser : tool === "brush" ? brush : null);
+  const paint = $derived(
+    tool === "eraser" || tool === "restoreEraser" ? eraser : tool === "brush" ? brush : null,
+  );
 
   const current = $derived(toolInfo(tool));
 

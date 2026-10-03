@@ -1805,6 +1805,148 @@ fn joined(below: &EffectEntry, above: &EffectEntry) -> Vec<Arc<Effect>> {
     steps
 }
 
+/// The Restore Eraser on a stack (ADR 0029): every paint entry brought back towards the
+/// identity where it rubs (`P ← (1−r)·P`, `k ← (1−r)·k + r`), the effects staying applied, and
+/// the tiles it reaches evaluated again through the stack, each on every core.
+#[derive(Debug)]
+pub struct RestorePaint {
+    stack: LayerStack,
+    /// By paint entry (its index in the stack), its tiles restored so far.
+    restored: BTreeMap<usize, BTreeMap<TileCoord, PaintTile>>,
+}
+
+impl RestorePaint {
+    pub fn new(stack: &LayerStack) -> Self {
+        Self {
+            stack: stack.clone(),
+            restored: BTreeMap::new(),
+        }
+    }
+
+    /// The format of the tiles shown while restoring: the stack's.
+    pub fn format(&self) -> PixelFormat {
+        self.stack.format()
+    }
+
+    /// Whether some paint was restored.
+    pub fn has_paint(&self) -> bool {
+        !self.restored.is_empty()
+    }
+
+    /// Restore at `amount(coord, x, y)` on the tiles of `dirty` (amounts only grow during a
+    /// stroke: every paint tile is restored from the stroke's start); the tiles the layer then
+    /// shows.
+    pub fn lay(
+        &mut self,
+        dirty: &[(TileCoord, [usize; 4])],
+        amount: impl Fn(TileCoord, usize, usize) -> f32 + Sync,
+    ) -> Vec<(TileCoord, Arc<[u8]>)> {
+        let size = self.stack.original.size();
+        let mut work: Vec<(usize, TileCoord, Option<PaintTile>)> = Vec::new();
+        for (index, entry) in self.stack.entries.iter().enumerate() {
+            if let Entry::Paint(paint) = entry {
+                for (coord, _) in dirty {
+                    if contains(size, *coord) && paint.tiles.contains_key(coord) {
+                        work.push((index, *coord, None));
+                    }
+                }
+            }
+        }
+        if work.is_empty() {
+            return Vec::new();
+        }
+        let entries = &self.stack.entries;
+        parallel_for_each(&mut work, |(index, coord, out)| {
+            if let Entry::Paint(paint) = &entries[*index] {
+                let coord = *coord;
+                *out =
+                    Some(paint.painted_tile(coord, PaintOp::Restore, |x, y| amount(coord, x, y)));
+            }
+        });
+        for (index, coord, tile) in work {
+            if let Some(tile) = tile {
+                self.restored.entry(index).or_default().insert(coord, tile);
+            }
+        }
+        let stack = self.current();
+        let atoms = atoms(&stack.entries);
+        let evaluator = Evaluator::new(&stack, &atoms, self.format());
+        dirty
+            .iter()
+            .filter(|(coord, _)| contains(size, *coord))
+            .map(|(coord, _)| (*coord, evaluator.tile_on_every_core(*coord)))
+            .collect()
+    }
+
+    /// The stack with the paint restored so far (the same format as the original stack's).
+    fn current(&self) -> LayerStack {
+        let entries = self
+            .stack
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| match (entry, self.restored.get(&index)) {
+                (Entry::Paint(paint), Some(tiles)) => {
+                    let mut all = paint.tiles.clone();
+                    all.extend(tiles.iter().map(|(c, t)| (*c, t.clone())));
+                    Entry::Paint(Arc::new(PaintEntry {
+                        size: paint.size,
+                        format: paint.format,
+                        space: paint.space,
+                        tiles: all,
+                        images: OnceLock::new(),
+                        below: Mutex::new(None),
+                    }))
+                }
+                _ => entry.clone(),
+            })
+            .collect();
+        LayerStack {
+            original: Arc::clone(&self.stack.original),
+            entries,
+        }
+    }
+
+    /// The stack with the paint restored: tiles back to the identity are dropped, and paint
+    /// entries left with none are deleted (their neighbours merging as when deleted).
+    pub fn stack(&self) -> Result<LayerStack, StackError> {
+        let mut stack = self.current();
+        let mut emptied = Vec::new();
+        for (index, entry) in stack.entries.iter_mut().enumerate() {
+            let Entry::Paint(paint) = entry else {
+                continue;
+            };
+            if !self.restored.contains_key(&index) {
+                continue;
+            }
+            let math = paint.math();
+            let (color, keep) = math.identity();
+            let tiles: BTreeMap<TileCoord, PaintTile> = paint
+                .tiles
+                .iter()
+                .filter(|(_, t)| *t.color != *color || *t.keep != *keep)
+                .map(|(c, t)| (*c, t.clone()))
+                .collect();
+            if tiles.is_empty() {
+                emptied.push(index);
+            }
+            *entry = Entry::Paint(Arc::new(PaintEntry {
+                size: paint.size,
+                format: paint.format,
+                space: paint.space,
+                tiles,
+                images: OnceLock::new(),
+                below: Mutex::new(None),
+            }));
+        }
+        // From the top, so that the indices below stay right.
+        for index in emptied.into_iter().rev() {
+            stack = stack.without(index)?;
+        }
+        Ok(stack)
+    }
+}
+
 fn union(a: Footprint, b: Footprint) -> Footprint {
     match (a, b) {
         (Footprint::Tiles(mut a), Footprint::Tiles(b)) => {
@@ -2390,6 +2532,39 @@ mod tests {
             .unwrap();
         assert_eq!(moved.entries().len(), 1, "it continues the top paint");
         assert!(difference(&moved.evaluate().unwrap(), &after) <= 1);
+    }
+
+    #[test]
+    fn the_restore_eraser_reaches_every_paint_and_keeps_the_effects() {
+        let original = gradient(true);
+        let below = painted(&empty(&original), gray(0.9), |x, _| {
+            if x < 200 { 1.0 } else { 0.0 }
+        });
+        let above = painted(&empty(&original), gray(0.1), |_, y| {
+            if y < 100 { 0.5 } else { 0.0 }
+        });
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_top_paint(below)
+            .unwrap()
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap()
+            .with_top_paint(above)
+            .unwrap();
+        let mut restore = RestorePaint::new(&stack);
+        let t = T as usize;
+        let dirty: Vec<(TileCoord, [usize; 4])> =
+            grid_coords(size()).map(|c| (c, [0, 0, t, t])).collect();
+        // Everywhere at once: the original, inverted.
+        let shown = restore.lay(&dirty, |_, _, _| 1.0);
+        let result = restore.stack().unwrap();
+        let [Entry::Effect(_)] = result.entries() else {
+            panic!("only the effect is left");
+        };
+        let evaluated = result.evaluate().unwrap();
+        for (coord, tile) in &shown {
+            assert_eq!(**tile, **tile_of(&evaluated, coord.col, coord.row));
+        }
+        assert_eq!(pixel(&evaluated, 10, 10)[0], 255 - 10);
     }
 
     #[test]

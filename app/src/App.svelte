@@ -82,7 +82,14 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import OptionsBar from "./lib/OptionsBar.svelte";
-  import { isPaintTool, slotForLetter, slotOf, type ToolId, type ToolSlot } from "./lib/tools";
+  import {
+    isEraser,
+    isPaintTool,
+    slotForLetter,
+    slotOf,
+    type ToolId,
+    type ToolSlot,
+  } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
@@ -561,6 +568,7 @@
     layerId: number;
     brush: BrushRequest;
     color: [number, number, number] | null;
+    restore: boolean;
     sending: boolean;
     waiting: [number, number, number][];
     ended: boolean;
@@ -599,14 +607,19 @@
           return;
         }
       }
-      const options = tool === "eraser" ? eraserOptions : brushOptions;
+      if (tool === "restoreEraser" && target !== "layer") {
+        showError(t("paint.restoreLayersOnly"));
+        return;
+      }
+      const options = isEraser(tool) ? eraserOptions : brushOptions;
       paintRun = {
         id: nextPaintStroke++,
         documentId: doc.id,
         target,
         layerId: layer?.id ?? 0,
         brush: { ...options, spacing: 0.25 },
-        color: tool === "eraser" ? null : hexToSrgb(colors.foreground),
+        color: isEraser(tool) ? null : hexToSrgb(colors.foreground),
+        restore: tool === "restoreEraser",
         sending: false,
         waiting: [],
         ended: false,
@@ -882,6 +895,7 @@
         layerId: run.layerId,
         brush: run.brush,
         color: run.color,
+        restore: run.restore,
         samples,
         end,
       })
@@ -3409,7 +3423,7 @@
       !isTextField(e.target)
     ) {
       e.preventDefault();
-      const options = tool === "eraser" ? eraserOptions : brushOptions;
+      const options = isEraser(tool) ? eraserOptions : brushOptions;
       const larger = e.code === "BracketRight";
       if (e.shiftKey) {
         options.hardness = Math.min(Math.max(options.hardness + (larger ? 0.25 : -0.25), 0), 1);
@@ -3755,10 +3769,10 @@
                     onhover={objectHover}
                     onselect={objectSelect}
                   />
-                {:else if tool === "brush" || tool === "eraser"}
+                {:else if isPaintTool(tool)}
                   <PaintTool
                     {mapping}
-                    size={(tool === "eraser" ? eraserOptions : brushOptions).size}
+                    size={(isEraser(tool) ? eraserOptions : brushOptions).size}
                     onstroke={paintStroke}
                   />
                 {:else if tool === "quickSelection"}
