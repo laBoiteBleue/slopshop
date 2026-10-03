@@ -1394,6 +1394,12 @@ fn layered_document() -> Document {
                 gamma: 1.2,
                 output_black: 0.0,
                 output_white: 1.0,
+                // Codes PSD stores exactly (0–255, gamma × 100).
+                channels: [
+                    slopshop_core::adjust::LEVELS_IDENTITY,
+                    [20.0 / 255.0, 1.0, 1.0, 0.0, 1.0],
+                    [0.0, 200.0 / 255.0, 0.8, 10.0 / 255.0, 1.0],
+                ],
             },
         },
     );

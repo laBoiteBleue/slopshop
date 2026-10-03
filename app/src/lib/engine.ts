@@ -90,7 +90,7 @@ export const ADJUSTMENTS: AdjustmentId[] = [
 ];
 
 /** Number of parameters of an adjustment (`PARAM_COUNT` in crates/slopshop-core/src/adjust.rs). */
-export const ADJUSTMENT_PARAMS = 16;
+export const ADJUSTMENT_PARAMS = 20;
 
 /** Turns and flips of Image > Image Rotation. */
 export type ImageTurn =

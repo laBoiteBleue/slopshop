@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
-use slopshop_core::adjust::Adjustment;
+use slopshop_core::adjust::{Adjustment, LEVELS_IDENTITY};
 use slopshop_core::color::SampleType;
 use slopshop_core::document::{Document, LayerContent};
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
@@ -463,9 +463,19 @@ pub(super) fn image_key(image: &RasterImage, level0_table: Hash) -> Hash {
 }
 
 /// An adjustment's parameters, as adjustment nodes and effects store them.
-fn adjustment_params(adjustment: &Adjustment) -> Value {
-    // At least five values: what readers of schema 0.7 expect.
-    let used = adjustment.param_count().max(5);
+pub(super) fn adjustment_params(adjustment: &Adjustment) -> Value {
+    // At least five values: what readers of schema 0.7 expect. Levels without settings of
+    // their own for the channels keep their five (schema 0.13 added the channels' fifteen),
+    // so that earlier readers still read them.
+    let composite_only = matches!(
+        adjustment,
+        Adjustment::Levels { channels, .. } if *channels == [LEVELS_IDENTITY; 3]
+    );
+    let used = if composite_only {
+        5
+    } else {
+        adjustment.param_count().max(5)
+    };
     let values = &adjustment.params()[..used];
     let mut params = json!({ "adjustment": adjustment.id(), "values": values });
     // Schema 0.9: Curves' points, composite, red, green, blue.

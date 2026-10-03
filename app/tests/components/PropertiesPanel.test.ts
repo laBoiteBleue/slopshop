@@ -70,6 +70,21 @@ test("Levels are shown 0–255, stored 0–1, the input black kept below the inp
   expect(sent(onedit)[0]).toBeCloseTo(98 / 255);
 });
 
+test("Levels' Channel menu edits each channel's own settings", async () => {
+  const identity = [0, 1, 1, 0, 1];
+  const { onedit, user } = open("levels", [...identity, ...identity, ...identity, ...identity]);
+  const channel = screen.getByRole("combobox", { name: "Channel" });
+  expect(channel).toHaveValue("0");
+  await user.selectOptions(channel, "Green");
+  await typeInto(user, "Input black", "30");
+  // Green's input black (values 10–14), the composite and the others unchanged.
+  expect(sent(onedit).slice(0, 15)).toEqual([...identity, ...identity, 30 / 255, 1, 1, 0, 1]);
+  // Green's input white stays above its input black.
+  await typeInto(user, "Input white", "10");
+  expect(sent(onedit)[11]).toBeCloseTo(32 / 255);
+  expect(sent(onedit)[1]).toBe(1);
+});
+
 test("a slider applies live during the drag, one undo entry at its end", async () => {
   const { onlive, ongestureend, onedit } = open("hueSaturation", []);
   const slider = screen.getByRole("slider", { name: "Hue" });

@@ -8,7 +8,13 @@ use crate::color::{ColorSpace, Mat3, TransferFunction, WORKING_SPACE, mat_vec};
 use crate::curve::{Curve, lookup};
 
 /// Number of parameters of an adjustment ([`Adjustment::params`]).
-pub const PARAM_COUNT: usize = 16;
+pub const PARAM_COUNT: usize = 20;
+
+/// One set of Levels settings: input black, input white, gamma, output black, output white.
+pub type LevelsChannel = [f32; 5];
+
+/// Levels that change nothing (within `[0, 1]`).
+pub const LEVELS_IDENTITY: LevelsChannel = [0.0, 1.0, 1.0, 0.0, 1.0];
 
 /// An adjustment and its parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,13 +32,17 @@ pub enum Adjustment {
         lightness: f32,
     },
     /// Per channel: inputs mapped from `[input_black, input_white]` (clamped) through `gamma`
-    /// to `[output_black, output_white]`, values in `[0, 1]`.
+    /// to `[output_black, output_white]`, values in `[0, 1]`. Red, green and blue first go
+    /// through their own settings (`channels`, [`LevelsChannel`] each; a channel at
+    /// [`LEVELS_IDENTITY`] is left as it is), then all three through the composite ones, as
+    /// Curves (Photoshop does not publish its order; GIMP's Levels do the same).
     Levels {
         input_black: f32,
         input_white: f32,
         gamma: f32,
         output_black: f32,
         output_white: f32,
+        channels: [LevelsChannel; 3],
     },
     /// Brightness (−150…150) and contrast (−50…100), keeping black and white where they are
     /// (like Photoshop's current, non-legacy mode; Adobe's exact curves are not published):
@@ -115,6 +125,7 @@ impl Adjustment {
             gamma: 1.0,
             output_black: 0.0,
             output_white: 1.0,
+            channels: [LEVELS_IDENTITY; 3],
         },
         Adjustment::BrightnessContrast {
             brightness: 0.0,
@@ -208,7 +219,7 @@ impl Adjustment {
     pub fn param_count(&self) -> usize {
         match self {
             Adjustment::Exposure { .. } | Adjustment::HueSaturation { .. } => 3,
-            Adjustment::Levels { .. } => 5,
+            Adjustment::Levels { .. } => 20,
             Adjustment::BrightnessContrast { .. } | Adjustment::Vibrance { .. } => 2,
             Adjustment::Invert | Adjustment::Curves { .. } => 0,
             Adjustment::Posterize { .. } | Adjustment::Threshold { .. } => 1,
@@ -247,7 +258,11 @@ impl Adjustment {
                 gamma,
                 output_black,
                 output_white,
-            } => vec![input_black, input_white, gamma, output_black, output_white],
+                channels,
+            } => [input_black, input_white, gamma, output_black, output_white]
+                .into_iter()
+                .chain(channels.into_iter().flatten())
+                .collect(),
             Adjustment::BrightnessContrast {
                 brightness,
                 contrast,
@@ -292,7 +307,7 @@ impl Adjustment {
     }
 
     /// The adjustment `id` with `params` (as [`Self::params`] orders them; missing ones are 0,
-    /// flags are set when not 0). `None` for an unknown id or more than [`PARAM_COUNT`] values.
+    /// flags are set when not 0; Levels given five values leave the channels unchanged). `None` for an unknown id or more than [`PARAM_COUNT`] values.
     pub fn from_params(id: &str, params: &[f32]) -> Option<Adjustment> {
         if params.len() > PARAM_COUNT {
             return None;
@@ -313,12 +328,21 @@ impl Adjustment {
                 saturation: p[1],
                 lightness: p[2],
             },
+            // Files and requests from before the channels have the composite's five only.
             Adjustment::Levels { .. } => Adjustment::Levels {
                 input_black: p[0],
                 input_white: p[1],
                 gamma: p[2],
                 output_black: p[3],
                 output_white: p[4],
+                channels: if params.len() > 5 {
+                    [0, 1, 2].map(|i| {
+                        let at = 5 + 5 * i;
+                        [p[at], p[at + 1], p[at + 2], p[at + 3], p[at + 4]]
+                    })
+                } else {
+                    [LEVELS_IDENTITY; 3]
+                },
             },
             Adjustment::BrightnessContrast { .. } => Adjustment::BrightnessContrast {
                 brightness: p[0],
@@ -387,13 +411,18 @@ impl Adjustment {
                 gamma,
                 output_black,
                 output_white,
+                channels,
             } => {
-                within(input_black, 0.0, 1.0)
-                    && within(input_white, 0.0, 1.0)
-                    && input_black < input_white
-                    && within(gamma, 0.01, 9.99)
-                    && within(output_black, 0.0, 1.0)
-                    && within(output_white, 0.0, 1.0)
+                let valid = |[ib, iw, g, ob, ow]: LevelsChannel| {
+                    within(ib, 0.0, 1.0)
+                        && within(iw, 0.0, 1.0)
+                        && ib < iw
+                        && within(g, 0.01, 9.99)
+                        && within(ob, 0.0, 1.0)
+                        && within(ow, 0.0, 1.0)
+                };
+                valid([input_black, input_white, gamma, output_black, output_white])
+                    && channels.into_iter().all(valid)
             }
             Adjustment::BrightnessContrast {
                 brightness,
@@ -514,14 +543,16 @@ impl Adjustment {
                 gamma,
                 output_black,
                 output_white,
+                channels,
             } => {
-                let (ib, iw) = (f64::from(input_black), f64::from(input_white));
-                let (ob, ow) = (f64::from(output_black), f64::from(output_white));
-                let inverse = 1.0 / f64::from(gamma);
-                c.map(|v| {
-                    let t = ((v - ib) / (iw - ib)).clamp(0.0, 1.0).powf(inverse);
-                    ob + t * (ow - ob)
-                })
+                let mut c = c;
+                for (v, channel) in c.iter_mut().zip(channels) {
+                    if channel != LEVELS_IDENTITY {
+                        *v = levels(*v, channel);
+                    }
+                }
+                let composite = [input_black, input_white, gamma, output_black, output_white];
+                c.map(|v| levels(v, composite))
             }
             Adjustment::BrightnessContrast {
                 brightness,
@@ -794,6 +825,16 @@ fn saturate(c: [f64; 3], amount: f64) -> [f64; 3] {
     c.map(|v| l + (v - l) * k)
 }
 
+/// `v` through one set of Levels settings.
+fn levels(v: f64, [ib, iw, gamma, ob, ow]: LevelsChannel) -> f64 {
+    let (ib, iw) = (f64::from(ib), f64::from(iw));
+    let (ob, ow) = (f64::from(ob), f64::from(ow));
+    let t = ((v - ib) / (iw - ib))
+        .clamp(0.0, 1.0)
+        .powf(1.0 / f64::from(gamma));
+    ob + t * (ow - ob)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,6 +973,7 @@ mod tests {
             gamma: 1.0,
             output_black: 0.0,
             output_white: 1.0,
+            channels: [crate::adjust::LEVELS_IDENTITY; 3],
         };
         assert!(close(a.apply([0.1, 0.4, 0.9]), [0.0, 0.5, 1.0]));
         let invalid = Adjustment::Levels {
@@ -940,7 +982,43 @@ mod tests {
             gamma: 1.0,
             output_black: 0.0,
             output_white: 1.0,
+            channels: [crate::adjust::LEVELS_IDENTITY; 3],
         };
+        assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn levels_channels_come_before_the_composite() {
+        let channels = [
+            [0.2, 0.6, 1.0, 0.0, 1.0],
+            LEVELS_IDENTITY,
+            [0.0, 1.0, 1.0, 0.5, 1.0],
+        ];
+        let a = Adjustment::Levels {
+            input_black: 0.0,
+            input_white: 1.0,
+            gamma: 1.0,
+            output_black: 0.0,
+            output_white: 0.5,
+            channels,
+        };
+        // Red stretched then halved; green only halved; blue raised then halved.
+        assert!(close(a.apply([0.4, 0.4, 0.0]), [0.25, 0.2, 0.25]));
+        // The parameters: the composite's five, then red, green and blue.
+        let params = a.params();
+        assert_eq!(&params[..5], &[0.0, 1.0, 1.0, 0.0, 0.5]);
+        assert_eq!(&params[5..10], &channels[0]);
+        assert_eq!(&params[15..20], &channels[2]);
+        assert_eq!(Adjustment::from_params("levels", &params), Some(a));
+        // Five values (files and requests from before the channels): channels unchanged.
+        let five = Adjustment::from_params("levels", &params[..5]).unwrap();
+        assert!(
+            matches!(five, Adjustment::Levels { channels, .. } if channels == [LEVELS_IDENTITY; 3])
+        );
+        // A channel out of range makes the whole adjustment invalid.
+        let mut wrong = params;
+        wrong[10..15].copy_from_slice(&[0.7, 0.3, 1.0, 0.0, 1.0]);
+        let invalid = Adjustment::from_params("levels", &wrong).unwrap();
         assert!(!invalid.is_valid());
     }
 
@@ -961,7 +1039,7 @@ mod tests {
             Adjustment::from_params("posterize", &[6.0, 0.0, 0.0, 0.0, 0.0]),
             Some(Adjustment::Posterize { levels: 6.0 })
         );
-        assert_eq!(Adjustment::from_params("invert", &[0.0; 17]), None);
+        assert_eq!(Adjustment::from_params("invert", &[0.0; 21]), None);
     }
 
     #[test]

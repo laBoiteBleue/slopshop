@@ -1305,6 +1305,7 @@ fn gpu_adjustment_layers_match_the_cpu_reference_compositor() {
                 gamma: 0.8,
                 output_black: 0.05,
                 output_white: 0.9,
+                channels: [slopshop_core::adjust::LEVELS_IDENTITY; 3],
             }),
             BlendMode::Normal,
             0.7,
@@ -1335,6 +1336,19 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
                 saturation: -20.0,
             },
             Adjustment::Invert,
+            // Levels with red's and blue's own settings, green left as it is.
+            Adjustment::Levels {
+                input_black: 0.05,
+                input_white: 0.95,
+                gamma: 1.1,
+                output_black: 0.02,
+                output_white: 0.98,
+                channels: [
+                    [0.1, 0.8, 0.7, 0.0, 1.0],
+                    slopshop_core::adjust::LEVELS_IDENTITY,
+                    [0.0, 0.9, 1.4, 0.15, 0.85],
+                ],
+            },
             // 7 levels: no 8-bit value (k / 255) falls on a step (255 is not a multiple of 7).
             Adjustment::Posterize { levels: 7.0 },
             Adjustment::Threshold { level: 0.45 },

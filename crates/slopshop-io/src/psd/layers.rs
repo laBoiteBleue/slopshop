@@ -680,7 +680,7 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
 }
 
 /// The adjustment of an adjustment layer's block, and whether it is only approximated (settings
-/// this version leaves out: Levels per channel, Hue/Saturation color ranges); `None` for
+/// this version leaves out: Hue/Saturation color ranges); `None` for
 /// adjustments not reproduced yet, or damaged blocks (the layer is then skipped).
 fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
     let u16_at = |at: usize| {
@@ -717,20 +717,45 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
                     u16_at(at + 8)?,
                 ])
             };
-            let [ib, iw, ob, ow, g] = record(0)?;
-            let identity = [0, 255, 0, 255, 100];
-            let per_channel = (1..4).any(|i| record(i).is_some_and(|r| r != identity));
             let unit = |v: u16| f32::from(v.min(255)) / 255.0;
-            (
-                Adjustment::Levels {
-                    input_black: unit(ib),
-                    input_white: unit(iw),
-                    gamma: (f32::from(g) / 100.0).clamp(0.01, 9.99),
-                    output_black: unit(ob),
-                    output_white: unit(ow),
-                },
-                per_channel,
-            )
+            let settings = |[ib, iw, ob, ow, g]: [u16; 5]| {
+                [
+                    unit(ib),
+                    unit(iw),
+                    (f32::from(g) / 100.0).clamp(0.01, 9.99),
+                    unit(ob),
+                    unit(ow),
+                ]
+            };
+            let [input_black, input_white, gamma, output_black, output_white] =
+                settings(record(0)?);
+            // Red, green and blue (a missing record leaves its channel as it is).
+            let channels = [1, 2, 3]
+                .map(|i| record(i).map_or(slopshop_core::adjust::LEVELS_IDENTITY, settings));
+            let levels = Adjustment::Levels {
+                input_black,
+                input_white,
+                gamma,
+                output_black,
+                output_white,
+                channels,
+            };
+            if levels.is_valid() {
+                (levels, false)
+            } else {
+                // A channel out of range (its input black above its white): the composite only.
+                (
+                    Adjustment::Levels {
+                        input_black,
+                        input_white,
+                        gamma,
+                        output_black,
+                        output_white,
+                        channels: [slopshop_core::adjust::LEVELS_IDENTITY; 3],
+                    },
+                    true,
+                )
+            }
         }
         // Version, then exposure, offset and gamma as big-endian floats.
         b"expA" => (

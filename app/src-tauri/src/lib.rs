@@ -3301,7 +3301,7 @@ mod tests {
         let too_many = format!(
             r#"{{"kind":"setAdjustment","id":{},"adjustment":"invert","values":[{}]}}"#,
             id.get(),
-            ["0"; 17].join(",")
+            ["0"; 21].join(",")
         );
         let edit = serde_json::from_str::<EditRequest>(&too_many)
             .unwrap()
