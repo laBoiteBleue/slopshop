@@ -9,6 +9,7 @@
 
 mod acquire;
 mod ai;
+mod bake;
 mod clipboard;
 mod export;
 mod info;
@@ -2124,6 +2125,7 @@ pub fn run() {
             clipboard::paste,
             clipboard::copy,
             clipboard::new_layer_from_visible,
+            bake::bake_layers,
             clipboard::clipboard_size,
             clipboard::clipboard_contents,
             save_document,

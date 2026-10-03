@@ -125,6 +125,12 @@ test("shortcuts are shown in each platform's way", () => {
   assert.equal(formatShortcut("mod+,", names, true), "⌘,");
 });
 
+test("Ctrl+E merges, Shift+Ctrl+E merges the visible layers, Export is Alt+Shift+Ctrl+W", () => {
+  assert.equal(commandAt(press("e", ctrl), false), "mergeLayers");
+  assert.equal(commandAt(press("E", { ...ctrl, shiftKey: true }), false), "mergeVisible");
+  assert.equal(commandAt(press("W", { ...ctrl, shiftKey: true, altKey: true }), false), "export");
+});
+
 test("New Layer from Visible is Photoshop's stamp visible, Alt+Shift+Ctrl+E", () => {
   assert.equal(
     commandAt(press("E", { ...ctrl, shiftKey: true, altKey: true }), false),

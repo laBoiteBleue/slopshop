@@ -9,6 +9,7 @@ respond("new_layer_from_visible", (args, doc) => {
   doc.layers = [...doc.layers, layer(99, args.name as string)];
   return { ...doc, revision: doc.revision + 1 };
 });
+respond("bake_layers", (_, doc) => ({ ...doc, revision: doc.revision + 1 }));
 
 test("the Layer menu: New, the fill and adjustment layers, then the commands on the layers", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
@@ -111,4 +112,22 @@ test("Alt+Shift+Ctrl+E stamps the visible layers into a new layer on top, select
   );
   await vi.waitFor(() => expect(layerNames()).toEqual(["Layer 3", "Cat", "Background"]));
   expect(row("Layer 3")).toHaveClass("selected");
+});
+
+test("Ctrl+E merges the selected layers; with one, the menu says Merge Down", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Background"), layer(2, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
+  await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+  await user.hover(screen.getByText("Bake to Pixels", { selector: ".label" }));
+  expect(screen.getByText("Merge Down")).toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+  await user.keyboard("[ControlLeft>]");
+  await user.click(row("Background"));
+  await user.keyboard("[/ControlLeft]");
+  await user.keyboard("{Control>}e{/Control}");
+  await vi.waitFor(() =>
+    expect(sent("bake_layers")).toEqual([
+      { documentId: 1, request: { kind: "merge", ids: [1, 2] } },
+    ]),
+  );
 });

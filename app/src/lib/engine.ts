@@ -406,6 +406,14 @@ export type Pasted =
   /** Paste Into without a selection. */
   | { kind: "noSelection" };
 
+/** Layer > Bake to Pixels' commands (BakeRequest in app/src-tauri/src/bake.rs). */
+export type BakeRequest =
+  | { kind: "rasterize"; ids: number[] }
+  /** Several layers merge together; one merges down onto the layer below it. */
+  | { kind: "merge"; ids: number[] }
+  | { kind: "mergeVisible" }
+  | { kind: "flatten"; name: string };
+
 /** Edit > Stroke: a band `width` pixels wide along the selection's outline (paint.rs). */
 export type StrokeRequest = { width: number; location: "inside" | "center" | "outside" };
 
@@ -1206,6 +1214,9 @@ export const engine = {
   /** What moving `ids` can snap to (bounds in document pixels). */
   moveSnapTargets: (documentId: number, ids: number[]) =>
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
+  /** Layer > Bake to Pixels (ADR 0030): one undo entry, composited on a worker. */
+  bakeLayers: (documentId: number, request: BakeRequest) =>
+    serial(() => invoke<DocumentView>("bake_layers", { documentId, request })),
   /** Layer > New Layer from Visible: the visible composite as a new layer on top. */
   newLayerFromVisible: (documentId: number, name: string) =>
     serial(() => invoke<DocumentView>("new_layer_from_visible", { documentId, name })),
