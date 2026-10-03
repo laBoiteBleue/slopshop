@@ -925,7 +925,8 @@ impl ViewInfo {
 /// | 0      | u32  | format version (2)                            |
 /// | 4      | u32  | width                                         |
 /// | 8      | u32  | height                                        |
-/// | 12     | u32  | flags (bit 0: view is in fit mode)            |
+/// | 12     | u32  | flags (bit 0: view is in fit mode; bit 1:     |
+/// |        |      | incomplete, render it again)                  |
 /// | 16     | u64  | document revision rendered                    |
 /// | 24     | f64  | zoom (1.0 = 100%)                             |
 /// | 32     | f32  | engine render time in ms (GPU + readback)     |
@@ -939,6 +940,8 @@ pub const FRAME_VERSION: u32 = 2;
 pub struct FrameHeader {
     pub size: Size,
     pub fit: bool,
+    /// Shown coarser or approximated meanwhile (a layer's stack evaluated): render it again.
+    pub incomplete: bool,
     pub revision: u64,
     pub zoom: f64,
     pub render_ms: f32,
@@ -952,7 +955,8 @@ impl FrameHeader {
         bytes[0..4].copy_from_slice(&FRAME_VERSION.to_le_bytes());
         bytes[4..8].copy_from_slice(&self.size.width.to_le_bytes());
         bytes[8..12].copy_from_slice(&self.size.height.to_le_bytes());
-        bytes[12..16].copy_from_slice(&u32::from(self.fit).to_le_bytes());
+        let flags = u32::from(self.fit) | (u32::from(self.incomplete) << 1);
+        bytes[12..16].copy_from_slice(&flags.to_le_bytes());
         bytes[16..24].copy_from_slice(&self.revision.to_le_bytes());
         bytes[24..32].copy_from_slice(&self.zoom.to_le_bytes());
         bytes[32..36].copy_from_slice(&self.render_ms.to_le_bytes());

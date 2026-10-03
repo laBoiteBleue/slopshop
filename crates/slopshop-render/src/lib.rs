@@ -61,7 +61,8 @@ pub struct FrameStats {
     pub tiles_composited: u32,
     pub tiles_reused: u32,
     /// Part of the view is shown from a coarser level, its own tiles not composited yet
-    /// (progressive frames): present again to refine it.
+    /// (progressive frames), or a layer's stack is shown while its pixels are evaluated
+    /// (ADR 0029): present again to refine it.
     pub incomplete: bool,
     /// GPU time of the compositing passes, when the adapter supports timestamp queries.
     pub gpu: Option<Duration>,
@@ -511,7 +512,8 @@ impl Renderer {
 
     /// Like [`Self::render_view`] with `overlays` drawn over the image, but appends the RGBA8
     /// sRGB pixels to `out`. Lets callers put a header before the pixels (or reuse an
-    /// allocation) without copying the frame again. On error, `out` is left as it was.
+    /// allocation) without copying the frame again. On error, `out` is left as it was. The
+    /// frame's statistics say whether to render it again ([`FrameStats::incomplete`]).
     pub fn render_view_into(
         &self,
         document: &Document,
@@ -519,9 +521,8 @@ impl Renderer {
         overlays: ViewOverlays,
         output: Size,
         out: &mut Vec<u8>,
-    ) -> Result<(), RenderError> {
+    ) -> Result<FrameStats, RenderError> {
         self.read_view_into(document, view, overlays, output, false, out)
-            .map(|_| ())
     }
 
     /// [`Self::render_view`] composited progressively, as [`Self::present_view`] does: when

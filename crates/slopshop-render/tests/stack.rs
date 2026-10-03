@@ -228,3 +228,23 @@ fn frames_showing_a_stack_ask_again_until_its_pixels_are_there() {
     let stats = r.profile_view(&gpu, view, Size::new(W, H), false).unwrap();
     assert!(!stats.incomplete);
 }
+
+#[test]
+fn frames_read_back_say_whether_a_stack_is_pending() {
+    // Frames sent over the IPC (macOS, Linux) are rendered again while they are incomplete.
+    let Some(r) = renderer() else { return };
+    let r = r.with_stack_evaluation(false);
+    let stack = stack();
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 1.0,
+    };
+    for (ready, incomplete) in [(false, true), (true, false)] {
+        let doc = document(&stack, ready);
+        let mut out = Vec::new();
+        let stats = r
+            .render_view_into(&doc, view, Default::default(), Size::new(W, H), &mut out)
+            .unwrap();
+        assert_eq!(stats.incomplete, incomplete, "ready {ready}");
+    }
+}

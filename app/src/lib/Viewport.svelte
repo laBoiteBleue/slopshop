@@ -208,6 +208,7 @@
       }
       return;
     }
+    let refine = false;
     try {
       const start = performance.now();
       const responsesAtStart = viewResponses;
@@ -237,6 +238,9 @@
         renderMs: frame.renderMs,
         totalMs: performance.now() - start,
       });
+      // A layer's stack shown while its pixels are evaluated: render again on the next
+      // animation frame, until the exact pixels are there (as native presents do).
+      refine = frame.incomplete;
     } catch (e) {
       error = String(e);
     } finally {
@@ -244,6 +248,8 @@
       if (pending) {
         pending = false;
         void draw();
+      } else if (refine) {
+        requestAnimationFrame(() => void draw());
       }
     }
   }

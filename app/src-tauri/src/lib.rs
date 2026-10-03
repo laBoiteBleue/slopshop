@@ -1769,12 +1769,13 @@ async fn render_view(
         // header once the render time is known.
         bytes.resize(FRAME_HEADER_LEN, 0);
         let start = Instant::now();
-        renderer
+        let stats = renderer
             .render_view_into(&doc, viewport.transform(), overlays, output, &mut bytes)
             .map_err(|e| e.to_string())?;
         let header = FrameHeader {
             size: output,
             fit: viewport.is_fit(),
+            incomplete: stats.incomplete,
             revision,
             zoom: viewport.zoom(),
             render_ms: start.elapsed().as_secs_f32() * 1000.0,
@@ -3395,6 +3396,7 @@ mod tests {
         let bytes = FrameHeader {
             size: Size::new(640, 480),
             fit: true,
+            incomplete: true,
             revision: 7,
             zoom: 0.5,
             render_ms: 1.5,
@@ -3407,7 +3409,7 @@ mod tests {
         assert_eq!(u32_at(0), 2);
         assert_eq!(u32_at(4), 640);
         assert_eq!(u32_at(8), 480);
-        assert_eq!(u32_at(12), 1);
+        assert_eq!(u32_at(12), 0b11);
         assert_eq!(u64::from_le_bytes(bytes[16..24].try_into().unwrap()), 7);
         assert_eq!(f64_at(24), 0.5);
         assert_eq!(f32::from_le_bytes(bytes[32..36].try_into().unwrap()), 1.5);

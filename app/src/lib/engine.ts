@@ -460,6 +460,8 @@ export type Frame = {
   width: number;
   height: number;
   fit: boolean;
+  /** Shown coarser or approximated meanwhile (a layer's stack evaluated): render it again. */
+  incomplete: boolean;
   revision: number;
   /** Low 32 bits of the document id. */
   documentId: number;
@@ -485,10 +487,12 @@ export function parseFrame(buffer: ArrayBuffer): Frame {
   if (buffer.byteLength !== FRAME_HEADER_LEN + pixelBytes) {
     throw new Error(`frame size mismatch: ${buffer.byteLength} bytes for ${width}x${height}`);
   }
+  const flags = view.getUint32(12, true);
   return {
     width,
     height,
-    fit: (view.getUint32(12, true) & 1) === 1,
+    fit: (flags & 1) !== 0,
+    incomplete: (flags & 2) !== 0,
     revision: Number(view.getBigUint64(16, true)),
     zoom: view.getFloat64(24, true),
     renderMs: view.getFloat32(32, true),
