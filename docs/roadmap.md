@@ -168,7 +168,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Layer menu restructured (New, fill and adjustment layers, Arrange with Ctrl+[ and ],
       commands on every selected layer), after an audit against Photoshop's
       ([ergonomics](ergonomics.md#layer-menu-audit-of-2026-10-03))
-- [ ] Solid color fill layers editable after creation
+- [x] Solid color fill layers: the foreground color, above the active layer, editable after
+      creation (Properties panel, double-click on the thumbnail)
 - [ ] Layer > Align and Distribute, shared with the Move tool's options bar
 - [ ] New Layer from Visible (stamp visible)
 - [ ] Merge Layers, Merge Visible, Flatten, Rasterize (their submenu is an open question)
