@@ -29,6 +29,15 @@
   import { engine, type DeviceRect, type ViewInfo, type ViewRequest } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
+  import {
+    NO_VIEW,
+    easeStep,
+    reprojection,
+    toDocument as documentAt,
+    toViewport as viewportAt,
+    wheelPixels,
+    type View,
+  } from "./viewMapping";
 
   let {
     documentId,
@@ -103,7 +112,6 @@
   // latest view, so pan and zoom respond immediately and the sharp frame replaces it when it
   // lands. Pure presentation: the view itself is always computed by the engine.
 
-  type View = { zoom: number; origin: [number, number] };
   /** View of the frame currently drawn on the canvas. */
   let shown: View | null = null;
   /** Latest view known from the engine. */
@@ -121,14 +129,8 @@
       canvas.style.transform = "";
       return;
     }
-    // document = origin + output / zoom, so a point drawn at `output` in the shown frame
-    // belongs at (origin_s - origin_t) * zoom_t + output * zoom_t / zoom_s in the target view.
-    const k = target.zoom / shown.zoom;
-    const dpr = window.devicePixelRatio;
-    const tx = ((shown.origin[0] - target.origin[0]) * target.zoom) / dpr;
-    const ty = ((shown.origin[1] - target.origin[1]) * target.zoom) / dpr;
-    const identity = Math.abs(k - 1) < 1e-9 && Math.abs(tx) < 1e-3 && Math.abs(ty) < 1e-3;
-    canvas.style.transform = identity ? "" : `translate(${tx}px, ${ty}px) scale(${k})`;
+    const r = reprojection(shown, target, window.devicePixelRatio);
+    canvas.style.transform = r ? `translate(${r.tx}px, ${r.ty}px) scale(${r.k})` : "";
   }
 
   // --- Frames --------------------------------------------------------------------------------
@@ -358,8 +360,7 @@
     // rAF timestamps can precede the wheel handler's performance.now(): never go backwards.
     const dt = Math.max(0, Math.min(now - lastTick, 50));
     lastTick = now;
-    let step = remainingLogZoom * (1 - Math.exp(-dt / ZOOM_EASE_MS));
-    if (Math.abs(remainingLogZoom - step) < 1e-3) step = remainingLogZoom;
+    const step = easeStep(remainingLogZoom, dt, ZOOM_EASE_MS);
     remainingLogZoom -= step;
     if (step !== 0) {
       void changeView({ kind: "zoomBy", factor: Math.exp(step), ...zoomAnchor });
@@ -383,23 +384,12 @@
 
   // --- Input ---------------------------------------------------------------------------------
 
-  /** Vertical wheel delta in CSS pixels, whatever the device reports (pixels, lines, pages). */
-  function wheelPixels(e: WheelEvent): number {
-    const unit =
-      e.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? 16
-        : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
-          ? container.clientHeight
-          : 1;
-    return e.deltaY * unit;
-  }
-
   // The middle button is dedicated to navigation: the wheel zooms around the pointer (with or
   // without modifiers, so trackpad pinch, reported by Chromium as Ctrl + wheel, zooms too;
   // WebKit pinch uses gesture events, handled below) and a middle-button drag pans.
   function onWheel(e: WheelEvent) {
     e.preventDefault();
-    const dy = wheelPixels(e);
+    const dy = wheelPixels(e.deltaY, e.deltaMode, container.clientHeight);
     if (dy === 0) return;
     zoomSmoothly(-dy * WHEEL_ZOOM_PER_PIXEL, devicePoint(e));
   }
@@ -508,19 +498,17 @@
   /** Document coordinates of a point of the window (CSS pixels). */
   function toDocument(clientX: number, clientY: number): [number, number] {
     const rect = container.getBoundingClientRect();
-    const dpr = window.devicePixelRatio;
-    const view = target ?? { zoom: 1, origin: [0, 0] };
-    return [
-      view.origin[0] + ((clientX - rect.left) * dpr) / view.zoom,
-      view.origin[1] + ((clientY - rect.top) * dpr) / view.zoom,
-    ];
+    return documentAt(
+      target ?? NO_VIEW,
+      window.devicePixelRatio,
+      clientX - rect.left,
+      clientY - rect.top,
+    );
   }
 
   /** Where a document point is in the viewport, in CSS pixels. */
   function toViewport(x: number, y: number): [number, number] {
-    const dpr = window.devicePixelRatio;
-    const view = target ?? { zoom: 1, origin: [0, 0] };
-    return [((x - view.origin[0]) * view.zoom) / dpr, ((y - view.origin[1]) * view.zoom) / dpr];
+    return viewportAt(target ?? NO_VIEW, window.devicePixelRatio, x, y);
   }
 
   const mapping: ViewMapping | null = $derived.by(() => {
@@ -528,16 +516,10 @@
     if (!view) return null;
     const dpr = window.devicePixelRatio;
     return {
-      toViewport: (x, y) => [
-        ((x - view.origin[0]) * view.zoom) / dpr,
-        ((y - view.origin[1]) * view.zoom) / dpr,
-      ],
+      toViewport: (x, y) => viewportAt(view, dpr, x, y),
       toDocument: (clientX, clientY) => {
         const rect = container.getBoundingClientRect();
-        return [
-          view.origin[0] + ((clientX - rect.left) * dpr) / view.zoom,
-          view.origin[1] + ((clientY - rect.top) * dpr) / view.zoom,
-        ];
+        return documentAt(view, dpr, clientX - rect.left, clientY - rect.top);
       },
       docPerCss: dpr / view.zoom,
       hand: spaceHeld,
