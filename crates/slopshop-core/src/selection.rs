@@ -197,6 +197,71 @@ pub fn invert(
     Ok(mask.into_image())
 }
 
+/// `current` moved by (`dx`, `dy`) whole pixels on a canvas of `canvas` pixels, what leaves the
+/// canvas dropped (the Move tool moving selected pixels): values are copied exactly, and a tile
+/// that only reads uniform tiles of one value stays uniform (shared). `None` when nothing stays
+/// selected.
+pub fn translated(
+    canvas: Size,
+    current: &RasterImage,
+    dx: i64,
+    dy: i64,
+) -> Result<Option<RasterImage>, SelectionError> {
+    let source = Mask::from_image(canvas, current)?;
+    let mut moved = Mask::new(canvas)?;
+    let t = T as i64;
+    let mut work: Vec<(usize, Tile)> = (0..moved.tiles.len())
+        .map(|index| (index, Tile::Const(0)))
+        .collect();
+    crate::raster::parallel_for_each(&mut work, |(index, tile)| {
+        let (col, row) = (*index % moved.columns, *index / moved.columns);
+        let (w, h) = moved.valid(col, row);
+        // The source pixels this tile reads.
+        let (x0, y0) = ((col * T) as i64 - dx, (row * T) as i64 - dy);
+        let (x1, y1) = (x0 + w as i64, y0 + h as i64);
+        let inside =
+            x0 >= 0 && y0 >= 0 && x1 <= i64::from(canvas.width) && y1 <= i64::from(canvas.height);
+        let outside =
+            x1 <= 0 || y1 <= 0 || x0 >= i64::from(canvas.width) || y0 >= i64::from(canvas.height);
+        if outside {
+            return;
+        }
+        // Uniform when every source tile it reads holds one constant (0 outside the canvas).
+        let mut constant = None;
+        let mut uniform = true;
+        'reads: for r in y0.max(0) / t..=(y1 - 1).min(i64::from(canvas.height) - 1) / t {
+            for c in x0.max(0) / t..=(x1 - 1).min(i64::from(canvas.width) - 1) / t {
+                let value = source.tiles[r as usize * source.columns + c as usize].constant();
+                uniform = match (value, constant) {
+                    (None, _) => false,
+                    (Some(v), None) => {
+                        constant = Some(v);
+                        true
+                    }
+                    (Some(v), Some(previous)) => v == previous,
+                };
+                if !uniform {
+                    break 'reads;
+                }
+            }
+        }
+        if uniform && (inside || constant == Some(0)) {
+            *tile = Tile::Const(constant.unwrap_or(0));
+            return;
+        }
+        let mut values = vec![0u16; T * T];
+        for y in 0..h {
+            for x in 0..w {
+                values[y * T + x] = source.get(x0 + x as i64, y0 + y as i64);
+            }
+        }
+        pad(&mut values, w, h);
+        *tile = Tile::Data(values);
+    });
+    moved.tiles = work.into_iter().map(|(_, tile)| tile).collect();
+    Ok(moved.into_image())
+}
+
 /// The coverage (0–1) of `selection` at the centers of a `width × height` grid stretched over
 /// `area` of the canvas: the nearest pixel of the finest pyramid level whose pixels are no
 /// larger than the grid's (a level's pixel averages the ones it covers). Reads the tiles
@@ -3561,5 +3626,33 @@ mod tests {
             corners,
             vec![[400, 200], [400, 800], [1200, 200], [1200, 800]]
         );
+    }
+
+    #[test]
+    fn a_translated_selection_moves_exactly_and_shares_uniform_tiles() {
+        let canvas = Size::new(1000, 700);
+        // A soft edge at column 100.5, a hard one elsewhere; a whole tile inside.
+        let image = select(canvas, &rect(100.5, 0.0, 700.0, 600.0));
+        let moved = translated(canvas, &image, 37, -20).unwrap().unwrap();
+        assert_eq!(moved.gray_at(137, 0), image.gray_at(100, 20));
+        assert_eq!(moved.gray_at(138, 5), 1.0);
+        assert_eq!(moved.gray_at(136, 5), 0.0);
+        assert_eq!(moved.gray_at(736, 579), 1.0);
+        assert_eq!(moved.gray_at(737, 579), 0.0);
+        assert_eq!(moved.gray_at(400, 580), 0.0);
+        assert_eq!(bounds(&moved), Some(Rect::new(137, 0, 600, 580)));
+        // Wholly selected tiles are one shared allocation.
+        let tile = |col, row| Arc::clone(moved.levels()[0].tile(TileCoord { col, row }).unwrap());
+        assert!(Arc::ptr_eq(&tile(1, 1), &tile(1, 0)));
+    }
+
+    #[test]
+    fn a_selection_moved_off_the_canvas_selects_nothing() {
+        let canvas = Size::new(300, 300);
+        let image = select(canvas, &rect(10.0, 10.0, 50.0, 50.0));
+        assert!(translated(canvas, &image, 300, 0).unwrap().is_none());
+        assert!(translated(canvas, &image, -50, 0).unwrap().is_none());
+        let back = translated(canvas, &image, 0, 0).unwrap().unwrap();
+        assert_eq!(bounds(&back), bounds(&image));
     }
 }
