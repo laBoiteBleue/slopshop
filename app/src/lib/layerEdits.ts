@@ -2,7 +2,7 @@
 // all of them (a batch), and nothing for layers already as asked. Null: nothing to send.
 
 import type { BlendModeId, EditRequest, LayerView } from "./engine";
-import { outermost, type LayerTree } from "./layerTree.ts";
+import { outermost, type LayerTree } from "./layerTree";
 
 /** One edit, or one batch (a single undo entry) for several. */
 export function batchOf(edits: EditRequest[]): EditRequest {

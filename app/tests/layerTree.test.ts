@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import type { LayerView } from "../src/lib/engine.ts";
+import type { LayerView } from "../src/lib/engine";
 import {
   canDropInto,
   carriesPaint,
@@ -16,7 +16,7 @@ import {
   visibleRasters,
   walk,
   within,
-} from "../src/lib/layerTree.ts";
+} from "../src/lib/layerTree";
 
 function layer(id: number, changes: Partial<LayerView> = {}): LayerView {
   return {

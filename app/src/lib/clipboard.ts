@@ -1,6 +1,6 @@
 // The Edit menu's pastes and what the clipboard holds.
 
-import type { CommandId } from "./commands.ts";
+import type { CommandId } from "./commands";
 import type { ClipboardContents } from "./engine";
 
 /**

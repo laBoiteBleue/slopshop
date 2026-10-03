@@ -1630,7 +1630,7 @@
       const [width, height] = [box.right - box.left, box.bottom - box.top];
       const fit = Math.min(1, doc.width / width, doc.height / height);
       const [cx, cy] = [(box.left + box.right) / 2, (box.top + box.bottom) / 2];
-      const matrix = affine.then(
+      const matrix = affine.andThen(
         affine.about(affine.scaling(fit, fit), cx, cy),
         affine.translation(place.at[0] - cx, place.at[1] - cy),
       );
@@ -1655,7 +1655,7 @@
     const current = transforming;
     if (!current) return;
     current.matrix = matrix;
-    const total = current.placed ? affine.then(current.placed.matrix, matrix) : matrix;
+    const total = current.placed ? affine.andThen(current.placed.matrix, matrix) : matrix;
     const request: EditRequest = { kind: "transformLayers", ids: current.ids, matrix: total };
     void sync(engine.performLive(current.document, request, true));
   }
@@ -1665,7 +1665,7 @@
     if (!current) return;
     transforming = null;
     const total = current.placed
-      ? affine.then(current.placed.matrix, current.matrix)
+      ? affine.andThen(current.placed.matrix, current.matrix)
       : current.matrix;
     if (!affine.isIdentity(current.matrix)) lastTransform = current.matrix;
     if (affine.isIdentity(total)) void cancelGesture(current.document);

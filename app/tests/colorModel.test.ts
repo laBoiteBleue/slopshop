@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   hexToRgb,
@@ -8,7 +8,7 @@ import {
   rgbToHsb,
   rgbToLab,
   type Rgb,
-} from "../src/lib/colorModel.ts";
+} from "../src/lib/colorModel";
 
 const closeAll = (actual: readonly number[], expected: readonly number[], tolerance = 1e-9) =>
   assert.ok(

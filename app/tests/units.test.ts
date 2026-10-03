@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { LENGTH_UNITS, fromPixels, fromPpi, rounded, toPixels, toPpi } from "../src/lib/units.ts";
+import { LENGTH_UNITS, fromPixels, fromPpi, rounded, toPixels, toPpi } from "../src/lib/units";
 
 const close = (actual: number, expected: number) =>
   assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} ≠ ${expected}`);

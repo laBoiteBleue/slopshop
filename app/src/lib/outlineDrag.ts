@@ -1,6 +1,4 @@
 // Dragging the selection's outline alone (see `SelectionDrag`).
-//
-// No imports: this module also runs under Node for its tests (`npm test`).
 
 /**
  * The whole document pixels a dragged outline moves by for a pointer move of (`dx`, `dy`)

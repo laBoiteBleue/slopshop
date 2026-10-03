@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { baseName, recentLabels } from "../src/lib/recent.ts";
+import { baseName, recentLabels } from "../src/lib/recent";
 
 test("a path's last part, with Windows or POSIX separators", () => {
   assert.equal(baseName("C:\\Users\\me\\Pictures\\cat.jpg"), "cat.jpg");

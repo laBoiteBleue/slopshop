@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   MAX_SIDE,
@@ -11,7 +11,7 @@ import {
   typeSide,
   withResample,
   type SizeState,
-} from "../src/lib/sizeDialog.ts";
+} from "../src/lib/sizeDialog";
 
 /** 100 × 200 pixels at 254 ppi: 100 pixels per centimeter. */
 const image = (changes: Partial<SizeState> = {}): SizeState => ({

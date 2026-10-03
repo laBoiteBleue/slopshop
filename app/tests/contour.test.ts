@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { outline } from "../src/lib/contour.ts";
+import { outline } from "../src/lib/contour";
 
 const mask = (rows: string[]) => Uint8Array.from(rows.join(""), (c) => (c === "#" ? 1 : 0));
 

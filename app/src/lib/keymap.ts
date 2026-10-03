@@ -3,8 +3,8 @@
 // commands' shortcuts (`commands.ts`). The order matters: the first rule that applies wins.
 // The app performs the action.
 
-import { commandAt, shortcutLetter, type CommandId, type KeyPress } from "./commands.ts";
-import { isEraser, isPaintTool, slotForLetter, type ToolId, type ToolSlot } from "./tools.ts";
+import { commandAt, shortcutLetter, type CommandId, type KeyPress } from "./commands";
+import { isEraser, isPaintTool, slotForLetter, type ToolId, type ToolSlot } from "./tools";
 
 /** A key press as the rules read it: `KeyboardEvent`'s fields, and where it goes. */
 export type KeyEvent = KeyPress & {

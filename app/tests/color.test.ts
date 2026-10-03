@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { hexToSrgb, srgbToHex } from "../src/lib/color.ts";
+import { hexToSrgb, srgbToHex } from "../src/lib/color";
 
 test("color inputs' values and sRGB components convert both ways", () => {
   assert.deepEqual(hexToSrgb("#ff0000"), [1, 0, 0]);

@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { IDENTITY, apply, invert, rotation, scaling } from "../src/lib/affine.ts";
+import { IDENTITY, apply, invert, rotation, scaling } from "../src/lib/affine";
 import {
   MIN_SCALE,
   boundsUnder,
@@ -13,7 +13,7 @@ import {
   skewDegrees,
   skewedTo,
   snappedScale,
-} from "../src/lib/freeTransform.ts";
+} from "../src/lib/freeTransform";
 
 /** A box 100 × 50 at the origin, its pivot at the center (50, 25). */
 const FRAME = boxFrame({ left: 0, top: 0, right: 100, bottom: 50 }, [50, 25]);

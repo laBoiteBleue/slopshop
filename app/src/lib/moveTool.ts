@@ -3,8 +3,8 @@
 // lands (snapped, whole pixels).
 
 import type { Bounds, LayerView } from "./engine";
-import { snapMove, type Guide } from "./snap.ts";
-import { isSelectionTool, type ToolId } from "./tools.ts";
+import { snapMove, type Guide } from "./snap";
+import { isSelectionTool, type ToolId } from "./tools";
 
 /** What moving selected pixels takes: the active layer's pixels, or its mask when targeted. */
 export type PixelTarget = { target: "layer" | "mask"; layerId: number };

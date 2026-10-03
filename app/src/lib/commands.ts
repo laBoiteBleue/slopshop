@@ -1,8 +1,6 @@
 // The keyboard shortcuts of the app's commands, in one table read by the menus (the shortcut
 // shown next to a command), the keyboard (the command a key press runs) and Edit > Keyboard
 // Shortcuts (the list). Photoshop's shortcuts where it has the command (ADR 0013).
-//
-// No imports: this module also runs under Node for its tests (`npm test`).
 
 /**
  * A shortcut as written in the table: modifiers then one key, joined by "+", lower case:

@@ -1,7 +1,7 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import type { CommandId } from "../src/lib/commands.ts";
-import { isTextField, keyAction, type KeyContext, type KeyEvent } from "../src/lib/keymap.ts";
+import type { CommandId } from "../src/lib/commands";
+import { isTextField, keyAction, type KeyContext, type KeyEvent } from "../src/lib/keymap";
 
 /** A key press: `key` as typed, `code` the physical key (by default the QWERTY one). */
 function press(key: string, changes: Partial<KeyEvent> = {}): KeyEvent {

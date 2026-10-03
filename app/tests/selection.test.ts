@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { MAX_BRUSH, modeFromKeys, stepBrush } from "../src/lib/selection.ts";
+import { MAX_BRUSH, modeFromKeys, stepBrush } from "../src/lib/selection";
 
 test("Shift adds, Alt subtracts, both intersect, as in Photoshop", () => {
   assert.equal(modeFromKeys({ shiftKey: true, altKey: false }), "add");

@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "../src/lib/imageEdits.ts";
+import { canvasBounds, cropEdit, outsideCanvas, sizeEdit } from "../src/lib/imageEdits";
 
 const DOC = { width: 400, height: 300, resolution: 72 };
 

@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { outlineOffset } from "../src/lib/outlineDrag.ts";
+import { outlineOffset } from "../src/lib/outlineDrag";
 
 test("a dragged outline moves by whole document pixels", () => {
   assert.deepEqual(outlineOffset(10.4, -3.6, false), [10, -4]);

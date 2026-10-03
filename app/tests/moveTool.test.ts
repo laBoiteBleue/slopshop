@@ -1,7 +1,7 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import type { LayerView } from "../src/lib/engine.ts";
-import { landing, nudged, pixelTarget } from "../src/lib/moveTool.ts";
+import type { LayerView } from "../src/lib/engine";
+import { landing, nudged, pixelTarget } from "../src/lib/moveTool";
 
 const layer = (changes: Partial<LayerView>) =>
   ({ id: 7, kind: "raster", visible: true, ...changes }) as LayerView;

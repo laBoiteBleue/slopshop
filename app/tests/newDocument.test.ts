@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { atResolution, isValidNew, matchingPreset, oriented } from "../src/lib/newDocument.ts";
+import { atResolution, isValidNew, matchingPreset, oriented } from "../src/lib/newDocument";
 
 const PRESETS = [
   { id: "hd", width: 1920, height: 1080 },

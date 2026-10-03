@@ -5,7 +5,7 @@
 // relative sizes add to the current ones. Each change says which fields to rewrite: the others
 // keep what is being typed.
 
-import { MAX_PPI, MIN_PPI, fromPixels, rounded, toPixels, type LengthUnit } from "./units.ts";
+import { MAX_PPI, MIN_PPI, fromPixels, rounded, toPixels, type LengthUnit } from "./units";
 
 export type SizeUnit = LengthUnit | "percent";
 export type SizeField = "width" | "height" | "resolution";
