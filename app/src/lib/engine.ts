@@ -1118,6 +1118,9 @@ export const engine = {
     serial(() => invoke<DocumentView>("select_all", { documentId })),
   deselect: (documentId: number) => serial(() => invoke<DocumentView>("deselect", { documentId })),
   reselect: (documentId: number) => serial(() => invoke<DocumentView>("reselect", { documentId })),
+  /** The selection moved by whole pixels, its pixels untouched (one undo entry). */
+  translateSelection: (documentId: number, dx: number, dy: number) =>
+    serial(() => invoke<DocumentView>("translate_selection", { documentId, dx, dy })),
   invertSelection: (documentId: number) =>
     serial(() => invoke<DocumentView>("invert_selection", { documentId })),
   /**

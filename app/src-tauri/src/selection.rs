@@ -623,6 +623,27 @@ pub async fn invert_selection(
     set_selection(&state, document_id, image)
 }
 
+/// The selection moved by (`dx`, `dy`) whole pixels, its pixels left where they are (a
+/// selection tool dragged from inside it, or the arrows, as in Photoshop): one undo entry.
+/// What leaves the canvas is dropped; nothing left selected deselects.
+#[tauri::command]
+pub async fn translate_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    dx: i64,
+    dy: i64,
+) -> Result<DocumentView, String> {
+    let (canvas, current) = snapshot(&state, document_id)?;
+    let Some(current) = current.filter(|_| (dx, dy) != (0, 0)) else {
+        return Ok(state.documents()?.get_mut(document_id)?.view());
+    };
+    let image = on_worker(move || {
+        selection::translated(canvas, &current, dx, dy).map_err(|e| e.to_string())
+    })
+    .await?;
+    set_selection(&state, document_id, image)
+}
+
 /// Select > Modify (`kind`: `feather`, `expand`, `contract`, `border`, `smooth`) by `amount`
 /// pixels, as one undo entry; nothing left selected deselects.
 #[tauri::command]

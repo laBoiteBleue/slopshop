@@ -2050,6 +2050,7 @@ pub fn run() {
             selection::select_shape,
             selection::select_all,
             selection::invert_selection,
+            selection::translate_selection,
             selection::deselect,
             selection::reselect,
             selection::set_quick_mask,
