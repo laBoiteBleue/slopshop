@@ -13,8 +13,8 @@ use slopshop_core::curve::Curve;
 use slopshop_core::stack::Entry;
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
-    BlendMode, BlendSpace, Document, Edit, ImageTurn, Layer, LayerContent, LayerId, LinearRgba,
-    Session, Size,
+    Arrange, BlendMode, BlendSpace, Document, Edit, ImageTurn, Layer, LayerContent, LayerId,
+    LinearRgba, Session, Size,
 };
 use slopshop_io::export::{
     AvifDepth, ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
@@ -409,9 +409,16 @@ pub enum EditRequest {
         ids: Vec<u64>,
         name: String,
     },
-    /// Replace a group by its layers (Layer > Ungroup Layers).
+    /// Replace the groups among `ids` by their layers (Layer > Ungroup Layers); the other
+    /// layers are left alone.
     Ungroup {
-        id: u64,
+        ids: Vec<u64>,
+    },
+    /// Move layers within their groups (Layer > Arrange): `arrange` is `front`, `forward`,
+    /// `backward` or `back`.
+    ArrangeLayers {
+        ids: Vec<u64>,
+        arrange: String,
     },
     /// Copies of layers, each right above its original (Layer > Duplicate Layer). A copy is
     /// named by `name_format` with `{name}` replaced by the original's name (the UI translates
@@ -730,8 +737,22 @@ impl EditRequest {
                 let group = new_group(session, name);
                 Edit::group_layers(session.document(), group, &ids).map_err(|e| e.to_string())?
             }
-            EditRequest::Ungroup { id } => Edit::ungroup(session.document(), LayerId::from_raw(id))
-                .map_err(|e| e.to_string())?,
+            EditRequest::Ungroup { ids } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::ungroup_layers(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::ArrangeLayers { ids, arrange } => {
+                let arrange = match arrange.as_str() {
+                    "front" => Arrange::Front,
+                    "forward" => Arrange::Forward,
+                    "backward" => Arrange::Backward,
+                    "back" => Arrange::Back,
+                    other => return Err(format!("unknown arrangement {other}")),
+                };
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::arrange_layers(session.document(), &ids, arrange)
+                    .map_err(|e| e.to_string())?
+            }
             EditRequest::DuplicateLayers { ids, name_format } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 session

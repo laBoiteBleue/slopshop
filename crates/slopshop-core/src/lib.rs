@@ -53,7 +53,7 @@ pub mod view;
 pub use blend::{BlendMode, BlendSpace};
 pub use color::{ColorSpace, LinearRgba};
 pub use document::{Document, Layer, LayerContent, LayerId, LayerMask, RestoreError};
-pub use edit::{Edit, EditError, ImageTurn};
+pub use edit::{Arrange, Edit, EditError, ImageTurn};
 pub use geom::{Rect, Size};
 pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;

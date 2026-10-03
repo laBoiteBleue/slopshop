@@ -3116,7 +3116,7 @@ mod tests {
         assert!(view.layers[0].pass_through);
         assert_eq!(view.layers[0].children[2].children[0].id, ids[0]);
 
-        apply(&mut s, format!(r#"{{"kind":"ungroup","id":{g}}}"#));
+        apply(&mut s, format!(r#"{{"kind":"ungroup","ids":[{g}]}}"#));
         let names: Vec<&str> = s
             .document()
             .layers()
@@ -3124,6 +3124,26 @@ mod tests {
             .map(|l| l.name.as_str())
             .collect();
         assert_eq!(names, ["a", "b", "inner"]);
+
+        for (arrange, expected) in [
+            ("front", ["b", "inner", "a"]),
+            ("back", ["a", "b", "inner"]),
+        ] {
+            apply(
+                &mut s,
+                format!(
+                    r#"{{"kind":"arrangeLayers","ids":[{}],"arrange":"{arrange}"}}"#,
+                    ids[1]
+                ),
+            );
+            let names: Vec<&str> = s
+                .document()
+                .layers()
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect();
+            assert_eq!(names, expected);
+        }
 
         apply(
             &mut s,
