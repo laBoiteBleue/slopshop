@@ -11,6 +11,7 @@ mod ai;
 mod export;
 mod ipc;
 mod paint;
+mod recent;
 mod segment;
 mod selection;
 mod vector;
@@ -411,6 +412,7 @@ struct AppState {
     quick: selection::QuickState,
     /// The paint stroke under way (see the `paint` module).
     paint: paint::PaintState,
+    recent: recent::RecentFiles,
 }
 
 impl AppState {
@@ -434,6 +436,7 @@ impl AppState {
             segment: segment::SegmentState::default(),
             quick: selection::QuickState::default(),
             paint: paint::PaintState::default(),
+            recent: recent::RecentFiles::default(),
         }
     }
 
@@ -1171,6 +1174,7 @@ async fn open_images(
     paths: Vec<PathBuf>,
     document_id: Option<u64>,
 ) -> Result<OpenSummary, String> {
+    let requested = paths.clone();
     let (paths, series, summary, archives) = tauri::async_runtime::spawn_blocking(move || {
         let mut summary = OpenSummary::default();
         let mut archives = Vec::new();
@@ -1205,7 +1209,8 @@ async fn open_images(
                     index,
                 };
                 // The outcome is reported by the open's own events.
-                let _ = open_path(&app, &path, Source::File, target, Some(&turn));
+                let opened = open_path(&app, &path, Source::File, target, Some(&turn));
+                opened.map(|view| vec![(path, view.id)]).unwrap_or_default()
             })
         })
         .collect();
@@ -1216,14 +1221,39 @@ async fn open_images(
                 order: &order,
                 index: count,
             };
-            let _ = open_path(&app, &first, Source::Series(&series), target, Some(&turn));
+            // A series is remembered by its first file.
+            let opened = open_path(&app, &first, Source::Series(&series), target, Some(&turn));
+            opened
+                .map(|view| vec![(first, view.id)])
+                .unwrap_or_default()
         }));
     }
+    let mut opened = Vec::new();
     for open in opens {
-        open.await.map_err(|e| e.to_string())?;
+        opened.extend(open.await.map_err(|e| e.to_string())?);
     }
     // Every file is decoded (into memory): the extracted copies can go.
     drop(archives);
+    if document_id.is_none() {
+        // File > Open Recent: what was asked for, as asked (folders and archives whole), when
+        // it opened.
+        tauri::async_runtime::spawn_blocking(move || {
+            for (path, document_id) in &opened {
+                recent::remember_document(&app, path, *document_id);
+            }
+            let recorded: Vec<PathBuf> = requested
+                .into_iter()
+                .filter(|path| {
+                    path.is_dir()
+                        || slopshop_io::collection::is_archive(path)
+                        || opened.iter().any(|(opened, _)| opened == path)
+                })
+                .collect();
+            recent::record(&app, &recorded);
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     Ok(summary)
 }
 
@@ -1294,7 +1324,14 @@ fn save_to(
         document.meta.name = Some(file_name(file.path()));
     }
     document.saved_revision = snapshot.revision();
-    Ok(document.view())
+    let view = document.view();
+    drop(documents);
+    if let Some(path) = &view.path {
+        let path = PathBuf::from(path);
+        recent::remember_thumbnail(app, &path, &snapshot);
+        recent::record(app, &[path]);
+    }
+    Ok(view)
 }
 
 /// Quit even with unsaved changes (the UI asked the user after `close-requested`).
@@ -2080,11 +2117,18 @@ pub fn run() {
                 for path in startup_files() {
                     let start = Instant::now();
                     match open_path(&handle, &path, Source::File, OpenTarget::NewTab, None) {
-                        Ok(_) => eprintln!(
-                            "opened {} in {:.1} s",
-                            path.display(),
-                            start.elapsed().as_secs_f32()
-                        ),
+                        Ok(view) => {
+                            // Files the app was launched with, not the dev builds' test file.
+                            if std::env::args_os().skip(1).any(|a| Path::new(&a) == path) {
+                                recent::remember_document(&handle, &path, view.id);
+                                recent::record(&handle, std::slice::from_ref(&path));
+                            }
+                            eprintln!(
+                                "opened {} in {:.1} s",
+                                path.display(),
+                                start.elapsed().as_secs_f32()
+                            )
+                        }
                         Err(e) => eprintln!("cannot open {}: {e}", path.display()),
                     }
                 }
@@ -2168,6 +2212,9 @@ pub fn run() {
             selection::quick_select,
             paint::paint_stroke,
             paint::fill_selection,
+            recent::recent_files,
+            recent::clear_recent_files,
+            recent::recent_thumbnail,
             paint::sample_color,
             selection::color_range_preview,
             selection::color_range,
