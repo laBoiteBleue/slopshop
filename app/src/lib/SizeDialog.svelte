@@ -1,16 +1,35 @@
 <script lang="ts">
-  // Image > Image Size and Image > Canvas Size, as in Photoshop: a width and a height in pixels or
-  // percent. Image Size resamples the whole image (proportions linked by default); Canvas Size
-  // changes the canvas around the image, kept where the anchor says (relative sizes add to the
-  // current ones). Nothing is cut or rewritten: layers are transformed (ADR 0017, 0018).
+  // Image > Image Size and Image > Canvas Size, as in Photoshop. Sizes in percent, pixels,
+  // inches, centimeters or millimeters, at the document's resolution (ADR 0028).
+  // - Image Size resamples the whole image (proportions linked by default) and sets the
+  //   resolution (pixels per inch or per centimeter). With Resample off, the pixels stay: a size
+  //   in inches or centimeters changes the resolution instead, and the proportions are kept.
+  // - Canvas Size changes the canvas around the image, kept where the anchor says (relative
+  //   sizes add to the current ones).
+  // Nothing is cut or rewritten: layers are transformed (ADR 0017, 0018).
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import type { MessageKey } from "./i18n/en";
   import Icon from "./Icon.svelte";
+  import {
+    LENGTH_UNITS,
+    MAX_PPI,
+    MIN_PPI,
+    RESOLUTION_UNITS,
+    fromPixels,
+    fromPpi,
+    rounded,
+    toPixels,
+    toPpi,
+    type LengthUnit,
+    type ResolutionUnit,
+  } from "./units";
 
   let {
     mode,
     width,
     height,
+    resolution,
     onapply,
     onclose,
   }: {
@@ -18,77 +37,162 @@
     /** The current size, in pixels. */
     width: number;
     height: number;
-    /** Apply the new size (and, for the canvas, the anchor: [x, y] in [0, 1]). */
-    onapply: (width: number, height: number, anchor: [number, number]) => void;
+    /** The document's resolution, pixels per inch. */
+    resolution: number;
+    /**
+     * Apply the new size, the anchor (Canvas Size: [x, y] in [0, 1]) and the resolution (Image
+     * Size, pixels per inch).
+     */
+    onapply: (width: number, height: number, anchor: [number, number], resolution: number) => void;
     onclose: () => void;
   } = $props();
 
   /** Largest side accepted, in pixels. */
   const MAX_SIDE = 300_000;
 
-  const current = untrack(() => ({ width, height }));
-  let unit = $state<"px" | "percent">("px");
+  type Unit = LengthUnit | "percent";
+  const UNITS: Unit[] = ["percent", ...LENGTH_UNITS];
+  const UNIT_LABELS: Record<Unit, MessageKey> = {
+    percent: "sizeDialog.unit.percent",
+    px: "sizeDialog.unit.px",
+    in: "units.in",
+    cm: "units.cm",
+    mm: "units.mm",
+  };
+  const RESOLUTION_LABELS: Record<ResolutionUnit, MessageKey> = {
+    ppi: "units.ppi",
+    ppcm: "units.ppcm",
+  };
+
+  const current = untrack(() => ({ width, height, ppi: resolution }));
+  let unit = $state<Unit>("px");
+  let resolutionUnit = $state<ResolutionUnit>("ppi");
   let relative = $state(false);
   let constrain = $state(true);
+  let resample = $state(true);
   let anchor = $state<[number, number]>([0.5, 0.5]);
-  /** The fields, in `unit`. */
-  let w = $state(current.width);
-  let h = $state(current.height);
+  /** The new size in pixels (not rounded while typing) and resolution, pixels per inch. */
+  let pxWidth = $state(current.width);
+  let pxHeight = $state(current.height);
+  let ppi = $state(current.ppi);
+  /** The fields as typed: rewritten only when something else changes them. */
+  let wField = $state("");
+  let hField = $state("");
+  let rField = $state("");
   let dialog: HTMLDialogElement;
 
-  /** A field's value as pixels, for a side currently `size` pixels long. */
-  function pixels(value: number, size: number): number {
-    const base = relative ? size : 0;
-    return Math.round(unit === "px" ? base + value : (size * value) / 100 + (relative ? size : 0));
-  }
-
-  const newWidth = $derived(pixels(w, current.width));
-  const newHeight = $derived(pixels(h, current.height));
+  const newWidth = $derived(Math.round(pxWidth));
+  const newHeight = $derived(Math.round(pxHeight));
   const valid = $derived(
-    Number.isFinite(newWidth) &&
-      Number.isFinite(newHeight) &&
-      newWidth >= 1 &&
-      newHeight >= 1 &&
-      newWidth <= MAX_SIDE &&
-      newHeight <= MAX_SIDE,
+    [newWidth, newHeight].every((side) => Number.isFinite(side) && side >= 1 && side <= MAX_SIDE) &&
+      Number.isFinite(ppi) &&
+      ppi >= MIN_PPI &&
+      ppi <= MAX_PPI,
   );
+  /** Without resampling, the pixels are fixed: they cannot be typed in pixels or percent. */
+  const locked = $derived(mode === "image" && !resample && (unit === "px" || unit === "percent"));
 
-  /** The fields' values for `unit` and `relative`, from pixel sizes. */
-  function fields(width: number, height: number) {
-    const value = (px: number, size: number) => {
-      const extra = relative ? px - size : px;
-      return unit === "px" ? extra : Math.round((extra / size) * 10000) / 100;
-    };
-    w = value(width, current.width);
-    h = value(height, current.height);
+  /** A side of `pixels` (`size` now) in the fields' unit. */
+  function shown(pixels: number, size: number): number {
+    const value = relative ? pixels - size : pixels;
+    return unit === "percent"
+      ? rounded((value / size) * 100, "percent")
+      : rounded(fromPixels(value, unit, ppi), unit);
   }
 
-  function setUnit(next: "px" | "percent") {
-    const [width, height] = [newWidth, newHeight];
+  /** A field's value as pixels, for a side `size` pixels long now. */
+  function typed(value: number, size: number): number {
+    const extra = unit === "percent" ? (size * value) / 100 : toPixels(value, unit, ppi);
+    return relative ? size + extra : extra;
+  }
+
+  /** Every field from the state. */
+  function sync() {
+    wField = String(shown(pxWidth, current.width));
+    hField = String(shown(pxHeight, current.height));
+    rField = String(rounded(fromPpi(ppi, resolutionUnit), resolutionUnit));
+  }
+  sync();
+
+  function setUnit(next: Unit) {
     unit = next;
-    fields(width, height);
+    sync();
   }
 
   function setRelative(next: boolean) {
-    const [width, height] = [newWidth, newHeight];
     relative = next;
-    fields(width, height);
+    sync();
   }
 
-  // Image Size keeps the proportions when asked: one field follows the other.
-  function onWidth() {
-    if (mode !== "image" || !constrain) return;
-    h = unit === "percent" ? w : Math.round((w * current.height) / current.width);
+  /** A width or a height typed. */
+  function onSide(side: "width" | "height") {
+    const value = Number(side === "width" ? wField : hField);
+    if (!Number.isFinite(value)) return;
+    const size = side === "width" ? current.width : current.height;
+    const pixels = typed(value, size);
+    if (mode === "image" && !resample) {
+      // The pixels stay: the length typed is the print size, which sets the resolution.
+      if (pixels <= 0) return;
+      ppi = (ppi * size) / pixels;
+      rField = String(rounded(fromPpi(ppi, resolutionUnit), resolutionUnit));
+      if (side === "width") hField = String(shown(pxHeight, current.height));
+      else wField = String(shown(pxWidth, current.width));
+      return;
+    }
+    if (side === "width") pxWidth = pixels;
+    else pxHeight = pixels;
+    // Image Size keeps the proportions when asked: the other side follows.
+    if (mode === "image" && constrain) {
+      if (side === "width") {
+        pxHeight = (pxWidth * current.height) / current.width;
+        hField = String(shown(pxHeight, current.height));
+      } else {
+        pxWidth = (pxHeight * current.width) / current.height;
+        wField = String(shown(pxWidth, current.width));
+      }
+    }
   }
 
-  function onHeight() {
-    if (mode !== "image" || !constrain) return;
-    w = unit === "percent" ? h : Math.round((h * current.width) / current.height);
+  /** The resolution typed: with resampling the print size stays (the pixels follow). */
+  function onResolution() {
+    const next = toPpi(Number(rField), resolutionUnit);
+    if (!Number.isFinite(next) || next <= 0) return;
+    if (resample) {
+      pxWidth = (pxWidth * next) / ppi;
+      pxHeight = (pxHeight * next) / ppi;
+    }
+    ppi = next;
+    // Pixel fields change with resampling, length fields without.
+    if ((unit === "px") === resample || unit === "percent") {
+      wField = String(shown(pxWidth, current.width));
+      hField = String(shown(pxHeight, current.height));
+    }
+  }
+
+  function setResolutionUnit(next: ResolutionUnit) {
+    resolutionUnit = next;
+    rField = String(rounded(fromPpi(ppi, resolutionUnit), resolutionUnit));
+  }
+
+  function setResample(next: boolean) {
+    resample = next;
+    if (!resample) {
+      // Back to the image's pixels; their print size at the resolution.
+      pxWidth = current.width;
+      pxHeight = current.height;
+      if (unit === "px" || unit === "percent") unit = "cm";
+      sync();
+    }
+  }
+
+  function toggleConstrain() {
+    constrain = !constrain;
+    if (constrain) onSide("width");
   }
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (valid) onapply(newWidth, newHeight, $state.snapshot(anchor));
+    if (valid) onapply(newWidth, newHeight, $state.snapshot(anchor), ppi);
   }
 
   onMount(() => {
@@ -119,41 +223,79 @@
     </p>
     <div class="fields">
       <label for="size-width">{t("sizeDialog.width")}</label>
-      <input id="size-width" type="number" step="any" bind:value={w} oninput={onWidth} />
+      <input
+        id="size-width"
+        type="number"
+        step="any"
+        disabled={locked}
+        bind:value={wField}
+        oninput={() => onSide("width")}
+      />
       {#if mode === "image"}
         <!-- Photoshop's link between the width and the height: a bracket and a chain while the
-             proportions are kept, the chain open otherwise; a click toggles them, as the checkbox
-             does. -->
+             proportions are kept, the chain open otherwise; a click toggles them. Without
+             resampling the proportions are always kept. -->
         <button
           type="button"
           class="link"
-          class:on={constrain}
-          aria-pressed={constrain}
+          class:on={constrain || !resample}
+          aria-pressed={constrain || !resample}
+          disabled={!resample}
           title={t("sizeDialog.constrain")}
           aria-label={t("sizeDialog.constrain")}
-          onclick={() => {
-            constrain = !constrain;
-            onWidth();
-          }}
+          onclick={toggleConstrain}
         >
-          <Icon name={constrain ? "link" : "linkBroken"} size={14} />
+          <Icon name={constrain || !resample ? "link" : "linkBroken"} size={14} />
         </button>
       {/if}
       <label for="size-height">{t("sizeDialog.height")}</label>
-      <input id="size-height" type="number" step="any" bind:value={h} oninput={onHeight} />
+      <input
+        id="size-height"
+        type="number"
+        step="any"
+        disabled={locked}
+        bind:value={hField}
+        oninput={() => onSide("height")}
+      />
       <label for="size-unit">{t("sizeDialog.unit")}</label>
       <select
         id="size-unit"
         value={unit}
-        onchange={(e) => setUnit((e.currentTarget as HTMLSelectElement).value as "px" | "percent")}
+        onchange={(e) => setUnit((e.currentTarget as HTMLSelectElement).value as Unit)}
       >
-        <option value="px">{t("sizeDialog.unit.px")}</option>
-        <option value="percent">{t("sizeDialog.unit.percent")}</option>
+        {#each UNITS as option (option)}
+          <option value={option}>{t(UNIT_LABELS[option])}</option>
+        {/each}
       </select>
       {#if mode === "image"}
+        <label for="size-resolution">{t("sizeDialog.resolution")}</label>
+        <div class="with-unit">
+          <input
+            id="size-resolution"
+            type="number"
+            step="any"
+            min="0"
+            bind:value={rField}
+            oninput={onResolution}
+          />
+          <select
+            aria-label={t("sizeDialog.resolution")}
+            value={resolutionUnit}
+            onchange={(e) =>
+              setResolutionUnit((e.currentTarget as HTMLSelectElement).value as ResolutionUnit)}
+          >
+            {#each RESOLUTION_UNITS as option (option)}
+              <option value={option}>{t(RESOLUTION_LABELS[option])}</option>
+            {/each}
+          </select>
+        </div>
         <label class="check">
-          <input type="checkbox" bind:checked={constrain} onchange={onWidth} />
-          {t("sizeDialog.constrain")}
+          <input
+            type="checkbox"
+            checked={resample}
+            onchange={(e) => setResample((e.currentTarget as HTMLInputElement).checked)}
+          />
+          {t("sizeDialog.resample")}
         </label>
       {:else}
         <label class="check">
@@ -193,7 +335,7 @@
 
 <style>
   dialog {
-    width: 300px;
+    width: 320px;
     padding: 0;
     border: 1px solid var(--border-dark);
     border-radius: 4px;
@@ -278,6 +420,17 @@
 
   input[type="number"],
   select {
+    min-width: 0;
+  }
+
+  .with-unit {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .with-unit input {
+    flex: 1;
     min-width: 0;
   }
 

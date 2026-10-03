@@ -147,6 +147,8 @@ export type DocumentView = {
   /** Identifier, translated with the `colorSpace.<id>` i18n keys. */
   workingSpace: ColorSpaceId;
   blendSpace: BlendSpaceId;
+  /** Pixels per inch (ADR 0028). */
+  resolution: number;
   revision: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -238,7 +240,7 @@ export type EditRequest =
   /** Apply `matrix` ([a, b, c, d, e, f], in document pixels) to layers (Free Transform). */
   | { kind: "transformLayers"; ids: number[]; matrix: Matrix }
   /** Image > Image Size: the whole image resampled to this size. */
-  | { kind: "resizeImage"; width: number; height: number }
+  | { kind: "resizeImage"; width: number; height: number; resolution?: number }
   /** Image > Canvas Size: `anchor` [x, y] in [0, 1] keeps the image there (0.5: centered). */
   | { kind: "canvasSize"; width: number; height: number; anchor: [number, number] }
   /** The Crop tool: keep this area of the canvas (it may extend past it). */
@@ -941,6 +943,8 @@ export const engine = {
     height: number;
     background: [number, number, number] | null;
     layerName: string;
+    /** Pixels per inch. */
+    resolution: number;
   }) => invoke<DocumentView>("new_document", settings),
   closeDocument: (documentId: number) =>
     serial(() => invoke<void>("close_document", { documentId })),

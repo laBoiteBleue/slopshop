@@ -291,6 +291,7 @@
         layerName: transparent
           ? t("layers.defaultLayerName", { n: 1 })
           : t("newDocument.backgroundLayer"),
+        resolution: settings.resolution,
       });
       upsert(doc);
       activate(doc.id);
@@ -1427,14 +1428,18 @@
     if (active) sizeDialog = { mode, document: active.id };
   }
 
-  function applySize(width: number, height: number, anchor: [number, number]) {
+  function applySize(width: number, height: number, anchor: [number, number], resolution: number) {
     const dialog = sizeDialog;
     sizeDialog = null;
-    if (!dialog) return;
+    const doc = dialog && tabs.find((d) => d.id === dialog.document);
+    if (!dialog || !doc) return;
+    // OK without a change: nothing to undo, as in Photoshop.
+    const same = width === doc.width && height === doc.height;
+    if (same && (dialog.mode === "canvas" || resolution === doc.resolution)) return;
     void edit(
       dialog.document,
       dialog.mode === "image"
-        ? { kind: "resizeImage", width, height }
+        ? { kind: "resizeImage", width, height, resolution }
         : { kind: "canvasSize", width, height, anchor },
     );
   }
@@ -3296,6 +3301,7 @@
       mode={sizeDialog.mode}
       width={sizeDoc.width}
       height={sizeDoc.height}
+      resolution={sizeDoc.resolution}
       onapply={applySize}
       onclose={() => (sizeDialog = null)}
     />

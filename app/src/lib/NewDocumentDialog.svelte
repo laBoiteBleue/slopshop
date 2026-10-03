@@ -1,5 +1,6 @@
 <script lang="ts" module>
   import type { MessageKey } from "./i18n/en";
+  import type { LengthUnit, ResolutionUnit } from "./units";
 
   /** What the new document's layer holds: a color, or nothing (a transparent layer). */
   export type NewBackground = "white" | "black" | "background" | "transparent";
@@ -10,17 +11,28 @@
     width: number;
     height: number;
     background: NewBackground;
+    /** Pixels per inch (ADR 0028). */
+    resolution: number;
   };
 
-  /** Common sizes, in pixels (print sizes at 300 ppi). */
-  const PRESETS: { id: string; label: MessageKey; width: number; height: number }[] = [
-    { id: "photo", label: "newDocument.preset.photo", width: 6000, height: 4000 },
-    { id: "a4", label: "newDocument.preset.a4", width: 2480, height: 3508 },
-    { id: "letter", label: "newDocument.preset.letter", width: 2550, height: 3300 },
-    { id: "hd", label: "newDocument.preset.hd", width: 1920, height: 1080 },
-    { id: "uhd", label: "newDocument.preset.uhd", width: 3840, height: 2160 },
-    { id: "square", label: "newDocument.preset.square", width: 1080, height: 1080 },
-    { id: "story", label: "newDocument.preset.story", width: 1080, height: 1920 },
+  /**
+   * Common sizes, in pixels, and their resolution: print sizes at 300 ppi, screen sizes at 72
+   * (Photoshop's).
+   */
+  const PRESETS: {
+    id: string;
+    label: MessageKey;
+    width: number;
+    height: number;
+    ppi: number;
+  }[] = [
+    { id: "photo", label: "newDocument.preset.photo", width: 6000, height: 4000, ppi: 300 },
+    { id: "a4", label: "newDocument.preset.a4", width: 2480, height: 3508, ppi: 300 },
+    { id: "letter", label: "newDocument.preset.letter", width: 2550, height: 3300, ppi: 300 },
+    { id: "hd", label: "newDocument.preset.hd", width: 1920, height: 1080, ppi: 72 },
+    { id: "uhd", label: "newDocument.preset.uhd", width: 3840, height: 2160, ppi: 72 },
+    { id: "square", label: "newDocument.preset.square", width: 1080, height: 1080, ppi: 72 },
+    { id: "story", label: "newDocument.preset.story", width: 1080, height: 1920, ppi: 72 },
   ];
 
   const BACKGROUNDS: { value: NewBackground; label: MessageKey }[] = [
@@ -34,16 +46,45 @@
   const MAX_SIDE = 300_000;
 
   /** As Photoshop's New dialog, the last settings come back (for the session). */
-  let last = { width: 6000, height: 4000, background: "white" as NewBackground };
+  let last = {
+    width: 6000,
+    height: 4000,
+    background: "white" as NewBackground,
+    resolution: 300,
+    unit: "px" as LengthUnit,
+    resolutionUnit: "ppi" as ResolutionUnit,
+  };
 </script>
 
 <script lang="ts">
-  // File > New, as Photoshop's New dialog: a name, a preset, the size in pixels with its
-  // orientation, and the background contents; OK and Cancel on the right. Enter creates the
-  // document, Esc cancels.
+  // File > New, as Photoshop's New dialog: a name, a preset, the size in pixels, inches,
+  // centimeters or millimeters with its orientation, the resolution (ADR 0028), and the
+  // background contents; OK and Cancel on the right. Enter creates the document, Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
   import Icon from "./Icon.svelte";
+  import {
+    LENGTH_UNITS,
+    MAX_PPI,
+    MIN_PPI,
+    RESOLUTION_UNITS,
+    fromPixels,
+    fromPpi,
+    rounded,
+    toPixels,
+    toPpi,
+  } from "./units";
+
+  const LENGTH_LABELS: Record<LengthUnit, MessageKey> = {
+    px: "sizeDialog.unit.px",
+    in: "units.in",
+    cm: "units.cm",
+    mm: "units.mm",
+  };
+  const RESOLUTION_LABELS: Record<ResolutionUnit, MessageKey> = {
+    ppi: "units.ppi",
+    ppcm: "units.ppcm",
+  };
 
   let {
     oncreate,
@@ -57,11 +98,48 @@
   let width = $state(last.width);
   let height = $state(last.height);
   let background = $state(last.background);
+  /** Pixels per inch. */
+  let resolution = $state(last.resolution);
+  let unit = $state<LengthUnit>(last.unit);
+  let resolutionUnit = $state<ResolutionUnit>(last.resolutionUnit);
+  /** The fields as typed: rewritten only when something else changes them. */
+  let wField = $state("");
+  let hField = $state("");
+  let rField = $state("");
+
+  function sync() {
+    wField = String(rounded(fromPixels(width, unit, resolution), unit));
+    hField = String(rounded(fromPixels(height, unit, resolution), unit));
+    rField = String(rounded(fromPpi(resolution, resolutionUnit), resolutionUnit));
+  }
+  sync();
+
+  /** A side typed in the unit: whole pixels. */
+  function onSide(side: "width" | "height") {
+    const value = Number(side === "width" ? wField : hField);
+    if (!Number.isFinite(value)) return;
+    const pixels = Math.round(toPixels(value, unit, resolution));
+    if (side === "width") width = pixels;
+    else height = pixels;
+  }
+
+  /** The resolution typed: a size in a length unit stays, its pixels follow (Photoshop). */
+  function onResolution() {
+    const next = toPpi(Number(rField), resolutionUnit);
+    if (!Number.isFinite(next) || next < MIN_PPI || next > MAX_PPI) return;
+    if (unit !== "px") {
+      width = Math.round((width * next) / resolution);
+      height = Math.round((height * next) / resolution);
+    }
+    resolution = next;
+  }
   let dialog: HTMLDialogElement;
   let form: HTMLFormElement;
 
   const valid = $derived(
-    [width, height].every((side) => Number.isInteger(side) && side >= 1 && side <= MAX_SIDE),
+    [width, height].every((side) => Number.isInteger(side) && side >= 1 && side <= MAX_SIDE) &&
+      resolution >= MIN_PPI &&
+      resolution <= MAX_PPI,
   );
   /** The preset matching the size, either way round; none is Custom. */
   const preset = $derived(
@@ -74,20 +152,25 @@
 
   function choosePreset(id: string) {
     const chosen = PRESETS.find((p) => p.id === id);
-    if (chosen) [width, height] = [chosen.width, chosen.height];
+    if (!chosen) return;
+    [width, height, resolution] = [chosen.width, chosen.height, chosen.ppi];
+    sync();
   }
 
   /** Portrait or landscape: the sides swap if needed. */
   function orient(toPortrait: boolean) {
-    if (toPortrait !== portrait && width !== height) [width, height] = [height, width];
+    if (toPortrait !== portrait && width !== height) {
+      [width, height] = [height, width];
+      sync();
+    }
   }
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
     if (!valid) return;
-    last = { width, height, background };
+    last = { width, height, background, resolution, unit, resolutionUnit };
     const trimmed = name.trim();
-    oncreate({ name: trimmed === "" ? null : trimmed, width, height, background });
+    oncreate({ name: trimmed === "" ? null : trimmed, width, height, background, resolution });
   }
 
   onMount(() => {
@@ -140,11 +223,57 @@
         {/each}
       </select>
       <label for="new-width">{t("sizeDialog.width")}</label>
-      <input id="new-width" type="number" min="1" max={MAX_SIDE} step="1" bind:value={width} />
-      <span class="unit">{t("sizeDialog.unit.px")}</span>
+      <input
+        id="new-width"
+        type="number"
+        min="0"
+        step="any"
+        bind:value={wField}
+        oninput={() => onSide("width")}
+      />
+      <select
+        aria-label={t("sizeDialog.unit")}
+        value={unit}
+        onchange={(e) => {
+          unit = (e.currentTarget as HTMLSelectElement).value as LengthUnit;
+          sync();
+        }}
+      >
+        {#each LENGTH_UNITS as option (option)}
+          <option value={option}>{t(LENGTH_LABELS[option])}</option>
+        {/each}
+      </select>
       <label for="new-height">{t("sizeDialog.height")}</label>
-      <input id="new-height" type="number" min="1" max={MAX_SIDE} step="1" bind:value={height} />
-      <span class="unit">{t("sizeDialog.unit.px")}</span>
+      <input
+        id="new-height"
+        type="number"
+        min="0"
+        step="any"
+        bind:value={hField}
+        oninput={() => onSide("height")}
+      />
+      <span class="unit">{t(LENGTH_LABELS[unit])}</span>
+      <label for="new-resolution">{t("sizeDialog.resolution")}</label>
+      <input
+        id="new-resolution"
+        type="number"
+        min="0"
+        step="any"
+        bind:value={rField}
+        oninput={onResolution}
+      />
+      <select
+        aria-label={t("sizeDialog.resolution")}
+        value={resolutionUnit}
+        onchange={(e) => {
+          resolutionUnit = (e.currentTarget as HTMLSelectElement).value as ResolutionUnit;
+          sync();
+        }}
+      >
+        {#each RESOLUTION_UNITS as option (option)}
+          <option value={option}>{t(RESOLUTION_LABELS[option])}</option>
+        {/each}
+      </select>
       <span class="label">{t("newDocument.orientation")}</span>
       <div class="orientation" role="radiogroup" aria-label={t("newDocument.orientation")}>
         <button
