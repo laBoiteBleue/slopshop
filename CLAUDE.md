@@ -51,6 +51,8 @@ merge on green CI, or stop for the maintainer when the change needs their decisi
   once its CI is green, then move on to the next roadmap item. Keep a cumulative "to test"
   list in the pull requests and replies, which the maintainer goes through when they choose;
   problems they find are fixed first.
+- Each pull request description says which tests cover the change (Rust and UI), or why a part
+  has none.
 - **Stop and ask before** decisions that are hard to reverse (file format changes beyond a
   compatible addition, architecture, structuring ADRs, significant or native dependencies),
   product and ergonomics choices, `unsafe` code, and anything risky for the maintainer's data
@@ -136,6 +138,13 @@ merge on green CI, or stop for the maintainer when the change needs their decisi
   `app/src/lib`, tested in `app/tests/*.test.ts`; components keep presentation and wiring, and
   their behavior (what a click or a key sends, what is shown) is tested in
   `app/tests/components/` with Testing Library, the engine's IPC mocked (`mockIPC`).
+- **UI changes come with their tests, as engine changes do (maintainer decision, 2026-10-03).**
+  Write them while developing, in the same commits as the code: new or changed logic in
+  `app/src/lib` gets module tests; a new or changed control, dialog, panel, shortcut or gesture
+  gets component tests of what the user does and what is sent or shown; a UI bug fix gets a
+  regression test that fails without the fix. What jsdom cannot run (GPU frames, canvas
+  drawing) has its logic moved into a module and tested there. Only pure presentation (styles,
+  layout, icons, wording) goes without tests, and the pull request says so.
 - GPU tests skip when no adapter is available, except when `SLOPSHOP_REQUIRE_GPU=1` (CI).
 
 ## Skills and documentation
