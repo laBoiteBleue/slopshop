@@ -1,22 +1,26 @@
 <script lang="ts">
   // Free Transform's numbers in the options bar, as in Photoshop: X and Y of the reference
-  // point, W and H in % (linked or not), the angle and the horizontal skew in degrees. A value
-  // typed (Enter or leaving the field) transforms the box at once; Enter again applies.
+  // point, W and H in % (linked or not), the angle and the horizontal skew in degrees. Each has
+  // a slider and a scrubby label, like every numeric setting; a value changes the box live.
   import type { Matrix } from "./engine";
   import Icon from "./Icon.svelte";
-  import { getLocale, t } from "./i18n/index.svelte";
+  import { t } from "./i18n/index.svelte";
   import { keepFocus } from "./platform";
+  import SliderField from "./SliderField.svelte";
   import { compose, decompose, type TransformValues } from "./transformValues";
 
   let {
     matrix,
     pivot,
+    canvas,
     onchange,
   }: {
     /** The transform so far (a map of the document's space). */
     matrix: Matrix;
     /** The reference point, in the coordinates of the box as it was. */
     pivot: [number, number];
+    /** The document's size: X and Y slide over it and as much around it. */
+    canvas: { width: number; height: number };
     onchange: (matrix: Matrix) => void;
   } = $props();
 
@@ -30,36 +34,57 @@
     key: keyof TransformValues;
     label: string;
     unit: string;
-    /** Shown value = stored × factor. */
+    /** Shown value = stored × factor; `min`, `max` and `step` are shown values. */
     factor: number;
-    digits: number;
+    min: number;
+    max: number;
+    step: number;
   };
   const FIELDS = $derived<Field[]>([
-    { key: "x", label: "X", unit: "px", factor: 1, digits: 1 },
-    { key: "y", label: "Y", unit: "px", factor: 1, digits: 1 },
-    { key: "width", label: t("transform.field.width"), unit: "%", factor: 100, digits: 1 },
-    { key: "height", label: t("transform.field.height"), unit: "%", factor: 100, digits: 1 },
-    { key: "angle", label: "∠", unit: "°", factor: DEGREES, digits: 1 },
-    { key: "skew", label: t("transform.field.skew"), unit: "°", factor: DEGREES, digits: 1 },
+    { key: "x", label: "X", unit: "px", factor: 1, ...around(canvas.width) },
+    { key: "y", label: "Y", unit: "px", factor: 1, ...around(canvas.height) },
+    {
+      key: "width",
+      label: t("transform.field.width"),
+      unit: "%",
+      factor: 100,
+      min: -1000,
+      max: 1000,
+      step: 0.1,
+    },
+    {
+      key: "height",
+      label: t("transform.field.height"),
+      unit: "%",
+      factor: 100,
+      min: -1000,
+      max: 1000,
+      step: 0.1,
+    },
+    { key: "angle", label: "∠", unit: "°", factor: DEGREES, min: -180, max: 180, step: 0.1 },
+    {
+      key: "skew",
+      label: t("transform.field.skew"),
+      unit: "°",
+      factor: DEGREES,
+      min: -85,
+      max: 85,
+      step: 0.1,
+    },
   ]);
 
-  function shown(field: Field): string {
-    return new Intl.NumberFormat(getLocale(), {
-      maximumFractionDigits: field.digits,
-      useGrouping: false,
-    }).format(values[field.key] * field.factor);
+  /** A position's range: the canvas side and as much on each side of it. */
+  function around(side: number) {
+    return { min: -side, max: 2 * side, step: 1 };
   }
 
-  /** A value typed: in the interface's language (a decimal comma too). */
-  function set(field: Field, text: string) {
-    const typed = Number(text.trim().replace(",", "."));
-    if (!Number.isFinite(typed)) return;
-    const value = typed / field.factor;
-    const next = { ...values, [field.key]: value };
+  /** A value set (in stored units): the box follows at once. */
+  function set(key: keyof TransformValues, value: number) {
+    const next = { ...values, [key]: value };
     // Linked: the other side keeps its share of this one.
-    if (linked && (field.key === "width" || field.key === "height")) {
-      const other = field.key === "width" ? "height" : "width";
-      const before = values[field.key];
+    if (linked && (key === "width" || key === "height")) {
+      const other = key === "width" ? "height" : "width";
+      const before = values[key];
       if (before !== 0) next[other] = values[other] * (value / before);
     }
     // A scale of zero cannot be undone.
@@ -69,24 +94,16 @@
 </script>
 
 {#each FIELDS as field (field.key)}
-  <label class="field">
-    <span class="name">{field.label}</span>
-    <input
-      type="text"
-      inputmode="decimal"
-      value={shown(field)}
-      onchange={(e) => set(field, e.currentTarget.value)}
-      onkeydown={(e) => {
-        // Enter sets the value; the next Enter (outside the field) applies the transform.
-        if (e.key === "Enter") {
-          e.stopPropagation();
-          set(field, e.currentTarget.value);
-          e.currentTarget.blur();
-        }
-      }}
-    />
-    <span class="unit">{field.unit}</span>
-  </label>
+  <SliderField
+    label={field.label}
+    bind:value={() => values[field.key], (v) => set(field.key, v)}
+    min={field.min}
+    max={field.max}
+    step={field.step}
+    unit={field.unit}
+    factor={field.factor}
+    width={56}
+  />
   {#if field.key === "width"}
     <button
       type="button"
@@ -103,21 +120,6 @@
 {/each}
 
 <style>
-  .field {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-  }
-
-  .name,
-  .unit {
-    color: var(--text-muted);
-  }
-
-  input {
-    width: 52px;
-  }
-
   .icon-btn.on {
     background: var(--selected);
     color: var(--text);
