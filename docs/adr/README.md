@@ -31,7 +31,8 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0024 | [Selections](0024-selections.md) | accepted |
 | 0025 | [AI selection](0025-ai-selection.md) | accepted |
 | 0026 | [Quick Selection by color](0026-quick-selection.md) | accepted |
-| 0027 | [Painting: brush strokes on tiles](0027-painting.md) | accepted |
+| 0027 | [Painting: brush strokes on tiles](0027-painting.md) | accepted (points 3–5 revised by 0029) |
 | 0028 | [Document resolution (pixels per inch)](0028-resolution.md) | accepted |
+| 0029 | [A layer's own stack: paint and applied effects](0029-layer-stack.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

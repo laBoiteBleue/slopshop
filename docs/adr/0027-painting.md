@@ -1,6 +1,6 @@
 # 0027 — Painting: brush strokes on tiles
 
-Status: accepted (2026-10-02; maintainer's choices: strokes computed on the CPU and shown by the
+Status: accepted, points 3 to 5 revised by [ADR 0029](0029-layer-stack.md) (2026-10-02; maintainer's choices: strokes computed on the CPU and shown by the
 GPU, new paint layers in 8-bit sRGB, pen pressure from the first version, paint kept apart from
 the layer's original pixels and mask and removable as a whole, the Eraser acting on alpha).
 
