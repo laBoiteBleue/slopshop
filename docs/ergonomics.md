@@ -230,6 +230,11 @@ built. Contributors: propose here first.
   (Shift+Ctrl+[), by the physical keys (^ and $ on AZERTY); the selected layers move within
   their own groups, a run of them as a whole, and the commands are grayed when nothing would
   move.
+- Layer > New Fill Layer > Solid Color (also in the layers panel's right-click menu): a fill
+  layer of the foreground color above the active layer (in its group), selected, without a
+  dialog. Its color stays editable: the Properties panel shows it
+  as a swatch, and a click on the swatch or a double-click on the layer's thumbnail opens the
+  color picker (one undo entry). Named "Color Fill 1" as in Photoshop.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
@@ -281,9 +286,8 @@ Photoshop's Layer menu is a reference for what users expect, not a list to copy.
 maintainer's answers to the audit:
 
 - **Decided, to build**:
-  - New Fill Layer > Solid Color: made with the foreground color, without a dialog; its color
-    stays editable (Properties panel, double-click on the thumbnail). Gradient and Pattern
-    come with a gradient engine and patterns, not before (no dead entries).
+  - Gradient and Pattern fill layers come with a gradient engine and patterns, not before (no
+    dead entries).
   - Layer > Align (left, horizontal centers, right, top, vertical centers, bottom) and
     Distribute (horizontal and vertical centers, horizontal and vertical spacing), one
     implementation shared with buttons in the Move tool's options bar. As Photoshop: aligned
