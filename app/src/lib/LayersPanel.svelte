@@ -27,6 +27,15 @@
     slotAt,
     topmost,
   } from "./layerTree";
+  import {
+    afterLayersChange,
+    allSelected,
+    pressed,
+    ranged,
+    selectionOf,
+    toggled,
+    type LayerSelection,
+  } from "./layerSelection";
 
   let {
     doc,
@@ -115,10 +124,7 @@
     collapsed = next;
   }
 
-  // Selection is UI state, not document state (it is not undoable). Several layers can be
-  // selected, as in Photoshop: click selects one, Ctrl+click adds or removes one, Shift+click
-  // selects a range from the anchor. The active layer (always a selected one, when any is) is
-  // the one rename, the Layer menu and the options show; actions apply to every selected layer.
+  // The selection's rules are in layerSelection.ts.
   let selectedIds = $state<number[]>([]);
   let activeId = $state<number | null>(null);
   let anchorId: number | null = null;
@@ -128,36 +134,25 @@
   let selection = $derived(allLayers.filter((l) => selectedSet.has(l.id)));
   let knownIds = new Set<number>();
 
+  function current(): LayerSelection {
+    return { ids: selectedIds, active: activeId, anchor: anchorId };
+  }
+
+  function apply(next: LayerSelection) {
+    selectedIds = next.ids;
+    activeId = next.active;
+    anchorId = next.anchor;
+  }
+
   function select(ids: number[], active: number | null) {
-    selectedIds = ids;
-    activeId = active;
-    anchorId = active;
+    apply(selectionOf(ids, active));
   }
 
   $effect(() => {
-    const ids = allLayers.map((l) => l.id);
-    const created = ids.filter((id) => !knownIds.has(id));
-    const first = knownIds.size === 0;
-    knownIds = new Set(ids);
-    untrack(() => {
-      // New layers become the selection (several for a layered import).
-      if (created.length > 0 && !first) {
-        select(created, created[created.length - 1]);
-        return;
-      }
-      // Deleted layers leave it; when none is left, the top layer is selected (a deliberate
-      // "Deselect Layers" keeps the selection empty).
-      const present = new Set(ids);
-      const kept = selectedIds.filter((id) => present.has(id));
-      if (first || (kept.length === 0 && selectedIds.length > 0)) {
-        const top = ids.at(-1) ?? null;
-        select(top === null ? [] : [top], top);
-      } else if (kept.length < selectedIds.length) {
-        selectedIds = kept;
-        if (activeId === null || !present.has(activeId)) activeId = topmost(tree, kept);
-        if (anchorId === null || !present.has(anchorId)) anchorId = activeId;
-      }
-    });
+    const order = allLayers.map((l) => l.id);
+    const known = knownIds;
+    knownIds = new Set(order);
+    untrack(() => apply(afterLayersChange(current(), known, order)));
   });
 
   /** One edit, or one batch (a single undo entry) for several. */
@@ -166,25 +161,23 @@
   }
 
   function toggleSelected(id: number) {
-    if (selectedSet.has(id)) {
-      selectedIds = selectedIds.filter((s) => s !== id);
-      if (activeId === id) activeId = topmost(tree, selectedIds);
-      anchorId = activeId;
-    } else {
-      selectedIds = [...selectedIds, id];
-      activeId = id;
-      anchorId = id;
-    }
+    apply(
+      toggled(
+        current(),
+        id,
+        allLayers.map((l) => l.id),
+      ),
+    );
   }
 
-  /** Select the rows from the anchor to `id` (inclusive); the anchor stays. */
   function selectRange(id: number) {
-    const displayed = rows.map((r) => r.layer.id);
-    const from = displayed.indexOf(anchorId ?? id);
-    const to = displayed.indexOf(id);
-    if (from < 0 || to < 0) return select([id], id);
-    selectedIds = displayed.slice(Math.min(from, to), Math.max(from, to) + 1);
-    activeId = id;
+    apply(
+      ranged(
+        current(),
+        id,
+        rows.map((r) => r.layer.id),
+      ),
+    );
   }
 
   let newColor = $state("#ffffff");
@@ -405,10 +398,12 @@
   }
 
   export function selectAllLayers() {
-    const ids = allLayers.map((l) => l.id);
-    selectedIds = ids;
-    if (activeId === null) activeId = ids.at(-1) ?? null;
-    anchorId = activeId;
+    apply(
+      allSelected(
+        current(),
+        allLayers.map((l) => l.id),
+      ),
+    );
   }
 
   export function deselectLayers() {
@@ -649,13 +644,9 @@
       toggleSelected(layer.id);
       return;
     }
-    if (selectedSet.has(layer.id) && selectedIds.length > 1) {
-      activeId = layer.id;
-      anchorId = layer.id;
-      collapseOnRelease = layer.id;
-    } else {
-      select([layer.id], layer.id);
-    }
+    const press = pressed(current(), layer.id);
+    apply(press.selection);
+    if (press.collapse) collapseOnRelease = layer.id;
     drag = {
       id: layer.id,
       pointerId: e.pointerId,
