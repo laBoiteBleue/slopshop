@@ -4,10 +4,12 @@
 //! Layers, Merge Down, Merge Visible and Flatten Image replace layers by the one pixel layer
 //! they composite into.
 //!
-//! The pixels are composited by the caller (on the GPU when there is one): a [`BakePlan`] holds
-//! a scratch document whose whole canvas is what to composite, and [`BakePlan::finish`] turns
-//! the composited image into the edit, one undo entry. Raster layers whose stack is baked need
-//! no compositing ([`rasterize_in_place`]).
+//! A merge shows at once: [`merge_preview`] moves the layers into a new group in the place of
+//! the result (the same pixels on screen), and that group is then rasterized. The pixels are
+//! composited by the caller (on the GPU when there is one, on a worker): a [`BakePlan`] holds a
+//! scratch document whose whole canvas is what to composite, and [`BakePlan::finish`] puts the
+//! image in place of the layer's content, unless it changed meanwhile. Raster layers whose stack
+//! is baked need no compositing ([`rasterize_in_place`]).
 
 use std::sync::Arc;
 
@@ -19,93 +21,51 @@ use crate::pick::{self, Bounds};
 use crate::raster::{RasterImage, TILE_SIZE};
 use crate::transform::Affine;
 
-/// A composite to make, and where its result goes.
+/// A composite to make, and the layer whose content it replaces.
 #[derive(Debug, Clone)]
 pub struct BakePlan {
     /// What to composite: its whole canvas, in its blend space.
     pub scratch: Document,
-    target: Target,
-}
-
-#[derive(Debug, Clone)]
-enum Target {
-    /// Rasterize `id` (a fill or a group): its content becomes the image, placed `shift` whole
-    /// tiles (columns, rows) further from its content space's origin, its mask grown alike.
-    Layer { id: LayerId, shift: (u32, u32) },
-    /// Merge: `removed` go, the image comes as a layer named `name` at `index` among the layers
-    /// of `parent` (once they are gone), its pixels at `at` (document pixels).
-    Merge {
-        removed: Vec<LayerId>,
-        parent: Option<LayerId>,
-        index: usize,
-        name: String,
-        at: (i64, i64),
-    },
+    /// The layer rasterized (a fill or a group).
+    id: LayerId,
+    /// Whole tiles (columns, rows) the image starts before the layer's content space's origin:
+    /// the content space moves by as much, its mask grown alike.
+    shift: (u32, u32),
+    /// The content baked: if it is not the layer's any more (undone, edited), nothing is.
+    expected: LayerContent,
 }
 
 impl BakePlan {
-    /// The edit that puts `image` (the scratch canvas composited, of its size) in place; a
-    /// merge's layer takes the id `new_id` (allocated by the document).
+    /// The layer this plan rasterizes.
+    pub fn layer(&self) -> LayerId {
+        self.id
+    }
+
+    /// The edit that puts `image` (the scratch canvas composited, of its size) in place of the
+    /// layer's content, keeping the rest of the layer as it is now; `None` when the layer is
+    /// gone or its content changed since the plan (nothing to bake any more).
     pub fn finish(
         self,
         doc: &Document,
         image: Arc<RasterImage>,
-        new_id: LayerId,
-    ) -> Result<Edit, EditError> {
+    ) -> Result<Option<Edit>, EditError> {
         if image.size() != self.scratch.size() {
             return Err(EditError::InvalidPaint);
         }
-        match self.target {
-            Target::Layer { id, shift } => {
-                let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
-                let mut baked = layer.clone();
-                baked.content = LayerContent::raster(image);
-                baked.transform = shifted(layer.transform, shift);
-                baked.mask = match &layer.mask {
-                    Some(mask) => Some(grown_mask(mask, shift)?),
-                    None => None,
-                };
-                replace(doc, baked)
-            }
-            Target::Merge {
-                removed,
-                parent,
-                index,
-                name,
-                at,
-            } => {
-                let to_parent = match parent {
-                    Some(p) => doc
-                        .layer(p)
-                        .map(|l| l.transform.then(doc.parent_transform(p)))
-                        .ok_or(EditError::UnknownLayer(p))?
-                        .inverse()
-                        .ok_or(EditError::InvalidTransform)?,
-                    None => Affine::IDENTITY,
-                };
-                let layer = Layer {
-                    id: new_id,
-                    name,
-                    visible: true,
-                    opacity: 1.0,
-                    blend_mode: BlendMode::Normal,
-                    content: LayerContent::raster(image),
-                    mask: None,
-                    clipped: false,
-                    transform: Affine::translation(at.0 as f64, at.1 as f64).then(to_parent),
-                };
-                let mut edits: Vec<Edit> = removed
-                    .into_iter()
-                    .map(|id| Edit::RemoveLayer { id })
-                    .collect();
-                edits.push(Edit::InsertLayer {
-                    parent,
-                    index,
-                    layer,
-                });
-                Ok(Edit::Batch(edits))
-            }
+        let Some(layer) = doc.layer(self.id) else {
+            return Ok(None);
+        };
+        if layer.content != self.expected {
+            return Ok(None);
         }
+        let mut baked = layer.clone();
+        baked.content = LayerContent::raster(image);
+        baked.transform = shifted(layer.transform, self.shift);
+        baked.mask = match &layer.mask {
+            Some(mask) => Some(grown_mask(mask, self.shift)?),
+            None => None,
+        };
+        replace(doc, baked).map(Some)
     }
 }
 
@@ -196,6 +156,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
         let content: Vec<Layer> = match &layer.content {
             // The fill alone, plain: its opacity, mode, mask and clipping stay the layer's.
             LayerContent::Fill { .. } => vec![Layer {
+                visible: true,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
                 mask: None,
@@ -214,8 +175,13 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
             .inverse()
             .map(|to_content| canvas_bounds(doc, to_content))
             .ok_or(EditError::InvalidTransform)?;
-        let region = content_bounds(doc, &content, canvas)?;
-        let Some(region) = region else { continue };
+        // Nothing shows (hidden or empty layers): a transparent pixel.
+        let region = content_bounds(doc, &content, canvas)?.unwrap_or(Bounds {
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+        });
         // Whole tiles before the origin when the content starts before it.
         let tiles = |v: i64| (v.min(0).unsigned_abs()).div_ceil(u64::from(TILE_SIZE)) as u32;
         let shift = (tiles(region.left), tiles(region.top));
@@ -227,36 +193,27 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
         let scratch = scratch(doc, size, content, moved)?;
         plans.push(BakePlan {
             scratch,
-            target: Target::Layer { id, shift },
+            id,
+            shift,
+            expected: layer.content.clone(),
         });
     }
     Ok(plans)
 }
 
-/// Merge `ids` (Merge Layers): the layers (a group with its layers) composited on their own, as
-/// they show, into one pixel layer in the place of the topmost, named after it; hidden ones
-/// are dropped. `None` without any of them.
-pub fn merge_plan(doc: &Document, ids: &[LayerId]) -> Result<Option<BakePlan>, EditError> {
-    let topmost = crate::edit::outermost_in_order(doc, ids)?.last().copied();
-    let Some(topmost) = topmost else {
-        return Ok(None);
-    };
-    let name = doc
-        .layer(topmost)
-        .map(|l| l.name.clone())
-        .unwrap_or_default();
-    merge_named(doc, ids, topmost, name)
-}
-
-/// Merge Down: `id` with the layer right below it in its group, named after that one. `None`
-/// when there is none, or when it is hidden (as in Photoshop).
-pub fn merge_down_plan(doc: &Document, id: LayerId) -> Result<Option<BakePlan>, EditError> {
-    let Some(below) = layer_below(doc, id) else {
-        return Ok(None);
-    };
-    let name = below.name.clone();
-    let below = below.id;
-    merge_named(doc, &[below, id], id, name)
+/// What a merge takes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Merge {
+    /// The layers (a group with its layers), into one in the place of the topmost, named after
+    /// it (Merge Layers).
+    Layers(Vec<LayerId>),
+    /// The layer with the visible layer right below it in its group, named after that one
+    /// (Merge Down; refused onto a hidden layer, as in Photoshop).
+    Down(LayerId),
+    /// Every visible layer of the top level, hidden ones staying (Merge Visible).
+    Visible,
+    /// Every layer, named as given (Flatten Image).
+    Flatten(String),
 }
 
 /// The layer right below `id` in its group, when visible.
@@ -266,72 +223,87 @@ pub fn layer_below(doc: &Document, id: LayerId) -> Option<&Layer> {
     below.visible.then_some(below)
 }
 
-/// Merge Visible: every visible layer of the top level into one (named after the topmost of
-/// them, in its place); hidden ones stay. `None` without any.
-pub fn merge_visible_plan(doc: &Document) -> Result<Option<BakePlan>, EditError> {
-    let ids: Vec<LayerId> = doc
-        .layers()
-        .iter()
-        .filter(|l| l.visible)
-        .map(|l| l.id)
-        .collect();
-    merge_plan(doc, &ids)
-}
-
-/// Flatten Image: every layer into one named `name`, hidden ones dropped, transparency kept
-/// (no background is added). `None` for a document without layers.
-pub fn flatten_plan(doc: &Document, name: String) -> Result<Option<BakePlan>, EditError> {
-    let ids: Vec<LayerId> = doc.layers().iter().map(|l| l.id).collect();
-    let Some(&topmost) = ids.last() else {
+/// The instant part of `merge`: the layers it takes moved into a new isolated group `group`
+/// (an id the document allocated) in the place of the topmost, named as the result, each
+/// placed and clipped so that it shows as it did on its own (clipped only to a base merged
+/// too). Rasterizing that group ([`rasterize_plans`]) then gives the merged layer: hidden layers
+/// drop, nothing outside the canvas is cut. `None` when there is nothing to merge.
+pub fn merge_preview(
+    doc: &Document,
+    merge: Merge,
+    group: LayerId,
+) -> Result<Option<Edit>, EditError> {
+    let top_level = |visible_only: bool| -> Vec<LayerId> {
+        doc.layers()
+            .iter()
+            .filter(|l| l.visible || !visible_only)
+            .map(|l| l.id)
+            .collect()
+    };
+    let (ids, name) = match merge {
+        Merge::Layers(ids) => (ids, None),
+        Merge::Down(id) => match layer_below(doc, id) {
+            Some(below) => (vec![below.id, id], Some(below.name.clone())),
+            None => return Ok(None),
+        },
+        Merge::Visible => (top_level(true), None),
+        Merge::Flatten(name) => (top_level(false), Some(name)),
+    };
+    let removed = crate::edit::outermost_in_order(doc, &ids)?;
+    let Some(&topmost) = removed.last() else {
         return Ok(None);
     };
-    merge_named(doc, &ids, topmost, name)
-}
-
-fn merge_named(
-    doc: &Document,
-    ids: &[LayerId],
-    topmost: LayerId,
-    name: String,
-) -> Result<Option<BakePlan>, EditError> {
-    let removed = crate::edit::outermost_in_order(doc, ids)?;
-    if removed.is_empty() {
-        return Ok(None);
-    }
-    let (parent, at) = doc
+    let name = match name {
+        Some(name) => name,
+        None => doc
+            .layer(topmost)
+            .map(|l| l.name.clone())
+            .unwrap_or_default(),
+    };
+    let (parent, _) = doc
         .locate(topmost)
         .ok_or(EditError::UnknownLayer(topmost))?;
-    // Its place once the others are gone: the layers below it that stay.
-    let index = doc
-        .children_of(parent)
-        .ok_or(EditError::UnknownLayer(topmost))?
-        .iter()
-        .take(at)
-        .filter(|l| !removed.contains(&l.id))
-        .count();
-    // Each layer in the document's space, clipped only to a base that is merged too.
-    let mut content = Vec::with_capacity(removed.len());
-    for &id in &removed {
-        let mut layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?.clone();
-        layer.transform = layer.transform.then(doc.parent_transform(id));
-        layer.clipped = layer.clipped && base(doc, id).is_some_and(|b| removed.contains(&b));
-        content.push(layer);
-    }
-    let canvas = canvas_bounds(doc, Affine::IDENTITY);
-    let region = content_bounds(doc, &content, canvas)?.unwrap_or(canvas);
-    let size = size_of(region.right - region.left, region.bottom - region.top)?;
-    let moved = Affine::translation(-region.left as f64, -region.top as f64);
-    let scratch = scratch(doc, size, content, moved)?;
-    Ok(Some(BakePlan {
-        scratch,
-        target: Target::Merge {
-            removed,
-            parent,
-            index,
-            name,
-            at: (region.left, region.top),
+    let from_document = match parent {
+        Some(p) => doc
+            .layer(p)
+            .ok_or(EditError::UnknownLayer(p))?
+            .transform
+            .then(doc.parent_transform(p))
+            .inverse()
+            .ok_or(EditError::InvalidTransform)?,
+        None => Affine::IDENTITY,
+    };
+    let group = Layer {
+        id: group,
+        name,
+        visible: true,
+        opacity: 1.0,
+        blend_mode: BlendMode::Normal,
+        mask: None,
+        clipped: false,
+        transform: Affine::IDENTITY,
+        content: LayerContent::Group {
+            children: Vec::new(),
+            pass_through: false,
         },
-    }))
+    };
+    let mut edits = vec![Edit::group_layers(doc, group, &removed)?];
+    for &id in &removed {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        // Where it shows, in the group's space (its new parent's): unchanged on screen.
+        let transform = layer
+            .transform
+            .then(doc.parent_transform(id))
+            .then(from_document);
+        if transform != layer.transform {
+            edits.push(Edit::SetLayerTransform { id, transform });
+        }
+        let clipped = layer.clipped && base(doc, id).is_some_and(|b| removed.contains(&b));
+        if clipped != layer.clipped {
+            edits.push(Edit::SetLayerClipped { id, clipped });
+        }
+    }
+    Ok(Some(Edit::Batch(edits)))
 }
 
 /// The base a clipped layer `id` is clipped to: the nearest layer below it in its group that
@@ -501,8 +473,21 @@ mod tests {
     /// `plan` finished and applied; its undo.
     fn bake(doc: &mut Document, plan: BakePlan) -> Edit {
         let image = composited(&plan);
-        let id = doc.allocate_layer_id();
-        plan.finish(doc, image, id).unwrap().apply(doc).unwrap()
+        plan.finish(doc, image)
+            .unwrap()
+            .unwrap()
+            .apply(doc)
+            .unwrap()
+    }
+
+    /// `merge` previewed, then its group rasterized; the undo of both.
+    fn merged(doc: &mut Document, merge: Merge) -> Edit {
+        let group = doc.allocate_layer_id();
+        let preview = merge_preview(doc, merge, group).unwrap().unwrap();
+        let undo_preview = preview.apply(doc).unwrap();
+        let plan = rasterize_plans(doc, &[group]).unwrap().remove(0);
+        let undo_bake = bake(doc, plan);
+        Edit::Batch(vec![undo_bake, undo_preview])
     }
 
     fn names(doc: &Document) -> Vec<String> {
@@ -529,28 +514,80 @@ mod tests {
         push(&mut doc, top);
         let before = names(&doc);
 
-        let plan = merge_plan(&doc, &[b, a]).unwrap().unwrap();
-        // From (-5, 10) to (30, 60).
-        assert_eq!(plan.scratch.size(), Size::new(35, 50));
-        let undo = bake(&mut doc, plan);
+        // The preview: the same pixels on screen at once, in a group named as the result.
+        let group = doc.allocate_layer_id();
+        let preview = merge_preview(&doc, Merge::Layers(vec![b, a]), group)
+            .unwrap()
+            .unwrap();
+        let undo_preview = preview.apply(&mut doc).unwrap();
         assert_eq!(names(&doc), ["bottom", "b", "top"]);
-        let merged = doc.layers()[1].id;
-        assert_eq!(
-            doc.layer(merged).unwrap().transform,
-            Affine::translation(-5.0, 10.0)
-        );
+        assert!(doc.layer(group).unwrap().is_group());
+        assert_eq!(shown(&doc, 15, 15).as_deref(), Some("a"));
+        assert_eq!(shown(&doc, 0, 55).as_deref(), Some("b"));
+        undo_preview.apply(&mut doc).unwrap();
+        assert_eq!(names(&doc), before);
+
+        let undo = merged(&mut doc, Merge::Layers(vec![b, a]));
+        assert_eq!(names(&doc), ["bottom", "b", "top"]);
+        let result = doc.layers()[1].id;
+        assert!(matches!(
+            doc.layer(result).unwrap().content,
+            LayerContent::Raster { .. }
+        ));
         assert_eq!(shown(&doc, 15, 15).as_deref(), Some("b"));
         assert_eq!(shown(&doc, 0, 55).as_deref(), Some("b"));
-        assert_eq!(pick::bounds_of(&doc, &[merged]).unwrap().left, -5);
+        assert_eq!(pick::bounds_of(&doc, &[result]).unwrap().left, -5);
         undo.apply(&mut doc).unwrap();
         assert_eq!(names(&doc), before);
 
         // Merge Down: with the layer below, named after it.
-        let plan = merge_down_plan(&doc, a).unwrap().unwrap();
-        bake(&mut doc, plan);
+        merged(&mut doc, Merge::Down(a));
         assert_eq!(names(&doc), ["bottom", "b", "top"]);
         assert_eq!(shown(&doc, 5, 5).as_deref(), Some("bottom"));
         assert_eq!(shown(&doc, 15, 15).as_deref(), Some("bottom"));
+    }
+
+    #[test]
+    fn a_merge_from_a_moved_group_shows_where_it_was() {
+        let mut doc = Document::new(Size::new(100, 100));
+        let inner = plain(&mut doc, "inner", boxed(Rect::new(0, 0, 10, 10)));
+        let inner_id = inner.id;
+        let mut group = plain(
+            &mut doc,
+            "group",
+            LayerContent::Group {
+                children: vec![inner],
+                pass_through: false,
+            },
+        );
+        group.transform = Affine::translation(30.0, 0.0);
+        push(&mut doc, group);
+        let outside = plain(&mut doc, "outside", boxed(Rect::new(0, 50, 10, 10)));
+        let outside = push(&mut doc, outside);
+        merged(&mut doc, Merge::Layers(vec![inner_id, outside]));
+        assert_eq!(shown(&doc, 35, 5).as_deref(), Some("outside"));
+        assert_eq!(shown(&doc, 5, 55).as_deref(), Some("outside"));
+        assert_eq!(shown(&doc, 5, 5), None);
+    }
+
+    #[test]
+    fn a_stale_plan_bakes_nothing() {
+        let mut doc = Document::new(Size::new(100, 100));
+        let a = plain(&mut doc, "a", boxed(Rect::new(0, 0, 10, 10)));
+        let a = push(&mut doc, a);
+        let b = plain(&mut doc, "b", boxed(Rect::new(0, 0, 10, 10)));
+        let b = push(&mut doc, b);
+        let group = doc.allocate_layer_id();
+        let undo = merge_preview(&doc, Merge::Layers(vec![a, b]), group)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let plan = rasterize_plans(&doc, &[group]).unwrap().remove(0);
+        let image = composited(&plan);
+        // Undone before the pixels came: the group is gone.
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(plan.finish(&doc, image).unwrap(), None);
     }
 
     #[test]
@@ -560,14 +597,23 @@ mod tests {
         let low = push(&mut doc, low);
         let high = plain(&mut doc, "high", boxed(Rect::new(0, 0, 10, 10)));
         let high = push(&mut doc, high);
-        assert!(merge_down_plan(&doc, low).unwrap().is_none());
+        let group = doc.allocate_layer_id();
+        assert!(
+            merge_preview(&doc, Merge::Down(low), group)
+                .unwrap()
+                .is_none()
+        );
         Edit::SetLayerVisible {
             id: low,
             visible: false,
         }
         .apply(&mut doc)
         .unwrap();
-        assert!(merge_down_plan(&doc, high).unwrap().is_none());
+        assert!(
+            merge_preview(&doc, Merge::Down(high), group)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -581,13 +627,11 @@ mod tests {
         let b = plain(&mut doc, "b", boxed(Rect::new(20, 0, 10, 10)));
         push(&mut doc, b);
 
-        let plan = merge_visible_plan(&doc).unwrap().unwrap();
-        let undo = bake(&mut doc, plan);
+        let undo = merged(&mut doc, Merge::Visible);
         assert_eq!(names(&doc), ["hidden", "b"]);
         undo.apply(&mut doc).unwrap();
 
-        let plan = flatten_plan(&doc, "Flat".into()).unwrap().unwrap();
-        bake(&mut doc, plan);
+        merged(&mut doc, Merge::Flatten("Flat".into()));
         assert_eq!(names(&doc), ["Flat"]);
         // Transparency is kept: no background.
         assert_eq!(shown(&doc, 15, 5), None);
@@ -605,8 +649,15 @@ mod tests {
         let mut clipped = plain(&mut doc, "clipped", boxed(Rect::new(0, 0, 60, 60)));
         clipped.clipped = true;
         let clipped = push(&mut doc, clipped);
-        let plan = merge_plan(&doc, &[other, clipped]).unwrap().unwrap();
-        assert!(plan.scratch.layers().iter().all(|l| !l.clipped));
+        let group = doc.allocate_layer_id();
+        merge_preview(&doc, Merge::Layers(vec![other, clipped]), group)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert!(!doc.layer(clipped).unwrap().clipped);
+        // Not clipped: it shows beyond `other`.
+        assert_eq!(shown(&doc, 30, 30).as_deref(), Some("clipped"));
     }
 
     #[test]
