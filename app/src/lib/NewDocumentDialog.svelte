@@ -146,7 +146,8 @@
   function onResolution() {
     const next = toPpi(Number(rField), resolutionUnit);
     if (!Number.isFinite(next) || next < MIN_PPI || next > MAX_PPI) return;
-    ({ width, height } = atResolution({ width, height }, unit, resolution, next));
+    const lengths = { width: Number(wField), height: Number(hField) };
+    ({ width, height } = atResolution({ width, height }, lengths, unit, next));
     resolution = next;
   }
   let dialog: HTMLDialogElement;

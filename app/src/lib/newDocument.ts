@@ -1,7 +1,7 @@
 // The math of File > New (NewDocumentDialog.svelte): sizes are whole pixels, typed in pixels
 // or a length at the resolution (ADR 0028).
 
-import { MAX_PPI, MIN_PPI, type LengthUnit } from "./units";
+import { MAX_PPI, MIN_PPI, toPixels, type LengthUnit } from "./units";
 import { MAX_SIDE } from "./sizeDialog";
 
 type Size = { width: number; height: number };
@@ -18,14 +18,18 @@ export function matchingPreset(presets: (Size & { id: string })[], size: Size): 
 }
 
 /**
- * The size once the resolution goes from `ppi` to `next`: a size typed in a length unit keeps
- * its length, so its pixels follow (Photoshop); in pixels it stays.
+ * The size in pixels once the resolution is `next` pixels per inch: in pixels it stays
+ * (`size`); in a length unit the length shown (`lengths`) stays and its pixels follow
+ * (Photoshop). From the lengths rather than the pixels: typing a resolution digit by digit
+ * (1, 15, 150) would otherwise round the pixels at each step.
  */
-export function atResolution(size: Size, unit: LengthUnit, ppi: number, next: number): Size {
-  if (unit === "px") return size;
+export function atResolution(size: Size, lengths: Size, unit: LengthUnit, next: number): Size {
+  if (unit === "px" || !Number.isFinite(lengths.width) || !Number.isFinite(lengths.height)) {
+    return size;
+  }
   return {
-    width: Math.round((size.width * next) / ppi),
-    height: Math.round((size.height * next) / ppi),
+    width: Math.round(toPixels(lengths.width, unit, next)),
+    height: Math.round(toPixels(lengths.height, unit, next)),
   };
 }
 
