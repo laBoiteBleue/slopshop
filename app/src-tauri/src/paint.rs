@@ -417,28 +417,49 @@ pub(crate) fn paint(
     }
 }
 
-/// Delete with a selection (ADR 0027): the selected part of layer `layer_id` erased (`color`
-/// absent: only alpha changes) or filled with `color` (sRGB-encoded RGB in `[0, 1]`), kept
-/// apart from its original like a stroke. A fill grows the layer to the canvas if needed, as
-/// strokes do. With `target` the mask, the mask is hidden there or filled with the color's
-/// gray. Nothing selected: nothing changes.
+/// Where Edit > Stroke draws, relative to the selection's outline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StrokeLocation {
+    Inside,
+    Center,
+    Outside,
+}
+
+/// Edit > Stroke: a band `width` pixels wide along the selection's outline.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrokeRequest {
+    pub width: f64,
+    pub location: StrokeLocation,
+}
+
+/// Edit > Fill and Stroke, and Delete with a selection, as paint (ADR 0027, kept apart from the
+/// original like a stroke; ADR 0029): layer `layer_id` erased (`color` absent: only alpha
+/// changes) or painted with `color` (sRGB-encoded RGB in `[0, 1]`) at `opacity`, within the
+/// selection, or the band `stroke` draws along its outline. Without a selection, Fill paints the
+/// whole layer, as in Photoshop. Painting grows the layer to the canvas if needed, as strokes
+/// do. With `target` the mask, the mask is hidden or painted with the color's gray. One undo
+/// entry; nothing to paint, nothing changes.
 #[tauri::command]
-pub async fn fill_selection(
+pub async fn fill(
     app: tauri::AppHandle,
     document_id: u64,
     layer_id: u64,
     target: PaintTarget,
     color: Option<[f32; 3]>,
+    opacity: f32,
+    stroke: Option<StrokeRequest>,
 ) -> Result<DocumentView, String> {
     on_worker(move || {
         let state = app.state::<AppState>();
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
-        if document.session.document().selection().is_none() {
-            return Ok(document.view());
-        }
         if target == PaintTarget::Selection {
             return Err("the selection cannot fill itself".to_owned());
+        }
+        if !(0.0..=1.0).contains(&opacity) {
+            return Err("the opacity is between 0 and 1".to_owned());
         }
         let request = PaintRequest {
             stroke: 0,
@@ -449,7 +470,7 @@ pub async fn fill_selection(
                 hardness: 1.0,
                 spacing: 1.0,
                 flow: 1.0,
-                opacity: 1.0,
+                opacity,
                 pressure_size: false,
                 pressure_opacity: false,
             },
@@ -457,18 +478,59 @@ pub async fn fill_selection(
             samples: Vec::new(),
             end: true,
         };
-        // Erasing only removes: no need to grow.
-        let (mut stroke, growth) = start(document.session.document(), &request, color.is_some())?;
-        stroke.fill();
-        if let Some(image) = stroke.finish().map_err(|e| e.to_string())? {
-            document
-                .session
-                .perform(paint_edit(request.target(), image, growth.as_ref()))
-                .map_err(|e| e.to_string())?;
+        if let Some(edit) = fill_edit(document.session.document(), &request, stroke)? {
+            document.session.perform(edit).map_err(|e| e.to_string())?;
         }
         Ok(document.view())
     })
     .await
+}
+
+/// The edit `fill` performs: `request`'s target painted within the selection of `doc` (or
+/// everywhere without one), or along its outline with `stroke`. `None`: nothing to paint.
+fn fill_edit(
+    doc: &Document,
+    request: &PaintRequest,
+    stroke: Option<StrokeRequest>,
+) -> Result<Option<Edit>, String> {
+    // Erasing only removes: no need to grow.
+    let grow_layer = request.color.is_some();
+    let (mut painting, growth) = match stroke {
+        None => start(doc, request, grow_layer)?,
+        Some(stroke) => match banded(doc, stroke)? {
+            Some(banded) => start(&banded, request, grow_layer)?,
+            None => return Ok(None),
+        },
+    };
+    painting.fill();
+    Ok(painting
+        .finish()
+        .map_err(|e| e.to_string())?
+        .map(|image| paint_edit(request.target(), image, growth.as_ref())))
+}
+
+/// `doc` with the band `stroke` draws along its selection's outline as its selection, for Fill
+/// to paint (a copy: the pixels are shared); `None` when there is nothing to stroke.
+fn banded(doc: &Document, stroke: StrokeRequest) -> Result<Option<Document>, String> {
+    use slopshop_core::selection::{StrokeLocation as Location, stroke_band};
+    let selection = doc.selection().ok_or("Stroke needs a selection")?;
+    let location = match stroke.location {
+        StrokeLocation::Inside => Location::Inside,
+        StrokeLocation::Center => Location::Center,
+        StrokeLocation::Outside => Location::Outside,
+    };
+    let band = stroke_band(doc.size(), selection.image(), stroke.width, location)
+        .map_err(|e| format!("{e:?}"))?;
+    let Some(band) = band else {
+        return Ok(None);
+    };
+    let mut banded = doc.clone();
+    Edit::SetSelection {
+        selection: Selection::new(Arc::new(band)),
+    }
+    .apply(&mut banded)
+    .map_err(|e| e.to_string())?;
+    Ok(Some(banded))
 }
 
 /// The color picker's eyedropper: the color shown at document point (`x`, `y`), every visible
@@ -503,4 +565,137 @@ pub(crate) fn sample_color_at(doc: &Document, x: f64, y: f64) -> Option<[u8; 3]>
     }
     let [r, g, b, alpha] = *sample_colors(doc, &[(x as u32, y as u32)]).first()?;
     (alpha > 0.0).then(|| [r, g, b].map(|v| v.round().clamp(0.0, 255.0) as u8))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slopshop_core::color::PixelFormat;
+    use slopshop_core::selection::{Combine, EdgeOptions, Shape, select_shape};
+    use slopshop_core::{BlendMode, Layer, Session};
+
+    const CANVAS: Size = Size::new(64, 48);
+
+    /// A document holding one transparent canvas-sized layer (id 1), `selected` as its
+    /// selection if given.
+    fn document(selected: Option<[f64; 4]>) -> Document {
+        let image = RasterImage::from_pixels(
+            CANVAS,
+            PixelFormat::RGBA8_SRGB,
+            &vec![0; CANVAS.pixel_count() as usize * 4],
+        )
+        .unwrap();
+        let layer = Layer {
+            id: LayerId::from_raw(1),
+            name: "layer".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            content: LayerContent::raster(Arc::new(image)),
+            mask: None,
+            clipped: false,
+            transform: Affine::IDENTITY,
+        };
+        let mut session = Session::new(
+            Document::restore(
+                CANVAS,
+                slopshop_core::color::WORKING_SPACE,
+                slopshop_core::BlendSpace::Perceptual,
+                vec![layer],
+                2,
+            )
+            .unwrap(),
+        );
+        if let Some([left, top, right, bottom]) = selected {
+            let shape = Shape::Rectangle {
+                left,
+                top,
+                right,
+                bottom,
+            };
+            let image = select_shape(
+                CANVAS,
+                None,
+                &shape,
+                EdgeOptions::default(),
+                Combine::Replace,
+            )
+            .unwrap()
+            .unwrap();
+            let selection = Selection::new(Arc::new(image));
+            session.perform(Edit::SetSelection { selection }).unwrap();
+        }
+        session.document().clone()
+    }
+
+    fn request(opacity: f32) -> PaintRequest {
+        PaintRequest {
+            stroke: 0,
+            target: PaintTarget::Layer,
+            layer_id: 1,
+            brush: BrushRequest {
+                size: 1.0,
+                hardness: 1.0,
+                spacing: 1.0,
+                flow: 1.0,
+                opacity,
+                pressure_size: false,
+                pressure_opacity: false,
+            },
+            color: Some([1.0, 0.0, 0.0]),
+            samples: Vec::new(),
+            end: true,
+        }
+    }
+
+    /// The layer's painted image once `fill_edit` is applied.
+    fn filled(
+        doc: &Document,
+        request: &PaintRequest,
+        stroke: Option<StrokeRequest>,
+    ) -> Arc<RasterImage> {
+        let edit = fill_edit(doc, request, stroke).unwrap().unwrap();
+        let mut doc = doc.clone();
+        edit.apply(&mut doc).unwrap();
+        let LayerContent::Raster { image, .. } = &doc.layer(LayerId::from_raw(1)).unwrap().content
+        else {
+            panic!("a raster layer");
+        };
+        Arc::clone(image)
+    }
+
+    #[test]
+    fn fill_paints_the_selection_or_the_whole_layer_at_its_opacity() {
+        let selected = document(Some([10.0, 10.0, 20.0, 20.0]));
+        let image = filled(&selected, &request(1.0), None);
+        assert_eq!(image.alpha_at(10, 10), 1.0);
+        assert_eq!(image.alpha_at(9, 10), 0.0);
+        let everywhere = filled(&document(None), &request(0.5), None);
+        assert!((everywhere.alpha_at(0, 0) - 0.5).abs() < 0.01);
+        assert!((everywhere.alpha_at(63, 47) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn stroke_paints_a_band_along_the_outline() {
+        let doc = document(Some([10.0, 10.0, 30.0, 30.0]));
+        let stroke = |location| StrokeRequest {
+            width: 2.0,
+            location,
+        };
+        let inside = filled(&doc, &request(1.0), Some(stroke(StrokeLocation::Inside)));
+        assert_eq!(inside.alpha_at(10, 20), 1.0);
+        assert_eq!(inside.alpha_at(11, 20), 1.0);
+        assert_eq!(inside.alpha_at(12, 20), 0.0);
+        assert_eq!(inside.alpha_at(9, 20), 0.0);
+        let outside = filled(&doc, &request(1.0), Some(stroke(StrokeLocation::Outside)));
+        assert_eq!(outside.alpha_at(8, 20), 1.0);
+        assert_eq!(outside.alpha_at(10, 20), 0.0);
+        // Stroke needs a selection.
+        let none = fill_edit(
+            &document(None),
+            &request(1.0),
+            Some(stroke(StrokeLocation::Center)),
+        );
+        assert!(none.is_err());
+    }
 }

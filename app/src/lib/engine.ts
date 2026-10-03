@@ -308,6 +308,9 @@ export type Pasted =
   /** Paste Into without a selection. */
   | { kind: "noSelection" };
 
+/** Edit > Stroke: a band `width` pixels wide along the selection's outline (paint.rs). */
+export type StrokeRequest = { width: number; location: "inside" | "center" | "outside" };
+
 /** What Edit > Copy takes (CopyRequest in clipboard.rs). */
 export type CopyRequest =
   | { kind: "layers"; ids: number[] }
@@ -1285,22 +1288,28 @@ export const engine = {
   paintStroke: (documentId: number, request: PaintRequest) =>
     serial(() => invoke<DocumentView | null>("paint_stroke", { documentId, request })),
   /**
-   * Delete with a selection: the selected part of a raster layer erased (`color` null) or
-   * filled with `color` (sRGB-encoded RGB in [0, 1]), as paint (ADR 0027); of its mask
-   * (`target` "mask"): hidden, or filled with the color's gray.
+   * Edit > Fill and Stroke, Delete with a selection: a raster layer erased (`color` null) or
+   * painted with `color` (sRGB-encoded RGB in [0, 1]) at `opacity`, as paint (ADR 0027), in the
+   * selection, along its outline with `stroke`, or everywhere without a selection; its mask
+   * (`target` "mask"): hidden, or painted with the color's gray. One undo entry.
    */
+  fill: (
+    documentId: number,
+    layerId: number,
+    target: Exclude<PaintTarget, "selection">,
+    color: [number, number, number] | null,
+    opacity: number,
+    stroke: StrokeRequest | null,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("fill", { documentId, layerId, target, color, opacity, stroke }),
+    ),
   /**
    * The color picker's eyedropper: the color shown at a document point (every visible layer),
    * whole 8-bit sRGB values; null outside the canvas or where nothing is shown.
    */
   sampleColor: (documentId: number, x: number, y: number) =>
     serial(() => invoke<[number, number, number] | null>("sample_color", { documentId, x, y })),
-  fillSelection: (
-    documentId: number,
-    layerId: number,
-    target: Exclude<PaintTarget, "selection">,
-    color: [number, number, number] | null,
-  ) => serial(() => invoke<DocumentView>("fill_selection", { documentId, layerId, target, color })),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),
