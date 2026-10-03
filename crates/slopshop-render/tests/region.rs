@@ -1336,6 +1336,25 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
                 saturation: -20.0,
             },
             Adjustment::Invert,
+            // Several ranges, relative then absolute.
+            Adjustment::SelectiveColor {
+                ranges: [
+                    [40, -20, 0, 10],
+                    [0, 0, -60, 0],
+                    [-30, 0, 25, 0],
+                    [0, 0, 0, 0],
+                    [10, 10, 10, -40],
+                    [0, 70, 0, 0],
+                    [0, 0, 0, 30],
+                    [-15, 20, 5, 0],
+                    [0, 0, 0, -50],
+                ],
+                absolute: false,
+            },
+            Adjustment::SelectiveColor {
+                ranges: [[-50, 40, 30, 20]; slopshop_core::adjust::SELECTIVE_RANGES],
+                absolute: true,
+            },
             // A gradient through three colors (a hard edge in the middle), reversed.
             Adjustment::GradientMap {
                 gradient: slopshop_core::gradient::Gradient::new(&[

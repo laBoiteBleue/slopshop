@@ -283,7 +283,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,
     `colorBalance`, `photoFilter` or `channelMixer`, from schema 0.9 `curves`, and from schema
-    0.14 `gradientMap`. `params.values` holds its parameters in
+    0.14 `gradientMap`, from schema 0.15 `selectiveColor`. `params.values` holds its parameters in
     this order: exposure, offset, gamma; hue, saturation, lightness; input black, input
     white, gamma, output black, output white; brightness, contrast; vibrance, saturation;
     nothing (invert); levels (posterize); level in [0, 1] (threshold); the reds, yellows,
@@ -306,6 +306,9 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     list, the color sRGB-encoded 0–255; between two stops the color is interpolated linearly
     (on sRGB-encoded values), outside them it stays the end stop's; the luminance mapped is
     0.299 r + 0.587 g + 0.114 b of the sRGB-encoded color, whatever the blend space.
+    From schema 0.15, at most 37 values: `selectiveColor` has the cyan, magenta, yellow and
+    black (integers, −100 to 100 %) of the reds, yellows, greens, cyans, blues, magentas,
+    whites, neutrals and blacks, then the method (flag: absolute).
     Parameters out of range make the file invalid; an unknown adjustment comes from a newer
     SlopShop. No `inputs`.
   - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills and adjustments.

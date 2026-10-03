@@ -3322,14 +3322,14 @@ mod tests {
         let too_many = format!(
             r#"{{"kind":"setAdjustment","id":{},"adjustment":"invert","values":[{}]}}"#,
             id.get(),
-            ["0"; 21].join(",")
+            ["0"; 38].join(",")
         );
         let edit = serde_json::from_str::<EditRequest>(&too_many)
             .unwrap()
             .into_edit(&mut s);
         assert!(edit.is_err());
         let unknown = serde_json::from_str::<EditRequest>(
-            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"selectiveColor","parent":null,"index":0}"#,
+            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"colorLookup","parent":null,"index":0}"#,
         )
         .unwrap()
         .into_edit(&mut s);

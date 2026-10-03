@@ -1462,6 +1462,8 @@ fn adjustment_fields(
         p[..3].copy_from_slice(&filter.map(|v| v as f32));
     }
     let vec4 = |at: usize| [p[at], p[at + 1], p[at + 2], p[at + 3]];
+    // Selective Color reads its parameters from the tile table (below); the others fit in
+    // the first 20.
     let mut fields = LayerFields {
         kind: KIND_ADJUST,
         flags,
@@ -1479,6 +1481,11 @@ fn adjustment_fields(
         for curve in &curves {
             tile_table.extend(curve.lut().iter().map(|v| v.to_bits()));
         }
+    }
+    // Selective Color's parameters (more than the layer fields hold), the same way.
+    if let Adjustment::SelectiveColor { .. } = adjustment {
+        fields.table_offset = tile_table.len() as u32;
+        tile_table.extend(adjustment.params().iter().map(|v| v.to_bits()));
     }
     // Gradient Map's (red, green, blue), the same way.
     if let Some(gradient) = adjustment.gradient() {

@@ -55,7 +55,14 @@
   type Check = { kind: "check"; index: number; label: MessageKey };
   /** Three sRGB-encoded values from `index`, as a color swatch. */
   type Color = { kind: "color"; index: number; label: MessageKey };
-  type Field = Slider | Check | Color;
+  /** A flag (0 or 1) as two radio buttons, `options` for 0 and for 1. */
+  type Choice = {
+    kind: "choice";
+    index: number;
+    label: MessageKey;
+    options: [MessageKey, MessageKey];
+  };
+  type Field = Slider | Check | Color | Choice;
   /** Which parameters the `selected` sliders edit (Photoshop's Tone and Output Channel menus):
    * an offset into the values per option. Hidden (offset 0) while flag `hiddenBy` is on. */
   type Selector = {
@@ -130,11 +137,43 @@
     invert: [],
     curves: [],
     gradientMap: [{ kind: "check", index: 0, label: "adjustment.gradientMap.reverse" }],
+    selectiveColor: [
+      slider(0, "adjustment.selectiveColor.cyan", -100, 100, { selected: true }),
+      slider(1, "adjustment.selectiveColor.magenta", -100, 100, { selected: true }),
+      slider(2, "adjustment.selectiveColor.yellow", -100, 100, { selected: true }),
+      slider(3, "adjustment.selectiveColor.black", -100, 100, { selected: true }),
+      {
+        kind: "choice",
+        index: 36,
+        label: "adjustment.selectiveColor.method",
+        options: ["adjustment.selectiveColor.relative", "adjustment.selectiveColor.absolute"],
+      },
+    ],
     posterize: [slider(0, "adjustment.posterize.levels", 2, 255)],
     threshold: [slider(0, "adjustment.threshold.level", 1, 255, { scale: 255 })],
   };
 
   const SELECTORS: Partial<Record<AdjustmentId, Selector>> = {
+    // Photoshop's Colors menu: which range the four sliders edit.
+    selectiveColor: {
+      label: "adjustment.selectiveColor.colors",
+      options: (
+        [
+          "reds",
+          "yellows",
+          "greens",
+          "cyans",
+          "blues",
+          "magentas",
+          "whites",
+          "neutrals",
+          "blacks",
+        ] as const
+      ).map((range, i) => ({
+        label: `adjustment.selectiveColor.${range}` as MessageKey,
+        offset: 4 * i,
+      })),
+    },
     // Photoshop's Channel menu: the composite, then each channel's own settings.
     levels: {
       label: "adjustment.levels.channel",
@@ -184,6 +223,7 @@
     invert: padded([]),
     curves: padded([]),
     gradientMap: padded([]),
+    selectiveColor: padded([]),
     posterize: padded([4]),
     threshold: padded([128 / 255]),
   };
@@ -354,6 +394,22 @@
         />
         {t(f.label)}
       </label>
+    {:else if f.kind === "choice"}
+      <div class="choice" role="radiogroup" aria-label={t(f.label)}>
+        <span class="label">{t(f.label)}</span>
+        {#each f.options as option, value (option)}
+          <label class="check">
+            <input
+              type="radio"
+              name="property-{f.index}"
+              checked={(values[f.index] !== 0 ? 1 : 0) === value}
+              onchange={() =>
+                onCheck({ kind: "check", index: f.index, label: f.label }, value === 1)}
+            />
+            {t(option)}
+          </label>
+        {/each}
+      </div>
     {:else}
       <label class="label" for="property-{f.index}">{t(f.label)}</label>
       <input
@@ -416,5 +472,12 @@
     align-items: center;
     gap: 6px;
     margin: 2px 0 4px;
+  }
+
+  .choice {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
 </style>

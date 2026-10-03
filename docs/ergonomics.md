@@ -183,7 +183,9 @@ built. Contributors: propose here first.
   stops below it; a click under the gradient adds a stop (of the color the gradient has
   there), a drag moves one between its neighbours, a drag down away from it removes it; Color,
   Location and Delete edit the selected stop; Reverse. Photoshop's preset gradients,
-  smoothness, midpoints and transparency are not there.
+  smoothness, midpoints and transparency are not there. Selective Color (after Gradient Map) has
+  Photoshop's Colors menu (Reds… Blacks), Cyan, Magenta, Yellow and Black in %, and the Method,
+  Relative or Absolute.
 - Crop tool (C, Image > Crop): a frame on the whole image with eight handles, the outside
   shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
   a corner keeps the proportions), outside to draw a new one; edges snap to the canvas, the
@@ -249,11 +251,6 @@ built. Contributors: propose here first.
 ## Proposed
 
 ### Image menu (maintainer's decisions, 2026-10-03)
-
-Decided, not built yet:
-
-- [x] Selective Color, as an adjustment layer and in Image > Adjustments (the same engine);
-      it approximates Photoshop's unpublished math.
 
 Decided, nothing to build:
 

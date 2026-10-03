@@ -73,7 +73,8 @@ export type AdjustmentId =
   | "invert"
   | "posterize"
   | "threshold"
-  | "gradientMap";
+  | "gradientMap"
+  | "selectiveColor";
 
 /** Adjustments in the order of Photoshop's New Adjustment Layer menu. */
 export const ADJUSTMENTS: AdjustmentId[] = [
@@ -91,10 +92,11 @@ export const ADJUSTMENTS: AdjustmentId[] = [
   "posterize",
   "threshold",
   "gradientMap",
+  "selectiveColor",
 ];
 
 /** Number of parameters of an adjustment (`PARAM_COUNT` in crates/slopshop-core/src/adjust.rs). */
-export const ADJUSTMENT_PARAMS = 20;
+export const ADJUSTMENT_PARAMS = 37;
 
 /** Turns and flips of Image > Image Rotation. */
 /** What Image > Trim takes off: transparent margins, or those of a corner's color. */
