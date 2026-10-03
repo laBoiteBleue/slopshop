@@ -16,6 +16,7 @@ mod atomic;
 mod avif;
 pub mod collection;
 mod dds;
+mod density;
 mod dicom;
 pub mod export;
 mod fits;
@@ -132,6 +133,8 @@ impl ImportWarning {
 pub struct Imported {
     pub image: RasterImage,
     pub warnings: Vec<ImportWarning>,
+    /// Pixels per inch, when the file says (ADR 0028).
+    pub resolution: Option<f64>,
 }
 
 /// A layered file (Photoshop) opened as a document.
@@ -280,7 +283,19 @@ pub fn open_file(path: &Path) -> Result<Opened, ImportError> {
     let mut head = Vec::with_capacity(132);
     File::open(path)?.take(132).read_to_end(&mut head)?;
     if psd::is_psd(&head) {
-        return psd::open(path);
+        return psd::open(path).map(|opened| match opened {
+            // A layered document keeps the file's resolution (ADR 0028).
+            Opened::Layers(mut layers) => {
+                if let Some(ppi) = psd::resolution(path) {
+                    // Out of range: the default stays.
+                    if let Ok(document) = layers.document.clone().with_resolution(ppi) {
+                        layers.document = document;
+                    }
+                }
+                Opened::Layers(layers)
+            }
+            image => image,
+        });
     }
     if dicom::is_dicom(&head) {
         return dicom::open(path);
@@ -348,7 +363,9 @@ pub fn open_image(path: &Path) -> Result<Imported, ImportError> {
         drop(file);
         decode_generic(path, &head)?
     };
-    finish(decoded)
+    let mut imported = finish(decoded)?;
+    imported.resolution = density::of_file(path, &head);
+    Ok(imported)
 }
 
 /// Interpret colors, orient, and build the tiled raster.
@@ -377,7 +394,11 @@ fn finish(decoded: Decoded) -> Result<Imported, ImportError> {
     }
     let (pixels, size) = orient::apply(decoded.pixels, decoded.size, bpp, decoded.orientation);
     let image = RasterImage::from_pixels(size, format, &pixels)?;
-    Ok(Imported { image, warnings })
+    Ok(Imported {
+        image,
+        warnings,
+        resolution: None,
+    })
 }
 
 /// The color space of decoded samples: `space` if the decoder knows it, else the ICC profile's,

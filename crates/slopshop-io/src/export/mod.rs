@@ -444,6 +444,9 @@ pub struct ExportSpec {
     /// The document's blend space (ADR 0012): transparency is flattened over `matte` there, as
     /// a background layer would be. [`default_spec`] copies it from the document.
     pub blend_space: BlendSpace,
+    /// Pixels per inch written where the format stores a resolution (JPEG, PNG, TIFF, PSD; ADR
+    /// 0028); `None`: none written. [`default_spec`] copies it from the document.
+    pub resolution: Option<f64>,
 }
 
 impl ExportSpec {
@@ -1027,6 +1030,7 @@ pub fn default_spec(kind: ExportFormatKind, document: &Document) -> ExportSpec {
         dither: kind != ExportFormatKind::Exr,
         gray,
         blend_space: document.blend_space(),
+        resolution: Some(document.resolution()),
     }
 }
 
@@ -1196,80 +1200,86 @@ pub fn export_image(
     let (temp, file) = TempFile::create(path)?;
     // A second handle to sync the data once the writer has finished (and dropped its own).
     let sync = file.try_clone()?;
-    let mut writer = match spec.format {
-        ExportFormat::Png { compression, .. } => {
-            FormatWriter::Png(Box::new(PngWriter::new(file, size, target, compression)?))
-        }
-        ExportFormat::Tiff { compression, .. } => {
-            FormatWriter::Tiff(Box::new(TiffWriter::new(file, size, target, compression)?))
-        }
-        ExportFormat::Exr { .. } => {
-            FormatWriter::Exr(Box::new(ExrWriter::new(file, size, target)?))
-        }
-        ExportFormat::Jpeg {
-            quality,
-            subsampling,
-        } => FormatWriter::Jpeg(Box::new(JpegWriter::new(
-            file,
-            size,
-            target,
-            quality,
-            subsampling,
-        )?)),
-        ExportFormat::Webp { compression } => match compression {
-            WebpCompression::Lossless => FormatWriter::WebpLossless(Box::new(
-                WebpLosslessWriter::new(file, size, target, cancel.clone())?,
+    let mut writer =
+        match spec.format {
+            ExportFormat::Png { compression, .. } => FormatWriter::Png(Box::new(PngWriter::new(
+                file,
+                size,
+                target,
+                compression,
+                spec.resolution,
+            )?)),
+            ExportFormat::Tiff { compression, .. } => FormatWriter::Tiff(Box::new(
+                TiffWriter::new(file, size, target, compression, spec.resolution)?,
             )),
-            WebpCompression::Lossy { quality } => FormatWriter::WebpLossy(Box::new(
-                WebpLossyWriter::new(file, size, target, quality, cancel.clone())?,
+            ExportFormat::Exr { .. } => {
+                FormatWriter::Exr(Box::new(ExrWriter::new(file, size, target)?))
+            }
+            ExportFormat::Jpeg {
+                quality,
+                subsampling,
+            } => FormatWriter::Jpeg(Box::new(JpegWriter::new(
+                file,
+                size,
+                target,
+                quality,
+                subsampling,
+                spec.resolution,
+            )?)),
+            ExportFormat::Webp { compression } => match compression {
+                WebpCompression::Lossless => FormatWriter::WebpLossless(Box::new(
+                    WebpLosslessWriter::new(file, size, target, cancel.clone())?,
+                )),
+                WebpCompression::Lossy { quality } => FormatWriter::WebpLossy(Box::new(
+                    WebpLossyWriter::new(file, size, target, quality, cancel.clone())?,
+                )),
+            },
+            ExportFormat::Bmp => FormatWriter::Bmp(Box::new(BmpWriter::new(file, size, target)?)),
+            ExportFormat::Pnm { .. } => {
+                FormatWriter::Pnm(Box::new(PnmWriter::new(file, size, target)?))
+            }
+            ExportFormat::Pfm => FormatWriter::Pfm(Box::new(PfmWriter::new(file, size, target)?)),
+            ExportFormat::Jxl { .. } => FormatWriter::Jxl(Box::new(JxlWriter::new(
+                file,
+                size,
+                target,
+                cancel.clone(),
+            )?)),
+            ExportFormat::Avif { quality, .. } => FormatWriter::Avif(Box::new(AvifWriter::new(
+                file,
+                size,
+                target,
+                quality,
+                cancel.clone(),
+            )?)),
+            ExportFormat::Tga { compression } => {
+                FormatWriter::Tga(Box::new(TgaWriter::new(file, size, target, compression)?))
+            }
+            ExportFormat::Qoi => FormatWriter::Qoi(Box::new(QoiWriter::new(file, size, target)?)),
+            ExportFormat::Farbfeld => {
+                FormatWriter::Farbfeld(Box::new(FarbfeldWriter::new(file, size, target)?))
+            }
+            ExportFormat::Hdr => FormatWriter::Hdr(Box::new(HdrWriter::new(file, size, target)?)),
+            ExportFormat::Ico => FormatWriter::Ico(Box::new(IcoWriter::new(file, size, target)?)),
+            ExportFormat::Gif => FormatWriter::Gif(Box::new(GifWriter::new(file, size, target)?)),
+            ExportFormat::Dds => FormatWriter::Dds(Box::new(DdsWriter::new(file, size, target)?)),
+            ExportFormat::Fits { .. } => {
+                FormatWriter::Fits(Box::new(FitsWriter::new(file, size, target)?))
+            }
+            ExportFormat::Dicom { .. } => {
+                FormatWriter::Dicom(Box::new(DicomWriter::new(file, size, target)?))
+            }
+            ExportFormat::Pdf => FormatWriter::Pdf(Box::new(PdfWriter::new(file, size, target)?)),
+            ExportFormat::Jpeg2000 { compression, .. } => FormatWriter::Jpeg2000(Box::new(
+                Jpeg2000Writer::new(file, size, target, compression, cancel.clone())?,
             )),
-        },
-        ExportFormat::Bmp => FormatWriter::Bmp(Box::new(BmpWriter::new(file, size, target)?)),
-        ExportFormat::Pnm { .. } => {
-            FormatWriter::Pnm(Box::new(PnmWriter::new(file, size, target)?))
-        }
-        ExportFormat::Pfm => FormatWriter::Pfm(Box::new(PfmWriter::new(file, size, target)?)),
-        ExportFormat::Jxl { .. } => FormatWriter::Jxl(Box::new(JxlWriter::new(
-            file,
-            size,
-            target,
-            cancel.clone(),
-        )?)),
-        ExportFormat::Avif { quality, .. } => FormatWriter::Avif(Box::new(AvifWriter::new(
-            file,
-            size,
-            target,
-            quality,
-            cancel.clone(),
-        )?)),
-        ExportFormat::Tga { compression } => {
-            FormatWriter::Tga(Box::new(TgaWriter::new(file, size, target, compression)?))
-        }
-        ExportFormat::Qoi => FormatWriter::Qoi(Box::new(QoiWriter::new(file, size, target)?)),
-        ExportFormat::Farbfeld => {
-            FormatWriter::Farbfeld(Box::new(FarbfeldWriter::new(file, size, target)?))
-        }
-        ExportFormat::Hdr => FormatWriter::Hdr(Box::new(HdrWriter::new(file, size, target)?)),
-        ExportFormat::Ico => FormatWriter::Ico(Box::new(IcoWriter::new(file, size, target)?)),
-        ExportFormat::Gif => FormatWriter::Gif(Box::new(GifWriter::new(file, size, target)?)),
-        ExportFormat::Dds => FormatWriter::Dds(Box::new(DdsWriter::new(file, size, target)?)),
-        ExportFormat::Fits { .. } => {
-            FormatWriter::Fits(Box::new(FitsWriter::new(file, size, target)?))
-        }
-        ExportFormat::Dicom { .. } => {
-            FormatWriter::Dicom(Box::new(DicomWriter::new(file, size, target)?))
-        }
-        ExportFormat::Pdf => FormatWriter::Pdf(Box::new(PdfWriter::new(file, size, target)?)),
-        ExportFormat::Jpeg2000 { compression, .. } => FormatWriter::Jpeg2000(Box::new(
-            Jpeg2000Writer::new(file, size, target, compression, cancel.clone())?,
-        )),
-        // Refused above.
-        ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
-            return Err(ExportError::InvalidSpec(
-                "a layered PSD is written by export_psd".to_owned(),
-            ));
-        }
-    };
+            // Refused above.
+            ExportFormat::Psd { .. } | ExportFormat::Psb { .. } => {
+                return Err(ExportError::InvalidSpec(
+                    "a layered PSD is written by export_psd".to_owned(),
+                ));
+            }
+        };
     let bands = Bands {
         size,
         band_values,

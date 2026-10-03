@@ -76,6 +76,7 @@ impl PngWriter {
         size: Size,
         target: PixelFormat,
         compression: PngCompression,
+        resolution: Option<f64>,
     ) -> Result<Self, ExportError> {
         check_size(size)?;
         let color_type = match target.layout {
@@ -116,6 +117,15 @@ impl PngWriter {
             info.srgb = Some(::png::SrgbRenderingIntent::Perceptual);
         }
         info.icc_profile = profile.map(Cow::Owned);
+        // pHYs, in pixels per meter (ADR 0028).
+        info.pixel_dims = resolution.map(|ppi| {
+            let ppm = (ppi / 0.0254).round() as u32;
+            ::png::PixelDimensions {
+                xppu: ppm,
+                yppu: ppm,
+                unit: ::png::Unit::Meter,
+            }
+        });
 
         let error = Rc::new(Cell::new(None));
         let sink = Sink {

@@ -75,6 +75,7 @@ fn tiff_spec(sample: TiffSample, compression: TiffCompression, keep_alpha: bool)
         // A synthetic source, not a document: flattened in linear light, as the expected
         // samples are computed.
         blend_space: BlendSpace::Linear,
+        resolution: None,
     }
 }
 
@@ -470,7 +471,7 @@ fn rows_must_come_in_order_and_in_whole_strips() {
     let path = temp_path("rows.tif");
     let new_writer = || {
         let file = File::create(&path).unwrap();
-        TiffWriter::new(file, size, target, TiffCompression::Deflate).unwrap()
+        TiffWriter::new(file, size, target, TiffCompression::Deflate, None).unwrap()
     };
 
     // Strips of MAX_STRIP_ROWS (32) rows.
@@ -538,12 +539,12 @@ fn unsupported_targets_are_rejected() {
         (gray_pq, "unsupportedSpace"),
     ] {
         let file = File::create(&path).unwrap();
-        let result = TiffWriter::new(file, Size::new(2, 2), format, TiffCompression::None);
+        let result = TiffWriter::new(file, Size::new(2, 2), format, TiffCompression::None, None);
         assert_eq!(result.err().map(|e| e.code()), Some(code), "{format:?}");
     }
     let file = File::create(&path).unwrap();
     let rgb = target(ChannelLayout::Rgb, SampleType::U8);
-    let result = TiffWriter::new(file, Size::new(0, 2), rgb, TiffCompression::None);
+    let result = TiffWriter::new(file, Size::new(0, 2), rgb, TiffCompression::None, None);
     assert_eq!(result.err().map(|e| e.code()), Some("invalidSpec"));
     std::fs::remove_file(&path).ok();
 }
