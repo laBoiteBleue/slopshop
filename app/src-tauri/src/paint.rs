@@ -488,7 +488,7 @@ pub async fn fill(
 
 /// The edit `fill` performs: `request`'s target painted within the selection of `doc` (or
 /// everywhere without one), or along its outline with `stroke`. `None`: nothing to paint.
-fn fill_edit(
+pub(crate) fn fill_edit(
     doc: &Document,
     request: &PaintRequest,
     stroke: Option<StrokeRequest>,
