@@ -1065,6 +1065,15 @@ impl Codec {
         }
     }
 
+    /// The alpha of pixel `px` in `[0, 1]`, 1 without an alpha sample (as [`Self::read`]).
+    pub(crate) fn alpha(&self, px: &[u8]) -> f32 {
+        if !self.has_alpha {
+            return 1.0;
+        }
+        self.unit(self.raw(px, self.channels - 1, &mut |v| v))
+            .clamp(0.0, 1.0)
+    }
+
     /// Multiply the alpha of pixel `px` by `factor` (in `[0, 1]`), its color samples untouched;
     /// `false` (nothing changed) where colors depend on alpha: premultiplied samples, or no
     /// alpha sample.

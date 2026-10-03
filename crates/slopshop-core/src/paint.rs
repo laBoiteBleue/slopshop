@@ -712,14 +712,14 @@ fn luma_of_working() -> [f64; 3] {
 }
 
 /// Reads a gray mask's coverage at document pixels.
-struct MaskReader<'a> {
-    image: &'a RasterImage,
-    codec: &'a Codec,
+pub(crate) struct MaskReader<'a> {
+    pub(crate) image: &'a RasterImage,
+    pub(crate) codec: &'a Codec,
 }
 
 impl MaskReader<'_> {
     /// Coverage of pixel (`x`, `y`) in `[0, 1]`; 0 outside the mask.
-    fn at(&self, x: f64, y: f64) -> f32 {
+    pub(crate) fn at(&self, x: f64, y: f64) -> f32 {
         let size = self.image.size();
         if x < 0.0 || y < 0.0 || x >= f64::from(size.width) || y >= f64::from(size.height) {
             return 0.0;
