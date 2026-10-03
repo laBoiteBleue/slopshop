@@ -1,7 +1,9 @@
 //! A document together with its undo/redo history.
 
+use std::sync::Arc;
+
 use crate::blend::BlendMode;
-use crate::document::{Document, Layer, LayerContent, LayerId};
+use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use crate::edit::{Edit, EditError};
 
 /// What [`Session::insert_layer_copies`] made.
@@ -86,6 +88,35 @@ impl Session {
         layers: &[Layer],
         group: Option<String>,
     ) -> Result<Copies, EditError> {
+        self.insert_copies(layers, group.map(|name| (name, None)))
+    }
+
+    /// Edit > Paste Into: [`Self::insert_layer_copies`] inside a new group named `name` whose
+    /// mask is the selection, the copies free to move under it; the selection is deselected (it
+    /// became the mask, as in Photoshop), in the same undo entry. `None` without a selection.
+    pub fn insert_into_selection(
+        &mut self,
+        layers: &[Layer],
+        name: String,
+    ) -> Result<Option<Copies>, EditError> {
+        let Some(selection) = self.document.selection() else {
+            return Ok(None);
+        };
+        let mask = LayerMask {
+            image: Arc::clone(selection.image()),
+            enabled: true,
+            replaces_alpha: false,
+            original: None,
+        };
+        self.insert_copies(layers, Some((name, Some(mask))))
+            .map(Some)
+    }
+
+    fn insert_copies(
+        &mut self,
+        layers: &[Layer],
+        group: Option<(String, Option<LayerMask>)>,
+    ) -> Result<Copies, EditError> {
         let mut ids = Vec::new();
         let copies: Vec<Layer> = layers
             .iter()
@@ -93,7 +124,7 @@ impl Session {
             .collect();
         let base = self.document.layers().len();
         let (group, edit) = match group {
-            Some(name) => {
+            Some((name, mask)) => {
                 let id = self.document.allocate_layer_id();
                 let edit = Edit::InsertLayer {
                     parent: None,
@@ -106,7 +137,7 @@ impl Session {
                         visible: true,
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
-                        mask: None,
+                        mask,
                         // Isolated: the copied document's adjustments stay within it.
                         content: LayerContent::Group {
                             children: copies,
@@ -130,6 +161,13 @@ impl Session {
                         .collect(),
                 ),
             ),
+        };
+        // A mask made from the selection deselects (Paste Into).
+        let deselect = matches!(&edit, Edit::InsertLayer { layer, .. } if layer.mask.is_some());
+        let edit = if deselect {
+            Edit::Batch(vec![edit, Edit::SetSelection { selection: None }])
+        } else {
+            edit
         };
         self.perform(edit)?;
         Ok(Copies { group, ids })
@@ -498,6 +536,35 @@ mod tests {
         assert_eq!(inside, copies.ids);
         target.undo().unwrap();
         assert_eq!(names(&target), ["background"]);
+
+        // Into the selection (Paste Into): a group masked by it, deselected, one undo entry.
+        assert!(
+            target
+                .insert_into_selection(source.document().layers(), "pasted".into())
+                .unwrap()
+                .is_none()
+        );
+        let coverage = Arc::new(
+            crate::RasterImage::from_pixels(
+                Size::new(16, 16),
+                crate::selection::SELECTION_FORMAT,
+                &[0xffu8; 16 * 16 * 2],
+            )
+            .unwrap(),
+        );
+        let selection = crate::selection::Selection::new(Arc::clone(&coverage));
+        target.perform(Edit::SetSelection { selection }).unwrap();
+        let copies = target
+            .insert_into_selection(source.document().layers(), "pasted".into())
+            .unwrap()
+            .unwrap();
+        assert!(target.document().selection().is_none());
+        let group = target.document().layer(copies.group.unwrap()).unwrap();
+        assert!(Arc::ptr_eq(&group.mask.as_ref().unwrap().image, &coverage));
+        assert_eq!(group.children().unwrap().len(), 2);
+        target.undo().unwrap();
+        assert_eq!(names(&target), ["background"]);
+        assert!(target.document().selection().is_some());
     }
 
     #[test]
