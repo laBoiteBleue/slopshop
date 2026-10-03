@@ -218,6 +218,7 @@ removable as a whole; undo keeps the old tiles by reference.
       its hole and the moved pixels), the move computed once on release
 - [x] Move the selection's outline alone, as Photoshop: a drag from inside it with the marquees,
       the Lasso or the Magic Wand (New Selection mode), the arrows with any selection tool
+- [x] Layer via Copy (Ctrl+J) and Layer via Cut (Shift+Ctrl+J) with a selection, as Photoshop
 
 ## Phase 4 — Very large images
 

@@ -1211,6 +1211,15 @@ export const engine = {
    * layer right above it and leave a hole, deselected (one undo entry). The document and the
    * new layer's id; null when the selection holds nothing of the layer.
    */
+  /**
+   * Layer via Copy or Cut (`cut`) with a selection: the selected pixels of a raster layer in a
+   * new layer `name` above it (one undo entry, deselected); the document and the new layer's id,
+   * or null when the selection holds nothing of the layer.
+   */
+  layerVia: (documentId: number, layerId: number, cut: boolean, name: string) =>
+    serial(() =>
+      invoke<[DocumentView, number] | null>("layer_via", { documentId, layerId, cut, name }),
+    ),
   floatPixels: (documentId: number, layerId: number) =>
     serial(() => invoke<[DocumentView, number] | null>("float_pixels", { documentId, layerId })),
   /** File > New's Clipboard preset: the size of the document a paste would make, if any. */

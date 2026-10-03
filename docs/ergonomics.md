@@ -51,7 +51,9 @@ built. Contributors: propose here first.
   drag to reorder; several layers with Ctrl/Shift+click, Select > All Layers (Alt+Ctrl+A); a
   click in the empty area deselects; Delete deletes; groups as folders that fold, Ctrl+G,
   Shift+Ctrl+G, drag into folders, Pass Through; mask thumbnail, Shift+click disables the mask;
-  Duplicate (Ctrl+J); right-click menu; drag layers onto another tab to copy them there, with a
+  Duplicate (Ctrl+J without a selection: Layer via Copy duplicates, as in Photoshop; with a
+  selection, Layer via Copy puts the selected pixels in a new layer, Layer via Cut (Shift+Ctrl+J)
+  too, leaving a hole as paint); right-click menu; drag layers onto another tab to copy them there, with a
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined).
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at

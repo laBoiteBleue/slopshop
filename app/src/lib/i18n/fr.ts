@@ -116,6 +116,11 @@ const fr: Messages = {
   "menu.layer.rename": "Renommer le calque",
   "menu.layer.createClipping": "Créer un masque d'écrêtage",
   "menu.layer.releaseClipping": "Annuler le masque d'écrêtage",
+  "menu.layer.viaCopy": "Calque par Copier",
+  "menu.layer.viaCut": "Calque par Couper",
+  "layerVia.needRaster":
+    "Sélectionnez un calque de pixels pour mettre ses pixels sélectionnés dans un nouveau calque.",
+  "layerVia.empty": "La zone sélectionnée ne contient aucun pixel du calque.",
   "menu.layer.duplicate": "Dupliquer le calque",
   "menu.layer.duplicateLayers": "Dupliquer les calques",
   "menu.layer.hideLayer": "Masquer le calque",
