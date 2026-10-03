@@ -178,6 +178,18 @@ fn finish(
     Ok(result.into_image())
 }
 
+/// `other` (a selection of the canvas, a saved one) combined with `current` by `how`: what
+/// loading a saved selection into the current one does (replace, add, subtract, intersect).
+/// `None` when nothing is left selected.
+pub fn combined(
+    canvas: Size,
+    current: Option<&RasterImage>,
+    other: &RasterImage,
+    how: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
+    finish(canvas, current, Mask::from_image(canvas, other)?, how)
+}
+
 /// Everything `current` leaves out (Select > Inverse); `None` selects everything.
 pub fn invert(
     canvas: Size,
@@ -3778,6 +3790,40 @@ mod tests {
                 .is_none()
         );
         assert!(transformed(canvas, &square, Affine::scale(0.0, 1.0)).is_err());
+    }
+
+    #[test]
+    fn a_saved_selection_combines_with_the_current_one() {
+        let canvas = Size::new(300, 200);
+        let left = select(canvas, &rect(0.0, 0.0, 150.0, 200.0));
+        let top = select(canvas, &rect(0.0, 0.0, 300.0, 100.0));
+        let at =
+            |image: &Option<RasterImage>, x, y| image.as_ref().map_or(0.0, |i| i.gray_at(x, y));
+        let replaced = combined(canvas, Some(&left), &top, Combine::Replace).unwrap();
+        assert_eq!((at(&replaced, 10, 150), at(&replaced, 250, 10)), (0.0, 1.0));
+        let added = combined(canvas, Some(&left), &top, Combine::Add).unwrap();
+        assert_eq!((at(&added, 10, 150), at(&added, 250, 10)), (1.0, 1.0));
+        let subtracted = combined(canvas, Some(&left), &top, Combine::Subtract).unwrap();
+        assert_eq!(
+            (at(&subtracted, 10, 150), at(&subtracted, 10, 10)),
+            (1.0, 0.0)
+        );
+        let intersected = combined(canvas, Some(&left), &top, Combine::Intersect).unwrap();
+        assert_eq!(
+            (at(&intersected, 10, 10), at(&intersected, 250, 10)),
+            (1.0, 0.0)
+        );
+        // Without a selection: adding selects it, subtracting or intersecting leaves nothing.
+        assert!(
+            combined(canvas, None, &top, Combine::Add)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            combined(canvas, None, &top, Combine::Intersect)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

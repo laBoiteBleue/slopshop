@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Properties panel (Photoshop's): the parameters of the selected adjustment layer
+  // The Properties panel (Photoshop's), in the dock below Layers: the parameters of the selected adjustment layer
   // (ADR 0020), as sliders with a number field each, checkboxes and color swatches. Dragging
   // applies live, one undo entry per drag; Reset puts the neutral values back. For a fill
   // layer, its color: a swatch that opens the color picker.
@@ -60,7 +60,6 @@
 
 {#if layer.kind === "fill"}
   <section class="panel" aria-label={t("properties.title")}>
-    <div class="tabs"><span class="tab active">{t("properties.title")}</span></div>
     <div class="title"><span>{t("menu.layer.newFill.solidColor")}</span></div>
     <label class="fill">
       <span>{t("properties.fillColor")}</span>
@@ -76,7 +75,6 @@
   </section>
 {:else if adjustment}
   <section class="panel" aria-label={t("properties.title")}>
-    <div class="tabs"><span class="tab active">{t("properties.title")}</span></div>
     <div class="title">
       <span>{t(`adjustment.${adjustment.id}`)}</span>
       {#if fields?.resettable()}
@@ -102,33 +100,12 @@
 {/if}
 
 <style>
+  /* In the dock, which gives the tab and the border. */
   .panel {
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
     background: var(--panel);
-    border-top: 1px solid var(--border-dark);
-  }
-
-  .tabs {
-    display: flex;
-    height: 26px;
-    background: var(--panel-header);
-    border-bottom: 1px solid var(--border-dark);
-  }
-
-  .tab {
-    display: flex;
-    align-items: center;
-    padding: 0 12px;
-    color: var(--text-muted);
-    font-weight: 600;
-  }
-
-  .tab.active {
-    background: var(--panel);
-    color: var(--text);
-    border-right: 1px solid var(--border-dark);
   }
 
   .title {

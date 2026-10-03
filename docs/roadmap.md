@@ -226,7 +226,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Quick Mask feedback: its label, its own gray swatches as Add / Remove, overlay opacity
 - [x] Saved selections: named objects in the document and `.slop` (schema 0.16), Save / Load
       Selection, transformed with the canvas
-- [ ] Right panels: the folding accordion of tab icons, then a Selections panel
+- [x] Right panels: the folding dock of tab icons below Layers ([ADR 0030](adr/0030-panel-dock.md)),
+      a Selections panel (load, add, subtract, intersect, replace, rename, delete)
 - [ ] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
       outputs
 - Dropped (2026-10-02): Select > Semantic (SAM 3), objects named by a text prompt. A click with

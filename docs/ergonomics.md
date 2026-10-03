@@ -174,7 +174,7 @@ built. Contributors: propose here first.
 - Adjustment layers (Layer > New Adjustment Layer, in Photoshop's order): Brightness/Contrast,
   Levels, Curves, Exposure, Vibrance, Hue/Saturation, Color Balance, Black & White, Photo
   Filter, Channel Mixer, Invert, Posterize, Threshold, placed
-  above the active layer (in its folder) and selected. A Properties panel below Layers (the
+  above the active layer (in its folder) and selected. A Properties panel in the dock below Layers (the
   list never moves; the maintainer's choice) shows the selected adjustment's parameters: sliders applied live (one undo entry
   per drag), number fields, Reset. An adjustment icon in the layers list; the blend mode stays
   normal for now. Levels has Photoshop's Channel menu: RGB, Red, Green, Blue, each channel's
@@ -343,22 +343,24 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   Selection (the saved selections by name; a click makes one the selection): named objects of
   the document, kept in `.slop` and following crops, canvas and image size changes and
   rotations, each change one undo entry (the `.slop` compatibility may break until version 1,
-  maintainer, 2026-10-04); All
+  maintainer, 2026-10-04). The Selections panel lists them: a click loads one, Shift+click
+  adds it, Alt+click subtracts it, Shift+Alt+click intersects (the selection tools' keys);
+  double-click renames; the right-click menu also replaces one with the current selection or
+  deletes it; + saves the current selection, the trash or Delete removes the row clicked last.
+  The right column (ADR 0030, maintainer's choice of 2026-10-04): Layers on top, below it a
+  dock of tab icons (Properties, Selections) whose unfolded panel's tab folds it down to the
+  icons; its top edge resizes it; remembered; selecting an adjustment or fill layer unfolds
+  Properties. All
   Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
   Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
   Mask; saved selections; layers.
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Saved selections: renaming, deleting and combining (Photoshop's Ctrl/Shift/Alt+click on
-    a thumbnail) come with a Selections panel.
   - Select and Mask…: a light panel beside the image (as Color Range), not a workspace: edge
     detection radius (computed on request), Smooth, Feather, Contrast, Shift Edge applied live;
     views: ants, overlay, on black, on white, mask; output to the selection, a layer mask, or a
     new layer with a mask. A refine-edge brush is a later, separate step.
-  - Right panels: Layers stays; the other panels form a closable accordion that folds down to
-    their tab icons, a click on an icon unfolding that panel (maintainer, 2026-10-04; details
-    left to the implementation).
   - The selection an Image > Adjustments effect keeps (ADR 0029) is an implicit mask dedicated
     to that effect: not exposed, not edited.
 - **Decided, not added**: Sky, Person, Hair and other subject kinds (evaluated separately if

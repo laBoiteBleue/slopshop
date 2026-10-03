@@ -844,24 +844,80 @@ pub async fn save_selection(
     Ok(document.view())
 }
 
-/// Select > Load Selection: the saved selection `id` becomes the selection, one undo entry.
+/// Select > Load Selection: the saved selection `id` becomes the selection (`mode`
+/// `replace`), or is added to it, subtracted from it or intersected with it: one undo entry.
 #[tauri::command]
 pub async fn load_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    id: u64,
+    mode: String,
+) -> Result<DocumentView, String> {
+    let how = combine(&mode)?;
+    let (canvas, current, saved) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document();
+        let saved = doc
+            .saved_selection(SavedSelectionId::from_raw(id))
+            .ok_or("unknown saved selection")?;
+        (
+            doc.size(),
+            doc.selection().map(|s| Arc::clone(s.image())),
+            saved.selection.clone(),
+        )
+    };
+    if how == Combine::Replace {
+        // The saved mask itself (shared); one that selects nothing deselects.
+        let selection = selection::bounds(saved.image()).map(|_| saved);
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        if selection.is_some() || document.session.document().selection().is_some() {
+            document
+                .session
+                .perform(Edit::SetSelection { selection })
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(document.view());
+    }
+    let image = on_worker(move || {
+        selection::combined(canvas, current.as_deref(), saved.image(), how)
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    set_selection(&state, document_id, image)
+}
+
+/// A saved selection renamed (Selections panel), one undo entry.
+#[tauri::command]
+pub async fn rename_saved_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    id: u64,
+    name: String,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let id = SavedSelectionId::from_raw(id);
+    document
+        .session
+        .perform(Edit::RenameSavedSelection { id, name })
+        .map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
+/// A saved selection deleted (Selections panel), one undo entry.
+#[tauri::command]
+pub async fn delete_saved_selection(
     state: State<'_, AppState>,
     document_id: u64,
     id: u64,
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    let session = &mut document.session;
-    let saved = session
-        .document()
-        .saved_selection(SavedSelectionId::from_raw(id))
-        .ok_or("unknown saved selection")?;
-    // One that selects nothing (cropped away) deselects.
-    let selection = selection::bounds(saved.selection.image()).map(|_| saved.selection.clone());
-    session
-        .perform(Edit::SetSelection { selection })
+    let id = SavedSelectionId::from_raw(id);
+    document
+        .session
+        .perform(Edit::RemoveSavedSelection { id })
         .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
