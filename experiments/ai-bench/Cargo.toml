@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 description = "Experiment: latency and VRAM of segmentation models through ONNX Runtime (not part of SlopShop)"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-only"
 
 # Outside SlopShop's workspace: built on its own, never by CI, until an ADR decides.
 [workspace]
