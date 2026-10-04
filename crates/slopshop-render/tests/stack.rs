@@ -367,4 +367,23 @@ fn a_filter_setting_changed_live_never_shows_the_layer_unfiltered() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
+    // Cancel, then another filter: its first frame never shows the cancelled one (the
+    // maintainer's report: the previous filter flashed).
+    let blurred = r.render_view(session.document(), view, output).unwrap();
+    session.cancel_gesture().unwrap();
+    let frame = r.render_view(session.document(), view, output).unwrap();
+    assert_eq!(
+        differences(&frame, &sharp).0,
+        0,
+        "cancelled: the layer as it was"
+    );
+    let high = slopshop_core::filter::Filter::HighPass { radius: 4.0 };
+    session
+        .perform_in_gesture(Edit::apply_filter(session.document(), id, high).unwrap())
+        .unwrap();
+    let frame = r.render_view(session.document(), view, output).unwrap();
+    assert!(
+        differences(&frame, &blurred).0 > 50,
+        "another filter showed the cancelled one"
+    );
 }
