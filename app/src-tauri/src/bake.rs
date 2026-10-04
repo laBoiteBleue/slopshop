@@ -210,7 +210,8 @@ pub async fn bake_layers(
 /// The thumbnail of layer `id` of `doc` while it is being baked, before its pixels come: what
 /// it will show, rendered at thumbnail size from the pyramids' coarse levels (milliseconds,
 /// where the composite at full size takes a while). At most `max_side` pixels on its longer
-/// side, never enlarged, as a pixel layer's thumbnail; RGBA8 sRGB, straight alpha. Blocking.
+/// side, never enlarged, as a pixel layer's thumbnail; RGBA8 sRGB, straight alpha (no
+/// checkerboard: the panel draws its own). Blocking.
 pub fn baking_thumbnail(
     renderer: &Renderer,
     doc: &Document,
@@ -222,7 +223,7 @@ pub fn baking_thumbnail(
     let region = plan.region();
     let (size, view) = thumbnail_view(region, max_side);
     let frame = renderer
-        .render_view(&plan.scratch, view, size)
+        .render_view_transparent(&plan.scratch, view, size)
         .map_err(|e| e.to_string())?;
     Ok((size, frame.data))
 }
@@ -342,24 +343,67 @@ mod tests {
 
     #[test]
     fn a_baking_layer_s_thumbnail_is_the_one_it_gets() {
+        use slopshop_core::color::PixelFormat;
         let Ok(renderer) = Renderer::new() else {
             assert_ne!(std::env::var("SLOPSHOP_REQUIRE_GPU").as_deref(), Ok("1"));
             return;
         };
-        let (mut s, ids) = session();
-        let request = format!(r#"{{"kind":"merge","ids":[{},{}]}}"#, ids[0], ids[2]);
-        let pending = start(&mut s, serde_json::from_str(&request).unwrap(), Vec::new()).unwrap();
+        // A see-through gradient and a box partly over it, in a 64 x 48 document: the
+        // thumbnail at full size, pixel for pixel.
+        let size = Size::new(64, 48);
+        let mut s = Session::new(Document::new(size));
+        let gradient: Vec<u8> = (0..48u32)
+            .flat_map(|y| {
+                (0..64u32).flat_map(move |x| [(x * 4) as u8, 90, (y * 5) as u8, (x * 4) as u8])
+            })
+            .collect();
+        let corner: Vec<u8> = (0..48u32)
+            .flat_map(|y| (0..64u32).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                if x > 40 && y > 30 {
+                    [250, 200, 20, 160]
+                } else {
+                    [0; 4]
+                }
+            })
+            .collect();
+        for pixels in [gradient, corner] {
+            let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+            let layer = Layer {
+                style: None,
+                id: s.allocate_layer_id(),
+                name: String::new(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::IDENTITY,
+                content: LayerContent::raster(Arc::new(image)),
+            };
+            let index = s.document().layers().len();
+            s.perform(Edit::InsertLayer {
+                parent: None,
+                index,
+                layer,
+            })
+            .unwrap();
+        }
+        let pending = start(&mut s, BakeRequest::MergeVisible, Vec::new()).unwrap();
         let id = pending.plans[0].layer();
-        let (size, early) = baking_thumbnail(&renderer, s.document(), id, 4).unwrap();
+        let (early_size, early) = baking_thumbnail(&renderer, s.document(), id, 64).unwrap();
         let (made, joins) = composites(pending);
         land(&mut s, made, joins).unwrap();
         let LayerContent::Raster { image, .. } = &s.document().layer(id).unwrap().content else {
             panic!("the merge's pixels expected");
         };
-        let later = slopshop_core::thumbnail::raster_thumbnail(&image.get(), 4);
-        assert_eq!(size, later.size);
-        for (a, b) in early.iter().zip(&later.pixels) {
-            assert!(a.abs_diff(*b) <= 2, "{early:?} vs {:?}", later.pixels);
+        let later = slopshop_core::thumbnail::raster_thumbnail(&image.get(), 64);
+        assert_eq!(early_size, later.size);
+        for (i, (a, b)) in early.chunks(4).zip(later.pixels.chunks(4)).enumerate() {
+            // Color matters only where something shows.
+            let close = a[3].abs_diff(b[3]) <= 1
+                && (b[3] < 8 || a[..3].iter().zip(&b[..3]).all(|(x, y)| x.abs_diff(*y) <= 2));
+            assert!(close, "pixel {i}: {a:?} vs {b:?}");
         }
     }
 

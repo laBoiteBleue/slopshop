@@ -4,16 +4,21 @@
    * or documents (same content key) is fetched once. Oldest entries go first beyond the limit.
    */
   const cache = new Map<string, ImageData>();
+  /**
+   * The last thumbnail shown for each layer and mask: a new one replaces it once it has come,
+   * never through an empty box (a merged layer's pixels coming after its preview, ADR 0031).
+   */
+  const shown = new Map<string, ImageData>();
   /** Enough for a stack of hundreds of slices (a thumbnail is a few tens of kilobytes). */
   const CACHE_LIMIT = 1024;
 
-  function remember(key: string, image: ImageData) {
-    cache.delete(key);
-    cache.set(key, image);
-    while (cache.size > CACHE_LIMIT) {
-      const oldest = cache.keys().next().value;
+  function remember(map: Map<string, ImageData>, key: string, image: ImageData) {
+    map.delete(key);
+    map.set(key, image);
+    while (map.size > CACHE_LIMIT) {
+      const oldest = map.keys().next().value;
       if (oldest === undefined) break;
-      cache.delete(oldest);
+      map.delete(oldest);
     }
   }
 </script>
@@ -62,13 +67,24 @@
   /** The thumbnail's pixel size, for its aspect ratio in the box. */
   let shape = $state<{ width: number; height: number } | null>(null);
 
+  /** Which thumbnail of the layer this is, across the rows that show it. */
+  let slot = $derived(`${documentId}:${layer.id}:${mask ? "mask" : "layer"}`);
+
   function draw(image: ImageData) {
     if (!canvas) return;
     canvas.width = image.width;
     canvas.height = image.height;
     canvas.getContext("2d")?.putImageData(image, 0, 0);
     shape = { width: image.width, height: image.height };
+    remember(shown, slot, image);
   }
+
+  // A new box shows the layer's last thumbnail until its own comes.
+  $effect(() => {
+    if (!isImage || !canvas || shape !== null) return;
+    const last = shown.get(slot);
+    if (last) draw(last);
+  });
 
   $effect(() => {
     if (!isImage || key === null || !canvas || !seen) return;
@@ -86,7 +102,7 @@
     engine
       .layerThumbnail(documentId, layer.id, maxSide, mask)
       .then((image) => {
-        if (cacheKey !== null) remember(cacheKey, image);
+        if (cacheKey !== null) remember(cache, cacheKey, image);
         if (!cancelled) draw(image);
       })
       .catch(() => {
