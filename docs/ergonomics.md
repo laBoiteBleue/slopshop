@@ -57,11 +57,16 @@ built. Contributors: propose here first.
   too, leaving a hole as paint); right-click menu; drag layers onto another tab to copy them there, with a
   thumbnail following the pointer; clipping masks (Alt+Ctrl+G, Alt+click on the line between two
   layers; clipped layers indented with an arrow, the base underlined). What was applied to a
-  layer's pixels (paint, and later Image > Adjustments; ADR 0029) is listed below it, as
-  Photoshop lists smart filters: an arrow at the end of the row unfolds the list (folded at
-  first), newest on top: Paint, or the adjustment's name (×2 when applied twice in a row).
-  Entries are not edited: the trash shown on hover, or a right-click > Delete, deletes one;
-  what was applied above it follows, and neighbours that become alike join.
+  layer's pixels (paint, Image > Adjustments; ADR 0029) is listed below it, as Photoshop
+  lists smart filters: an arrow at the end of the row unfolds the list (folded at first),
+  newest on top: Paint, or the adjustment's name (×2 when applied twice in a row). Each entry
+  has an eye that hides it without deleting it ([ADR 0034](adr/0034-editable-operations.md)).
+  An adjustment is edited again with the icon shown on hover next to the trash (or a
+  double-click, or right-click > Edit Settings…): its dialog, previewed on the canvas (Preview
+  off hides the entry meanwhile), OK one undo entry, Cancel takes it back; an entry applied
+  several times in a row chooses which application it edits. What was painted above it
+  follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
+  follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
   startup), the marquees (M), the lassos (L), the Magic Wand (W) and Crop (C); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
@@ -141,8 +146,9 @@ built. Contributors: propose here first.
   whole visible image, not only the selected layers: maintainer's choice), within the
   selection, as one undo entry, the canvas going from the preview straight to the result;
   Invert applies at once. What is applied is
-  kept in the layer's stack (ADR 0029), listed below the layer and deletable; the same
-  adjustment applied twice in a row is one entry (×2), two Inverts cancel.
+  kept in the layer's stack (ADR 0029), listed below the layer, editable again, hidden by its
+  eye and deletable; the same adjustment applied twice in a row is one entry (×2), two Inverts
+  cancel.
 - Image > Auto Tone (Shift+Ctrl+L), Auto Contrast (Alt+Shift+Ctrl+L), Auto Color
   (Shift+Ctrl+B), Photoshop's three classic algorithms, 0.1 % clipped at each end: Auto
   Contrast stretches the three channels alike (colors keep their relations), Auto Tone each
