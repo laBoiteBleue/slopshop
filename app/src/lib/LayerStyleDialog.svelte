@@ -9,6 +9,7 @@
   import { srgbToHex } from "./color";
   import { EFFECTS, PLAIN, withEffect, type EffectId } from "./layerStyle";
   import SliderField from "./SliderField.svelte";
+  import StyleEffectFields from "./StyleEffectFields.svelte";
   import { t } from "./i18n/index.svelte";
 
   /** What the left list selects: Blending Options or an effect. */
@@ -222,54 +223,32 @@
         {:else}
           <p class="empty">{t("style.off")}</p>
         {/if}
-      {:else if page === "dropShadow"}
-        <h3>{t("style.dropShadow")}</h3>
-        {#if draft.dropShadow}
-          {@render modes(
-            draft.dropShadow.mode,
-            (m) => (draft.dropShadow!.mode = m as never),
-            t("style.mode"),
-          )}
-          <div class="field">
-            <span>{t("style.color")}</span>
-            {@render swatch(draft.dropShadow.color, "dropShadow")}
-          </div>
-          <SliderField
-            label={t("style.opacity")}
-            bind:value={draft.dropShadow.opacity}
-            min={0}
-            max={100}
-            unit="%"
-            factor={100}
+      {:else}
+        <!-- A shadow or a glow, outside or inside the shape. -->
+        <h3>{t(`style.${page}`)}</h3>
+        {#if page === "dropShadow" && draft.dropShadow}
+          <StyleEffectFields
+            bind:effect={draft.dropShadow}
+            inside={false}
+            onpickcolor={() => onpickcolor("dropShadow")}
           />
-          <SliderField
-            label={t("style.angle")}
-            bind:value={draft.dropShadow.angle}
-            min={-180}
-            max={180}
-            unit="°"
+        {:else if page === "innerShadow" && draft.innerShadow}
+          <StyleEffectFields
+            bind:effect={draft.innerShadow}
+            inside
+            onpickcolor={() => onpickcolor("innerShadow")}
           />
-          <SliderField
-            label={t("style.distance")}
-            bind:value={draft.dropShadow.distance}
-            min={0}
-            max={30000}
-            log={false}
-            unit="px"
+        {:else if page === "outerGlow" && draft.outerGlow}
+          <StyleEffectFields
+            bind:effect={draft.outerGlow}
+            inside={false}
+            onpickcolor={() => onpickcolor("outerGlow")}
           />
-          <SliderField
-            label={t("style.spread")}
-            bind:value={draft.dropShadow.spread}
-            min={0}
-            max={100}
-            unit="%"
-          />
-          <SliderField
-            label={t("style.size")}
-            bind:value={draft.dropShadow.size}
-            min={0}
-            max={250}
-            unit="px"
+        {:else if page === "innerGlow" && draft.innerGlow}
+          <StyleEffectFields
+            bind:effect={draft.innerGlow}
+            inside
+            onpickcolor={() => onpickcolor("innerGlow")}
           />
         {:else}
           <p class="empty">{t("style.off")}</p>

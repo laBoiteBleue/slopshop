@@ -6,12 +6,16 @@ import type { EditRequest, LayerStyle, LayerView } from "./engine";
 import type { MessageKey } from "./i18n/en";
 
 /** An effect a style can hold. */
-export type EffectId = "stroke" | "colorOverlay" | "dropShadow";
+export type EffectId =
+  "stroke" | "innerShadow" | "innerGlow" | "colorOverlay" | "outerGlow" | "dropShadow";
 
-/** In the order of Photoshop's Layer Style dialog and layers panel. */
+/** In the order of Photoshop's Layer Style dialog and layers panel (topmost drawn first). */
 export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
   { id: "stroke", label: "style.stroke" },
+  { id: "innerShadow", label: "style.innerShadow" },
+  { id: "innerGlow", label: "style.innerGlow" },
   { id: "colorOverlay", label: "style.colorOverlay" },
+  { id: "outerGlow", label: "style.outerGlow" },
   { id: "dropShadow", label: "style.dropShadow" },
 ];
 
@@ -19,23 +23,39 @@ export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
 export const PLAIN: LayerStyle = {
   fillOpacity: 1,
   dropShadow: null,
+  outerGlow: null,
+  innerShadow: null,
+  innerGlow: null,
   colorOverlay: null,
   stroke: null,
 };
 
 /** An effect as Photoshop adds it (as `style.rs`'s defaults), enabled. */
 export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle[E]> {
+  const shadow = {
+    enabled: true,
+    color: [0, 0, 0],
+    mode: "multiply",
+    opacity: 0.75,
+    angle: 120,
+    distance: 5,
+    spread: 0,
+    size: 5,
+  } as const;
+  // Pale yellow, sRGB #ffffbe.
+  const glow = {
+    enabled: true,
+    color: [1, 1, 190 / 255],
+    mode: "screen",
+    opacity: 0.75,
+    spread: 0,
+    size: 5,
+  } as const;
   const effects = {
-    dropShadow: {
-      enabled: true,
-      color: [0, 0, 0],
-      mode: "multiply",
-      opacity: 0.75,
-      angle: 120,
-      distance: 5,
-      spread: 0,
-      size: 5,
-    },
+    dropShadow: { ...shadow, color: [0, 0, 0] },
+    innerShadow: { ...shadow, color: [0, 0, 0] },
+    outerGlow: { ...glow, color: [1, 1, 190 / 255] },
+    innerGlow: { ...glow, color: [1, 1, 190 / 255] },
     colorOverlay: { enabled: true, color: [1, 0, 0], mode: "normal", opacity: 1 },
     stroke: {
       enabled: true,
@@ -51,7 +71,7 @@ export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle
 
 /** `style`, or nothing when it changes nothing (no effect, Fill at 100 %). */
 export function simplified(style: LayerStyle): LayerStyle | null {
-  const none = !style.dropShadow && !style.colorOverlay && !style.stroke;
+  const none = EFFECTS.every(({ id }) => !style[id]);
   return none && style.fillOpacity >= 1 ? null : style;
 }
 

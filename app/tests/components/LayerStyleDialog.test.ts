@@ -64,3 +64,16 @@ test("an effect not added says how to turn it on", () => {
   open(null, "dropShadow");
   expect(screen.getByText("Check this effect in the list to set it.")).toBeInTheDocument();
 });
+
+test("an inner glow's settings say Choke, a shadow's has an angle", async () => {
+  open(withEffect(null, "innerGlow", true), "innerGlow");
+  const settings = screen.getByRole("region", { name: "Inner Glow" });
+  expect(within(settings).getByText("Choke")).toBeInTheDocument();
+  expect(within(settings).queryByText("Angle")).not.toBeInTheDocument();
+  document.body.innerHTML = "";
+  const { onchange, user } = open(withEffect(null, "innerShadow", true), "innerShadow");
+  const shadow = screen.getByRole("region", { name: "Inner Shadow" });
+  expect(within(shadow).getByText("Angle")).toBeInTheDocument();
+  await user.selectOptions(within(shadow).getByRole("combobox", { name: "Blend Mode" }), "overlay");
+  expect(last(onchange).innerShadow?.mode).toBe("overlay");
+});

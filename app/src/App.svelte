@@ -87,7 +87,7 @@
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
-  import { styleEdit, withEffect, type EffectId } from "./lib/layerStyle";
+  import { EFFECTS, styleEdit, withEffect, type EffectId } from "./lib/layerStyle";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
@@ -3798,8 +3798,8 @@
             items: [
               cmd(t("menu.layer.style.blending"), () => layer && openStyle(layer, "blending")),
               separator,
-              ...(["stroke", "colorOverlay", "dropShadow"] as const).map((effect) =>
-                cmd(`${t(`style.${effect}`)}…`, () => layer && openStyle(layer, effect)),
+              ...EFFECTS.map((effect) =>
+                cmd(`${t(effect.label)}…`, () => layer && openStyle(layer, effect.id)),
               ),
               separator,
               cmd(t("menu.layer.style.clear"), clearStyles, undefined, !layer?.style),
