@@ -1,12 +1,12 @@
 <script lang="ts">
   // A filter's dialog (Filter > …, ADR 0034), laid out as Photoshop's: its settings on the left,
-  // a number of pixels with a logarithmic slider below it; OK, Cancel and Preview on the right.
+  // each a number with its unit and a slider below it; OK, Cancel and Preview on the right.
   // The app shows the settings live on the canvas; OK applies them (one undo entry), Cancel
   // leaves everything as it was. Enter applies, Esc cancels. The same dialog edits a filter
   // entry of a stack again.
   import { onMount, untrack } from "svelte";
   import type { FilterId } from "./engine";
-  import { FILTERS, validValues } from "./filters";
+  import { FILTERS, sliderPosition, sliderValue, validValues } from "./filters";
   import { t } from "./i18n/index.svelte";
 
   let {
@@ -53,12 +53,6 @@
     e.preventDefault();
     if (valid) onok([...current]);
   }
-
-  /** A slider position (0–1000) for value `v` between `min` and `max`, logarithmically. */
-  const position = (v: number, min: number, max: number) =>
-    (Math.log(Math.max(v, min) / min) / Math.log(max / min)) * 1000;
-  const fromPosition = (p: number, min: number, max: number, decimals: number) =>
-    Number((min * Math.pow(max / min, p / 1000)).toFixed(decimals));
 </script>
 
 <dialog
@@ -74,7 +68,7 @@
     <div class="settings">
       {#each params as param, i (param.key)}
         <div class="row">
-          <label for="filter-{param.key}">{t(`filter.${filter}.${param.key}`)}</label>
+          <label for="filter-{param.key}">{t(param.label)}</label>
           <!-- svelte-ignore a11y_autofocus -->
           <input
             id="filter-{param.key}"
@@ -85,7 +79,7 @@
             autofocus={i === 0}
             bind:value={current[i]}
           />
-          <span>{t("filter.pixels")}</span>
+          <span>{t(param.unit)}</span>
         </div>
         <input
           class="slider"
@@ -93,15 +87,9 @@
           min="0"
           max="1000"
           step="1"
-          aria-label={t(`filter.${filter}.${param.key}`)}
-          value={position(current[i], param.min, param.max)}
-          oninput={(e) =>
-            (current[i] = fromPosition(
-              e.currentTarget.valueAsNumber,
-              param.min,
-              param.max,
-              param.decimals,
-            ))}
+          aria-label={t(param.label)}
+          value={sliderPosition(param, current[i])}
+          oninput={(e) => (current[i] = sliderValue(param, e.currentTarget.valueAsNumber))}
         />
       {/each}
     </div>

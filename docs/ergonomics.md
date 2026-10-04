@@ -153,7 +153,9 @@ built. Contributors: propose here first.
   Photoshop: Repeat (Ctrl+F: the filter applied last, as it was, on the active layer, a new
   entry; "Repeat Gaussian Blur" once there is one) and Last Filter Settings… (Alt+Ctrl+F: its
   dialog at those settings), then Blur > Gaussian Blur…: Photoshop's dialog, a radius in pixels
-  (0.1 to 1000, the field and a logarithmic slider), shown live on the canvas (Preview off
+  (0.1 to 1000, the field and a logarithmic slider); Sharpen > Unsharp Mask… (Amount 1 to 500 %,
+  Radius, Threshold 0 to 255 levels: linear sliders but the radius) and Other > High Pass…
+  (Radius), Photoshop's ranges and defaults. A filter's settings show live on the canvas (Preview off
   shows the layer without it), OK one undo entry, Cancel takes it back. A filter applies to the
   active layer only, within the selection: grayed on a hidden layer, a layer that is not
   pixels, a targeted mask and in Quick Mask. It is an entry of the layer's stack, listed below

@@ -125,6 +125,7 @@
   } from "./lib/stackEntries";
   import {
     FILTERS,
+    FILTER_MENU,
     applyFilterEdit,
     filterEntryEdit,
     filterSteps,
@@ -4487,18 +4488,13 @@
           item("repeatFilter"),
           item("repeatFilterSettings"),
           separator,
-          {
-            kind: "submenu",
-            label: t("menu.filter.blur"),
-            items: [
-              cmd(
-                `${t("filter.gaussianBlur")}…`,
-                () => openFilter("gaussianBlur"),
-                undefined,
-                !filterLayer(),
-              ),
-            ],
-          },
+          ...FILTER_MENU.map(({ label, filters }) => ({
+            kind: "submenu" as const,
+            label: t(label),
+            items: filters.map((filter) =>
+              cmd(`${t(`filter.${filter}`)}…`, () => openFilter(filter), undefined, !filterLayer()),
+            ),
+          })),
         ],
       },
       {

@@ -32,6 +32,37 @@ test("the Filter menu: Repeat and its settings grayed until a filter is applied,
   expect(screen.getByText("Blur", { selector: ".label" })).toBeInTheDocument();
 });
 
+test("Sharpen > Unsharp Mask and Other > High Pass apply to the active layer", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Sharpen", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Unsharp Mask…" }));
+  await screen.findByRole("dialog", { name: "Unsharp Mask" });
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "unsharpMask",
+      values: [100, 1, 0],
+    }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Other", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "High Pass…" }));
+  await screen.findByRole("dialog", { name: "High Pass" });
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "highPass",
+      values: [10],
+    }),
+  );
+});
+
 test("Gaussian Blur shows live on the active layer, OK is one undo entry, Ctrl+F repeats it", async () => {
   const user = await blurDialog();
   await vi.waitFor(() =>

@@ -28,7 +28,10 @@ holds a wgpu device; the core must stay free of it (dependency direction).
    beyond, the CPU's three boxes approximate the Gaussian the GPU computes exactly: within a
    few levels of 8 bits. Tested against each other (skipped without an adapter, as the other
    GPU tests).
-4. **Later**: looks kept on the GPU and sampled by the display without a readback, other
+4. **Filters made from the blur** (Unsharp Mask, High Pass, 2026-10-04) run in the same two
+   passes: the column pass makes each pixel from the input it blurred and its blur, as the
+   CPU's `Filter::finish` does.
+5. **Later**: looks kept on the GPU and sampled by the display without a readback, other
    formats in the shader, the whole layer on the GPU, layer styles' blurs on the same passes.
 
 ## Alternatives
