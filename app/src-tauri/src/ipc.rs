@@ -110,9 +110,157 @@ pub struct LayerView {
     pub painted: bool,
     /// What was applied to a raster layer's pixels (ADR 0029), bottom to top.
     pub entries: Vec<EntryView>,
+    /// Its style (ADR 0032), if it has one.
+    pub style: Option<StyleDto>,
     /// Being baked into pixels (ADR 0031): a merge's group shown until its pixels come; the
     /// panel shows it as the layer it becomes.
     pub baking: bool,
+}
+
+/// A layer's style as the UI reads and sends it (ADR 0032): colors sRGB-encoded RGB in `[0, 1]`
+/// (as color pickers give them, converted explicitly), blend modes and Stroke's position by
+/// identifier.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleDto {
+    pub fill_opacity: f32,
+    pub drop_shadow: Option<DropShadowDto>,
+    pub color_overlay: Option<ColorOverlayDto>,
+    pub stroke: Option<StrokeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropShadowDto {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub mode: String,
+    pub opacity: f32,
+    pub angle: f64,
+    pub distance: f64,
+    pub spread: f64,
+    pub size: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorOverlayDto {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub mode: String,
+    pub opacity: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrokeDto {
+    pub enabled: bool,
+    pub size: f64,
+    /// `inside`, `center` or `outside`.
+    pub position: String,
+    pub color: [f32; 3],
+    pub mode: String,
+    pub opacity: f32,
+}
+
+/// A working-space color as the UI shows it: sRGB-encoded RGB.
+fn srgb(color: LinearRgba) -> [f32; 3] {
+    let [r, g, b, _] = color.working_to_srgb_encoded();
+    [r, g, b]
+}
+
+/// An sRGB-encoded color from the UI in the working space.
+fn working([r, g, b]: [f32; 3]) -> LinearRgba {
+    LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0)
+}
+
+fn mode(id: &str) -> Result<BlendMode, String> {
+    BlendMode::from_id(id).ok_or(format!("unknown blend mode {id}"))
+}
+
+impl StyleDto {
+    pub fn new(style: &slopshop_core::style::LayerStyle) -> Self {
+        use slopshop_core::selection::StrokeLocation;
+        Self {
+            fill_opacity: style.fill_opacity,
+            drop_shadow: style.drop_shadow.map(|s| DropShadowDto {
+                enabled: s.enabled,
+                color: srgb(s.color),
+                mode: s.mode.id().to_owned(),
+                opacity: s.opacity,
+                angle: s.angle,
+                distance: s.distance,
+                spread: s.spread,
+                size: s.size,
+            }),
+            color_overlay: style.color_overlay.map(|o| ColorOverlayDto {
+                enabled: o.enabled,
+                color: srgb(o.color),
+                mode: o.mode.id().to_owned(),
+                opacity: o.opacity,
+            }),
+            stroke: style.stroke.map(|s| StrokeDto {
+                enabled: s.enabled,
+                size: s.size,
+                position: match s.position {
+                    StrokeLocation::Inside => "inside",
+                    StrokeLocation::Center => "center",
+                    StrokeLocation::Outside => "outside",
+                }
+                .to_owned(),
+                color: srgb(s.color),
+                mode: s.mode.id().to_owned(),
+                opacity: s.opacity,
+            }),
+        }
+    }
+
+    /// The style it describes; its ranges are checked by the edit.
+    pub fn style(&self) -> Result<slopshop_core::style::LayerStyle, String> {
+        use slopshop_core::selection::StrokeLocation;
+        use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
+        Ok(LayerStyle {
+            fill_opacity: self.fill_opacity,
+            drop_shadow: match &self.drop_shadow {
+                Some(s) => Some(DropShadow {
+                    enabled: s.enabled,
+                    color: working(s.color),
+                    mode: mode(&s.mode)?,
+                    opacity: s.opacity,
+                    angle: s.angle,
+                    distance: s.distance,
+                    spread: s.spread,
+                    size: s.size,
+                }),
+                None => None,
+            },
+            color_overlay: match &self.color_overlay {
+                Some(o) => Some(ColorOverlay {
+                    enabled: o.enabled,
+                    color: working(o.color),
+                    mode: mode(&o.mode)?,
+                    opacity: o.opacity,
+                }),
+                None => None,
+            },
+            stroke: match &self.stroke {
+                Some(s) => Some(Stroke {
+                    enabled: s.enabled,
+                    size: s.size,
+                    position: match s.position.as_str() {
+                        "inside" => StrokeLocation::Inside,
+                        "center" => StrokeLocation::Center,
+                        "outside" => StrokeLocation::Outside,
+                        other => return Err(format!("unknown stroke position {other}")),
+                    },
+                    color: working(s.color),
+                    mode: mode(&s.mode)?,
+                    opacity: s.opacity,
+                }),
+                None => None,
+            },
+        })
+    }
 }
 
 /// An entry of a raster layer's stack (ADR 0029).
@@ -262,6 +410,7 @@ impl LayerView {
                     .collect(),
                 _ => Vec::new(),
             },
+            style: layer.style.as_ref().map(|s| StyleDto::new(s.settings())),
             baking: false,
         }
     }
@@ -340,6 +489,11 @@ pub enum EditRequest {
         parent: Option<u64>,
         #[serde(default)]
         index: Option<usize>,
+    },
+    /// A layer's style (ADR 0032); `None` removes it.
+    SetLayerStyle {
+        id: u64,
+        style: Option<StyleDto>,
     },
     /// A fill layer's color, sRGB-encoded RGBA in `[0, 1]` as `AddFillLayer`'s.
     SetFillColor {
@@ -623,6 +777,13 @@ impl EditRequest {
                     },
                 }
             }
+            EditRequest::SetLayerStyle { id, style } => Edit::SetLayerStyle {
+                id: LayerId::from_raw(id),
+                style: match style {
+                    Some(dto) => Some(Box::new(dto.style()?)),
+                    None => None,
+                },
+            },
             EditRequest::SetFillColor { id, color } => {
                 let [r, g, b, a] = color;
                 Edit::SetFillColor {

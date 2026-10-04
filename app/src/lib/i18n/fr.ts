@@ -594,6 +594,8 @@ const fr: Messages = {
   "export.report.precisionReduced": "Écrit en flottants 16 bits : moins précis que l'image",
   "export.report.pixelsOutsideCanvas":
     "Des parties de calques étaient hors de la zone de travail : le fichier en calques ne garde que l'intérieur",
+  "export.report.stylesNotWritten":
+    "Les styles de calque ne sont pas encore écrits comme ceux de Photoshop : les calques gardent leurs pixels, l’image fusionnée montre les effets",
   "export.report.bigTiff":
     "Écrit en BigTIFF (plus de 4 Go) : certains anciens logiciels ne peuvent pas le lire",
   "export.report.alphaFlattened":

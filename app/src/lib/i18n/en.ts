@@ -579,6 +579,8 @@ const en = {
   "export.report.precisionReduced": "Written as 16-bit floats: less precise than the image",
   "export.report.pixelsOutsideCanvas":
     "Parts of layers were outside the canvas: the layered file keeps only what is inside",
+  "export.report.stylesNotWritten":
+    "Layer styles are not written as Photoshop's yet: the layers keep their own pixels, the merged image shows the effects",
   "export.report.bigTiff": "Written as BigTIFF (over 4 GB): some older software cannot read it",
   "export.report.alphaFlattened":
     "{count} partly transparent pixels were flattened over the background color",

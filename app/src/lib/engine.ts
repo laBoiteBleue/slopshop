@@ -44,6 +44,8 @@ export type LayerView = {
   painted: boolean;
   /** What was applied to a raster layer's pixels (ADR 0029), bottom to top. */
   entries: StackEntryView[];
+  /** Its style (ADR 0032), if it has one. Absent: none. */
+  style?: LayerStyle | null;
   /**
    * Being baked into pixels (ADR 0031): a merge's group shown until its pixels come, listed as
    * the layer it becomes. Absent: false.
@@ -102,6 +104,40 @@ export const ADJUSTMENTS: AdjustmentId[] = [
 
 /** Number of parameters of an adjustment (`PARAM_COUNT` in crates/slopshop-core/src/adjust.rs). */
 export const ADJUSTMENT_PARAMS = 37;
+
+/**
+ * A layer's style (ADR 0032; StyleDto in ipc.rs): colors sRGB-encoded RGB in [0, 1], effects not
+ * added `null`.
+ */
+export type LayerStyle = {
+  fillOpacity: number;
+  dropShadow: {
+    enabled: boolean;
+    color: [number, number, number];
+    mode: BlendModeId;
+    opacity: number;
+    /** Degrees, where the light comes from. */
+    angle: number;
+    distance: number;
+    /** Percent. */
+    spread: number;
+    size: number;
+  } | null;
+  colorOverlay: {
+    enabled: boolean;
+    color: [number, number, number];
+    mode: BlendModeId;
+    opacity: number;
+  } | null;
+  stroke: {
+    enabled: boolean;
+    size: number;
+    position: "inside" | "center" | "outside";
+    color: [number, number, number];
+    mode: BlendModeId;
+    opacity: number;
+  } | null;
+};
 
 /** Turns and flips of Image > Image Rotation. */
 /** What Image > Trim takes off: transparent margins, or those of a corner's color. */
@@ -256,6 +292,8 @@ export type EditRequest =
       parent?: number | null;
       index?: number;
     }
+  /** A layer's style (ADR 0032); `null` removes it. */
+  | { kind: "setLayerStyle"; id: number; style: LayerStyle | null }
   /** A fill layer's color, sRGB-encoded RGBA in [0, 1] as `addFillLayer`'s. */
   | { kind: "setFillColor"; id: number; color: [number, number, number, number] }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
@@ -861,6 +899,7 @@ export type ExportNoticeId =
   | "precisionReduced"
   | "bigTiff"
   | "pixelsOutsideCanvas"
+  | "stylesNotWritten"
   | "alphaFlattened"
   | "colorDiscarded"
   | "colorsQuantized";
