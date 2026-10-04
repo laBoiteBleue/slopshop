@@ -68,5 +68,5 @@ pub use edit::{Arrange, Edit, EditError, ImageTurn};
 pub use geom::{Rect, Size};
 pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;
-pub use session::{Copies, Session};
+pub use session::{Copies, HistoryLabel, Session};
 pub use transform::Affine;

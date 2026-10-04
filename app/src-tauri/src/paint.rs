@@ -12,6 +12,7 @@
 //! tiles before it (its stack and mask move with it, its transform compensates), so the layer
 //! looks the same until painted; the growth is part of the stroke's undo entry.
 
+use slopshop_core::HistoryLabel;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
@@ -460,9 +461,17 @@ pub(crate) fn paint(
         let view = if request.end {
             document.set_paint_preview(None);
             if has_paint {
+                let label = HistoryLabel::new(if request.restore {
+                    "restoreEraser"
+                } else if request.color.is_none() {
+                    "eraser"
+                } else {
+                    "brush"
+                });
+                let edit = paint_edit(active.target, painted, active.growth.as_ref());
                 document
                     .session
-                    .perform(paint_edit(active.target, painted, active.growth.as_ref()))
+                    .with_label(Some(label), |s| s.perform(edit))
                     .map_err(|e| e.to_string())?;
             }
             Some(document.view())
@@ -545,8 +554,16 @@ pub async fn fill(
             samples: Vec::new(),
             end: true,
         };
+        let label = HistoryLabel::new(match (&stroke, request.color) {
+            (Some(_), _) => "stroke",
+            (None, Some(_)) => "fill",
+            (None, None) => "clear",
+        });
         if let Some(edit) = fill_edit(document.session.document(), &request, stroke)? {
-            document.session.perform(edit).map_err(|e| e.to_string())?;
+            document
+                .session
+                .with_label(Some(label), |s| s.perform(edit))
+                .map_err(|e| e.to_string())?;
         }
         Ok(document.view())
     })

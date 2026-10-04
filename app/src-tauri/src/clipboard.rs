@@ -7,6 +7,7 @@
 //! SlopShop's own copy back while the system clipboard still holds that image, otherwise what
 //! another application put there (files open as layers, an image becomes one).
 
+use slopshop_core::HistoryLabel;
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -554,7 +555,9 @@ fn place(
     let copies = if kind == PasteKind::Into {
         match target
             .session
-            .insert_into_selection(&layers, name.to_owned())
+            .with_label(Some(HistoryLabel::new("pasteInto")), |s| {
+                s.insert_into_selection(&layers, name.to_owned())
+            })
             .map_err(|e| e.to_string())?
         {
             Some(copies) => copies,
@@ -563,7 +566,9 @@ fn place(
     } else {
         target
             .session
-            .insert_layer_copies(&layers, None)
+            .with_label(Some(HistoryLabel::new("paste")), |s| {
+                s.insert_layer_copies(&layers, None)
+            })
             .map_err(|e| e.to_string())?
     };
     for (id, mut warnings) in copies.ids.iter().copied().zip(copied.warnings) {

@@ -15,6 +15,7 @@
 //! pixels, the latter moved by a transform at each request, as cheap as moving a layer. The
 //! moved image is computed once, when the drag ends. A mask's pixels are moved at each request.
 
+use slopshop_core::HistoryLabel;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -286,7 +287,9 @@ pub(crate) fn move_pixels(
     let shifted = (request.dx, request.dy) != (0, 0);
     if shifted {
         session
-            .perform_in_gesture(edit)
+            .with_label(Some(HistoryLabel::new("movePixels")), |s| {
+                s.perform_in_gesture(edit)
+            })
             .map_err(|e| e.to_string())?;
     }
     if request.end {
@@ -361,7 +364,10 @@ pub async fn float_pixels(
             return Ok(None);
         };
         let (edit, id) = edit;
-        document.session.perform(edit).map_err(|e| e.to_string())?;
+        document
+            .session
+            .with_label(Some(HistoryLabel::new("movePixels")), |s| s.perform(edit))
+            .map_err(|e| e.to_string())?;
         Ok(Some((document.view(), id.get())))
     })
     .await
@@ -388,7 +394,11 @@ pub async fn layer_via(
         let Some((edit, id)) = lift_edit(&mut document.session, id, cut, Look::New(name))? else {
             return Ok(None);
         };
-        document.session.perform(edit).map_err(|e| e.to_string())?;
+        let label = HistoryLabel::new(if cut { "layerViaCut" } else { "layerViaCopy" });
+        document
+            .session
+            .with_label(Some(label), |s| s.perform(edit))
+            .map_err(|e| e.to_string())?;
         Ok(Some((document.view(), id.get())))
     })
     .await

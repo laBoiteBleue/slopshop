@@ -4,6 +4,7 @@
 //! image SAM sees is encoded once and reused until the document, the region or the sampled
 //! layer changes, so hovering and clicking only decode (milliseconds).
 
+use slopshop_core::HistoryLabel;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -615,7 +616,13 @@ pub(crate) async fn ai_object_select(
             &mut task,
         )?;
         task.check()?;
-        let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
+        let view = selection::set_selection(
+            &state,
+            document_id,
+            image,
+            HistoryLabel::new("objectSelection"),
+        )
+        .map_err(internal)?;
         // Only the selection changed: the encoded image stays valid for the next hover.
         if let Some(encoded) = session.encoded.as_mut() {
             encoded.revision = view.revision;
@@ -777,7 +784,13 @@ pub(crate) async fn ai_select_subject(
             &mut task,
         )?;
         task.check()?;
-        let view = selection::set_selection(&state, document_id, image).map_err(internal)?;
+        let view = selection::set_selection(
+            &state,
+            document_id,
+            image,
+            HistoryLabel::new("selectSubject"),
+        )
+        .map_err(internal)?;
         // Only the selection changed: an image encoded from this revision stays valid.
         if let Some(encoded) = session.encoded.as_mut()
             && encoded.document_id == document_id
