@@ -18,6 +18,7 @@
     onOpenEvents,
     type AdjustmentId,
     type AdjustmentSettings,
+    type FilterId,
     type BrushRequest,
     type StrokeRequest,
     type ClipboardContents,
@@ -90,6 +91,7 @@
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
   import { EFFECTS, styleEdit, withEffect, type EffectId } from "./lib/layerStyle";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
+  import FilterDialog from "./lib/FilterDialog.svelte";
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
@@ -119,6 +121,14 @@
     withStep,
     type SettingsChange,
   } from "./lib/stackEntries";
+  import {
+    FILTERS,
+    applyFilterEdit,
+    filterEntryEdit,
+    filterSteps,
+    filterable,
+    type FilterSettings,
+  } from "./lib/filters";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./lib/align";
   import { canFlatten, canMergeVisible, canRasterize } from "./lib/bake";
   import {
@@ -972,8 +982,8 @@
   }
 
   /**
-   * An entry of a layer's stack edited again (ADR 0034): the adjustment dialog on step `step`
-   * of entry `index` of layer `layerId`. The canvas follows the settings live (a gesture), the
+   * An entry of a layer's stack edited again (ADR 0034): the adjustment dialog on entry `index`
+   * of layer `layerId` (on its last application, for an entry read from an older file). The canvas follows the settings live (a gesture), the
    * entry hidden while Preview is off; OK makes it one undo entry with the eye the entry had,
    * Cancel takes it all back.
    */
@@ -1001,7 +1011,24 @@
   function openEntry(layer: LayerView, index: number) {
     const doc = active;
     const entry = layer.entries[index];
-    if (!doc || !entry || !editableEntry(entry) || adjustDialog || entryDialog) return;
+    if (!doc || !entry || !editableEntry(entry) || adjustDialog || entryDialog || filterDialog) {
+      return;
+    }
+    if (entry.kind === "filter" && entry.filter) {
+      const settings = filterSteps(entry);
+      const step = settings.length - 1;
+      filterDialog = {
+        documentId: doc.id,
+        layerId: layer.id,
+        filter: entry.filter,
+        preview: true,
+        values: settings[step].values,
+        entry: { index, step, hidden: entry.hidden, original: settings, settings },
+      };
+      // A hidden entry shows while it is edited.
+      if (entry.hidden) showFilter(filterDialog);
+      return;
+    }
     const settings = stepSettings(entry);
     entryDialog = {
       documentId: doc.id,
@@ -1061,6 +1088,141 @@
     const dialog = entryDialog;
     entryDialog = null;
     if (dialog) void cancelGesture(dialog.documentId);
+  }
+
+  /** The filter applied last (Filter > Repeat, Ctrl+F), for the session. */
+  let lastFilter = $state<FilterSettings | null>(null);
+  /** Each filter's settings used last, its dialog's start, for the session. */
+  const filterValues: Partial<Record<FilterId, number[]>> = {};
+
+  /**
+   * A filter's dialog (ADR 0034): applying it to the active layer, or editing a filter entry of
+   * a stack again (`entry`, step `step` of it). The canvas follows the settings live (a
+   * gesture); OK makes it one undo entry, Cancel takes it all back.
+   */
+  let filterDialog = $state<{
+    documentId: number;
+    layerId: number;
+    filter: FilterId;
+    preview: boolean;
+    /** The settings shown (of the step edited). */
+    values: number[];
+    entry: {
+      index: number;
+      step: number;
+      /** The entry's eye when the dialog opened. */
+      hidden: boolean;
+      original: FilterSettings[];
+      settings: FilterSettings[];
+    } | null;
+  } | null>(null);
+
+  /** The layer Filter > … applies to: the active one, a pixel layer shown (ADR 0034). */
+  function filterLayer(): LayerView | null {
+    const doc = active;
+    const layer = layersPanel?.selectedLayer() ?? null;
+    return doc && filterable(layer, layersPanel?.paintsMask() ?? false, doc.quickMask)
+      ? layer
+      : null;
+  }
+
+  /** Filter > `filter`…: its dialog on the active layer, at `values`. */
+  function openFilter(filter: FilterId, values = filterValues[filter] ?? FILTERS[filter].defaults) {
+    commitTransform();
+    const doc = active;
+    const layer = filterLayer();
+    if (!doc || !layer || filterDialog || adjustDialog || entryDialog) return;
+    filterDialog = {
+      documentId: doc.id,
+      layerId: layer.id,
+      filter,
+      preview: true,
+      values: [...values],
+      entry: null,
+    };
+  }
+
+  /**
+   * The canvas shows the dialog's settings: a filter applied as a gesture replaced at each
+   * change (nothing while Preview is off), or the entry edited live (hidden while it is off).
+   */
+  function showFilter(dialog: NonNullable<typeof filterDialog>) {
+    if (dialog.entry) {
+      const { index, settings } = dialog.entry;
+      void live(
+        dialog.documentId,
+        filterEntryEdit(dialog.layerId, index, settings, !dialog.preview),
+      );
+    } else if (dialog.preview) {
+      const request = applyFilterEdit(dialog.layerId, {
+        filter: dialog.filter,
+        values: dialog.values,
+      });
+      void sync(engine.performLive(dialog.documentId, request, true));
+    } else {
+      void cancelGesture(dialog.documentId);
+    }
+  }
+
+  function filterLive(values: number[]) {
+    const dialog = filterDialog;
+    if (!dialog) return;
+    const entry = dialog.entry && {
+      ...dialog.entry,
+      settings: dialog.entry.settings.map((s, i) =>
+        i === dialog.entry?.step ? { ...s, values } : s,
+      ),
+    };
+    filterDialog = { ...dialog, values, entry };
+    showFilter(filterDialog);
+  }
+
+  function filterPreview(preview: boolean) {
+    if (!filterDialog) return;
+    filterDialog = { ...filterDialog, preview };
+    showFilter(filterDialog);
+  }
+
+  /** OK: one undo entry (none when an entry is left as it was). */
+  function applyFilterDialog(values: number[]) {
+    const dialog = filterDialog;
+    filterDialog = null;
+    if (!dialog) return;
+    if (!dialog.entry) {
+      const settings = { filter: dialog.filter, values };
+      filterValues[dialog.filter] = values;
+      lastFilter = settings;
+      void sync(
+        engine.replaceGesture(dialog.documentId, applyFilterEdit(dialog.layerId, settings)),
+      );
+      return;
+    }
+    const { index, hidden, original, step } = dialog.entry;
+    const settings = dialog.entry.settings.map((s, i) => (i === step ? { ...s, values } : s));
+    if (JSON.stringify(settings) === JSON.stringify(original)) {
+      void cancelGesture(dialog.documentId);
+      return;
+    }
+    void sync(
+      engine.replaceGesture(
+        dialog.documentId,
+        filterEntryEdit(dialog.layerId, index, settings, hidden),
+      ),
+    );
+  }
+
+  function cancelFilter() {
+    const dialog = filterDialog;
+    filterDialog = null;
+    if (dialog) void cancelGesture(dialog.documentId);
+  }
+
+  /** Filter > Repeat (Ctrl+F): the filter applied last, as it was, on the active layer. */
+  function repeatFilter() {
+    commitTransform();
+    const doc = active;
+    const layer = filterLayer();
+    if (doc && layer && lastFilter) void edit(doc.id, applyFilterEdit(layer.id, lastFilter));
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
@@ -3327,6 +3489,18 @@
         run: () => (preferences = true),
         whileTyping: true,
       },
+      repeatFilter: {
+        label: lastFilter
+          ? t("menu.filter.repeat", { name: t(`filter.${lastFilter.filter}`) })
+          : t("menu.filter.repeatNone"),
+        run: repeatFilter,
+        disabled: !lastFilter || !filterLayer(),
+      },
+      repeatFilterSettings: {
+        label: t("menu.filter.repeatSettings"),
+        run: () => lastFilter && openFilter(lastFilter.filter, lastFilter.values),
+        disabled: !lastFilter || !filterLayer(),
+      },
       adjustLevels: {
         label: `${t("adjustment.levels")}…`,
         run: () => void openAdjust("levels"),
@@ -4069,6 +4243,26 @@
         ],
       },
       {
+        label: t("menu.filter"),
+        items: [
+          item("repeatFilter"),
+          item("repeatFilterSettings"),
+          separator,
+          {
+            kind: "submenu",
+            label: t("menu.filter.blur"),
+            items: [
+              cmd(
+                `${t("filter.gaussianBlur")}…`,
+                () => openFilter("gaussianBlur"),
+                undefined,
+                !filterLayer(),
+              ),
+            ],
+          },
+        ],
+      },
+      {
         label: t("menu.view"),
         items: [
           item("zoomIn"),
@@ -4740,13 +4934,21 @@
     onclose={() => (canvasMenu = null)}
   />
 {/if}
+{#if filterDialog}
+  <FilterDialog
+    filter={filterDialog.filter}
+    values={filterDialog.values}
+    preview={filterDialog.preview}
+    onlive={filterLive}
+    onpreview={filterPreview}
+    onok={applyFilterDialog}
+    oncancel={cancelFilter}
+  />
+{/if}
 {#if entryDialog && entryShown}
   <AdjustDialog
     adjustment={entryShown}
     preview={entryDialog.preview}
-    steps={entryDialog.settings.length}
-    step={entryDialog.step}
-    onstep={(step) => entryDialog && (entryDialog = { ...entryDialog, step })}
     onlive={(values, gradient) => entryLive({ values, gradient })}
     oncurves={(curves) => entryLive({ curves })}
     onpreview={entryPreview}

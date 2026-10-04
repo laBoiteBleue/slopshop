@@ -7,9 +7,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-/** An entry of a raster layer's stack (ADR 0029): paint, or an applied adjustment. */
+/** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, or a filter
+ * (ADR 0034). */
 export type StackEntryView = {
-  kind: "paint" | "effect";
+  kind: "paint" | "effect" | "filter";
   /** An effect's adjustment. */
   adjustment: AdjustmentId | null;
   /** How many times an effect of this kind was applied in a row (1 for paint). */
@@ -18,7 +19,14 @@ export type StackEntryView = {
   hidden: boolean;
   /** An effect's steps with their settings, bottom to top (none for paint): edited again. */
   steps: AdjustmentView[];
+  /** A filter entry's filter. */
+  filter: FilterId | null;
+  /** A filter entry's steps with their settings, bottom to top. */
+  filterSteps: { id: FilterId; values: number[] }[];
 };
+
+/** The filters (Filter in crates/slopshop-core/src/filter.rs). */
+export type FilterId = "gaussianBlur";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {
@@ -344,7 +352,11 @@ export type EditRequest =
       index: number;
       hidden: boolean;
       steps?: AdjustmentSettings[];
+      /** A filter entry's: every step's filter and values. */
+      filters?: { filter: FilterId; values: number[] }[];
     }
+  /** Filter > … (ADR 0034): a filter on layer `id` (the active one), within the selection. */
+  | { kind: "applyFilter"; id: number; filter: FilterId; values: number[] }
   /** Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
    * `ids`, within the selection (`values` and `curves` as `setAdjustment`). */
   | {

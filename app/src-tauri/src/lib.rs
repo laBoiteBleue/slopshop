@@ -1636,7 +1636,10 @@ async fn layer_thumbnail(
         }
     };
     let thumbnail = tauri::async_runtime::spawn_blocking(move || {
-        let image = image.get();
+        // A filter being applied: its quick look, rather than the whole layer at each setting.
+        let image = image
+            .quick_look(THUMBNAIL_LOOK_PIXELS)
+            .unwrap_or_else(|| image.get());
         if mask {
             slopshop_core::thumbnail::mask_thumbnail(&image, max_side)
         } else {
@@ -1650,6 +1653,9 @@ async fn layer_thumbnail(
         thumbnail.pixels,
     )))
 }
+
+/// The largest quick look a thumbnail is made from while a filter is applied (ADR 0034).
+const THUMBNAIL_LOOK_PIXELS: u64 = 1 << 18;
 
 /// A thumbnail as [`layer_thumbnail`] sends it: width and height (`u32` little-endian), then
 /// the pixels.

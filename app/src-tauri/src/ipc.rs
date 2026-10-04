@@ -321,8 +321,20 @@ pub struct EntryView {
     /// Hidden by its eye (ADR 0034).
     pub hidden: bool,
     /// An effect's steps, each with its settings, to edit them again (ADR 0034); none for
-    /// paint.
+    /// paint and filters.
     pub steps: Vec<AdjustmentView>,
+    /// A filter entry's filter (`Filter::id`), translated by the UI (ADR 0034).
+    pub filter: Option<&'static str>,
+    /// A filter entry's steps, each with its settings.
+    pub filter_steps: Vec<FilterView>,
+}
+
+/// A filter and its settings (`Filter::params` order).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterView {
+    pub id: &'static str,
+    pub values: Vec<f32>,
 }
 
 impl DocumentView {
@@ -435,6 +447,24 @@ impl LayerView {
                             count: 1,
                             hidden: entry.hidden(),
                             steps: Vec::new(),
+                            filter: None,
+                            filter_steps: Vec::new(),
+                        },
+                        Entry::Filter(filter) => EntryView {
+                            kind: "filter",
+                            adjustment: None,
+                            count: filter.steps().len(),
+                            hidden: entry.hidden(),
+                            steps: Vec::new(),
+                            filter: Some(filter.kind()),
+                            filter_steps: filter
+                                .steps()
+                                .iter()
+                                .map(|step| FilterView {
+                                    id: step.filter.id(),
+                                    values: step.filter.params(),
+                                })
+                                .collect(),
                         },
                         Entry::Effect(effect) => EntryView {
                             kind: "effect",
@@ -446,6 +476,8 @@ impl LayerView {
                                 .iter()
                                 .map(|step| AdjustmentView::new(&step.adjustment))
                                 .collect(),
+                            filter: None,
+                            filter_steps: Vec::new(),
                         },
                     })
                     .collect(),
@@ -652,6 +684,16 @@ pub enum EditRequest {
         hidden: bool,
         #[serde(default)]
         steps: Option<Vec<AdjustmentSettings>>,
+        /// A filter entry's: every step's filter settings when given.
+        #[serde(default)]
+        filters: Option<Vec<FilterSettings>>,
+    },
+    /// Filter > … (ADR 0034): `filter` with `values` (`Filter::params` order) applied to raster
+    /// layer `id` (the active one), within the selection, on top of its stack.
+    ApplyFilter {
+        id: u64,
+        filter: String,
+        values: Vec<f32>,
     },
     /// Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
     /// `ids`, within the selection (values and curves as `SetAdjustment`).
@@ -980,24 +1022,39 @@ impl EditRequest {
                 index,
                 hidden,
                 steps,
+                filters,
             } => {
-                let adjustments = steps
-                    .map(|steps| {
+                use slopshop_core::stack::Operation;
+                let operations: Option<Vec<Operation>> = match (steps, filters) {
+                    (Some(steps), _) => Some(
                         steps
                             .iter()
-                            .map(AdjustmentSettings::adjustment)
-                            .collect::<Result<Vec<_>, _>>()
-                    })
-                    .transpose()?;
+                            .map(|s| s.adjustment().map(Operation::Adjustment))
+                            .collect::<Result<_, _>>()?,
+                    ),
+                    (None, Some(filters)) => Some(
+                        filters
+                            .iter()
+                            .map(|f| f.filter().map(Operation::Filter))
+                            .collect::<Result<_, _>>()?,
+                    ),
+                    (None, None) => None,
+                };
                 Edit::set_entry(
                     session.document(),
                     LayerId::from_raw(id),
                     index,
-                    adjustments.as_deref(),
+                    operations.as_deref(),
                     hidden,
                 )
                 .map_err(|e| e.to_string())?
             }
+            EditRequest::ApplyFilter { id, filter, values } => Edit::apply_filter(
+                session.document(),
+                LayerId::from_raw(id),
+                FilterSettings { filter, values }.filter()?,
+            )
+            .map_err(|e| e.to_string())?,
             EditRequest::DeletePaint { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::delete_paint(session.document(), &ids).map_err(|e| e.to_string())?
@@ -1461,6 +1518,21 @@ impl AdjustmentSettings {
             built = curves_adjustment(self.curves.as_deref())?;
         }
         with_gradient(built, self.gradient.as_deref())
+    }
+}
+
+/// A filter's settings as the UI sends them: its identifier and its parameters.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterSettings {
+    filter: String,
+    values: Vec<f32>,
+}
+
+impl FilterSettings {
+    fn filter(&self) -> Result<slopshop_core::filter::Filter, String> {
+        slopshop_core::filter::Filter::from_params(&self.filter, &self.values)
+            .ok_or(format!("unknown filter {} or wrong values", self.filter))
     }
 }
 
@@ -2723,5 +2795,54 @@ mod tests {
         let view = LayerView::new(session.document().layer(id).unwrap());
         assert!(view.entries[0].hidden);
         assert!((view.entries[0].steps[0].values[0] - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_filter_is_applied_and_edited_from_the_ui() {
+        use slopshop_core::color::PixelFormat;
+        use slopshop_core::raster::RasterImage;
+        let size = slopshop_core::Size::new(4, 4);
+        let pixels = vec![10_u8; 4 * 4 * 4];
+        let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let mut document = Document::new(size);
+        let id = document.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "pixels".to_owned(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(std::sync::Arc::new(image)),
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::IDENTITY,
+                style: None,
+            },
+        }
+        .apply(&mut document)
+        .unwrap();
+        let mut session = Session::new(document);
+        let mut send = |json: String| {
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            let edit = request.into_edit(&mut session).unwrap();
+            session.perform(edit).unwrap();
+            LayerView::new(session.document().layer(id).unwrap())
+        };
+        let view = send(format!(
+            r#"{{"kind":"applyFilter","id":{},"filter":"gaussianBlur","values":[2.5]}}"#,
+            id.get()
+        ));
+        assert_eq!(view.entries[0].kind, "filter");
+        assert_eq!(view.entries[0].filter, Some("gaussianBlur"));
+        assert_eq!(view.entries[0].filter_steps[0].values, vec![2.5]);
+        let view = send(format!(
+            r#"{{"kind":"setStackEntry","id":{},"index":0,"hidden":false,
+                "filters":[{{"filter":"gaussianBlur","values":[7]}}]}}"#,
+            id.get()
+        ));
+        assert_eq!(view.entries[0].filter_steps[0].values, vec![7.0]);
     }
 }

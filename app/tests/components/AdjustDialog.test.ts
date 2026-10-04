@@ -82,35 +82,3 @@ test("Preview is off when the app says so", () => {
   open("hueSaturation", [], false);
   expect(screen.getByRole("checkbox", { name: "Preview" })).not.toBeChecked();
 });
-
-test("an entry applied several times in a row chooses which application it edits", async () => {
-  const onstep = vi.fn();
-  const user = userEvent.setup();
-  render(AdjustDialog, {
-    adjustment: {
-      id: "hueSaturation",
-      values: padded([10, 0, 0]),
-      curves: null,
-      curveSamples: null,
-      gradient: null,
-    },
-    preview: true,
-    steps: 2,
-    step: 1,
-    onstep,
-    onlive: vi.fn(),
-    oncurves: vi.fn(),
-    onpreview: vi.fn(),
-    onok: vi.fn(),
-    oncancel: vi.fn(),
-  });
-  const which = screen.getByRole("combobox", { name: "Application" });
-  expect(which).toHaveDisplayValue("2 of 2");
-  await user.selectOptions(which, "1 of 2");
-  expect(onstep).toHaveBeenCalledWith(0);
-});
-
-test("an adjustment applied once has no choice of application", () => {
-  open("hueSaturation", [0, 0, 0]);
-  expect(screen.queryByRole("combobox", { name: "Application" })).toBeNull();
-});

@@ -14,6 +14,8 @@
     // A dashed selection with a turning arrow (Select > Reselect).
     reselect: "M4 9V4h5 M13 4h2 M20 9v2 M4 13v2 M9 20H4v-3 M20 15a5 5 0 1 1-5-5h3 M16 8l2 2-2 2",
     // Three sliders (the Properties panel).
+    // A funnel (Filter > …, ADR 0034).
+    filter: "M4 5h16l-6 7.5V18l-4 2v-7.5z",
     sliders: "M4 6h9 M17 6h3 M15 4v4 M4 12h3 M11 12h9 M9 10v4 M4 18h11 M19 18h1 M17 16v4",
     // Two chain links, one above the other (linked proportions).
     link: "M8.5 6.5a3.5 3.5 0 0 1 7 0v3a3.5 3.5 0 0 1-7 0Z M8.5 14.5a3.5 3.5 0 0 1 7 0v3a3.5 3.5 0 0 1-7 0Z M12 8.5v7",
