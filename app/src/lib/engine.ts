@@ -1500,6 +1500,12 @@ export const engine = {
         nameFormat,
       }),
     ),
+  /**
+   * Select and Mask's refine-edge brush: a stroke (`[x, y, pressure]`, document pixels) of a
+   * `size` pixels brush marking where edge detection decides (`erase`: no longer).
+   */
+  refineBrush: (documentId: number, samples: number[][], size: number, erase: boolean) =>
+    serial(() => invoke<void>("refine_brush", { documentId, samples, size, erase })),
   /** Select and Mask's edge detection: its base matted within `radius` pixels (ViTMatte). */
   aiRefineBase: (documentId: number, radius: number, layerId: number | null, task: number) =>
     serial(() => invoke<void>("ai_refine_base", { documentId, radius, layerId, task })),

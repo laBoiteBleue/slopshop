@@ -17,11 +17,12 @@
     /**
      * Samples since the last call (`[x, y, pressure]`, document pixels), with `start` for the
      * first ones of a stroke (`line`: Shift held, a straight line from the last stroke's end)
-     * and `end` for the last ones.
+     * and `end` for the last ones; at the start, whether Alt is held.
      */
     onstroke: (
       samples: [number, number, number][],
       phase: "start" | "line" | "move" | "end",
+      keys?: { altKey: boolean },
     ) => void;
   } = $props();
 
@@ -48,7 +49,7 @@
     if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
     element.setPointerCapture(e.pointerId);
     painting = true;
-    onstroke([sample(e)], e.shiftKey ? "line" : "start");
+    onstroke([sample(e)], e.shiftKey ? "line" : "start", { altKey: e.altKey });
   }
 
   function move(e: PointerEvent) {

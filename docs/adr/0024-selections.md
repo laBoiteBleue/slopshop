@@ -78,6 +78,9 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
   pyramid like a layer's mask, at an opacity the user sets (half by default). Select and
   Mask's views use the same pass: the tint black or white wholly (On Black, On White), or the
   mask itself in gray.
+- Select and Mask's Refine Edge Brush paints, with the Brush's engine, a coverage of where the
+  matting model decides beside the outline's band (`plan_refinement_with`); edge detection
+  always starts again from the selection the panel opened with, so strokes never compound.
 - The brush will respect the selection: it multiplies the stroke's coverage by the mask.
 - Rasterizing touches every pixel of the shape's bounds once (0.65 s for an ellipse filling a
   600 MP canvas); interior tiles could be detected without being filled if that matters.

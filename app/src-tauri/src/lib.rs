@@ -135,8 +135,8 @@ struct OpenDocument {
     last_selection: Option<slopshop_core::selection::Selection>,
     /// What the view shows over the image (Quick Mask): view state, like the viewport.
     overlays: ViewOverlays,
-    /// Select and Mask is open: the selection it refines (`refine`).
-    refine_base: Option<Arc<slopshop_core::RasterImage>>,
+    /// Select and Mask is open: what it refines (`refine`).
+    refine: Option<refine::RefineSession>,
     /// A paint stroke under way, shown in place of its layer's pixels (view state too).
     paint_preview: Option<paint::PaintPreview>,
     /// Selected pixels the Move tool moved, floating until something else happens.
@@ -164,7 +164,7 @@ impl OpenDocument {
             saving: false,
             last_selection: None,
             overlays: ViewOverlays::default(),
-            refine_base: None,
+            refine: None,
             paint_preview: None,
             floating: None,
             move_preview: None,
@@ -2119,6 +2119,7 @@ pub fn run() {
             refine::refine_preview,
             refine::refine_close,
             refine::refine_output,
+            refine::refine_brush,
             segment::ai_refine_base,
             selection::quick_select,
             paint::paint_stroke,
@@ -2780,11 +2781,11 @@ mod tests {
         };
         let mut background = None;
         with(&mut |d| {
-            d.refine_base = d
+            d.refine = d
                 .session
                 .document()
                 .selection()
-                .map(|s| Arc::clone(s.image()));
+                .map(|s| refine::RefineSession::new(Arc::clone(s.image())));
             background = Some(d.session.document().layers()[0].id);
         });
         let background = background.unwrap();
@@ -2821,12 +2822,45 @@ mod tests {
             let mask = document.layers()[1].mask.as_ref().expect("a mask");
             assert_eq!(mask.image.gray_at(97, 200), 1.0);
             assert_eq!(mask.image.gray_at(90, 200), 0.0);
-            assert!(d.refine_base.is_none());
+            assert!(d.refine.is_none());
             d.session.undo().unwrap();
             assert_eq!(d.session.document().layers().len(), 1);
             assert!(d.session.document().layers()[0].visible);
         });
         assert_eq!((at(97), at(100)), (0.0, 1.0));
+    }
+
+    #[test]
+    fn the_refine_edge_brush_paints_and_erases_where_the_model_decides() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let select_all = slopshop_core::selection::select_all(Size::new(6000, 4000)).unwrap();
+        selection::set_selection(&state, doc.id, Some(select_all)).unwrap();
+        // Closed: no stroke.
+        assert!(refine::brush(&state, doc.id, &[[10.0, 10.0, 1.0]], 20.0, false).is_err());
+        {
+            let mut documents = state.documents().unwrap();
+            let d = documents.get_mut(doc.id).unwrap();
+            let selection = Arc::clone(d.session.document().selection().unwrap().image());
+            d.refine = Some(refine::RefineSession::new(selection));
+        }
+        let region = |state: &AppState| {
+            let mut documents = state.documents().unwrap();
+            let d = documents.get_mut(doc.id).unwrap();
+            d.refine.as_ref().unwrap().region.clone()
+        };
+        let line = [[100.0, 100.0, 1.0], [300.0, 100.0, 1.0]];
+        refine::brush(&state, doc.id, &line, 20.0, false).unwrap();
+        let painted = region(&state).expect("painted");
+        assert_eq!(painted.gray_at(200, 100), 1.0);
+        assert_eq!(painted.gray_at(200, 140), 0.0);
+        // Erasing part of it.
+        refine::brush(&state, doc.id, &[[200.0, 100.0, 1.0]], 40.0, true).unwrap();
+        let erased = region(&state).unwrap();
+        assert_eq!(erased.gray_at(200, 100), 0.0);
+        assert_eq!(erased.gray_at(110, 100), 1.0);
     }
 
     #[test]

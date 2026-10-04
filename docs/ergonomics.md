@@ -372,15 +372,16 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   on the image (Smooth, Shift Edge in pixels, Feather, Contrast, applied in that order), Output
   To (Selection, Layer Mask on the active layer, New Layer with Layer Mask: a copy of the
   layer with the mask, the layer hidden); OK is one undo entry, Cancel puts the selection back;
-  its settings are kept for the next time. All
+  its settings are kept for the next time. Its Refine Edge Brush (Photoshop's): while it is on,
+  strokes on the image mark hair or fur where edge detection decides too (Paint / Erase, Alt
+  does the other; a size slider); the stroke's path shows while painting, and on release edge
+  detection runs again on the selection the panel opened with, then the settings apply. All
   Layers, Deselect Layers (layers, not pixels). The menu is grouped as: basics; Select
   Subject, Color Range, Select and Mask; Modify; Grow, Similar, Transform Selection, Quick
   Mask; saved selections; layers.
 - **Decided, to build**:
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
-  - Select and Mask: a refine-edge brush (paint where the model decides) is a later,
-    separate step.
   - The selection an Image > Adjustments effect keeps (ADR 0029) is an implicit mask dedicated
     to that effect: not exposed, not edited.
 - **Decided, not added**: Sky, Person, Hair and other subject kinds (evaluated separately if

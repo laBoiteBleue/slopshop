@@ -205,6 +205,12 @@ const fr: Messages = {
   "refine.radius": "Rayon :",
   "refine.detect": "Détecter",
   "refine.edges": "Affinages globaux",
+  "refine.brush": "Pinceau d’amélioration du contour",
+  "refine.brush.hint":
+    "Peignez sur les cheveux ou la fourrure : la détection du contour y décide aussi, au relâchement (Alt : effacer)",
+  "refine.brush.paint": "Peindre",
+  "refine.brush.erase": "Effacer",
+  "refine.brush.size": "Taille :",
   "refine.smooth": "Lisser :",
   "refine.feather": "Contour progressif :",
   "refine.contrast": "Contraste :",

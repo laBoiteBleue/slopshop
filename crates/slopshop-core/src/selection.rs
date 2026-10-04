@@ -2397,6 +2397,9 @@ pub struct EdgeRefinement {
     mask: Mask,
     /// Document pixels around the outline that the model decides.
     band: RefineBand,
+    /// Where the model decides as well, whatever the outline (Select and Mask's refine-edge
+    /// brush): pixels covered at least half.
+    unknown: Option<Mask>,
     windows: Vec<EdgeWindow>,
     /// The mattes of the undecided pixels, by tile: the sum of each window's alpha times its
     /// weight there, and the sum of the weights.
@@ -2446,10 +2449,43 @@ pub fn plan_refinement(
     side: u32,
     max_windows: usize,
 ) -> Result<EdgeRefinement, SelectionError> {
+    plan_refinement_with(canvas, selection, band, None, side, max_windows)
+}
+
+/// [`plan_refinement`], the model also deciding wherever `unknown` covers at least half
+/// (Select and Mask's refine-edge brush), near the outline or not.
+pub fn plan_refinement_with(
+    canvas: Size,
+    selection: &RasterImage,
+    band: RefineBand,
+    unknown: Option<&RasterImage>,
+    side: u32,
+    max_windows: usize,
+) -> Result<EdgeRefinement, SelectionError> {
     if side < 64 || band.inward == 0 || band.outward == 0 {
         return Err(SelectionError::InvalidShape);
     }
     let mask = Mask::from_image(canvas, selection)?;
+    let unknown = unknown.map(|u| Mask::from_image(canvas, u)).transpose()?;
+    // The tiles where the brush asks the model to decide.
+    let forced: Vec<bool> = match &unknown {
+        Some(u) => u
+            .tiles
+            .iter()
+            .map(|tile| match tile {
+                Tile::Const(v) => *v >= HALF,
+                other => other.values().iter().any(|&v| v >= HALF),
+            })
+            .collect(),
+        None => vec![false; mask.tiles.len()],
+    };
+    let forced_in = |inner: Rect| {
+        let t = TILE_SIZE;
+        (inner.y / t..=(inner.y + inner.height - 1) / t).any(|row| {
+            (inner.x / t..=(inner.x + inner.width - 1) / t)
+                .any(|col| forced[row as usize * mask.columns + col as usize])
+        })
+    };
     let side_of = |v: u16| {
         if v >= SURE_IN {
             Side::In
@@ -2491,7 +2527,7 @@ pub fn plan_refinement(
                     cell.min(canvas.width - x),
                     cell.min(canvas.height - y),
                 );
-                if crosses(&mask, &sides, inner, reach) {
+                if crosses(&mask, &sides, inner, reach) || forced_in(inner) {
                     let x0 = x.saturating_sub(margin);
                     let y0 = y.saturating_sub(margin);
                     let rect = Rect::new(
@@ -2513,6 +2549,7 @@ pub fn plan_refinement(
             return Ok(EdgeRefinement {
                 mask,
                 band,
+                unknown,
                 windows,
                 blend: HashMap::new(),
             });
@@ -2587,11 +2624,20 @@ impl EdgeRefinement {
                 - sat[yb * (w + 1) + xa]
                 > 0
         };
+        let forced = |x: usize, y: usize| {
+            self.unknown.as_ref().is_some_and(|u| {
+                let dx = i64::from(window.rect.x) + x as i64 * s + s / 2;
+                let dy = i64::from(window.rect.y) + y as i64 * s + s / 2;
+                u.get(dx, dy) >= HALF
+            })
+        };
         (0..w * h)
             .map(|i| {
                 let (x, y) = (i % w, i / w);
                 let v = coverage[i];
-                if v >= SURE_IN {
+                if forced(x, y) {
+                    TRIMAP_UNKNOWN
+                } else if v >= SURE_IN {
                     if near(&not_in, x, y, self.band.inward) {
                         TRIMAP_UNKNOWN
                     } else {
@@ -3915,6 +3961,48 @@ mod tests {
         };
         assert!(refine_edges(canvas, &square, gone).unwrap().is_none());
         assert!(modify(canvas, &square, Modify::Contrast(101.0)).is_err());
+    }
+
+    #[test]
+    fn the_refine_brush_lets_the_model_decide_where_it_painted() {
+        let canvas = Size::new(1200, 600);
+        let square = select(canvas, &rect(100.0, 100.0, 300.0, 300.0));
+        // Painted far from the outline: windows there too, undecided where painted.
+        let painted = select(canvas, &rect(800.0, 300.0, 900.0, 400.0));
+        let band = RefineBand::both(8);
+        let plain = plan_refinement(canvas, &square, band, 256, 100).unwrap();
+        let with = plan_refinement_with(canvas, &square, band, Some(&painted), 256, 100).unwrap();
+        let reaches = |plan: &EdgeRefinement| {
+            plan.windows().iter().any(|w| {
+                w.inner.x <= 850
+                    && 850 < w.inner.x + w.inner.width
+                    && w.inner.y <= 350
+                    && 350 < w.inner.y + w.inner.height
+            })
+        };
+        assert!(!reaches(&plain));
+        assert!(reaches(&with));
+        let window = with
+            .windows()
+            .iter()
+            .find(|w| {
+                w.rect.x <= 850
+                    && 850 < w.rect.x + w.rect.width
+                    && w.rect.y <= 350
+                    && 350 < w.rect.y + w.rect.height
+            })
+            .unwrap();
+        let trimap = with.trimap(window);
+        let at = |x: u32, y: u32| {
+            let size = window.input_size();
+            let (i, j) = (
+                (x - window.rect.x) / window.scale,
+                (y - window.rect.y) / window.scale,
+            );
+            trimap[(j * size.width + i) as usize]
+        };
+        assert_eq!(at(850, 350), TRIMAP_UNKNOWN);
+        assert_eq!(at(850, 250), 0);
     }
 
     #[test]

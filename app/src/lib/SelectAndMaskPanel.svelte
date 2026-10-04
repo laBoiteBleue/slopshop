@@ -10,6 +10,8 @@
     /** Edge detection: ViTMatte's band around the outline, document pixels. */
     radius: number;
     edges: EdgeSettings;
+    /** The refine-edge brush: on (strokes on the image), its size, and whether it erases. */
+    brush: { on: boolean; size: number; erase: boolean };
     output: RefineOutput;
   };
 
@@ -17,6 +19,7 @@
     view: "overlay",
     radius: 16,
     edges: { smooth: 0, feather: 0, contrast: 0, shift: 0 },
+    brush: { on: false, size: 40, erase: false },
     output: "selection",
   };
 </script>
@@ -24,14 +27,16 @@
 <script lang="ts">
   // Select > Select and Mask, as a light panel beside the image (maintainer's choice,
   // 2026-10-04), not Photoshop's workspace: how the selection is shown, edge detection
-  // (ViTMatte, run on request: it takes seconds), then Smooth, Shift Edge, Feather and Contrast
-  // shown live on the image, and where the result goes. Enter applies (except in a number
-  // field), Esc cancels.
+  // (ViTMatte, run on request: it takes seconds; the refine-edge brush marks where else it
+  // decides, hair and fur, and runs it on release), then Smooth, Shift Edge, Feather and
+  // Contrast shown live on the image, and where the result goes. Enter applies (except in a
+  // number field), Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
   import SliderField from "./SliderField.svelte";
-  import { MAX_FEATHER, MAX_REFINE } from "./selection";
+  import { MAX_BRUSH, MAX_FEATHER, MAX_REFINE } from "./selection";
+  import { keepFocus } from "./platform";
 
   let {
     settings = $bindable(),
@@ -120,6 +125,45 @@
         {t("refine.detect")}
       </button>
     </div>
+
+    <div class="brush">
+      <button
+        type="button"
+        class="btn small"
+        class:on={settings.brush.on}
+        aria-pressed={settings.brush.on}
+        title={t("refine.brush.hint")}
+        onmousedown={keepFocus}
+        onclick={() => (settings.brush.on = !settings.brush.on)}
+      >
+        {t("refine.brush")}
+      </button>
+      {#if settings.brush.on}
+        <div class="segmented" role="group" aria-label={t("refine.brush")}>
+          {#each [false, true] as erase (erase)}
+            <button
+              type="button"
+              class:on={settings.brush.erase === erase}
+              aria-pressed={settings.brush.erase === erase}
+              onmousedown={keepFocus}
+              onclick={() => (settings.brush.erase = erase)}
+            >
+              {t(erase ? "refine.brush.erase" : "refine.brush.paint")}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    {#if settings.brush.on}
+      <SliderField
+        label={t("refine.brush.size")}
+        bind:value={settings.brush.size}
+        min={1}
+        max={MAX_BRUSH}
+        unit="px"
+        log
+      />
+    {/if}
 
     <h3>{t("refine.edges")}</h3>
     <div class="fields">
@@ -224,6 +268,40 @@
   .fields {
     display: grid;
     gap: 6px;
+  }
+
+  .brush {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .btn.on {
+    background: var(--selected);
+  }
+
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .segmented button {
+    padding: 2px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .segmented button + button {
+    border-left: 1px solid var(--border-strong);
+  }
+
+  .segmented button.on {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   footer {

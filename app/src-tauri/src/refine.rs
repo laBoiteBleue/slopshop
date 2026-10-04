@@ -1,6 +1,7 @@
 //! Select > Select and Mask (ADR 0024): a panel beside the image refines the selection it was
-//! opened with (its *base*): the edge settings are shown live as a gesture each new value
-//! replaces, the base itself can be matted by ViTMatte (`segment::ai_refine_base`), and the
+//! opened with: ViTMatte can matte its edge (`segment::ai_refine_base`), within a band of the
+//! outline and wherever the refine-edge brush painted (`refine_brush`), which gives the *base*;
+//! the edge settings are shown live on the base as a gesture each new value replaces; the
 //! result goes to the selection, the active layer's mask, or a copy of the layer with that
 //! mask, as one undo entry. The view of the selection (ants, overlay, on black or white, the
 //! mask) is view state.
@@ -8,14 +9,36 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke};
 use slopshop_core::selection::{self, EdgeSettings, Selection};
-use slopshop_core::{Edit, LayerId, LayerMask, RasterImage};
+use slopshop_core::{Affine, Edit, LayerId, LayerMask, RasterImage};
 use slopshop_render::SelectionView;
 use tauri::{AppHandle, Manager, State};
 
 use crate::AppState;
 use crate::ipc::DocumentView;
 use crate::selection::on_worker;
+
+/// What an open Select and Mask works on.
+#[derive(Debug, Clone)]
+pub(crate) struct RefineSession {
+    /// The selection it was opened with: what edge detection mattes, each time from scratch.
+    pub original: Arc<RasterImage>,
+    /// What the settings apply to: the original, or its matted edge.
+    pub base: Arc<RasterImage>,
+    /// Where the refine-edge brush painted (coverage), `None` before it paints.
+    pub region: Option<Arc<RasterImage>>,
+}
+
+impl RefineSession {
+    pub fn new(selection: Arc<RasterImage>) -> Self {
+        Self {
+            original: Arc::clone(&selection),
+            base: selection,
+            region: None,
+        }
+    }
+}
 
 /// The edge settings, from the panel (document pixels, Contrast in percent).
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -52,7 +75,7 @@ pub async fn refine_open(
         .selection()
         .map(|s| Arc::clone(s.image()))
         .ok_or("nothing is selected")?;
-    document.refine_base = Some(base);
+    document.refine = Some(RefineSession::new(base));
     Ok(document.view())
 }
 
@@ -125,15 +148,81 @@ fn base_of(
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
     let base = document
-        .refine_base
-        .clone()
+        .refine
+        .as_ref()
+        .map(|r| Arc::clone(&r.base))
         .ok_or("Select and Mask is not open")?;
     Ok((document.session.document().size(), base))
 }
 
 fn close_session(document: &mut crate::OpenDocument) {
-    document.refine_base = None;
+    document.refine = None;
     document.overlays.selection_view = SelectionView::Off;
+}
+
+/// The refine-edge brush: a stroke (`samples`: `[x, y, pressure]`, document pixels) of a round
+/// brush `size` pixels wide painting where edge detection decides (`erase`: no longer). The
+/// panel then runs edge detection again.
+#[tauri::command]
+pub async fn refine_brush(
+    app: AppHandle,
+    document_id: u64,
+    samples: Vec<[f64; 3]>,
+    size: f32,
+    erase: bool,
+) -> Result<(), String> {
+    on_worker(move || brush(&app.state::<AppState>(), document_id, &samples, size, erase)).await
+}
+
+pub(crate) fn brush(
+    state: &AppState,
+    document_id: u64,
+    samples: &[[f64; 3]],
+    size: f32,
+    erase: bool,
+) -> Result<(), String> {
+    let (canvas, blend_space, region) = {
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        let session = document
+            .refine
+            .as_ref()
+            .ok_or("Select and Mask is not open")?;
+        let doc = document.session.document();
+        (doc.size(), doc.blend_space(), session.region.clone())
+    };
+    let region = match region {
+        Some(region) => region,
+        None => Arc::new(selection::uniform_mask(canvas, false).map_err(|e| e.to_string())?),
+    };
+    // The Brush's engine, painting a gray coverage (ADR 0027): white marks, the eraser clears.
+    let brush = Brush {
+        diameter: size.clamp(1.0, slopshop_core::paint::MAX_DIAMETER),
+        hardness: 1.0,
+        pressure_size: false,
+        ..Brush::default()
+    };
+    let paint = Paint::Gray(if erase { 0.0 } else { 1.0 });
+    let mut stroke = Stroke::new(region, Affine::IDENTITY, None, blend_space, brush, paint)
+        .map_err(|e| e.to_string())?;
+    let samples: Vec<PointerSample> = samples
+        .iter()
+        .map(|&[x, y, pressure]| PointerSample {
+            x,
+            y,
+            pressure: pressure as f32,
+        })
+        .collect();
+    stroke.add(&samples);
+    let Some(painted) = stroke.finish().map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    if let Some(session) = document.refine.as_mut() {
+        session.region = Some(painted);
+    }
+    Ok(())
 }
 
 /// Cancel: the selection as it was when the panel opened.
