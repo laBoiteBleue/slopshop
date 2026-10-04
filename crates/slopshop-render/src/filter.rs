@@ -10,7 +10,7 @@ use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::PixelFormat;
 use slopshop_core::filter::{Filter, LINE_UP_TO, line_offsets};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
-use slopshop_core::stack::LookJob;
+use slopshop_core::stack::{FilterStep, LookJob};
 use wgpu::util::DeviceExt;
 
 /// The farthest a pixel's result reads, in pixels on each side.
@@ -28,6 +28,7 @@ pub(crate) struct GpuFilter {
     rows: wgpu::ComputePipeline,
     columns: wgpu::ComputePipeline,
     line: wgpu::ComputePipeline,
+    noise: wgpu::ComputePipeline,
 }
 
 impl GpuFilter {
@@ -87,6 +88,7 @@ impl GpuFilter {
             rows: pipeline("rows_main"),
             columns: pipeline("columns_main"),
             line: pipeline("line_main"),
+            noise: pipeline("noise_main"),
         }
     }
 
@@ -103,7 +105,7 @@ impl GpuFilter {
                 if step.selection.is_some() || step.space != BlendSpace::Perceptual {
                     return None;
                 }
-                Pass::of(step.filter)
+                Pass::of(step)
             })
             .collect::<Option<_>>()?;
         let (width, height) = (job.size.width, job.size.height);
@@ -178,7 +180,8 @@ impl GpuFilter {
                     .flat_map(|v| v.to_le_bytes())
                     .chain(pass.amount.to_le_bytes())
                     .chain(pass.threshold.to_le_bytes())
-                    .chain([0u8; 8])
+                    .chain(pass.seed.to_le_bytes())
+                    .chain(pass.flags.to_le_bytes())
                     .collect::<Vec<u8>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
@@ -217,10 +220,10 @@ impl GpuFilter {
                     },
                 ],
             });
-            let pipelines = if pass.line {
-                vec![&self.line]
-            } else {
-                vec![&self.rows, &self.columns]
+            let pipelines = match pass.kind {
+                Kind::Separable => vec![&self.rows, &self.columns],
+                Kind::Line => vec![&self.line],
+                Kind::Noise => vec![&self.noise],
             };
             for pipeline in pipelines {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -248,34 +251,75 @@ impl GpuFilter {
     }
 }
 
-/// A step as the shader runs it: the blur's kernel, then what each pixel becomes from it; or a
-/// Motion Blur's line, its samples' offsets in `weights` (`Params` in filter.wgsl).
+/// What a pass runs (filter.wgsl's entry points).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A Gaussian along rows then columns, each pixel then made from it (`mode`).
+    Separable,
+    /// Motion Blur's line: `weights` holds its samples' offsets.
+    Line,
+    /// Add Noise: `weights` holds the crop's map to the document.
+    Noise,
+}
+
+/// A step as the shader runs it (`Params` in filter.wgsl).
 struct Pass {
+    kind: Kind,
     weights: Vec<f32>,
-    line: bool,
     mode: u32,
     amount: f32,
     threshold: f32,
+    seed: u32,
+    flags: u32,
 }
 
 impl Pass {
-    /// `filter`'s pass, or `None` when it reaches too far (the CPU reduces the layer then).
-    fn of(filter: Filter) -> Option<Self> {
-        if let Filter::MotionBlur { angle, distance } = filter {
-            if f64::from(distance) > LINE_UP_TO {
-                return None;
+    /// `step`'s pass, or `None` when it reaches too far (the CPU reduces the layer then).
+    fn of(step: &FilterStep) -> Option<Self> {
+        let none = Self {
+            kind: Kind::Separable,
+            weights: Vec::new(),
+            mode: 0,
+            amount: 0.0,
+            threshold: 0.0,
+            seed: 0,
+            flags: 0,
+        };
+        let filter = step.filter;
+        match filter {
+            Filter::MotionBlur { angle, distance } => {
+                if f64::from(distance) > LINE_UP_TO {
+                    return None;
+                }
+                return Some(Self {
+                    kind: Kind::Line,
+                    weights: line_offsets(f64::from(angle), f64::from(distance))
+                        .into_iter()
+                        .flatten()
+                        .map(|v| v as f32)
+                        .collect(),
+                    ..none
+                });
             }
-            return Some(Self {
-                weights: line_offsets(f64::from(angle), f64::from(distance))
-                    .into_iter()
-                    .flatten()
-                    .map(|v| v as f32)
-                    .collect(),
-                line: true,
-                mode: 0,
-                amount: 0.0,
-                threshold: 0.0,
-            });
+            Filter::AddNoise {
+                amount,
+                gaussian,
+                monochromatic,
+                seed,
+            } => {
+                let map = step.to_document;
+                return Some(Self {
+                    kind: Kind::Noise,
+                    weights: [map.a, map.b, map.c, map.d, map.e, map.f]
+                        .map(|v| v as f32)
+                        .to_vec(),
+                    amount,
+                    seed,
+                    flags: u32::from(gaussian) | u32::from(monochromatic) << 1,
+                    ..none
+                });
+            }
+            _ => {}
         }
         let weights = gaussian(f64::from(filter.blur_radius()?))?;
         let (mode, amount, threshold) = match filter {
@@ -284,14 +328,14 @@ impl Pass {
                 amount, threshold, ..
             } => (1, amount, threshold),
             Filter::HighPass { .. } => (2, 0.0, 0.0),
-            Filter::MotionBlur { .. } => return None,
+            Filter::MotionBlur { .. } | Filter::AddNoise { .. } => return None,
         };
         Some(Self {
             weights,
-            line: false,
             mode,
             amount,
             threshold,
+            ..none
         })
     }
 }

@@ -18,6 +18,14 @@ pub const MAX_MOTION_DISTANCE: f32 = 2000.0;
 /// the layer reduced (see [`Plan::line`]), whatever the distance costs about the same.
 pub const LINE_UP_TO: f64 = 256.0;
 
+/// Add Noise's amount range, in percent (Photoshop's): at 100 %, uniform noise reaches half the
+/// range of a channel either way.
+pub const MIN_NOISE_AMOUNT: f32 = 0.1;
+pub const MAX_NOISE_AMOUNT: f32 = 400.0;
+
+/// The seeds Add Noise takes: whole numbers below 2^24, exact in an `f32` parameter.
+pub const NOISE_SEEDS: u32 = 1 << 24;
+
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
 pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
@@ -56,11 +64,27 @@ pub enum Filter {
     /// Photoshop's High Pass: each color's difference with its Gaussian blur of `radius`, around
     /// middle gray.
     HighPass { radius: f32 },
+    /// Photoshop's Add Noise: `amount` percent of noise added to each color, `gaussian` or
+    /// uniform, the same on the three channels when `monochromatic`. The noise is a function of
+    /// the document pixel and `seed` (a whole number below [`NOISE_SEEDS`]): computing it again
+    /// gives the same grain, another seed another grain.
+    AddNoise {
+        amount: f32,
+        gaussian: bool,
+        monochromatic: bool,
+        seed: u32,
+    },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 4] = ["gaussianBlur", "motionBlur", "unsharpMask", "highPass"];
+    pub const IDS: [&'static str; 5] = [
+        "gaussianBlur",
+        "motionBlur",
+        "unsharpMask",
+        "addNoise",
+        "highPass",
+    ];
 
     /// The identifier the UI and files know it by.
     pub fn id(&self) -> &'static str {
@@ -69,6 +93,7 @@ impl Filter {
             Self::MotionBlur { .. } => "motionBlur",
             Self::UnsharpMask { .. } => "unsharpMask",
             Self::HighPass { .. } => "highPass",
+            Self::AddNoise { .. } => "addNoise",
         }
     }
 
@@ -82,6 +107,17 @@ impl Filter {
                 radius,
                 threshold,
             } => vec![amount, radius, threshold],
+            Self::AddNoise {
+                amount,
+                gaussian,
+                monochromatic,
+                seed,
+            } => vec![
+                amount,
+                f32::from(u8::from(gaussian)),
+                f32::from(u8::from(monochromatic)),
+                seed as f32,
+            ],
         }
     }
 
@@ -97,6 +133,18 @@ impl Filter {
                 threshold,
             }),
             ("highPass", &[radius]) => Some(Self::HighPass { radius }),
+            ("addNoise", &[amount, gaussian, monochromatic, seed]) => {
+                // Flags are 0 or 1, the seed a whole number in range: anything else is not
+                // this filter's.
+                let flag = |v: f32| (v == 0.0 || v == 1.0).then_some(v == 1.0);
+                let whole = seed.fract() == 0.0 && (0.0..NOISE_SEEDS as f32).contains(&seed);
+                Some(Self::AddNoise {
+                    amount,
+                    gaussian: flag(gaussian)?,
+                    monochromatic: flag(monochromatic)?,
+                    seed: whole.then_some(seed as u32)?,
+                })
+            }
             _ => None,
         }
     }
@@ -115,6 +163,12 @@ impl Filter {
                 threshold: 0.0,
             }),
             "highPass" => Some(Self::HighPass { radius: 10.0 }),
+            "addNoise" => Some(Self::AddNoise {
+                amount: 12.5,
+                gaussian: false,
+                monochromatic: false,
+                seed: 0,
+            }),
             _ => None,
         }
     }
@@ -140,6 +194,11 @@ impl Filter {
                     && threshold.is_finite()
                     && (0.0..=MAX_THRESHOLD).contains(&threshold)
             }
+            Self::AddNoise { amount, seed, .. } => {
+                amount.is_finite()
+                    && (MIN_NOISE_AMOUNT..=MAX_NOISE_AMOUNT).contains(&amount)
+                    && seed < NOISE_SEEDS
+            }
         }
     }
 
@@ -149,7 +208,7 @@ impl Filter {
             Self::GaussianBlur { radius }
             | Self::UnsharpMask { radius, .. }
             | Self::HighPass { radius } => Some(radius),
-            Self::MotionBlur { .. } => None,
+            Self::MotionBlur { .. } | Self::AddNoise { .. } => None,
         }
     }
 
@@ -171,6 +230,18 @@ impl Filter {
                 threshold,
             },
             Self::HighPass { .. } => Self::HighPass { radius },
+            // A reduced pixel averages `factor`² noisy ones: its noise is `factor` times weaker.
+            Self::AddNoise {
+                amount,
+                gaussian,
+                monochromatic,
+                seed,
+            } => Self::AddNoise {
+                amount: (amount / factor).max(MIN_NOISE_AMOUNT),
+                gaussian,
+                monochromatic,
+                seed,
+            },
         }
     }
 
@@ -179,6 +250,7 @@ impl Filter {
     pub fn reach(&self) -> f64 {
         match *self {
             Self::MotionBlur { distance, .. } => f64::from(distance) / 2.0 + 2.0,
+            Self::AddNoise { .. } => 0.0,
             _ => 3.5 * f64::from(self.blur_radius().unwrap_or(0.0)) + 2.0,
         }
     }
@@ -189,6 +261,10 @@ impl Filter {
             Self::MotionBlur { angle, distance } => {
                 Plan::line(f64::from(angle), f64::from(distance))
             }
+            Self::AddNoise { .. } => Plan {
+                factor: 1,
+                kernel: Kernel::Identity,
+            },
             _ => Plan::gaussian(f64::from(self.blur_radius().unwrap_or(MIN_BLUR_RADIUS))),
         }
     }
@@ -199,9 +275,10 @@ impl Filter {
     }
 
     /// A pixel's result from its premultiplied value `original` and its blur's `blurred`, in
-    /// the blend space (values of 1 are white). Unsharp Mask and High Pass work on the colors
-    /// (straight, the blur's by its own coverage), and keep the pixel's alpha.
-    pub(crate) fn finish(&self, original: [f64; 4], blurred: [f64; 4]) -> [f64; 4] {
+    /// the blend space (values of 1 are white); `at` is the document pixel it shows. Unsharp
+    /// Mask, High Pass and Add Noise work on the colors (straight, the blur's by its own
+    /// coverage), and keep the pixel's alpha.
+    pub(crate) fn finish(&self, original: [f64; 4], blurred: [f64; 4], at: [i64; 2]) -> [f64; 4] {
         let straight = |p: [f64; 4]| {
             if p[3] > 0.0 {
                 [p[0] / p[3], p[1] / p[3], p[2] / p[3]]
@@ -229,8 +306,58 @@ impl Filter {
                 color(&|o, b| o + k * (o - b))
             }
             Self::HighPass { .. } => color(&|o, b| o - b + 0.5),
+            Self::AddNoise {
+                amount,
+                gaussian,
+                monochromatic,
+                seed,
+            } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let n = noise(at, seed, gaussian, monochromatic);
+                let k = f64::from(amount) / 100.0;
+                let c: [f64; 3] = std::array::from_fn(|i| o[i] + k * n[i]);
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
         }
     }
+}
+
+/// Add Noise's noise at document pixel `at` for `seed`, per channel: uniform within ±0.5, or
+/// Gaussian of the same spread (a standard deviation of 0.5 / √3); the red channel's on all
+/// three when `monochromatic`. From a hash of the pixel, the seed and the channel, so that the
+/// GPU computes the same (ADR 0035): whole 32-bit operations, then 24 bits of it as a float.
+pub fn noise(at: [i64; 2], seed: u32, gaussian: bool, monochromatic: bool) -> [f64; 3] {
+    let uniform = |channel: u32, draw: u32| {
+        let h = hash(
+            at[0] as i32 as u32 ^ hash(at[1] as i32 as u32 ^ hash(seed ^ hash(channel * 2 + draw))),
+        );
+        // The middle of 2^24 cells of [0, 1): never 0, so that a logarithm of it is finite.
+        (f64::from(h >> 8) + 0.5) / f64::from(1u32 << 24)
+    };
+    let one = |channel: u32| {
+        if gaussian {
+            // Box-Muller, scaled to the uniform noise's variance (1/12).
+            let (u, v) = (uniform(channel, 0), uniform(channel, 1));
+            (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos() / 12f64.sqrt()
+        } else {
+            uniform(channel, 0) - 0.5
+        }
+    };
+    if monochromatic {
+        [one(0); 3]
+    } else {
+        [one(0), one(1), one(2)]
+    }
+}
+
+/// A 32-bit integer hash (PCG's output permutation of an LCG step): well mixed, and the same in
+/// the shader.
+fn hash(x: u32) -> u32 {
+    let h = x.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let h = ((h >> ((h >> 28) + 4)) ^ h).wrapping_mul(277_803_737);
+    (h >> 22) ^ h
 }
 
 /// How a line of pixels is blurred: an exact kernel, or box blurs of these radii.
@@ -361,11 +488,12 @@ impl Plan {
     }
 }
 
-/// What a filter blurs a region or an image by.
+/// What a filter blurs a region or an image by; nothing for a filter of each pixel alone.
 #[derive(Debug, Clone)]
 pub(crate) enum Kernel {
     Gaussian(Blur),
     Line(Line),
+    Identity,
 }
 
 impl Kernel {
@@ -374,6 +502,7 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.reach(),
             Self::Line(line) => line.reach(),
+            Self::Identity => 0,
         }
     }
 
@@ -386,6 +515,7 @@ impl Kernel {
                 let source = region.to_vec();
                 line.rows(&source, width, height, 0, region);
             }
+            Self::Identity => {}
         }
     }
 
@@ -393,6 +523,7 @@ impl Kernel {
     pub(crate) fn image(&self, image: Vec<[f32; 4]>, width: usize, height: usize) -> Vec<[f32; 4]> {
         match self {
             Self::Gaussian(blur) => blur.image(image, width, height),
+            Self::Identity => image,
             Self::Line(line) => {
                 let mut out = vec![[0.0f32; 4]; image.len()];
                 if width == 0 {
@@ -689,32 +820,117 @@ mod tests {
         // Half opaque: colors are straight, alpha kept.
         let original = [0.3, 0.2, 0.1, 0.5];
         let blurred = [0.2, 0.2, 0.2, 0.5];
-        let out = sharpen(0.0).finish(original, blurred);
+        let out = sharpen(0.0).finish(original, blurred, [0, 0]);
         let expected = [0.7, 0.4, 0.1].map(|c| c * 0.5);
         for c in 0..3 {
             assert!((out[c] - expected[c]).abs() < 1e-12, "{out:?}");
         }
         assert_eq!(out[3], 0.5);
         // Within the threshold on every channel (0.2 is 51 levels, 0 is 0): left as it is.
-        assert_eq!(sharpen(52.0).finish(original, blurred), original);
-        assert_ne!(sharpen(50.0).finish(original, blurred), original);
+        assert_eq!(sharpen(52.0).finish(original, blurred, [0, 0]), original);
+        assert_ne!(sharpen(50.0).finish(original, blurred, [0, 0]), original);
         // Transparent stays transparent.
-        assert_eq!(sharpen(0.0).finish([0.0; 4], blurred), [0.0; 4]);
+        assert_eq!(sharpen(0.0).finish([0.0; 4], blurred, [0, 0]), [0.0; 4]);
+    }
+
+    #[test]
+    fn noise_is_the_pixels_and_the_seeds_and_spread_as_its_distribution() {
+        // The same pixel and seed: the same noise; another of either: another.
+        assert_eq!(
+            noise([5, 9], 7, false, false),
+            noise([5, 9], 7, false, false)
+        );
+        assert_ne!(
+            noise([5, 9], 7, false, false),
+            noise([5, 9], 8, false, false)
+        );
+        assert_ne!(
+            noise([5, 9], 7, false, false),
+            noise([6, 9], 7, false, false)
+        );
+        assert_ne!(
+            noise([5, 9], 7, false, false),
+            noise([-5, 9], 7, false, false)
+        );
+        let mono = noise([1, 2], 3, true, true);
+        assert!(mono[0] == mono[1] && mono[1] == mono[2]);
+        let color = noise([1, 2], 3, false, false);
+        assert!(color[0] != color[1] && color[1] != color[2]);
+        // Over many pixels: centered, uniform within ±0.5, both of variance 1/12.
+        for gaussian in [false, true] {
+            let values: Vec<f64> = (0..200_000)
+                .map(|i| noise([i % 1000, i / 1000], 11, gaussian, false)[1])
+                .collect();
+            let n = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n;
+            let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+            assert!(mean.abs() < 0.005, "{gaussian}: mean {mean}");
+            assert!(
+                (variance - 1.0 / 12.0).abs() < 0.002,
+                "{gaussian}: {variance}"
+            );
+            if !gaussian {
+                assert!(values.iter().all(|v| v.abs() < 0.5));
+            }
+        }
+    }
+
+    #[test]
+    fn add_noise_moves_colors_and_keeps_alpha() {
+        let filter = |amount, monochromatic| Filter::AddNoise {
+            amount,
+            gaussian: false,
+            monochromatic,
+            seed: 4,
+        };
+        let original = [0.25, 0.25, 0.25, 0.5];
+        let out = filter(100.0, false).finish(original, original, [3, 4]);
+        let n = noise([3, 4], 4, false, false);
+        for c in 0..3 {
+            assert!((out[c] - (0.5 + n[c]) * 0.5).abs() < 1e-12, "{out:?}");
+        }
+        assert_eq!(out[3], 0.5);
+        // Half the amount, half the noise; transparent stays transparent.
+        let half = filter(50.0, false).finish(original, original, [3, 4]);
+        assert!((half[0] - (0.5 + n[0] / 2.0) * 0.5).abs() < 1e-12);
+        assert_eq!(
+            filter(100.0, true).finish([0.0; 4], [0.0; 4], [3, 4]),
+            [0.0; 4]
+        );
+        // Flags and seeds out of their values are not Add Noise's.
+        assert_eq!(
+            Filter::from_params("addNoise", &[10.0, 2.0, 0.0, 1.0]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("addNoise", &[10.0, 0.0, 0.0, 1.5]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("addNoise", &[10.0, 0.0, 0.0, NOISE_SEEDS as f32]),
+            None
+        );
+        assert!(!filter(401.0, false).is_valid() && !filter(0.0, false).is_valid());
+        assert_eq!(
+            filter(100.0, true).scaled(4.0),
+            filter(25.0, true),
+            "a reduced pixel's noise is weaker"
+        );
     }
 
     #[test]
     fn high_pass_is_the_difference_with_the_blur_around_middle_gray() {
         let high = Filter::HighPass { radius: 3.0 };
-        let same = high.finish([0.4, 0.4, 0.4, 1.0], [0.4, 0.4, 0.4, 1.0]);
+        let same = high.finish([0.4, 0.4, 0.4, 1.0], [0.4, 0.4, 0.4, 1.0], [0, 0]);
         for v in &same[..3] {
             assert!((v - 0.5).abs() < 1e-12, "{same:?}");
         }
-        let out = high.finish([0.9, 0.1, 0.5, 1.0], [0.5, 0.5, 0.5, 1.0]);
+        let out = high.finish([0.9, 0.1, 0.5, 1.0], [0.5, 0.5, 0.5, 1.0], [0, 0]);
         for (c, v) in [0.9, 0.1, 0.5].iter().enumerate() {
             assert!((out[c] - v).abs() < 1e-12, "{out:?}");
         }
         // Half opaque over a transparent blur (read as black): a straight 0.5 becomes 1.
-        let out = high.finish([0.25, 0.25, 0.25, 0.5], [0.0; 4]);
+        let out = high.finish([0.25, 0.25, 0.25, 0.5], [0.0; 4], [0, 0]);
         assert_eq!(out, [0.5, 0.5, 0.5, 0.5]);
     }
 
