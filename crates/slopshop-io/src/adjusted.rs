@@ -39,6 +39,7 @@ pub(crate) fn grouped(
         .reduce(|a, b| slopshop_core::Size::new(a.width.max(b.width), a.height.max(b.height)))
         .ok_or_else(|| ImportError::Decode("no image".into()))?;
     let layer = |id: u64, name: String, content: LayerContent| Layer {
+        style: None,
         id: LayerId::from_raw(id),
         name,
         visible: true,

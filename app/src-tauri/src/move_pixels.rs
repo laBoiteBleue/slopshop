@@ -452,6 +452,7 @@ fn lift_edit(
         Look::New(name) => (name, 1.0, slopshop_core::BlendMode::Normal, false),
     };
     let floating = slopshop_core::Layer {
+        style: None,
         id: LayerId::from_raw(0),
         name,
         visible: true,
@@ -517,6 +518,7 @@ mod tests {
         let pixels = [200u8, 100, 50, 255].repeat(CANVAS.pixel_count() as usize);
         let image = RasterImage::from_pixels(CANVAS, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
         let layer = Layer {
+            style: None,
             id: LayerId::from_raw(1),
             name: "photo".into(),
             visible: true,

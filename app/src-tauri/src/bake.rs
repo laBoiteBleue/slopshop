@@ -82,6 +82,7 @@ fn start(session: &mut Session, request: BakeRequest, baked: Vec<Edit>) -> Resul
                 .cloned()
                 .collect();
             let group = Layer {
+                style: None,
                 id: LayerId::from_raw(1),
                 name,
                 visible: true,

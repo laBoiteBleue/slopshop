@@ -400,6 +400,7 @@ pub(super) fn read_node(
         residue.nodes.insert(id, node.extra.clone());
     }
     Ok(Layer {
+        style: None,
         transform,
         clipped,
         id: LayerId::from_raw(id),

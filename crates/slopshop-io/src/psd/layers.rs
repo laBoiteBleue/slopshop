@@ -432,6 +432,7 @@ fn read_layer_info<R: Read + Seek>(
             notes_of.insert(id, notes);
         }
         let layer = Layer {
+            style: None,
             transform: slopshop_core::Affine::IDENTITY,
             clipped: record.clipping,
             id,

@@ -25,6 +25,7 @@ fn print_size(size: Size) -> (Size, f64) {
 fn on_paper(doc: &Document) -> Result<Document, String> {
     let mut doc = doc.clone();
     let paper = Layer {
+        style: None,
         transform: Affine::IDENTITY,
         clipped: false,
         id: doc.allocate_layer_id(),

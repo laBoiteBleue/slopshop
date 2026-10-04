@@ -218,6 +218,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                 parent: None,
                 index,
                 layer: Layer {
+                    style: None,
                     transform: slopshop_core::Affine::IDENTITY,
                     clipped: false,
                     id,

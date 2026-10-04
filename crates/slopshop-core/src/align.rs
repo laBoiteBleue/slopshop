@@ -235,6 +235,7 @@ mod tests {
                     parent: None,
                     index,
                     layer: Layer {
+                        style: None,
                         id,
                         name: "box".into(),
                         visible: true,

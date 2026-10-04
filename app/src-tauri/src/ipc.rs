@@ -608,6 +608,7 @@ impl EditRequest {
                     parent,
                     index,
                     layer: Layer {
+                        style: None,
                         transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
@@ -651,6 +652,7 @@ impl EditRequest {
                     parent: parent.map(LayerId::from_raw),
                     index,
                     layer: Layer {
+                        style: None,
                         transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
@@ -719,6 +721,7 @@ impl EditRequest {
                         parent,
                         index: index + 1,
                         layer: Layer {
+                            style: None,
                             transform: slopshop_core::Affine::IDENTITY,
                             clipped: true,
                             id: session.allocate_layer_id(),
@@ -785,6 +788,7 @@ impl EditRequest {
                     parent: parent.map(LayerId::from_raw),
                     index,
                     layer: Layer {
+                        style: None,
                         transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
@@ -1030,6 +1034,7 @@ impl EditRequest {
 /// Pass Through stays one choice away in the blend modes.
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
+        style: None,
         transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id: session.allocate_layer_id(),

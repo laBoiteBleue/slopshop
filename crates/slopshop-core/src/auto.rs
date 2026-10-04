@@ -321,6 +321,7 @@ mod tests {
             .collect();
         let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
         let layer = Layer {
+            style: None,
             id: doc.allocate_layer_id(),
             name: "image".into(),
             visible: true,

@@ -1198,6 +1198,7 @@ pub(crate) fn single_layer_document(image: RasterImage, name: &str) -> Result<Do
         parent: None,
         index: 0,
         layer: Layer {
+            style: None,
             transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,

@@ -125,6 +125,7 @@ fn document(stack: &LayerStack, ready: bool) -> Document {
         parent: None,
         index: 0,
         layer: Layer {
+            style: None,
             transform: Affine::IDENTITY,
             clipped: false,
             id,

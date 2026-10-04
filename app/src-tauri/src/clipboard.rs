@@ -176,6 +176,7 @@ fn holding(size: Size, space: BlendSpace, layers: &[Layer]) -> Result<Document, 
 /// A new top-level layer named `name` showing `image` placed by `transform`.
 fn raster_layer(name: String, image: Arc<RasterImage>, transform: Affine) -> Layer {
     Layer {
+        style: None,
         id: LayerId::from_raw(1),
         name,
         visible: true,

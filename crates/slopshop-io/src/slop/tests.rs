@@ -64,6 +64,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        style: None,
         transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id,
@@ -825,6 +826,7 @@ fn golden_document_v0_9() -> Document {
         parent: None,
         index,
         layer: Layer {
+            style: None,
             id,
             name: "Curves".into(),
             visible: true,
@@ -858,6 +860,7 @@ fn golden_document_v0_8() -> Document {
         parent: None,
         index,
         layer: Layer {
+            style: None,
             id,
             name: "Channel Mixer".into(),
             visible: true,
@@ -891,6 +894,7 @@ fn golden_document_v0_7() -> Document {
         parent: None,
         index,
         layer: Layer {
+            style: None,
             id,
             name: "Hue/Saturation".into(),
             visible: true,
@@ -958,6 +962,7 @@ fn golden_document_v0_4() -> Document {
     let folder = doc.allocate_layer_id();
     let inner = doc.allocate_layer_id();
     let group = |id, name: &str, pass_through, mode, opacity, mask| Layer {
+        style: None,
         transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id,

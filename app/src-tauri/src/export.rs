@@ -492,6 +492,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                style: None,
                 transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,

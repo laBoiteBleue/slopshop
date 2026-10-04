@@ -51,6 +51,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
         let id = document.allocate_layer_id();
         let index = document.layers().len();
         let layer = Layer {
+            style: None,
             transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,

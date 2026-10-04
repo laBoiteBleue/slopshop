@@ -654,6 +654,7 @@ mod tests {
         )
         .unwrap();
         let layer = Layer {
+            style: None,
             id: LayerId::from_raw(1),
             name: "layer".into(),
             visible: true,

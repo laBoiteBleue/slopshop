@@ -295,6 +295,7 @@ mod tests {
 
     fn layer(doc: &mut Document, content: LayerContent) -> Layer {
         Layer {
+            style: None,
             id: doc.allocate_layer_id(),
             name: "l".into(),
             visible: true,

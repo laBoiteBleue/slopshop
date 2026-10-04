@@ -162,6 +162,7 @@ impl Session {
                     parent: None,
                     index: base,
                     layer: Layer {
+                        style: None,
                         transform: crate::transform::Affine::IDENTITY,
                         clipped: false,
                         id,
@@ -343,6 +344,7 @@ mod tests {
                 parent: None,
                 index,
                 layer: Layer {
+                    style: None,
                     transform: crate::transform::Affine::IDENTITY,
                     clipped: false,
                     id,
@@ -542,6 +544,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    style: None,
                     transform: crate::transform::Affine::IDENTITY,
                     clipped: false,
                     id,
@@ -656,6 +659,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    style: None,
                     transform: crate::transform::Affine::IDENTITY,
                     clipped: false,
                     id: group,
