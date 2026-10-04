@@ -133,8 +133,9 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       deleted
 - [x] View menu (decided 2026-10-04, docs/ergonomics.md): Hide Extras (Ctrl+H), Snap
       remembered, Full Screen (F11), Window > Hide Panels (Tab)
-- [ ] Rulers (Ctrl+R) and guides in the document (drag from a ruler, snapping, Clear Guides),
-      a pixel grid at high zoom, Free Transform's edges on whole pixels
+- [x] Rulers (Ctrl+R) and guides in the document (drag from a ruler, snapping, Clear Guides,
+      `.slop` 0.22), a pixel grid at high zoom
+- [ ] Free Transform's unrotated edges on whole pixels; physical units on the rulers
 - [x] Image > Image Rotation > Arbitrary: the layers turned by any angle through their
       transforms, the canvas grown to hold them (Photoshop's Rotate Canvas)
 - [x] Image > Trim (transparent or corner-colored margins, composited in bands from the edges)

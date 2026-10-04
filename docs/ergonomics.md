@@ -503,14 +503,20 @@ working interface (panels) belongs to Window.
   Screen (F11, the system's full screen: F11 rather than Photoshop's F, every application's
   key). Window > Hide Panels (Tab, as in Photoshop): the toolbar, the options bar and the
   panels hidden, in any mode (full screen and Tab is the canvas alone); choosing a panel in
-  Window shows them again.
-- **Decided, to build**: Rulers (Ctrl+R, in pixels; physical units later from a right-click on
-  a ruler). Guides dragged out of a ruler, moved by dragging, deleted by dragging them back
-  onto it, stored in the document, each change undoable; View > Clear Guides. Snap is one
-  switch and snaps to everything (the canvas, the layers, the guides); the magenta smart
-  guides show what snapped, there is no separate Smart Guides switch; Ctrl held moves freely.
-  A pixel grid shown by itself at high zoom, without a menu entry. Moves stay in whole pixels
-  and Free Transform's unrotated edges snap to whole pixels: no "Pixels" snap target.
+  Window shows them again. Rulers (Ctrl+R, remembered) along the top and the left, in
+  pixels, labelled every 1, 2 or 5 × 10ⁿ pixels. Guides, cyan as in Photoshop: dragged out of
+  a ruler (the top one gives a horizontal guide), moved with the Move tool, deleted by
+  dragging them out of the image (onto a ruler), on whole pixels, snapping to the canvas and
+  the layers' edges and centers (Ctrl: freely), Escape dropping the one dragged; stored in the
+  document and moved with the image by Crop, Canvas Size, Image Size and Image Rotation; each
+  drag one undo entry; View > Clear Guides. Snap is one switch and snaps to everything (the
+  canvas, the layers, the guides); the magenta smart guides show what snapped, there is no
+  separate Smart Guides switch; Ctrl held moves freely. From 800% a pixel grid shows by
+  itself over the canvas, without a menu entry. Hide Extras also hides the guides and the
+  pixel grid.
+- **Decided, to build**: physical units on the rulers (a right-click on a ruler). Free
+  Transform's unrotated edges snap to whole pixels (moves are already in whole pixels): no
+  "Pixels" snap target.
 - **Decided, not added**: the Show and Snap To submenus, a Smart Guides switch, New Guide…
   and Lock Guides (later if missed), a regular grid and New Guide Layout (guides cover it),
   Fill Screen (the wheel does it), screen modes cycled with F, rotating the view (the engine's
