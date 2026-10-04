@@ -233,7 +233,7 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       a Selections panel (load, add, subtract, intersect, replace, rename, delete), Window menu
 - [x] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
       outputs
-- [ ] Select and Mask: a refine-edge brush
+- [x] Select and Mask: the Refine Edge Brush (the model also decides where it paints)
 - Dropped (2026-10-02): Select > Semantic (SAM 3), objects named by a text prompt. A click with
   Object Selection is simpler.
 - [x] Painting decided ([ADR 0027](adr/0027-painting.md)): strokes on the CPU as a coverage,

@@ -586,7 +586,8 @@ pub(crate) async fn ai_object_select(
 const MAX_REFINE_RADIUS: u32 = 256;
 
 /// `current`'s edge matted at full resolution by ViTMatte within `radius` document pixels of
-/// its outline (Refine Edge, Select and Mask's edge detection).
+/// its outline and wherever `region` covers at least half (Select and Mask's edge detection and
+/// refine-edge brush).
 #[allow(clippy::too_many_arguments)]
 fn matted(
     state: &AppState,
@@ -595,14 +596,16 @@ fn matted(
     doc: &slopshop_core::Document,
     current: &RasterImage,
     radius: u32,
+    region: Option<&RasterImage>,
     layer_id: Option<u64>,
     task: &mut Task,
 ) -> Result<Option<RasterImage>, AiFailure> {
     let radius = radius.clamp(1, MAX_REFINE_RADIUS);
-    let mut plan = core_selection::plan_refinement(
+    let mut plan = core_selection::plan_refinement_with(
         doc.size(),
         current,
         core_selection::RefineBand::both(radius),
+        region,
         MATTE_SIDE,
         MAX_MATTE_WINDOWS,
     )
@@ -612,9 +615,9 @@ fn matted(
     plan.finish(None, Combine::Replace).map_err(internal)
 }
 
-/// Select and Mask's edge detection: the base it refines (the selection it was opened with)
-/// matted by ViTMatte within `radius` pixels of its outline, which becomes its new base. The
-/// panel then shows its settings on it again (`refine_preview`).
+/// Select and Mask's edge detection: the selection it was opened with matted by ViTMatte within
+/// `radius` pixels of its outline and wherever the refine-edge brush painted, which becomes the
+/// base its settings apply to. The panel then shows them on it again (`refine_preview`).
 #[tauri::command]
 pub(crate) async fn ai_refine_base(
     app: AppHandle,
@@ -627,13 +630,14 @@ pub(crate) async fn ai_refine_base(
         let state = app.state::<AppState>();
         let (root, doc) = prepare(&app, document_id)?;
         require(&root, Feature::Segmentation)?;
-        let base = {
+        let (original, region) = {
             let mut documents = state.documents().map_err(internal)?;
             let document = documents.get_mut(document_id).map_err(internal)?;
-            document
-                .refine_base
-                .clone()
-                .ok_or_else(|| internal("Select and Mask is not open"))?
+            let session = document
+                .refine
+                .as_ref()
+                .ok_or_else(|| internal("Select and Mask is not open"))?;
+            (Arc::clone(&session.original), session.region.clone())
         };
         let mut task = Task::start(&app, task);
         let mut session = lock(&state)?;
@@ -642,8 +646,9 @@ pub(crate) async fn ai_refine_base(
             &root,
             &mut session,
             &doc,
-            &base,
+            &original,
             radius,
+            region.as_deref(),
             layer_id,
             &mut task,
         )?;
@@ -654,8 +659,8 @@ pub(crate) async fn ai_refine_base(
         let mut documents = state.documents().map_err(internal)?;
         let document = documents.get_mut(document_id).map_err(internal)?;
         // The panel may have closed meanwhile.
-        if document.refine_base.is_some() {
-            document.refine_base = Some(Arc::new(image));
+        if let Some(session) = document.refine.as_mut() {
+            session.base = Arc::new(image);
         }
         Ok(())
     })

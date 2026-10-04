@@ -202,6 +202,12 @@ const en = {
   "refine.radius": "Radius:",
   "refine.detect": "Detect",
   "refine.edges": "Global Refinements",
+  "refine.brush": "Refine Edge Brush",
+  "refine.brush.hint":
+    "Paint over hair or fur: edge detection decides there too, once released (Alt: erase)",
+  "refine.brush.paint": "Paint",
+  "refine.brush.erase": "Erase",
+  "refine.brush.size": "Size:",
   "refine.smooth": "Smooth:",
   "refine.feather": "Feather:",
   "refine.contrast": "Contrast:",

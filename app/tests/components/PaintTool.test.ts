@@ -35,7 +35,7 @@ test("a drag sends the start, the samples of the moves, then the end, at full pr
     { keys: "[/MouseLeft]", target: svg, coords: { clientX: 30, clientY: 14 } },
   ]);
   expect(onstroke.mock.calls).toEqual([
-    [[[10, 10, 1]], "start"],
+    [[[10, 10, 1]], "start", { altKey: false }],
     [[[20, 12, 1]], "move"],
     [[[30, 14, 1]], "move"],
     [[[30, 14, 1]], "end"],
@@ -48,7 +48,7 @@ test("Shift at the press asks for a straight line from where the last stroke end
   await user.pointer({ keys: "[MouseLeft]", target: svg, coords: { clientX: 40, clientY: 40 } });
   await user.keyboard("[/ShiftLeft]");
   expect(onstroke.mock.calls).toEqual([
-    [[[40, 40, 1]], "line"],
+    [[[40, 40, 1]], "line", { altKey: false }],
     [[[40, 40, 1]], "end"],
   ]);
 });
@@ -60,7 +60,7 @@ test("a pen's pressure goes with each sample", async () => {
   await fireEvent.pointerMove(svg, { ...pen, pressure: 0.75, clientX: 8, clientY: 9 });
   await fireEvent.pointerUp(svg, { ...pen, pressure: 0, clientX: 8, clientY: 9 });
   expect(onstroke.mock.calls).toEqual([
-    [[[5, 6, 0.25]], "start"],
+    [[[5, 6, 0.25]], "start", { altKey: false }],
     [[[8, 9, 0.75]], "move"],
     [[[8, 9, 0]], "end"],
   ]);
@@ -90,4 +90,16 @@ test("a pointer cancelled mid-stroke ends the stroke, and later moves paint noth
   await fireEvent.pointerCancel(svg, { clientX: 10, clientY: 10 });
   await user.pointer({ target: svg, coords: { clientX: 30, clientY: 30 } });
   expect(onstroke.mock.calls.map(([, phase]) => phase)).toEqual(["start", "end"]);
+});
+
+test("the press says whether Alt is held (Select and Mask's brush erases with it)", async () => {
+  const { onstroke, svg } = open();
+  await fireEvent.pointerDown(svg, {
+    pointerId: 3,
+    button: 0,
+    altKey: true,
+    clientX: 1,
+    clientY: 2,
+  });
+  expect(onstroke.mock.calls[0]).toEqual([[[1, 2, 1]], "start", { altKey: true }]);
 });

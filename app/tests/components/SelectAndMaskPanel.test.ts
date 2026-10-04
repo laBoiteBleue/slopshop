@@ -72,3 +72,16 @@ test("while detecting, OK and Detect wait", () => {
   expect(screen.getByRole("button", { name: "OK" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Detect" })).toBeDisabled();
 });
+
+test("the refine-edge brush: on, Paint or Erase, and its size", async () => {
+  const { settings, user } = open();
+  expect(screen.queryByRole("button", { name: "Erase" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Refine Edge Brush" }));
+  expect(settings.brush.on).toBe(true);
+  expect(screen.getByRole("button", { name: "Paint" })).toHaveAttribute("aria-pressed", "true");
+  await user.click(screen.getByRole("button", { name: "Erase" }));
+  expect(settings.brush.erase).toBe(true);
+  await user.clear(field("Size:"));
+  await user.type(field("Size:"), "80");
+  expect(settings.brush.size).toBe(80);
+});

@@ -132,6 +132,7 @@
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
   import { latestWins } from "./lib/latest";
+  import StrokeTrail from "./lib/StrokeTrail.svelte";
   import SelectAndMaskPanel, {
     DEFAULT_REFINE,
     type RefineSettings,
@@ -1458,6 +1459,37 @@
     if (!session) return;
     const edges = $state.snapshot(refineSettings.edges);
     void runAi("ai.task.refine", async (task) => {
+      await engine.aiRefineBase(session.document, radius, aiLayer(), task);
+      return engine.refinePreview(session.document, edges, true);
+    });
+  }
+
+  /** A refine-edge brush stroke under way: its samples and whether it erases. */
+  let refineStroke = $state<{ samples: [number, number, number][]; erase: boolean } | null>(null);
+
+  /** Select and Mask's refine-edge brush: the stroke is sent on release, then edge detection. */
+  function refineBrushStroke(
+    samples: [number, number, number][],
+    phase: "start" | "line" | "move" | "end",
+    keys?: { altKey: boolean },
+  ) {
+    const session = refining;
+    if (!session) return;
+    if (phase === "start" || phase === "line") {
+      // Alt does the other of Paint and Erase, as in Photoshop.
+      refineStroke = { samples, erase: refineSettings.brush.erase !== (keys?.altKey ?? false) };
+      return;
+    }
+    if (!refineStroke) return;
+    refineStroke.samples.push(...samples);
+    if (phase !== "end") return;
+    const stroke = $state.snapshot(refineStroke);
+    refineStroke = null;
+    const { size } = refineSettings.brush;
+    const radius = refineSettings.radius;
+    const edges = $state.snapshot(refineSettings.edges);
+    void runAi("ai.task.refine", async (task) => {
+      await engine.refineBrush(session.document, stroke.samples, size, stroke.erase);
       await engine.aiRefineBase(session.document, radius, aiLayer(), task);
       return engine.refinePreview(session.document, edges, true);
     });
@@ -4192,6 +4224,18 @@
                     onchange={onTransformChange}
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
+                  />
+                {:else if refining?.document === active?.id && refineSettings.brush.on}
+                  <!-- Select and Mask's refine-edge brush: strokes mark where the model decides. -->
+                  <PaintTool
+                    {mapping}
+                    size={refineSettings.brush.size}
+                    onstroke={refineBrushStroke}
+                  />
+                  <StrokeTrail
+                    {mapping}
+                    points={refineStroke?.samples.map(([x, y]) => [x, y] as [number, number]) ?? []}
+                    size={refineSettings.brush.size}
                   />
                 {:else if colorRange && colorRange.document === active?.id}
                   <!-- Color Range open: a click on the image samples a color. -->

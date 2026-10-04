@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/svelte";
+import { fireEvent, screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import { calls, documentView, layer, layerNames, menuLabels, open, respond, sent } from "./harness";
 
@@ -20,6 +20,8 @@ for (const cmd of [
   "refine_preview",
   "refine_close",
   "refine_output",
+  "refine_brush",
+  "ai_refine_base",
 ]) {
   respond(cmd, (_, doc) => ({ ...doc }));
 }
@@ -308,4 +310,36 @@ test("Select and Mask opens on the selection, shows it live, and outputs it", as
   await vi.waitFor(() =>
     expect(sent("refine_preview").at(-1)).toMatchObject({ documentId: 1, live: false }),
   );
+});
+
+test("Select and Mask's refine-edge brush: a stroke sent on release, then edge detection", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Select and Mask…", { selector: ".label" }));
+  await user.click(await screen.findByRole("button", { name: "Refine Edge Brush" }));
+  const canvas = document.querySelector("svg.paint") as SVGSVGElement;
+  expect(canvas).not.toBeNull();
+  await fireEvent.pointerDown(canvas, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 20, clientY: 10 });
+  expect(sent("refine_brush")).toEqual([]);
+  await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 30, clientY: 10 });
+  await vi.waitFor(() => expect(sent("ai_refine_base")).toHaveLength(1));
+  const [stroke] = sent("refine_brush");
+  expect(stroke).toMatchObject({ documentId: 1, size: 40, erase: false });
+  expect((stroke.samples as number[][]).length).toBe(3);
+  expect(sent("ai_refine_base")[0]).toMatchObject({ documentId: 1, radius: 16 });
+  await vi.waitFor(() =>
+    expect(sent("refine_preview").at(-1)).toMatchObject({ documentId: 1, live: true }),
+  );
+  // Alt erases.
+  await fireEvent.pointerDown(canvas, {
+    pointerId: 2,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+    altKey: true,
+  });
+  await fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 10, clientY: 10 });
+  await vi.waitFor(() => expect(sent("refine_brush")[1]).toMatchObject({ erase: true }));
 });
