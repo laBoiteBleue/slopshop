@@ -1,6 +1,6 @@
 # 0034 — Editable operations: the stack's entries, filters and filter layers
 
-Status: proposed (2026-10-04, the maintainer's answers to the Filter menu audit).
+Status: accepted (2026-10-04, the maintainer's answers to the Filter menu audit).
 Revises [ADR 0029](0029-layer-stack.md), points 3 to 5.
 
 ## Context

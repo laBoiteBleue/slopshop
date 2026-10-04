@@ -38,6 +38,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0031 | [Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten](0031-bake-to-pixels.md) | accepted |
 | 0032 | [Layer styles: effects drawn from a layer's shape](0032-layer-styles.md) | accepted |
 | 0033 | [Project license: GPL-3.0-only](0033-project-license.md) | accepted |
-| 0034 | [Editable operations: the stack's entries, filters and filter layers](0034-editable-operations.md) | proposed |
+| 0034 | [Editable operations: the stack's entries, filters and filter layers](0034-editable-operations.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
