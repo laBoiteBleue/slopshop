@@ -288,7 +288,9 @@ built. Contributors: propose here first.
   change; OK keeps them as one undo entry, Cancel takes them back. A styled layer shows "fx";
   its effects unfold below it with the arrow (folded at first), each with an eye, a
   double-click opening its settings. Fill, under Opacity in the layers panel, fades the
-  content but not its effects. Drop Shadow, Stroke and Color Overlay so far.
+  content but not its effects. Drop Shadow, Outer Glow, Inner Shadow, Inner Glow (from the
+  edge), Color Overlay and Stroke, in Photoshop's order; inner effects say Choke where outer
+  ones say Spread.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in

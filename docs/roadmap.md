@@ -185,7 +185,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       them (not written yet)
 - [x] The Layer Style dialog, Layer > Layer Style, the fx mark and the effects listed below
       the layer with their eyes, Fill in the layers panel
-- [ ] Layer styles: Outer and Inner Glow, Inner Shadow; PSD import and export
+- [x] Layer styles: Outer and Inner Glow, Inner Shadow (`.slop` node v9)
+- [ ] Layer styles: PSD import and export
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation
