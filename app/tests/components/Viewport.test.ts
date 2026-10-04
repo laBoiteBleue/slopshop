@@ -413,3 +413,21 @@ test("the pixel grid shows by itself from 800%, over the canvas", async () => {
   await rerender({ extras: false });
   expect(container.querySelector(".pixel-grid")).not.toBeInTheDocument();
 });
+
+test("rulers in a length unit at the document's resolution; a right-click asks for the unit", async () => {
+  const onrulermenu = vi.fn();
+  // 254 pixels per inch: 100 pixels per centimeter, so 0.01 cm per CSS pixel at 100%.
+  const { container } = open({ rulers: true, rulerUnit: "cm", resolution: 254, onrulermenu });
+  await vi.waitFor(() => expect(container.querySelectorAll("svg.ruler")).toHaveLength(2));
+  const [top] = container.querySelectorAll("svg.ruler");
+  expect([...top.querySelectorAll("text")].map((t) => t.textContent?.trim())).toEqual([
+    "0",
+    "1",
+    "2",
+  ]);
+  const menu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30 });
+  top.dispatchEvent(menu);
+  expect(menu.defaultPrevented).toBe(true);
+  // Taken: not the image's menu, which leaves a prevented right-click alone.
+  expect(onrulermenu).toHaveBeenCalledWith(30, 0);
+});

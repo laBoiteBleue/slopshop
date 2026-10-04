@@ -98,7 +98,8 @@
       <li class="separator" role="separator"></li>
     {:else if item.kind === "command"}
       <li
-        role="menuitem"
+        role={item.checked !== undefined ? "menuitemradio" : "menuitem"}
+        aria-checked={item.checked}
         class="item"
         class:disabled={item.disabled}
         class:current={highlighted === i}

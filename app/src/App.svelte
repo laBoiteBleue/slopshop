@@ -154,6 +154,7 @@
   import { setPanelContext } from "./lib/panels/context";
   import { hasProperties } from "./lib/layerEdits";
   import { loadViewSettings, saveViewSettings } from "./lib/viewSettings";
+  import { LENGTH_UNITS, type LengthUnit } from "./lib/units";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
@@ -2068,18 +2069,38 @@
   const viewSettings = loadViewSettings();
   /** View > Snap, remembered. */
   let snapping = $state(viewSettings.snap);
-  /** View > Rulers, remembered. */
+  /** View > Rulers and their unit (a right-click on a ruler), remembered. */
   let rulersShown = $state(viewSettings.rulers);
+  let rulerUnit = $state<LengthUnit>(viewSettings.rulerUnit);
+  /** The rulers' right-click menu, where it opened. */
+  let rulerMenu = $state<{ x: number; y: number } | null>(null);
+
+  function saveView() {
+    saveViewSettings({ rulers: rulersShown, rulerUnit, snap: snapping });
+  }
 
   function toggleSnapping() {
     snapping = !snapping;
-    saveViewSettings({ rulers: rulersShown, snap: snapping });
+    saveView();
   }
 
   function toggleRulers() {
     rulersShown = !rulersShown;
-    saveViewSettings({ rulers: rulersShown, snap: snapping });
+    saveView();
   }
+
+  /** The rulers' units, the one in use checked. */
+  let rulerMenuItems = $derived(
+    LENGTH_UNITS.map((unit): MenuItem => ({
+      kind: "command",
+      label: t(`units.${unit}`),
+      checked: unit === rulerUnit,
+      run: () => {
+        rulerUnit = unit;
+        saveView();
+      },
+    })),
+  );
 
   // Guides (View > Rulers): dragged out of a ruler or with the Move tool, one undo entry per
   // drag; a guide snaps to the canvas and the visible layers, fetched when it is picked up.
@@ -4876,6 +4897,9 @@
               {smartGuides}
               canvasSize={active}
               rulers={rulersShown}
+              {rulerUnit}
+              resolution={active.resolution}
+              onrulermenu={(x, y) => (rulerMenu = { x, y })}
               guides={active.guides}
               extras={!extrasHidden}
               guidesMovable={tool === "move" && !transforming && !cropping}
@@ -5169,6 +5193,14 @@
   <DocumentInfoDialog info={documentInfo} onclose={() => (documentInfo = null)} />
 {/if}
 
+{#if rulerMenu}
+  <ContextMenu
+    x={rulerMenu.x}
+    y={rulerMenu.y}
+    items={rulerMenuItems}
+    onclose={() => (rulerMenu = null)}
+  />
+{/if}
 {#if canvasMenu}
   <ContextMenu
     x={canvasMenu.x}

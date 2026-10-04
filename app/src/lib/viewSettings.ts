@@ -1,10 +1,13 @@
-// The View menu's settings remembered on this machine: Rulers and Snap. Hide Extras and Hide
-// Panels are not: they hide things for a moment, and must not greet the next session hidden.
+// The View menu's settings remembered on this machine: Rulers, their unit, and Snap. Hide
+// Extras and Hide Panels are not: they hide things for a moment, and must not greet the next
+// session hidden.
 
-export type ViewSettings = { rulers: boolean; snap: boolean };
+import { LENGTH_UNITS, type LengthUnit } from "./units";
 
-/** Rulers off and Snap on at first, as in Photoshop. */
-export const DEFAULT_VIEW_SETTINGS: ViewSettings = { rulers: false, snap: true };
+export type ViewSettings = { rulers: boolean; rulerUnit: LengthUnit; snap: boolean };
+
+/** Rulers off, in pixels, and Snap on at first, as in Photoshop. */
+export const DEFAULT_VIEW_SETTINGS: ViewSettings = { rulers: false, rulerUnit: "px", snap: true };
 
 const STORAGE_KEY = "slopshop.view";
 type Store = Pick<Storage, "getItem" | "setItem">;
@@ -13,9 +16,12 @@ type Store = Pick<Storage, "getItem" | "setItem">;
 export function loadViewSettings(store?: Store): ViewSettings {
   try {
     const saved = JSON.parse((store ?? localStorage).getItem(STORAGE_KEY) ?? "null");
-    const flag = (name: keyof ViewSettings) =>
+    const flag = (name: "rulers" | "snap") =>
       typeof saved?.[name] === "boolean" ? (saved[name] as boolean) : DEFAULT_VIEW_SETTINGS[name];
-    return { rulers: flag("rulers"), snap: flag("snap") };
+    const unit = LENGTH_UNITS.includes(saved?.rulerUnit)
+      ? (saved.rulerUnit as LengthUnit)
+      : DEFAULT_VIEW_SETTINGS.rulerUnit;
+    return { rulers: flag("rulers"), rulerUnit: unit, snap: flag("snap") };
   } catch {
     return { ...DEFAULT_VIEW_SETTINGS };
   }

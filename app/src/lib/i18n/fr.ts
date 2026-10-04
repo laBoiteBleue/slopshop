@@ -75,6 +75,7 @@ const fr: Messages = {
   "sizeDialog.constrain": "Conserver les proportions",
   "sizeDialog.relative": "Relative",
   "sizeDialog.anchor": "Position",
+  "units.px": "Pixels",
   "units.in": "Pouces",
   "units.cm": "Centimètres",
   "units.mm": "Millimètres",
