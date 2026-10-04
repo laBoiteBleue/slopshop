@@ -1,5 +1,6 @@
 <script lang="ts" module>
   import type { ColorRangeRequest } from "./engine";
+  import { eyedropperCursor, eyedropperFromKeys, type EyedropperKind } from "./eyedropper";
 
   /** Select > Color Range's samples and settings (document pixels). */
   export type ColorRangeState = {
@@ -9,7 +10,7 @@
     fuzziness: number;
     invert: boolean;
     /** What a click samples: a new color, one more, or one to take away. */
-    eyedropper: "pick" | "add" | "subtract";
+    eyedropper: EyedropperKind;
     /** Localized: each color selected only within `radius` document pixels of its sample. */
     localized: boolean;
     radius: number;
@@ -37,7 +38,7 @@
     y: number,
     keys: { shiftKey: boolean; altKey: boolean },
   ) {
-    const kind = keys.shiftKey ? "add" : keys.altKey ? "subtract" : range.eyedropper;
+    const kind = eyedropperFromKeys(range.eyedropper, keys);
     const point: [number, number] = [Math.floor(x), Math.floor(y)];
     if (kind === "add") range.included.push(point);
     else if (kind === "subtract") range.excluded.push(point);
@@ -137,6 +138,12 @@
     void refresh();
   });
 
+  /** Shift and Alt show on the pointer which eyedropper a click would use. */
+  let keys = $state({ shiftKey: false, altKey: false });
+  function track(e: PointerEvent | KeyboardEvent) {
+    keys = { shiftKey: e.shiftKey, altKey: e.altKey };
+  }
+
   function onPreviewClick(e: PointerEvent) {
     const box = canvas.getBoundingClientRect();
     const x = ((e.clientX - box.left) / box.width) * width;
@@ -159,6 +166,8 @@
     return () => window.removeEventListener("keydown", keys, true);
   });
 </script>
+
+<svelte:window onkeydown={track} onkeyup={track} />
 
 <section class="panel" aria-labelledby="color-range-title">
   <header id="color-range-title">{t("colorRange.title")}</header>
@@ -206,6 +215,8 @@
       bind:this={canvas}
       class="preview"
       style:aspect-ratio="{width} / {height}"
+      style:cursor={eyedropperCursor(eyedropperFromKeys(range.eyedropper, keys))}
+      onpointermove={track}
       onpointerdown={onPreviewClick}
     ></canvas>
     <p class="hint">{t("colorRange.hint")}</p>
@@ -275,7 +286,6 @@
   .preview {
     width: 100%;
     background: #000000;
-    cursor: crosshair;
     image-rendering: auto;
   }
 
