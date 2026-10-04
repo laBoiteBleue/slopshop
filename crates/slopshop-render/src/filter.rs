@@ -331,7 +331,8 @@ impl Pass {
             // Dust & Scratches' median: computed by the CPU for now.
             Filter::MotionBlur { .. }
             | Filter::AddNoise { .. }
-            | Filter::DustAndScratches { .. } => return None,
+            | Filter::DustAndScratches { .. }
+            | Filter::ClarityTexture { .. } => return None,
         };
         Some(Self {
             weights,
