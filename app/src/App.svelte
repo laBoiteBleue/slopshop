@@ -2038,15 +2038,14 @@
 
   // Guides (View > Rulers): dragged out of a ruler or with the Move tool, one undo entry per
   // drag; a guide snaps to the canvas and the visible layers, fetched when it is picked up.
+  // Not to the other guides: the one moved would hold itself in place.
   let guideTargets: SnapTarget[] = [];
 
   async function startGuideSnaps() {
     const doc = active;
     guideTargets = [];
     if (!doc || !snapping) return;
-    const { targets } = await snapTargets(doc, []);
-    // Not to the guides: the one moved would hold itself in place.
-    guideTargets = targets.filter((t) => !("position" in t));
+    guideTargets = (await snapTargets(doc, [])).targets;
   }
 
   function snapDraggedGuide(at: number, vertical: boolean, docPerCss: number, free: boolean) {
@@ -2059,18 +2058,25 @@
   }
 
   /** What a gesture on `ids` works with: their bounds (null: none, or nothing could be read). */
-  type GestureSnaps = { moving: Bounds | null; targets: SnapTarget[] };
+  type GestureSnaps = { moving: Bounds | null; targets: Bounds[] };
 
   /**
    * What a gesture on the layers `ids` snaps to, for every tool (the Move tool, Free Transform,
-   * Crop): the canvas, the other visible layers and the guides, and the bounds of `ids`.
+   * Crop): the canvas and the other visible layers, and the bounds of `ids`. Fetched when the
+   * tool starts; the guides are not among them but added as the tool snaps ([`withGuides`]):
+   * one placed meanwhile must hold too.
    */
   async function snapTargets(doc: DocumentView, ids: number[]): Promise<GestureSnaps> {
     const found = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
     return {
       moving: found?.moving ?? null,
-      targets: [canvasBounds(doc), ...(found?.others ?? []), ...doc.guides],
+      targets: [canvasBounds(doc), ...(found?.others ?? [])],
     };
+  }
+
+  /** `targets` and the guides of `doc` as they are now. */
+  function withGuides(targets: Bounds[], doc: DocumentView | null | undefined): SnapTarget[] {
+    return doc && doc.guides.length > 0 ? [...targets, ...doc.guides] : targets;
   }
 
   type MoveDrag = {
@@ -2197,7 +2203,10 @@
     const landed = landing(
       drag.raw,
       snaps ? (drag.targets?.moving ?? null) : null,
-      drag.targets?.targets ?? [],
+      withGuides(
+        drag.targets?.targets ?? [],
+        tabs.find((d) => d.id === drag.document),
+      ),
       SNAP_CSS_PX * drag.docPerCss,
     );
     smartGuides = landed.guides;
@@ -2323,7 +2332,7 @@
     ids: number[];
     box: Bounds;
     /** What the box snaps to: the canvas and the other visible layers. */
-    targets: SnapTarget[];
+    targets: Bounds[];
     matrix: Matrix;
     /** The reference point, in the box's coordinates (the center at first). */
     pivot: [number, number];
@@ -2681,7 +2690,7 @@
   // The Crop tool (C, ADR 0017): a frame on the image while the tool is active; applying it
   // reframes the canvas, and nothing is deleted. As in Photoshop, a new frame then starts on the
   // new canvas, and Esc starts it over. What the frame snaps to is fetched when it opens.
-  type Cropping = { document: number; width: number; height: number; targets: SnapTarget[] };
+  type Cropping = { document: number; width: number; height: number; targets: Bounds[] };
   let cropping = $state<Cropping | null>(null);
   /** Bumped by each frame requested: only the latest one opens. */
   let cropRequest = 0;
@@ -4817,7 +4826,7 @@
                   <CropBox
                     {mapping}
                     canvas={canvasBounds(active)}
-                    targets={snapping ? cropping.targets : []}
+                    targets={snapping ? withGuides(cropping.targets, active) : []}
                     smartGuides={!extrasHidden}
                     onapply={applyCrop}
                     oncancel={() => (cropping = null)}
@@ -4828,7 +4837,7 @@
                     box={transforming.box}
                     bind:matrix={transforming.matrix}
                     bind:pivot={transforming.pivot}
-                    targets={snapping ? transforming.targets : []}
+                    targets={snapping ? withGuides(transforming.targets, active) : []}
                     smartGuides={!extrasHidden}
                     onchange={onTransformChange}
                     oncommit={commitTransform}
