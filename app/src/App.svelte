@@ -1649,7 +1649,9 @@
     const { fuzziness, invert, localized, sampleAll } = range;
     colorRangeSettings = { fuzziness, invert, localized, sampleAll };
     if (range.included.length === 0 && !range.invert) return;
-    void sync(engine.colorRange(range.document, colorRangeRequest(range)));
+    // Seconds on a large image: its progress shows, and Esc cancels it.
+    const request = colorRangeRequest(range);
+    void runAi("colorRange.task", (task) => engine.colorRange(range.document, request, task));
   }
 
   $effect(() => {

@@ -343,3 +343,23 @@ test("Select and Mask's refine-edge brush: a stroke sent on release, then edge d
   await fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 10, clientY: 10 });
   await vi.waitFor(() => expect(sent("refine_brush")[1]).toMatchObject({ erase: true }));
 });
+
+test("Color Range shows its progress and the cancel button while it computes", async () => {
+  let finish: (() => void) | null = null;
+  respond("color_range", (_, doc) => new Promise((resolve) => (finish = () => resolve(doc))));
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Color Range…", { selector: ".label" }));
+  await user.click(screen.getByRole("checkbox", { name: "Invert" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(sent("color_range")).toHaveLength(1));
+  const task = sent("color_range")[0].task as number;
+  expect(typeof task).toBe("number");
+  // After a moment, the card with its cancel button.
+  const cancel = await screen.findByRole("button", { name: "Cancel (Esc)" }, { timeout: 2000 });
+  expect(screen.getByText(/Selecting the color range/)).toBeInTheDocument();
+  await user.click(cancel);
+  await vi.waitFor(() => expect(sent("ai_cancel")).toEqual([{ task }]));
+  finish!();
+});

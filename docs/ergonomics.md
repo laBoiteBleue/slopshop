@@ -215,7 +215,8 @@ built. Contributors: propose here first.
   Invert; Localized (each color selected only near where it was sampled, fading to nothing at
   its Range, a quarter of the image at first); Sample All Layers (unchecked: the active layer);
   the preview shows the selection it would make, live; Enter applies, Esc cancels; a current
-  selection limits it, as in Photoshop. Its settings are kept for the next time.
+  selection limits it, as in Photoshop. Its settings are kept for the next time. Applying it
+  takes seconds on a large image: its progress shows above the status bar, Esc or ✕ cancels.
   Moving the outline alone, as in Photoshop: with the marquees, the Lasso or the Magic Wand in
   New Selection mode, a drag from inside the selection (without Shift or Alt; the pointer is the
   arrow there) moves the outline, its pixels staying where they are (Shift during the drag: by

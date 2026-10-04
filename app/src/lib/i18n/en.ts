@@ -175,6 +175,7 @@ const en = {
   "menu.select.colorRange": "Color Range…",
   "menu.select.subject": "Select Subject",
   "colorRange.title": "Color Range",
+  "colorRange.task": "Selecting the color range",
   "colorRange.fuzziness": "Fuzziness:",
   "colorRange.invert": "Invert",
   "colorRange.localized": "Localized",

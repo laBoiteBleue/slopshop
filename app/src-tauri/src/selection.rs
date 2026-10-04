@@ -14,7 +14,9 @@ use tauri::State;
 use tauri::ipc::Response;
 
 use crate::AppState;
+use crate::ai::AiFailure;
 use crate::ipc::DocumentView;
+use crate::segment::Task;
 
 /// A shape to select, in document pixels.
 #[derive(Debug, Clone, Deserialize)]
@@ -634,25 +636,50 @@ pub async fn color_range_preview(
     .await
 }
 
-/// Select > Color Range: the colors of the samples, within the current selection if any.
+/// Select > Color Range: the colors of the samples, within the current selection if any, as
+/// one undo entry. Its progress is reported, and it can be cancelled, as the UI's `task` (as
+/// an AI request is: `ai_cancel`).
 #[tauri::command]
 pub async fn color_range(
-    state: State<'_, AppState>,
+    app: tauri::AppHandle,
     document_id: u64,
     request: ColorRangeRequest,
-) -> Result<DocumentView, String> {
-    let (doc, current) = {
-        let mut documents = state.documents()?;
-        let doc = documents.get_mut(document_id)?.session.document().clone();
-        let current = doc.selection().map(|s| Arc::clone(s.image()));
-        (doc, current)
-    };
-    let image = on_worker(move || {
-        let (source, range) = request.resolve(&doc)?;
-        selection::color_range(&source, current.as_deref(), &range).map_err(|e| e.to_string())
+    task: u64,
+) -> Result<DocumentView, AiFailure> {
+    use tauri::Manager;
+    let internal = |e: String| AiFailure::new("internal", e);
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (doc, current) = {
+            let mut documents = state.documents().map_err(internal)?;
+            let doc = documents
+                .get_mut(document_id)
+                .map_err(internal)?
+                .session
+                .document()
+                .clone();
+            let current = doc.selection().map(|s| Arc::clone(s.image()));
+            (doc, current)
+        };
+        let task = Task::start(&app, task);
+        let progress = task.shared("colorRange");
+        let (source, range) = request.resolve(&doc).map_err(internal)?;
+        let report = |done: usize, total: usize| progress.report(done, total);
+        let image = selection::color_range_with(
+            &source,
+            current.as_deref(),
+            &range,
+            &report,
+            task.cancel_token(),
+        )
+        .map_err(|e| match e {
+            selection::SelectionError::Cancelled => AiFailure::new("cancelled", ""),
+            other => internal(other.to_string()),
+        })?;
+        set_selection(&state, document_id, image).map_err(internal)
     })
-    .await?;
-    set_selection(&state, document_id, image)
+    .await
+    .map_err(|e| internal(e.to_string()))?
 }
 
 /// Select > All.

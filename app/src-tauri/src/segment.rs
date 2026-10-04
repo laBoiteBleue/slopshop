@@ -35,8 +35,8 @@ struct AiProgress {
 
 /// An AI request the UI follows and can cancel (`ai_cancel`): its steps (a model run, a window
 /// of Refine Edge) are reported as they are done, and cancellation is checked between them.
-/// A model run under way finishes first.
-struct Task<'a> {
+/// A model run under way finishes first. Other long requests (Color Range) report the same way.
+pub(crate) struct Task<'a> {
     app: &'a AppHandle,
     id: u64,
     stage: &'static str,
@@ -46,7 +46,7 @@ struct Task<'a> {
 }
 
 impl<'a> Task<'a> {
-    fn start(app: &'a AppHandle, id: u64) -> Self {
+    pub(crate) fn start(app: &'a AppHandle, id: u64) -> Self {
         let cancel = CancelToken::new();
         if let Ok(mut tasks) = app.state::<AppState>().segment.tasks.lock() {
             tasks.insert(id, cancel.clone());
@@ -82,12 +82,56 @@ impl<'a> Task<'a> {
         }
     }
 
+    /// `done` of `total` steps reported from any thread, at most every 50 ms (or the last).
+    pub(crate) fn shared(&self, stage: &'static str) -> SharedProgress<'a> {
+        SharedProgress {
+            app: self.app,
+            id: self.id,
+            stage,
+            last: Mutex::new(None),
+        }
+    }
+
+    /// Whether the UI cancelled the request.
+    pub(crate) fn cancel_token(&self) -> &CancelToken {
+        &self.cancel
+    }
+
     fn report(&self) {
         let progress = AiProgress {
             task: self.id,
             stage: self.stage,
             done: self.done,
             total: self.total,
+        };
+        crate::emit(self.app, EVENT_AI_PROGRESS, &progress);
+    }
+}
+
+/// [`Task::shared`].
+pub(crate) struct SharedProgress<'a> {
+    app: &'a AppHandle,
+    id: u64,
+    stage: &'static str,
+    last: Mutex<Option<std::time::Instant>>,
+}
+
+impl SharedProgress<'_> {
+    pub(crate) fn report(&self, done: usize, total: usize) {
+        let now = std::time::Instant::now();
+        let Ok(mut last) = self.last.lock() else {
+            return;
+        };
+        let due = last.is_none_or(|t| now.duration_since(t).as_millis() >= 50);
+        if !due && done < total {
+            return;
+        }
+        *last = Some(now);
+        let progress = AiProgress {
+            task: self.id,
+            stage: self.stage,
+            done: done as u64,
+            total: total as u64,
         };
         crate::emit(self.app, EVENT_AI_PROGRESS, &progress);
     }
