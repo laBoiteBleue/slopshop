@@ -64,6 +64,9 @@ do not depend on each other: export receives its pixel source as a closure (see
   UI for frames over IPC; the GPU draws the ants itself where the engine presents natively,
   `slopshop_render::Ants`). Saved
   selections are named objects of the document (`Document::saved_selections`), kept in `.slop`.
+  The color-comparing tools (Magic Wand, Grow, Similar, Color Range) take their composited
+  pixels from an injected `PixelSource` (the GPU export path in the app, the CPU compositor
+  otherwise and as fallback).
 - `session`: document + linear undo/redo history made of inverse edits. *Gestures* (e.g. a
   slider drag) apply edits live and are recorded as one entry (`Edit::Batch`).
 - `view`: `ViewTransform` mapping output pixels to document pixels, and `Viewport`: fit mode,
