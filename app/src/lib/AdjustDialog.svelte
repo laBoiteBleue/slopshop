@@ -9,6 +9,7 @@
   import AdjustmentFields from "./AdjustmentFields.svelte";
   import type { LayerView } from "./engine";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   let {
     adjustment,
@@ -71,7 +72,7 @@
     oncancel();
   }}
 >
-  <header id="adjust-title">{t(`adjustment.${adjustment.id}`)}</header>
+  <header id="adjust-title" {@attach movable("adjust")}>{t(`adjustment.${adjustment.id}`)}</header>
   <form bind:this={form} onsubmit={submit}>
     <div class="settings">
       {#if steps > 1}

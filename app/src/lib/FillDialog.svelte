@@ -27,6 +27,7 @@
   // once, as in Photoshop; its color then shows next to the list. Enter applies, Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import SliderField from "./SliderField.svelte";
 
   let {
@@ -83,7 +84,7 @@
     onclose();
   }}
 >
-  <header id="fill-title">{t("fillChoice.title")}</header>
+  <header id="fill-title" {@attach movable("fill")}>{t("fillChoice.title")}</header>
   <form bind:this={form} onsubmit={submit}>
     <div class="fields">
       <label for="fill-contents">{t("fillChoice.contents")}</label>

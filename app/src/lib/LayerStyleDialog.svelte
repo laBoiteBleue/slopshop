@@ -11,6 +11,7 @@
   import SliderField from "./SliderField.svelte";
   import StyleEffectFields from "./StyleEffectFields.svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   /** What the left list selects: Blending Options or an effect. */
   export type StylePage = "blending" | EffectId;
@@ -116,7 +117,7 @@
     oncancel();
   }}
 >
-  <header id="style-title">{t("style.title")}</header>
+  <header id="style-title" {@attach movable("style")}>{t("style.title")}</header>
   <form bind:this={form} onsubmit={submit}>
     <ul class="pages" role="listbox" aria-label={t("style.title")}>
       <li

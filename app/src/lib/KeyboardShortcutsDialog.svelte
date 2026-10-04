@@ -7,6 +7,7 @@
   import { SLOTS } from "./tools";
   import { modifierLabel } from "./platform";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   type Entry = { label: string; keys: string[] };
 
@@ -97,7 +98,7 @@
     onclose();
   }}
 >
-  <header id="shortcuts-title">{t("shortcuts.title")}</header>
+  <header id="shortcuts-title" {@attach movable("shortcuts")}>{t("shortcuts.title")}</header>
   <div class="body">
     <!-- svelte-ignore a11y_autofocus -->
     <input

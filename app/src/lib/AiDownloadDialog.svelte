@@ -7,6 +7,7 @@
   import { componentName, failureMessage } from "./ai";
   import { formatBytes } from "./format";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   let {
     components,
@@ -67,7 +68,7 @@
     cancel();
   }}
 >
-  <header id="ai-download-title">{t("ai.download.title")}</header>
+  <header id="ai-download-title" {@attach movable("ai-download")}>{t("ai.download.title")}</header>
   <div class="body">
     <p>{t("ai.download.intro")}</p>
     <ul class="components">

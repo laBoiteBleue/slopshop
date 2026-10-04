@@ -10,6 +10,7 @@
   } from "./engine";
   import { hexToSrgb, srgbToHex } from "./color";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   let {
     documentId,
@@ -107,7 +108,7 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="export-title">
+    <header id="export-title" {@attach movable("export")}>
       {t("export.titleFor", { format: t(`export.format.${target.format}`) })}
     </header>
     <p class="file" title={target.path}>{fileName}</p>

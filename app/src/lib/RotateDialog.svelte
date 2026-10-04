@@ -3,6 +3,7 @@
   // direction. The canvas grows to hold the turned image (the engine's `rotateImageBy`).
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   /** Photoshop's limit: less than a whole turn either way. */
   const MAX_ANGLE = 359.99;
@@ -49,7 +50,7 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="rotate-title">{t("rotateDialog.title")}</header>
+    <header id="rotate-title" {@attach movable("rotate")}>{t("rotateDialog.title")}</header>
     <div class="fields">
       <label for="rotate-angle">{t("rotateDialog.angle")}</label>
       <!-- svelte-ignore a11y_autofocus -->

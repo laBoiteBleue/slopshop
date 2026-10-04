@@ -59,6 +59,7 @@
   // background contents; OK and Cancel on the right. Enter creates the document, Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import Icon from "./Icon.svelte";
   import {
     LENGTH_UNITS,
@@ -205,7 +206,7 @@
     onclose();
   }}
 >
-  <header id="new-title">{t("newDocument.title")}</header>
+  <header id="new-title" {@attach movable("new")}>{t("newDocument.title")}</header>
   <form bind:this={form} onsubmit={submit}>
     <div class="fields">
       <label for="new-name">{t("newDocument.name")}</label>

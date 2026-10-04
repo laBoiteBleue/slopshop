@@ -6,6 +6,7 @@
   import type { DocumentInfo, FileInfo } from "./engine";
   import { formatBytes } from "./format";
   import { getLocale, t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
 
   let { info, onclose }: { info: DocumentInfo; onclose: () => void } = $props();
@@ -56,7 +57,9 @@
       onclose();
     }}
   >
-    <header id="document-info-title">{t("documentInfo.title")}</header>
+    <header id="document-info-title" {@attach movable("document-info")}>
+      {t("documentInfo.title")}
+    </header>
     <dl>
       <dt>{t("documentInfo.name")}</dt>
       <dd>{info.name ?? t("document.untitled")}</dd>

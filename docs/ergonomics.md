@@ -305,6 +305,9 @@ built. Contributors: propose here first.
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
   Photoshop. Image > Crop crops to the selection's bounds when there is one (otherwise it picks
   the Crop tool).
+- Every dialog moves by its title bar, its top edge kept in the window and a part of it always
+  left to grab again; it opens again where it was left, for the session (Layer Style comes back
+  in place after the color picker).
 - The eyedropper, wherever the image is sampled (the color picker open, Select > Color Range on
   the image and on its preview): the pointer is a dropper whose tip samples, with a + or a −
   for Color Range's adding and subtracting ones (Shift and Alt show theirs while held). Over the

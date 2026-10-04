@@ -9,6 +9,7 @@
   // Nothing is cut or rewritten: layers are transformed (ADR 0017, 0018).
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
   import Icon from "./Icon.svelte";
   import {
@@ -162,7 +163,7 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="size-title">
+    <header id="size-title" {@attach movable("size")}>
       {t(mode === "image" ? "sizeDialog.imageTitle" : "sizeDialog.canvasTitle")}
     </header>
     <p class="current">
