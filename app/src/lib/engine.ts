@@ -252,6 +252,15 @@ export const BLEND_MODE_GROUPS: BlendModeId[][] = [
 /** Where layers blend: perceptual (Photoshop's look, the default) or linear (physical, HDR). */
 export type BlendSpaceId = "perceptual" | "linear";
 
+/**
+ * A history entry (ADR 0036): an identifier the UI translates (`history.<kind>`), and the
+ * adjustment or filter it applied when that is part of its name.
+ */
+export type HistoryEntryView = { kind: string; detail: string | null };
+
+/** A document's history: oldest first, the steps undone (redo's) last; `done` are done. */
+export type HistoryView = { entries: HistoryEntryView[]; done: number };
+
 export type DocumentView = {
   /** One document per tab; ids are never reused. */
   id: number;
@@ -1725,6 +1734,11 @@ export const engine = {
     serial(() => invoke<DocumentView>("replace_gesture", { documentId, edit })),
   undo: (documentId: number) => serial(() => invoke<DocumentView>("undo", { documentId })),
   redo: (documentId: number) => serial(() => invoke<DocumentView>("redo", { documentId })),
+  /** A document's history (the History panel, only while it shows). */
+  history: (documentId: number) => invoke<HistoryView>("history", { documentId }),
+  /** Undo or redo until `done` entries of the history are done (a click in History). */
+  goToHistory: (documentId: number, done: number) =>
+    serial(() => invoke<DocumentView>("go_to_history", { documentId, done })),
   gpuInfo: () => invoke<GpuInfo>("gpu_info"),
   presenterMode: () => invoke<PresenterMode>("presenter_mode"),
   /**

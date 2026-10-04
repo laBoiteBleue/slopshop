@@ -38,6 +38,13 @@ commands hidden in panel flyout menus.
    (as in Photoshop) and, once none is, the dock shows again what Properties replaced, unless the
    user chose a panel meanwhile.
 7. **Tabs are reordered by dragging them** along the dock's row.
+8. **History is the dock's third panel**: the steps oldest first under the initial state, the
+   current one marked, those undone dimmed until the next change; a click goes to the state
+   after a step (undo or redo in one call). Each history entry has a label in the engine
+   (`HistoryLabel`: an identifier the UI translates, and the adjustment or filter applied),
+   named after its edit unless its command names it (the tool, the menu command). The panel
+   asks for the history only while it shows. No snapshots and no non-linear history (later, if
+   asked).
 
 ## Alternatives
 

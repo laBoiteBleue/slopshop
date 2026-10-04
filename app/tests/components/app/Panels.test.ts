@@ -1,7 +1,7 @@
 import { fireEvent, screen } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
-import { documentView, layer, layerNames, open, respond, row, sent } from "./harness";
+import { calls, documentView, layer, layerNames, open, respond, row, sent } from "./harness";
 
 // The panels below Layers: the dock's tabs, Properties and the Selections panel; the Window
 // menu's bars and layout.
@@ -216,11 +216,43 @@ test("Window > Options Bar and Toolbar hide them, saved; Reset Layout brings eve
   await fireEvent.pointerDown(tab, { pointerId: 1, button: 0, clientX: 10 });
   await fireEvent.pointerMove(tab, { pointerId: 1, clientX: 100 });
   await fireEvent.pointerUp(tab, { pointerId: 1, clientX: 100 });
-  expect(saved().order).toEqual(["selections", "properties"]);
+  expect(saved().order).toEqual(["selections", "history", "properties"]);
   await choose("Reset Layout");
   expect(toolbar()).not.toHaveClass("hidden");
   expect(optionsBar()).not.toHaveClass("hidden");
   expect(saved()).toMatchObject({ toolbar: true, optionsBar: true });
-  expect(saved().order).toEqual(["properties", "selections"]);
+  expect(saved().order).toEqual(["properties", "selections", "history"]);
   localStorage.clear();
+});
+
+test("History lists the steps under the initial state, asked only while shown; a click goes back", async () => {
+  respond("history", () => ({
+    entries: [
+      { kind: "newLayer", detail: null },
+      { kind: "filter", detail: "gaussianBlur" },
+      { kind: "brush", detail: null },
+    ],
+    done: 2,
+  }));
+  respond("go_to_history", (_, doc) => ({ ...doc, revision: doc.revision + 1 }));
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  // Properties shows: History costs nothing.
+  expect(calls.some((c) => c.cmd === "history")).toBe(false);
+  await user.click(screen.getByRole("tab", { name: /History/ }));
+  const panel = screen.getByRole("tabpanel", { name: "History" });
+  await vi.waitFor(() => expect(panel).toHaveTextContent("Gaussian Blur"));
+  const step = (name: string) => screen.getByRole("button", { name });
+  expect(step("Initial State")).toBeInTheDocument();
+  expect(step("New Layer")).not.toHaveClass("undone");
+  expect(step("Gaussian Blur")).toHaveAttribute("aria-current", "step");
+  // Undone (redo's): listed, dimmed.
+  expect(step("Brush")).toHaveClass("undone");
+  await user.click(step("Initial State"));
+  await vi.waitFor(() => expect(sent("go_to_history")).toEqual([{ documentId: 1, done: 0 }]));
+  // The document changed: asked again.
+  await vi.waitFor(() => expect(sent("history").length).toBeGreaterThan(1));
+  // The current step clicked: nothing to do.
+  await user.click(step("Gaussian Blur"));
+  expect(sent("go_to_history")).toHaveLength(1);
 });

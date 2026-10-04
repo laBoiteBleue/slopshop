@@ -109,6 +109,7 @@ test("Tab hides the toolbar, the options bar and the panels; a Window panel show
   expect(menuLabels()).toEqual([
     "Properties",
     "Selections",
+    "History",
     "—",
     "Options Bar",
     "Toolbar",

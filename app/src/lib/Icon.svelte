@@ -17,6 +17,7 @@
     // A funnel (Filter > …, ADR 0034).
     filter: "M4 5h16l-6 7.5V18l-4 2v-7.5z",
     sliders: "M4 6h9 M17 6h3 M15 4v4 M4 12h3 M11 12h9 M9 10v4 M4 18h11 M19 18h1 M17 16v4",
+    history: "M3.5 12a8.5 8.5 0 1 0 2.5-6 M3.5 3.5V8h4.5 M12 7.5V12l3 2",
     // Two chain links, one above the other (linked proportions).
     link: "M8.5 6.5a3.5 3.5 0 0 1 7 0v3a3.5 3.5 0 0 1-7 0Z M8.5 14.5a3.5 3.5 0 0 1 7 0v3a3.5 3.5 0 0 1-7 0Z M12 8.5v7",
     // The same links apart (proportions free).
