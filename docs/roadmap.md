@@ -305,9 +305,10 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Filter menu: Gaussian Blur as a stack entry (its result cached, the entries above start
       from it; computed on the CPU, the display showing the layer's previous pixels meanwhile),
       Repeat (Ctrl+F) and Last Filter Settings (Alt+Ctrl+F), `.slop` 0.21
-- [ ] Filters on the GPU (Gaussian Blur first): live previews of large layers
+- [x] Filters on the GPU (Gaussian Blur first): live previews of large layers (ADR 0035)
+- [x] Sharpen > Unsharp Mask and Other > High Pass, made from the Gaussian blur (CPU and GPU)
 - [ ] The other classical filters, the maintainer's short list (2026-10-04): Motion Blur,
-      Unsharp Mask, High Pass, Add Noise, Dust & Scratches, Clarity / Texture; then Liquify
+      Add Noise, Dust & Scratches, Clarity / Texture; then Liquify
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
 - [ ] Liquify as a stack entry (a displacement field, its own workspace)

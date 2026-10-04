@@ -47,6 +47,25 @@ test("the slider is logarithmic: its middle is the geometric middle of 0.1 and 1
   await vi.waitFor(() => expect(onlive).toHaveBeenLastCalledWith([10]));
 });
 
+test("Unsharp Mask: its amount in percent, its radius in pixels, its threshold in levels", async () => {
+  const { onlive, onok, user } = open([100, 1, 0], { filter: "unsharpMask" });
+  expect(screen.getByRole("dialog", { name: "Unsharp Mask" })).toBeInTheDocument();
+  const amount = screen.getByRole("spinbutton", { name: "Amount" });
+  const threshold = screen.getByRole("spinbutton", { name: "Threshold" });
+  expect(amount).toHaveValue(100);
+  expect(radius()).toHaveValue(1);
+  expect(threshold).toHaveValue(0);
+  for (const unit of ["%", "pixels", "levels"]) expect(screen.getByText(unit)).toBeInTheDocument();
+  await user.clear(amount);
+  await user.type(amount, "250");
+  const slider = screen.getByRole("slider", { name: "Threshold" }) as HTMLInputElement;
+  slider.value = "200";
+  slider.dispatchEvent(new Event("input", { bubbles: true }));
+  await vi.waitFor(() => expect(onlive).toHaveBeenLastCalledWith([250, 1, 51]));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  expect(onok).toHaveBeenCalledWith([250, 1, 51]);
+});
+
 test("Preview, Cancel and Escape; the app's keys wait meanwhile", async () => {
   const { onpreview, oncancel, onok, user } = open();
   const appKeys = vi.fn();
