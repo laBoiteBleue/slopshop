@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DocumentView, LayerView } from "../../src/lib/engine";
 import LayersPanel from "../../src/lib/LayersPanel.svelte";
+import { withEffect } from "../../src/lib/layerStyle";
 
 // Thumbnails ask the engine: their answers never come (nothing to draw in jsdom).
 beforeEach(() => mockIPC(() => new Promise(() => {})));
@@ -69,7 +70,9 @@ const LAYERS = [
 function open(layers = LAYERS) {
   const onedit = vi.fn(() => Promise.resolve());
   const onfillcolor = vi.fn();
+  const onstyle = vi.fn();
   const props = {
+    onstyle,
     doc: documentOf(layers),
     onfillcolor,
     onedit,
@@ -77,7 +80,7 @@ function open(layers = LAYERS) {
     ongestureend: vi.fn(() => Promise.resolve()),
   };
   const view = render(LayersPanel, props);
-  return { ...view, props, onedit, onfillcolor, user: userEvent.setup() };
+  return { ...view, props, onedit, onfillcolor, onstyle, user: userEvent.setup() };
 }
 
 /** The row of the layer named `name`. */
@@ -239,4 +242,40 @@ test("a double-click on a fill layer's thumbnail asks for its color, not on a pi
   expect(onfillcolor).not.toHaveBeenCalled();
   await user.dblClick(row("Color Fill 1").querySelector(".thumb")!);
   expect(onfillcolor).toHaveBeenCalledWith(fill);
+});
+
+test("a styled layer shows fx; its effects unfold below it, each eye turns one off", async () => {
+  const style = withEffect(withEffect(null, "stroke", true), "dropShadow", true);
+  const { onedit, user } = open([layer(1, "Background"), layer(2, "Logo", { style })]);
+  expect(within(row("Logo")).getByText("fx")).toBeInTheDocument();
+  expect(within(row("Background")).queryByText("fx")).not.toBeInTheDocument();
+  await user.click(within(row("Logo")).getByRole("button", { expanded: false }));
+  expect(screen.getByText("Effects")).toBeInTheDocument();
+  expect(screen.getByText("Stroke")).toBeInTheDocument();
+  await user.click(
+    within(screen.getByText("Drop Shadow").closest("li")!).getByRole("button", {
+      name: "Hide the effect",
+    }),
+  );
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerStyle",
+    id: 2,
+    style: { ...style, dropShadow: { ...style.dropShadow, enabled: false } },
+  });
+});
+
+test("a double-click on a pixel layer's row opens Layer Style; Fill sets its Fill Opacity", async () => {
+  const { onedit, onstyle, user } = open([layer(1, "Background"), layer(2, "Logo")]);
+  await user.click(row("Logo"));
+  await user.dblClick(row("Logo"));
+  expect(onstyle).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), "blending");
+  const fill = screen.getByRole("spinbutton", { name: "Fill" });
+  await user.clear(fill);
+  await user.type(fill, "30");
+  await user.tab();
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerStyle",
+    id: 2,
+    style: { fillOpacity: 0.3, dropShadow: null, colorOverlay: null, stroke: null },
+  });
 });

@@ -27,6 +27,7 @@
     type DocumentView,
     type BakeRequest,
     type EditRequest,
+    type LayerStyle,
     type LayerView,
     type LayerMaskKind,
     type SelectionModify,
@@ -87,6 +88,8 @@
   import { isEraser, isPaintTool, slotOf, slotTool, type ToolId, type ToolSlot } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
+  import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
+  import { styleEdit, withEffect, type EffectId } from "./lib/layerStyle";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
@@ -120,7 +123,7 @@
     referenceMask,
     type Arrangement,
   } from "./lib/layerEdits";
-  import { hexToSrgb } from "./lib/color";
+  import { hexToSrgb, srgbToHex } from "./lib/color";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
@@ -943,6 +946,76 @@
     apply: (hex: string) => void;
     close?: () => void;
   } | null>(null);
+
+  /**
+   * Layer > Layer Style (ADR 0032) under way: the layer, the style as the dialog shows it (each
+   * change sent live, one undo entry once OK), the page shown, and whether the color picker
+   * replaces the dialog for a moment.
+   */
+  let styleDialog = $state<{
+    documentId: number;
+    layerId: number;
+    style: LayerStyle | null;
+    page: StylePage;
+    picking: boolean;
+  } | null>(null);
+
+  /** Layer Style on `page` for `layer` (a pixel or fill layer); an effect's page turns it on. */
+  function openStyle(layer: LayerView, page: StylePage) {
+    const doc = active;
+    if (!doc || (layer.kind !== "raster" && layer.kind !== "fill")) return;
+    let style = layer.style ?? null;
+    if (page !== "blending" && !style?.[page]?.enabled) {
+      style = withEffect(style, page, true);
+      live(doc.id, styleEdit(layer.id, style));
+    }
+    styleDialog = { documentId: doc.id, layerId: layer.id, style, page, picking: false };
+  }
+
+  function changeStyle(style: LayerStyle) {
+    if (!styleDialog) return;
+    styleDialog.style = style;
+    live(styleDialog.documentId, styleEdit(styleDialog.layerId, style));
+  }
+
+  function closeStyle(keep: boolean) {
+    const dialog = styleDialog;
+    styleDialog = null;
+    if (dialog) void (keep ? endGesture : cancelGesture)(dialog.documentId);
+  }
+
+  /** An effect's color, in the picker; then the dialog again. */
+  function pickStyleColor(effect: EffectId) {
+    const dialog = styleDialog;
+    const current = dialog?.style?.[effect];
+    if (!dialog || !current) return;
+    dialog.picking = true;
+    pickColor = {
+      title: t("style.color"),
+      color: srgbToHex(current.color),
+      apply: (hex) => {
+        if (!styleDialog?.style?.[effect]) return;
+        const style = structuredClone($state.snapshot(styleDialog.style));
+        style[effect]!.color = hexToSrgb(hex);
+        changeStyle(style);
+        styleDialog.picking = false;
+      },
+      close: () => {
+        if (styleDialog) styleDialog.picking = false;
+      },
+    };
+  }
+
+  /** Layer > Layer Style > Clear Layer Style: the selected layers' styles removed. */
+  function clearStyles() {
+    const doc = active;
+    const edits = (layersPanel?.selectedLayers() ?? [])
+      .filter((l) => l.style)
+      .map((l) => styleEdit(l.id, null));
+    if (doc && edits.length > 0) {
+      void edit(doc.id, edits.length === 1 ? edits[0] : { kind: "batch", edits });
+    }
+  }
 
   /** A fill layer's color, chosen in the color picker (one undo entry). */
   function pickFillLayerColor(layer: LayerView) {
@@ -3670,6 +3743,20 @@
           },
           layerCommands.clipping,
           layerCommands.deletePaint,
+          {
+            kind: "submenu",
+            label: t("menu.layer.style"),
+            disabled: layer?.kind !== "raster" && layer?.kind !== "fill",
+            items: [
+              cmd(t("menu.layer.style.blending"), () => layer && openStyle(layer, "blending")),
+              separator,
+              ...(["stroke", "colorOverlay", "dropShadow"] as const).map((effect) =>
+                cmd(`${t(`style.${effect}`)}…`, () => layer && openStyle(layer, effect)),
+              ),
+              separator,
+              cmd(t("menu.layer.style.clear"), clearStyles, undefined, !layer?.style),
+            ],
+          },
           separator,
           layerCommands.group,
           layerCommands.ungroup,
@@ -4302,6 +4389,7 @@
             onlayerdrag={onLayerDrag}
             hidden={previewHidden}
             onfillcolor={pickFillLayerColor}
+            onstyle={openStyle}
           />
         {/key}
         <PanelDock bind:dock panels={dockPanels}>
@@ -4463,6 +4551,18 @@
     oncancel={cancelAdjust}
   />
 {/if}
+{#if styleDialog && !styleDialog.picking}
+  <LayerStyleDialog
+    style={styleDialog.style}
+    page={styleDialog.page}
+    onchange={changeStyle}
+    onpage={(page) => styleDialog && (styleDialog.page = page)}
+    onpickcolor={pickStyleColor}
+    onok={() => closeStyle(true)}
+    oncancel={() => closeStyle(false)}
+  />
+{/if}
+
 {#if fillDialog && !fillDialog.picking}
   <FillDialog
     color={fillDialog.color}

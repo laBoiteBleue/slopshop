@@ -151,3 +151,29 @@ test("Ctrl+E merges the selected layers; with one, the menu says Merge Down", as
     ]),
   );
 });
+
+test("Layer > Layer Style > Drop Shadow turns it on live; OK keeps it as one undo entry", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+  await user.hover(screen.getByText("Layer Style", { selector: ".label" }));
+  await user.click(screen.getByText("Drop Shadow…", { selector: ".label" }));
+  const dialog = await screen.findByRole("dialog", { name: "Layer Style" });
+  await vi.waitFor(() =>
+    expect(sent("perform_live")).toContainEqual(
+      expect.objectContaining({
+        edit: expect.objectContaining({
+          kind: "setLayerStyle",
+          id: 1,
+          style: expect.objectContaining({
+            dropShadow: expect.objectContaining({ enabled: true, mode: "multiply" }),
+          }),
+        }),
+      }),
+    ),
+  );
+  expect(within(dialog).getByRole("checkbox", { name: "Drop Shadow" })).toBeChecked();
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(sent("end_gesture")).toEqual([{ documentId: 1 }]));
+  expect(sent("cancel_gesture")).toEqual([]);
+});
