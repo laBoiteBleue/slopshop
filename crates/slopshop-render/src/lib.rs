@@ -27,10 +27,11 @@ use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
 use slopshop_core::color::{
     AlphaMode, ColorSpace, Mat3, PixelFormat, TransferFunction, WORKING_SPACE,
 };
-use slopshop_core::composite::{Step, display_plan, display_steps};
+use slopshop_core::composite::{Step, display_plan_with, display_steps_with};
 use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::resample::{self, Filter, Resampling};
+use slopshop_core::stack::Looks;
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{
@@ -824,8 +825,10 @@ impl Renderer {
         // rounding at 100 %, evaluated on coarser levels when zoomed out): their pixels are
         // evaluated meanwhile, and the frame asks to be shown again until they are (ADR 0029).
         // Likewise layer styles' effects, computed in the background while what they drew last
-        // shows (ADR 0032).
-        let pending = start_stack_evaluations(document, self.evaluate_stacks);
+        // shows (ADR 0032), and the looks at filtered layers (ADR 0034).
+        let (looks, looks_pending) = gather_looks(document, view, output);
+        let pending =
+            start_stack_evaluations(document, &looks, self.evaluate_stacks) || looks_pending;
         let uploads = |caches: &GpuCaches| -> u64 {
             caches.tiles.iter().flatten().map(TileCache::uploads).sum()
         };
@@ -834,8 +837,15 @@ impl Renderer {
         let mut stats = FrameStats::default();
 
         if self.use_display_cache {
-            let cached =
-                self.composite_cached(document, view, output, &output_buffer, options, caches);
+            let cached = self.composite_cached(
+                document,
+                &looks,
+                view,
+                output,
+                &output_buffer,
+                options,
+                caches,
+            );
             if let Some((encoder, cached_stats)) = cached {
                 stats = cached_stats;
                 stats.incomplete |= pending;
@@ -852,7 +862,7 @@ impl Renderer {
             }
         }
 
-        let layers = self.prepare_layers(document, view, output, &mut caches.tiles);
+        let layers = self.prepare_layers(document, &looks, view, output, &mut caches.tiles);
         stats.incomplete = pending;
         stats.prepare = start.elapsed();
         stats.layers = layers.count;
@@ -1102,13 +1112,15 @@ impl Renderer {
     fn prepare_layers(
         &self,
         document: &Document,
+        looks: &Looks,
         view: ViewTransform,
         output: Size,
         caches: &mut [Option<TileCache>; 4],
     ) -> PreparedLayers {
         let visible_doc = visible_document_rect(document.size(), view, output);
-        // Stacks not evaluated yet are evaluated by the shader (ADR 0029).
-        let steps = display_steps(document);
+        // Stacks not evaluated yet are evaluated by the shader (ADR 0029), those with a filter
+        // over the look at what is shown (ADR 0034).
+        let steps = display_steps_with(document, Some(looks));
 
         // Plan the pyramid level of every raster layer together, so that all visible tiles
         // fit in the cache: coarser levels rather than missing layers.
@@ -1230,22 +1242,71 @@ impl Renderer {
 
 /// Start evaluating, each on a thread of its own, the pixels of the shown layers whose stack
 /// the display evaluates (ADR 0029); whether there are any, or layer style effects shown that
-/// are not drawn yet (planning the display started them, ADR 0032).
-fn start_stack_evaluations(document: &Document, start: bool) -> bool {
-    let (steps, mut pending) = display_plan(document);
+/// are not drawn yet (planning the display started them, ADR 0032). A stack with a filter is
+/// not evaluated whole for the display: only its quick look is started, and the look at what
+/// is shown (see [`gather_looks`]) tells whether the frame must be shown again (ADR 0034).
+fn start_stack_evaluations(document: &Document, looks: &Looks, start: bool) -> bool {
+    let (steps, mut pending) = display_plan_with(document, Some(looks));
     for step in steps {
-        if let Step::Layer {
-            layer, stack: true, ..
-        } = step
-            && let LayerContent::Raster { image, .. } = &layer.content
+        if let Step::Layer { layer, stack, .. } = step
+            && let LayerContent::Raster {
+                image,
+                stack: layer_stack,
+            } = &layer.content
+            && (stack || image.ready_image().is_none())
         {
             if start {
                 image.evaluate_in_background();
             }
-            pending = true;
+            pending |= !layer_stack.as_ref().is_some_and(|s| s.has_shown_filter());
         }
     }
     pending
+}
+
+/// What the display shows of the shown layers whose stack has a filter and is not evaluated
+/// (ADR 0034): the look at the part of each in `view`, at the level it is seen at, computed on
+/// a thread of its own when it is not there yet (meanwhile, the quick look); and whether the
+/// frame must be shown again for one.
+fn gather_looks(document: &Document, view: ViewTransform, output: Size) -> (Looks, bool) {
+    let mut looks = Looks::new();
+    let mut pending = false;
+    let Some(visible) = visible_document_rect(document.size(), view, output) else {
+        return (looks, false);
+    };
+    for layer in document.all_layers().filter(|l| l.visible) {
+        let LayerContent::Raster {
+            image,
+            stack: Some(stack),
+        } = &layer.content
+        else {
+            continue;
+        };
+        if !stack.has_shown_filter() || image.ready_image().is_some() {
+            continue;
+        }
+        let to_document = layer.transform.then(document.parent_transform(layer.id));
+        let Some(to_layer) = to_document.inverse() else {
+            continue;
+        };
+        // Pixels of the layer per screen pixel (the view's scale is document pixels per screen
+        // pixel): the level the display samples it at.
+        let scale = (to_document.a * to_document.d - to_document.b * to_document.c)
+            .abs()
+            .sqrt();
+        let per_screen = view.scale / scale;
+        let level = if per_screen > 1.0 {
+            per_screen.log2().floor() as usize
+        } else {
+            0
+        };
+        let (look, again) = image.look_for(to_layer.map_rect(visible), level);
+        pending |= again;
+        if let Some(look) = look {
+            looks.insert(layer.id, look);
+        }
+    }
+    (looks, pending)
 }
 
 /// The rasters a step samples, with their transforms to the document: a raster layer's image,
@@ -1265,9 +1326,10 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
                     stack: Some(layer_stack),
                     ..
                 } if *stack => Some((layer_stack.original().as_ref(), *transform)),
-                LayerContent::Raster { image, .. } => image
-                    .ready_image()
-                    .map(|image| (image.as_ref(), *transform)),
+                // Its pixels, or what the layer showed before while they are evaluated.
+                LayerContent::Raster { image, .. } => {
+                    image.shown().map(|image| (image.as_ref(), *transform))
+                }
                 _ => None,
             };
             [
@@ -2301,7 +2363,7 @@ mod tests {
         let encoded = |origin: [f64; 2]| {
             let mut caches = r.caches.lock().expect("not poisoned");
             let view = ViewTransform { origin, scale: 1.0 };
-            r.prepare_layers(&document, view, output, &mut caches.tiles)
+            r.prepare_layers(&document, &Looks::new(), view, output, &mut caches.tiles)
                 .count
         };
         assert_eq!(encoded([0.0, 0.0]), 1);

@@ -3147,7 +3147,7 @@ fn feather(mask: &Mask, sigma: f64) -> Mask {
 }
 
 /// The radii of three box blurs whose succession approximates a Gaussian of `sigma`.
-fn box_radii(sigma: f64) -> [usize; 3] {
+pub(crate) fn box_radii(sigma: f64) -> [usize; 3] {
     let n = 3.0;
     let ideal = (12.0 * sigma * sigma / n + 1.0).sqrt();
     let mut lower = ideal.floor() as i64;

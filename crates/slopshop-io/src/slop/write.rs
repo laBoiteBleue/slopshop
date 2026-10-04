@@ -177,6 +177,13 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
                                 .filter_map(|s| s.selection.as_ref())
                                 .map(|s| Arc::clone(s.image())),
                         ),
+                        Entry::Filter(filter) => out.extend(
+                            filter
+                                .steps()
+                                .iter()
+                                .filter_map(|s| s.selection.as_ref())
+                                .map(|s| Arc::clone(s.image())),
+                        ),
                     }
                 }
             }
@@ -551,6 +558,25 @@ fn build_manifest(
                                     })
                                     .collect();
                                 json!({ "effect": steps })
+                            }
+                            Entry::Filter(filter) => {
+                                let steps: Vec<Value> = filter
+                                    .steps()
+                                    .iter()
+                                    .map(|step| {
+                                        json!({
+                                            "filter": step.filter.id(),
+                                            "values": step.filter.params(),
+                                            "selection": step
+                                                .selection
+                                                .as_ref()
+                                                .and_then(|s| key(s.image())),
+                                            "transform": step.to_document.to_array(),
+                                            "space": step.space.id(),
+                                        })
+                                    })
+                                    .collect();
+                                json!({ "filter": steps })
                             }
                         };
                         if entry.hidden() {

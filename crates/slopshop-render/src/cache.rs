@@ -14,8 +14,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
-use slopshop_core::composite::{Step, display_steps};
+use slopshop_core::composite::{Step, display_steps_with};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
+use slopshop_core::stack::Looks;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{BlendSpace, Document, Size};
 
@@ -339,9 +340,11 @@ impl Renderer {
     /// when the cache cannot show this view (more visible tiles than it holds, or a tile needing
     /// more raster tiles than their caches hold): the caller composites directly. Tiles filled
     /// before that stay cached.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn composite_cached(
         &self,
         document: &Document,
+        looks: &Looks,
         view: ViewTransform,
         output: Size,
         output_buffer: &wgpu::Buffer,
@@ -354,8 +357,9 @@ impl Renderer {
         let level = display_level(view.scale, levels);
         let scene = Scene {
             document,
-            // Stacks not evaluated yet are evaluated by the shader (ADR 0029).
-            steps: display_steps(document),
+            // Stacks not evaluated yet are evaluated by the shader (ADR 0029), those with a
+            // filter over the look at what is shown (ADR 0034).
+            steps: display_steps_with(document, Some(looks)),
             visible: visible_document_rect(doc, view, output),
             center: view.output_to_document(
                 f64::from(output.width) / 2.0,

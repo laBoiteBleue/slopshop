@@ -8,6 +8,9 @@
 //!   type (floats: `f32`), so that an opaque pixel painted over stays exactly opaque.
 //! - **Effects** are parameters: an adjustment applied to the layer's own color, limited by the
 //!   selection it was applied with (kept by reference, with the layer's placement then).
+//! - **Filters** are parameters too (ADR 0034), but read neighbouring pixels: the result of what
+//!   is below a filter is computed whole, the filter applied to it, and the entries above
+//!   evaluated from there. Both are kept in a cache, never saved.
 //!
 //! The result is quantized to the layer's format after every paint and every effect, as each
 //! one wrote the layer's pixels in Photoshop. So evaluating from the original and adding to a
@@ -16,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::adjust::{Adjustment, Prepared};
 use crate::blend::{BlendSpace, Blender};
@@ -24,6 +27,7 @@ use crate::color::{
     ChannelLayout, IDENTITY, LinearRgba, Mat3, PixelFormat, SampleType, WORKING_SPACE, f16_to_f32,
     f32_to_f16, mat_vec,
 };
+use crate::filter::{Filter, GaussianPlan};
 use crate::geom::Size;
 use crate::paint::MaskReader;
 use crate::raster::{
@@ -54,6 +58,7 @@ pub struct LayerStack {
 pub enum Entry {
     Paint(Arc<PaintEntry>),
     Effect(Arc<EffectEntry>),
+    Filter(Arc<FilterEntry>),
 }
 
 impl PartialEq for Entry {
@@ -61,6 +66,7 @@ impl PartialEq for Entry {
         match (self, other) {
             (Self::Paint(a), Self::Paint(b)) => Arc::ptr_eq(a, b),
             (Self::Effect(a), Self::Effect(b)) => Arc::ptr_eq(a, b),
+            (Self::Filter(a), Self::Filter(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -72,8 +78,17 @@ impl Entry {
         match self {
             Self::Paint(p) => p.hidden,
             Self::Effect(e) => e.hidden,
+            Self::Filter(f) => f.hidden,
         }
     }
+}
+
+/// What an entry's steps are set to when it is edited again (ADR 0034): an adjustment for each
+/// step of an effect entry, a filter for each step of a filter entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Operation {
+    Adjustment(Adjustment),
+    Filter(Filter),
 }
 
 /// Paint: `P + k·B` over what is below it, on the tiles it touched.
@@ -157,13 +172,67 @@ impl Effect {
             && self.to_document.inverse().is_some()
     }
 
-    /// Two Inverts in a row with nothing between them do nothing.
-    fn cancels(&self, next: &Effect) -> bool {
-        matches!(self.adjustment, Adjustment::Invert)
-            && matches!(next.adjustment, Adjustment::Invert)
-            && self.selection.is_none()
-            && next.selection.is_none()
-            && self.space == next.space
+    /// This effect then `next` as one (ADR 0034), when that is exact: Exposure's stops added
+    /// (without offset nor gamma), Hue/Saturation's hue shifts added (without saturation nor
+    /// lightness), two Inverts nothing (`Some(None)`). `None`: they stay two entries (Curves,
+    /// Levels…, or another selection).
+    fn combined(&self, next: &Effect) -> Option<Option<Effect>> {
+        if self.selection != next.selection
+            || self.to_document != next.to_document
+            || self.space != next.space
+        {
+            return None;
+        }
+        let adjustment = match (self.adjustment, next.adjustment) {
+            (Adjustment::Invert, Adjustment::Invert) => return Some(None),
+            (
+                Adjustment::Exposure {
+                    exposure: a,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+                Adjustment::Exposure {
+                    exposure: b,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            ) => Adjustment::Exposure {
+                exposure: a + b,
+                offset: 0.0,
+                gamma: 1.0,
+            },
+            (
+                Adjustment::HueSaturation {
+                    hue: a,
+                    saturation: 0.0,
+                    lightness: 0.0,
+                },
+                Adjustment::HueSaturation {
+                    hue: b,
+                    saturation: 0.0,
+                    lightness: 0.0,
+                },
+            ) => {
+                let mut hue = a + b;
+                if hue > 180.0 {
+                    hue -= 360.0;
+                } else if hue < -180.0 {
+                    hue += 360.0;
+                }
+                Adjustment::HueSaturation {
+                    hue,
+                    saturation: 0.0,
+                    lightness: 0.0,
+                }
+            }
+            _ => return None,
+        };
+        let combined = Effect {
+            adjustment,
+            ..self.clone()
+        };
+        // Out of range combined (more stops than Exposure allows): two entries.
+        combined.is_valid().then_some(Some(combined))
     }
 }
 
@@ -207,15 +276,188 @@ impl EffectEntry {
         Self { hidden, ..self }
     }
 
-    /// Whether `above` joins this entry (below it) when they meet: the same kind, both shown
-    /// or both hidden.
-    fn joins(&self, above: &EffectEntry) -> bool {
-        self.kind() == above.kind() && self.hidden == above.hidden
+    /// This entry and `above` (above it) as one, when they meet (ADR 0034): both shown or both
+    /// hidden, one step each, combined exactly (see [`Effect::combined`]); `Some(None)` when
+    /// they cancel. `None`: they stay two entries.
+    fn combined(&self, above: &EffectEntry) -> Option<Option<EffectEntry>> {
+        let ([below], [top]) = (&self.steps[..], &above.steps[..]) else {
+            return None;
+        };
+        if self.hidden != above.hidden {
+            return None;
+        }
+        Some(below.combined(top)?.map(|one| EffectEntry {
+            steps: vec![Arc::new(one)],
+            hidden: self.hidden,
+        }))
     }
 
     /// The adjustment's kind ([`Adjustment::id`]).
     pub fn kind(&self) -> &'static str {
         self.steps[0].adjustment.id()
+    }
+}
+
+/// An applied filter (Filter > …, ADR 0034), as an [`Effect`] is an applied adjustment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterStep {
+    pub filter: Filter,
+    /// Where it applies (a coverage at the document origin); everywhere when `None`. The filter
+    /// reads around it as well.
+    pub selection: Option<Selection>,
+    /// The layer's pixels → document when it was applied (see [`Effect::to_document`]).
+    pub to_document: Affine,
+    pub space: BlendSpace,
+}
+
+impl FilterStep {
+    pub fn is_valid(&self) -> bool {
+        self.filter.is_valid()
+            && self.to_document.is_finite()
+            && self.to_document.inverse().is_some()
+    }
+
+    /// This filter then `next` as one, when that is exact: two Gaussian Blurs are one of the
+    /// root of the sum of their squared radii (ADR 0034). `None`: two entries.
+    fn combined(&self, next: &FilterStep) -> Option<FilterStep> {
+        if self.selection != next.selection
+            || self.to_document != next.to_document
+            || self.space != next.space
+        {
+            return None;
+        }
+        let filter = match (self.filter, next.filter) {
+            (Filter::GaussianBlur { radius: a }, Filter::GaussianBlur { radius: b }) => {
+                Filter::GaussianBlur {
+                    radius: (a * a + b * b).sqrt(),
+                }
+            }
+        };
+        let combined = FilterStep {
+            filter,
+            ..self.clone()
+        };
+        combined.is_valid().then_some(combined)
+    }
+}
+
+/// Filters of one kind applied in a row: one entry, each step editable (ADR 0034). What it was
+/// applied to and its result are cached: the entries above evaluate from that result.
+#[derive(Debug)]
+pub struct FilterEntry {
+    steps: Vec<Arc<FilterStep>>,
+    hidden: bool,
+    cache: Mutex<Option<FilterCache>>,
+}
+
+/// What is below a filter entry (its stack), the result of that stack, and the entry's own
+/// result once computed.
+#[derive(Debug, Clone)]
+struct FilterCache {
+    below: LayerStack,
+    input: Arc<RasterImage>,
+    output: Option<Arc<RasterImage>>,
+}
+
+impl FilterEntry {
+    /// One entry of `steps`, in order: at least one, all valid and of the same kind.
+    pub fn new(steps: Vec<Arc<FilterStep>>) -> Result<Self, StackError> {
+        let first = steps.first().ok_or(StackError::InvalidEffect)?;
+        let kind = first.filter.id();
+        if steps.iter().any(|s| !s.is_valid() || s.filter.id() != kind) {
+            return Err(StackError::InvalidEffect);
+        }
+        Ok(Self {
+            steps,
+            hidden: false,
+            cache: Mutex::new(None),
+        })
+    }
+
+    pub fn steps(&self) -> &[Arc<FilterStep>] {
+        &self.steps
+    }
+
+    /// The filter's kind ([`Filter::id`]).
+    pub fn kind(&self) -> &'static str {
+        self.steps[0].filter.id()
+    }
+
+    /// Hidden by its eye: kept in the stack, not evaluated.
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// This entry, hidden or shown.
+    pub fn with_hidden(self, hidden: bool) -> Self {
+        Self { hidden, ..self }
+    }
+
+    /// This entry and `above` (above it) as one, when they meet (ADR 0034): both shown or both
+    /// hidden, one step each, combined exactly (see [`FilterStep::combined`]); it knows what
+    /// this one was applied to. `None`: they stay two entries.
+    fn combined(&self, above: &FilterEntry) -> Option<FilterEntry> {
+        let ([below], [top]) = (&self.steps[..], &above.steps[..]) else {
+            return None;
+        };
+        if self.hidden != above.hidden {
+            return None;
+        }
+        let one = FilterEntry {
+            steps: vec![Arc::new(below.combined(top)?)],
+            hidden: self.hidden,
+            cache: Mutex::new(None),
+        };
+        Some(match self.known_input() {
+            Some((stack, input)) => one.knowing(stack, input),
+            None => one,
+        })
+    }
+
+    /// This entry knowing what it is applied to: `below`'s result is `input` (the pixels a layer
+    /// shows, when a filter is applied on top of it).
+    fn knowing(self, below: LayerStack, input: Arc<RasterImage>) -> Self {
+        Self {
+            cache: Mutex::new(Some(FilterCache {
+                below,
+                input,
+                output: None,
+            })),
+            ..self
+        }
+    }
+
+    /// What this entry knows of what it was applied to, for an entry made from it (edited,
+    /// joined): the same below, the same input.
+    fn known_input(&self) -> Option<(LayerStack, Arc<RasterImage>)> {
+        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        cache
+            .as_ref()
+            .map(|c| (c.below.clone(), Arc::clone(&c.input)))
+    }
+
+    /// The result of the entry over `below` (the stack of the entries below it): from its
+    /// cache, or computed now (and `below` evaluated first when it was not known).
+    fn output(&self, below: &LayerStack) -> Result<Arc<RasterImage>, StackError> {
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let known = cache.as_ref().filter(|c| c.below == *below);
+        if let Some(output) = known.and_then(|c| c.output.as_ref()) {
+            return Ok(Arc::clone(output));
+        }
+        let input = match known {
+            Some(c) => Arc::clone(&c.input),
+            None => below.evaluate()?,
+        };
+        let mut image = Arc::clone(&input);
+        for step in &self.steps {
+            image = Arc::new(filtered(step, &image)?);
+        }
+        *cache = Some(FilterCache {
+            below: below.clone(),
+            input,
+            output: Some(Arc::clone(&image)),
+        });
+        Ok(image)
     }
 }
 
@@ -396,6 +638,238 @@ impl LayerColors {
         };
         codec.write(rgb.map(|v| v as f32), a as f32, out);
     }
+}
+
+/// A layer's pixels read as premultiplied values of a blend space, and written back.
+struct PremulPixels<'a> {
+    level: &'a crate::raster::RasterLevel,
+    size: Size,
+    codec: Codec,
+    colors: LayerColors,
+    blender: Blender,
+    /// The stored values are the blend values (see [`blends_as_stored`]).
+    as_stored: bool,
+}
+
+impl<'a> PremulPixels<'a> {
+    fn new(image: &'a RasterImage, space: BlendSpace) -> Self {
+        let stored = image.stored_format();
+        Self {
+            level: &image.levels()[0],
+            size: image.size(),
+            codec: Codec::new(stored),
+            colors: LayerColors::new(image.format()),
+            blender: Blender::new(space),
+            as_stored: blends_as_stored(stored, space),
+        }
+    }
+
+    fn read(&self, px: &[u8]) -> [f64; 4] {
+        if self.as_stored {
+            read_stored(px)
+        } else {
+            self.blender
+                .encode_premultiplied(&self.colors.read(&self.codec, px))
+        }
+    }
+
+    fn write(&self, values: [f64; 4], px: &mut [u8]) {
+        if self.as_stored {
+            write_stored(values, px);
+        } else {
+            let color = self.blender.decode_premultiplied(&values);
+            self.colors.write(&self.codec, color, px);
+        }
+    }
+
+    /// Pixels `x0..x0 + out.len()` of row `y` into `out`, the layer's edges repeating outward:
+    /// each tile looked up once per run of its pixels.
+    fn row(&self, x0: i64, y: i64, out: &mut [[f32; 4]]) {
+        let (width, height) = (i64::from(self.size.width), i64::from(self.size.height));
+        let y = y.clamp(0, height - 1) as u32;
+        let (row, ty) = (y / TILE_SIZE, (y % TILE_SIZE) as usize);
+        let bpp = self.codec.bytes_per_pixel;
+        let t = TILE_SIZE as usize;
+        let mut i = 0;
+        while i < out.len() {
+            let x = (x0 + i as i64).clamp(0, width - 1) as u32;
+            let coord = TileCoord {
+                col: x / TILE_SIZE,
+                row,
+            };
+            // The run of `out` reading this tile: up to its right edge, or all of the repeated
+            // edge pixels beyond the layer.
+            let run = if x0 + (i as i64) < 0 {
+                ((-x0) as usize - i).min(out.len() - i)
+            } else if x0 + (i as i64) >= width {
+                out.len() - i
+            } else {
+                ((TILE_SIZE - x % TILE_SIZE) as usize).min(out.len() - i)
+            };
+            match self.level.tile(coord) {
+                Some(tile) => {
+                    let start = (x % TILE_SIZE) as usize;
+                    let edge = x0 + (i as i64) < 0 || x0 + (i as i64) >= width;
+                    for n in 0..run {
+                        let tx = if edge { start } else { start + n };
+                        let at = (ty * t + tx) * bpp;
+                        out[i + n] = self.read(&tile[at..at + bpp]).map(|v| v as f32);
+                    }
+                }
+                None => out[i..i + run].fill([0.0; 4]),
+            }
+            i += run;
+        }
+    }
+
+    /// Pixel (`x`, `y`), the layer's edges repeating outward.
+    #[cfg(test)]
+    fn at(&self, x: i64, y: i64) -> [f32; 4] {
+        let x = x.clamp(0, i64::from(self.size.width) - 1) as u32;
+        let y = y.clamp(0, i64::from(self.size.height) - 1) as u32;
+        let coord = TileCoord {
+            col: x / TILE_SIZE,
+            row: y / TILE_SIZE,
+        };
+        let Some(tile) = self.level.tile(coord) else {
+            return [0.0; 4];
+        };
+        let bpp = self.codec.bytes_per_pixel;
+        let i = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize;
+        self.read(&tile[i * bpp..(i + 1) * bpp]).map(|v| v as f32)
+    }
+}
+
+/// `input` (a layer's pixels) with `step` applied (ADR 0034): filtered in premultiplied values
+/// of the step's blend space (the layer's edges repeating outward), mixed with what it was by
+/// the selection's coverage, written in the image's own format. Tile by tile: the memory it
+/// takes does not grow with the layer (see `filter::GaussianPlan`).
+fn filtered(step: &FilterStep, input: &RasterImage) -> Result<RasterImage, StackError> {
+    let size = input.size();
+    let format = input.format();
+    let pixels = PremulPixels::new(input, step.space);
+    let bpp = pixels.codec.bytes_per_pixel;
+    let t = TILE_SIZE as usize;
+    let level = &input.levels()[0];
+    let plan = match step.filter {
+        Filter::GaussianBlur { radius } => GaussianPlan::new(f64::from(radius)),
+    };
+    // A large radius: the layer reduced by the plan's factor (averages of blocks), blurred.
+    let factor = plan.factor;
+    let (small_width, small_height) = (
+        (size.width as usize).div_ceil(factor),
+        (size.height as usize).div_ceil(factor),
+    );
+    let reduced = (factor > 1).then(|| {
+        let mut small = vec![[0.0f32; 4]; small_width * small_height];
+        let mut rows: Vec<(usize, &mut [[f32; 4]])> =
+            small.chunks_mut(small_width).enumerate().collect();
+        let weight = 1.0 / (factor * factor) as f32;
+        parallel_for_each(&mut rows, |(sy, row)| {
+            let mut line = vec![[0.0f32; 4]; small_width * factor];
+            let mut sums = vec![[0.0f32; 4]; small_width];
+            for j in 0..factor {
+                pixels.row(0, (*sy * factor + j) as i64, &mut line);
+                for (sum, block) in sums.iter_mut().zip(line.chunks(factor)) {
+                    for px in block {
+                        for c in 0..4 {
+                            sum[c] += px[c];
+                        }
+                    }
+                }
+            }
+            for (out, sum) in row.iter_mut().zip(&sums) {
+                *out = sum.map(|v| v * weight);
+            }
+        });
+        plan.blur.image(small, small_width, small_height)
+    });
+    // Read back between the reduced pixels' centers.
+    let interpolated = |small: &[[f32; 4]], x: usize, y: usize| -> [f64; 4] {
+        let f = factor as f64;
+        let u = ((x as f64 + 0.5) / f - 0.5).clamp(0.0, (small_width - 1) as f64);
+        let v = ((y as f64 + 0.5) / f - 0.5).clamp(0.0, (small_height - 1) as f64);
+        let (x0, y0) = (u.floor() as usize, v.floor() as usize);
+        let (x1, y1) = (
+            (x0 + 1).min(small_width - 1),
+            (y0 + 1).min(small_height - 1),
+        );
+        let (a, b) = (u - x0 as f64, v - y0 as f64);
+        let px = |x: usize, y: usize| small[y * small_width + x].map(f64::from);
+        let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+        std::array::from_fn(|c| {
+            (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
+        })
+    };
+
+    let selection = step.selection.as_ref().map(|s| {
+        let image = s.image().as_ref();
+        (image, Codec::new(image.stored_format()))
+    });
+    let mut tiles: Vec<(TileCoord, Option<Arc<[u8]>>)> =
+        grid_coords(size).map(|coord| (coord, None)).collect();
+    parallel_for_each(&mut tiles, |(coord, out)| {
+        let Some(tile) = level.tile(*coord) else {
+            return;
+        };
+        let (w, h) = valid_area(size, *coord);
+        let (x0, y0) = (coord.col as usize * t, coord.row as usize * t);
+        // A small radius: the tile and its margin, blurred on this thread.
+        let margin = plan.blur.reach();
+        let (rw, rh) = (w + 2 * margin, h + 2 * margin);
+        let region = reduced.is_none().then(|| {
+            let mut region = vec![[0.0f32; 4]; rw * rh];
+            for (y, row) in region.chunks_mut(rw).enumerate() {
+                let (x, y) = (x0 as i64 - margin as i64, (y0 + y) as i64 - margin as i64);
+                pixels.row(x, y, row);
+            }
+            plan.blur.region(&mut region, rw, rh);
+            region
+        });
+        let mut bytes = tile.to_vec();
+        for y in 0..h {
+            for x in 0..w {
+                let coverage = match &selection {
+                    Some((image, codec)) => {
+                        let (dx, dy) = step
+                            .to_document
+                            .apply((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
+                        f64::from(MaskReader { image, codec }.at(dx.floor(), dy.floor()))
+                    }
+                    None => 1.0,
+                }
+                .min(1.0);
+                if coverage <= 0.0 {
+                    continue;
+                }
+                let f = match (&region, &reduced) {
+                    (Some(region), _) => region[(y + margin) * rw + x + margin].map(f64::from),
+                    (None, Some(small)) => interpolated(small, x0 + x, y0 + y),
+                    (None, None) => continue,
+                };
+                let px = &mut bytes[(y * t + x) * bpp..][..bpp];
+                let r = if coverage >= 1.0 {
+                    f
+                } else {
+                    let b = pixels.read(px);
+                    std::array::from_fn(|n| b[n] + (f[n] - b[n]) * coverage)
+                };
+                pixels.write(r, px);
+            }
+        }
+        pad_tile(&mut bytes, w, h, bpp);
+        *out = Some(Arc::from(bytes));
+    });
+    let tiles = tiles
+        .into_iter()
+        .map(|(coord, tile)| match tile {
+            Some(tile) => tile,
+            None => level
+                .tile(coord)
+                .map_or_else(|| Arc::from(vec![0; t * t * bpp]), Arc::clone),
+        })
+        .collect();
+    Ok(RasterImage::from_level0_tiles(size, format, tiles)?)
 }
 
 /// The valid pixels (width, height) of tile `coord` of an image of `size`.
@@ -1043,6 +1517,8 @@ fn atoms(entries: &[Entry]) -> Vec<Atom<'_>> {
         match entry {
             Entry::Paint(p) => out.push(Atom::Paint(p)),
             Entry::Effect(e) => out.extend(e.steps.iter().map(Atom::Effect)),
+            // Evaluated whole, before: see `LayerStack::flat`.
+            Entry::Filter(_) => {}
         }
     }
     out
@@ -1345,10 +1821,82 @@ struct LazyPixels {
     pending: Mutex<Option<Recipe>>,
     /// An evaluation was started on a thread of its own.
     started: std::sync::atomic::AtomicBool,
+    /// What the layer showed before, shown meanwhile when the stack has a filter, which the
+    /// display does not evaluate (ADR 0034).
+    meanwhile: Option<Arc<RasterImage>>,
+    /// A quick look at the result, computed first when the stack has a filter.
+    preview: OnceLock<Preview>,
+    /// The quick look of an earlier state, shown until this one's: a slider dragged over a
+    /// filter shows the last one rather than the layer unfiltered in between.
+    inherited: Option<Preview>,
+    /// Pixels known at once going back below a filter, a state never shown: the next state
+    /// stands in with what was shown before them (`meanwhile`), not with them.
+    passes_on: bool,
+    /// The stack being evaluated, for its quick look: read without waiting for an evaluation
+    /// in progress (which holds `pending`).
+    stack: Option<LayerStack>,
+    /// The look at the part of the layer the display shows (see [`Pixels::look_for`]).
+    region: Mutex<Region>,
 }
+
+/// The look at part of a layer, the part asked for last, and whether one is being computed.
+#[derive(Debug, Default)]
+struct Region {
+    look: Option<Arc<Preview>>,
+    asked: Option<([f64; 4], usize)>,
+    computing: bool,
+}
+
+/// Background evaluations, one at a time (each on every core): one superseded meanwhile (a
+/// slider dragged over a filter) is skipped rather than computed for nothing.
+static BACKGROUND: Mutex<()> = Mutex::new(());
 
 /// A stack to evaluate, and the pixels of an earlier state of it with that state.
 type Recipe = (LayerStack, Option<(Pixels, LayerStack)>);
+
+/// A quick look at a stack's result while it is evaluated (see [`LayerStack::preview`] and
+/// [`LayerStack::look_at`]): what its topmost filter gives at a pyramid level, `factor` layer
+/// pixels a side per pixel, over the whole layer or a part of it starting at `origin` (pixels of
+/// that level); the display evaluates the entries `above` the filter over it.
+#[derive(Debug, Clone)]
+pub struct Preview {
+    pub image: Arc<RasterImage>,
+    pub factor: u32,
+    pub origin: [u32; 2],
+    pub above: Vec<Entry>,
+}
+
+impl Preview {
+    /// Its pixels → the layer's.
+    pub fn placement(&self) -> Affine {
+        let factor = f64::from(self.factor);
+        Affine::translation(f64::from(self.origin[0]), f64::from(self.origin[1]))
+            .then(Affine::scale(factor, factor))
+    }
+
+    /// Whether it shows `rect` (`[x0, y0, x1, y1]`, the layer's pixels, within it) at `level`
+    /// or finer.
+    fn covers(&self, rect: [f64; 4], level: usize) -> bool {
+        let factor = f64::from(self.factor);
+        let size = self.image.size();
+        let [x0, y0] = self.origin.map(|v| f64::from(v) * factor);
+        let (x1, y1) = (
+            x0 + f64::from(size.width) * factor,
+            y0 + f64::from(size.height) * factor,
+        );
+        self.factor <= 1 << level
+            && x0 <= rect[0]
+            && y0 <= rect[1]
+            && x1 >= rect[2]
+            && y1 >= rect[3]
+    }
+}
+
+/// The looks the display shows in place of layers whose stack has a filter, by layer.
+pub type Looks = HashMap<crate::document::LayerId, Arc<Preview>>;
+
+/// The largest preview, in pixels: a few tens of milliseconds to compute.
+const PREVIEW_PIXELS: u64 = 4_000_000;
 
 impl Pixels {
     /// Pixels already there.
@@ -1360,6 +1908,12 @@ impl Pixels {
             ready: OnceLock::new(),
             pending: Mutex::new(None),
             started: std::sync::atomic::AtomicBool::new(true),
+            meanwhile: None,
+            preview: OnceLock::new(),
+            inherited: None,
+            passes_on: false,
+            stack: None,
+            region: Mutex::default(),
         };
         let _ = lazy.ready.set(image);
         Self(Arc::new(lazy))
@@ -1368,13 +1922,61 @@ impl Pixels {
     /// The result of `stack`, evaluated when first asked; from `earlier` (pixels of another
     /// state of the stack, and that state) when they are evaluated by then.
     pub fn pending(stack: LayerStack, earlier: Option<(Pixels, LayerStack)>) -> Self {
+        // Kept where a filter comes or goes: a preview replaced at each setting goes back to the
+        // stack without its filter, then on, and must not flash the layer unfiltered meanwhile.
+        let meanwhile = earlier
+            .as_ref()
+            .filter(|(_, before)| stack.has_shown_filter() || before.has_shown_filter())
+            .and_then(|(pixels, _)| pixels.stand_in().cloned());
+        // An earlier quick look stands while the entries above the filter are the same; a state
+        // without a filter (a preview replaced, going back before applying again) passes it on.
+        let inherited = earlier.as_ref().and_then(|(pixels, _)| {
+            let preview = pixels.preview()?;
+            match stack.last_filter() {
+                None => Some(preview.clone()),
+                Some(index) => {
+                    (stack.entries[index + 1..] == preview.above[..]).then(|| preview.clone())
+                }
+            }
+        });
+        // Back to what a filter of the earlier state applied to: known already. What was shown
+        // is passed on to the next state (a preview replaced goes back, then on again).
+        if let Some(image) = earlier
+            .as_ref()
+            .and_then(|(_, before)| before.known_result(&stack))
+        {
+            let lazy = LazyPixels {
+                key: image.id(),
+                size: image.size(),
+                format: image.format(),
+                ready: OnceLock::new(),
+                pending: Mutex::new(None),
+                started: std::sync::atomic::AtomicBool::new(true),
+                meanwhile: earlier
+                    .as_ref()
+                    .and_then(|(pixels, _)| pixels.stand_in().cloned()),
+                preview: OnceLock::new(),
+                inherited,
+                passes_on: true,
+                stack: None,
+                region: Mutex::default(),
+            };
+            let _ = lazy.ready.set(image);
+            return Self(Arc::new(lazy));
+        }
         Self(Arc::new(LazyPixels {
             key: crate::raster::ImageId::next(),
             size: stack.original().size(),
             format: stack.format(),
             ready: OnceLock::new(),
+            stack: Some(stack.clone()),
             pending: Mutex::new(Some((stack, earlier))),
             started: std::sync::atomic::AtomicBool::new(false),
+            meanwhile,
+            preview: OnceLock::new(),
+            inherited,
+            passes_on: false,
+            region: Mutex::default(),
         }))
     }
 
@@ -1412,7 +2014,21 @@ impl Pixels {
         let spawned = std::thread::Builder::new()
             .name("stack pixels".to_owned())
             .spawn(move || {
-                pixels.get();
+                // A filter's quick look first, not waiting for the other evaluations: what a
+                // slider dragged over a filter shows at once.
+                if let Some(stack) = pixels.0.stack.as_ref().filter(|s| s.has_shown_filter()) {
+                    if let Ok(Some(preview)) = stack.preview(PREVIEW_PIXELS) {
+                        let _ = pixels.0.preview.set(preview);
+                    }
+                    // The display looks at what it shows (`look_for`): the whole layer is
+                    // evaluated only when something needs it (`get`).
+                    return;
+                }
+                let _one_at_a_time = BACKGROUND.lock().unwrap_or_else(PoisonError::into_inner);
+                // Only this thread holds them any more: nobody needs them.
+                if Arc::strong_count(&pixels.0) > 1 {
+                    pixels.get();
+                }
             });
         // Without a thread, whoever needs the pixels evaluates them.
         if spawned.is_err() {
@@ -1423,6 +2039,116 @@ impl Pixels {
     /// The pixels if they are evaluated, without waiting.
     pub fn ready_image(&self) -> Option<&Arc<RasterImage>> {
         self.0.ready.get()
+    }
+
+    /// A quick look at the result of a stack with a filter, while its pixels are evaluated:
+    /// its own, or an earlier state's until its own is computed.
+    pub fn preview(&self) -> Option<&Preview> {
+        self.0.preview.get().or(self.0.inherited.as_ref())
+    }
+
+    /// What the layer showed before, while pixels of a stack with a filter are evaluated.
+    pub fn meanwhile(&self) -> Option<&Arc<RasterImage>> {
+        self.0.meanwhile.as_ref()
+    }
+
+    /// The pixels if they are evaluated, else what stands in for them meanwhile.
+    pub fn shown(&self) -> Option<&Arc<RasterImage>> {
+        self.ready_image().or(self.meanwhile())
+    }
+
+    /// What the display shows of a stack with a filter while its pixels are not evaluated, for
+    /// `rect` (`[x0, y0, x1, y1]`, the layer's pixels) seen at pyramid `level`: the look at
+    /// that part once computed, else the quick look while it is computed on a thread of its own
+    /// (only the part last asked for), and whether the display must ask again. `None` when the
+    /// pixels are there or the stack has no filter.
+    pub fn look_for(&self, rect: [f64; 4], level: usize) -> (Option<Arc<Preview>>, bool) {
+        if self.ready_image().is_some() {
+            return (None, false);
+        }
+        let Some(stack) = self.0.stack.as_ref().filter(|s| s.has_shown_filter()) else {
+            return (None, false);
+        };
+        let size = stack.original().size();
+        let rect = [
+            rect[0].clamp(0.0, f64::from(size.width)),
+            rect[1].clamp(0.0, f64::from(size.height)),
+            rect[2].clamp(0.0, f64::from(size.width)),
+            rect[3].clamp(0.0, f64::from(size.height)),
+        ];
+        let mut region = self.0.region.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(look) = region.look.as_ref().filter(|l| l.covers(rect, level)) {
+            return (Some(Arc::clone(look)), false);
+        }
+        region.asked = Some((rect, level));
+        if !region.computing {
+            region.computing = true;
+            let pixels = self.clone();
+            let stack = stack.clone();
+            let spawned = std::thread::Builder::new()
+                .name("stack look".to_owned())
+                .spawn(move || {
+                    loop {
+                        let asked = {
+                            let mut region = pixels
+                                .0
+                                .region
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner);
+                            match region.asked.take() {
+                                Some(asked) => asked,
+                                None => {
+                                    region.computing = false;
+                                    return;
+                                }
+                            }
+                        };
+                        // Nobody shows these pixels any more: nothing to look at.
+                        if Arc::strong_count(&pixels.0) <= 1 {
+                            continue;
+                        }
+                        if let Ok(Some(look)) = stack.look_at(asked.0, asked.1) {
+                            pixels
+                                .0
+                                .region
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .look = Some(Arc::new(look));
+                        }
+                    }
+                });
+            if spawned.is_err() {
+                region.computing = false;
+            }
+        }
+        let fallback = self.preview().cloned().map(Arc::new);
+        (fallback, true)
+    }
+
+    /// The pixels if they are evaluated, else a quick look at them of at most `max_pixels`
+    /// when the stack's topmost filter is its last entry (a filter being applied): what a
+    /// thumbnail needs, without waiting for the whole layer. `None`: only [`Self::get`] tells.
+    pub fn quick_look(&self, max_pixels: u64) -> Option<Arc<RasterImage>> {
+        if let Some(image) = self.ready_image() {
+            return Some(Arc::clone(image));
+        }
+        if let Some(preview) = self.0.preview.get()
+            && preview.above.is_empty()
+        {
+            return Some(Arc::clone(&preview.image));
+        }
+        let stack = self.0.stack.as_ref()?;
+        let preview = stack.preview(max_pixels).ok()??;
+        preview.above.is_empty().then_some(preview.image)
+    }
+
+    /// What the next state shows while its own pixels are evaluated (see `passes_on`).
+    fn stand_in(&self) -> Option<&Arc<RasterImage>> {
+        if self.0.passes_on {
+            self.meanwhile().or(self.ready_image())
+        } else {
+            self.shown()
+        }
     }
 
     /// Changes whenever the pixels do (a new `Pixels`): what thumbnails are known by.
@@ -1501,6 +2227,11 @@ impl LayerStack {
             }
             Entry::Effect(effect) => {
                 if effect.steps.is_empty() || effect.steps.iter().any(|s| !s.is_valid()) {
+                    return Err(StackError::InvalidEffect);
+                }
+            }
+            Entry::Filter(filter) => {
+                if filter.steps.is_empty() || filter.steps.iter().any(|s| !s.is_valid()) {
                     return Err(StackError::InvalidEffect);
                 }
             }
@@ -1623,6 +2354,20 @@ impl LayerStack {
                         })
                         .collect(),
                 })),
+                Entry::Filter(filter) => Entry::Filter(Arc::new(FilterEntry {
+                    hidden: filter.hidden,
+                    cache: Mutex::new(None),
+                    steps: filter
+                        .steps
+                        .iter()
+                        .map(|step| {
+                            Arc::new(FilterStep {
+                                to_document: shift.then(step.to_document),
+                                ..(**step).clone()
+                            })
+                        })
+                        .collect(),
+                })),
                 Entry::Effect(effect) => Entry::Effect(Arc::new(EffectEntry {
                     hidden: effect.hidden,
                     steps: effect
@@ -1641,21 +2386,22 @@ impl LayerStack {
         Self::with_entries(original, entries)
     }
 
-    /// The stack with `effect` applied on top: an entry of its own, or joining the top entry
-    /// when it holds effects of the same kind (contiguous entries never are alike); an Invert
-    /// on an Invert cancels it.
+    /// The stack with `effect` applied on top: an entry of its own, or combined with the top
+    /// entry when their settings combine exactly (ADR 0034: Exposure's stops, a hue shift); an
+    /// Invert on an Invert cancels it.
     pub fn with_effect(&self, effect: Effect) -> Result<Self, StackError> {
         let added = EffectEntry::new(vec![Arc::new(effect)])?;
         let mut entries = self.entries.clone();
-        match entries.last() {
-            Some(Entry::Effect(top)) if top.joins(&added) => {
-                let steps = joined(top, &added);
+        let combined = match entries.last() {
+            Some(Entry::Effect(top)) => top.combined(&added),
+            _ => None,
+        };
+        match combined {
+            Some(one) => {
                 entries.pop();
-                if !steps.is_empty() {
-                    entries.push(Entry::Effect(Arc::new(EffectEntry::new(steps)?)));
-                }
+                entries.extend(one.map(|one| Entry::Effect(Arc::new(one))));
             }
-            _ => entries.push(Entry::Effect(Arc::new(added))),
+            None => entries.push(Entry::Effect(Arc::new(added))),
         }
         Ok(Self {
             original: Arc::clone(&self.original),
@@ -1663,8 +2409,41 @@ impl LayerStack {
         })
     }
 
-    /// The stack without entry `index`; the neighbours that become alike merge: two paints
-    /// exactly, two effects of the same kind as one entry, two Inverts cancel.
+    /// The stack with `step` applied on top: an entry of its own, or combined with the top
+    /// entry when they combine exactly (two Gaussian Blurs, ADR 0034). `shown`: what the layer
+    /// shows (this stack's result, when it is evaluated), what the filter is applied to.
+    pub fn with_filter(
+        &self,
+        step: FilterStep,
+        shown: Option<Arc<RasterImage>>,
+    ) -> Result<Self, StackError> {
+        let added = FilterEntry::new(vec![Arc::new(step)])?;
+        let mut entries = self.entries.clone();
+        let combined = match entries.last() {
+            Some(Entry::Filter(top)) => top.combined(&added),
+            _ => None,
+        };
+        let entry = match combined {
+            Some(one) => {
+                entries.pop();
+                one
+            }
+            None => match shown {
+                Some(input) if input.size() == self.original.size() => {
+                    added.knowing(self.clone(), input)
+                }
+                _ => added,
+            },
+        };
+        entries.push(Entry::Filter(Arc::new(entry)));
+        Ok(Self {
+            original: Arc::clone(&self.original),
+            entries,
+        })
+    }
+
+    /// The stack without entry `index`; the neighbours that meet merge: two paints exactly, two
+    /// effects or filters whose settings combine exactly as one entry, two Inverts cancel.
     pub fn without(&self, index: usize) -> Result<Self, StackError> {
         if index >= self.entries.len() {
             return Err(StackError::IndexOutOfRange(index));
@@ -1679,19 +2458,24 @@ impl LayerStack {
                     entries.splice(seam - 1..=seam, [merged]);
                     break;
                 }
-                (Entry::Effect(below), Entry::Effect(above)) if below.joins(above) => {
-                    let steps = joined(below, above);
-                    if steps.is_empty() {
+                (Entry::Filter(below), Entry::Filter(above)) => {
+                    let Some(merged) = below.combined(above) else {
+                        break;
+                    };
+                    entries.splice(seam - 1..=seam, [Entry::Filter(Arc::new(merged))]);
+                    break;
+                }
+                (Entry::Effect(below), Entry::Effect(above)) => match below.combined(above) {
+                    None => break,
+                    Some(None) => {
                         entries.drain(seam - 1..=seam);
                         seam -= 1;
-                    } else {
-                        let merged = Entry::Effect(Arc::new(
-                            EffectEntry::new(steps)?.with_hidden(below.hidden),
-                        ));
-                        entries.splice(seam - 1..=seam, [merged]);
+                    }
+                    Some(Some(merged)) => {
+                        entries.splice(seam - 1..=seam, [Entry::Effect(Arc::new(merged))]);
                         break;
                     }
-                }
+                },
                 _ => break,
             }
         }
@@ -1717,6 +2501,18 @@ impl LayerStack {
                 steps: effect.steps.clone(),
                 hidden,
             })),
+            // What it computed stays good: hiding a filter changes what is above it only.
+            Entry::Filter(filter) => Entry::Filter(Arc::new(FilterEntry {
+                steps: filter.steps.clone(),
+                hidden,
+                cache: Mutex::new(
+                    filter
+                        .cache
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone(),
+                ),
+            })),
         };
         let mut entries = self.entries.clone();
         entries[index] = changed;
@@ -1726,42 +2522,69 @@ impl LayerStack {
         })
     }
 
-    /// The stack with the steps of effect entry `index` set to `adjustments` (one per step, of
-    /// the entry's kind), each keeping its selection, placement and blend space: an entry edited
-    /// again (ADR 0034). Nothing merges nor splits; the entry keeps its eye.
-    pub fn with_steps(&self, index: usize, adjustments: &[Adjustment]) -> Result<Self, StackError> {
-        let Entry::Effect(effect) = self
+    /// The stack with the steps of entry `index` set to `operations` (one per step: adjustments
+    /// of an effect entry's kind, filters of a filter entry's), each keeping its selection,
+    /// placement and blend space: an entry edited again (ADR 0034). Nothing merges nor splits;
+    /// the entry keeps its eye.
+    pub fn with_steps(&self, index: usize, operations: &[Operation]) -> Result<Self, StackError> {
+        let entry = self
             .entries
             .get(index)
-            .ok_or(StackError::IndexOutOfRange(index))?
-        else {
-            return Err(StackError::InvalidEffect);
-        };
-        if adjustments.len() != effect.steps.len() {
-            return Err(StackError::InvalidEffect);
-        }
-        let steps = effect
-            .steps
-            .iter()
-            .zip(adjustments)
-            .map(|(step, &adjustment)| {
-                if step.adjustment == adjustment {
-                    Arc::clone(step)
-                } else {
-                    Arc::new(Effect {
-                        adjustment,
-                        ..(**step).clone()
-                    })
+            .ok_or(StackError::IndexOutOfRange(index))?;
+        let edited = match entry {
+            Entry::Effect(effect) if operations.len() == effect.steps.len() => {
+                let mut steps = Vec::with_capacity(operations.len());
+                for (step, operation) in effect.steps.iter().zip(operations) {
+                    let Operation::Adjustment(adjustment) = *operation else {
+                        return Err(StackError::InvalidEffect);
+                    };
+                    steps.push(if step.adjustment == adjustment {
+                        Arc::clone(step)
+                    } else {
+                        Arc::new(Effect {
+                            adjustment,
+                            ..(**step).clone()
+                        })
+                    });
                 }
-            })
-            .collect();
-        // Valid steps of the entry's kind only.
-        let edited = EffectEntry::new(steps)?;
-        if edited.kind() != effect.kind() {
-            return Err(StackError::InvalidEffect);
-        }
+                // Valid steps of the entry's kind only.
+                let edited = EffectEntry::new(steps)?;
+                if edited.kind() != effect.kind() {
+                    return Err(StackError::InvalidEffect);
+                }
+                Entry::Effect(Arc::new(edited.with_hidden(effect.hidden)))
+            }
+            Entry::Filter(filter) if operations.len() == filter.steps.len() => {
+                let mut steps = Vec::with_capacity(operations.len());
+                for (step, operation) in filter.steps.iter().zip(operations) {
+                    let Operation::Filter(changed) = *operation else {
+                        return Err(StackError::InvalidEffect);
+                    };
+                    steps.push(if step.filter == changed {
+                        Arc::clone(step)
+                    } else {
+                        Arc::new(FilterStep {
+                            filter: changed,
+                            ..(**step).clone()
+                        })
+                    });
+                }
+                let edited = FilterEntry::new(steps)?;
+                if edited.kind() != filter.kind() {
+                    return Err(StackError::InvalidEffect);
+                }
+                // What it is applied to has not changed: only the filter is computed again.
+                let edited = edited.with_hidden(filter.hidden);
+                let edited = match filter.known_input() {
+                    Some((below, input)) => edited.knowing(below, input),
+                    None => edited,
+                };
+                Entry::Filter(Arc::new(edited))
+            }
+            _ => return Err(StackError::InvalidEffect),
+        };
         let mut entries = self.entries.clone();
-        entries[index] = Entry::Effect(Arc::new(edited.with_hidden(effect.hidden)));
+        entries[index] = edited;
         Ok(Self {
             original: Arc::clone(&self.original),
             entries,
@@ -1774,7 +2597,7 @@ impl LayerStack {
         let format = self.original.format();
         let lowers_alpha = self.entries.iter().any(|e| match e {
             Entry::Paint(p) => p.lowers_alpha(),
-            Entry::Effect(_) => false,
+            Entry::Effect(_) | Entry::Filter(_) => false,
         });
         if format.layout.has_alpha() || !lowers_alpha {
             return format;
@@ -1782,9 +2605,212 @@ impl LayerStack {
         paint_format(format)
     }
 
+    /// Whether a filter is shown in the stack: its result cannot be evaluated tile by tile.
+    pub fn has_shown_filter(&self) -> bool {
+        self.last_filter().is_some()
+    }
+
+    /// The result of `stack`, when a filter entry of this stack knows it as what it applies to:
+    /// going back from a filter to what was below it (a preview replaced, undo) needs no
+    /// evaluation.
+    fn known_result(&self, stack: &LayerStack) -> Option<Arc<RasterImage>> {
+        self.entries.iter().find_map(|entry| match entry {
+            Entry::Filter(filter) => filter
+                .known_input()
+                .filter(|(below, input)| {
+                    below == stack
+                        && input.format() == stack.format()
+                        && input.size() == stack.original.size()
+                })
+                .map(|(_, input)| input),
+            _ => None,
+        })
+    }
+
+    /// The index of the topmost filter entry shown.
+    fn last_filter(&self) -> Option<usize> {
+        self.entries
+            .iter()
+            .rposition(|e| matches!(e, Entry::Filter(f) if !f.hidden))
+    }
+
+    /// The stack of the entries below `index`.
+    fn below(&self, index: usize) -> LayerStack {
+        LayerStack {
+            original: Arc::clone(&self.original),
+            entries: self.entries[..index].to_vec(),
+        }
+    }
+
+    /// A quick look at the result while it is evaluated (ADR 0034): the topmost shown filter
+    /// applied to what is below it at the coarsest pyramid level of at most `max_pixels`
+    /// (its radius scaled alike), for the display to evaluate the entries above it from. `None`
+    /// without a filter, when what is below it is not known yet, or when the layer is small
+    /// enough to evaluate whole at once.
+    pub fn preview(&self, max_pixels: u64) -> Result<Option<Preview>, StackError> {
+        let Some(index) = self.last_filter() else {
+            return Ok(None);
+        };
+        let Entry::Filter(filter) = &self.entries[index] else {
+            return Ok(None);
+        };
+        let below = self.below(index);
+        let Some((known, input)) = filter.known_input() else {
+            return Ok(None);
+        };
+        if known != below {
+            return Ok(None);
+        }
+        let Some(level) = input
+            .levels()
+            .iter()
+            .position(|l| u64::from(l.size().width) * u64::from(l.size().height) <= max_pixels)
+            .filter(|&level| level > 0)
+        else {
+            return Ok(None);
+        };
+        let factor = (1u32 << level) as f32;
+        let coarse = &input.levels()[level];
+        let mut image = Arc::new(RasterImage::from_level0_tiles(
+            coarse.size(),
+            input.format(),
+            coarse.tiles().to_vec(),
+        )?);
+        // A coarse pixel is `factor` pixels of the layer: where the selection is read from, and
+        // how far the filter reaches.
+        let scale = Affine::scale(f64::from(factor), f64::from(factor));
+        for step in &filter.steps {
+            let coarse_step = FilterStep {
+                filter: match step.filter {
+                    Filter::GaussianBlur { radius } => Filter::GaussianBlur {
+                        radius: (radius / factor).max(crate::filter::MIN_BLUR_RADIUS),
+                    },
+                },
+                to_document: scale.then(step.to_document),
+                ..(**step).clone()
+            };
+            image = Arc::new(filtered(&coarse_step, &image)?);
+        }
+        Ok(Some(Preview {
+            image,
+            factor: 1 << level,
+            origin: [0, 0],
+            above: self.entries[index + 1..].to_vec(),
+        }))
+    }
+
+    /// The look at `rect` (`[x0, y0, x1, y1]`, the layer's pixels) at pyramid `level`: the
+    /// topmost shown filter applied to the tiles of what is below it there, with a margin of
+    /// what the filter reaches; what the display needs when it shows part of a large layer
+    /// close up. `None` without a shown filter, when what is below it is not known, or when
+    /// `rect` misses the layer.
+    pub fn look_at(&self, rect: [f64; 4], level: usize) -> Result<Option<Preview>, StackError> {
+        let Some(index) = self.last_filter() else {
+            return Ok(None);
+        };
+        let Entry::Filter(filter) = &self.entries[index] else {
+            return Ok(None);
+        };
+        let Some((known, input)) = filter.known_input() else {
+            return Ok(None);
+        };
+        if known != self.below(index) {
+            return Ok(None);
+        }
+        let whole = input.size();
+        if rect[0] >= f64::from(whole.width)
+            || rect[1] >= f64::from(whole.height)
+            || rect[2] <= 0.0
+            || rect[3] <= 0.0
+            || rect[0] >= rect[2]
+            || rect[1] >= rect[3]
+        {
+            return Ok(None);
+        }
+        let level = level.min(input.levels().len() - 1);
+        let factor = (1u32 << level) as f32;
+        let coarse = &input.levels()[level];
+        let size = coarse.size();
+        // How far the filter reads around a pixel at this level (three sigmas, and some).
+        let reach: f64 = filter
+            .steps
+            .iter()
+            .map(|step| match step.filter {
+                Filter::GaussianBlur { radius } => 3.5 * f64::from(radius / factor) + 2.0,
+            })
+            .sum();
+        let t = f64::from(TILE_SIZE);
+        let f = f64::from(factor);
+        let (columns, rows) = (coarse.grid().columns(), coarse.grid().rows());
+        let col0 = ((rect[0] / f - reach) / t).floor().max(0.0) as u32;
+        let row0 = ((rect[1] / f - reach) / t).floor().max(0.0) as u32;
+        let col1 = (((rect[2] / f + reach) / t).ceil().max(0.0) as u32).min(columns);
+        let row1 = (((rect[3] / f + reach) / t).ceil().max(0.0) as u32).min(rows);
+        if col0 >= col1 || row0 >= row1 {
+            return Ok(None);
+        }
+        let mut tiles = Vec::with_capacity(((col1 - col0) * (row1 - row0)) as usize);
+        for row in row0..row1 {
+            for col in col0..col1 {
+                let Some(tile) = coarse.tile(TileCoord { col, row }) else {
+                    return Ok(None);
+                };
+                tiles.push(Arc::clone(tile));
+            }
+        }
+        let origin = [col0 * TILE_SIZE, row0 * TILE_SIZE];
+        let crop = Size::new(
+            (col1 * TILE_SIZE).min(size.width) - origin[0],
+            (row1 * TILE_SIZE).min(size.height) - origin[1],
+        );
+        let mut image = Arc::new(RasterImage::from_level0_tiles(crop, input.format(), tiles)?);
+        // A pixel of the crop is `factor` pixels of the layer, from `origin`.
+        let placed = Affine::translation(f64::from(origin[0]), f64::from(origin[1]))
+            .then(Affine::scale(f, f));
+        for step in &filter.steps {
+            let crop_step = FilterStep {
+                filter: match step.filter {
+                    Filter::GaussianBlur { radius } => Filter::GaussianBlur {
+                        radius: (radius / factor).max(crate::filter::MIN_BLUR_RADIUS),
+                    },
+                },
+                to_document: placed.then(step.to_document),
+                ..(**step).clone()
+            };
+            image = Arc::new(filtered(&crop_step, &image)?);
+        }
+        Ok(Some(Preview {
+            image,
+            factor: 1 << level,
+            origin,
+            above: self.entries[index + 1..].to_vec(),
+        }))
+    }
+
+    /// The same result without shown filters: the result of the topmost one as the original,
+    /// the entries above it on top (computed now, unless the filter has it already). What
+    /// evaluates tile by tile starts from it.
+    fn flat(&self) -> Result<LayerStack, StackError> {
+        let Some(index) = self.last_filter() else {
+            return Ok(self.clone());
+        };
+        let Entry::Filter(filter) = &self.entries[index] else {
+            return Ok(self.clone());
+        };
+        Ok(LayerStack {
+            original: filter.output(&self.below(index))?,
+            entries: self.entries[index + 1..].to_vec(),
+        })
+    }
+
     /// The result, evaluated from the original: every tile no entry reaches is the original's.
     pub fn evaluate(&self) -> Result<Arc<RasterImage>, StackError> {
         let format = self.format();
+        self.flat()?.evaluate_as(format)
+    }
+
+    /// [`Self::evaluate`] of a stack without shown filters, in `format`.
+    fn evaluate_as(&self, format: PixelFormat) -> Result<Arc<RasterImage>, StackError> {
         if self.entries.is_empty() && format == self.original.format() {
             return Ok(Arc::clone(&self.original));
         }
@@ -1810,11 +2836,32 @@ impl LayerStack {
         shown: &Arc<RasterImage>,
     ) -> Result<Arc<RasterImage>, StackError> {
         let format = self.format();
+        match (self.last_filter(), before.last_filter()) {
+            (None, None) => self.reevaluate_as(before, shown, format),
+            // The same filter over the same entries: from its result, as a stack without filters.
+            (Some(index), Some(then))
+                if index == then
+                    && Arc::ptr_eq(&self.original, &before.original)
+                    && self.entries[..=index] == before.entries[..=index] =>
+            {
+                self.flat()?.reevaluate_as(&before.flat()?, shown, format)
+            }
+            _ => self.flat()?.evaluate_as(format),
+        }
+    }
+
+    /// [`Self::reevaluate`] of a stack without shown filters, in `format`.
+    fn reevaluate_as(
+        &self,
+        before: &LayerStack,
+        shown: &Arc<RasterImage>,
+        format: PixelFormat,
+    ) -> Result<Arc<RasterImage>, StackError> {
         if !Arc::ptr_eq(&self.original, &before.original)
             || shown.format() != format
             || shown.size() != self.original.size()
         {
-            return self.evaluate();
+            return self.evaluate_as(format);
         }
         if self.entries.is_empty() && format == self.original.format() {
             return Ok(Arc::clone(&self.original));
@@ -1872,6 +2919,8 @@ impl LayerStack {
 pub struct TopPaint {
     /// The stack without the paint being laid.
     below: LayerStack,
+    /// The same without shown filters (their result as its original): what tiles evaluate from.
+    flat: LayerStack,
     /// The paint it continues (empty if none).
     start: PaintEntry,
     /// The paint laid so far: the tiles changed since the start.
@@ -1915,6 +2964,9 @@ impl TopPaint {
                 PaintEntry::empty(stack.original.format(), stack.original.size(), space),
             ),
         };
+        // Invariant: evaluating a stack's own tiles cannot fail (see `evaluated`); were it to,
+        // the paint is laid over the stack without its filters rather than not at all.
+        let flat = below.flat().unwrap_or_else(|_| below.clone());
         let format = stack.format();
         let format = if erase && !format.layout.has_alpha() {
             paint_format(format)
@@ -1939,6 +2991,7 @@ impl TopPaint {
         };
         Self {
             below,
+            flat,
             start,
             painted: BTreeMap::new(),
             format,
@@ -1969,8 +3022,8 @@ impl TopPaint {
         amount: impl Fn(TileCoord, usize, usize) -> f32 + Sync,
         shown: &RasterImage,
     ) -> Vec<(TileCoord, Arc<[u8]>)> {
-        let atoms = atoms(&self.below.entries);
-        let evaluator = Evaluator::new(&self.below, &atoms, self.format);
+        let atoms = atoms(&self.flat.entries);
+        let evaluator = Evaluator::new(&self.flat, &atoms, self.format);
         let math = self.start.math();
         let color = op_color(&math, op);
         let level = &shown.levels()[0];
@@ -2138,21 +3191,6 @@ impl TopPaint {
     }
 }
 
-/// The steps of two effect entries of one kind as one entry's, `below` first; Inverts that
-/// meet cancel.
-fn joined(below: &EffectEntry, above: &EffectEntry) -> Vec<Arc<Effect>> {
-    let mut steps: Vec<Arc<Effect>> = Vec::new();
-    for step in below.steps.iter().chain(&above.steps) {
-        match steps.last() {
-            Some(last) if last.cancels(step) => {
-                steps.pop();
-            }
-            _ => steps.push(Arc::clone(step)),
-        }
-    }
-    steps
-}
-
 /// The Restore Eraser on a stack (ADR 0029): every paint entry brought back towards the
 /// identity where it rubs (`P ← (1−r)·P`, `k ← (1−r)·k + r`), the effects staying applied, and
 /// the tiles it reaches evaluated again through the stack, each on every core.
@@ -2191,7 +3229,10 @@ impl RestorePaint {
     ) -> Vec<(TileCoord, Arc<[u8]>)> {
         let size = self.stack.original.size();
         let mut work: Vec<(usize, TileCoord, Option<PaintTile>)> = Vec::new();
-        for (index, entry) in self.stack.entries.iter().enumerate() {
+        // Paint below a filter would make it compute again at every frame: the Restore Eraser
+        // reaches the paint above the topmost shown filter only (ADR 0034).
+        let first = self.stack.last_filter().map_or(0, |index| index + 1);
+        for (index, entry) in self.stack.entries.iter().enumerate().skip(first) {
             // A hidden paint is left as it is: the stroke cannot be seen on it.
             if let Entry::Paint(paint) = entry
                 && !paint.hidden
@@ -2219,7 +3260,9 @@ impl RestorePaint {
                 self.restored.entry(index).or_default().insert(coord, tile);
             }
         }
-        let stack = self.current();
+        let current = self.current();
+        // Invariant: as in `TopPaint::new`; the filters' results are known by then.
+        let stack = current.flat().unwrap_or(current);
         let atoms = atoms(&stack.entries);
         let evaluator = Evaluator::new(&stack, &atoms, self.format());
         dirty
@@ -2582,7 +3625,10 @@ mod tests {
         };
         let stack = built(2.0);
         let edited = stack
-            .with_steps(0, &[Adjustment::Posterize { levels: 4.0 }])
+            .with_steps(
+                0,
+                &[Operation::Adjustment(Adjustment::Posterize { levels: 4.0 })],
+            )
             .unwrap();
         // The paint is the same entry, laid over the new result.
         assert_eq!(edited.entries()[1], stack.entries()[1]);
@@ -2596,13 +3642,19 @@ mod tests {
     }
 
     #[test]
-    fn each_step_of_a_joined_entry_is_edited_on_its_own() {
+    fn each_step_of_an_entry_read_from_an_older_file_is_edited_on_its_own() {
         let original = gradient(true);
-        let stack = LayerStack::new(Arc::clone(&original))
-            .with_effect(effect(Adjustment::Posterize { levels: 2.0 }, None))
-            .unwrap()
-            .with_effect(effect(Adjustment::Posterize { levels: 8.0 }, None))
-            .unwrap();
+        let stack = LayerStack::with_entries(
+            Arc::clone(&original),
+            vec![Entry::Effect(Arc::new(
+                EffectEntry::new(vec![
+                    Arc::new(effect(Adjustment::Posterize { levels: 2.0 }, None)),
+                    Arc::new(effect(Adjustment::Posterize { levels: 8.0 }, None)),
+                ])
+                .unwrap(),
+            ))],
+        )
+        .unwrap();
         let Entry::Effect(entry) = &stack.entries()[0] else {
             panic!("an effect entry");
         };
@@ -2611,8 +3663,8 @@ mod tests {
             .with_steps(
                 0,
                 &[
-                    Adjustment::Posterize { levels: 3.0 },
-                    entry.steps()[1].adjustment,
+                    Operation::Adjustment(Adjustment::Posterize { levels: 3.0 }),
+                    Operation::Adjustment(entry.steps()[1].adjustment),
                 ],
             )
             .unwrap();
@@ -2626,7 +3678,10 @@ mod tests {
         // The step left alone is the same allocation.
         assert!(Arc::ptr_eq(&changed.steps()[1], &entry.steps()[1]));
         assert_eq!(
-            stack.with_steps(0, &[Adjustment::Posterize { levels: 3.0 }]),
+            stack.with_steps(
+                0,
+                &[Operation::Adjustment(Adjustment::Posterize { levels: 3.0 })]
+            ),
             Err(StackError::InvalidEffect)
         );
     }
@@ -2735,11 +3790,9 @@ mod tests {
             .unwrap()
             .with_effect(brighter(-40.0))
             .unwrap();
+        // Brightness/Contrast does not combine: two entries, as if applied in a row.
         let merged = stack.without(1).unwrap();
-        let [Entry::Effect(entry)] = merged.entries() else {
-            panic!("one effect entry expected");
-        };
-        assert_eq!(entry.steps().len(), 2);
+        assert_eq!(merged.entries().len(), 2);
         let apart = base
             .with_effect(brighter(20.0))
             .unwrap()
@@ -2764,7 +3817,7 @@ mod tests {
     }
 
     #[test]
-    fn contiguous_effects_of_a_kind_are_one_entry_and_inverts_cancel() {
+    fn effects_that_do_not_combine_are_entries_of_their_own_and_inverts_cancel() {
         let original = gradient(true);
         let brighter = |amount| {
             effect(
@@ -2778,19 +3831,78 @@ mod tests {
         let base = LayerStack::new(Arc::clone(&original));
         let once = base.with_effect(brighter(20.0)).unwrap();
         let twice = once.with_effect(brighter(-40.0)).unwrap();
-        let [Entry::Effect(entry)] = twice.entries() else {
-            panic!("one effect entry expected");
-        };
-        assert_eq!(entry.steps().len(), 2);
-        // Applied on top of what is shown: the first step is not evaluated again.
+        assert_eq!(twice.entries().len(), 2);
+        // Applied on top of what is shown: the first entry is not evaluated again.
         let shown = once.reevaluate(&base, &original).unwrap();
         let shown = twice.reevaluate(&once, &shown).unwrap();
         assert_eq!(difference(&shown, &twice.evaluate().unwrap()), 0);
         // Another kind starts an entry; an Invert on an Invert cancels.
         let other = twice.with_effect(effect(Adjustment::Invert, None)).unwrap();
-        assert_eq!(other.entries().len(), 2);
+        assert_eq!(other.entries().len(), 3);
         let back = other.with_effect(effect(Adjustment::Invert, None)).unwrap();
         assert_eq!(back.entries(), twice.entries());
+    }
+
+    #[test]
+    fn settings_that_combine_exactly_make_one_entry() {
+        let original = gradient(true);
+        let base = LayerStack::new(Arc::clone(&original));
+        let exposure = |exposure| Adjustment::Exposure {
+            exposure,
+            offset: 0.0,
+            gamma: 1.0,
+        };
+        let stops = base
+            .with_effect(effect(exposure(1.0), None))
+            .unwrap()
+            .with_effect(effect(exposure(0.5), None))
+            .unwrap();
+        let [Entry::Effect(one)] = stops.entries() else {
+            panic!("one entry expected");
+        };
+        assert_eq!(one.steps()[0].adjustment, exposure(1.5));
+        let hue = |hue| Adjustment::HueSaturation {
+            hue,
+            saturation: 0.0,
+            lightness: 0.0,
+        };
+        let turned = base
+            .with_effect(effect(hue(150.0), None))
+            .unwrap()
+            .with_effect(effect(hue(60.0), None))
+            .unwrap();
+        let [Entry::Effect(one)] = turned.entries() else {
+            panic!("one entry expected");
+        };
+        assert_eq!(one.steps()[0].adjustment, hue(-150.0));
+        // With a saturation, or within another selection: two entries.
+        let saturated = Adjustment::HueSaturation {
+            hue: 10.0,
+            saturation: 20.0,
+            lightness: 0.0,
+        };
+        let two = base
+            .with_effect(effect(saturated, None))
+            .unwrap()
+            .with_effect(effect(saturated, None))
+            .unwrap();
+        assert_eq!(two.entries().len(), 2);
+        let elsewhere = base
+            .with_effect(effect(exposure(1.0), None))
+            .unwrap()
+            .with_effect(effect(exposure(1.0), Some(selection(|x, _| x < 50))))
+            .unwrap();
+        assert_eq!(elsewhere.entries().len(), 2);
+        // Two blurs: one, of the root of the sum of the squares.
+        let blurred = base
+            .with_filter(blur(3.0, None), None)
+            .unwrap()
+            .with_filter(blur(4.0, None), None)
+            .unwrap();
+        let [Entry::Filter(one)] = blurred.entries() else {
+            panic!("one entry expected");
+        };
+        assert_eq!(one.steps()[0].filter, Filter::GaussianBlur { radius: 5.0 });
     }
 
     #[test]
@@ -2942,6 +4054,392 @@ mod tests {
             assert_eq!(result.format(), top.format());
             assert_eq!(difference(&shown, &result.evaluate().unwrap()), 0);
         }
+    }
+
+    fn blur(radius: f32, selection: Option<Selection>) -> FilterStep {
+        FilterStep {
+            filter: Filter::GaussianBlur { radius },
+            selection,
+            to_document: Affine::IDENTITY,
+            space: BlendSpace::Perceptual,
+        }
+    }
+
+    /// Opaque black left of `x = 150`, white from there.
+    fn halves() -> Arc<RasterImage> {
+        image(PixelFormat::RGBA8_SRGB, |x, _| {
+            let v = if x < 150 { 0 } else { 255 };
+            vec![v, v, v, 255]
+        })
+    }
+
+    #[test]
+    fn a_blur_softens_an_edge_and_stays_opaque_within_the_layer() {
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(4.0, None), None)
+            .unwrap();
+        let shown = stack.evaluate().unwrap();
+        // Far from the edge (and at the layer's edges, which repeat), unchanged.
+        for (x, y) in [(0, 0), (100, 10), (299, 259), (200, 130)] {
+            assert_eq!(pixel(&shown, x, y), pixel(&original, x, y), "({x}, {y})");
+        }
+        // Across it, a ramp: about half at the edge, rising, opaque.
+        let ramp: Vec<u8> = (144..156).map(|x| pixel(&shown, x, 50)[0]).collect();
+        assert!(ramp.windows(2).all(|w| w[0] <= w[1]), "{ramp:?}");
+        assert!(ramp[0] > 0 && ramp[11] < 255, "{ramp:?}");
+        assert!(pixel(&shown, 149, 50)[0].abs_diff(128) < 30);
+        assert!((140..160).all(|x| pixel(&shown, x, 50)[3] == 255));
+    }
+
+    #[test]
+    fn rows_are_read_as_pixels_are_the_edges_repeating() {
+        let original = gradient(true);
+        let reader = PremulPixels::new(&original, BlendSpace::Perceptual);
+        // Across both edges and the tiles between them, above and below the layer.
+        for y in [-3i64, 0, 130, 259, 300] {
+            let mut row = vec![[0.0f32; 4]; 340];
+            reader.row(-20, y, &mut row);
+            for (i, px) in row.iter().enumerate() {
+                assert_eq!(*px, reader.at(i as i64 - 20, y), "({}, {y})", i as i64 - 20);
+            }
+        }
+    }
+
+    #[test]
+    fn a_large_blur_made_on_the_reduced_layer_is_close_to_the_direct_one() {
+        let original = halves();
+        let (w, h) = (W as usize, H as usize);
+        for radius in [70.0, 150.0] {
+            let out = filtered(&blur(radius, None), &original).unwrap();
+            let reader = PremulPixels::new(&original, BlendSpace::Perceptual);
+            let buffer: Vec<[f32; 4]> = (0..w * h)
+                .map(|i| reader.at((i % w) as i64, (i / w) as i64))
+                .collect();
+            let direct = crate::filter::Blur::gaussian(f64::from(radius)).image(buffer, w, h);
+            let shown = PremulPixels::new(&out, BlendSpace::Perceptual);
+            let mut worst = 0.0f32;
+            for y in 0..h {
+                for x in 0..w {
+                    let (a, b) = (shown.at(x as i64, y as i64), direct[y * w + x]);
+                    for c in 0..4 {
+                        worst = worst.max((a[c] - b[c]).abs());
+                    }
+                }
+            }
+            assert!(worst < 0.02, "radius {radius}: {worst}");
+        }
+    }
+
+    #[test]
+    fn a_blur_applies_within_its_selection_only() {
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(4.0, Some(selection(|_, y| y < 100))), None)
+            .unwrap();
+        let shown = stack.evaluate().unwrap();
+        assert_ne!(pixel(&shown, 149, 50), pixel(&original, 149, 50));
+        for x in 140..160 {
+            assert_eq!(pixel(&shown, x, 150), pixel(&original, x, 150));
+        }
+    }
+
+    #[test]
+    fn paint_above_a_blur_is_laid_on_its_result_and_follows_its_edits() {
+        let original = halves();
+        let paint = painted(&empty(&original), gray(1.0), |x, _| {
+            if (100..200).contains(&x) { 0.5 } else { 0.0 }
+        });
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(4.0, None), None)
+            .unwrap()
+            .with_top_paint(Arc::clone(&paint))
+            .unwrap();
+        let blurred = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(4.0, None), None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        let direct = LayerStack::new(Arc::clone(&blurred))
+            .with_top_paint(Arc::clone(&paint))
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        let shown = stack.evaluate().unwrap();
+        assert_eq!(difference(&shown, &direct), 0);
+
+        // The radius edited: as a stack made with it, from what the filter knew it applied to.
+        let edited = stack
+            .with_steps(
+                0,
+                &[Operation::Filter(Filter::GaussianBlur { radius: 9.0 })],
+            )
+            .unwrap();
+        let Entry::Filter(entry) = &edited.entries()[0] else {
+            panic!("a filter entry");
+        };
+        assert!(entry.known_input().is_some());
+        let made = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(9.0, None), None)
+            .unwrap()
+            .with_top_paint(paint)
+            .unwrap();
+        assert_eq!(
+            difference(
+                &edited.reevaluate(&stack, &shown).unwrap(),
+                &made.evaluate().unwrap()
+            ),
+            0
+        );
+        // Hidden: as if it were not there.
+        let hidden = edited.with_hidden(0, true).unwrap();
+        assert!(!hidden.has_shown_filter());
+        let without = LayerStack::new(Arc::clone(&original))
+            .with_top_paint(match &stack.entries()[1] {
+                Entry::Paint(p) => Arc::clone(p),
+                _ => panic!("a paint entry"),
+            })
+            .unwrap();
+        assert_eq!(
+            difference(&hidden.evaluate().unwrap(), &without.evaluate().unwrap()),
+            0
+        );
+    }
+
+    #[test]
+    fn adding_on_top_of_a_blur_starts_from_its_result() {
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(3.0, None), None)
+            .unwrap();
+        let shown = stack.evaluate().unwrap();
+        let inverted = stack
+            .with_effect(effect(Adjustment::Invert, Some(selection(|x, _| x > 140))))
+            .unwrap();
+        assert_eq!(
+            difference(
+                &inverted.reevaluate(&stack, &shown).unwrap(),
+                &inverted.evaluate().unwrap()
+            ),
+            0
+        );
+        // Applied over what the layer shows: the filter knows its input.
+        let again = inverted
+            .with_filter(blur(2.0, None), Some(inverted.evaluate().unwrap()))
+            .unwrap();
+        let Entry::Filter(top) = again.entries().last().unwrap() else {
+            panic!("a filter entry");
+        };
+        assert!(top.known_input().is_some());
+        // Two blurs in a row are one entry, one blur.
+        let twice = stack.with_filter(blur(2.0, None), None).unwrap();
+        assert_eq!(twice.entries().len(), 1);
+        let Entry::Filter(both) = &twice.entries()[0] else {
+            panic!("a filter entry");
+        };
+        assert_eq!(both.steps().len(), 1);
+    }
+
+    #[test]
+    fn a_stroke_over_a_blur_shows_what_its_stack_evaluates_to() {
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(5.0, None), None)
+            .unwrap();
+        let mut shown = stack.evaluate().unwrap();
+        let mut top = TopPaint::new(&stack, &shown, BlendSpace::Perceptual, false);
+        let t = T as usize;
+        let dirty = [(TileCoord { col: 0, row: 0 }, [0, 0, t, t])];
+        let tiles = top.lay(
+            &dirty,
+            gray(0.5),
+            |_, x, _| if x > 140 { 0.4 } else { 0.0 },
+            &shown,
+        );
+        shown = Arc::new(shown.with_tiles(tiles).unwrap());
+        let result = top.stack().unwrap();
+        assert_eq!(result.entries().len(), 2);
+        assert_eq!(difference(&shown, &result.evaluate().unwrap()), 0);
+    }
+
+    #[test]
+    fn a_preview_filters_a_coarse_level_of_what_the_filter_applies_to() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let stack = plain
+            .with_filter(blur(8.0, None), Some(Arc::clone(&original)))
+            .unwrap()
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap();
+        // 300 × 260: level 1 is 150 × 130.
+        let preview = stack.preview(150 * 130).unwrap().unwrap();
+        assert_eq!(preview.factor, 2);
+        assert_eq!(preview.above, stack.entries()[1..]);
+        assert_eq!(preview.image.size(), Size::new(150, 130));
+        // As the filter at half the radius on the coarse level.
+        let coarse = &original.levels()[1];
+        let input = Arc::new(
+            RasterImage::from_level0_tiles(
+                coarse.size(),
+                original.format(),
+                coarse.tiles().to_vec(),
+            )
+            .unwrap(),
+        );
+        let direct = LayerStack::new(input)
+            .with_filter(blur(4.0, None), None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        let shown = PremulPixels::new(&preview.image, BlendSpace::Perceptual);
+        let expected = PremulPixels::new(&direct, BlendSpace::Perceptual);
+        for (x, y) in [(0, 0), (74, 60), (75, 60), (149, 129)] {
+            assert_eq!(shown.at(x, y), expected.at(x, y), "({x}, {y})");
+        }
+        // Small enough whole, or nothing known below: no preview.
+        assert!(stack.preview(u64::MAX).unwrap().is_none());
+        let unknown = plain.with_filter(blur(8.0, None), None).unwrap();
+        assert!(unknown.preview(150 * 130).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_look_at_part_of_a_layer_is_the_filter_there() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let blurred = plain
+            .with_filter(blur(4.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        // The middle of the layer at full size: the tiles around it, with the filter's margin.
+        let look = blurred
+            .look_at([140.0, 100.0, 160.0, 120.0], 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(look.factor, 1);
+        assert!(look.covers([140.0, 100.0, 160.0, 120.0], 0));
+        assert!(!look.covers([140.0, 100.0, 160.0, 120.0], 1) || look.factor <= 2);
+        let whole = blurred.evaluate().unwrap();
+        let part = PremulPixels::new(&look.image, BlendSpace::Perceptual);
+        let exact = PremulPixels::new(&whole, BlendSpace::Perceptual);
+        let [ox, oy] = look.origin.map(i64::from);
+        for (x, y) in [(140, 100), (149, 110), (150, 110), (159, 119)] {
+            assert_eq!(part.at(x - ox, y - oy), exact.at(x, y), "({x}, {y})");
+        }
+        // Half size: half as many pixels, a factor of 2.
+        let half = blurred
+            .look_at([0.0, 0.0, 300.0, 260.0], 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!((half.factor, half.image.size()), (2, Size::new(150, 130)));
+        // Outside the layer: nothing.
+        assert!(
+            blurred
+                .look_at([400.0, 400.0, 500.0, 500.0], 0)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_filter_being_applied_has_a_quick_look_for_thumbnails() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let blurred = plain
+            .with_filter(blur(4.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        let pixels = Pixels::pending(blurred.clone(), None);
+        let look = pixels.quick_look(150 * 130).unwrap();
+        assert_eq!(look.size(), Size::new(150, 130));
+        assert!(pixels.ready_image().is_none(), "nothing evaluated whole");
+        // Paint above the filter: only the pixels tell.
+        let paint = painted(
+            &empty(&original),
+            gray(1.0),
+            |x, _| if x < 9 { 1.0 } else { 0.0 },
+        );
+        let painted_pixels = Pixels::pending(blurred.with_top_paint(paint).unwrap(), None);
+        assert!(painted_pixels.quick_look(150 * 130).is_none());
+        // Evaluated: the pixels themselves.
+        let image = pixels.get();
+        assert!(Arc::ptr_eq(&pixels.quick_look(150 * 130).unwrap(), &image));
+    }
+
+    #[test]
+    fn going_back_below_a_filter_needs_no_evaluation() {
+        let original = halves();
+        let painted_stack = LayerStack::new(Arc::clone(&original))
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap();
+        let shown = painted_stack.evaluate().unwrap();
+        let blurred = painted_stack
+            .with_filter(blur(3.0, None), Some(Arc::clone(&shown)))
+            .unwrap();
+        let pixels = Pixels::pending(blurred.clone(), None);
+        // A preview replaced: back to the stack the filter applied to, then the filter again,
+        // which knows its input from what the layer shows.
+        let back = Pixels::pending(painted_stack.clone(), Some((pixels, blurred)));
+        assert!(Arc::ptr_eq(back.ready_image().unwrap(), &shown));
+        let again = painted_stack
+            .with_filter(blur(5.0, None), back.ready_image().cloned())
+            .unwrap();
+        assert!(again.preview(150 * 130).unwrap().is_some());
+    }
+
+    #[test]
+    fn an_earlier_preview_stands_while_the_next_is_computed() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let shown = Pixels::ready(Arc::clone(&original));
+        let first_stack = plain
+            .with_filter(blur(3.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        let first = Pixels::pending(first_stack.clone(), Some((shown, plain.clone())));
+        first
+            .0
+            .preview
+            .set(first_stack.preview(150 * 130).unwrap().unwrap())
+            .unwrap();
+        // Replaced: back to the stack without the filter, then another radius.
+        let back = Pixels::pending(plain.clone(), Some((first.clone(), first_stack)));
+        let again = plain
+            .with_filter(blur(6.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        let second = Pixels::pending(again.clone(), Some((back, plain.clone())));
+        assert!(Arc::ptr_eq(
+            &second.preview().unwrap().image,
+            &first.preview().unwrap().image
+        ));
+        // Paint added above the filter: the earlier look no longer stands.
+        let paint = painted(
+            &empty(&original),
+            gray(1.0),
+            |x, _| if x < 9 { 1.0 } else { 0.0 },
+        );
+        let painted_stack = again.with_top_paint(paint).unwrap();
+        let third = Pixels::pending(painted_stack, Some((second, again)));
+        assert!(third.preview().is_none());
+    }
+
+    #[test]
+    fn what_a_layer_showed_stands_in_while_a_filter_is_evaluated() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let shown = Pixels::ready(Arc::clone(&original));
+        let blurred = plain.with_filter(blur(3.0, None), None).unwrap();
+        let first = Pixels::pending(blurred.clone(), Some((shown.clone(), plain.clone())));
+        assert!(Arc::ptr_eq(first.meanwhile().unwrap(), &original));
+        let first_image = first.get();
+        // A preview replaced: back to the stack without the filter, then another radius on it.
+        let back = Pixels::pending(plain.clone(), Some((first.clone(), blurred.clone())));
+        let again = plain.with_filter(blur(6.0, None), None).unwrap();
+        let second = Pixels::pending(again, Some((back.clone(), plain.clone())));
+        assert!(Arc::ptr_eq(second.shown().unwrap(), &first_image));
+        // No filter on either side: nothing kept.
+        let painted = plain.with_effect(effect(Adjustment::Invert, None)).unwrap();
+        assert!(
+            Pixels::pending(painted, Some((shown, plain)))
+                .meanwhile()
+                .is_none()
+        );
     }
 
     #[test]

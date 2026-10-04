@@ -283,13 +283,16 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Frames over the IPC (macOS, Linux) rendered again until a stack's pixels are evaluated,
       as native presents (Windows) are
 - [x] Editable operations ([ADR 0034](adr/0034-editable-operations.md)): entries of a stack
-      edited again (an icon reopens their dialog, each step of a ×2 entry), an eye per entry,
+      edited again (an icon reopens their dialog), an eye per entry,
       `.slop` 0.20
 - [ ] An applied adjustment's selection loaded as the selection or replaced; moved pixels
       replayed when an entry below them changes
-- [ ] Filter menu: Gaussian Blur as a stack entry (a cached result the entries above start
-      from, CPU and GPU alike), Repeat Last Filter (Ctrl+F); then Blur, Sharpen, Noise, Distort,
-      Pixelate, Stylize
+- [x] Filter menu: Gaussian Blur as a stack entry (its result cached, the entries above start
+      from it; computed on the CPU, the display showing the layer's previous pixels meanwhile),
+      Repeat (Ctrl+F) and Last Filter Settings (Alt+Ctrl+F), `.slop` 0.21
+- [ ] Filters on the GPU (Gaussian Blur first): live previews of large layers
+- [ ] The other classical filters, the maintainer's short list (2026-10-04): Motion Blur,
+      Unsharp Mask, High Pass, Add Noise, Dust & Scratches, Clarity / Texture; then Liquify
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
 - [ ] Liquify as a stack entry (a displacement field, its own workspace)
