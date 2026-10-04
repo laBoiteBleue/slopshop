@@ -45,8 +45,8 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::export::ExportJobs;
 use crate::ipc::{
-    DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo, PresentInfo,
-    SaveFailed, ViewInfo, ViewRequest,
+    AntsRequest, DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo,
+    PresentInfo, SaveFailed, ViewInfo, ViewRequest,
 };
 
 /// How the viewport reaches the screen (ADR 0002):
@@ -1875,6 +1875,13 @@ async fn presenter_mode(app: AppHandle) -> Result<&'static str, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The time the ants march by: since the first request, shared by every present, so that the
+/// dashes keep their place from one present to the next whatever the rate.
+fn ants_clock() -> Duration {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
+}
+
 /// Present the document's view directly to the window (native presentation): into the
 /// `width × height` canvas area at (`x`, `y`), in physical pixels of the window's client area.
 /// Nothing crosses the IPC but this small request and its answer.
@@ -1886,6 +1893,7 @@ async fn present_view(
     y: u32,
     width: u32,
     height: u32,
+    ants: Option<AntsRequest>,
 ) -> Result<PresentInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -1902,7 +1910,11 @@ async fn present_view(
             if !output.is_empty() && document.viewport.output() != output {
                 document.viewport.resize(doc.size(), output);
             }
-            (doc, revision, document.viewport, document.overlays)
+            let mut overlays = document.overlays;
+            // The ants of the selection, drawn in the frame (ADR 0024): the UI asks for them
+            // while it shows them, with where and how they are.
+            overlays.ants = ants.and_then(|ants| ants.ants(ants_clock()));
+            (doc, revision, document.viewport, overlays)
         };
         let surface_size = state.surface_size(&app)?;
 
