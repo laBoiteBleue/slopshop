@@ -32,6 +32,27 @@ test("the Filter menu: Repeat and its settings grayed until a filter is applied,
   expect(screen.getByText("Blur", { selector: ".label" })).toBeInTheDocument();
 });
 
+test("Blur > Motion Blur: an angle and a distance", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Blur", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Motion Blur…" }));
+  await screen.findByRole("dialog", { name: "Motion Blur" });
+  const angle = screen.getByRole("spinbutton", { name: "Angle" });
+  await user.clear(angle);
+  await user.type(angle, "-30");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "motionBlur",
+      values: [-30, 10],
+    }),
+  );
+});
+
 test("Sharpen > Unsharp Mask and Other > High Pass apply to the active layer", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });
