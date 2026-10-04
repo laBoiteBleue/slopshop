@@ -1657,30 +1657,36 @@ impl<'a> WandSampler<'a> {
     fn tile(&self, col: usize, row: usize, mask: &Mask) -> Vec<[f32; 4]> {
         let (w, h) = mask.valid(col, row);
         let region = Rect::new((col * T) as u32, (row * T) as u32, w as u32, h as u32);
-        let mut rgba = vec![0f32; w * h * 4];
         let mut out = vec![[0f32; 4]; T * T];
+        for (y, line) in self.region(region).chunks_exact(w.max(1)).enumerate() {
+            out[y * T..y * T + w].copy_from_slice(line);
+        }
+        out
+    }
+
+    /// The colors of `region` (within the canvas), row-major; transparent if it cannot be
+    /// composited.
+    fn region(&self, region: Rect) -> Vec<[f32; 4]> {
+        let (w, h) = (region.width as usize, region.height as usize);
+        let mut rgba = vec![0f32; w * h * 4];
+        let mut out = vec![[0f32; 4]; w * h];
         // Callers composite tiles on every core already: one thread per tile.
         if crate::composite::composite_region_serial(self.document, region, &mut rgba).is_err() {
             return out;
         }
-        for y in 0..h {
-            for x in 0..w {
-                let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
-                let a = p[3].clamp(0.0, 1.0);
-                let color = if a > 0.0 {
-                    let linear = crate::color::mat_vec(
-                        &self.to_srgb,
-                        [
-                            f64::from(p[0] / a),
-                            f64::from(p[1] / a),
-                            f64::from(p[2] / a),
-                        ],
-                    );
-                    linear.map(|v| f32::from(srgb_byte(v as f32)))
-                } else {
-                    [0.0; 3]
-                };
-                out[y * T + x] = [color[0], color[1], color[2], (a * 255.0).round()];
+        for (color, p) in out.iter_mut().zip(rgba.as_chunks::<4>().0) {
+            let a = p[3].clamp(0.0, 1.0);
+            if a > 0.0 {
+                let linear = crate::color::mat_vec(
+                    &self.to_srgb,
+                    [
+                        f64::from(p[0] / a),
+                        f64::from(p[1] / a),
+                        f64::from(p[2] / a),
+                    ],
+                );
+                let [r, g, b] = linear.map(|v| f32::from(srgb_byte(v as f32)));
+                *color = [r, g, b, (a * 255.0).round()];
             }
         }
         out
@@ -2063,6 +2069,46 @@ pub fn sample_colors(source: &crate::document::Document, points: &[(u32, u32)]) 
             tile[(y as usize % T) * T + x as usize % T]
         })
         .collect()
+}
+
+/// The colors of `source` in the `width × height` pixels from (`x`, `y`) (document pixels), as
+/// displayed: whole 8-bit sRGB values, straight alpha, row-major. Pixels outside the canvas are
+/// transparent. Only those pixels are composited: for an eyedropper and its loupe.
+pub fn sample_region(
+    source: &crate::document::Document,
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let (w, h) = (width as usize, height as usize);
+    let mut out = vec![[0f32; 4]; w * h];
+    let size = source.size();
+    let (left, top) = (x.max(0), y.max(0));
+    let right = x
+        .saturating_add(i64::from(width))
+        .min(i64::from(size.width));
+    let bottom = y
+        .saturating_add(i64::from(height))
+        .min(i64::from(size.height));
+    if left >= right || top >= bottom {
+        return out;
+    }
+    // Within the canvas, so within u32.
+    let inside = Rect::new(
+        left as u32,
+        top as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    );
+    let colors = WandSampler::new(source).region(inside);
+    let (dx, dy) = ((left - x) as usize, (top - y) as usize);
+    let iw = inside.width as usize;
+    for (row, line) in colors.chunks_exact(iw).enumerate() {
+        let start = (dy + row) * w + dx;
+        out[start..start + iw].copy_from_slice(line);
+    }
+    out
 }
 
 /// Select > Color Range on `source` (the composited document, or one holding only the layer to
@@ -4067,6 +4113,31 @@ mod tests {
         assert_eq!(left, (u32::from(FULL) * 6 / 9) as u16);
         assert_eq!(right, (u32::from(FULL) * 3 / 9) as u16);
         assert_eq!(soft.at(0, 1), FULL);
+    }
+
+    #[test]
+    fn a_sampled_region_matches_the_sampled_points_and_is_clear_off_the_canvas() {
+        let doc = wand_document();
+        // Across a tile boundary and the red strip's edge; across the top-right corner.
+        for (x, y, w, h) in [(250i64, 10i64, 12u32, 20u32), (594, -3, 10, 6)] {
+            let region = sample_region(&doc, x, y, w, h);
+            assert_eq!(region.len(), (w * h) as usize);
+            for row in 0..i64::from(h) {
+                for col in 0..i64::from(w) {
+                    let (px, py) = (x + col, y + row);
+                    let inside = (0..600).contains(&px) && (0..300).contains(&py);
+                    let expected = if inside {
+                        sample_colors(&doc, &[(px as u32, py as u32)])[0]
+                    } else {
+                        [0.0; 4]
+                    };
+                    assert_eq!(region[(row * i64::from(w) + col) as usize], expected);
+                }
+            }
+        }
+        assert_eq!(sample_region(&doc, -20, 5, 4, 4), vec![[0.0; 4]; 16]);
+        assert_eq!(sample_region(&doc, 600, 0, 3, 1), vec![[0.0; 4]; 3]);
+        assert!(sample_region(&doc, 0, 0, 0, 5).is_empty());
     }
 
     #[test]
