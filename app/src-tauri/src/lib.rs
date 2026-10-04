@@ -2239,6 +2239,7 @@ pub fn run() {
             recent::clear_recent_files,
             recent::recent_thumbnail,
             info::document_info,
+            info::histogram,
             print::print_page,
             acquire::acquire_image,
             paint::sample_color,

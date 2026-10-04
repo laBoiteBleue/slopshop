@@ -254,6 +254,8 @@
     propertiesFollow = next.follow;
     shownProperties = id;
   });
+  /** The document point under the pointer over the image (the Info panel shows it). */
+  let pointerAt = $state<[number, number] | null>(null);
   /** The user chose what the dock shows: Properties no longer gives it back by itself. */
   const dockChosen = () => (propertiesFollow = null);
   // What the dock's panels get from the app (panels/context.ts).
@@ -274,6 +276,9 @@
     loadSelection: (id, mode) => void loadSavedSelection(id, mode),
     get combinedSelections() {
       return active ? combinedRows(selectionsCombination, active.id, active.selectionKey) : [];
+    },
+    get pointer() {
+      return pointerAt;
     },
   });
   /** Opens in progress (decoding a large image takes seconds). */
@@ -4878,6 +4883,8 @@
         class:see-through={nativeCanvas && active}
         role="presentation"
         oncontextmenu={openCanvasMenu}
+        onpointermove={(e) => (pointerAt = viewport?.documentPointAt(e.clientX, e.clientY) ?? null)}
+        onpointerleave={() => (pointerAt = null)}
       >
         {#if active}
           {#key active.id}

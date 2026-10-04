@@ -111,6 +111,8 @@ test("Tab hides the toolbar, the options bar and the panels; a Window panel show
     "Properties",
     "Selections",
     "History",
+    "Histogram",
+    "Info",
     "—",
     "Options Bar",
     "Toolbar",

@@ -18,6 +18,8 @@ export const PANELS = [
   { id: "properties", icon: "sliders", title: "properties.title" },
   { id: "selections", icon: "marquee", title: "selections.title" },
   { id: "history", icon: "history", title: "history.title" },
+  { id: "histogram", icon: "histogram", title: "histogram.title" },
+  { id: "info", icon: "info", title: "info.title" },
 ] as const satisfies readonly PanelInfo[];
 
 export type PanelId = (typeof PANELS)[number]["id"];

@@ -261,6 +261,18 @@ export type HistoryEntryView = { kind: string; detail: string | null };
 /** A document's history: oldest first, the steps undone (redo's) last; `done` are done. */
 export type HistoryView = { entries: HistoryEntryView[]; done: number };
 
+/**
+ * The Histogram panel's counts per 8-bit value (0–255) of the visible image, as displayed
+ * (within the selection); `step`: every `step`-th row and column counted (1: every pixel).
+ */
+export type HistogramView = {
+  red: number[];
+  green: number[];
+  blue: number[];
+  luminosity: number[];
+  step: number;
+};
+
 export type DocumentView = {
   /** One document per tab; ids are never reused. */
   id: number;
@@ -1736,6 +1748,8 @@ export const engine = {
   redo: (documentId: number) => serial(() => invoke<DocumentView>("redo", { documentId })),
   /** A document's history (the History panel, only while it shows). */
   history: (documentId: number) => invoke<HistoryView>("history", { documentId }),
+  /** The Histogram panel's counts (only while it shows). */
+  histogram: (documentId: number) => invoke<HistogramView>("histogram", { documentId }),
   /** Undo or redo until `done` entries of the history are done (a click in History). */
   goToHistory: (documentId: number, done: number) =>
     serial(() => invoke<DocumentView>("go_to_history", { documentId, done })),
