@@ -5,11 +5,12 @@
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
-use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
+use slopshop_core::selection::{self, Combine, EdgeOptions, PixelSource, Selection, Shape};
 use slopshop_core::{
-    Edit, LayerContent, LayerId, LayerMask, RasterImage, Rect, SavedSelection, SavedSelectionId,
-    Size,
+    Document, Edit, LayerContent, LayerId, LayerMask, RasterImage, Rect, SavedSelection,
+    SavedSelectionId, Size,
 };
+use slopshop_render::Renderer;
 use tauri::State;
 use tauri::ipc::Response;
 
@@ -111,6 +112,29 @@ pub(crate) fn set_selection(
     Ok(document.view())
 }
 
+/// The GPU as the pixel source of the tools that compare colors (Magic Wand, Grow, Similar,
+/// Color Range): rows of tiles rendered at full resolution by the export path, which falls back
+/// to the CPU compositor by itself when a region does not fit the GPU. `None` without a
+/// renderer: the tools then composite on the CPU. The tools call it from several threads, whose
+/// GPU calls overlap: each takes one of the export renderers (which keep their GPU buffers from
+/// call to call) from a pool, a new one when none is free.
+pub(crate) fn gpu_pixels(
+    renderer: Option<&Renderer>,
+) -> Option<impl Fn(&Document, Rect, &mut [f32]) -> Result<(), String> + Sync + '_> {
+    type Render<'a> =
+        Box<dyn FnMut(&Document, Rect, &mut [f32]) -> Result<u64, String> + Send + 'a>;
+    let renderer = renderer?;
+    let pool: Mutex<Vec<Render<'_>>> = Mutex::new(Vec::new());
+    Some(move |document: &Document, region: Rect, out: &mut [f32]| {
+        let free = pool.lock().unwrap_or_else(|e| e.into_inner()).pop();
+        let mut render =
+            free.unwrap_or_else(|| Box::new(slopshop_render::export_renderer(Some(renderer))));
+        let result = render(document, region, out).map(|_| ());
+        pool.lock().unwrap_or_else(|e| e.into_inner()).push(render);
+        result
+    })
+}
+
 pub(crate) async fn on_worker<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -151,6 +175,7 @@ pub async fn select_shape(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn magic_wand(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     document_id: u64,
     x: u32,
@@ -174,8 +199,19 @@ pub async fn magic_wand(
         anti_alias,
     };
     let image = on_worker(move || {
-        selection::magic_wand(&source, current.as_deref(), (x, y), options, combine)
-            .map_err(|e| e.to_string())
+        use tauri::Manager;
+        let state = app.state::<AppState>();
+        let gpu = gpu_pixels(state.renderer().ok());
+        let pixels = gpu.as_ref().map(|p| p as &PixelSource<'_>);
+        selection::magic_wand_from(
+            &source,
+            pixels,
+            current.as_deref(),
+            (x, y),
+            options,
+            combine,
+        )
+        .map_err(|e| e.to_string())
     })
     .await?;
     set_selection(&state, document_id, image)
@@ -186,6 +222,7 @@ pub async fn magic_wand(
 /// the Magic Wand does: the composited document, or with `layer_id` only that layer.
 #[tauri::command]
 pub async fn grow_selection(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     document_id: u64,
     tolerance: f32,
@@ -205,9 +242,14 @@ pub async fn grow_selection(
         contiguous,
         anti_alias,
     };
-    let image =
-        on_worker(move || selection::grow(&source, &current, options).map_err(|e| e.to_string()))
-            .await?;
+    let image = on_worker(move || {
+        use tauri::Manager;
+        let state = app.state::<AppState>();
+        let gpu = gpu_pixels(state.renderer().ok());
+        let pixels = gpu.as_ref().map(|p| p as &PixelSource<'_>);
+        selection::grow_from(&source, pixels, &current, options).map_err(|e| e.to_string())
+    })
+    .await?;
     set_selection(&state, document_id, image)
 }
 
@@ -536,10 +578,12 @@ pub struct ColorRangeRequest {
 }
 
 impl ColorRangeRequest {
-    /// The source to sample and the range, its sampled colors read from the source.
+    /// The source to sample and the range, its sampled colors read from the source (by `pixels`
+    /// if given: the colors the range is then compared with must come from the same one).
     fn resolve(
         &self,
         doc: &slopshop_core::Document,
+        pixels: Option<&PixelSource<'_>>,
     ) -> Result<(slopshop_core::Document, selection::ColorRange), String> {
         let source = sampled_document(doc, self.layer_id)?;
         let size = source.size();
@@ -559,8 +603,8 @@ impl ColorRangeRequest {
             radius,
         });
         let range = selection::ColorRange {
-            included: selection::sample_colors(&source, &included),
-            excluded: selection::sample_colors(&source, &points(&self.excluded)),
+            included: selection::sample_colors_from(&source, pixels, &included),
+            excluded: selection::sample_colors_from(&source, pixels, &points(&self.excluded)),
             fuzziness: self.fuzziness,
             invert: self.invert,
             localized,
@@ -589,7 +633,7 @@ pub async fn color_range_preview(
     };
     on_worker(move || {
         let state = app.state::<AppState>();
-        let (source, range) = request.resolve(&doc)?;
+        let (source, range) = request.resolve(&doc, None)?;
         let size = source.size();
         let side = max_side.clamp(16, 1024);
         let scale = (f64::from(size.width.max(size.height)) / f64::from(side)).max(1.0);
@@ -663,10 +707,13 @@ pub async fn color_range(
         };
         let task = Task::start(&app, task);
         let progress = task.shared("colorRange");
-        let (source, range) = request.resolve(&doc).map_err(internal)?;
+        let gpu = gpu_pixels(state.renderer().ok());
+        let pixels = gpu.as_ref().map(|p| p as &PixelSource<'_>);
+        let (source, range) = request.resolve(&doc, pixels).map_err(internal)?;
         let report = |done: usize, total: usize| progress.report(done, total);
-        let image = selection::color_range_with(
+        let image = selection::color_range_from(
             &source,
+            pixels,
             current.as_deref(),
             &range,
             &report,
@@ -1200,4 +1247,74 @@ pub async fn selection_outline(
         Ok(Response::new(bytes))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slopshop_core::{LinearRgba, Session};
+
+    #[test]
+    fn without_a_renderer_the_tools_composite_on_the_cpu() {
+        assert!(gpu_pixels(None).is_none());
+    }
+
+    #[test]
+    fn the_gpu_pixels_give_the_wand_its_cpu_selection() {
+        let Ok(renderer) = Renderer::new() else {
+            assert_ne!(std::env::var("SLOPSHOP_REQUIRE_GPU").as_deref(), Ok("1"));
+            return;
+        };
+        // A fill three tiles wide: the rows of tiles are rendered by one call each.
+        let size = Size::new(600, 300);
+        let mut s = Session::new(Document::new(size));
+        let id = s.allocate_layer_id();
+        let layer = slopshop_core::Layer {
+            style: None,
+            transform: slopshop_core::Affine::IDENTITY,
+            clipped: false,
+            id,
+            name: "fill".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: slopshop_core::BlendMode::Normal,
+            mask: None,
+            content: LayerContent::Fill {
+                color: LinearRgba::new(0.8, 0.1, 0.1, 1.0),
+            },
+        };
+        s.perform(Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        })
+        .unwrap();
+        let doc = s.document().clone();
+        let gpu = gpu_pixels(Some(&renderer)).expect("a renderer gives a source");
+        let pixels: &PixelSource<'_> = &gpu;
+        let options = selection::WandOptions {
+            tolerance: 10.0,
+            contiguous: false,
+            anti_alias: false,
+        };
+        let cpu = selection::magic_wand(&doc, None, (10, 10), options, Combine::Replace)
+            .unwrap()
+            .unwrap();
+        let from = selection::magic_wand_from(
+            &doc,
+            Some(pixels),
+            None,
+            (10, 10),
+            options,
+            Combine::Replace,
+        )
+        .unwrap()
+        .unwrap();
+        let all = Rect::new(0, 0, 600, 300);
+        assert_eq!(
+            selection::sample_grid(&cpu, all, 600, 300),
+            selection::sample_grid(&from, all, 600, 300)
+        );
+        assert_eq!(selection::bounds(&from), Some(all));
+    }
 }
