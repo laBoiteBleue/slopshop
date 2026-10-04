@@ -40,6 +40,12 @@ test("an applied adjustment with settings is editable; paint and Invert are not"
   ).toBe(false);
 });
 
+test("a Liquify entry is edited again in its workspace, not by settings", () => {
+  expect(
+    editableEntry(entry({ kind: "liquify", adjustment: null, steps: [], filterSteps: [] })),
+  ).toBe(true);
+});
+
 test("settings travel as edits send them: Curves' points and Gradient Map's stops only when there", () => {
   expect(settingsOf(levels)).toEqual({ adjustment: "levels", values: [0, 1, 1, 0, 1] });
   const curves = {

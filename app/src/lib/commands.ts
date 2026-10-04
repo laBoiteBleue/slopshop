@@ -84,6 +84,8 @@ export const SHORTCUTS = {
   // Filter: Photoshop's historical Last Filter (Ctrl+F), and with its dialog (Alt+Ctrl+F).
   repeatFilter: ["mod+f"],
   repeatFilterSettings: ["alt+mod+f"],
+  // Liquify's own, Photoshop's.
+  liquify: ["shift+mod+x"],
   // View
   zoomIn: ["mod++"],
   zoomOut: ["mod+-"],

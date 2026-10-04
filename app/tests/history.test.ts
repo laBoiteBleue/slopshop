@@ -21,6 +21,8 @@ test("history entries are named by their kind, with the adjustment or filter the
   });
   // A detail the catalogs do not know: the kind alone.
   expect(historyName({ kind: "filter", detail: "swirl" })).toEqual({ key: "history.filter" });
+  // Liquify and editing one of its entries again (ADR 0037).
+  expect(historyName({ kind: "liquify", detail: null })).toEqual({ key: "history.liquify" });
   // A kind newer than the catalogs: a generic name, never the identifier.
-  expect(historyName({ kind: "liquify", detail: null })).toEqual({ key: "history.edit" });
+  expect(historyName({ kind: "teleport", detail: null })).toEqual({ key: "history.edit" });
 });

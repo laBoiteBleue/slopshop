@@ -7,10 +7,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-/** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, or a filter
- * (ADR 0034). */
+/** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, a filter
+ * (ADR 0034) or a Liquify field (ADR 0037). */
 export type StackEntryView = {
-  kind: "paint" | "effect" | "filter";
+  kind: "paint" | "effect" | "filter" | "liquify";
   /** An effect's adjustment. */
   adjustment: AdjustmentId | null;
   /** How many times an effect of this kind was applied in a row (1 for paint). */
@@ -23,6 +23,58 @@ export type StackEntryView = {
   filter: FilterId | null;
   /** A filter entry's steps with their settings, bottom to top. */
   filterSteps: { id: FilterId; values: number[] }[];
+};
+
+/** Liquify's tools (`Tool` in crates/slopshop-core/src/liquify.rs). */
+export type LiquifyToolId =
+  | "forwardWarp"
+  | "reconstruct"
+  | "smooth"
+  | "twirlClockwise"
+  | "twirlCounterclockwise"
+  | "pucker"
+  | "bloat"
+  | "pushLeft"
+  | "freeze"
+  | "thaw";
+
+/** Liquify's brush: size in pixels, density, pressure and rate from 0 to 100. */
+export type LiquifyBrush = { size: number; density: number; pressure: number; rate: number };
+
+/** The workspace's session as the engine has it. */
+export type LiquifyState = {
+  width: number;
+  height: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** The field is not what the workspace opened with. */
+  changed: boolean;
+  /** Something is displaced: Restore All does something. */
+  displaced: boolean;
+};
+
+/** A piece of a stroke: the pointer's samples (layer pixels) and how long it stayed still. */
+export type LiquifyStrokePiece = {
+  tool: LiquifyToolId;
+  brush: LiquifyBrush;
+  /** The pointer went down: a new stroke. */
+  begin: boolean;
+  points: [number, number][];
+  /** Seconds the pointer stayed at the last sample. */
+  hold: number;
+  /** The pointer went up. */
+  end: boolean;
+};
+
+/** What a Liquify frame shows: layer point (`x`, `y`) at the top left, `zoom` pixels per layer
+ * pixel, the frame's size in pixels, the frozen area tinted or not. */
+export type LiquifyViewRequest = {
+  x: number;
+  y: number;
+  zoom: number;
+  width: number;
+  height: number;
+  overlay: boolean;
 };
 
 /** The filters (Filter in crates/slopshop-core/src/filter.rs). */
@@ -1627,6 +1679,33 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("ai_select_subject", { documentId, layerId, mode, refine, task }),
     ),
+  /**
+   * Filter > Liquify (ADR 0037): opens the workspace on raster layer `layerId`, on its Liquify
+   * entry `index` to edit it again or on a new one (`null`). Nothing of the document changes
+   * until `liquifyCommit`.
+   */
+  liquifyOpen: (documentId: number, layerId: number, index: number | null) =>
+    serial(() => invoke<LiquifyState>("liquify_open", { documentId, layerId, index })),
+  /** A piece of a stroke of a tool. */
+  liquifyStroke: (documentId: number, request: LiquifyStrokePiece) =>
+    serial(() => invoke<LiquifyState>("liquify_stroke", { documentId, request })),
+  /** Undo the workspace's last stroke (`redo`: bring it back). */
+  liquifyUndo: (documentId: number, redo: boolean) =>
+    serial(() => invoke<LiquifyState>("liquify_undo", { documentId, redo })),
+  /** Restore All: every displacement taken back, the freeze mask kept. */
+  liquifyRestoreAll: (documentId: number) =>
+    serial(() => invoke<LiquifyState>("liquify_restore_all", { documentId })),
+  /**
+   * The layer seen through the field, as 8-bit sRGB RGBA, straight alpha, `view.width ×
+   * view.height` pixels. Only reads: not queued behind the strokes (ask after they are answered).
+   */
+  liquifyFrame: async (documentId: number, view: LiquifyViewRequest) =>
+    new Uint8ClampedArray(await invoke<ArrayBuffer>("liquify_frame", { documentId, view })),
+  /** OK: the field becomes an entry of the layer's stack, one undo entry. */
+  liquifyCommit: (documentId: number) =>
+    serial(() => invoke<DocumentView>("liquify_commit", { documentId })),
+  /** Cancel: the workspace closes, the document is as it was. */
+  liquifyClose: (documentId: number) => serial(() => invoke<void>("liquify_close", { documentId })),
   /** Select and Mask opens on the current selection (its base). */
   refineOpen: (documentId: number) =>
     serial(() => invoke<DocumentView>("refine_open", { documentId })),

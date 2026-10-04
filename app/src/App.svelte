@@ -93,6 +93,7 @@
   import { EFFECTS, styleEdit, withEffect, type EffectId } from "./lib/layerStyle";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
   import FilterDialog from "./lib/FilterDialog.svelte";
+  import LiquifyWorkspace from "./lib/LiquifyWorkspace.svelte";
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
@@ -1077,7 +1078,19 @@
   function openEntry(layer: LayerView, index: number) {
     const doc = active;
     const entry = layer.entries[index];
-    if (!doc || !entry || !editableEntry(entry) || adjustDialog || entryDialog || filterDialog) {
+    if (
+      !doc ||
+      !entry ||
+      !editableEntry(entry) ||
+      adjustDialog ||
+      entryDialog ||
+      filterDialog ||
+      liquifyDialog
+    ) {
+      return;
+    }
+    if (entry.kind === "liquify") {
+      liquifyDialog = { documentId: doc.id, layerId: layer.id, index };
       return;
     }
     if (entry.kind === "filter" && entry.filter) {
@@ -1282,6 +1295,38 @@
     const dialog = filterDialog;
     filterDialog = null;
     if (dialog) void cancelGesture(dialog.documentId);
+  }
+
+  /**
+   * Filter > Liquify (ADR 0037): its workspace is open on a layer, on a new entry or on entry
+   * `index` of its stack to edit it again. The engine holds the field being edited; the
+   * document changes at OK only.
+   */
+  let liquifyDialog = $state<{
+    documentId: number;
+    layerId: number;
+    index: number | null;
+  } | null>(null);
+
+  /** Filter > Liquify… (Shift+Ctrl+X): its workspace on the active layer. */
+  function openLiquify() {
+    commitTransform();
+    const doc = active;
+    const layer = filterLayer();
+    if (!doc || !layer || filterDialog || adjustDialog || entryDialog || liquifyDialog) return;
+    liquifyDialog = { documentId: doc.id, layerId: layer.id, index: null };
+  }
+
+  function liquifyOk() {
+    const dialog = liquifyDialog;
+    liquifyDialog = null;
+    if (dialog) void sync(engine.liquifyCommit(dialog.documentId));
+  }
+
+  function liquifyCancel() {
+    const dialog = liquifyDialog;
+    liquifyDialog = null;
+    if (dialog) void engine.liquifyClose(dialog.documentId);
   }
 
   /** Filter > Repeat (Ctrl+F): the filter applied last, as it was, on the active layer. */
@@ -3694,6 +3739,11 @@
         run: repeatFilter,
         disabled: !lastFilter || !filterLayer(),
       },
+      liquify: {
+        label: t("menu.filter.liquify"),
+        run: openLiquify,
+        disabled: !filterLayer(),
+      },
       repeatFilterSettings: {
         label: t("menu.filter.repeatSettings"),
         run: () => lastFilter && openFilter(lastFilter.filter, lastFilter.values),
@@ -4492,6 +4542,8 @@
           item("repeatFilter"),
           item("repeatFilterSettings"),
           separator,
+          item("liquify"),
+          separator,
           ...FILTER_MENU.map(({ label, filters }) => ({
             kind: "submenu" as const,
             label: t(label),
@@ -5225,6 +5277,15 @@
     onpreview={filterPreview}
     onok={applyFilterDialog}
     oncancel={cancelFilter}
+  />
+{/if}
+{#if liquifyDialog}
+  <LiquifyWorkspace
+    documentId={liquifyDialog.documentId}
+    layerId={liquifyDialog.layerId}
+    index={liquifyDialog.index}
+    onok={liquifyOk}
+    oncancel={liquifyCancel}
   />
 {/if}
 {#if entryDialog && entryShown}
