@@ -195,7 +195,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation
-- [ ] History: memory limits, named entries, history panel
+- [x] History panel and named history entries ([ADR 0036](adr/0036-panels-and-layout.md))
+- [ ] History: memory limits
 
 ## Phase 3 — Selection and painting
 
