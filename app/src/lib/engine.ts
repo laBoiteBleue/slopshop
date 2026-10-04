@@ -111,18 +111,12 @@ export const ADJUSTMENT_PARAMS = 37;
  */
 export type LayerStyle = {
   fillOpacity: number;
-  dropShadow: {
-    enabled: boolean;
-    color: [number, number, number];
-    mode: BlendModeId;
-    opacity: number;
-    /** Degrees, where the light comes from. */
-    angle: number;
-    distance: number;
-    /** Percent. */
-    spread: number;
-    size: number;
-  } | null;
+  dropShadow: StyleShadow | null;
+  outerGlow: StyleGlow | null;
+  /** Its `spread` is Photoshop's Choke. */
+  innerShadow: StyleShadow | null;
+  /** Its `spread` is Photoshop's Choke. */
+  innerGlow: StyleGlow | null;
   colorOverlay: {
     enabled: boolean;
     color: [number, number, number];
@@ -137,6 +131,31 @@ export type LayerStyle = {
     mode: BlendModeId;
     opacity: number;
   } | null;
+};
+
+/** A shadow of a layer style: Drop Shadow, Inner Shadow. */
+export type StyleShadow = {
+  enabled: boolean;
+  color: [number, number, number];
+  mode: BlendModeId;
+  opacity: number;
+  /** Degrees, where the light comes from. */
+  angle: number;
+  distance: number;
+  /** Percent. */
+  spread: number;
+  size: number;
+};
+
+/** A glow of a layer style: Outer Glow, Inner Glow. */
+export type StyleGlow = {
+  enabled: boolean;
+  color: [number, number, number];
+  mode: BlendModeId;
+  opacity: number;
+  /** Percent. */
+  spread: number;
+  size: number;
 };
 
 /** Turns and flips of Image > Image Rotation. */

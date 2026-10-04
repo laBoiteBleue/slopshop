@@ -87,3 +87,23 @@ test("Fill reaches the selected pixel and fill layers only, in one edit", () => 
   });
   assert.equal(fillEdit([layer(2, { kind: "group" })], 0.5), null);
 });
+
+test("the glows and Inner Shadow come at Photoshop's defaults, in the dialog's order", () => {
+  assert.deepEqual(withEffect(null, "outerGlow", true).outerGlow, {
+    enabled: true,
+    color: [1, 1, 190 / 255],
+    mode: "screen",
+    opacity: 0.75,
+    spread: 0,
+    size: 5,
+  });
+  assert.equal(withEffect(null, "innerShadow", true).innerShadow?.mode, "multiply");
+  let style = withEffect(null, "dropShadow", true);
+  for (const id of ["outerGlow", "innerGlow", "innerShadow", "stroke", "colorOverlay"] as const) {
+    style = withEffect(style, id, true);
+  }
+  assert.deepEqual(
+    effectsOf(style).map((e) => e.id),
+    ["stroke", "innerShadow", "innerGlow", "colorOverlay", "outerGlow", "dropShadow"],
+  );
+});

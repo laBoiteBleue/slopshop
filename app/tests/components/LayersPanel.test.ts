@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DocumentView, LayerView } from "../../src/lib/engine";
 import LayersPanel from "../../src/lib/LayersPanel.svelte";
-import { withEffect } from "../../src/lib/layerStyle";
+import { PLAIN, withEffect } from "../../src/lib/layerStyle";
 
 // Thumbnails ask the engine: their answers never come (nothing to draw in jsdom).
 beforeEach(() => mockIPC(() => new Promise(() => {})));
@@ -276,6 +276,6 @@ test("a double-click on a pixel layer's row opens Layer Style; Fill sets its Fil
   expect(onedit).toHaveBeenLastCalledWith(1, {
     kind: "setLayerStyle",
     id: 2,
-    style: { fillOpacity: 0.3, dropShadow: null, colorOverlay: null, stroke: null },
+    style: { ...PLAIN, fillOpacity: 0.3 },
   });
 });

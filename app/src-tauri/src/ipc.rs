@@ -125,6 +125,9 @@ pub struct LayerView {
 pub struct StyleDto {
     pub fill_opacity: f32,
     pub drop_shadow: Option<DropShadowDto>,
+    pub outer_glow: Option<GlowDto>,
+    pub inner_shadow: Option<DropShadowDto>,
+    pub inner_glow: Option<GlowDto>,
     pub color_overlay: Option<ColorOverlayDto>,
     pub stroke: Option<StrokeDto>,
 }
@@ -138,6 +141,17 @@ pub struct DropShadowDto {
     pub opacity: f32,
     pub angle: f64,
     pub distance: f64,
+    pub spread: f64,
+    pub size: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlowDto {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub mode: String,
+    pub opacity: f32,
     pub spread: f64,
     pub size: f64,
 }
@@ -181,18 +195,30 @@ fn mode(id: &str) -> Result<BlendMode, String> {
 impl StyleDto {
     pub fn new(style: &slopshop_core::style::LayerStyle) -> Self {
         use slopshop_core::selection::StrokeLocation;
+        let shadow = |s: slopshop_core::style::DropShadow| DropShadowDto {
+            enabled: s.enabled,
+            color: srgb(s.color),
+            mode: s.mode.id().to_owned(),
+            opacity: s.opacity,
+            angle: s.angle,
+            distance: s.distance,
+            spread: s.spread,
+            size: s.size,
+        };
+        let glow = |g: slopshop_core::style::Glow| GlowDto {
+            enabled: g.enabled,
+            color: srgb(g.color),
+            mode: g.mode.id().to_owned(),
+            opacity: g.opacity,
+            spread: g.spread,
+            size: g.size,
+        };
         Self {
             fill_opacity: style.fill_opacity,
-            drop_shadow: style.drop_shadow.map(|s| DropShadowDto {
-                enabled: s.enabled,
-                color: srgb(s.color),
-                mode: s.mode.id().to_owned(),
-                opacity: s.opacity,
-                angle: s.angle,
-                distance: s.distance,
-                spread: s.spread,
-                size: s.size,
-            }),
+            drop_shadow: style.drop_shadow.map(shadow),
+            outer_glow: style.outer_glow.map(glow),
+            inner_shadow: style.inner_shadow.map(shadow),
+            inner_glow: style.inner_glow.map(glow),
             color_overlay: style.color_overlay.map(|o| ColorOverlayDto {
                 enabled: o.enabled,
                 color: srgb(o.color),
@@ -218,10 +244,9 @@ impl StyleDto {
     /// The style it describes; its ranges are checked by the edit.
     pub fn style(&self) -> Result<slopshop_core::style::LayerStyle, String> {
         use slopshop_core::selection::StrokeLocation;
-        use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
-        Ok(LayerStyle {
-            fill_opacity: self.fill_opacity,
-            drop_shadow: match &self.drop_shadow {
+        use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
+        let shadow = |s: &Option<DropShadowDto>| -> Result<Option<DropShadow>, String> {
+            Ok(match s {
                 Some(s) => Some(DropShadow {
                     enabled: s.enabled,
                     color: working(s.color),
@@ -233,7 +258,27 @@ impl StyleDto {
                     size: s.size,
                 }),
                 None => None,
-            },
+            })
+        };
+        let glow = |g: &Option<GlowDto>| -> Result<Option<Glow>, String> {
+            Ok(match g {
+                Some(g) => Some(Glow {
+                    enabled: g.enabled,
+                    color: working(g.color),
+                    mode: mode(&g.mode)?,
+                    opacity: g.opacity,
+                    spread: g.spread,
+                    size: g.size,
+                }),
+                None => None,
+            })
+        };
+        Ok(LayerStyle {
+            fill_opacity: self.fill_opacity,
+            drop_shadow: shadow(&self.drop_shadow)?,
+            outer_glow: glow(&self.outer_glow)?,
+            inner_shadow: shadow(&self.inner_shadow)?,
+            inner_glow: glow(&self.inner_glow)?,
             color_overlay: match &self.color_overlay {
                 Some(o) => Some(ColorOverlay {
                     enabled: o.enabled,
