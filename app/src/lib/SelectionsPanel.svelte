@@ -3,7 +3,8 @@
   // objects rather than Photoshop's alpha channels. A click loads one (it becomes the
   // selection); Shift+click adds it, Alt+click subtracts it, Shift+Alt+click intersects, as the
   // selection tools' keys do. A double-click renames; the right-click menu has every command;
-  // Delete removes the row last clicked. "+" saves the current selection.
+  // Delete removes the row last clicked, a press on the empty part of the list deselects it.
+  // "+" saves the current selection.
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
   import type { SavedSelectionView, SelectionMode } from "./engine";
@@ -106,7 +107,17 @@
     <p class="empty">{t("selections.empty")}</p>
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <ul class="list" role="listbox" aria-label={t("selections.title")} tabindex="0" {onkeydown}>
+    <!-- A press on the empty part of the list deselects its row, as in the Layers panel. -->
+    <ul
+      class="list"
+      role="listbox"
+      aria-label={t("selections.title")}
+      tabindex="0"
+      {onkeydown}
+      onpointerdown={(e) => {
+        if (e.button === 0 && e.target === e.currentTarget) current = null;
+      }}
+    >
       {#each saved as entry (entry.id)}
         <li
           role="option"

@@ -86,3 +86,14 @@ test("without a selection, nothing to save or replace with; without saved ones, 
   expect(screen.getByText(/No saved selection/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Save the current selection" })).toBeDisabled();
 });
+
+test("a press on the empty part of the list deselects the row, as in the Layers panel", async () => {
+  const { ondelete, user } = open();
+  await user.click(row("Shirt"));
+  expect(row("Shirt")).toHaveAttribute("aria-selected", "true");
+  await fireEvent.pointerDown(screen.getByRole("listbox"), { button: 0 });
+  expect(row("Shirt")).toHaveAttribute("aria-selected", "false");
+  expect(screen.getByRole("button", { name: "Delete Saved Selection" })).toBeDisabled();
+  await user.keyboard("{Delete}");
+  expect(ondelete).not.toHaveBeenCalled();
+});
