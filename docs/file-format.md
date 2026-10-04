@@ -5,6 +5,10 @@ The byte-level specification of SlopShop documents. The design and its reasons a
 `crates/slopshop-io/src/slop/`. Before 1.0 the format may change in incompatible ways: a reader
 refuses files with a newer major version.
 
+This specification is licensed under [CC BY 4.0](../LICENSES/CC-BY-4.0.txt), not under the
+GPL of SlopShop's code, so that other software can implement the format. The golden files in
+`crates/slopshop-io/src/slop/fixtures/` are under [CC0 1.0](../LICENSES/CC0-1.0.txt).
+
 ## Conventions
 
 - All integers are little-endian and unsigned. Offsets and lengths are `u64` byte counts from
