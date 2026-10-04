@@ -1,8 +1,9 @@
-// Snapping of on-canvas gestures (the Move tool, Free Transform) to the canvas and the other
-// layers, as in Photoshop: edges and centers meet within a few screen pixels, and magenta smart
-// guides show each alignment. Gesture geometry only, in document pixels.
+// Snapping of on-canvas gestures (the Move tool, Free Transform, Crop, a guide dragged) to the
+// canvas, the other layers and the guides, as in Photoshop: edges and centers meet within a few
+// screen pixels, and magenta smart guides show each alignment. One engine for every gesture.
+// Gesture geometry only, in document pixels.
 
-import type { Bounds } from "./engine";
+import type { Bounds, Guide } from "./engine";
 
 /**
  * A smart guide: a line in document pixels. A `measure` (an equal size) ends with short
@@ -10,28 +11,32 @@ import type { Bounds } from "./engine";
  */
 export type SmartGuide = { x1: number; y1: number; x2: number; y2: number; measure?: boolean };
 
+/** What a gesture snaps to: a box (the canvas, a layer: its edges and center) or a guide. */
+export type SnapTarget = Bounds | Guide;
+
 /** Snapping distance, in screen (CSS) pixels. */
 export const SNAP_CSS_PX = 6;
 
-/** A line to snap to (x of a vertical one, y of a horizontal one), and its target's extent. */
-type Line = { at: number; span: [number, number] };
+/**
+ * A line to snap to (x of a vertical one, y of a horizontal one), and its target's extent
+ * across (`null`: a guide, across the whole document).
+ */
+type Line = { at: number; span: [number, number] | null };
 
-function verticals(targets: Bounds[]): Line[] {
-  return targets.flatMap((b) =>
-    [b.left, (b.left + b.right) / 2, b.right].map((at) => ({
-      at,
-      span: [b.top, b.bottom] as [number, number],
-    })),
-  );
+const isGuide = (t: SnapTarget): t is Guide => "position" in t;
+
+function verticals(targets: SnapTarget[]): Line[] {
+  return targets.flatMap((t): Line[] => {
+    if (isGuide(t)) return t.vertical ? [{ at: t.position, span: null }] : [];
+    return [t.left, (t.left + t.right) / 2, t.right].map((at) => ({ at, span: [t.top, t.bottom] }));
+  });
 }
 
-function horizontals(targets: Bounds[]): Line[] {
-  return targets.flatMap((b) =>
-    [b.top, (b.top + b.bottom) / 2, b.bottom].map((at) => ({
-      at,
-      span: [b.left, b.right] as [number, number],
-    })),
-  );
+function horizontals(targets: SnapTarget[]): Line[] {
+  return targets.flatMap((t): Line[] => {
+    if (isGuide(t)) return t.vertical ? [] : [{ at: t.position, span: null }];
+    return [t.top, (t.top + t.bottom) / 2, t.bottom].map((at) => ({ at, span: [t.left, t.right] }));
+  });
 }
 
 /** The line nearest to one of `edges` within `threshold`, and the shift that reaches it. */
@@ -52,28 +57,32 @@ function nearest(
   return found;
 }
 
-/** Smart guides for alignments on `x` and `y`, spanning `box` and the targets aligned with. */
+/**
+ * Smart guides for alignments on `x` and `y`, spanning `box` and the targets aligned with (a
+ * guide's alignment spans the box alone: the guide is drawn already).
+ */
 function guidesFor(box: Bounds, x: Line | null, y: Line | null): SmartGuide[] {
   const guides: SmartGuide[] = [];
   if (x) {
+    const [top, bottom] = x.span ?? [box.top, box.bottom];
     guides.push({
       x1: x.at,
       x2: x.at,
-      y1: Math.min(box.top, x.span[0]),
-      y2: Math.max(box.bottom, x.span[1]),
+      y1: Math.min(box.top, top),
+      y2: Math.max(box.bottom, bottom),
     });
   }
   if (y) {
+    const [left, right] = y.span ?? [box.left, box.right];
     guides.push({
       y1: y.at,
       y2: y.at,
-      x1: Math.min(box.left, y.span[0]),
-      x2: Math.max(box.right, y.span[1]),
+      x1: Math.min(box.left, left),
+      x2: Math.max(box.right, right),
     });
   }
   return guides;
 }
-
 /**
  * The move (`x`, `y`) of `box` adjusted so that an edge or the center of the box meets an edge
  * or the center of one of `targets` within `threshold`, per axis, with a guide for each.
@@ -82,7 +91,7 @@ export function snapMove(
   box: Bounds,
   x: number,
   y: number,
-  targets: Bounds[],
+  targets: SnapTarget[],
   threshold: number,
 ): { x: number; y: number; guides: SmartGuide[] } {
   const moved = {
@@ -127,7 +136,7 @@ export function snapHandle(
   anchor: number,
   span: number,
   axis: "x" | "y",
-  targets: Bounds[],
+  targets: SnapTarget[],
   threshold: number,
 ): AxisSnap | null {
   const vertical = axis === "x";
@@ -144,6 +153,7 @@ export function snapHandle(
   }
   const direction = Math.sign(handle - anchor) || 1;
   for (const t of targets) {
+    if (isGuide(t)) continue;
     const size = vertical ? t.right - t.left : t.bottom - t.top;
     if (size <= 0) continue;
     const shift = anchor + (direction * size) / span - handle;
@@ -159,4 +169,18 @@ export function snapHandle(
     ]);
   }
   return found;
+}
+
+/**
+ * Where a guide dragged to `at` lands: onto an edge or the center of one of `targets` on its
+ * axis within `threshold`, else where it is.
+ */
+export function snapGuide(
+  at: number,
+  vertical: boolean,
+  targets: SnapTarget[],
+  threshold: number,
+): number {
+  const found = nearest([at], vertical ? verticals(targets) : horizontals(targets), threshold);
+  return at + (found?.shift ?? 0);
 }

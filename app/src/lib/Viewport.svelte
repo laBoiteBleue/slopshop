@@ -30,15 +30,19 @@
     engine,
     type AntsRequest,
     type DeviceRect,
+    type Guide,
     type ViewInfo,
     type ViewRequest,
   } from "./engine";
   import { ANTS_INTERVAL_MS } from "./ants";
+  import { GUIDE_GRAB_CSS, dropped, dropsOut, guidePosition } from "./guides";
+  import Ruler from "./Ruler.svelte";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
   import {
     NO_VIEW,
     easeStep,
+    pixelGrid,
     reprojection,
     toDocument as documentAt,
     toViewport as viewportAt,
@@ -61,6 +65,14 @@
     onmoveend,
     ondoubleclick,
     smartGuides = [],
+    canvasSize = { width: 0, height: 0 },
+    rulers = false,
+    guides = [],
+    extras = true,
+    guidesMovable = false,
+    snapGuide,
+    onguidestart,
+    onguides,
     overlay,
   }: {
     /** Open document. Read once: the viewport is recreated for another document. */
@@ -96,6 +108,28 @@
     ondoubleclick?: () => void;
     /** Smart guides of the Move tool's snap, drawn over the image, in document pixels. */
     smartGuides?: SmartGuide[];
+    /** The canvas's size, document pixels: what the pixel grid covers. */
+    canvasSize?: { width: number; height: number };
+    /** View > Rulers: rulers along the top and the left, a guide dragged out of each. */
+    rulers?: boolean;
+    /** The document's guides. */
+    guides?: Guide[];
+    /**
+     * The guides, the pixel grid (from 800%) and the smart guides are drawn: View > Hide Extras
+     * hides them for a moment.
+     */
+    extras?: boolean;
+    /** The guides can be dragged (with the Move tool, as in Photoshop). */
+    guidesMovable?: boolean;
+    /**
+     * Where a guide dragged to document coordinate `at` lands before rounding: snapped by the
+     * owner (`free`: Ctrl or Cmd held). Absent: where it is.
+     */
+    snapGuide?: (at: number, vertical: boolean, docPerCss: number, free: boolean) => number;
+    /** A guide is dragged out of a ruler or picked up: the owner gathers what it snaps to. */
+    onguidestart?: () => void;
+    /** A guide drag ended with these guides (one placed, moved or deleted): one undo entry. */
+    onguides?: (guides: Guide[]) => void;
     /** Drawn over the image, following the view (it handles its own pointer events). */
     overlay?: Snippet<[ViewMapping]>;
   } = $props();
@@ -556,6 +590,78 @@
     };
   });
 
+  // --- Rulers, guides, pixel grid ----------------------------------------------------------------
+
+  /** The rulers and the image: a guide drag captures the pointer here, rulers included. */
+  let frame: HTMLDivElement;
+  /** The viewport's size, CSS pixels. */
+  const cssSize = $derived({
+    width: size.width / window.devicePixelRatio,
+    height: size.height / window.devicePixelRatio,
+  });
+  const grid = $derived(
+    targetView &&
+      pixelGrid(targetView, window.devicePixelRatio, canvasSize, cssSize.width, cssSize.height),
+  );
+
+  /**
+   * A guide dragged: out of a ruler (`index` null) or picked up; `position` where it would land
+   * (document pixels), null while the pointer is out of the image.
+   */
+  type GuideDrag = {
+    pointerId: number;
+    index: number | null;
+    vertical: boolean;
+    position: number | null;
+  };
+  let guideDrag = $state<GuideDrag | null>(null);
+
+  function startGuideDrag(e: PointerEvent, index: number | null, vertical: boolean) {
+    if (e.button !== 0 || spaceHeld) return;
+    // Not the Move tool's drag, nor a pan.
+    e.preventDefault();
+    e.stopPropagation();
+    frame.setPointerCapture(e.pointerId);
+    guideDrag = {
+      pointerId: e.pointerId,
+      index,
+      vertical,
+      position: index === null ? null : (guides[index]?.position ?? null),
+    };
+    onguidestart?.();
+  }
+
+  function onFramePointerMove(e: PointerEvent) {
+    const drag = guideDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    if (dropsOut(e.clientX, e.clientY, container.getBoundingClientRect())) {
+      guideDrag = { ...drag, position: null };
+      return;
+    }
+    const [x, y] = toDocument(e.clientX, e.clientY);
+    const raw = drag.vertical ? x : y;
+    const docPerCss = window.devicePixelRatio / (target?.zoom ?? 1);
+    const at = snapGuide ? snapGuide(raw, drag.vertical, docPerCss, hasShortcutModifier(e)) : raw;
+    guideDrag = { ...drag, position: guidePosition(at) };
+  }
+
+  function endGuideDrag(e: PointerEvent) {
+    const drag = guideDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    guideDrag = null;
+    const out = dropsOut(e.clientX, e.clientY, container.getBoundingClientRect());
+    const position = out ? null : drag.position;
+    const guide = position === null ? null : { vertical: drag.vertical, position };
+    const changed = dropped(guides, drag.index, guide);
+    if (changed) onguides?.(changed);
+  }
+
+  /** Where a guide is drawn across the viewport, CSS pixels, on a pixel's middle (crisp). */
+  function guideAt(guide: { vertical: boolean; position: number }, view: ViewMapping): number {
+    const [x, y] = view.toViewport(guide.position, guide.position);
+    return Math.round(guide.vertical ? x : y) + 0.5;
+  }
+
   function endPan(e: PointerEvent) {
     if (panning && e.pointerId === panning.pointerId) panning = null;
     if (moving && e.pointerId === moving.pointerId) {
@@ -565,6 +671,8 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    // Escape drops the guide being dragged where it was.
+    if (e.key === "Escape" && guideDrag) guideDrag = null;
     if (isTextField(e.target)) return;
     if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // Space would otherwise press the focused button or scroll.
@@ -594,36 +702,160 @@
 />
 
 <div
-  class="viewport"
-  class:native={presentsNatively}
-  class:hand={spaceHeld}
-  class:panning={panning !== null}
-  bind:this={container}
+  class="frame"
+  class:rulers
+  bind:this={frame}
   role="presentation"
-  onpointerdown={onPointerDown}
-  onpointermove={onPointerMove}
-  onpointerup={endPan}
-  onpointercancel={endPan}
-  onauxclick={(e) => e.preventDefault()}
-  ondblclick={(e) => {
-    if (e.button === 0 && onmove && !spaceHeld) ondoubleclick?.();
-  }}
+  onpointermove={onFramePointerMove}
+  onpointerup={endGuideDrag}
+  onpointercancel={() => (guideDrag = null)}
 >
-  <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
-  {#if mapping && smartGuides.length > 0}
-    <svg class="smart-guides" aria-hidden="true">
-      <SmartGuides guides={smartGuides} {mapping} />
-    </svg>
+  {#if rulers}
+    <div class="corner"></div>
+    <Ruler
+      vertical={false}
+      start={targetView?.origin[0] ?? 0}
+      docPerCss={mapping?.docPerCss ?? 1}
+      length={cssSize.width}
+      onpress={(e) => startGuideDrag(e, null, false)}
+    />
+    <Ruler
+      vertical
+      start={targetView?.origin[1] ?? 0}
+      docPerCss={mapping?.docPerCss ?? 1}
+      length={cssSize.height}
+      onpress={(e) => startGuideDrag(e, null, true)}
+    />
   {/if}
-  {#if overlay && mapping}
-    {@render overlay(mapping)}
-  {/if}
-  {#if error}
-    <p class="error" role="alert">{t("viewport.renderFailed", { error })}</p>
-  {/if}
+  <div
+    class="viewport"
+    class:native={presentsNatively}
+    class:hand={spaceHeld}
+    class:panning={panning !== null}
+    bind:this={container}
+    role="presentation"
+    onpointerdown={onPointerDown}
+    onpointermove={onPointerMove}
+    onpointerup={endPan}
+    onpointercancel={endPan}
+    onauxclick={(e) => e.preventDefault()}
+    ondblclick={(e) => {
+      if (e.button === 0 && onmove && !spaceHeld) ondoubleclick?.();
+    }}
+  >
+    <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
+    {#if extras && grid}
+      <div
+        class="pixel-grid"
+        style:left="{grid.left}px"
+        style:top="{grid.top}px"
+        style:width="{grid.width}px"
+        style:height="{grid.height}px"
+        style:background-size="{grid.cell}px {grid.cell}px"
+        style:background-position="{grid.offsetX}px {grid.offsetY}px"
+      ></div>
+    {/if}
+    {#if mapping && ((extras && guides.length > 0) || guideDrag?.position != null)}
+      <svg class="guides" aria-hidden="true">
+        {#if extras}
+          {#each guides as guide, i (i)}
+            {#if guideDrag?.index !== i}
+              {@const at = guideAt(guide, mapping)}
+              {@const [x1, y1, x2, y2] = guide.vertical ? [at, 0, at, "100%"] : [0, at, "100%", at]}
+              <line class="guide" {x1} {y1} {x2} {y2} />
+              {#if guidesMovable}
+                <line
+                  class="grab"
+                  role="presentation"
+                  class:vertical={guide.vertical}
+                  {x1}
+                  {y1}
+                  {x2}
+                  {y2}
+                  stroke-width={GUIDE_GRAB_CSS * 2 + 1}
+                  onpointerdown={(e) => startGuideDrag(e, i, guide.vertical)}
+                />
+              {/if}
+            {/if}
+          {/each}
+        {/if}
+        {#if guideDrag && guideDrag.position !== null}
+          {@const at = guideAt(
+            { vertical: guideDrag.vertical, position: guideDrag.position },
+            mapping,
+          )}
+          {@const [x1, y1, x2, y2] = guideDrag.vertical ? [at, 0, at, "100%"] : [0, at, "100%", at]}
+          <line class="guide dragged" {x1} {y1} {x2} {y2} />
+        {/if}
+      </svg>
+    {/if}
+    {#if extras && mapping && smartGuides.length > 0}
+      <svg class="smart-guides" aria-hidden="true">
+        <SmartGuides guides={smartGuides} {mapping} />
+      </svg>
+    {/if}
+    {#if overlay && mapping}
+      {@render overlay(mapping)}
+    {/if}
+    {#if error}
+      <p class="error" role="alert">{t("viewport.renderFailed", { error })}</p>
+    {/if}
+  </div>
 </div>
 
 <style>
+  .frame {
+    display: grid;
+    grid-template: 1fr / 1fr;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* View > Rulers: the corner, the top ruler, the left ruler, then the image. */
+  .frame.rulers {
+    grid-template: 18px 1fr / 18px 1fr;
+  }
+
+  .corner {
+    background: var(--chrome);
+    border-right: 1px solid var(--border-dark);
+    border-bottom: 1px solid var(--border-dark);
+  }
+
+  /* The pixel grid at high zoom, over the canvas only. */
+  .pixel-grid {
+    position: absolute;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgb(128 128 128 / 0.35) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(128 128 128 / 0.35) 1px, transparent 1px);
+  }
+
+  .guides {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  /* Guides, cyan as in Photoshop. */
+  .guide {
+    stroke: #00c8ff;
+    stroke-width: 1;
+  }
+
+  /* A guide's grab area, wider than the line: the Move tool picks it up. */
+  .grab {
+    stroke: transparent;
+    pointer-events: stroke;
+    cursor: row-resize;
+  }
+
+  .grab.vertical {
+    cursor: col-resize;
+  }
+
   .viewport {
     position: relative;
     min-width: 0;

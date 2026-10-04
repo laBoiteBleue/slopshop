@@ -30,6 +30,7 @@
     type DocumentView,
     type BakeRequest,
     type EditRequest,
+    type Guide,
     type LayerStyle,
     type LayerView,
     type LayerMaskKind,
@@ -174,7 +175,7 @@
   } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import SelectionDrag from "./lib/SelectionDrag.svelte";
-  import { SNAP_CSS_PX, type SmartGuide } from "./lib/snap";
+  import { SNAP_CSS_PX, snapGuide, type SmartGuide, type SnapTarget } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import TransformFields from "./lib/TransformFields.svelte";
   import ContextMenu from "./lib/ContextMenu.svelte";
@@ -2019,26 +2020,56 @@
   // A drag from inside the selection moves the selected pixels of the active layer (or of its
   // mask when it is the target) with the selection, leaving a hole; Alt copies them.
   let autoSelect = $state(true);
+  const viewSettings = loadViewSettings();
   /** View > Snap, remembered. */
-  let snapping = $state(loadViewSettings().snap);
+  let snapping = $state(viewSettings.snap);
+  /** View > Rulers, remembered. */
+  let rulersShown = $state(viewSettings.rulers);
 
   function toggleSnapping() {
     snapping = !snapping;
-    saveViewSettings({ snap: snapping });
+    saveViewSettings({ rulers: rulersShown, snap: snapping });
+  }
+
+  function toggleRulers() {
+    rulersShown = !rulersShown;
+    saveViewSettings({ rulers: rulersShown, snap: snapping });
+  }
+
+  // Guides (View > Rulers): dragged out of a ruler or with the Move tool, one undo entry per
+  // drag; a guide snaps to the canvas and the visible layers, fetched when it is picked up.
+  let guideTargets: SnapTarget[] = [];
+
+  async function startGuideSnaps() {
+    const doc = active;
+    guideTargets = [];
+    if (!doc || !snapping) return;
+    const { targets } = await snapTargets(doc, []);
+    // Not to the guides: the one moved would hold itself in place.
+    guideTargets = targets.filter((t) => !("position" in t));
+  }
+
+  function snapDraggedGuide(at: number, vertical: boolean, docPerCss: number, free: boolean) {
+    if (!snapping || free) return at;
+    return snapGuide(at, vertical, guideTargets, SNAP_CSS_PX * docPerCss);
+  }
+
+  function setGuides(guides: Guide[]) {
+    if (active) void edit(active.id, { kind: "setGuides", guides });
   }
 
   /** What a gesture on `ids` works with: their bounds (null: none, or nothing could be read). */
-  type GestureSnaps = { moving: Bounds | null; targets: Bounds[] };
+  type GestureSnaps = { moving: Bounds | null; targets: SnapTarget[] };
 
   /**
    * What a gesture on the layers `ids` snaps to, for every tool (the Move tool, Free Transform,
-   * Crop): the canvas and the other visible layers, and the bounds of `ids`.
+   * Crop): the canvas, the other visible layers and the guides, and the bounds of `ids`.
    */
   async function snapTargets(doc: DocumentView, ids: number[]): Promise<GestureSnaps> {
     const found = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
     return {
       moving: found?.moving ?? null,
-      targets: [canvasBounds(doc), ...(found?.others ?? [])],
+      targets: [canvasBounds(doc), ...(found?.others ?? []), ...doc.guides],
     };
   }
 
@@ -2292,7 +2323,7 @@
     ids: number[];
     box: Bounds;
     /** What the box snaps to: the canvas and the other visible layers. */
-    targets: Bounds[];
+    targets: SnapTarget[];
     matrix: Matrix;
     /** The reference point, in the box's coordinates (the center at first). */
     pivot: [number, number];
@@ -2650,7 +2681,7 @@
   // The Crop tool (C, ADR 0017): a frame on the image while the tool is active; applying it
   // reframes the canvas, and nothing is deleted. As in Photoshop, a new frame then starts on the
   // new canvas, and Esc starts it over. What the frame snaps to is fetched when it opens.
-  type Cropping = { document: number; width: number; height: number; targets: Bounds[] };
+  type Cropping = { document: number; width: number; height: number; targets: SnapTarget[] };
   let cropping = $state<Cropping | null>(null);
   /** Bumped by each frame requested: only the latest one opens. */
   let cropRequest = 0;
@@ -3763,6 +3794,11 @@
         run: () => void viewport?.zoomTo(1),
         disabled: !doc,
       },
+      rulers: {
+        label: t("menu.view.rulers"),
+        run: toggleRulers,
+        checked: rulersShown,
+      },
       hideExtras: {
         label: t("menu.view.hideExtras"),
         run: () => (extrasHidden = !extrasHidden),
@@ -4368,6 +4404,13 @@
           item("fitOnScreen"),
           item("actualSize"),
           separator,
+          item("rulers"),
+          cmd(
+            t("menu.view.clearGuides"),
+            () => setGuides([]),
+            undefined,
+            !active || active.guides.length === 0,
+          ),
           item("hideExtras"),
           { ...cmd(t("menu.view.snap"), toggleSnapping), checked: snapping },
           separator,
@@ -4745,7 +4788,15 @@
               onmove={tool === "move" && !transforming ? onMoveDrag : undefined}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
-              smartGuides={extrasHidden ? [] : smartGuides}
+              {smartGuides}
+              canvasSize={active}
+              rulers={rulersShown}
+              guides={active.guides}
+              extras={!extrasHidden}
+              guidesMovable={tool === "move" && !transforming && !cropping}
+              snapGuide={snapDraggedGuide}
+              onguidestart={() => void startGuideSnaps()}
+              onguides={setGuides}
             >
               {#snippet overlay(mapping)}
                 {#if active?.selectionKey != null && !nativeCanvas}

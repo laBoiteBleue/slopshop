@@ -3,7 +3,7 @@
 // lands (snapped, whole pixels).
 
 import type { Bounds, LayerView } from "./engine";
-import { snapMove, type SmartGuide } from "./snap";
+import { snapMove, type SmartGuide, type SnapTarget } from "./snap";
 import { isSelectionTool, type ToolId } from "./tools";
 
 /** What moving selected pixels takes: the active layer's pixels, or its mask when targeted. */
@@ -42,7 +42,7 @@ export function nudged(tool: ToolId, selection: boolean): "outline" | "pixels" |
 export function landing(
   raw: { x: number; y: number },
   moving: Bounds | null,
-  targets: Bounds[],
+  targets: SnapTarget[],
   threshold: number,
 ): { x: number; y: number; guides: SmartGuide[] } {
   let { x, y } = raw;

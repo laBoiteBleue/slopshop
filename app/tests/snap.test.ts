@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { snapHandle, snapMove } from "../src/lib/snap";
+import { snapGuide, snapHandle, snapMove } from "../src/lib/snap";
 
 const box = (left: number, top: number, right: number, bottom: number) => ({
   left,
@@ -57,4 +57,32 @@ test("a handle scaling about the center, or dragged backwards, matches sizes too
 test("nothing to snap to within the threshold gives null", () => {
   assert.equal(snapHandle(100, 0, 1, "x", [box(300, 0, 500, 10)], 6), null);
   assert.equal(snapHandle(100, 0, 1, "x", [], 6), null);
+});
+
+test("guides are snapped to on their axis only, the smart guide along the box", () => {
+  const guides = [
+    { vertical: true, position: 50 },
+    { vertical: false, position: 7 },
+  ];
+  // The box's right edge (40 + 8) meets the vertical guide; nothing meets y = 7 within 3.
+  const moved = snapMove(box(0, 20, 40, 30), 8, 0, guides, 3);
+  assert.equal(moved.x, 10);
+  assert.equal(moved.y, 0);
+  // Along the placed box only: the guide itself is drawn already.
+  assert.deepEqual(moved.guides, [{ x1: 50, x2: 50, y1: 20, y2: 30 }]);
+  // A horizontal guide does not hold a vertical edge, nor the other way round.
+  assert.equal(snapMove(box(0, 0, 10, 10), 4, 0, [{ vertical: false, position: 15 }], 3).x, 4);
+  // A dragged handle meets a guide too, never a "same size" as one.
+  const handle = snapHandle(49, 0, 1, "x", guides, 3);
+  assert.equal(handle?.shift, 1);
+});
+
+test("a dragged guide lands on an edge or a center near it, on its own axis", () => {
+  const layers = [box(10, 20, 30, 60)];
+  // Vertical: the layer's left 10, center 20, right 30.
+  assert.equal(snapGuide(21.5, true, layers, 3), 20);
+  assert.equal(snapGuide(25, true, layers, 3), 25);
+  // Horizontal: top 20, center 40, bottom 60.
+  assert.equal(snapGuide(58, false, layers, 3), 60);
+  assert.equal(snapGuide(58, false, [], 3), 58);
 });

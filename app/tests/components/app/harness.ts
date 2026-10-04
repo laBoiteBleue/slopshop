@@ -66,6 +66,7 @@ export function documentView(id: number, name: string | null, layers: LayerView[
     quickMask: false,
     quickMaskOpacity: 50,
     savedSelections: [],
+    guides: [],
   } as DocumentView;
 }
 

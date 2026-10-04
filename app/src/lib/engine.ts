@@ -285,7 +285,15 @@ export type DocumentView = {
   quickMaskOpacity: number;
   /** Selections saved by name (Select > Save Selection), in the order they were saved. */
   savedSelections: SavedSelectionView[];
+  /** The guides (View > Rulers), in the order they were placed. */
+  guides: Guide[];
 };
+
+/**
+ * A guide: `vertical` at `position` document pixels from the canvas's left edge, else
+ * horizontal from its top edge.
+ */
+export type Guide = { vertical: boolean; position: number };
 
 /** Select and Mask's edge settings: document pixels, Contrast in percent. */
 export type EdgeSettings = { smooth: number; feather: number; contrast: number; shift: number };
@@ -443,6 +451,7 @@ export type EditRequest =
   | ({ kind: "trim" } & TrimSettings)
   | { kind: "setLayerBlendMode"; id: number; mode: BlendModeId }
   | { kind: "setBlendSpace"; space: BlendSpaceId }
+  | { kind: "setGuides"; guides: Guide[] }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
   | { kind: "removeLayerMask"; id: number }
   /** Several edits as one undo entry, applied in order: all or none. */

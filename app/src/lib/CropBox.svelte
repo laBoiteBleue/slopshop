@@ -9,7 +9,7 @@
   import type { Bounds } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
-  import { SNAP_CSS_PX, snapHandle, snapMove, type SmartGuide } from "./snap";
+  import { SNAP_CSS_PX, snapHandle, snapMove, type SmartGuide, type SnapTarget } from "./snap";
   import type { ViewMapping } from "./Viewport.svelte";
   import SmartGuides from "./SmartGuides.svelte";
 
@@ -25,7 +25,7 @@
     /** The canvas, where the frame starts. */
     canvas: Bounds;
     /** What the frame's edges snap to; none when snapping is off. Ctrl held: no snapping. */
-    targets?: Bounds[];
+    targets?: SnapTarget[];
     /** The snaps' smart guides are drawn (View > Hide Extras hides them; the snap stays). */
     smartGuides?: boolean;
     /** Crop to `frame` (whole document pixels). */
