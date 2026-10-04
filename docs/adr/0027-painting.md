@@ -70,7 +70,8 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
    optimization.
 7. **Where it paints**: the active raster layer's painted image; its mask's painted image when
    the mask is the target (gray: white shows, black hides; the Brush paints the gray of its
-   color, the Eraser hides, as it lowers alpha); the selection in Quick Mask. A transformed layer (ADR 0017) is painted in its own pixel grid: each pixel's
+   color, the Eraser and Delete the background color's, as Photoshop's: amended 2026-10-04 at
+   the maintainer's request); Quick Mask's image likewise. A transformed layer (ADR 0017) is painted in its own pixel grid: each pixel's
    center is mapped to the document through the layer's whole transform (groups included), so
    a dab stays round on the canvas whatever the scale or rotation. A stroke paints within the
    layer's bounds; growing a layer to follow the brush is future work. Fill and adjustment

@@ -229,7 +229,8 @@ built. Contributors: propose here first.
   the ants). Quick Mask works as Photoshop's (maintainer, 2026-10-04): entering it turns the
   selection into a mask (everything when nothing is selected) and deselects; the painting
   tools then paint that mask (Brush, Eraser, Edit > Fill and Stroke, Delete: white selects,
-  black leaves out, a gray partly), and a selection made meanwhile with the selection tools
+  black leaves out, a gray partly; as in Photoshop, on any mask the Eraser, Delete and Cut
+  paint the background color, white at first), and a selection made meanwhile with the selection tools
   limits them, as on any image; leaving it turns the mask back into the selection. Entering
   and leaving are undo entries. While a mask is painted (Quick Mask, or a layer's mask), the
   swatches are a pair of grays of their own (black and white at first, D, X swapping them) and
