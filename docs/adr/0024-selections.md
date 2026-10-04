@@ -40,6 +40,8 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
    the visible region, as polylines in document pixels (a budget of points: beyond it, a
    coarser level). The UI draws them as SVG with a CSS dash animation, so they cost the engine
    nothing between view changes and work with native presentation and with frames alike.
+   (Amended 2026-10-04: with native presentation the GPU draws the ants in the frame instead,
+   see the last amendment; this is the path of frames over IPC.)
 
 ## Alternatives
 
@@ -48,7 +50,8 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
 - **Vector shapes rasterized on demand**: editable rectangles and lassos, but the magic wand,
   color ranges, AI selection and painted masks are pixels anyway: two systems.
 - **Ants drawn by the GPU in the image**: no complexity limit, but the animation needs about ten
-  renders a second, costly when frames travel over the IPC (macOS, Linux).
+  renders a second, costly when frames travel over the IPC (macOS, Linux). Chosen later for
+  native presentation, where a present is cheap (amendment below); frames keep the SVG.
 
 ## Consequences
 
@@ -104,3 +107,36 @@ until 1.0, so no compatibility flag protects them from older writers. Select > S
 asks a name (an existing name replaces that saved selection), Select > Load Selection lists
 them and replaces the selection; renaming, deleting and combining (add, subtract, intersect)
 come with a Selections panel.
+
+## Amendment (2026-10-04): the marching ants drawn by the GPU
+
+The ants lagged behind fast navigation on large images (a 233 MP image): the engine traced the
+outline on the CPU, sent it over the IPC, and the page redrew an SVG path. Where the engine
+presents to the window (Windows today, ADR 0002), the GPU now draws the ants in the frame,
+from the selection's own coverage tiles, like Quick Mask's overlay (point 6 above still holds
+for frames over IPC, see below):
+
+- **A pass over the finished frame** (`ants_main` in `composite.wgsl`, `ViewOverlays::ants`),
+  after the display cache's present, with the same bindings as Quick Mask's pass. The selection
+  is sampled like a layer's mask at the view's pyramid level, so the cost is that of the frame's
+  pixels, whatever the outline's complexity or the zoom, with no point budget.
+- **The outline is the frame's pixels**: a pixel is on it when the selection covers it (half
+  or more) and one of its four neighbours does not, one device pixel wide, inside the selection
+  (the SVG's line ran on the pixel edges). Black or white by `((x + y + phase) / 4) & 1`:
+  dashes of four, Photoshop-like. The canvas edge is not an outline (neighbours beyond it count
+  as the pixel itself).
+- **The phase is the clock's**: `Ants::at(time)` advances by one every 75 ms (8 pixels in 0.6 s,
+  as the CSS animation did); the shell reads a shared clock at each present, so the dashes keep
+  their place whatever the rate. The UI presents the view again every 66 ms, only while the ants
+  are shown and moving (visible window, no reduced motion); a present is cheap with the display
+  cache (ADR 0022: its tiles hit).
+- **Placement**: the selection's plan takes an `Affine`: a drag's shift (whole pixels: an exact
+  offset) and Select > Transform Selection's live matrix (resampled like a layer, ADR 0018) move
+  the ants without touching the document.
+- **Not drawn** over Quick Mask or Select and Mask's views (they show the selection
+  themselves), nor without a selection; a Quick Mask on its own paints no ants even for a
+  selection made meanwhile (the SVG still did).
+- **Frames over IPC keep the SVG** (`SelectionOutline`, and `selection::outline` in the
+  engine): macOS and Linux have no native presentation yet, and re-presenting ten times a
+  second would cost a frame transfer each, which is the argument of the alternative below. The
+  UI draws the SVG only when the engine does not draw the ants.

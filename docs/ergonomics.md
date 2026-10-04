@@ -239,7 +239,10 @@ built. Contributors: propose here first.
   steps of 45°); a click there stays the tool's click. With any selection tool, the arrows nudge
   the outline by 1 pixel, 10 with Shift. One undo entry each.
   Options bar: the four modes, Feather (px), Anti-alias for the ellipse and the lassos. Marching ants follow the
-  selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Quick Mask
+  selection at any zoom, where coverage crosses one half; where the engine presents to the window
+  (Windows) the GPU draws them in the image, one device pixel wide just inside the selection,
+  black and white in dashes of four (Photoshop-like), so they never lag behind a pan or a zoom;
+  with frames over IPC (macOS, Linux) they are the page's SVG line, as before. Quick Mask (Q, Select > Quick Mask
   Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
   the ants). Quick Mask works as Photoshop's (maintainer, 2026-10-04): entering it turns the

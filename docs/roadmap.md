@@ -211,6 +211,10 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Rectangular and Elliptical Marquee, their options (modes, feather, anti-alias), marching
       ants, the Select menu (All, Deselect, Reselect, Inverse), tool groups in the toolbar
 - [x] Quick Mask (Q): a view overlay drawn by the GPU after compositing, never cached
+- [x] Marching ants drawn by the GPU in the natively presented view (ADR 0024, amended): the
+      selection's coverage sampled per frame pixel, so they stay in step with the image while
+      scrolling a 233 MP image, with no CPU trace or IPC round trip; the SVG ants remain for
+      frames over IPC (macOS, Linux: to test there)
 - [x] Lasso and Polygonal Lasso
 - [x] Selection → layer mask (Reveal / Hide Selection, and Reveal / Hide All), Image > Crop to
       the selection
