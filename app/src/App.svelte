@@ -74,10 +74,9 @@
   import Icon from "./lib/Icon.svelte";
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
-  import PropertiesPanel from "./lib/PropertiesPanel.svelte";
   import { LayersUis } from "./lib/layersUi.svelte";
   import PanelResizer from "./lib/PanelResizer.svelte";
-  import { clampPanelWidth, loadPanelWidth } from "./lib/panelWidth";
+  import { clampPanelWidth } from "./lib/panelWidth";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import {
@@ -147,11 +146,14 @@
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
-  import SelectionsPanel from "./lib/SelectionsPanel.svelte";
   import PanelDock from "./lib/PanelDock.svelte";
-  import { clickTab, loadDock, saveDock, type DockPanel } from "./lib/panelDock";
+  import { clickTab, followProperties, type PropertiesFollow } from "./lib/panelDock";
+  import { defaultLayout, loadLayout, saveLayout } from "./lib/layout";
+  import { panelInfo } from "./lib/panels/registry";
+  import { PANEL_COMPONENTS } from "./lib/panels";
+  import { setPanelContext } from "./lib/panels/context";
+  import { hasProperties } from "./lib/layerEdits";
   import { loadViewSettings, saveViewSettings } from "./lib/viewSettings";
-  import type { IconName } from "./lib/Icon.svelte";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
@@ -210,11 +212,10 @@
   /** What the Layers panel remembers of each open document (selection, folds, scroll). */
   const layersUis = new LayersUis();
   $effect(() => layersUis.keep(tabs.map((d) => d.id)));
+  /** The active layer, if any (the Layers panel's). */
+  let activeLayer = $derived(layersPanel?.selectedLayer() ?? null);
   /** The active layer when it is an adjustment or a fill layer: the Properties panel shows it. */
-  let selectedProperties = $derived.by(() => {
-    const layer = layersPanel?.selectedLayer() ?? null;
-    return layer?.kind === "adjustment" || layer?.kind === "fill" ? layer : null;
-  });
+  let selectedProperties = $derived(hasProperties(activeLayer) ? activeLayer : null);
   /**
    * View > Hide Extras (Ctrl+H, Photoshop's Extras): the selection outline and the smart guides
    * hidden for a moment, the selection and the snap kept. Not remembered.
@@ -224,19 +225,54 @@
   let panelsHidden = $state(false);
   /** View > Full Screen (F11): the window covers the screen, without its title bar. */
   let fullScreen = $state(false);
-  /** The dock below Layers: the panel unfolded, if any, and its height. */
-  let dock = $state(loadDock());
-  /** Its panels, as its tabs and the Window menu list them. */
-  const dockPanels = $derived<{ id: DockPanel; icon: IconName; label: string }[]>([
-    { id: "properties", icon: "sliders", label: t("properties.title") },
-    { id: "selections", icon: "marquee", label: t("selections.title") },
-  ]);
-  // An adjustment or fill layer just selected shows its properties, as in Photoshop.
+  /**
+   * How the window is arranged (Window menu, ADR 0036): the dock below Layers (the panel
+   * unfolded, its height, its tabs' order), the panels' width, the options bar and the toolbar.
+   * Saved whenever it changes.
+   */
+  let layout = $state(loadLayout());
+  $effect(() => saveLayout(layout));
+  /** The dock's panels, as its tabs and the Window menu list them (panels/index.ts). */
+  const dockPanels = $derived(
+    layout.order.map((id) => {
+      const panel = panelInfo(id);
+      return { id, icon: panel.icon, label: t(panel.title) };
+    }),
+  );
+  // An adjustment or fill layer just selected shows its properties, as in Photoshop; once none
+  // is, the dock goes back to the panel Properties replaced (unless another was chosen since).
   let shownProperties: number | null = null;
+  let propertiesFollow: PropertiesFollow = null;
   $effect(() => {
     const id = selectedProperties?.id ?? null;
-    if (id !== null && id !== shownProperties) dock = { ...dock, open: "properties" };
+    const next = untrack(() =>
+      followProperties(layout.dock, propertiesFollow, shownProperties, id),
+    );
+    if (next.dock !== untrack(() => layout.dock)) layout.dock = next.dock;
+    propertiesFollow = next.follow;
     shownProperties = id;
+  });
+  /** The user chose what the dock shows: Properties no longer gives it back by itself. */
+  const dockChosen = () => (propertiesFollow = null);
+  // What the dock's panels get from the app (panels/context.ts).
+  setPanelContext({
+    get doc() {
+      return active as DocumentView;
+    },
+    get activeLayer() {
+      return activeLayer;
+    },
+    edit: (id, request) => edit(id, request),
+    live: (id, request) => void live(id, request),
+    gestureEnd: (id) => endGesture(id),
+    sync: (request) => sync(request),
+    selectionCommand: (run) => selectionCommand(run),
+    pickFillColor: (layer) => pickFillLayerColor(layer),
+    saveSelection: () => openSaveSelection(),
+    loadSelection: (id, mode) => void loadSavedSelection(id, mode),
+    get combinedSelections() {
+      return active ? combinedRows(selectionsCombination, active.id, active.selectionKey) : [];
+    },
   });
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
@@ -656,9 +692,11 @@
   });
 
   /** The width of the panels on the right, as the user left it; narrower if the window is. */
-  let panelWidth = $state(loadPanelWidth());
+  /** The options bar and the toolbar: each as the layout says, both hidden with the panels. */
+  const optionsBarShown = $derived(!panelsHidden && layout.optionsBar);
+  const toolbarShown = $derived(!panelsHidden && layout.toolbar);
   let windowWidth = $state(window.innerWidth);
-  const shownPanelWidth = $derived(clampPanelWidth(panelWidth, windowWidth));
+  const shownPanelWidth = $derived(clampPanelWidth(layout.panelWidth, windowWidth));
   /** The color the color picker is open for. */
   let colorPicker = $state<"foreground" | "background" | null>(null);
 
@@ -3860,6 +3898,31 @@
     return item.kind === "separator" ? item : { ...item, label };
   }
 
+  /**
+   * Window > Options Bar and Toolbar: shown or not, saved with the layout. With the panels
+   * hidden (Tab), choosing one shows everything again, that bar included.
+   */
+  function barItem(label: MessageKey, bar: "optionsBar" | "toolbar"): MenuItem {
+    return {
+      kind: "command",
+      label: t(label),
+      run: () => {
+        if (panelsHidden) {
+          panelsHidden = false;
+          layout[bar] = true;
+        } else layout[bar] = !layout[bar];
+      },
+      checked: !panelsHidden && layout[bar],
+    };
+  }
+
+  /** Window > Reset Layout: the panels, their sizes and the bars as at first. */
+  function resetLayout() {
+    layout = defaultLayout();
+    panelsHidden = false;
+    propertiesFollow = null;
+  }
+
   /** Layer > Arrange's commands, grayed when they would move nothing. */
   function arrangeCommand(arrangement: Arrangement, label: MessageKey) {
     return {
@@ -4431,29 +4494,34 @@
         ],
       },
       {
-        // Window: the dock's panels, checked while unfolded; choosing one unfolds it (or, already
-        // unfolded, folds the dock), as its tab does, and shows the panels if they were hidden.
-        // Layers is always shown (ADR 0030).
+        // Window (ADR 0036): the dock's panels, checked while unfolded; choosing one unfolds it
+        // (or, already unfolded, folds the dock), as its tab does, and shows the panels if they
+        // were hidden. Layers is always shown (ADR 0030). Then the bars, Hide Panels (Tab) and
+        // the default layout back.
         label: t("menu.window"),
         items: [
           ...dockPanels.map((panel) => ({
             ...cmd(
               panel.label,
               () => {
+                dockChosen();
                 if (panelsHidden) {
                   panelsHidden = false;
-                  if (dock.open === panel.id) return;
+                  if (layout.dock.open === panel.id) return;
                 }
-                dock = clickTab(dock, panel.id);
-                saveDock(dock);
+                layout.dock = clickTab(layout.dock, panel.id);
               },
               undefined,
               !doc,
             ),
-            checked: doc !== null && !panelsHidden && dock.open === panel.id,
+            checked: doc !== null && !panelsHidden && layout.dock.open === panel.id,
           })),
           separator,
+          barItem("menu.window.optionsBar", "optionsBar"),
+          barItem("menu.window.toolbar", "toolbar"),
           item("hidePanels"),
+          separator,
+          cmd(t("menu.window.resetLayout"), resetLayout),
         ],
       },
       {
@@ -4629,7 +4697,7 @@
 
 <svelte:window {onkeydown} onblur={cancelTabDrag} bind:innerWidth={windowWidth} />
 
-<div class="app" class:panels-hidden={panelsHidden}>
+<div class="app" class:no-options-bar={!optionsBarShown}>
   <header class="menubar">
     <img class="logo" src="/favicon.svg" alt="" draggable="false" />
     <MenuBar {menus} onopen={() => void refreshClipboard()} />
@@ -4638,7 +4706,7 @@
   </header>
 
   <!-- Hidden panels stay mounted (Tab): their state (the layers selected…) must survive. -->
-  <div class="chrome" class:hidden={panelsHidden}>
+  <div class="chrome" class:hidden={!optionsBarShown}>
     <OptionsBar
       {tool}
       bind:autoSelect
@@ -4672,6 +4740,7 @@
   <main
     class:has-panel={active !== null}
     class:panels-hidden={panelsHidden}
+    class:no-toolbar={!toolbarShown}
     style:--panel-width="{shownPanelWidth}px"
     class:transferring={layerTransfer !== null}
     bind:this={mainElement}
@@ -4679,7 +4748,7 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
-    <div class="chrome" class:hidden={panelsHidden}>
+    <div class="chrome" class:hidden={!toolbarShown}>
       <Toolbar
         {tool}
         choices={toolChoices}
@@ -4951,7 +5020,7 @@
     {#if active}
       <!-- Properties (the selected adjustment layer's, ADR 0020) below Layers: the list never moves. -->
       <div class="sidebar" class:hidden={panelsHidden}>
-        <PanelResizer bind:width={panelWidth} />
+        <PanelResizer bind:width={layout.panelWidth} />
         {#key active.id}
           <LayersPanel
             bind:this={layersPanelInstance}
@@ -4970,36 +5039,15 @@
             onentryedit={openEntry}
           />
         {/key}
-        <PanelDock bind:dock panels={dockPanels}>
+        <PanelDock
+          bind:dock={layout.dock}
+          panels={dockPanels}
+          onselect={dockChosen}
+          onreorder={(from, slot) => moveTabTo(layout.order, from, slot)}
+        >
           {#snippet content(panel)}
-            {#if panel === "properties"}
-              {#if selectedProperties}
-                <PropertiesPanel
-                  documentId={active.id}
-                  layer={selectedProperties}
-                  onfillcolor={pickFillLayerColor}
-                  onedit={edit}
-                  onlive={live}
-                  ongestureend={endGesture}
-                />
-              {:else}
-                <p class="dock-empty">{t("properties.empty")}</p>
-              {/if}
-            {:else}
-              <SelectionsPanel
-                saved={active.savedSelections}
-                selected={active.selectionKey != null}
-                onload={loadSavedSelection}
-                combined={combinedRows(selectionsCombination, active.id, active.selectionKey)}
-                onsave={openSaveSelection}
-                onreplace={(id) => selectionCommand((doc) => engine.saveSelection(doc, "", id))}
-                onrename={(id, name) => void sync(engine.renameSavedSelection(active.id, id, name))}
-                ondelete={(id) => void sync(engine.deleteSavedSelection(active.id, id))}
-                ondeselect={() => selectionCommand(engine.deselect)}
-                canReselect={active.canReselect}
-                onreselect={() => selectionCommand(engine.reselect)}
-              />
-            {/if}
+            {@const Panel = PANEL_COMPONENTS[panel]}
+            <Panel />
           {/snippet}
         </PanelDock>
       </div>
@@ -5526,7 +5574,7 @@
     grid-template-columns: 40px 1fr var(--panel-width);
   }
 
-  /* Window > Hide Panels (Tab): the options bar, the toolbar and the panels leave the grid. */
+  /* Window > Options Bar, Toolbar, Hide Panels (Tab): what is hidden leaves the grid. */
   .chrome {
     display: contents;
   }
@@ -5536,8 +5584,16 @@
     display: none;
   }
 
-  .app.panels-hidden {
+  .app.no-options-bar {
     grid-template-rows: 30px 1fr 22px;
+  }
+
+  main.no-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  main.has-panel.no-toolbar {
+    grid-template-columns: 1fr var(--panel-width);
   }
 
   main.panels-hidden,
@@ -5560,12 +5616,6 @@
 
   .sidebar > :global(:nth-child(2)) {
     flex: 1 1 0;
-  }
-
-  .dock-empty {
-    margin: 0;
-    padding: 10px;
-    color: var(--text-muted);
   }
 
   .workspace {

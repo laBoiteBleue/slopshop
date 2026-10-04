@@ -101,6 +101,8 @@ export function respond(cmd: string, answer: Answer) {
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", FixedSizeObserver);
+  // Each test starts from a fresh machine: the app saves its layout as soon as it shows.
+  localStorage.clear();
   documents = [];
   calls = [];
   mockIPC(

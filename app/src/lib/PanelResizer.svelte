@@ -1,13 +1,8 @@
 <script lang="ts">
   import { t } from "./i18n/index.svelte";
-  import {
-    clampPanelWidth,
-    DEFAULT_PANEL_WIDTH,
-    MIN_PANEL_WIDTH,
-    savePanelWidth,
-  } from "./panelWidth";
+  import { clampPanelWidth, DEFAULT_PANEL_WIDTH, MIN_PANEL_WIDTH } from "./panelWidth";
 
-  /** The panels' width: dragging their left edge sets it, saved on release. */
+  /** The panels' width: dragging their left edge sets it (the app saves it with the layout). */
   let { width = $bindable() }: { width: number } = $props();
 
   let drag: { pointerId: number; x: number; width: number } | null = null;
@@ -31,13 +26,11 @@
     if (drag?.pointerId !== e.pointerId) return;
     drag = null;
     dragging = false;
-    savePanelWidth(width);
   }
 
   /** A double-click puts the default width back. */
   function ondblclick() {
     width = DEFAULT_PANEL_WIDTH;
-    savePanelWidth(width);
   }
 </script>
 

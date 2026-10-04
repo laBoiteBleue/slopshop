@@ -429,9 +429,14 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   means something else).
   The right column (ADR 0030, maintainer's choice of 2026-10-04): Layers on top, below it a
   dock of tab icons (Properties, Selections) whose unfolded panel's tab folds it down to the
-  icons; its top edge resizes it; remembered; selecting an adjustment or fill layer unfolds
-  Properties. The Window menu lists the dock's panels, the unfolded one checked: choosing one
-  unfolds it (the unfolded one folds the dock), as its tab does. Select and Mask… (maintainer's choice of a light panel, 2026-10-04): a panel
+  icons; its top edge resizes it; its tabs are reordered by dragging them; remembered;
+  selecting an adjustment or fill layer unfolds Properties, and leaving it gives the dock back
+  to the panel Properties replaced (unless another was chosen meanwhile). No panel closes or
+  floats (ADR 0036). The Window menu lists the dock's panels, the unfolded one checked:
+  choosing one unfolds it (the unfolded one folds the dock), as its tab does; then Options
+  Bar and Toolbar (shown or not), Hide Panels (Tab) and Reset Layout (panels, sizes, order and
+  bars as at first). The layout is one record on this machine; documents are not part of it.
+  Select and Mask… (maintainer's choice of a light panel, 2026-10-04): a panel
   beside the image, not a workspace: View (Marching Ants, Overlay at Quick Mask's opacity, On
   Black, On White, Mask, drawn by the GPU over the image), Edge Detection (a radius and Detect:
   ViTMatte mattes the edge, on request since it takes seconds), Global Refinements shown live

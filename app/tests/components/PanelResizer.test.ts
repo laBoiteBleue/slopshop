@@ -3,9 +3,7 @@ import { beforeEach, expect, test } from "vitest";
 import { tick } from "svelte";
 import { reactive } from "./reactive.svelte";
 import PanelResizer from "../../src/lib/PanelResizer.svelte";
-import { DEFAULT_PANEL_WIDTH, loadPanelWidth, MIN_PANEL_WIDTH } from "../../src/lib/panelWidth";
-
-const STORAGE_KEY = "slopshop.panelWidth";
+import { DEFAULT_PANEL_WIDTH, MIN_PANEL_WIDTH } from "../../src/lib/panelWidth";
 
 beforeEach(() => {
   localStorage.clear();
@@ -18,18 +16,16 @@ function open(width = 260) {
   return { props, edge: screen.getByRole("separator", { name: "Resize the panels" }) };
 }
 
-test("dragging the left edge left widens the panels, saved on release", async () => {
+test("dragging the left edge left widens the panels", async () => {
   const { props, edge } = open();
   await fireEvent.pointerDown(edge, { pointerId: 1, button: 0, clientX: 1600 });
   await fireEvent.pointerMove(edge, { pointerId: 1, clientX: 1500 });
   expect(props.width).toBe(360);
-  expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   await fireEvent.pointerMove(edge, { pointerId: 1, clientX: 1700 });
   expect(props.width).toBe(MIN_PANEL_WIDTH);
   await fireEvent.pointerMove(edge, { pointerId: 1, clientX: 1550 });
   await fireEvent.pointerUp(edge, { pointerId: 1, clientX: 1550 });
   expect(props.width).toBe(310);
-  expect(loadPanelWidth()).toBe(310);
   await tick();
   expect(edge).toHaveAttribute("aria-valuenow", "310");
 });
@@ -54,12 +50,4 @@ test("a double-click puts the default width back", async () => {
   const { props, edge } = open(500);
   await fireEvent.dblClick(edge);
   expect(props.width).toBe(DEFAULT_PANEL_WIDTH);
-  expect(loadPanelWidth()).toBe(DEFAULT_PANEL_WIDTH);
-});
-
-test("the saved width comes back, a corrupt one gives the default", () => {
-  localStorage.setItem(STORAGE_KEY, "420");
-  expect(loadPanelWidth()).toBe(420);
-  localStorage.setItem(STORAGE_KEY, "wide");
-  expect(loadPanelWidth()).toBe(DEFAULT_PANEL_WIDTH);
 });

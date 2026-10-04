@@ -1,0 +1,32 @@
+<script lang="ts">
+  // The dock's Properties panel: the settings of the active layer when it has some (an
+  // adjustment or a fill layer, ADR 0020), else a hint.
+  import PropertiesPanel from "../PropertiesPanel.svelte";
+  import { hasProperties } from "../layerEdits";
+  import { t } from "../i18n/index.svelte";
+  import { panelContext } from "./context";
+
+  const app = panelContext();
+  const layer = $derived(hasProperties(app.activeLayer) ? app.activeLayer : null);
+</script>
+
+{#if layer}
+  <PropertiesPanel
+    documentId={app.doc.id}
+    {layer}
+    onfillcolor={app.pickFillColor}
+    onedit={app.edit}
+    onlive={app.live}
+    ongestureend={app.gestureEnd}
+  />
+{:else}
+  <p class="empty">{t("properties.empty")}</p>
+{/if}
+
+<style>
+  .empty {
+    margin: 0;
+    padding: 10px;
+    color: var(--text-muted);
+  }
+</style>

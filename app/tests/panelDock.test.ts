@@ -1,20 +1,5 @@
 import { expect, test } from "vitest";
-import {
-  DEFAULT_DOCK,
-  MIN_DOCK_HEIGHT,
-  clampDockHeight,
-  clickTab,
-  loadDock,
-  saveDock,
-} from "../src/lib/panelDock";
-
-function memory() {
-  const items = new Map<string, string>();
-  return {
-    getItem: (key: string) => items.get(key) ?? null,
-    setItem: (key: string, value: string) => void items.set(key, value),
-  };
-}
+import { MIN_DOCK_HEIGHT, clampDockHeight, clickTab, followProperties } from "../src/lib/panelDock";
 
 test("a tab unfolds its panel; the unfolded one's tab folds the dock to its icons", () => {
   const folded = clickTab({ open: "properties", height: 300 }, "properties");
@@ -31,15 +16,21 @@ test("the dock keeps its minimum height and leaves Layers room", () => {
   expect(clampDockHeight(400, 200)).toBe(MIN_DOCK_HEIGHT);
 });
 
-test("the dock's state is kept between sessions; anything odd reads as the default", () => {
-  const store = memory();
-  expect(loadDock(store)).toEqual(DEFAULT_DOCK);
-  saveDock({ open: null, height: 333 }, store);
-  expect(loadDock(store)).toEqual({ open: null, height: 333 });
-  saveDock({ open: "selections", height: 200 }, store);
-  expect(loadDock(store)).toEqual({ open: "selections", height: 200 });
-  store.setItem("slopshop.dock", JSON.stringify({ open: "history", height: 5 }));
-  expect(loadDock(store)).toEqual(DEFAULT_DOCK);
-  store.setItem("slopshop.dock", "{not json");
-  expect(loadDock(store)).toEqual(DEFAULT_DOCK);
+test("Properties unfolds for a layer that has some, then gives back what it replaced", () => {
+  const dock = { open: "selections" as const, height: 280 };
+  const shown = followProperties(dock, null, null, 4);
+  expect(shown).toEqual({
+    dock: { open: "properties", height: 280 },
+    follow: { replaced: "selections" },
+  });
+  // Another adjustment layer: Properties stays, still to give back.
+  expect(followProperties(shown.dock, shown.follow, 4, 7)).toEqual(shown);
+  expect(followProperties(shown.dock, shown.follow, 7, null)).toEqual({ dock, follow: null });
+  // A folded dock folds again.
+  const folded = followProperties({ open: null, height: 280 }, null, null, 4);
+  expect(followProperties(folded.dock, folded.follow, 4, null).dock.open).toBeNull();
+  // The user chose meanwhile (no follow): nothing given back.
+  expect(followProperties(shown.dock, null, 4, null)).toEqual({ dock: shown.dock, follow: null });
+  // Already on Properties: nothing to give back later.
+  expect(followProperties(shown.dock, null, null, 4)).toEqual({ dock: shown.dock, follow: null });
 });

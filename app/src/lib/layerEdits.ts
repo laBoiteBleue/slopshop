@@ -114,6 +114,11 @@ export function newFill(
   return { kind: "addFillLayer", name, color: [...hexToSrgb(hex), 1], parent, index };
 }
 
+/** Whether `layer` has settings the Properties panel shows: an adjustment or a fill layer. */
+export function hasProperties(layer: LayerView | null): layer is LayerView {
+  return layer?.kind === "adjustment" || layer?.kind === "fill";
+}
+
 /** A fill layer's color as `#rrggbb`, from its display swatch. */
 export function fillHex(layer: LayerView): string {
   return srgbToHex(layer.swatch);

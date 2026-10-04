@@ -1,11 +1,11 @@
 // The panels below Layers in the right column (maintainer's choice, 2026-10-04): a dock that
 // folds down to a row of tab icons, a click on an icon unfolding that panel. Layers stays above
-// it, always shown. Which panel is unfolded and how tall the dock is are remembered on this
-// machine.
+// it, always shown. Which panel is unfolded and how tall the dock is are part of the saved
+// layout (layout.ts); the panels are listed in panels/index.ts.
 
-/** The dock's panels, in the order of their tabs (a future Window menu lists the same). */
-export const DOCK_PANELS = ["properties", "selections"] as const;
-export type DockPanel = (typeof DOCK_PANELS)[number];
+import type { PanelId } from "./panels/registry";
+
+export type DockPanel = PanelId;
 
 /** The panel unfolded (`null`: folded down to the tabs) and the unfolded dock's height. */
 export type DockState = { open: DockPanel | null; height: number };
@@ -27,29 +27,31 @@ export function clampDockHeight(height: number, column: number): number {
   return Math.round(Math.min(Math.max(height, MIN_DOCK_HEIGHT), max));
 }
 
-const STORAGE_KEY = "slopshop.dock";
-type Store = Pick<Storage, "getItem" | "setItem">;
+/**
+ * Properties replaced `replaced` in the dock by itself (`null`: the dock was folded), to give
+ * it back; `null` when it did not, or the user has chosen what the dock shows since.
+ */
+export type PropertiesFollow = { replaced: DockPanel | null } | null;
 
-/** The state saved last, or the default (nothing saved, storage unavailable or corrupt). */
-export function loadDock(store?: Store): DockState {
-  try {
-    const saved = JSON.parse((store ?? localStorage).getItem(STORAGE_KEY) ?? "null");
-    const open =
-      saved?.open === null || DOCK_PANELS.includes(saved?.open) ? saved.open : DEFAULT_DOCK.open;
-    const height =
-      Number.isFinite(saved?.height) && saved.height >= MIN_DOCK_HEIGHT
-        ? saved.height
-        : DEFAULT_DOCK.height;
-    return saved ? { open, height } : { ...DEFAULT_DOCK };
-  } catch {
-    return { ...DEFAULT_DOCK };
+/**
+ * The dock as the active layer with properties goes from `before` to `now` (its id; `null`:
+ * the active layer has none). One just selected unfolds Properties, as in Photoshop; once none
+ * is, the dock goes back to what Properties replaced, unless the user chose since (`follow`
+ * is then `null`).
+ */
+export function followProperties(
+  dock: DockState,
+  follow: PropertiesFollow,
+  before: number | null,
+  now: number | null,
+): { dock: DockState; follow: PropertiesFollow } {
+  if (now !== null && now !== before) {
+    if (dock.open === "properties") return { dock, follow };
+    return { dock: { ...dock, open: "properties" }, follow: { replaced: dock.open } };
   }
-}
-
-export function saveDock(state: DockState, store?: Store) {
-  try {
-    (store ?? localStorage).setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Not remembered: it lasts for the session.
+  if (now === null && before !== null && follow) {
+    const back = dock.open === "properties" ? { ...dock, open: follow.replaced } : dock;
+    return { dock: back, follow: null };
   }
+  return { dock, follow };
 }
