@@ -54,7 +54,10 @@ Stroke effect positions).
    *Done (2026-10-04)*: Drop Shadow, Outer Glow, Inner Shadow, Inner Glow (from the edge),
    Color Overlay and Stroke, the dialog, the panel, Fill, `.slop` (node v8, v9 for the glows
    and Inner Shadow). An effect is drawn as a fill of its color masked by its coverage (no
-   color image): about 95 ms for a 12 MP layer.
+   color image): about 95 ms for a 12 MP layer. Then PSD import and export (`lfx2`/`lmfx`
+   through a descriptor parser, Fill as `iOpa`; effects not drawn are reported) and styles on
+   groups: a group's shape is what it holds, composited isolated, its effects drawn again when
+   a layer inside changes (`.slop` schema 0.19).
 6. **Order of work**: the model, Drop Shadow, Stroke and Color Overlay with their tests
    (the CPU compositor first); the Layer Style dialog; Outer and Inner Glow, Inner Shadow;
    PSD import and export; then Gradient Overlay (with a gradient engine, shared with the

@@ -213,11 +213,13 @@ pixels per side:
 - adjustment layers as Photoshop adjustment layers (Hue/Saturation, Levels,
   Brightness/Contrast, Curves, Exposure, Vibrance, Color Balance, Black & White, Photo
   Filter, Channel Mixer, Invert, Posterize, Threshold);
+- layer styles as Photoshop's (Drop Shadow, Inner Shadow, Outer and Inner Glow, Color Overlay,
+  Stroke, and Fill);
 - a merged composite for readers that do not read layers, and the ICC profile of `--space`.
 
 Every layer is rendered on its own at its pixel size, so transformed (rotated, scaled) layers
 are written resampled, and a layer's parts outside the canvas are cut (reported as
-`pixelsOutsideCanvas`). Layer styles, text and smart objects do not exist in SlopShop yet.
+`pixelsOutsideCanvas`). Text and smart objects do not exist in SlopShop yet.
 The compressed layers wait in a temporary file next to `OUTPUT` until the file is assembled:
 memory does not grow with the document.
 
