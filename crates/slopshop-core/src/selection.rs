@@ -1629,17 +1629,22 @@ fn wand_mask(
 /// one (`slopshop_render::export_renderer`): `slopshop-core` cannot name it, so the caller
 /// passes it in (dependency direction: core <- render). `Err` (the source cannot render this
 /// region) makes the sampler composite it on the CPU instead, so a source may fail without the
-/// selection being wrong. It is called from one thread at a time, for regions of several tiles
-/// at once: a call has a cost of its own.
+/// selection being wrong. It is called from several threads at once, for regions of several tiles
+/// each: a call has a cost of its own.
 pub type PixelSource<'a> =
     dyn Fn(&crate::document::Document, Rect, &mut [f32]) -> Result<(), String> + Sync + 'a;
 
 /// Most tiles of a row that one call of a [`PixelSource`] covers (2 MP, 32 MB of `f32`).
 const SOURCE_RUN_TILES: usize = 32;
 
-/// Rendered regions in flight between the thread asking a [`PixelSource`] for them and the ones
-/// reading their colors: one being filled, one waiting, one being read.
-const SOURCE_BUFFERS: usize = 3;
+/// Threads asking a [`PixelSource`] for rows of tiles at once: a GPU call spends most of its time
+/// waiting (upload, readback), so the calls of several threads overlap (measured on a 50 MP
+/// document: 3 threads render it in about half the time of one).
+const SOURCE_PRODUCERS: usize = 3;
+
+/// Rendered regions in flight (32 MB each): one being filled by each producer, one waiting, one
+/// being read.
+const SOURCE_BUFFERS: usize = SOURCE_PRODUCERS + 2;
 
 /// A row of consecutive tiles composited by one call of a [`PixelSource`].
 struct Run {
@@ -1731,8 +1736,8 @@ impl<'a> WandSampler<'a> {
     /// tiles skipped once `stop()`.
     ///
     /// Without a [`PixelSource`] each tile is composited alone, on its thread. With one, the
-    /// tiles are composited a row of up to [`SOURCE_RUN_TILES`] at a time by one thread, which
-    /// asks the source while the others read the colors of the previous rows, at most
+    /// tiles are composited a row of up to [`SOURCE_RUN_TILES`] at a time, by [`SOURCE_PRODUCERS`]
+    /// threads asking the source while the others read the colors of the previous rows, at most
     /// [`SOURCE_BUFFERS`] rows being in memory.
     fn map_tiles<R: Send>(
         &self,
@@ -1769,32 +1774,44 @@ impl<'a> WandSampler<'a> {
         }
         let runs = source_runs(mask, tiles);
         let runs = &runs;
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let next = &next;
+        let (give_back, free) = std::sync::mpsc::channel::<Vec<f32>>();
+        for _ in 0..SOURCE_BUFFERS {
+            // The receiver is alive: the producers share it.
+            let _ = give_back.send(Vec::new());
+        }
+        let free = std::sync::Mutex::new(free);
+        let free = &free;
         std::thread::scope(|scope| {
             let (full, rendered) = std::sync::mpsc::sync_channel::<(usize, Vec<f32>)>(1);
-            let (give_back, free) = std::sync::mpsc::channel::<Vec<f32>>();
-            for _ in 0..SOURCE_BUFFERS {
-                // The receiver is alive: it is moved to the producer below.
-                let _ = give_back.send(Vec::new());
+            for _ in 0..SOURCE_PRODUCERS.min(runs.len()) {
+                let full = full.clone();
+                scope.spawn(move || {
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(run) = runs.get(i) else { break };
+                        let received = free.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                        let Ok(mut rgba) = received else { break };
+                        if stop() {
+                            break;
+                        }
+                        rgba.resize(run.region.size().pixel_count() as usize * 4, 0.0);
+                        if !self.composite(run.region, &mut rgba, true) {
+                            rgba.fill(0.0);
+                        }
+                        if full.send((i, rgba)).is_err() {
+                            break;
+                        }
+                    }
+                });
             }
-            scope.spawn(move || {
-                for (i, run) in runs.iter().enumerate() {
-                    let Ok(mut rgba) = free.recv() else { break };
-                    if stop() {
-                        break;
-                    }
-                    rgba.resize(run.region.size().pixel_count() as usize * 4, 0.0);
-                    if !self.composite(run.region, &mut rgba, true) {
-                        rgba.fill(0.0);
-                    }
-                    if full.send((i, rgba)).is_err() {
-                        break;
-                    }
-                }
-            });
+            // Only the producers hold senders now: the loop below ends with the last of them.
+            drop(full);
             let mut results = Vec::new();
             for (i, rgba) in rendered {
                 results.extend(self.read_run(mask, &runs[i], &rgba, stop, work));
-                // The producer is gone once it has rendered every run: nothing to give back.
+                // The producers are gone once they have rendered every run: nothing to give back.
                 let _ = give_back.send(rgba);
             }
             results
@@ -4403,7 +4420,7 @@ mod tests {
         // A source painting everything blue: the wand sees a blue canvas, whatever the document.
         let doc = wand_document();
         let blue = |_: &crate::document::Document, region: Rect, out: &mut [f32]| {
-            for px in out.chunks_exact_mut(4) {
+            for px in out.as_chunks_mut::<4>().0 {
                 px.copy_from_slice(&[0.0, 0.0, 1.0, 1.0]);
             }
             assert_eq!(out.len() as u64, region.size().pixel_count() * 4);
