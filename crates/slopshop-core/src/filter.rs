@@ -4,9 +4,17 @@
 
 use crate::raster::parallel_for_each;
 
-/// Gaussian Blur's radius range in pixels (Photoshop's): its standard deviation.
+/// Gaussian Blur's radius range in pixels (Photoshop's): its standard deviation. Unsharp Mask
+/// and High Pass blur by a radius in the same range.
 pub const MIN_BLUR_RADIUS: f32 = 0.1;
 pub const MAX_BLUR_RADIUS: f32 = 1000.0;
+
+/// Unsharp Mask's amount range, in percent (Photoshop's).
+pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
+pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
+
+/// Unsharp Mask's threshold range, in levels of 8 bits (Photoshop's).
+pub const MAX_THRESHOLD: f32 = 255.0;
 
 /// Up to this radius, the Gaussian is convolved exactly; beyond it, three box blurs approximate
 /// it (as the selection's Feather does), whatever the radius costs the same.
@@ -25,23 +33,41 @@ const REDUCED_UP_TO: f64 = 32.0;
 pub enum Filter {
     /// Photoshop's Gaussian Blur: `radius` is the standard deviation, in the layer's pixels.
     GaussianBlur { radius: f32 },
+    /// Photoshop's Unsharp Mask: each color pushed away from its Gaussian blur of `radius` by
+    /// `amount` percent of their difference, where that difference reaches `threshold` levels
+    /// (of 8 bits) on some channel.
+    UnsharpMask {
+        amount: f32,
+        radius: f32,
+        threshold: f32,
+    },
+    /// Photoshop's High Pass: each color's difference with its Gaussian blur of `radius`, around
+    /// middle gray.
+    HighPass { radius: f32 },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 1] = ["gaussianBlur"];
+    pub const IDS: [&'static str; 3] = ["gaussianBlur", "unsharpMask", "highPass"];
 
     /// The identifier the UI and files know it by.
     pub fn id(&self) -> &'static str {
         match self {
             Self::GaussianBlur { .. } => "gaussianBlur",
+            Self::UnsharpMask { .. } => "unsharpMask",
+            Self::HighPass { .. } => "highPass",
         }
     }
 
     /// Its parameters, in a fixed order per filter.
     pub fn params(&self) -> Vec<f32> {
         match *self {
-            Self::GaussianBlur { radius } => vec![radius],
+            Self::GaussianBlur { radius } | Self::HighPass { radius } => vec![radius],
+            Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => vec![amount, radius, threshold],
         }
     }
 
@@ -50,23 +76,116 @@ impl Filter {
     pub fn from_params(id: &str, values: &[f32]) -> Option<Self> {
         match (id, values) {
             ("gaussianBlur", &[radius]) => Some(Self::GaussianBlur { radius }),
+            ("unsharpMask", &[amount, radius, threshold]) => Some(Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            }),
+            ("highPass", &[radius]) => Some(Self::HighPass { radius }),
             _ => None,
         }
     }
 
-    /// The filter `id` at the settings its dialog opens with the first time.
+    /// The filter `id` at the settings its dialog opens with the first time (Photoshop's).
     pub fn defaults(id: &str) -> Option<Self> {
         match id {
             "gaussianBlur" => Some(Self::GaussianBlur { radius: 1.0 }),
+            "unsharpMask" => Some(Self::UnsharpMask {
+                amount: 100.0,
+                radius: 1.0,
+                threshold: 0.0,
+            }),
+            "highPass" => Some(Self::HighPass { radius: 10.0 }),
             _ => None,
         }
     }
 
     pub fn is_valid(&self) -> bool {
+        let radius = |r: f32| r.is_finite() && (MIN_BLUR_RADIUS..=MAX_BLUR_RADIUS).contains(&r);
         match *self {
-            Self::GaussianBlur { radius } => {
-                radius.is_finite() && (MIN_BLUR_RADIUS..=MAX_BLUR_RADIUS).contains(&radius)
+            Self::GaussianBlur { radius: r } | Self::HighPass { radius: r } => radius(r),
+            Self::UnsharpMask {
+                amount,
+                radius: r,
+                threshold,
+            } => {
+                radius(r)
+                    && amount.is_finite()
+                    && (MIN_SHARPEN_AMOUNT..=MAX_SHARPEN_AMOUNT).contains(&amount)
+                    && threshold.is_finite()
+                    && (0.0..=MAX_THRESHOLD).contains(&threshold)
             }
+        }
+    }
+
+    /// The radius of the Gaussian blur the filter is made from.
+    pub fn blur_radius(&self) -> f32 {
+        match *self {
+            Self::GaussianBlur { radius }
+            | Self::UnsharpMask { radius, .. }
+            | Self::HighPass { radius } => radius,
+        }
+    }
+
+    /// The filter on the layer reduced `factor` times (a pyramid level, a look): its distances
+    /// divided, no less than the smallest it takes.
+    pub fn scaled(&self, factor: f32) -> Self {
+        let radius = (self.blur_radius() / factor).max(MIN_BLUR_RADIUS);
+        match *self {
+            Self::GaussianBlur { .. } => Self::GaussianBlur { radius },
+            Self::UnsharpMask {
+                amount, threshold, ..
+            } => Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            },
+            Self::HighPass { .. } => Self::HighPass { radius },
+        }
+    }
+
+    /// How far a pixel's result reads, in pixels on each side, with some room (a look's
+    /// margin): three and a half sigmas of its blur.
+    pub fn reach(&self) -> f64 {
+        3.5 * f64::from(self.blur_radius()) + 2.0
+    }
+
+    /// Whether a pixel's result depends on its own value besides its blur's.
+    pub(crate) fn reads_original(&self) -> bool {
+        !matches!(self, Self::GaussianBlur { .. })
+    }
+
+    /// A pixel's result from its premultiplied value `original` and its blur's `blurred`, in
+    /// the blend space (values of 1 are white). Unsharp Mask and High Pass work on the colors
+    /// (straight, the blur's by its own coverage), and keep the pixel's alpha.
+    pub(crate) fn finish(&self, original: [f64; 4], blurred: [f64; 4]) -> [f64; 4] {
+        let straight = |p: [f64; 4]| {
+            if p[3] > 0.0 {
+                [p[0] / p[3], p[1] / p[3], p[2] / p[3]]
+            } else {
+                [0.0; 3]
+            }
+        };
+        let (o, b) = (straight(original), straight(blurred));
+        let alpha = original[3];
+        let color = |f: &dyn Fn(f64, f64) -> f64| {
+            let c: [f64; 3] = std::array::from_fn(|i| f(o[i], b[i]));
+            [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+        };
+        match *self {
+            Self::GaussianBlur { .. } => blurred,
+            Self::UnsharpMask {
+                amount, threshold, ..
+            } => {
+                // Below the threshold on every channel, the pixel is left as it is.
+                let level = f64::from(threshold) / 255.0;
+                if alpha <= 0.0 || (0..3).all(|i| (o[i] - b[i]).abs() < level) {
+                    return original;
+                }
+                let k = f64::from(amount) / 100.0;
+                color(&|o, b| o + k * (o - b))
+            }
+            Self::HighPass { .. } => color(&|o, b| o - b + 0.5),
         }
     }
 }
@@ -316,8 +435,93 @@ mod tests {
         assert!(blur.is_valid());
         for radius in [0.0, 1001.0, f32::NAN] {
             assert!(!Filter::GaussianBlur { radius }.is_valid(), "{radius}");
+            assert!(!Filter::HighPass { radius }.is_valid(), "{radius}");
         }
-        assert!(Filter::defaults("gaussianBlur").is_some_and(|f| f.is_valid()));
+        let sharpen = |amount, radius, threshold| Filter::UnsharpMask {
+            amount,
+            radius,
+            threshold,
+        };
+        assert!(sharpen(500.0, 1000.0, 255.0).is_valid());
+        for wrong in [
+            sharpen(0.5, 1.0, 0.0),
+            sharpen(501.0, 1.0, 0.0),
+            sharpen(100.0, 0.0, 0.0),
+            sharpen(100.0, 1.0, -1.0),
+            sharpen(100.0, 1.0, 256.0),
+            sharpen(f32::NAN, 1.0, 0.0),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        for id in Filter::IDS {
+            let filter = Filter::defaults(id).expect("every filter has defaults");
+            assert!(filter.is_valid(), "{id}");
+            assert_eq!(filter.id(), id);
+            assert_eq!(Filter::from_params(id, &filter.params()), Some(filter));
+        }
+    }
+
+    #[test]
+    fn scaled_filters_divide_their_distances_only() {
+        let sharpen = Filter::UnsharpMask {
+            amount: 150.0,
+            radius: 8.0,
+            threshold: 4.0,
+        };
+        assert_eq!(
+            sharpen.scaled(4.0),
+            Filter::UnsharpMask {
+                amount: 150.0,
+                radius: 2.0,
+                threshold: 4.0
+            }
+        );
+        assert_eq!(
+            Filter::HighPass { radius: 0.2 }.scaled(8.0),
+            Filter::HighPass {
+                radius: MIN_BLUR_RADIUS
+            }
+        );
+        assert!(sharpen.scaled(4.0).reach() < sharpen.reach());
+    }
+
+    #[test]
+    fn unsharp_mask_pushes_colors_from_their_blur_above_its_threshold() {
+        let sharpen = |threshold| Filter::UnsharpMask {
+            amount: 50.0,
+            radius: 1.0,
+            threshold,
+        };
+        // Half opaque: colors are straight, alpha kept.
+        let original = [0.3, 0.2, 0.1, 0.5];
+        let blurred = [0.2, 0.2, 0.2, 0.5];
+        let out = sharpen(0.0).finish(original, blurred);
+        let expected = [0.7, 0.4, 0.1].map(|c| c * 0.5);
+        for c in 0..3 {
+            assert!((out[c] - expected[c]).abs() < 1e-12, "{out:?}");
+        }
+        assert_eq!(out[3], 0.5);
+        // Within the threshold on every channel (0.2 is 51 levels, 0 is 0): left as it is.
+        assert_eq!(sharpen(52.0).finish(original, blurred), original);
+        assert_ne!(sharpen(50.0).finish(original, blurred), original);
+        // Transparent stays transparent.
+        assert_eq!(sharpen(0.0).finish([0.0; 4], blurred), [0.0; 4]);
+    }
+
+    #[test]
+    fn high_pass_is_the_difference_with_the_blur_around_middle_gray() {
+        let high = Filter::HighPass { radius: 3.0 };
+        let same = high.finish([0.4, 0.4, 0.4, 1.0], [0.4, 0.4, 0.4, 1.0]);
+        for v in &same[..3] {
+            assert!((v - 0.5).abs() < 1e-12, "{same:?}");
+        }
+        let out = high.finish([0.9, 0.1, 0.5, 1.0], [0.5, 0.5, 0.5, 1.0]);
+        for (c, v) in [0.9, 0.1, 0.5].iter().enumerate() {
+            assert!((out[c] - v).abs() < 1e-12, "{out:?}");
+        }
+        // Half opaque over a transparent blur (read as black): a straight 0.5 becomes 1.
+        let out = high.finish([0.25, 0.25, 0.25, 0.5], [0.0; 4]);
+        assert_eq!(out, [0.5, 0.5, 0.5, 0.5]);
     }
 
     /// A line of `n` pixels, all transparent but one opaque white in the middle.
