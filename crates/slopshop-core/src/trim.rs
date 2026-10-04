@@ -192,6 +192,7 @@ mod tests {
 
     fn push(doc: &mut Document, content: LayerContent) {
         let layer = Layer {
+            style: None,
             id: doc.allocate_layer_id(),
             name: "l".into(),
             visible: true,
@@ -244,6 +245,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                style: None,
                 id: opaque.allocate_layer_id(),
                 name: "fill".into(),
                 visible: true,

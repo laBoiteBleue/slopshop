@@ -191,6 +191,7 @@ mod tests {
 
     fn layer(id: u64, content: LayerContent, mask: Option<LayerMask>) -> Layer {
         Layer {
+            style: None,
             transform: Affine::IDENTITY,
             clipped: false,
             id: LayerId::from_raw(id),

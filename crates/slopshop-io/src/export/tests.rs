@@ -21,6 +21,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        style: None,
         transform: slopshop_core::Affine::IDENTITY,
         clipped: false,
         id,
@@ -1239,6 +1240,7 @@ fn layered_document() -> Document {
             parent,
             index,
             layer: Layer {
+                style: None,
                 transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
@@ -1605,6 +1607,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
             parent: None,
             index,
             layer: Layer {
+                style: None,
                 transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,

@@ -474,6 +474,7 @@ impl Writer<'_, '_> {
             .transform
             .then(self.document.parent_transform(layer.id));
         let coverage = Layer {
+            style: None,
             id: LayerId::from_raw(1),
             name: String::new(),
             visible: true,

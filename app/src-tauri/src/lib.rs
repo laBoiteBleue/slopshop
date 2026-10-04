@@ -565,6 +565,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
         parent: None,
         index: 0,
         layer: Layer {
+            style: None,
             transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,
@@ -997,6 +998,7 @@ fn insert_image(
                 parent: None,
                 index: session.document().layers().len(),
                 layer: Layer {
+                    style: None,
                     transform: slopshop_core::Affine::IDENTITY,
                     clipped: false,
                     id: layer_id,
@@ -2279,6 +2281,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                style: None,
                 transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
@@ -2411,6 +2414,7 @@ mod tests {
             let id = document.session.allocate_layer_id();
             let index = document.session.document().layers().len();
             let layer = Layer {
+                style: None,
                 id,
                 name: "small".into(),
                 visible: true,
@@ -2533,6 +2537,7 @@ mod tests {
                     parent: None,
                     index,
                     layer: Layer {
+                        style: None,
                         transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
                         id,
@@ -2614,6 +2619,7 @@ mod tests {
                     parent: None,
                     index,
                     layer: Layer {
+                        style: None,
                         transform: slopshop_core::Affine::IDENTITY,
                         clipped: false,
                         id,
@@ -2934,6 +2940,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    style: None,
                     transform: slopshop_core::Affine::IDENTITY,
                     clipped: false,
                     id: second,
@@ -2997,6 +3004,7 @@ mod tests {
         );
         let id = document.session.allocate_layer_id();
         let layer = Layer {
+            style: None,
             transform: slopshop_core::Affine::IDENTITY,
             clipped: false,
             id,
@@ -3690,6 +3698,7 @@ mod tests {
             let document = documents.get_mut(doc.id).unwrap();
             let id = document.session.allocate_layer_id();
             let layer = Layer {
+                style: None,
                 id,
                 name: "photo".into(),
                 visible: true,
@@ -3849,6 +3858,7 @@ mod tests {
             let document = documents.get_mut(doc.id).unwrap();
             let id = document.session.allocate_layer_id();
             let layer = Layer {
+                style: None,
                 id,
                 name: "photo".into(),
                 visible: true,

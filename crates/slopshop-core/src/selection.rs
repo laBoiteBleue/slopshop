@@ -3666,6 +3666,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                style: None,
                 id,
                 name: "colors".into(),
                 visible: true,
