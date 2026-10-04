@@ -549,9 +549,9 @@
     window.addEventListener("blur", end);
   }
 
-  // Fill (ADR 0032): the selected pixel and fill layers' Fill Opacity, live while dragging (one
-  // undo entry per drag), as Opacity.
-  let styleable = $derived(selected?.kind === "raster" || selected?.kind === "fill");
+  // Fill (ADR 0032): the selected layers' Fill Opacity (adjustment layers have none), live
+  // while dragging (one undo entry per drag), as Opacity.
+  let styleable = $derived(selected !== null && selected.kind !== "adjustment");
   let fillDraft = $state<{ layerId: number; percent: number } | null>(null);
   let shownFill = $derived(
     fillDraft !== null && fillDraft.layerId === selected?.id
@@ -884,7 +884,7 @@
         onpointermove={onRowPointerMove}
         oncontextmenu={(e) => onRowContextMenu(e, layer)}
         ondblclick={(e) => {
-          if (e.defaultPrevented || (layer.kind !== "raster" && layer.kind !== "fill")) return;
+          if (e.defaultPrevented || layer.kind === "adjustment") return;
           const on = e.target as HTMLElement;
           if (on.closest(".name, .thumb, .mask-thumb, button, input")) return;
           onstyle?.(layer, "blending");

@@ -106,10 +106,10 @@ export function hasEffects(style: LayerStyle | null | undefined): boolean {
   return effectsOf(style).some((e) => e.enabled);
 }
 
-/** Fill Opacity `fill` for the pixel and fill layers among `layers` (one undo entry). */
+/** Fill Opacity `fill` for `layers` but adjustment layers (one undo entry). */
 export function fillEdit(layers: LayerView[], fill: number): EditRequest | null {
   const edits = layers
-    .filter((l) => l.kind === "raster" || l.kind === "fill")
+    .filter((l) => l.kind !== "adjustment")
     .map((l) => styleEdit(l.id, withFill(l.style ?? null, fill)));
   if (edits.length === 0) return null;
   return edits.length === 1 ? edits[0] : { kind: "batch", edits };

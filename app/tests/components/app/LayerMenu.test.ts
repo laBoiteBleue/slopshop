@@ -177,3 +177,20 @@ test("Layer > Layer Style > Drop Shadow turns it on live; OK keeps it as one und
   await vi.waitFor(() => expect(sent("end_gesture")).toEqual([{ documentId: 1 }]));
   expect(sent("cancel_gesture")).toEqual([]);
 });
+
+test("Layer > Layer Style is open to groups, not to adjustment layers", async () => {
+  const group = { ...layer(1, "Back"), kind: "group" as const, children: [layer(2, "Sky")] };
+  const curves = { ...layer(3, "Curves"), kind: "adjustment" as const };
+  const user = open(documentView(1, "cat.jpg", [group, curves]));
+  await vi.waitFor(() => expect(layerNames()).toContain("Back"));
+  const styleItem = async () => {
+    await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+    const label = screen.getByText("Layer Style", { selector: ".label" });
+    return label.closest(".item") as HTMLElement;
+  };
+  await user.click(row("Back"));
+  expect((await styleItem()).classList.contains("disabled")).toBe(false);
+  await user.keyboard("{Escape}");
+  await user.click(row("Curves"));
+  expect((await styleItem()).classList.contains("disabled")).toBe(true);
+});
