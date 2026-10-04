@@ -39,15 +39,33 @@ usable headless; `unsafe` and new dependencies need a decision.
 2. **A tile's key is its content, not its position in time**: (level, column, row, a 128-bit
    hash of everything the shader reads for that tile). The hash covers the document's blend
    space and the encoded fields of every step that can change the tile (the same bytes uploaded
-   to the shader, tile slots excluded), with the ids of the images and masks it samples
-   (immutable, ADR 0005), the display transform and the raster tile budget (which may coarsen
-   the levels read). Each step is hashed once per frame, each tile combines the hashes of its
-   steps: a frame whose tiles are cached costs well under a millisecond of CPU time even with
-   hundreds of layers. A tile is valid exactly when its key is found: **there is no
-   invalidation to get right** — any edit, undo or redo changes the steps of the tiles it
-   touches and only those. Undoing reuses the tiles of the previous state while they are still
-   in the cache. Completeness of the hash is by construction (it hashes what the GPU receives),
-   and checked by tests that change each field.
+   to the shader, tile slots excluded), with the raster tiles it samples (images and masks:
+   immutable, ADR 0005; see the implementation note below), the display transform and the raster
+   tile budget (which may coarsen the levels read). Each step is hashed once per frame, each
+   tile combines the hashes of its steps and of the raster tiles it reads: a frame whose tiles
+   are cached costs well under a millisecond of CPU time even with hundreds of layers. A tile
+   is valid exactly when its key is found: **there is no invalidation to get right** — any
+   edit, undo or redo changes the steps of the tiles it touches and only those. Undoing reuses
+   the tiles of the previous state while they are still in the cache. Completeness of the hash
+   is by construction (it hashes what the GPU receives), and checked by tests that change each
+   field.
+   (Implementation note, 2026-10-04, ADR 0027 point 6: the first version hashed the *id* of each
+   image sampled, so a new image (every frame of a painting stroke) changed the key of every
+   display tile its layer reaches. A fill reads raster tiles, and images share the tiles they do
+   not change, so the key now holds the *identity of each raster tile the fill can read* at the
+   level it reads (its allocation's address; a tile that is not stored counts as absent): the
+   tiles of the plan's range over the display tile, which includes a resampled layer's filter
+   support and, after the raster tile budget coarsened a plan, the coarser level's tiles; masks,
+   a stack's paint `P` and `k`, style effects and filter looks are rasters of steps like the
+   others. The image only contributes what the encoded fields do not say (its size and storage).
+   Only the display tiles over a changed raster tile change keys. An address stands for its tile
+   only while the tile lives, so a cached display tile keeps the raster tiles its key was made
+   from allocated until its slot is reassigned; those pinned tiles are bounded by the cache's
+   capacity, and a replaced tile stays in memory until the display tiles that show it are
+   evicted. Tiles of different allocations never match even when their pixels are equal (a
+   recomputed tile is a miss, never a stale hit). Not narrowed yet: a stack's paint images
+   (`PaintEntry::images`) make a new identity tile per entry, so a stack evaluated by the
+   shader still recomposites every display tile its paint reaches.)
 
 3. **Per tile, only the steps that reach it** are encoded (binning): a step's reach is its
    placed image (whole-pixel offset), its transformed bounds plus the resampling support, or
@@ -71,9 +89,11 @@ usable headless; `unsafe` and new dependencies need a decision.
    never waits for compositing; a huge document shows a soft image for a frame or two.
 
 6. **Live gestures** (slider drags, transforms) keep working as now: the changed steps give new
-   keys every frame, so the visible tiles they reach are composited again, and only those. A
-   later step (not part of this decision) can cache *partial* stacks — the accumulator below
-   the edited layer — with the same content addressing.
+   keys every frame, so the visible tiles they reach are composited again, and only those
+   (a raster changed in a few tiles, as a painting stroke does, changes only the keys of the
+   display tiles over them: see the note of point 2). A later step (not part of this decision)
+   can cache *partial* stacks — the accumulator below the edited layer — with the same content
+   addressing.
 
 7. **Export is unchanged**: it renders regions at full resolution in f32, unclipped, through
    `render_region` (ADR 0008); the f16 display cache is never a source for files.
