@@ -324,14 +324,13 @@ built. Contributors: propose here first.
   left to grab again; it opens again where it was left, for the session (Layer Style comes back
   in place after the color picker).
 - The eyedropper, wherever the image is sampled (the color picker open, Select > Color Range on
-  the image and on its preview): the pointer is a dropper whose tip samples, with a + or a −
-  for Color Range's adding and subtracting ones (Shift and Alt show theirs while held). Over the
-  image a loupe centered on the pointer (it is the pointer then) magnifies the 13 × 13 pixels
-  around it, the sampled one framed in the middle, inside Photoshop's sampling ring: the new
-  color over the current one (the color picker's; the new one all round for Color Range, whose
-  + or − sits on the ring), in a neutral gray ring. The new color's value is under the loupe
-  (above it at the bottom of the window). The loupe follows the pointer frame by frame, its
-  pixels cut from a tile kept around the pointer.
+  the image and on its preview): the pointer is a small cross open in its middle, with a + or a
+  − for Color Range's adding and subtracting eyedroppers (Shift and Alt show theirs while held).
+  Over the image a loupe, above right of the pointer, magnifies the 13 × 13 pixels around it,
+  the sampled one framed in the middle, inside Photoshop's sampling ring: the new color over the
+  current one (the color picker's; the new one all round for Color Range), in a neutral gray
+  ring, the new color's value under it. It follows the pointer frame by frame, its pixels cut
+  from a tile kept around the pointer.
 - Help menu, an open-source project's only: Keyboard Shortcuts (the list of Edit > Keyboard
   Shortcuts), Report a Bug (GitHub's new issue form) and Contribute to SlopShop
   (`CONTRIBUTING.md`) in the browser, About SlopShop (version as built, license, a link to the

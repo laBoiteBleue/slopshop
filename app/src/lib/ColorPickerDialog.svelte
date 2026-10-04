@@ -259,8 +259,6 @@
 
   /** The pointer over the image, window pixels: the eyedropper and its loupe show. */
   let overImage = $state<{ x: number; y: number } | null>(null);
-  /** The loupe is drawn: it is the pointer. */
-  let loupeShown = $state(false);
   /** A press on the image samples until released; one sample in flight at a time. */
   let sampling: { pointerId: number; busy: boolean; next: [number, number] | null } | null = null;
 
@@ -323,7 +321,7 @@
 
 <div
   class="blocker"
-  style:cursor={overImage ? (loupeShown ? "none" : eyedropperCursor("pick")) : null}
+  style:cursor={overImage ? eyedropperCursor("pick") : null}
   role="presentation"
   onpointerdown={onBlockerDown}
   onpointermove={onBlockerMove}
@@ -333,13 +331,7 @@
   oncontextmenu={(e) => e.preventDefault()}
 ></div>
 {#if overImage && sample?.loupe}
-  <Loupe
-    x={overImage.x}
-    y={overImage.y}
-    source={sample.loupe}
-    current={hex}
-    bind:shown={loupeShown}
-  />
+  <Loupe x={overImage.x} y={overImage.y} source={sample.loupe} current={hex} />
 {/if}
 
 <dialog bind:this={dialog} aria-labelledby="color-picker-title">

@@ -1,19 +1,20 @@
 <script lang="ts">
-  // The eyedropper's loupe, centered on the pointer: the pixels around it magnified, the sampled
-  // one framed in the middle, Photoshop's sampling ring around them (the new color over the
-  // current one) and the new color's value under it. Hidden off the image. Its pixels are cut
+  // The eyedropper's loupe, above right of the pointer: the pixels around it magnified, the
+  // sampled one framed in the middle, Photoshop's sampling ring around them (the new color over
+  // the current one) and the new color's value under it. Hidden off the image. Its pixels are cut
   // from a tile kept around the pointer (see loupeTile): it follows the pointer frame by frame,
   // always with the pixels of where it is drawn.
   import { onDestroy } from "svelte";
   import {
     centerHex,
     LOUPE_CELL,
+    LOUPE_HALO,
+    LOUPE_OUTER,
     LOUPE_RADIUS,
     LOUPE_RING,
     LOUPE_SIDE,
     LOUPE_SIZE,
-    tagAbove,
-    type EyedropperKind,
+    loupePlacement,
     type LoupeSource,
   } from "./eyedropper";
   import { loupeTiles } from "./loupeTile";
@@ -23,8 +24,6 @@
     y,
     source,
     current = null,
-    sign = "pick",
-    shown = $bindable(false),
   }: {
     /** The pointer, window pixels. */
     x: number;
@@ -32,13 +31,10 @@
     source: LoupeSource;
     /** The current color (`#rrggbb`), on the ring's lower half; the new color all round if none. */
     current?: string | null;
-    /** The eyedropper's sign, on the ring: a color added or taken away. */
-    sign?: EyedropperKind;
-    /** Whether the loupe is drawn (the pointer is hidden meanwhile: the loupe is the pointer). */
-    shown?: boolean;
   } = $props();
 
   let canvas: HTMLCanvasElement;
+  let shown = $state(false);
   /** The sampled pixel's color, null where nothing is shown. */
   let sampled = $state<string | null>(null);
   /** The pointer the pixels drawn are for: the loupe stays there until the next ones are. */
@@ -81,26 +77,28 @@
     closed = true;
     cancelAnimationFrame(frame);
     tiles.drop();
-    shown = false;
   });
 
-  let height = $state(window.innerHeight);
+  let view = $state({ width: window.innerWidth, height: window.innerHeight });
+  const place = $derived(loupePlacement(at.x, at.y, view));
   const ring = $derived(sampled ?? "var(--panel)");
 </script>
 
-<svelte:window onresize={() => (height = window.innerHeight)} />
+<svelte:window onresize={() => (view = { width: window.innerWidth, height: window.innerHeight })} />
 
 <div
   class="loupe"
   class:shown
   aria-hidden="true"
-  style:left="{at.x}px"
-  style:top="{at.y}px"
+  style:left="{place.left}px"
+  style:top="{place.top}px"
+  style:width="{LOUPE_OUTER}px"
   style:--new={ring}
   style:--current={current ?? ring}
   style:--cell="{LOUPE_CELL}px"
   style:--size="{LOUPE_SIZE}px"
   style:--ring="{LOUPE_RING}px"
+  style:--halo="{LOUPE_HALO}px"
 >
   <div class="ring">
     <div class="pixels">
@@ -113,44 +111,37 @@
       ></div>
     </div>
   </div>
-  {#if sign !== "pick"}
-    <span class="sign">{sign === "add" ? "+" : "−"}</span>
-  {/if}
   {#if sampled}
-    <span class="value" class:above={tagAbove(at.y, height)}>{sampled}</span>
+    <span class="value">{sampled}</span>
   {/if}
 </div>
 
 <style>
-  /* Above the color picker's blocker and dialog: the loupe is part of the pointer. Its box is the
-     pointer's point; what it shows is centered on it. */
+  /* Above the color picker's blocker and dialog: the loupe is part of the pointer. */
   .loupe {
     position: fixed;
     z-index: 450;
     display: none;
-    width: 0;
-    height: 0;
+    flex-direction: column;
+    align-items: center;
     pointer-events: none;
-    --outer: calc(var(--size) / 2 + var(--ring));
   }
 
   .loupe.shown {
-    display: block;
+    display: flex;
   }
 
   /* Photoshop's sampling ring: the new color over the current one, in a neutral gray that reads
      on any image. */
   .ring {
-    position: absolute;
-    left: calc(-1 * var(--outer));
-    top: calc(-1 * var(--outer));
+    margin: var(--halo);
     padding: var(--ring);
     border-radius: 50%;
     background: linear-gradient(to bottom, var(--new) 50%, var(--current) 50%);
     box-shadow:
       0 0 0 1px #00000080,
       0 0 0 5px #8a8a8a,
-      0 0 0 6px #00000090,
+      0 0 0 var(--halo) #00000090,
       0 10px 28px #000a;
   }
 
@@ -192,32 +183,12 @@
     outline: 1px solid #000000;
   }
 
-  /* On the ring, upper right. */
-  .sign {
-    position: absolute;
-    left: calc(var(--outer) * 0.7071 - 9px);
-    top: calc(var(--outer) * -0.7071 - 9px);
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #1b1b1b;
-    box-shadow: 0 0 0 1px #8a8a8a;
-    color: #f0f0f0;
-    font:
-      600 14px/18px ui-monospace,
-      monospace;
-    text-align: center;
-  }
-
-  /* The new color's value, under the loupe (above it at the bottom of the window). */
+  /* The new color's value, under the loupe. */
   .value {
-    position: absolute;
-    left: 0;
-    top: calc(var(--outer) + 14px);
-    translate: -50% 0;
     display: flex;
     gap: 6px;
     align-items: center;
+    margin-top: 6px;
     padding: 2px 9px;
     border: 1px solid #000000;
     border-radius: 10px;
@@ -228,11 +199,6 @@
       12px/16px ui-monospace,
       monospace;
     white-space: nowrap;
-  }
-
-  .value.above {
-    top: auto;
-    bottom: calc(var(--outer) + 14px);
   }
 
   .value::before {

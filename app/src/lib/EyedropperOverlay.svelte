@@ -28,9 +28,6 @@
   let keys = $state({ shiftKey: false, altKey: false });
   /** The pointer over the image, window pixels. */
   let hover = $state<{ x: number; y: number } | null>(null);
-  /** The loupe is drawn: it is the pointer. */
-  let loupeShown = $state(false);
-  const shownKind = $derived(eyedropperFromKeys(kind, keys));
 
   function track(e: PointerEvent | KeyboardEvent) {
     keys = { shiftKey: e.shiftKey, altKey: e.altKey };
@@ -43,7 +40,7 @@
   class="eyedropper"
   class:hand={mapping.hand}
   role="presentation"
-  style:cursor={loupeShown ? "none" : eyedropperCursor(shownKind)}
+  style:cursor={eyedropperCursor(eyedropperFromKeys(kind, keys))}
   onpointerdown={(e) => {
     if (e.button !== 0 || mapping.hand) return;
     const [x, y] = mapping.toDocument(e.clientX, e.clientY);
@@ -56,7 +53,7 @@
   onpointerleave={() => (hover = null)}
 ></div>
 {#if hover && !mapping.hand}
-  <Loupe x={hover.x} y={hover.y} source={loupe} sign={shownKind} bind:shown={loupeShown} />
+  <Loupe x={hover.x} y={hover.y} source={loupe} />
 {/if}
 
 <style>
