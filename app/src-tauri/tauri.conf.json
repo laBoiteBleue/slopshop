@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SlopShop",
-  "version": "0.1.0",
   "identifier": "dev.slopshop.app",
   "build": {
     "beforeDevCommand": "cargo build -p slopshop-raw && cargo build -p slopshop-ai --features helper && npm run dev",
