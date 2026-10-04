@@ -296,6 +296,12 @@ built. Contributors: propose here first.
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
   Photoshop. Image > Crop crops to the selection's bounds when there is one (otherwise it picks
   the Crop tool).
+- The eyedropper, wherever the image is sampled (the color picker open, Select > Color Range on
+  the image and on its preview): the pointer is a dropper whose tip samples, with a + or a −
+  for Color Range's adding and subtracting ones (Shift and Alt show theirs while held). Over the
+  image a loupe, above right of the pointer, magnifies the 13 × 13 pixels around it with the
+  sampled one framed in the middle and its color on the ring (Photoshop's sampling ring; the
+  loupe is ours, for precision).
 
 ## Proposed
 
@@ -439,3 +445,5 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
 - [ ] The active tool and its options remembered across sessions, as in Photoshop.
 - [ ] Spring-loaded tools: holding a tool's key uses it until the key is released.
 - [ ] Brush size and hardness with [ and ], Alt+right-drag to resize on the canvas.
+- [ ] An Eyedropper tool (I) and Alt+click with the Brush to take the foreground color, with
+  the eyedropper's pointer and loupe (Photoshop; only the color picker samples the image now).
