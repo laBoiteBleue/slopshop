@@ -125,3 +125,11 @@ test("the dialog opens again where it was left (after the color picker)", async 
   expect(screen.getByRole("dialog", { hidden: true }).style.translate).toBe("50px 30px");
   vi.restoreAllMocks();
 });
+
+test("a slider's arrow drops its slider down without applying the dialog", async () => {
+  const { onok, user } = open(null);
+  const blending = screen.getByRole("region", { name: "Blending Options" });
+  await user.click(within(blending).getByText("▾"));
+  expect(onok).not.toHaveBeenCalled();
+  expect(within(blending).getAllByRole("slider").length).toBeGreaterThan(1);
+});

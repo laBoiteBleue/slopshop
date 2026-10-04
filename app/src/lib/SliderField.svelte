@@ -117,6 +117,7 @@
   />
   {#if unit}<span class="unit">{unit}</span>{/if}
   <button
+    type="button"
     class="arrow"
     class:on={open}
     tabindex="-1"
