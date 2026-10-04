@@ -1192,6 +1192,15 @@ fn merged_image(
     Ok(())
 }
 
+/// A layer's style as Photoshop's (ADR 0032): its effects (`lfx2`) and Fill (`iOpa`).
+fn push_style(blocks: &mut Vec<([u8; 4], Vec<u8>)>, style: &LayerStyle) {
+    if let Some(effects) = crate::psd::effects::write(style) {
+        blocks.push((*b"lfx2", effects));
+    }
+    let fill = (style.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    blocks.push((*b"iOpa", vec![fill, 0, 0, 0]));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1235,13 +1244,4 @@ mod tests {
             BlendMode::ALL.iter().map(|&m| blend_key(m)).collect();
         assert_eq!(keys.len(), BlendMode::ALL.len());
     }
-}
-
-/// A layer's style as Photoshop's (ADR 0032): its effects (`lfx2`) and Fill (`iOpa`).
-fn push_style(blocks: &mut Vec<([u8; 4], Vec<u8>)>, style: &LayerStyle) {
-    if let Some(effects) = crate::psd::effects::write(style) {
-        blocks.push((*b"lfx2", effects));
-    }
-    let fill = (style.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-    blocks.push((*b"iOpa", vec![fill, 0, 0, 0]));
 }
