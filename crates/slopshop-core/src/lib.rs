@@ -18,6 +18,7 @@
 //! - [`convert`]: working-space pixels to a target pixel format, counting every lossy event.
 //! - [`copy`]: the clipboard's pixels (Copy Merged, the image other applications get) and where
 //!   Paste places what it pastes.
+//! - [`liquify`]: Filter > Liquify, a displacement field edited by brush tools (ADR 0037).
 //! - [`job`]: cancellation and progress of background jobs.
 //! - [`align`]: Layer > Align and Distribute.
 //! - [`bake`]: Layer > Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten (ADR 0031).
@@ -42,6 +43,7 @@ pub mod geom;
 pub mod gradient;
 pub mod histogram;
 pub mod job;
+pub mod liquify;
 mod maxflow;
 pub mod move_pixels;
 pub mod paint;
