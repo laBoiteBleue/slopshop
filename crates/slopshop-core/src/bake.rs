@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::blend::BlendMode;
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use crate::edit::{Edit, EditError};
-use crate::geom::Size;
+use crate::geom::{Rect, Size};
 use crate::pick::{self, Bounds};
 use crate::raster::{RasterImage, TILE_SIZE};
 use crate::transform::Affine;
@@ -28,6 +28,8 @@ pub struct BakePlan {
     pub scratch: Document,
     /// The layer rasterized (a fill or a group).
     id: LayerId,
+    /// Where the content shows on the scratch canvas.
+    region: Rect,
     /// Whole tiles (columns, rows) the image starts before the layer's content space's origin:
     /// the content space moves by as much, its mask grown alike.
     shift: (u32, u32),
@@ -39,6 +41,11 @@ impl BakePlan {
     /// The layer this plan rasterizes.
     pub fn layer(&self) -> LayerId {
         self.id
+    }
+
+    /// Where the content shows on the scratch canvas: what the baked layer's thumbnail shows.
+    pub fn region(&self) -> Rect {
+        self.region
     }
 
     /// The edit that puts `image` (the scratch canvas composited, of its size) in place of the
@@ -193,9 +200,17 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
         let size = size_of(region.right + ox, region.bottom + oy)?;
         let moved = Affine::translation(ox as f64, oy as f64);
         let scratch = scratch(doc, size, content, moved)?;
+        // Within the canvas by construction (the shift makes the region's start non-negative).
+        let region = Rect::new(
+            (region.left + ox).max(0) as u32,
+            (region.top + oy).max(0) as u32,
+            (region.right - region.left).max(1) as u32,
+            (region.bottom - region.top).max(1) as u32,
+        );
         plans.push(BakePlan {
             scratch,
             id,
+            region,
             shift,
             expected: layer.content.clone(),
         });
@@ -549,6 +564,25 @@ mod tests {
         assert_eq!(names(&doc), ["bottom", "b", "top"]);
         assert_eq!(shown(&doc, 5, 5).as_deref(), Some("bottom"));
         assert_eq!(shown(&doc, 15, 15).as_deref(), Some("bottom"));
+    }
+
+    #[test]
+    fn a_plan_s_region_is_where_its_composite_shows() {
+        let mut doc = Document::new(Size::new(100, 100));
+        let a = plain(&mut doc, "a", boxed(Rect::new(10, 20, 30, 15)));
+        let a = push(&mut doc, a);
+        let mut b = plain(&mut doc, "b", boxed(Rect::new(0, 0, 10, 10)));
+        // Partly before the origin: the scratch canvas starts a tile earlier.
+        b.transform = Affine::translation(-5.0, 60.0);
+        let b = push(&mut doc, b);
+        let group = doc.allocate_layer_id();
+        merge_preview(&doc, Merge::Layers(vec![a, b]), group)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let plan = rasterize_plans(&doc, &[group]).unwrap().remove(0);
+        assert_eq!(Some(plan.region()), composited(&plan).content_bounds());
     }
 
     #[test]
