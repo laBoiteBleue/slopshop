@@ -51,6 +51,8 @@
     type LayerSelection,
   } from "./layerSelection";
   import { isTextField } from "./keymap";
+  import { effectsOf, fillEdit, hasEffects, styleEdit, withEffect } from "./layerStyle";
+  import type { StylePage } from "./LayerStyleDialog.svelte";
   import { canDistribute } from "./align";
   import { mergeKind } from "./bake";
 
@@ -65,10 +67,14 @@
     onlayerdrag,
     hidden = [],
     onfillcolor,
+    onstyle,
   }: {
     doc: DocumentView;
     /** A double-click on a fill layer's thumbnail: the app lets its color be chosen. */
     onfillcolor?: (layer: LayerView) => void;
+    /** A double-click on a pixel or fill layer's row, or on one of its effects: the app opens
+     * Layer Style (ADR 0032) on `page`. */
+    onstyle?: (layer: LayerView, page: StylePage) => void;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
     contextMenu?: MenuItem[];
     /** The right-click menu of the empty area below the layers (built by the app). */
@@ -543,6 +549,43 @@
     window.addEventListener("blur", end);
   }
 
+  // Fill (ADR 0032): the selected pixel and fill layers' Fill Opacity, live while dragging (one
+  // undo entry per drag), as Opacity.
+  let styleable = $derived(selected?.kind === "raster" || selected?.kind === "fill");
+  let fillDraft = $state<{ layerId: number; percent: number } | null>(null);
+  let shownFill = $derived(
+    fillDraft !== null && fillDraft.layerId === selected?.id
+      ? fillDraft.percent
+      : Math.round((selected?.style?.fillOpacity ?? 1) * 100),
+  );
+
+  function onFillInput(value: string) {
+    if (!selected) return;
+    const percent = Number(value);
+    fillDraft = { layerId: selected.id, percent };
+    const request = fillEdit(selection, percent / 100);
+    if (request) live(request);
+  }
+
+  function onFillPointerDown() {
+    const end = () => {
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+      window.removeEventListener("blur", end);
+      void gestureEnd().then(() => (fillDraft = null));
+    };
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("blur", end);
+  }
+
+  function onFillFieldChange(input: HTMLInputElement) {
+    const percent = typedOpacity(input.value, input.valueAsNumber);
+    const request = percent === null ? null : fillEdit(selection, percent / 100);
+    if (request) void edit(request);
+    else input.value = String(shownFill);
+  }
+
   // The field edits the layers that were selected when it got focus, even if the selection
   // changes before `change` fires (clicking another row commits the field on blur).
   let opacityFieldLayers: number[] | null = null;
@@ -787,6 +830,34 @@
     />
     <span class="unit">%</span>
   </div>
+  <!-- Fill Opacity (ADR 0032): the content's opacity, its effects untouched. -->
+  <div class="options fill">
+    <label for="layer-fill">{t("layers.fill")}</label>
+    <input
+      class="opacity-range"
+      type="range"
+      min="0"
+      max="100"
+      value={shownFill}
+      style:--fill="{shownFill}%"
+      disabled={!styleable}
+      aria-label={t("layers.fill")}
+      onpointerdown={onFillPointerDown}
+      oninput={(e) => onFillInput(e.currentTarget.value)}
+    />
+    <input
+      id="layer-fill"
+      class="opacity-field"
+      type="number"
+      min="0"
+      max="100"
+      autocomplete="off"
+      value={shownFill}
+      disabled={!styleable}
+      onchange={(e) => onFillFieldChange(e.currentTarget)}
+    />
+    <span class="unit">%</span>
+  </div>
 
   <!-- A click in the empty area below the layers deselects them, as in Photoshop. -->
   <ul
@@ -812,6 +883,12 @@
         onpointerdown={(e) => onRowPointerDown(e, row, layer)}
         onpointermove={onRowPointerMove}
         oncontextmenu={(e) => onRowContextMenu(e, layer)}
+        ondblclick={(e) => {
+          if (e.defaultPrevented || (layer.kind !== "raster" && layer.kind !== "fill")) return;
+          const on = e.target as HTMLElement;
+          if (on.closest(".name, .thumb, .mask-thumb, button, input")) return;
+          onstyle?.(layer, "blending");
+        }}
       >
         <button
           class="eye"
@@ -918,7 +995,10 @@
               <Icon name="brush" size={12} />
             </span>
           {/if}
-          {#if layer.entries.length > 0}
+          {#if hasEffects(layer.style)}
+            <span class="fx" title={t("layers.fx")}>fx</span>
+          {/if}
+          {#if layer.entries.length > 0 || effectsOf(layer.style).length > 0}
             <button
               class="entries-fold"
               title={t(unfolded.has(layer.id) ? "layers.entries.hide" : "layers.entries.show")}
@@ -931,6 +1011,36 @@
           {/if}
         {/if}
       </li>
+      {#if unfolded.has(layer.id) && effectsOf(layer.style).length > 0}
+        <!-- Its effects (ADR 0032), each with its eye, as Photoshop lists them. -->
+        <li class="entry effects-title" class:hidden-layer={!shown}>
+          <span class="entry-indent" style:width="{30 + depth * 16 + 24}px"></span>
+          <span class="entry-name">{t("layers.effects")}</span>
+        </li>
+        {#each effectsOf(layer.style) as effect (effect.id)}
+          <li
+            class="entry effect"
+            class:hidden-layer={!shown}
+            class:off={!effect.enabled}
+            ondblclick={() => onstyle?.(layer, effect.id)}
+          >
+            <span class="entry-indent" style:width="{30 + depth * 16 + 12}px"></span>
+            <button
+              class="effect-eye"
+              title={t(effect.enabled ? "layers.effect.hide" : "layers.effect.show")}
+              aria-label={t(effect.enabled ? "layers.effect.hide" : "layers.effect.show")}
+              aria-pressed={effect.enabled}
+              onclick={() =>
+                void edit(
+                  styleEdit(layer.id, withEffect(layer.style ?? null, effect.id, !effect.enabled)),
+                )}
+            >
+              <Icon name="eye" size={12} />
+            </button>
+            <span class="entry-name">{t(`style.${effect.id}`)}</span>
+          </li>
+        {/each}
+      {/if}
       {#if layer.entries.length > 0 && unfolded.has(layer.id)}
         <!-- Its stack, newest on top, as Photoshop lists smart filters (ADR 0029). -->
         {#each layer.entries.toReversed() as entry, shownAt (shownAt)}
@@ -1057,6 +1167,39 @@
 
   .unit {
     color: var(--text-muted);
+  }
+
+  /* Fill sits under Opacity, aligned with it. */
+  .options.fill {
+    justify-content: flex-end;
+    padding-top: 0;
+  }
+
+  .fx {
+    margin-left: 4px;
+    font-style: italic;
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .effects-title .entry-name {
+    color: var(--text-muted);
+  }
+
+  .effect-eye {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+  }
+
+  .entry.effect.off .entry-name,
+  .entry.effect.off .effect-eye {
+    opacity: 0.4;
   }
 
   ul {
