@@ -41,34 +41,41 @@ export const LOUPE_SIDE = 2 * LOUPE_RADIUS + 1;
 export const LOUPE_CELL = 10;
 /** The loupe's side, screen pixels. */
 export const LOUPE_SIZE = LOUPE_SIDE * LOUPE_CELL;
-/** Space between the pointer and the loupe, past the eyedropper's 24 px. */
-const GAP = 24;
+/** The ring around the pixels: the new color over the current one (Photoshop's sampling ring). */
+export const LOUPE_RING = 10;
+/** The loupe's side with its ring, screen pixels. */
+export const LOUPE_OUTER = LOUPE_SIZE + 2 * LOUPE_RING;
+/** The value's tag under the loupe: its height with the space from the ring. */
+const TAG = 32;
 
 /**
- * Where the loupe goes for the pointer at (`x`, `y`) in a `width × height` window: above and to
- * the right, clear of the pointer and of what is left of and below it; on the other side where
- * the window ends.
+ * Whether the value's tag goes above the loupe centered on window row `y`: not enough room for it
+ * below in a window `height` tall.
  */
-export function loupePlacement(
-  x: number,
-  y: number,
-  view: { width: number; height: number },
-  size = LOUPE_SIZE,
-): { left: number; top: number } {
-  let left = x + GAP;
-  if (left + size > view.width) left = x - GAP - size;
-  let top = y - GAP - size;
-  if (top < 0) top = y + GAP;
-  const clamp = (v: number, max: number) => Math.max(0, Math.min(v, max));
-  return { left: clamp(left, view.width - size), top: clamp(top, view.height - size) };
+export function tagAbove(y: number, height: number): boolean {
+  return y + LOUPE_OUTER / 2 + TAG > height;
 }
 
+/** Where the loupe takes its pixels from. */
+export type LoupeSource = {
+  /** The document point under a window point; null off the canvas. */
+  point: (clientX: number, clientY: number) => [number, number] | null;
+  /**
+   * The pixels shown around document point (`x`, `y`), `radius` on each side: `(2 × radius + 1)²`
+   * RGBA (8-bit sRGB, straight alpha), the one under it in the middle; null if there are none.
+   */
+  pixels: (x: number, y: number, radius: number) => Promise<Uint8ClampedArray<ArrayBuffer> | null>;
+  /** What the pixels show (the document and its revision): a change drops those kept. */
+  version: unknown;
+};
+
 /**
- * The sampled pixel's color in a loupe patch (`LOUPE_SIDE²` RGBA, straight alpha) as CSS, or null
- * where nothing is shown there.
+ * The sampled pixel's color in a loupe patch (`LOUPE_SIDE²` RGBA, straight alpha) as `#rrggbb`, or
+ * null where nothing is shown there.
  */
-export function centerColor(patch: Uint8ClampedArray): string | null {
+export function centerHex(patch: Uint8ClampedArray): string | null {
   const i = (LOUPE_RADIUS * LOUPE_SIDE + LOUPE_RADIUS) * 4;
   if (patch.length < i + 4 || patch[i + 3] === 0) return null;
-  return `rgb(${patch[i]} ${patch[i + 1]} ${patch[i + 2]})`;
+  const byte = (v: number) => v.toString(16).padStart(2, "0");
+  return `#${byte(patch[i])}${byte(patch[i + 1])}${byte(patch[i + 2])}`;
 }

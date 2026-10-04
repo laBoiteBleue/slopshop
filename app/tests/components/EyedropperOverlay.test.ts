@@ -2,7 +2,7 @@ import { fireEvent, render } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import EyedropperOverlay from "../../src/lib/EyedropperOverlay.svelte";
-import { eyedropperCursor, LOUPE_RADIUS } from "../../src/lib/eyedropper";
+import { eyedropperCursor } from "../../src/lib/eyedropper";
 import type { EyedropperKind } from "../../src/lib/eyedropper";
 import type { ViewMapping } from "../../src/lib/Viewport.svelte";
 
@@ -16,15 +16,19 @@ const MAPPING: ViewMapping = {
 
 function open(options: { kind?: EyedropperKind; hand?: boolean } = {}) {
   const onsample = vi.fn();
-  const patch = vi.fn(async () => null);
+  // An opaque gray image: the pixels asked around a document point.
+  const pixels = vi.fn(async (_x: number, _y: number, radius: number) =>
+    new Uint8ClampedArray((2 * radius + 1) ** 2 * 4).fill(128),
+  );
+  const loupe = { point: MAPPING.toDocument, pixels, version: 1 };
   const { container } = render(EyedropperOverlay, {
     mapping: { ...MAPPING, hand: options.hand ?? false },
     kind: options.kind ?? "pick",
     onsample,
-    patch,
+    loupe,
   });
   const overlay = container.querySelector(".eyedropper") as HTMLElement;
-  return { onsample, patch, overlay, user: userEvent.setup() };
+  return { onsample, pixels, overlay, user: userEvent.setup() };
 }
 
 /** jsdom keeps a cursor with a data URL as it was set. */
@@ -53,20 +57,27 @@ test("a click samples the document point under the pointer, with the keys held",
   expect(onsample).toHaveBeenCalledWith(60, 80, expect.objectContaining({ shiftKey: true }));
 });
 
-test("hovering the image shows a loupe of the document pixels around the pointer", async () => {
-  const { overlay, patch, user } = open();
+test("hovering the image shows a loupe of the document pixels around the pointer, which is the pointer then", async () => {
+  const { overlay, pixels, user } = open({ kind: "add" });
   await user.pointer({ target: overlay, coords: { clientX: 30, clientY: 40 } });
-  await vi.waitFor(() => expect(patch).toHaveBeenCalledWith(60, 80, LOUPE_RADIUS));
-  expect(document.querySelector(".loupe")).not.toBeNull();
+  await vi.waitFor(() => expect(document.querySelector(".loupe")).toHaveClass("shown"));
+  expect(pixels).toHaveBeenCalledWith(60, 80, expect.any(Number));
+  expect(cursorOf(overlay)).toBe("none");
+  // The eyedropper's sign is on the loupe; Alt shows the one taking away.
+  expect(document.querySelector(".loupe .sign")).toHaveTextContent("+");
+  await user.keyboard("{Alt>}");
+  expect(document.querySelector(".loupe .sign")).toHaveTextContent("−");
+  await user.keyboard("{/Alt}");
   await user.unhover(overlay);
   expect(document.querySelector(".loupe")).toBeNull();
+  expect(cursorOf(overlay)).toBe(eyedropperCursor("add"));
 });
 
 test("while Space pans, neither a click nor the loupe samples", async () => {
-  const { overlay, onsample, patch } = open({ hand: true });
+  const { overlay, onsample, pixels } = open({ hand: true });
   await fireEvent.pointerMove(overlay, { clientX: 5, clientY: 5 });
   await fireEvent.pointerDown(overlay, { button: 0, clientX: 5, clientY: 5 });
   await new Promise((done) => setTimeout(done));
   expect(onsample).not.toHaveBeenCalled();
-  expect(patch).not.toHaveBeenCalled();
+  expect(pixels).not.toHaveBeenCalled();
 });

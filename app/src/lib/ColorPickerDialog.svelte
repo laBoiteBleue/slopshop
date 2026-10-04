@@ -28,7 +28,7 @@
     type Hsb,
     type Rgb,
   } from "./colorModel";
-  import { eyedropperCursor, LOUPE_RADIUS } from "./eyedropper";
+  import { eyedropperCursor, type LoupeSource } from "./eyedropper";
   import Loupe from "./Loupe.svelte";
 
   let {
@@ -48,17 +48,13 @@
     onclose: () => void;
     /**
      * The color shown in the image under a window point (sRGB in [0, 1]); null where there is
-     * no image or nothing shown. `probe` only asks whether there is an image there; `patch`
-     * gives the loupe the pixels shown around it, `radius` on each side (see Loupe).
+     * no image or nothing shown. `probe` only asks whether there is an image there; `loupe`
+     * gives the loupe its pixels.
      */
     sample?: {
       at: (clientX: number, clientY: number) => Promise<Rgb | null>;
       probe: (clientX: number, clientY: number) => boolean;
-      patch?: (
-        clientX: number,
-        clientY: number,
-        radius: number,
-      ) => Promise<Uint8ClampedArray<ArrayBuffer> | null>;
+      loupe?: LoupeSource;
     };
   } = $props();
 
@@ -263,6 +259,8 @@
 
   /** The pointer over the image, window pixels: the eyedropper and its loupe show. */
   let overImage = $state<{ x: number; y: number } | null>(null);
+  /** The loupe is drawn: it is the pointer. */
+  let loupeShown = $state(false);
   /** A press on the image samples until released; one sample in flight at a time. */
   let sampling: { pointerId: number; busy: boolean; next: [number, number] | null } | null = null;
 
@@ -325,7 +323,7 @@
 
 <div
   class="blocker"
-  style:cursor={overImage ? eyedropperCursor("pick") : null}
+  style:cursor={overImage ? (loupeShown ? "none" : eyedropperCursor("pick")) : null}
   role="presentation"
   onpointerdown={onBlockerDown}
   onpointermove={onBlockerMove}
@@ -334,12 +332,13 @@
   onpointerleave={() => (overImage = null)}
   oncontextmenu={(e) => e.preventDefault()}
 ></div>
-{#if overImage && sample?.patch}
-  {@const patch = sample.patch}
+{#if overImage && sample?.loupe}
   <Loupe
     x={overImage.x}
     y={overImage.y}
-    patch={(clientX, clientY) => patch(clientX, clientY, LOUPE_RADIUS)}
+    source={sample.loupe}
+    current={hex}
+    bind:shown={loupeShown}
   />
 {/if}
 
