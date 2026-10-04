@@ -1948,26 +1948,45 @@ impl<'a> RasterPlan<'a> {
 
     /// Visible tiles of the planned level.
     fn range(&self) -> Rect {
+        self.range_over(self.area)
+    }
+
+    /// The tiles of the planned level that the document `area` reads (the plan's own area
+    /// aside): the placed image's, and for a resampled one its filter's support.
+    fn range_over(&self, area: [f64; 4]) -> Rect {
         let grid = self.image.levels()[self.level].grid();
         // The image's area (level-0 pixels) that the document area reads.
         let visible = match self.resampling() {
-            Some(r) => r.source_area(self.area),
-            None => shifted(self.area, self.offset()),
+            Some(r) => r.source_area(area),
+            None => shifted(area, self.offset()),
         };
         tile_range(visible, self.factor(), grid.columns(), grid.rows())
     }
 
-    /// The visible tiles, row-major (`None` for one that is not stored).
-    fn keys(&self) -> impl Iterator<Item = Option<TileKey>> + '_ {
-        let range = self.range();
+    /// The tiles of `range` (at the planned level), row-major, borrowed (`None` for one that is
+    /// not stored).
+    fn tile_refs(&self, range: Rect) -> impl Iterator<Item = Option<&'a Arc<[u8]>>> + use<'a> {
         let level = &self.image.levels()[self.level];
         (range.y..range.y + range.height).flat_map(move |row| {
-            (range.x..range.x + range.width).map(move |col| {
-                level
-                    .tile(TileCoord { col, row })
-                    .map(|tile| TileKey(Arc::clone(tile)))
-            })
+            (range.x..range.x + range.width).map(move |col| level.tile(TileCoord { col, row }))
         })
+    }
+
+    /// [`Self::tile_refs`] with `visit` called on each tile: faster for what runs per tile
+    /// of a frame, which is most of the time.
+    fn for_each_tile(&self, range: Rect, mut visit: impl FnMut(Option<&Arc<[u8]>>)) {
+        let level = &self.image.levels()[self.level];
+        for row in range.y..range.y + range.height {
+            for col in range.x..range.x + range.width {
+                visit(level.tile(TileCoord { col, row }));
+            }
+        }
+    }
+
+    /// The visible tiles, row-major (`None` for one that is not stored).
+    fn keys(&self) -> impl Iterator<Item = Option<TileKey>> + use<'a> {
+        self.tile_refs(self.range())
+            .map(|tile| tile.map(|tile| TileKey(Arc::clone(tile))))
     }
 }
 
