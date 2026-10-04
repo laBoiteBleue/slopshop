@@ -126,7 +126,8 @@
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
   import SelectionsPanel from "./lib/SelectionsPanel.svelte";
   import PanelDock from "./lib/PanelDock.svelte";
-  import { loadDock } from "./lib/panelDock";
+  import { clickTab, loadDock, saveDock, type DockPanel } from "./lib/panelDock";
+  import type { IconName } from "./lib/Icon.svelte";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
@@ -185,6 +186,11 @@
   });
   /** The dock below Layers: the panel unfolded, if any, and its height. */
   let dock = $state(loadDock());
+  /** Its panels, as its tabs and the Window menu list them. */
+  const dockPanels = $derived<{ id: DockPanel; icon: IconName; label: string }[]>([
+    { id: "properties", icon: "sliders", label: t("properties.title") },
+    { id: "selections", icon: "marquee", label: t("selections.title") },
+  ]);
   // An adjustment or fill layer just selected shows its properties, as in Photoshop.
   let shownProperties: number | null = null;
   $effect(() => {
@@ -3801,6 +3807,23 @@
         ],
       },
       {
+        // Window: the dock's panels, checked while unfolded; choosing one unfolds it (or, already
+        // unfolded, folds the dock), as its tab does. Layers is always shown (ADR 0030).
+        label: t("menu.window"),
+        items: dockPanels.map((panel) => ({
+          ...cmd(
+            panel.label,
+            () => {
+              dock = clickTab(dock, panel.id);
+              saveDock(dock);
+            },
+            undefined,
+            !doc,
+          ),
+          checked: doc !== null && dock.open === panel.id,
+        })),
+      },
+      {
         label: t("menu.help"),
         items: [cmd(t("menu.help.about"), () => void showAbout())],
       },
@@ -4281,13 +4304,7 @@
             onfillcolor={pickFillLayerColor}
           />
         {/key}
-        <PanelDock
-          bind:dock
-          panels={[
-            { id: "properties", icon: "sliders", label: t("properties.title") },
-            { id: "selections", icon: "marquee", label: t("selections.title") },
-          ]}
-        >
+        <PanelDock bind:dock panels={dockPanels}>
           {#snippet content(panel)}
             {#if panel === "properties"}
               {#if selectedProperties}

@@ -35,5 +35,6 @@ Blender-like icon bar and a real docking system (detachable panels were dropped 
 
 - `app/src/lib/panelDock.ts` (state, clamping, storage) and `PanelDock.svelte`; Properties and
   Selections are its first panels. Properties lost its own tab row.
-- A Window menu, History, or more zones (tabs inside the dock's zone, a second dock) can come
-  without changing Layers.
+- The Window menu lists `DOCK_PANELS`, the unfolded one checked, and acts as their tabs.
+- History, or more zones (tabs inside the dock's zone, a second dock) can come without changing
+  Layers.

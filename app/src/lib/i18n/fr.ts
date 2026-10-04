@@ -167,6 +167,7 @@ const fr: Messages = {
   "layers.mask.hint":
     "Masque de fusion : clic pour y peindre, Maj+clic pour le désactiver ou l'activer",
   "menu.view": "Affichage",
+  "menu.window": "Fenêtre",
   "menu.select": "Sélection",
   "menu.select.allLayers": "Tous les calques",
   "menu.select.deselectLayers": "Désélectionner les calques",

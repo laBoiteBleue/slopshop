@@ -229,7 +229,7 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Saved selections: named objects in the document and `.slop` (schema 0.16), Save / Load
       Selection, transformed with the canvas
 - [x] Right panels: the folding dock of tab icons below Layers ([ADR 0030](adr/0030-panel-dock.md)),
-      a Selections panel (load, add, subtract, intersect, replace, rename, delete)
+      a Selections panel (load, add, subtract, intersect, replace, rename, delete), Window menu
 - [x] Select and Mask… panel: edge detection, Smooth, Feather, Contrast, Shift Edge, views,
       outputs
 - [ ] Select and Mask: a refine-edge brush
