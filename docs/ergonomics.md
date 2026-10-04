@@ -274,6 +274,15 @@ built. Contributors: propose here first.
   transparency kept. Grayed when there is nothing to bake. A merge shows at once (its layers
   drawn as one while the pixels are composited, listed as the new layer; the maintainer's
   idea), and the pixels replace them in the same undo entry.
+- Layer styles ([ADR 0032](adr/0032-layer-styles.md)), as in Photoshop: Layer > Layer Style
+  (Blending Options…, Stroke…, Color Overlay…, Drop Shadow…, Clear Layer Style) or a
+  double-click on a pixel or fill layer's row (outside its name and thumbnail) opens the Layer
+  Style dialog: the effects on the left with their checkboxes, the selected one's settings
+  (each number with a slider, the color swatch opening the picker), the canvas following every
+  change; OK keeps them as one undo entry, Cancel takes them back. A styled layer shows "fx";
+  its effects unfold below it with the arrow (folded at first), each with an eye, a
+  double-click opening its settings. Fill, under Opacity in the layers panel, fades the
+  content but not its effects. Drop Shadow, Stroke and Color Overlay so far.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected
   layers without a mask (the selection follows the layer's transform; Reveal All and Reveal
   Selection also in the layers' right-click menu); a mask from the selection deselects, as in
