@@ -324,6 +324,21 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     repeating outward, in premultiplied values of `space`), mixed with what it was by the
     selection's coverage, and rounded to the original's format. Older readers refuse such an
     entry as coming from a newer SlopShop, and so does a reader that does not know the filter.
+  - From schema 0.23 ([ADR 0037](adr/0037-liquify.md)), a stack entry may be a Liquify entry,
+    `{"liquify": {"displacement", "frozen", "cell", "space"}}`: `displacement` the key of
+    an image of one pixel per node, `ceil(width / cell) × ceil(height / cell)` nodes of the
+    layer, in the format gray + alpha of `f32` samples (linear sRGB, straight alpha: the
+    channels are `dx` and `dy`, never converted, only stored), and `frozen` the key of a gray
+    8-bit image of the same size (0 free, 255 frozen). `cell` is the layer's pixels a node
+    spans (a power of two up to 256: 1, 2 or 4 as writers choose from the layer's size), `space`
+    the blend space the pixels are interpolated in. Pixel (`x`, `y`) of the result reads the
+    result of the entries below it at (`x + ½ + dx`, `y + ½ + dy`) (the layer's pixels, `dx`
+    and `dy` interpolated bilinearly between the nodes, whose centers are at
+    `((i + ½) × cell, (j + ½) × cell)`), bilinearly in premultiplied values of `space`, the
+    layer's edges repeating outward, and is rounded to the original's format. Both images are
+    stored with a pyramid as every image is, and a tile no stroke touched is all zero bytes
+    (one shared tile). The entry takes `hidden` like the others. Older readers refuse such an
+    entry as coming from a newer SlopShop.
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,
