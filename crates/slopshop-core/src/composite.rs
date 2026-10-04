@@ -367,6 +367,18 @@ fn push_layer<'a>(
         });
         return;
     }
+    // A styled pixel or fill layer (ADR 0032): its effects below, its content at Fill Opacity
+    // with the effects recoloring it, its effects above, the whole blended as one.
+    let styled = layer
+        .style
+        .as_ref()
+        .filter(|s| s.settings().shows() && !matches!(layer.content, LayerContent::Group { .. }));
+    let drawn = styled.map(|style| style.drawn(layer, transform, plan.canvas));
+    if let Some(drawn) = drawn {
+        steps.push(Step::Begin { isolated: true });
+        steps.extend(drawn.below.iter().map(|effect| effect_step(effect, false)));
+        steps.push(Step::Begin { isolated: true });
+    }
     let mut stacked = false;
     if plan.stacks
         && let LayerContent::Raster {
@@ -399,13 +411,42 @@ fn push_layer<'a>(
         pass_through,
     } = &layer.content
     else {
+        let Some(drawn) = drawn else {
+            steps.push(Step::Layer {
+                layer,
+                mode,
+                opacity,
+                atop,
+                transform,
+                stack: stacked,
+            });
+            return;
+        };
         steps.push(Step::Layer {
             layer,
-            mode,
-            opacity,
-            atop,
+            mode: BlendMode::Normal,
+            opacity: styled.map_or(1.0, |s| s.settings().fill_opacity),
+            atop: false,
             transform,
             stack: stacked,
+        });
+        steps.extend(drawn.over.iter().map(|effect| effect_step(effect, true)));
+        steps.push(Step::End {
+            mask: None,
+            mask_transform: Affine::IDENTITY,
+            mode: BlendMode::Normal,
+            opacity: 1.0,
+            isolated: true,
+            atop: false,
+        });
+        steps.extend(drawn.above.iter().map(|effect| effect_step(effect, false)));
+        steps.push(Step::End {
+            mask: None,
+            mask_transform: Affine::IDENTITY,
+            mode,
+            opacity,
+            isolated: true,
+            atop,
         });
         return;
     };
@@ -436,6 +477,19 @@ fn push_layer<'a>(
         isolated: !passes,
         atop,
     });
+}
+
+/// An effect of a layer's style (ADR 0032), a plain layer placed in the document, drawn with its
+/// own mode and opacity, `atop` what is below it in the style's group.
+fn effect_step(effect: &Layer, atop: bool) -> Step<'_> {
+    Step::Layer {
+        layer: effect,
+        mode: effect.blend_mode,
+        opacity: effect.opacity,
+        atop,
+        transform: effect.transform,
+        stack: false,
+    }
 }
 
 /// What a row pass does at each step.
@@ -1063,6 +1117,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                style: None,
                 transform: crate::transform::Affine::IDENTITY,
                 clipped: false,
                 id,
@@ -1632,6 +1687,7 @@ mod tests {
     ) -> Layer {
         let id = doc.allocate_layer_id();
         Layer {
+            style: None,
             transform: crate::transform::Affine::IDENTITY,
             clipped: false,
             id,

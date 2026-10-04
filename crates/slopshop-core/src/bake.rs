@@ -162,6 +162,8 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
                 mask: None,
                 clipped: false,
                 transform: Affine::IDENTITY,
+                // Its effects stay the layer's (ADR 0032), drawn from the pixels it becomes.
+                style: None,
                 ..layer.clone()
             }],
             // Its layers, in the group's content space, composited on their own.
@@ -274,6 +276,7 @@ pub fn merge_preview(
         None => Affine::IDENTITY,
     };
     let group = Layer {
+        style: None,
         id: group,
         name,
         visible: true,
@@ -418,6 +421,7 @@ mod tests {
 
     fn plain(doc: &mut Document, name: &str, content: LayerContent) -> Layer {
         Layer {
+            style: None,
             id: doc.allocate_layer_id(),
             name: name.into(),
             visible: true,

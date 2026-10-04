@@ -197,6 +197,8 @@ pub struct Layer {
     pub clipped: bool,
     /// From the layer's content (and mask) to its parent's space (ADR 0017).
     pub transform: crate::transform::Affine,
+    /// Effects drawn from its shape, and its Fill Opacity (ADR 0032).
+    pub style: Option<crate::style::Style>,
 }
 
 /// A layer mask (ADR 0014): a gray raster at the document origin whose samples are the layer's
@@ -232,6 +234,19 @@ impl Layer {
         match &self.content {
             LayerContent::Group { children, .. } => Some(children),
             _ => None,
+        }
+    }
+
+    /// Its style's effects (and those of the layers inside it) drawn again when next composited:
+    /// the layer changed.
+    pub(crate) fn redraw_styles(&mut self) {
+        if let Some(style) = &mut self.style {
+            *style = style.redrawn();
+        }
+        if let LayerContent::Group { children, .. } = &mut self.content {
+            for child in children {
+                child.redraw_styles();
+            }
         }
     }
 
@@ -629,6 +644,10 @@ impl Document {
     }
 
     pub(crate) fn set_size(&mut self, size: Size) -> Size {
+        // Effects are drawn on the canvas.
+        for layer in &mut self.layers {
+            layer.redraw_styles();
+        }
         std::mem::replace(&mut self.size, size)
     }
 
@@ -651,8 +670,11 @@ impl Document {
         &mut self.saved_selections
     }
 
+    /// The layer `id`, to change: its effects (and those inside it) are drawn again.
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        find_mut(&mut self.layers, id)
+        let layer = find_mut(&mut self.layers, id)?;
+        layer.redraw_styles();
+        Some(layer)
     }
 
     pub(crate) fn bump_revision(&mut self) {
@@ -794,6 +816,7 @@ mod tests {
 
     fn fill(id: u64, opacity: f32) -> Layer {
         Layer {
+            style: None,
             transform: crate::transform::Affine::IDENTITY,
             clipped: false,
             id: LayerId(id),
