@@ -2603,6 +2603,24 @@ mod tests {
                 },
                 1,
             ),
+            (
+                Filter::AddNoise {
+                    amount: 40.0,
+                    gaussian: false,
+                    monochromatic: false,
+                    seed: 12,
+                },
+                1,
+            ),
+            (
+                Filter::AddNoise {
+                    amount: 25.0,
+                    gaussian: true,
+                    monochromatic: true,
+                    seed: 99,
+                },
+                1,
+            ),
         ] {
             let stack = LayerStack::new(Arc::clone(&original))
                 .with_filter(

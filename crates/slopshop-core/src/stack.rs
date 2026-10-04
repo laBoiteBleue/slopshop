@@ -835,13 +835,13 @@ fn filtered(
         let mut bytes = tile.to_vec();
         for y in 0..h {
             for x in 0..w {
+                // The document pixel this one shows.
+                let (dx, dy) = step
+                    .to_document
+                    .apply((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
+                let (dx, dy) = (dx.floor(), dy.floor());
                 let coverage = match &selection {
-                    Some((image, codec)) => {
-                        let (dx, dy) = step
-                            .to_document
-                            .apply((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
-                        f64::from(MaskReader { image, codec }.at(dx.floor(), dy.floor()))
-                    }
+                    Some((image, codec)) => f64::from(MaskReader { image, codec }.at(dx, dy)),
                     None => 1.0,
                 }
                 .min(1.0);
@@ -856,7 +856,7 @@ fn filtered(
                 let px = &mut bytes[(y * t + x) * bpp..][..bpp];
                 let r = if coverage < 1.0 || filter.reads_original() {
                     let b = pixels.read(px);
-                    let f = filter.finish(b, blurred);
+                    let f = filter.finish(b, blurred, [dx as i64, dy as i64]);
                     std::array::from_fn(|n| b[n] + (f[n] - b[n]) * coverage)
                 } else {
                     blurred
