@@ -130,6 +130,8 @@ pub struct LayerView {
     pub swatch: [f32; 4],
     /// An adjustment layer's adjustment (ADR 0020), for the Properties panel.
     pub adjustment: Option<AdjustmentView>,
+    /// A filter layer's filter (ADR 0037), for its dialog.
+    pub filter: Option<FilterView>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
     pub children: Vec<LayerView>,
     /// A group whose layers blend through it.
@@ -456,6 +458,13 @@ impl LayerView {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView::new(adjustment)),
                 _ => None,
             },
+            filter: match &layer.content {
+                LayerContent::Filter { filter } => Some(FilterView {
+                    id: filter.id(),
+                    values: filter.params(),
+                }),
+                _ => None,
+            },
             children: layer
                 .children()
                 .map_or_else(Vec::new, |c| c.iter().map(LayerView::new).collect()),
@@ -678,6 +687,22 @@ pub enum EditRequest {
         #[serde(default)]
         parent: Option<u64>,
         index: usize,
+    },
+    /// A new filter layer (ADR 0037): `filter` (`Filter::id`) with `values` (`Filter::params`
+    /// order), at `index` among the layers of `parent` (absent: the top level).
+    AddFilterLayer {
+        name: String,
+        filter: String,
+        values: Vec<f32>,
+        #[serde(default)]
+        parent: Option<u64>,
+        index: usize,
+    },
+    /// A filter layer's filter and settings.
+    SetFilter {
+        id: u64,
+        filter: String,
+        values: Vec<f32>,
     },
     /// An adjustment layer's parameters (`values`, in `Adjustment::params` order, at most
     /// `PARAM_COUNT`; missing ones are 0).
@@ -942,6 +967,8 @@ impl EditRequest {
             Self::AddAdjustmentLayer { adjustment: id, .. } => {
                 label("newAdjustmentLayer", adjustment(id))
             }
+            Self::AddFilterLayer { filter: id, .. } => label("newFilterLayer", filter(id)),
+            Self::SetFilter { filter: id, .. } => label("filterSettings", filter(id)),
             Self::AddEmptyLayer { .. } => HistoryLabel::new("newLayer"),
             Self::MoveLayers { .. } => HistoryLabel::new("arrange"),
             Self::DeletePaint { .. } => HistoryLabel::new("deletePaint"),
@@ -1245,6 +1272,34 @@ impl EditRequest {
                     },
                 }
             }
+            EditRequest::AddFilterLayer {
+                name,
+                filter,
+                values,
+                parent,
+                index,
+            } => Edit::InsertLayer {
+                parent: parent.map(LayerId::from_raw),
+                index,
+                layer: Layer {
+                    style: None,
+                    transform: slopshop_core::Affine::IDENTITY,
+                    clipped: false,
+                    id: session.allocate_layer_id(),
+                    name,
+                    visible: true,
+                    opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
+                    mask: None,
+                    content: LayerContent::Filter {
+                        filter: FilterSettings { filter, values }.filter()?,
+                    },
+                },
+            },
+            EditRequest::SetFilter { id, filter, values } => Edit::SetFilter {
+                id: LayerId::from_raw(id),
+                filter: FilterSettings { filter, values }.filter()?,
+            },
             EditRequest::SetAdjustment {
                 id,
                 adjustment,
@@ -1692,7 +1747,8 @@ pub struct FilterSettings {
 impl FilterSettings {
     fn filter(&self) -> Result<slopshop_core::filter::Filter, String> {
         slopshop_core::filter::Filter::from_params(&self.filter, &self.values)
-            .ok_or(format!("unknown filter {} or wrong values", self.filter))
+            .filter(slopshop_core::filter::Filter::is_valid)
+            .ok_or(format!("unknown filter {} or values out of range", self.filter))
     }
 }
 

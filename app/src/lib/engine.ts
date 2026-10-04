@@ -58,7 +58,7 @@ export type LayerView = {
   name: string;
   visible: boolean;
   opacity: number;
-  kind: "fill" | "raster" | "group" | "adjustment";
+  kind: "fill" | "raster" | "group" | "adjustment" | "filter";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
@@ -93,6 +93,8 @@ export type LayerView = {
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
    * curves, and `curveSamples`, each curve's output (0–1) at evenly spaced inputs. */
   adjustment: AdjustmentView | null;
+  /** A filter layer's filter (ADR 0037) and its settings (`Filter::params` order). */
+  filter?: { id: FilterId; values: number[] } | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
@@ -415,6 +417,17 @@ export type EditRequest =
   /** `index` counts the layers of `parent` that do not move (0 = below them all). */
   | { kind: "moveLayers"; ids: number[]; parent: number | null; index: number }
   | { kind: "addGroup"; name: string; parent: number | null; index: number }
+  /** A new filter layer (ADR 0037), `filter` at `values` (`index` among `parent`'s layers). */
+  | {
+      kind: "addFilterLayer";
+      name: string;
+      filter: FilterId;
+      values: number[];
+      parent: number | null;
+      index: number;
+    }
+  /** A filter layer's filter and settings. */
+  | { kind: "setFilter"; id: number; filter: FilterId; values: number[] }
   /** A new adjustment layer at its neutral parameters (`index` among `parent`'s layers). */
   | {
       kind: "addAdjustmentLayer";

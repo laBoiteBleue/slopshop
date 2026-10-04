@@ -680,6 +680,7 @@ const fr: Messages = {
   "colorSpace.custom": "Personnalisé",
 
   "menu.layer.newAdjustment": "Nouveau calque de réglage",
+  "menu.layer.newFilter": "Nouveau calque de filtre",
   "menu.layer.new": "Nouveau",
   "menu.layer.new.layer": "Calque",
   "menu.layer.new.group": "Groupe",
@@ -753,6 +754,7 @@ const fr: Messages = {
   "options.distribute.horizontalSpacing": "Répartir l’espacement horizontal",
   "options.distribute.verticalSpacing": "Répartir l’espacement vertical",
   "layers.defaultAdjustmentName": "{name} {n}",
+  "layers.defaultFilterName": "{name} {n}",
   "properties.title": "Propriétés",
   "properties.empty":
     "Sélectionnez un calque de réglage ou de remplissage pour voir ses propriétés.",
@@ -809,6 +811,8 @@ const fr: Messages = {
   "history.fillColor": "Couleur de remplissage",
   "history.adjustmentSettings": "Modifier le calque de réglage",
   "history.adjustmentSettingsOf": "Modifier le calque de réglage {name}",
+  "history.filterSettingsOf": "Modifier le calque de filtre {name}",
+  "history.filterSettings": "Modifier le calque de filtre",
   "history.layerStyle": "Style de calque",
   "history.clipping": "Masque d'écrêtage",
   "history.passThrough": "Transfert",
@@ -823,6 +827,8 @@ const fr: Messages = {
   "history.newGroup": "Nouveau groupe",
   "history.newAdjustmentLayer": "Nouveau calque de réglage",
   "history.newAdjustmentLayerOf": "Nouveau calque de réglage {name}",
+  "history.newFilterLayerOf": "Nouveau calque de filtre {name}",
+  "history.newFilterLayer": "Nouveau calque de filtre",
   "history.deletePaint": "Supprimer la peinture",
   "history.deleteEntry": "Supprimer l'opération",
   "history.entryVisibility": "Afficher/masquer l'opération",

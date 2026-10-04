@@ -11,7 +11,7 @@ export function historyName(entry: HistoryEntryView): { key: MessageKey; name?: 
   const detail =
     entry.detail === null
       ? null
-      : entry.kind === "filter"
+      : ["filter", "newFilterLayer", "filterSettings"].includes(entry.kind)
         ? `filter.${entry.detail}`
         : `adjustment.${entry.detail}`;
   if (detail !== null && known(detail)) {
@@ -23,6 +23,12 @@ export function historyName(entry: HistoryEntryView): { key: MessageKey; name?: 
     }
     if (entry.kind === "adjustmentSettings") {
       return { key: "history.adjustmentSettingsOf", name: detail };
+    }
+    if (entry.kind === "newFilterLayer") {
+      return { key: "history.newFilterLayerOf", name: detail };
+    }
+    if (entry.kind === "filterSettings") {
+      return { key: "history.filterSettingsOf", name: detail };
     }
   }
   const key = `history.${entry.kind}`;

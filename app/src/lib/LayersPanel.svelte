@@ -78,6 +78,7 @@
     hidden = [],
     onfillcolor,
     onstyle,
+    onfilterlayer,
     onentryedit,
     ui = new LayersUi(),
   }: {
@@ -92,6 +93,8 @@
     /** A double-click on a pixel or fill layer's row, or on one of its effects: the app opens
      * Layer Style (ADR 0032) on `page`. */
     onstyle?: (layer: LayerView, page: StylePage) => void;
+    /** A filter layer's settings asked for (a double-click on it, ADR 0037). */
+    onfilterlayer?: (layer: LayerView) => void;
     /** Edit entry `index` of `layer`'s stack again (its icon, a double-click; ADR 0034). */
     onentryedit?: (layer: LayerView, index: number) => void;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
@@ -389,6 +392,11 @@
     void edit({ kind: "deletePaint", ids: selection.map((l) => l.id) });
   }
 
+  /** Where a new layer goes: above the active layer (in its group), or at the top. */
+  export function newLayerPlace(): { parent: number | null; index: number } {
+    return insertionPoint(tree, selected?.id ?? null);
+  }
+
   /** A new empty group above the active layer, or at the top. */
   export function newGroup() {
     const n = allLayers.filter((l) => l.kind === "group").length + 1;
@@ -581,7 +589,10 @@
   // while dragging (one undo entry per drag), as Opacity. Shown when it means something for
   // the active layer: an effect, or a Fill already set.
   let showsFill = $derived(
-    selected !== null && selected.kind !== "adjustment" && usesFill(selected.style),
+    selected !== null &&
+      selected.kind !== "adjustment" &&
+      selected.kind !== "filter" &&
+      usesFill(selected.style),
   );
   let fillDraft = $state<{ layerId: number; percent: number } | null>(null);
   let shownFill = $derived(
@@ -918,6 +929,11 @@
         ondblclick={(e) => {
           if (e.defaultPrevented || layer.kind === "adjustment") return;
           const on = e.target as HTMLElement;
+          if (layer.kind === "filter") {
+            // Its settings, from anywhere on the row but its name and buttons.
+            if (!on.closest(".name, .mask-thumb, button, input")) onfilterlayer?.(layer);
+            return;
+          }
           if (on.closest(".name, .thumb, .mask-thumb, button, input")) return;
           onstyle?.(layer, "blending");
         }}
@@ -958,6 +974,10 @@
             title={layer.adjustment ? t(`adjustment.${layer.adjustment.id}`) : ""}
           >
             <Icon name="adjust" size={24} />
+          </span>
+        {:else if layer.kind === "filter"}
+          <span class="thumb folder" title={layer.filter ? t(`filter.${layer.filter.id}`) : ""}>
+            <Icon name="filter" size={24} />
           </span>
         {:else}
           <!-- A double-click on a fill layer's thumbnail picks its color, as in Photoshop. -->

@@ -1284,6 +1284,149 @@
     if (dialog) void cancelGesture(dialog.documentId);
   }
 
+  /**
+   * Layer > New Filter Layer and a filter layer's settings (ADR 0037): its dialog, the layer
+   * shown live on the canvas (added at once, then its settings changed, one undo entry on OK).
+   * `layerId`: the layer once added; `original`: an existing layer's settings.
+   */
+  let filterLayerDialog = $state<{
+    documentId: number;
+    filter: FilterId;
+    values: number[];
+    preview: boolean;
+    layerId: number | null;
+    original: number[] | null;
+    name: string;
+    place: { parent: number | null; index: number };
+  } | null>(null);
+  /** The layer being added: what to send once it is there. */
+  let addingFilterLayer: Promise<void> | null = null;
+
+  function openNewFilterLayer(filter: FilterId) {
+    commitTransform();
+    const doc = active;
+    if (!doc || filterDialog || filterLayerDialog || adjustDialog || entryDialog) return;
+    const n = allLayersOf(doc).filter((l) => l.filter?.id === filter).length + 1;
+    filterLayerDialog = {
+      documentId: doc.id,
+      filter,
+      values: withNewSeeds(filter, filterValues[filter] ?? FILTERS[filter].defaults),
+      preview: true,
+      layerId: null,
+      original: null,
+      name: t("layers.defaultFilterName", { name: t(`filter.${filter}`), n }),
+      place: layersPanel?.newLayerPlace() ?? { parent: null, index: doc.layers.length },
+    };
+  }
+
+  /** A filter layer's settings again (a double-click on it in the Layers panel). */
+  function openFilterLayer(layer: LayerView) {
+    commitTransform();
+    const doc = active;
+    const settings = layer.filter;
+    if (!doc || !settings || filterDialog || filterLayerDialog || adjustDialog || entryDialog)
+      return;
+    filterLayerDialog = {
+      documentId: doc.id,
+      filter: settings.id,
+      values: [...settings.values],
+      preview: true,
+      layerId: layer.id,
+      original: [...settings.values],
+      name: layer.name,
+      place: { parent: null, index: 0 },
+    };
+  }
+
+  /** Every layer of `doc`, groups' layers included. */
+  function allLayersOf(doc: DocumentView): LayerView[] {
+    const out: LayerView[] = [];
+    const walk = (layers: LayerView[]) => {
+      for (const layer of layers) {
+        out.push(layer);
+        walk(layer.children);
+      }
+    };
+    walk(doc.layers);
+    return out;
+  }
+
+  /** The canvas shows the dialog's settings: the layer added, or set; nothing with Preview off. */
+  function showFilterLayer() {
+    const dialog = filterLayerDialog;
+    if (!dialog) return;
+    const { documentId, filter, values } = dialog;
+    if (!dialog.preview) {
+      // An existing layer as it was; a new one not there.
+      void cancelGesture(documentId);
+      if (dialog.original === null) dialog.layerId = null;
+      return;
+    }
+    if (dialog.layerId !== null) {
+      void live(documentId, { kind: "setFilter", id: dialog.layerId, filter, values });
+      return;
+    }
+    if (addingFilterLayer) return;
+    const before = new Set(active ? allLayersOf(active).map((l) => l.id) : []);
+    const { name, place } = dialog;
+    addingFilterLayer = engine
+      .performLive(documentId, { kind: "addFilterLayer", name, filter, values, ...place })
+      .then((view) => {
+        if (view) upsert(view);
+        const added = view && allLayersOf(view).find((l) => !before.has(l.id));
+        addingFilterLayer = null;
+        const current = filterLayerDialog;
+        if (!added || current !== dialog) return;
+        current.layerId = added.id;
+        layersPanel?.selectOnly(added.id);
+        // Settings changed meanwhile: shown now.
+        if (current.values !== values) showFilterLayer();
+      })
+      .catch((e) => {
+        addingFilterLayer = null;
+        showError(String(e));
+      });
+  }
+
+  function filterLayerLive(values: number[]) {
+    if (!filterLayerDialog) return;
+    filterLayerDialog.values = values;
+    showFilterLayer();
+  }
+
+  function filterLayerPreview(preview: boolean) {
+    if (!filterLayerDialog) return;
+    filterLayerDialog.preview = preview;
+    showFilterLayer();
+  }
+
+  /** OK: one undo entry (none for an existing layer left as it was). */
+  async function applyFilterLayerDialog(values: number[]) {
+    const dialog = filterLayerDialog;
+    if (!dialog) return;
+    dialog.values = values;
+    if (!dialog.preview) {
+      dialog.preview = true;
+      showFilterLayer();
+    }
+    if (addingFilterLayer) await addingFilterLayer;
+    filterLayerDialog = null;
+    if (dialog.original && JSON.stringify(dialog.original) === JSON.stringify(values)) {
+      void cancelGesture(dialog.documentId);
+      return;
+    }
+    filterValues[dialog.filter] = values;
+    void endGesture(dialog.documentId);
+  }
+
+  async function cancelFilterLayer() {
+    const dialog = filterLayerDialog;
+    filterLayerDialog = null;
+    if (!dialog) return;
+    if (addingFilterLayer) await addingFilterLayer;
+    void cancelGesture(dialog.documentId);
+  }
+
   /** Filter > Repeat (Ctrl+F): the filter applied last, as it was, on the active layer. */
   function repeatFilter() {
     commitTransform();
@@ -4324,6 +4467,18 @@
               ),
             ),
           },
+          {
+            // A flat list by category (ADR 0034), the Filter menu's order.
+            kind: "submenu",
+            label: t("menu.layer.newFilter"),
+            disabled: !doc,
+            items: FILTER_MENU.flatMap(({ filters }, i) => [
+              ...(i > 0 ? [separator] : []),
+              ...filters.map((filter) =>
+                cmd(`${t(`filter.${filter}`)}…`, () => openNewFilterLayer(filter)),
+              ),
+            ]),
+          },
           separator,
           layerCommands.duplicate,
           layerCommands.delete,
@@ -5070,6 +5225,7 @@
             hidden={previewHidden}
             onfillcolor={pickFillLayerColor}
             onstyle={openStyle}
+            onfilterlayer={openFilterLayer}
             onentryedit={openEntry}
           />
         {/key}
@@ -5225,6 +5381,17 @@
     onpreview={filterPreview}
     onok={applyFilterDialog}
     oncancel={cancelFilter}
+  />
+{/if}
+{#if filterLayerDialog}
+  <FilterDialog
+    filter={filterLayerDialog.filter}
+    values={filterLayerDialog.values}
+    preview={filterLayerDialog.preview}
+    onlive={filterLayerLive}
+    onpreview={filterLayerPreview}
+    onok={applyFilterLayerDialog}
+    oncancel={cancelFilterLayer}
   />
 {/if}
 {#if entryDialog && entryShown}
