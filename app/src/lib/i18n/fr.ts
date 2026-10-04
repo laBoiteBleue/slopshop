@@ -760,6 +760,7 @@ const fr: Messages = {
   "history.clipping": "Masque d'écrêtage",
   "history.passThrough": "Transfert",
   "history.selection": "Sélection",
+  "history.guides": "Repères",
   "history.quickMask": "Masque rapide",
   "history.saveSelection": "Mémoriser la sélection",
   "history.deleteSavedSelection": "Supprimer la sélection mémorisée",
