@@ -126,6 +126,7 @@
   import {
     FILTERS,
     FILTER_MENU,
+    withNewSeeds,
     applyFilterEdit,
     filterEntryEdit,
     filterSteps,
@@ -1202,7 +1203,8 @@
       layerId: layer.id,
       filter,
       preview: true,
-      values: [...values],
+      // Applied anew: another grain for the filters that draw one.
+      values: withNewSeeds(filter, values),
       entry: null,
     };
   }
@@ -1287,7 +1289,9 @@
     commitTransform();
     const doc = active;
     const layer = filterLayer();
-    if (doc && layer && lastFilter) void edit(doc.id, applyFilterEdit(layer.id, lastFilter));
+    if (!doc || !layer || !lastFilter) return;
+    const { filter, values } = lastFilter;
+    void edit(doc.id, applyFilterEdit(layer.id, { filter, values: withNewSeeds(filter, values) }));
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */

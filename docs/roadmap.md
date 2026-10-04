@@ -308,8 +308,10 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Filters on the GPU (Gaussian Blur first): live previews of large layers (ADR 0035)
 - [x] Sharpen > Unsharp Mask and Other > High Pass, made from the Gaussian blur (CPU and GPU)
 - [x] Blur > Motion Blur (a line of samples; beyond 256 pixels on the layer reduced; CPU and GPU)
-- [ ] The other classical filters, the maintainer's short list (2026-10-04): Add Noise,
-      Dust & Scratches, Clarity / Texture; then Liquify
+- [x] Noise > Add Noise (uniform or Gaussian, monochromatic; a grain of the document pixel and
+      a seed drawn each time it is applied; CPU and GPU)
+- [ ] The other classical filters, the maintainer's short list (2026-10-04): Dust & Scratches,
+      Clarity / Texture; then Liquify
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
 - [ ] Liquify as a stack entry (a displacement field, its own workspace)

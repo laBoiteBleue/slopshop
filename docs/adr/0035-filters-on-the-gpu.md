@@ -34,6 +34,8 @@ holds a wgpu device; the core must stay free of it (dependency direction).
    Motion Blur (2026-10-04) is a pass of its own (`line_main`): the line's samples, read
    bilinearly, as the CPU's `Line`; beyond 256 pixels at the look's level the CPU samples the
    layer reduced, softening a few pixels across the line.
+   Add Noise (2026-10-04) is a pass of its own (`noise_main`): the same 32-bit hash of the
+   document pixel, the seed and the channel as the CPU's `filter::noise`.
 5. **Later**: looks kept on the GPU and sampled by the display without a readback, other
    formats in the shader, the whole layer on the GPU, layer styles' blurs on the same passes.
 

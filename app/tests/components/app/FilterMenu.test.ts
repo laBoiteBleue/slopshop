@@ -53,6 +53,36 @@ test("Blur > Motion Blur: an angle and a distance", async () => {
   );
 });
 
+test("Noise > Add Noise: Gaussian and monochromatic, a new seed each time it is applied", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Noise", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Add Noise…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add Noise" });
+  expect(within(dialog).getByRole("radio", { name: "Uniform" })).toBeChecked();
+  await user.click(within(dialog).getByRole("radio", { name: "Gaussian" }));
+  await user.click(within(dialog).getByRole("checkbox", { name: "Monochromatic" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("replace_gesture").at(-1)?.edit).toMatchObject({
+      kind: "applyFilter",
+      filter: "addNoise",
+    }),
+  );
+  const first = sent("replace_gesture").at(-1)?.edit as { values: number[] };
+  expect(first.values.slice(0, 3)).toEqual([12.5, 1, 1]);
+  expect(Number.isInteger(first.values[3])).toBe(true);
+  // Repeat: the same settings, another grain.
+  await user.keyboard("{Control>}f{/Control}");
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toMatchObject({ filter: "addNoise" }),
+  );
+  const again = sent("perform").at(-1)?.edit as { values: number[] };
+  expect(again.values.slice(0, 3)).toEqual([12.5, 1, 1]);
+  expect(again.values[3]).not.toBe(first.values[3]);
+});
+
 test("Sharpen > Unsharp Mask and Other > High Pass apply to the active layer", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });
