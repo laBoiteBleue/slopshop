@@ -422,8 +422,12 @@ impl Edit {
                     .clone()
                     .unwrap_or_else(|| crate::stack::LayerStack::new(image.get()));
                 let shown = match shown {
-                    // Nothing applied: the original itself, not a copy of it.
-                    _ if stack.is_empty() && stack.format() == stack.original().format() => {
+                    // Nothing applied: the original itself, not a copy of it; unless coming back
+                    // from a filter, whose pixels pass on what was shown (ADR 0034).
+                    _ if stack.is_empty()
+                        && stack.format() == stack.original().format()
+                        && !before.has_shown_filter() =>
+                    {
                         Pixels::ready(Arc::clone(stack.original()))
                     }
                     Some(shown) => {
