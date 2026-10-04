@@ -345,7 +345,7 @@ const en = {
   "key.backspace": "Backspace",
   "about.title": "About SlopShop",
   "about.text":
-    "SlopShop {version}, pre-alpha.\nAn open-source, non-destructive image editor. MIT license.",
+    "SlopShop {version}, pre-alpha.\nAn open-source, non-destructive image editor. GNU GPL v3 license.",
 
   "document.untitled": "Untitled",
   "newDocument.title": "New",

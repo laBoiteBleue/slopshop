@@ -26,11 +26,20 @@ allow = [
     # Boost: permissive, OSI and FSF approved, no attribution needed in binaries (clipboard-win
     # and error-code, the Windows side of arboard).
     "BSL-1.0",
-    # File-level copyleft (modified MPL files must stay MPL); compatible with MIT distribution.
+    # File-level copyleft (modified MPL files must stay MPL); GPL-compatible (its section 3.3).
     "MPL-2.0",
 ]
 confidence-threshold = 0.9
 exceptions = [
+    # SlopShop's own crates are GPL-3.0-only (ADR 0033). The policy above applies to their
+    # dependencies, which stay permissive.
+    { allow = ["GPL-3.0-only"], crate = "slopshop-core" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-render" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-io" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-cli" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-raw" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-ai" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-app" },
     # jpeg-encoder is (MIT OR Apache-2.0) AND IJG: the IJG license only asks for an
     # acknowledgement in the documentation (ADR 0010). Allowed for this crate only.
     { allow = ["IJG"], crate = "jpeg-encoder" },
