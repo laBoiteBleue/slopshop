@@ -2,7 +2,8 @@
   // The dock below Layers (maintainer's choice, 2026-10-04): a row of tab icons, one panel
   // unfolded under them. A click on a tab unfolds its panel; on the unfolded one's tab, the dock
   // folds down to the icons and Layers takes the room. The edge above the dock resizes it
-  // (a double-click puts the default height back). Remembered on this machine.
+  // (a double-click puts the default height back). Tabs are reordered by dragging them along
+  // the row. The app saves all this with the layout.
   import type { Snippet } from "svelte";
   import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
@@ -11,17 +12,23 @@
     MIN_DOCK_HEIGHT,
     clampDockHeight,
     clickTab,
-    saveDock,
     type DockPanel,
     type DockState,
   } from "./panelDock";
+  import { tabSlot } from "./tabs";
 
   let {
     dock = $bindable(),
     panels,
     content,
+    onselect,
+    onreorder,
   }: {
     dock: DockState;
+    /** A tab was clicked (after the dock changed). */
+    onselect?: (panel: DockPanel) => void;
+    /** The tab at `from` dropped at insertion position `slot` (0: before the first). */
+    onreorder?: (from: number, slot: number) => void;
     /** The tabs, left to right. */
     panels: { id: DockPanel; icon: IconName; label: string }[];
     /** The unfolded panel's content. */
@@ -33,8 +40,53 @@
   let dragging = $state(false);
 
   function select(panel: DockPanel) {
+    if (moved) {
+      // The click ending a drag of the tab.
+      moved = false;
+      return;
+    }
     dock = clickTab(dock, panel);
-    saveDock(dock);
+    onselect?.(panel);
+  }
+
+  // A tab dragged along the row: where it would land (as the document tabs do).
+  const TAB_DRAG_THRESHOLD = 4;
+  let tabRow: HTMLElement;
+  let tabDrag = $state<{
+    pointerId: number;
+    from: number;
+    x: number;
+    moved: boolean;
+    slot: number | null;
+  } | null>(null);
+  /** The last drag moved its tab: the click that follows does not select it. */
+  let moved = false;
+
+  function onTabDown(e: PointerEvent, from: number) {
+    if (e.button !== 0) return;
+    tabDrag = { pointerId: e.pointerId, from, x: e.clientX, moved: false, slot: null };
+  }
+
+  function onTabMove(e: PointerEvent) {
+    if (!tabDrag || tabDrag.pointerId !== e.pointerId) return;
+    if (!tabDrag.moved) {
+      if (Math.abs(e.clientX - tabDrag.x) < TAB_DRAG_THRESHOLD) return;
+      tabDrag.moved = true;
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    }
+    const middles = [...tabRow.querySelectorAll<HTMLElement>(".tab")].map((tab) => {
+      const rect = tab.getBoundingClientRect();
+      return rect.left + rect.width / 2;
+    });
+    tabDrag.slot = tabSlot(middles, e.clientX, tabDrag.from);
+  }
+
+  function onTabUp(e: PointerEvent) {
+    if (!tabDrag || tabDrag.pointerId !== e.pointerId) return;
+    const { from, slot } = tabDrag;
+    moved = tabDrag.moved;
+    tabDrag = null;
+    if (moved && slot !== null) onreorder?.(from, slot);
   }
 
   /** The column's height: the dock's parent. */
@@ -58,12 +110,10 @@
     if (drag?.pointerId !== e.pointerId) return;
     drag = null;
     dragging = false;
-    saveDock(dock);
   }
 
   function ondblclick() {
     dock = { ...dock, height: DEFAULT_DOCK.height };
-    saveDock(dock);
   }
 
   const open = $derived(panels.find((p) => p.id === dock.open) ?? null);
@@ -91,18 +141,25 @@
       {ondblclick}
     ></div>
   {/if}
-  <div class="tabs" role="tablist" aria-label={t("dock.label")}>
-    {#each panels as panel (panel.id)}
+  <div class="tabs" role="tablist" aria-label={t("dock.label")} bind:this={tabRow}>
+    {#each panels as panel, index (panel.id)}
       {@const selected = dock.open === panel.id}
       <button
         type="button"
         class="tab"
         class:selected
+        class:dragging={tabDrag?.moved && tabDrag.from === index}
+        class:drop-before={tabDrag?.slot === index}
+        class:drop-after={index === panels.length - 1 && tabDrag?.slot === panels.length}
         role="tab"
         aria-selected={selected}
         aria-controls="dock-panel"
         title={selected ? t("dock.fold") : panel.label}
         onclick={() => select(panel.id)}
+        onpointerdown={(e) => onTabDown(e, index)}
+        onpointermove={onTabMove}
+        onpointerup={onTabUp}
+        onpointercancel={() => (tabDrag = null)}
       >
         <Icon name={panel.icon} size={15} />
         {#if selected}<span>{panel.label}</span>{/if}
@@ -171,6 +228,18 @@
   .tab.selected {
     background: var(--panel);
     color: var(--text);
+  }
+
+  .tab.dragging {
+    opacity: 0.5;
+  }
+
+  .tab.drop-before {
+    box-shadow: inset 2px 0 var(--accent);
+  }
+
+  .tab.drop-after {
+    box-shadow: inset -2px 0 var(--accent);
   }
 
   .content {

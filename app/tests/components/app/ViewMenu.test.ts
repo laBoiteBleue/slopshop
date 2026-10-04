@@ -106,7 +106,16 @@ test("Tab hides the toolbar, the options bar and the panels; a Window panel show
   // Still there, hidden: the layers keep their selection.
   expect(screen.getByText("Cat", { selector: "li .name" })).toBeInTheDocument();
   await openMenu(user, "Window");
-  expect(menuLabels()).toEqual(["Properties", "Selections", "—", "Hide Panels"]);
+  expect(menuLabels()).toEqual([
+    "Properties",
+    "Selections",
+    "—",
+    "Options Bar",
+    "Toolbar",
+    "Hide Panels",
+    "—",
+    "Reset Layout",
+  ]);
   expect(entry("Hide Panels")).toHaveTextContent("Tab");
   expect(entry("Hide Panels")).toHaveAttribute("aria-checked", "true");
   expect(entry("Properties")).toHaveAttribute("aria-checked", "false");

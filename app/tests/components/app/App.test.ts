@@ -92,6 +92,6 @@ test("the panels open at the width saved last, and their left edge resizes them"
   await fireEvent.pointerMove(edge, { pointerId: 1, clientX: 550 });
   await fireEvent.pointerUp(edge, { pointerId: 1, clientX: 550 });
   expect(main.style.getPropertyValue("--panel-width")).toBe("470px");
-  expect(localStorage.getItem("slopshop.panelWidth")).toBe("470");
+  expect(JSON.parse(localStorage.getItem("slopshop.layout")!).panelWidth).toBe(470);
   localStorage.clear();
 });

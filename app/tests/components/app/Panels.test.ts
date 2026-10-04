@@ -3,7 +3,11 @@ import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
 import { documentView, layer, layerNames, open, respond, row, sent } from "./harness";
 
-// The panels below Layers: the dock's tabs, Properties and the Selections panel.
+// The panels below Layers: the dock's tabs, Properties and the Selections panel; the Window
+// menu's bars and layout.
+
+/** The layout saved last. */
+const saved = () => JSON.parse(localStorage.getItem("slopshop.layout")!);
 
 test("the dock below Layers: tabs unfold their panel, the open one folds it, its edge resizes it", async () => {
   localStorage.clear();
@@ -22,16 +26,13 @@ test("the dock below Layers: tabs unfold their panel, the open one folds it, its
   // The open tab folds the dock down to its icons, remembered.
   await user.click(screen.getByRole("tab", { name: "Selections" }));
   expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
-  expect(JSON.parse(localStorage.getItem("slopshop.dock")!)).toMatchObject({ open: null });
+  expect(saved().dock).toMatchObject({ open: null });
   await user.click(screen.getByRole("tab", { name: /Selections/ }));
   const edge = screen.getByRole("separator", { name: "Resize the panels below Layers" });
   await fireEvent.pointerDown(edge, { pointerId: 1, button: 0, clientY: 500 });
   await fireEvent.pointerMove(edge, { pointerId: 1, clientY: 450 });
   await fireEvent.pointerUp(edge, { pointerId: 1, clientY: 450 });
-  expect(JSON.parse(localStorage.getItem("slopshop.dock")!)).toEqual({
-    open: "selections",
-    height: 330,
-  });
+  expect(saved().dock).toEqual({ open: "selections", height: 330 });
   localStorage.clear();
 });
 
@@ -45,8 +46,7 @@ test("selecting an adjustment layer unfolds Properties", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), adjustment]));
   await vi.waitFor(() => expect(layerNames()).toEqual(["Levels 1", "Cat"]));
   await user.click(row("Cat"));
-  // Folded meanwhile.
-  await user.click(screen.getByRole("tab", { name: "Properties" }));
+  // Properties had unfolded for the top layer: the dock is folded again, as it was.
   expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
   await user.click(row("Levels 1"));
   expect(screen.getByRole("tabpanel", { name: "Properties" })).toBeInTheDocument();
@@ -100,7 +100,7 @@ test("Window lists the dock's panels, the unfolded one checked; choosing one unf
   await user.click(screen.getByRole("menuitem", { name: "Window" }));
   await user.click(screen.getByText("Selections", { selector: ".dropdown .label" }));
   expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
-  expect(JSON.parse(localStorage.getItem("slopshop.dock")!)).toMatchObject({ open: null });
+  expect(saved().dock).toMatchObject({ open: null });
   localStorage.clear();
 });
 
@@ -160,5 +160,67 @@ test("the Selections panel marks the saved selections combined, until the select
   // Deselected: the marks go.
   await user.keyboard("{Control>}d{/Control}");
   await vi.waitFor(() => expect(document.querySelectorAll("li.combined")).toHaveLength(0));
+  localStorage.clear();
+});
+
+test("Properties gives the dock back to the panel it replaced once its layer is left", async () => {
+  localStorage.setItem("slopshop.dock", JSON.stringify({ open: "selections", height: 280 }));
+  const adjustment = {
+    ...layer(2, "Levels 1"),
+    kind: "adjustment" as const,
+    adjustment: { id: "invert", values: [], curves: null, gradient: null },
+  } as unknown as LayerView;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), adjustment]));
+  // The adjustment layer is selected at first (the top one): Properties.
+  await vi.waitFor(() =>
+    expect(screen.getByRole("tabpanel", { name: "Properties" })).toBeInTheDocument(),
+  );
+  await user.click(row("Cat"));
+  expect(screen.getByRole("tabpanel", { name: "Selections" })).toBeInTheDocument();
+  // Folded and unfolded by the user meanwhile: Properties stays.
+  await user.click(row("Levels 1"));
+  expect(screen.getByRole("tabpanel", { name: "Properties" })).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "Properties" }));
+  await user.click(screen.getByRole("tab", { name: /Properties/ }));
+  await user.click(row("Cat"));
+  expect(screen.getByRole("tabpanel", { name: "Properties" })).toBeInTheDocument();
+  localStorage.clear();
+});
+
+test("Window > Options Bar and Toolbar hide them, saved; Reset Layout brings everything back", async () => {
+  localStorage.clear();
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  const choose = async (name: string) => {
+    await user.click(screen.getByRole("menuitem", { name: "Window" }));
+    await user.click(screen.getByText(name, { selector: ".dropdown .label" }));
+  };
+  const chrome = () => [...document.querySelectorAll(".chrome")];
+  const toolbar = () => chrome()[1];
+  const optionsBar = () => chrome()[0];
+  await choose("Toolbar");
+  expect(toolbar()).toHaveClass("hidden");
+  expect(optionsBar()).not.toHaveClass("hidden");
+  expect(document.querySelector("main")).toHaveClass("no-toolbar");
+  await choose("Options Bar");
+  expect(optionsBar()).toHaveClass("hidden");
+  expect(saved()).toMatchObject({ toolbar: false, optionsBar: false });
+  await user.click(screen.getByRole("menuitem", { name: "Window" }));
+  expect(screen.getByRole("menuitemradio", { name: /Toolbar/ })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  await user.keyboard("{Escape}");
+  // A tab dragged meanwhile: the reset puts the order back too.
+  const tab = screen.getByRole("tab", { name: /Properties/ });
+  await fireEvent.pointerDown(tab, { pointerId: 1, button: 0, clientX: 10 });
+  await fireEvent.pointerMove(tab, { pointerId: 1, clientX: 100 });
+  await fireEvent.pointerUp(tab, { pointerId: 1, clientX: 100 });
+  expect(saved().order).toEqual(["selections", "properties"]);
+  await choose("Reset Layout");
+  expect(toolbar()).not.toHaveClass("hidden");
+  expect(optionsBar()).not.toHaveClass("hidden");
+  expect(saved()).toMatchObject({ toolbar: true, optionsBar: true });
+  expect(saved().order).toEqual(["properties", "selections"]);
   localStorage.clear();
 });
