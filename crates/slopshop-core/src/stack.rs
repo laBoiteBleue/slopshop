@@ -759,54 +759,12 @@ fn filtered(
     let t = TILE_SIZE as usize;
     let level = &input.levels()[0];
     let filter = step.filter;
-    let plan = filter.plan();
+    let plans = filter.plans();
     // A large radius: the layer reduced by the plan's factor (averages of blocks), blurred.
-    let factor = plan.factor;
-    let (small_width, small_height) = (
-        (size.width as usize).div_ceil(factor),
-        (size.height as usize).div_ceil(factor),
-    );
-    let reduced = (factor > 1).then(|| {
-        let mut small = vec![[0.0f32; 4]; small_width * small_height];
-        let mut rows: Vec<(usize, &mut [[f32; 4]])> =
-            small.chunks_mut(small_width).enumerate().collect();
-        let weight = 1.0 / (factor * factor) as f32;
-        parallel_for_each(&mut rows, |(sy, row)| {
-            let mut line = vec![[0.0f32; 4]; small_width * factor];
-            let mut sums = vec![[0.0f32; 4]; small_width];
-            for j in 0..factor {
-                pixels.row(0, (*sy * factor + j) as i64, &mut line);
-                for (sum, block) in sums.iter_mut().zip(line.chunks(factor)) {
-                    for px in block {
-                        for c in 0..4 {
-                            sum[c] += px[c];
-                        }
-                    }
-                }
-            }
-            for (out, sum) in row.iter_mut().zip(&sums) {
-                *out = sum.map(|v| v * weight);
-            }
-        });
-        plan.kernel.image(small, small_width, small_height)
-    });
-    // Read back between the reduced pixels' centers.
-    let interpolated = |small: &[[f32; 4]], x: usize, y: usize| -> [f64; 4] {
-        let f = factor as f64;
-        let u = ((x as f64 + 0.5) / f - 0.5).clamp(0.0, (small_width - 1) as f64);
-        let v = ((y as f64 + 0.5) / f - 0.5).clamp(0.0, (small_height - 1) as f64);
-        let (x0, y0) = (u.floor() as usize, v.floor() as usize);
-        let (x1, y1) = (
-            (x0 + 1).min(small_width - 1),
-            (y0 + 1).min(small_height - 1),
-        );
-        let (a, b) = (u - x0 as f64, v - y0 as f64);
-        let px = |x: usize, y: usize| small[y * small_width + x].map(f64::from);
-        let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
-        std::array::from_fn(|c| {
-            (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
-        })
-    };
+    let reduced: Vec<Option<Reduced>> = plans
+        .iter()
+        .map(|plan| (plan.factor > 1).then(|| Reduced::new(&pixels, size, plan)))
+        .collect();
 
     let selection = step.selection.as_ref().map(|s| {
         let image = s.image().as_ref();
@@ -821,17 +779,30 @@ fn filtered(
         let (w, h) = valid_area(size, *coord);
         let (x0, y0) = (coord.col as usize * t, coord.row as usize * t);
         // A small radius: the tile and its margin, blurred on this thread.
-        let margin = plan.kernel.reach();
+        let margin = plans
+            .iter()
+            .zip(&reduced)
+            .filter(|(_, reduced)| reduced.is_none())
+            .map(|(plan, _)| plan.kernel.reach())
+            .max()
+            .unwrap_or(0);
         let (rw, rh) = (w + 2 * margin, h + 2 * margin);
-        let region = reduced.is_none().then(|| {
-            let mut region = vec![[0.0f32; 4]; rw * rh];
-            for (y, row) in region.chunks_mut(rw).enumerate() {
-                let (x, y) = (x0 as i64 - margin as i64, (y0 + y) as i64 - margin as i64);
-                pixels.row(x, y, row);
-            }
-            plan.kernel.region(&mut region, rw, rh);
-            region
-        });
+        let mut source = vec![[0.0f32; 4]; rw * rh];
+        for (y, row) in source.chunks_mut(rw).enumerate() {
+            let (x, y) = (x0 as i64 - margin as i64, (y0 + y) as i64 - margin as i64);
+            pixels.row(x, y, row);
+        }
+        let regions: Vec<Option<Vec<[f32; 4]>>> = plans
+            .iter()
+            .zip(&reduced)
+            .map(|(plan, reduced)| {
+                reduced.is_none().then(|| {
+                    let mut region = source.clone();
+                    plan.kernel.region(&mut region, rw, rh);
+                    region
+                })
+            })
+            .collect();
         let mut bytes = tile.to_vec();
         for y in 0..h {
             for x in 0..w {
@@ -848,18 +819,22 @@ fn filtered(
                 if coverage <= 0.0 {
                     continue;
                 }
-                let blurred = match (&region, &reduced) {
-                    (Some(region), _) => region[(y + margin) * rw + x + margin].map(f64::from),
-                    (None, Some(small)) => interpolated(small, x0 + x, y0 + y),
-                    (None, None) => continue,
-                };
+                let mut blurs = [[0.0f64; 4]; MAX_PLANS];
+                for (n, (region, reduced)) in regions.iter().zip(&reduced).enumerate() {
+                    blurs[n] = match (region, reduced) {
+                        (Some(region), _) => region[(y + margin) * rw + x + margin].map(f64::from),
+                        (None, Some(small)) => small.at(x0 + x, y0 + y),
+                        (None, None) => [0.0; 4],
+                    };
+                }
+                let blurs = &blurs[..plans.len()];
                 let px = &mut bytes[(y * t + x) * bpp..][..bpp];
                 let r = if coverage < 1.0 || filter.reads_original() {
                     let b = pixels.read(px);
-                    let f = filter.finish(b, blurred, [dx as i64, dy as i64]);
+                    let f = filter.finish(b, blurs, [dx as i64, dy as i64]);
                     std::array::from_fn(|n| b[n] + (f[n] - b[n]) * coverage)
                 } else {
-                    blurred
+                    blurs[0]
                 };
                 pixels.write(r, px);
             }
@@ -881,6 +856,69 @@ fn filtered(
     } else {
         RasterImage::from_level0_tiles_only(size, format, tiles)?
     })
+}
+
+/// The most blurs a filter takes (Clarity and Texture's two).
+const MAX_PLANS: usize = 2;
+
+/// A layer reduced by a plan's factor (averages of blocks of pixels) and blurred by its kernel:
+/// how a large radius is computed (see `filter::Plan`).
+struct Reduced {
+    image: Vec<[f32; 4]>,
+    width: usize,
+    height: usize,
+    factor: usize,
+}
+
+impl Reduced {
+    fn new(pixels: &PremulPixels<'_>, size: Size, plan: &crate::filter::Plan) -> Self {
+        let factor = plan.factor;
+        let (width, height) = (
+            (size.width as usize).div_ceil(factor),
+            (size.height as usize).div_ceil(factor),
+        );
+        let mut small = vec![[0.0f32; 4]; width * height];
+        let mut rows: Vec<(usize, &mut [[f32; 4]])> = small.chunks_mut(width).enumerate().collect();
+        let weight = 1.0 / (factor * factor) as f32;
+        parallel_for_each(&mut rows, |(sy, row)| {
+            let mut line = vec![[0.0f32; 4]; width * factor];
+            let mut sums = vec![[0.0f32; 4]; width];
+            for j in 0..factor {
+                pixels.row(0, (*sy * factor + j) as i64, &mut line);
+                for (sum, block) in sums.iter_mut().zip(line.chunks(factor)) {
+                    for px in block {
+                        for c in 0..4 {
+                            sum[c] += px[c];
+                        }
+                    }
+                }
+            }
+            for (out, sum) in row.iter_mut().zip(&sums) {
+                *out = sum.map(|v| v * weight);
+            }
+        });
+        Self {
+            image: plan.kernel.image(small, width, height),
+            width,
+            height,
+            factor,
+        }
+    }
+
+    /// Pixel (`x`, `y`) of the layer, read back between the reduced pixels' centers.
+    fn at(&self, x: usize, y: usize) -> [f64; 4] {
+        let f = self.factor as f64;
+        let u = ((x as f64 + 0.5) / f - 0.5).clamp(0.0, (self.width - 1) as f64);
+        let v = ((y as f64 + 0.5) / f - 0.5).clamp(0.0, (self.height - 1) as f64);
+        let (x0, y0) = (u.floor() as usize, v.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(self.width - 1), (y0 + 1).min(self.height - 1));
+        let (a, b) = (u - x0 as f64, v - y0 as f64);
+        let px = |x: usize, y: usize| self.image[y * self.width + x].map(f64::from);
+        let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+        std::array::from_fn(|c| {
+            (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
+        })
+    }
 }
 
 /// The valid pixels (width, height) of tile `coord` of an image of `size`.
@@ -4302,6 +4340,40 @@ mod tests {
         assert_eq!(pixel(&gone, 150, 60), [255, 255, 255, 255]);
         // A threshold above the speck's difference keeps it.
         assert_eq!(pixel(&cleaned(2.0, 120.0), 40, 60), [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn texture_and_clarity_work_on_a_layer_with_their_two_blurs() {
+        let original = halves();
+        let filtered = |texture, clarity| {
+            let filter = Filter::ClarityTexture {
+                texture,
+                clarity,
+                scale: 1.0,
+            };
+            LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter,
+                        ..blur(1.0, None)
+                    },
+                    None,
+                )
+                .unwrap()
+                .evaluate()
+                .unwrap()
+        };
+        // Texture at -100 is the fine blur: the edge softens over a few pixels only.
+        let smooth = filtered(-100.0, 0.0);
+        let fine = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(3.0, None), None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        assert!(difference(&smooth, &fine) <= 1);
+        // Black and white have no midtones: Clarity leaves them, at any setting.
+        assert_eq!(difference(&filtered(0.0, 100.0), &original), 0);
+        assert_eq!(difference(&filtered(0.0, -100.0), &original), 0);
     }
 
     #[test]

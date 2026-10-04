@@ -34,6 +34,15 @@ pub const MAX_MEDIAN_RADIUS: f32 = 500.0;
 /// [`Plan::median`]).
 const MEDIAN_UP_TO: f64 = 8.0;
 
+/// Clarity and Texture's range (Lightroom's), and the radii of the blurs they push the colors
+/// from, in the layer's pixels: Texture's fine details, Clarity's broad local contrast.
+pub const MAX_CLARITY: f32 = 100.0;
+const TEXTURE_RADIUS: f32 = 3.0;
+const CLARITY_RADIUS: f32 = 25.0;
+
+/// How strongly Clarity pushes the midtones at 100 (Texture pushes by its whole difference).
+const CLARITY_STRENGTH: f64 = 0.6;
+
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
 pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
@@ -86,16 +95,26 @@ pub enum Filter {
     /// `radius` pixels around it by more than `threshold` levels (of 8 bits) on some channel
     /// becomes that median.
     DustAndScratches { radius: f32, threshold: f32 },
+    /// Lightroom's Texture and Clarity (-100 to 100): each color pushed away from (or, below 0,
+    /// toward) its blur of a few pixels by `texture`, and from its blur of tens of pixels by
+    /// `clarity`, in the midtones. `scale` is how many of the layer's pixels a pixel it is
+    /// computed on stands for (1, more for a look): not a setting, the blurs' radii shrink by it.
+    ClarityTexture {
+        texture: f32,
+        clarity: f32,
+        scale: f32,
+    },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 6] = [
+    pub const IDS: [&'static str; 7] = [
         "gaussianBlur",
         "motionBlur",
         "unsharpMask",
         "addNoise",
         "dustAndScratches",
+        "clarityTexture",
         "highPass",
     ];
 
@@ -108,6 +127,7 @@ impl Filter {
             Self::HighPass { .. } => "highPass",
             Self::AddNoise { .. } => "addNoise",
             Self::DustAndScratches { .. } => "dustAndScratches",
+            Self::ClarityTexture { .. } => "clarityTexture",
         }
     }
 
@@ -133,6 +153,9 @@ impl Filter {
                 seed as f32,
             ],
             Self::DustAndScratches { radius, threshold } => vec![radius, threshold],
+            Self::ClarityTexture {
+                texture, clarity, ..
+            } => vec![texture, clarity],
         }
     }
 
@@ -151,6 +174,11 @@ impl Filter {
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
+            ("clarityTexture", &[texture, clarity]) => Some(Self::ClarityTexture {
+                texture,
+                clarity,
+                scale: 1.0,
+            }),
             ("addNoise", &[amount, gaussian, monochromatic, seed]) => {
                 // Flags are 0 or 1, the seed a whole number in range: anything else is not
                 // this filter's.
@@ -191,6 +219,11 @@ impl Filter {
                 radius: 1.0,
                 threshold: 0.0,
             }),
+            "clarityTexture" => Some(Self::ClarityTexture {
+                texture: 0.0,
+                clarity: 0.0,
+                scale: 1.0,
+            }),
             _ => None,
         }
     }
@@ -221,6 +254,14 @@ impl Filter {
                     && (MIN_NOISE_AMOUNT..=MAX_NOISE_AMOUNT).contains(&amount)
                     && seed < NOISE_SEEDS
             }
+            Self::ClarityTexture {
+                texture,
+                clarity,
+                scale,
+            } => {
+                let amount = |v: f32| v.is_finite() && (-MAX_CLARITY..=MAX_CLARITY).contains(&v);
+                amount(texture) && amount(clarity) && scale.is_finite() && scale >= 1.0
+            }
             // Whole pixels: a square of them.
             Self::DustAndScratches { radius, threshold } => {
                 radius.fract() == 0.0
@@ -237,7 +278,10 @@ impl Filter {
             Self::GaussianBlur { radius }
             | Self::UnsharpMask { radius, .. }
             | Self::HighPass { radius } => Some(radius),
-            Self::MotionBlur { .. } | Self::AddNoise { .. } | Self::DustAndScratches { .. } => None,
+            Self::MotionBlur { .. }
+            | Self::AddNoise { .. }
+            | Self::DustAndScratches { .. }
+            | Self::ClarityTexture { .. } => None,
         }
     }
 
@@ -275,6 +319,15 @@ impl Filter {
                 radius: (radius / factor).round().max(MIN_MEDIAN_RADIUS),
                 threshold,
             },
+            Self::ClarityTexture {
+                texture,
+                clarity,
+                scale,
+            } => Self::ClarityTexture {
+                texture,
+                clarity,
+                scale: scale * factor,
+            },
         }
     }
 
@@ -285,12 +338,25 @@ impl Filter {
             Self::MotionBlur { distance, .. } => f64::from(distance) / 2.0 + 2.0,
             Self::AddNoise { .. } => 0.0,
             Self::DustAndScratches { radius, .. } => f64::from(radius) + 2.0,
+            Self::ClarityTexture { scale, .. } => {
+                3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
+            }
             _ => 3.5 * f64::from(self.blur_radius().unwrap_or(0.0)) + 2.0,
         }
     }
 
-    /// How the filter is computed over a layer: what it blurs by, at what reduction.
-    pub(crate) fn plan(&self) -> Plan {
+    /// How the filter is computed over a layer: what it blurs by, at what reduction; Clarity
+    /// and Texture blur twice ([`Self::finish`] gets one blur per plan, in this order).
+    pub(crate) fn plans(&self) -> Vec<Plan> {
+        match *self {
+            Self::ClarityTexture { scale, .. } => [TEXTURE_RADIUS, CLARITY_RADIUS]
+                .map(|r| Plan::gaussian(f64::from((r / scale).max(MIN_BLUR_RADIUS))))
+                .to_vec(),
+            _ => vec![self.plan()],
+        }
+    }
+
+    fn plan(&self) -> Plan {
         match *self {
             Self::MotionBlur { angle, distance } => {
                 Plan::line(f64::from(angle), f64::from(distance))
@@ -300,6 +366,10 @@ impl Filter {
                 kernel: Kernel::Identity,
             },
             Self::DustAndScratches { radius, .. } => Plan::median(f64::from(radius)),
+            Self::ClarityTexture { .. } => Plan {
+                factor: 1,
+                kernel: Kernel::Identity,
+            },
             _ => Plan::gaussian(f64::from(self.blur_radius().unwrap_or(MIN_BLUR_RADIUS))),
         }
     }
@@ -309,11 +379,12 @@ impl Filter {
         !matches!(self, Self::GaussianBlur { .. } | Self::MotionBlur { .. })
     }
 
-    /// A pixel's result from its premultiplied value `original` and its blur's `blurred`, in
-    /// the blend space (values of 1 are white); `at` is the document pixel it shows. Unsharp
-    /// Mask, High Pass and Add Noise work on the colors (straight, the blur's by its own
-    /// coverage), and keep the pixel's alpha.
-    pub(crate) fn finish(&self, original: [f64; 4], blurred: [f64; 4], at: [i64; 2]) -> [f64; 4] {
+    /// A pixel's result from its premultiplied value `original` and its blurs' `blurs` (one per
+    /// plan, [`Self::plans`]), in the blend space (values of 1 are white); `at` is the document
+    /// pixel it shows. Unsharp Mask, High Pass, Add Noise, Clarity and Texture work on the colors
+    /// (straight, a blur's by its own coverage), and keep the pixel's alpha.
+    pub(crate) fn finish(&self, original: [f64; 4], blurs: &[[f64; 4]], at: [i64; 2]) -> [f64; 4] {
+        let blurred = blurs[0];
         let straight = |p: [f64; 4]| {
             if p[3] > 0.0 {
                 [p[0] / p[3], p[1] / p[3], p[2] / p[3]]
@@ -360,6 +431,22 @@ impl Filter {
                 let level = f64::from(threshold) / 255.0;
                 let differs = (0..4).any(|c| (original[c] - blurred[c]).abs() > level);
                 if differs { blurred } else { original }
+            }
+            Self::ClarityTexture {
+                texture, clarity, ..
+            } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let broad = straight(blurs[1]);
+                // Midtones most, the darkest and lightest not at all (Rec. 709 luma).
+                let luma = 0.2126 * o[0] + 0.7152 * o[1] + 0.0722 * o[2];
+                let midtones = (1.0 - (2.0 * luma - 1.0).powi(2)).clamp(0.0, 1.0);
+                let kt = f64::from(texture) / 100.0;
+                let kc = f64::from(clarity) / 100.0 * CLARITY_STRENGTH * midtones;
+                let c: [f64; 3] =
+                    std::array::from_fn(|i| o[i] + kt * (o[i] - b[i]) + kc * (o[i] - broad[i]));
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
             }
         }
     }
@@ -933,17 +1020,17 @@ mod tests {
         // Half opaque: colors are straight, alpha kept.
         let original = [0.3, 0.2, 0.1, 0.5];
         let blurred = [0.2, 0.2, 0.2, 0.5];
-        let out = sharpen(0.0).finish(original, blurred, [0, 0]);
+        let out = sharpen(0.0).finish(original, &[blurred], [0, 0]);
         let expected = [0.7, 0.4, 0.1].map(|c| c * 0.5);
         for c in 0..3 {
             assert!((out[c] - expected[c]).abs() < 1e-12, "{out:?}");
         }
         assert_eq!(out[3], 0.5);
         // Within the threshold on every channel (0.2 is 51 levels, 0 is 0): left as it is.
-        assert_eq!(sharpen(52.0).finish(original, blurred, [0, 0]), original);
-        assert_ne!(sharpen(50.0).finish(original, blurred, [0, 0]), original);
+        assert_eq!(sharpen(52.0).finish(original, &[blurred], [0, 0]), original);
+        assert_ne!(sharpen(50.0).finish(original, &[blurred], [0, 0]), original);
         // Transparent stays transparent.
-        assert_eq!(sharpen(0.0).finish([0.0; 4], blurred, [0, 0]), [0.0; 4]);
+        assert_eq!(sharpen(0.0).finish([0.0; 4], &[blurred], [0, 0]), [0.0; 4]);
     }
 
     #[test]
@@ -997,17 +1084,17 @@ mod tests {
             seed: 4,
         };
         let original = [0.25, 0.25, 0.25, 0.5];
-        let out = filter(100.0, false).finish(original, original, [3, 4]);
+        let out = filter(100.0, false).finish(original, &[original], [3, 4]);
         let n = noise([3, 4], 4, false, false);
         for c in 0..3 {
             assert!((out[c] - (0.5 + n[c]) * 0.5).abs() < 1e-12, "{out:?}");
         }
         assert_eq!(out[3], 0.5);
         // Half the amount, half the noise; transparent stays transparent.
-        let half = filter(50.0, false).finish(original, original, [3, 4]);
+        let half = filter(50.0, false).finish(original, &[original], [3, 4]);
         assert!((half[0] - (0.5 + n[0] / 2.0) * 0.5).abs() < 1e-12);
         assert_eq!(
-            filter(100.0, true).finish([0.0; 4], [0.0; 4], [3, 4]),
+            filter(100.0, true).finish([0.0; 4], &[[0.0; 4]], [3, 4]),
             [0.0; 4]
         );
         // Flags and seeds out of their values are not Add Noise's.
@@ -1065,9 +1152,9 @@ mod tests {
         };
         let (speck, median) = ([0.6, 0.5, 0.5, 1.0], [0.5, 0.5, 0.5, 1.0]);
         // 0.1 is 25.5 levels.
-        assert_eq!(filter(0.0).finish(speck, median, [0, 0]), median);
-        assert_eq!(filter(25.0).finish(speck, median, [0, 0]), median);
-        assert_eq!(filter(26.0).finish(speck, median, [0, 0]), speck);
+        assert_eq!(filter(0.0).finish(speck, &[median], [0, 0]), median);
+        assert_eq!(filter(25.0).finish(speck, &[median], [0, 0]), median);
+        assert_eq!(filter(26.0).finish(speck, &[median], [0, 0]), speck);
         assert!(filter(255.0).is_valid());
         for wrong in [
             filter(256.0),
@@ -1092,18 +1179,55 @@ mod tests {
     }
 
     #[test]
+    fn clarity_and_texture_push_colors_from_their_two_blurs() {
+        let filter = |texture, clarity| Filter::ClarityTexture {
+            texture,
+            clarity,
+            scale: 1.0,
+        };
+        let (o, fine, broad) = ([0.6, 0.5, 0.4, 1.0], [0.5; 4], [0.4, 0.4, 0.4, 1.0]);
+        let fine = [fine[0], fine[1], fine[2], 1.0];
+        // Nothing at 0.
+        assert_eq!(filter(0.0, 0.0).finish(o, &[fine, broad], [0, 0]), o);
+        // Texture at -100: the fine blur itself; at 100, as far again from it.
+        let smooth = filter(-100.0, 0.0).finish(o, &[fine, broad], [0, 0]);
+        let sharp = filter(100.0, 0.0).finish(o, &[fine, broad], [0, 0]);
+        for c in 0..3 {
+            assert!((smooth[c] - fine[c]).abs() < 1e-12);
+            assert!((sharp[c] - (2.0 * o[c] - fine[c])).abs() < 1e-12);
+        }
+        // Clarity: in the midtones, not at black or white.
+        let mid = filter(0.0, 100.0).finish(o, &[fine, broad], [0, 0]);
+        assert!(mid[0] > o[0] && mid[2] == o[2], "{mid:?}");
+        let white = [1.0; 4];
+        assert_eq!(
+            filter(0.0, 100.0).finish(white, &[fine, broad], [0, 0]),
+            white
+        );
+        // Ranges; the scale is no setting: looks shrink the blurs, the settings round-trip.
+        assert!(filter(-100.0, 100.0).is_valid() && !filter(101.0, 0.0).is_valid());
+        let look = filter(30.0, 40.0).scaled(4.0);
+        assert_eq!(
+            Filter::from_params("clarityTexture", &look.params()),
+            Some(filter(30.0, 40.0))
+        );
+        assert!(look.reach() < filter(30.0, 40.0).reach());
+        assert_eq!(filter(1.0, 1.0).plans().len(), 2);
+    }
+
+    #[test]
     fn high_pass_is_the_difference_with_the_blur_around_middle_gray() {
         let high = Filter::HighPass { radius: 3.0 };
-        let same = high.finish([0.4, 0.4, 0.4, 1.0], [0.4, 0.4, 0.4, 1.0], [0, 0]);
+        let same = high.finish([0.4, 0.4, 0.4, 1.0], &[[0.4, 0.4, 0.4, 1.0]], [0, 0]);
         for v in &same[..3] {
             assert!((v - 0.5).abs() < 1e-12, "{same:?}");
         }
-        let out = high.finish([0.9, 0.1, 0.5, 1.0], [0.5, 0.5, 0.5, 1.0], [0, 0]);
+        let out = high.finish([0.9, 0.1, 0.5, 1.0], &[[0.5, 0.5, 0.5, 1.0]], [0, 0]);
         for (c, v) in [0.9, 0.1, 0.5].iter().enumerate() {
             assert!((out[c] - v).abs() < 1e-12, "{out:?}");
         }
         // Half opaque over a transparent blur (read as black): a straight 0.5 becomes 1.
-        let out = high.finish([0.25, 0.25, 0.25, 0.5], [0.0; 4], [0, 0]);
+        let out = high.finish([0.25, 0.25, 0.25, 0.5], &[[0.0; 4]], [0, 0]);
         assert_eq!(out, [0.5, 0.5, 0.5, 0.5]);
     }
 
