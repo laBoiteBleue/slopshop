@@ -262,7 +262,7 @@ built. Contributors: propose here first.
   ignored, as a new pixel layer at the top of the document (the maintainer's choice, rather
   than above the active layer), selected; the layers stay. One undo entry. It shows at once,
   its pixels following, as a merge.
-- Layer > Bake to Pixels ("Figer en pixels", [ADR 0030](adr/0030-bake-to-pixels.md)), what
+- Layer > Bake to Pixels ("Figer en pixels", [ADR 0031](adr/0031-bake-to-pixels.md)), what
   loses editability on purpose, in one place, one undo entry each. Rasterize: the selected
   layers keep their place, transform, opacity, mode, mask and clipping, their content becomes
   pixels (a stack its result, a fill its color over the canvas, a group its layers
@@ -335,7 +335,7 @@ maintainer's answers to the audit:
   yet: then one mask concept with several representations), Group from Layers (it is Group
   Layers), Rasterize forced by a tool (no text or vector layer yet; to settle with the first
   of them).
-- **Decided** (2026-10-04, [ADR 0030](adr/0030-bake-to-pixels.md)): what is destructive
+- **Decided** (2026-10-04, [ADR 0031](adr/0031-bake-to-pixels.md)): what is destructive
   goes in one submenu, Layer > Bake to Pixels; Rasterize keeps the transform; Flatten keeps
   transparency; merging an adjustment layer down bakes it into pixels.
 

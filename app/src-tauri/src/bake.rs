@@ -1,4 +1,4 @@
-//! Layer > Bake to Pixels (ADR 0030): Rasterize, Merge Layers (Merge Down for one layer),
+//! Layer > Bake to Pixels (ADR 0031): Rasterize, Merge Layers (Merge Down for one layer),
 //! Merge Visible, Flatten Image, and New Layer from Visible. What can show at once does: a merge
 //! moves its layers into a group in the place of the result (the same pixels on screen), New
 //! Layer from Visible puts copies of the visible layers there. The pixels are then composited

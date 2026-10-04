@@ -110,7 +110,7 @@ pub struct LayerView {
     pub painted: bool,
     /// What was applied to a raster layer's pixels (ADR 0029), bottom to top.
     pub entries: Vec<EntryView>,
-    /// Being baked into pixels (ADR 0030): a merge's group shown until its pixels come; the
+    /// Being baked into pixels (ADR 0031): a merge's group shown until its pixels come; the
     /// panel shows it as the layer it becomes.
     pub baking: bool,
 }

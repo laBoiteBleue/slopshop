@@ -828,7 +828,7 @@
           </span>
         {/if}
         {#if layer.baking}
-          <!-- Being baked (ADR 0030): the layer it becomes, its thumbnail once its pixels come. -->
+          <!-- Being baked (ADR 0031): the layer it becomes, its thumbnail once its pixels come. -->
           <span class="thumb baking" title={t("layers.baking")}></span>
         {:else if layer.kind === "group"}
           <button
