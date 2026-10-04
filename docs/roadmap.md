@@ -181,12 +181,12 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       Color Overlay drawn from a layer's shape with the selection's coverage operations, Fill
       Opacity, composited around the content (CPU and GPU alike), drawn again when the layer
       changes
-- [x] Layer styles in `.slop` (node v8) and through the IPC; layered PSD export reports
-      them (not written yet)
+- [x] Layer styles in `.slop` (node v8) and through the IPC
 - [x] The Layer Style dialog, Layer > Layer Style, the fx mark and the effects listed below
       the layer with their eyes, Fill in the layers panel
 - [x] Layer styles: Outer and Inner Glow, Inner Shadow (`.slop` node v9)
-- [ ] Layer styles: PSD import and export
+- [x] Layer styles: PSD import and export (`lfx2`, Fill), styles on groups (drawn from
+      what they hold)
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation

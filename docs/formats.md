@@ -41,15 +41,19 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    until the engine has them (ADR 0006). The composite is used when the layers cannot be read
    (with a warning), and for the CLI.
 2. **Layers** ✅ (`slopshop_io::psd::layers`, gray, RGB and duotone documents): pixel layers
-   with name, visibility, opacity (times the fill opacity), position, blend mode (ADR 0012; the
+   with name, visibility, opacity, position, blend mode (ADR 0012; the
    document blends in perceptual space, as Photoshop's 8/16-bit documents do, and 32-bit ones in
    linear light) and layer mask (ADR 0014, the real pixel mask when there is also a vector
    mask); solid color fill layers as native fill layers; groups as groups (ADR 0015: pass-through
-   or isolated, nested, with their opacity, blend mode and mask); clipping masks (ADR 0016). A
-   layer smaller than the canvas
+   or isolated, nested, with their opacity, blend mode and mask); clipping masks (ADR 0016);
+   layer styles (ADR 0032, `lfx2`/`lmfx` read with a descriptor parser) on pixel and fill
+   layers and groups: Drop Shadow, Inner Shadow, Outer and Inner Glow, Color Overlay and Stroke
+   (the first of each kind when several are stacked), with the document's global light and the
+   style's scale, and Fill as the style's Fill Opacity. A layer smaller than the canvas
    shares one tile for its empty area, so it costs what its pixels cost. What the engine cannot
-   represent yet is approximated and reported layer by layer: layer styles and
-   advanced blending, mask density and feather, the adjustment layers not reproduced yet and
+   represent yet is approximated and reported layer by layer: the effects SlopShop does not draw
+   (Bevel & Emboss, Satin, Gradient and Pattern Overlay; glow gradients, contours, noise and
+   techniques approximated), advanced blending, mask density and feather, the adjustment layers not reproduced yet and
    gradient or pattern fills (left out), text, shapes, smart objects and vector masks (their pixels), pixels outside the
    canvas (cropped). A file saved without "Maximize Compatibility" opens from its layers.
 3. **Groups and clipping** ✅ (ADR 0015, ADR 0016).
@@ -57,7 +61,8 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    through a temporary file so that memory does not grow with the document): pixel layers
    rendered one by one at their pixel size (transformed layers resampled, parts outside the
    canvas cut and reported), fill layers as pixels, groups, clipping, layer masks, blend modes
-   and the adjustment layers the importer reads, as native ones; a merged composite stored over
+   and the adjustment layers the importer reads, as native ones; layer styles as Photoshop's
+   (`lfx2` and Fill); a merged composite stored over
    white as Photoshop does, and the ICC profile. Checked by re-importing and with psd-tools.
 5. **Adjustment layers** ✅ in part (ADR 0020): Brightness/Contrast (from its descriptor, as
    current Photoshop versions write it), Levels, Curves, Exposure, Vibrance, Hue/Saturation,
@@ -68,7 +73,7 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    Filter colors other than RGB or Lab (and version 3's XYZ) and blend modes other than normal
    are approximated and reported; Photo Filter colors are kept within sRGB; Colorize, drawn
    ("map") curves, curves of more than 16 points and Color Lookup are left out for now.
-   Then layer styles as native nodes, text as rasterized pixels plus its parameters, smart
+   Then text as rasterized pixels plus its parameters, smart
    objects as embedded documents.
 
 ## PDF (P1)
@@ -106,7 +111,7 @@ The list follows Adobe's help page on the formats Photoshop supports.
 
 | Format | Extensions | Import | Export | Priority | Approach | Notes |
 |---|---|---|---|---|---|---|
-| **Photoshop** | `.psd`, `.pdd` | ✅ layers | ✅ layers | **P0** | in-house reader (see above) | groups, clipping and fifteen kinds of adjustment layers kept; other adjustments and styles reported; CMYK, Lab refused |
+| **Photoshop** | `.psd`, `.pdd` | ✅ layers | ✅ layers | **P0** | in-house reader (see above) | groups, clipping, layer styles and fifteen kinds of adjustment layers kept; other adjustments and effects reported; CMYK, Lab refused |
 | **Large Document Format** | `.psb` | ✅ layers | ✅ layers | **P0** | same reader and writer (64-bit lengths) | up to 300,000 px per side |
 | JPEG | `.jpg`, `.jpeg`, `.jpe` | ✅ | ✅ | done | `image` (zune-jpeg) / `jpeg-encoder` | 12-bit and lossless JPEG not yet (libjpeg-turbo, optional) |
 | PNG | `.png` | ✅ | ✅ | done | `png` | 8/16-bit, cICP, ICC; gray export; APNG frames as layers (see GIF) |

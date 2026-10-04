@@ -93,12 +93,12 @@ Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
   gray files (PNG, TIFF, JPEG and others; the default for gray images), and every lossy conversion
   reported ([ADR 0008](docs/adr/0008-export.md), [ADR 0010](docs/adr/0010-jpeg-webp-export.md),
   [ADR 0011](docs/adr/0011-gray-export.md)). Export to Photoshop PSD and PSB (8/16-bit) keeps the
-  layers: groups, clipping, masks, blend modes and adjustment layers.
+  layers: groups, clipping, masks, blend modes, adjustment layers and layer styles.
 - Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
   float, HDR): PNG, JPEG, TIFF, WebP, JPEG XL, AVIF, JPEG 2000, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR,
   HDR, DDS, DICOM and FITS (the display window or an automatic stretch as a Levels layer), SVG, PDF pages (rasterized at a chosen resolution, picked in an Import PDF dialog), and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
-  color fills, the thirteen kinds of adjustment layers SlopShop has; other adjustments and layer
-  styles are not supported yet and are reported).
+  color fills, the adjustment layers SlopShop has, layer styles: shadows, glows, Color Overlay,
+  Stroke and Fill; other adjustments and effects are not supported yet and are reported).
   A layered file imported into a document arrives as a group.
   Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
   Camera RAW files (DNG and the cameras rawler knows) open developed as shot, in linear float
