@@ -1083,7 +1083,6 @@
             class="entry"
             class:hidden-layer={!shown}
             class:off={entry.hidden}
-            ondblclick={() => editableEntry(entry) && onentryedit?.(layer, index)}
             oncontextmenu={(e) => {
               e.preventDefault();
               e.stopPropagation();

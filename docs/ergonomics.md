@@ -61,8 +61,8 @@ built. Contributors: propose here first.
   lists smart filters: an arrow at the end of the row unfolds the list (folded at first),
   newest on top: Paint, or the adjustment's name. Each entry
   has an eye that hides it without deleting it ([ADR 0034](adr/0034-editable-operations.md)).
-  An adjustment is edited again with the icon shown on hover next to the trash (or a
-  double-click, or right-click > Edit Settings…): its dialog, previewed on the canvas (Preview
+  An adjustment is edited again with the icon shown on hover next to the trash (or
+  right-click > Edit Settings…; a double-click does nothing): its dialog, previewed on the canvas (Preview
   off hides the entry meanwhile), OK one undo entry, Cancel takes it back. What was painted above it
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.

@@ -326,10 +326,9 @@ test("a layer's stack unfolds below it: each entry has an eye, an edit icon when
   await user.click(within(entry("Levels ×2")).getByRole("button", { name: "Edit Settings…" }));
   expect(onentryedit).toHaveBeenLastCalledWith(expect.objectContaining({ id: 2 }), 2);
   onentryedit.mockClear();
-  await user.dblClick(entry("Invert"));
-  expect(onentryedit).not.toHaveBeenCalled();
+  // A double-click edits nothing: only the icon and the right-click menu do.
   await user.dblClick(entry("Levels ×2"));
-  expect(onentryedit).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), 2);
+  expect(onentryedit).not.toHaveBeenCalled();
   // The right-click menu: edit, show or hide, delete.
   await user.pointer({ keys: "[MouseRight]", target: entry("Levels ×2") });
   const menu = screen.getByRole("menu");
