@@ -1969,6 +1969,8 @@
     selection: boolean;
   };
   let transforming = $state<Transforming | null>(null);
+  /** Transform Selection applied, while the engine resamples the selection. */
+  let appliedSelectionMatrix = $state<{ document: number; matrix: Matrix } | null>(null);
 
   /**
    * Free Transform of the selected layers or, for files just dropped on the image, of the new
@@ -2061,7 +2063,12 @@
     transforming = null;
     if (current.selection) {
       if (!affine.isIdentity(current.matrix)) {
-        void sync(engine.transformSelection(current.document, current.matrix));
+        // The outline stays transformed until the engine's selection replaces it.
+        const shown = { document: current.document, matrix: current.matrix };
+        appliedSelectionMatrix = shown;
+        void sync(engine.transformSelection(current.document, current.matrix)).finally(() => {
+          if (appliedSelectionMatrix === shown) appliedSelectionMatrix = null;
+        });
       }
       return;
     }
@@ -4290,7 +4297,9 @@
                     height={active.height}
                     matrix={transforming?.selection && transforming.document === active.id
                       ? transforming.matrix
-                      : undefined}
+                      : appliedSelectionMatrix?.document === active.id
+                        ? appliedSelectionMatrix.matrix
+                        : undefined}
                   />
                 {/if}
                 {#if cropping && cropping.document === active?.id}

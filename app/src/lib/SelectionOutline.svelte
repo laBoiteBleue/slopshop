@@ -186,6 +186,27 @@
     matrix && current && !affine.isIdentity(matrix) ? toPath(current, mapping, matrix) : null,
   );
 
+  // Applied: the matrix goes once the transformed selection is the document's. Its outline is
+  // fetched then; meanwhile the transformed path stays drawn (not the old outline back where
+  // it was). Cancelled, the selection is the same: the old outline is right.
+  let lastMapped: { path: string; key: number } | null = null;
+  let held = $state<string | null>(null);
+  $effect(() => {
+    const path = mappedPath;
+    if (path !== null) lastMapped = { path, key: untrack(() => selectionKey) };
+  });
+  $effect(() => {
+    const [key, transformed, outline] = [selectionKey, matrix, current];
+    untrack(() => {
+      if (outline) {
+        held = null;
+        if (!transformed) lastMapped = null;
+      } else {
+        held = lastMapped && lastMapped.key !== key ? lastMapped.path : null;
+      }
+    });
+  });
+
   // A new outline: a new path, for the current view.
   $effect(() => {
     void current;
@@ -208,9 +229,9 @@
   aria-hidden="true"
 >
   <svg>
-    {#if mappedPath !== null}
-      <path class="under" d={mappedPath} />
-      <path class="ants" d={mappedPath} />
+    {#if mappedPath !== null || held !== null}
+      <path class="under" d={mappedPath ?? held} />
+      <path class="ants" d={mappedPath ?? held} />
     {:else if built && placed}
       <!-- Lines keep one pixel while scaled; only then, as Chromium stops repainting the
            animated dashes of non-scaling strokes until their transform changes. -->
