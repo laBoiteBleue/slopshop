@@ -101,6 +101,20 @@ export function effectsOf(
   });
 }
 
+/** `style` without effect `id` (deleted, its settings with it); nothing when that leaves it plain. */
+export function withoutEffect(style: LayerStyle | null, id: EffectId): LayerStyle | null {
+  return simplified({ ...(style ?? PLAIN), [id]: null });
+}
+
+/**
+ * Whether Fill means something for `style`, so that the layers panel shows it: an effect, even
+ * turned off (Fill fades the content and leaves it), or a Fill already set. Without either, Fill
+ * would do what Opacity does; Blending Options still sets it.
+ */
+export function usesFill(style: LayerStyle | null | undefined): boolean {
+  return effectsOf(style).length > 0 || (style?.fillOpacity ?? 1) < 1;
+}
+
 /** Whether `style` has an effect turned on (the panel's fx mark). */
 export function hasEffects(style: LayerStyle | null | undefined): boolean {
   return effectsOf(style).some((e) => e.enabled);

@@ -670,6 +670,7 @@ const fr: Messages = {
   "layers.effects": "Effets",
   "layers.effect.show": "Afficher l’effet",
   "layers.effect.hide": "Masquer l’effet",
+  "layers.effect.delete": "Supprimer l’effet",
   "menu.layer.bake": "Figer en pixels",
   "menu.layer.bake.rasterize": "Pixelliser",
   "menu.layer.bake.merge": "Fusionner les calques",

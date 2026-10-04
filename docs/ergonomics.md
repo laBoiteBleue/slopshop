@@ -295,9 +295,11 @@ built. Contributors: propose here first.
   Style dialog: the effects on the left with their checkboxes, the selected one's settings
   (each number with a slider, the color swatch opening the picker), the canvas following every
   change; OK keeps them as one undo entry, Cancel takes them back. A styled layer shows "fx";
-  its effects unfold below it with the arrow (folded at first), each with an eye, a
-  double-click opening its settings. Fill, under Opacity in the layers panel, fades the
-  content but not its effects. Drop Shadow, Outer Glow, Inner Shadow, Inner Glow (from the
+  its effects unfold below it with the arrow (folded at first), each with an eye and a trash
+  (shown on hover) that deletes it, a double-click opening its settings. Fill, under Opacity in
+  the layers panel, fades the content but not its effects; it shows only when it means
+  something there (the layer has an effect, or a Fill already set; Blending Options still sets
+  it on any layer). Drop Shadow, Outer Glow, Inner Shadow, Inner Glow (from the
   edge), Color Overlay and Stroke, in Photoshop's order; inner effects say Choke where outer
   ones say Spread. A group's effects are drawn around what it holds.
 - Layer > Layer Mask: Reveal All, Hide All, Reveal Selection, Hide Selection on the selected

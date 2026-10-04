@@ -653,6 +653,7 @@ const en = {
   "layers.effects": "Effects",
   "layers.effect.show": "Show the effect",
   "layers.effect.hide": "Hide the effect",
+  "layers.effect.delete": "Delete the effect",
   "menu.layer.bake": "Bake to Pixels",
   "menu.layer.bake.rasterize": "Rasterize",
   "menu.layer.bake.merge": "Merge Layers",
