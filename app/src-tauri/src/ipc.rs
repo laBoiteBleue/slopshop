@@ -538,7 +538,8 @@ pub enum EditRequest {
     /// A layer's style (ADR 0032); `None` removes it.
     SetLayerStyle {
         id: u64,
-        style: Option<StyleDto>,
+        /// Boxed: much larger than the other requests.
+        style: Option<Box<StyleDto>>,
     },
     /// A fill layer's color, sRGB-encoded RGBA in `[0, 1]` as `AddFillLayer`'s.
     SetFillColor {
