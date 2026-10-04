@@ -250,6 +250,19 @@ impl Layer {
         }
     }
 
+    /// Its style's effects (and those of the layers inside it) follow it: the layer moved, its
+    /// shape did not change.
+    fn move_styles(&mut self) {
+        if let Some(style) = &mut self.style {
+            *style = style.moved();
+        }
+        if let LayerContent::Group { children, .. } = &mut self.content {
+            for child in children {
+                child.move_styles();
+            }
+        }
+    }
+
     pub fn is_group(&self) -> bool {
         matches!(self.content, LayerContent::Group { .. })
     }
@@ -714,6 +727,28 @@ impl Document {
         let layer = find_mut(&mut self.layers, id)?;
         layer.redraw_styles();
         Some(layer)
+    }
+
+    /// The layer `id`, to change without changing its shape (its visibility, opacity, mode,
+    /// clipping or style): its own effects are kept; those of the groups around it, drawn from
+    /// what they hold, are drawn again.
+    pub(crate) fn layer_mut_same_shape(&mut self, id: LayerId) -> Option<&mut Layer> {
+        redraw_groups_around(&mut self.layers, id);
+        find_mut(&mut self.layers, id)
+    }
+
+    /// The layer `id`, to move (its transform): its effects and those inside it follow it; those
+    /// of the groups around it are drawn again.
+    pub(crate) fn layer_mut_moved(&mut self, id: LayerId) -> Option<&mut Layer> {
+        redraw_groups_around(&mut self.layers, id);
+        let layer = find_mut(&mut self.layers, id)?;
+        layer.move_styles();
+        Some(layer)
+    }
+
+    /// The name of layer `id`, to change: no effect depends on it.
+    pub(crate) fn layer_name_mut(&mut self, id: LayerId) -> Option<&mut String> {
+        Some(&mut find_mut(&mut self.layers, id)?.name)
     }
 
     pub(crate) fn bump_revision(&mut self) {

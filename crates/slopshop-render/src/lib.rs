@@ -27,7 +27,7 @@ use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
 use slopshop_core::color::{
     AlphaMode, ColorSpace, Mat3, PixelFormat, TransferFunction, WORKING_SPACE,
 };
-use slopshop_core::composite::{Step, display_steps};
+use slopshop_core::composite::{Step, display_plan, display_steps};
 use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::resample::{self, Filter, Resampling};
@@ -823,7 +823,9 @@ impl Renderer {
         // Stacks not evaluated yet are shown by the shader, close to their pixels (exact but for
         // rounding at 100 %, evaluated on coarser levels when zoomed out): their pixels are
         // evaluated meanwhile, and the frame asks to be shown again until they are (ADR 0029).
-        let stacks_pending = start_stack_evaluations(document, self.evaluate_stacks);
+        // Likewise layer styles' effects, computed in the background while what they drew last
+        // shows (ADR 0032).
+        let pending = start_stack_evaluations(document, self.evaluate_stacks);
         let uploads = |caches: &GpuCaches| -> u64 {
             caches.tiles.iter().flatten().map(TileCache::uploads).sum()
         };
@@ -836,7 +838,7 @@ impl Renderer {
                 self.composite_cached(document, view, output, &output_buffer, options, caches);
             if let Some((encoder, cached_stats)) = cached {
                 stats = cached_stats;
-                stats.incomplete |= stacks_pending;
+                stats.incomplete |= pending;
                 stats.prepare = start.elapsed();
                 stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
                 let frame = Composited {
@@ -851,7 +853,7 @@ impl Renderer {
         }
 
         let layers = self.prepare_layers(document, view, output, &mut caches.tiles);
-        stats.incomplete = stacks_pending;
+        stats.incomplete = pending;
         stats.prepare = start.elapsed();
         stats.layers = layers.count;
         stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
@@ -1227,10 +1229,11 @@ impl Renderer {
 }
 
 /// Start evaluating, each on a thread of its own, the pixels of the shown layers whose stack
-/// the display evaluates (ADR 0029); whether there are any.
+/// the display evaluates (ADR 0029); whether there are any, or layer style effects shown that
+/// are not drawn yet (planning the display started them, ADR 0032).
 fn start_stack_evaluations(document: &Document, start: bool) -> bool {
-    let mut pending = false;
-    for step in display_steps(document) {
+    let (steps, mut pending) = display_plan(document);
+    for step in steps {
         if let Step::Layer {
             layer, stack: true, ..
         } = step

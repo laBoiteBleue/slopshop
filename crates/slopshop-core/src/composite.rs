@@ -19,6 +19,7 @@
 //! NaN, as `inf × 0`) between layers; results beyond the `f32` range saturate to ±`f32::MAX`,
 //! and are counted too.
 
+use std::cell::Cell;
 use std::fmt;
 
 use crate::adjust::Adjustment;
@@ -142,7 +143,7 @@ pub fn steps(document: &Document) -> Vec<Step<'_>> {
         Affine::IDENTITY,
         Plan {
             canvas: document.size(),
-            stacks: false,
+            display: None,
         },
         &mut steps,
     );
@@ -153,25 +154,34 @@ pub fn steps(document: &Document) -> Vec<Step<'_>> {
 /// its original and its entries ([`Step::StackOriginal`] and the steps after it), evaluated by
 /// the renderer itself, before its `Layer` step. The layer's pixels are never waited for.
 pub fn display_steps(document: &Document) -> Vec<Step<'_>> {
+    display_plan(document).0
+}
+
+/// [`display_steps`], and whether a layer style's effects they show are not drawn yet (ADR
+/// 0032): never waited for either, they are computed in the background while what they drew
+/// last shows, and the display is to be shown again until they are drawn.
+pub fn display_plan(document: &Document) -> (Vec<Step<'_>>, bool) {
     let mut steps = Vec::new();
+    let pending = Cell::new(false);
     push_steps(
         document.layers(),
         Affine::IDENTITY,
         Plan {
             canvas: document.size(),
-            stacks: true,
+            display: Some(&pending),
         },
         &mut steps,
     );
-    steps
+    (steps, pending.get())
 }
 
-/// What the steps are made for: the canvas, and whether stacks not evaluated yet are steps of
-/// their own ([`display_steps`]).
+/// What the steps are made for: the canvas, and for [`display_plan`] where to say that effects
+/// are not drawn yet (stacks not evaluated yet are steps of their own, effects not drawn yet
+/// are not waited for).
 #[derive(Debug, Clone, Copy)]
-struct Plan {
+struct Plan<'p> {
     canvas: Size,
-    stacks: bool,
+    display: Option<&'p Cell<bool>>,
 }
 
 /// How a layer takes part in compositing.
@@ -291,7 +301,7 @@ fn hidden_layers(layers: &[Layer], parent: Affine, canvas: Size) -> Vec<bool> {
 
 /// Steps of sibling `layers` (in a space mapped to the document by `parent`): each base with the
 /// clipped layers above it (ADR 0016), except the ones hidden by an opaque layer above them.
-fn push_steps<'a>(layers: &'a [Layer], parent: Affine, plan: Plan, steps: &mut Vec<Step<'a>>) {
+fn push_steps<'a>(layers: &'a [Layer], parent: Affine, plan: Plan<'_>, steps: &mut Vec<Step<'a>>) {
     let hidden = hidden_layers(layers, parent, plan.canvas);
     let mut i = 0;
     while i < layers.len() {
@@ -349,7 +359,7 @@ fn push_layer<'a>(
     layer: &'a Layer,
     role: Role,
     parent: Affine,
-    plan: Plan,
+    plan: Plan<'_>,
     steps: &mut Vec<Step<'a>>,
 ) {
     let transform = layer.transform.then(parent);
@@ -370,14 +380,22 @@ fn push_layer<'a>(
     // A styled layer (ADR 0032): its effects below, its content at Fill Opacity
     // with the effects recoloring it, its effects above, the whole blended as one.
     let styled = layer.style.as_ref().filter(|s| s.settings().shows());
-    let drawn = styled.map(|style| style.drawn(layer, transform, plan.canvas));
+    let drawn = styled.map(|style| match plan.display {
+        Some(pending) => style
+            .drawn_for_display(layer, transform, plan.canvas)
+            .unwrap_or_else(|meanwhile| {
+                pending.set(true);
+                meanwhile.unwrap_or(&crate::style::NO_EFFECTS)
+            }),
+        None => style.drawn(layer, transform, plan.canvas),
+    });
     if let Some(drawn) = drawn {
         steps.push(Step::Begin { isolated: true });
         steps.extend(drawn.below.iter().map(|effect| effect_step(effect, false)));
         steps.push(Step::Begin { isolated: true });
     }
     let mut stacked = false;
-    if plan.stacks
+    if plan.display.is_some()
         && let LayerContent::Raster {
             image,
             stack: Some(stack),
