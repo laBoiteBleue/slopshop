@@ -541,6 +541,7 @@ export type ImportWarning =
   | "adjustmentLayersSkipped"
   | "adjustmentsApproximated"
   | "layerStylesIgnored"
+  | "layerStylesApproximated"
   | "layersRasterized"
   | "pixelsOutsideCanvas"
   | "masksSimplified"
@@ -918,7 +919,6 @@ export type ExportNoticeId =
   | "precisionReduced"
   | "bigTiff"
   | "pixelsOutsideCanvas"
-  | "stylesNotWritten"
   | "alphaFlattened"
   | "colorDiscarded"
   | "colorsQuantized";

@@ -33,6 +33,8 @@ use crate::{
     Decoded, ImportError, ImportWarning, Opened, check_budget, finish, icc, resolve_color_space,
 };
 
+mod descriptor;
+pub(crate) mod effects;
 mod layers;
 
 const SIGNATURE: &[u8; 4] = b"8BPS";
@@ -40,6 +42,8 @@ const RESOURCE_SIGNATURE: &[u8; 4] = b"8BIM";
 const RESOURCE_ICC: u16 = 1039;
 /// ResolutionInfo: the horizontal resolution first, pixels per inch in 16.16 fixed point.
 const RESOURCE_RESOLUTION: u16 = 1005;
+/// The global light's angle (layer effects), a 4-byte number of degrees.
+const RESOURCE_GLOBAL_ANGLE: u16 = 1037;
 const RESOURCE_TRANSPARENCY_INDEX: u16 = 1047;
 const RESOURCE_VERSION_INFO: u16 = 1057;
 
@@ -126,6 +130,8 @@ struct Header {
     transparent_index: Option<u16>,
     /// Pixels per inch (ADR 0028).
     resolution: Option<f64>,
+    /// The global light's angle, degrees (layer effects that use it).
+    global_angle: Option<f64>,
     /// The composite is real (else Photoshop wrote a blank one: "Maximize Compatibility" off).
     real_merged_data: bool,
 }
@@ -251,6 +257,7 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
         icc_profile: None,
         transparent_index: None,
         resolution: None,
+        global_angle: None,
         real_merged_data: true,
     };
     if channels < header.color_channels() {
@@ -262,6 +269,10 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
             RESOURCE_RESOLUTION if data.len() >= 4 => {
                 let fixed = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
                 header.resolution = Some(f64::from(fixed) / 65536.0);
+            }
+            RESOURCE_GLOBAL_ANGLE if data.len() >= 4 => {
+                let angle = i32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                header.global_angle = Some(f64::from(angle));
             }
             RESOURCE_TRANSPARENCY_INDEX if data.len() >= 2 => {
                 header.transparent_index = Some(u16::from_be_bytes([data[0], data[1]]));

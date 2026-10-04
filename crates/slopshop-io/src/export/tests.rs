@@ -1702,7 +1702,6 @@ fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
     )
     .unwrap();
     assert!(report.notices.contains(&ExportNotice::PixelsOutsideCanvas));
-    assert!(!report.notices.contains(&ExportNotice::StylesNotWritten));
     std::fs::remove_file(&path).ok();
     let huge = Document::new(Size::new(PSD_MAX_SIDE + 1, 10));
     assert!(matches!(
@@ -3272,19 +3271,51 @@ fn the_resolution_survives_a_round_trip() {
 }
 
 #[test]
-fn layered_psd_reports_layer_styles_it_does_not_write() {
+fn layer_styles_round_trip_through_a_layered_psd() {
+    use slopshop_core::style::{DropShadow, Glow, LayerStyle, Stroke};
     let mut doc = layered_document();
     let styled = doc
         .all_layers()
         .find(|l| matches!(l.content, LayerContent::Raster { .. }))
         .unwrap()
         .id;
+    let style = LayerStyle {
+        fill_opacity: 0.6,
+        drop_shadow: Some(DropShadow {
+            angle: 45.0,
+            distance: 8.0,
+            ..DropShadow::default()
+        }),
+        inner_glow: Some(Glow::default()),
+        stroke: Some(Stroke {
+            size: 4.0,
+            ..Stroke::default()
+        }),
+        ..LayerStyle::default()
+    };
     Edit::SetLayerStyle {
         id: styled,
-        style: Some(Box::new(slopshop_core::style::LayerStyle {
-            stroke: Some(slopshop_core::style::Stroke::default()),
-            ..Default::default()
-        })),
+        style: Some(Box::new(style)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    // A group's effects and Fill too.
+    let group = doc
+        .all_layers()
+        .find(|l| matches!(l.content, LayerContent::Group { .. }))
+        .unwrap()
+        .id;
+    let group_style = LayerStyle {
+        fill_opacity: 0.4,
+        outer_glow: Some(Glow {
+            size: 12.0,
+            ..Glow::default()
+        }),
+        ..LayerStyle::default()
+    };
+    Edit::SetLayerStyle {
+        id: group,
+        style: Some(Box::new(group_style)),
     }
     .apply(&mut doc)
     .unwrap();
@@ -3295,7 +3326,7 @@ fn layered_psd_reports_layer_styles_it_does_not_write() {
         dither: true,
         large: false,
     };
-    let report = export_psd(
+    export_psd(
         &path,
         &doc,
         &options,
@@ -3304,6 +3335,31 @@ fn layered_psd_reports_layer_styles_it_does_not_write() {
         &mut |_| {},
     )
     .unwrap();
-    assert!(report.notices.contains(&ExportNotice::StylesNotWritten));
+    let opened = match crate::open_file(&path).unwrap() {
+        crate::Opened::Layers(layers) => layers,
+        _ => panic!("layers expected"),
+    };
+    let style_of = |group: bool| {
+        opened
+            .document
+            .all_layers()
+            .filter(|l| matches!(l.content, LayerContent::Group { .. }) == group)
+            .find_map(|l| l.style.as_ref())
+            .map(|s| *s.settings())
+            .unwrap()
+    };
+    let back = style_of(false);
+    assert!((back.fill_opacity - 0.6).abs() < 0.01);
+    let shadow = back.drop_shadow.unwrap();
+    assert_eq!((shadow.angle, shadow.distance), (45.0, 8.0));
+    assert!(back.inner_glow.is_some());
+    assert_eq!(back.stroke.unwrap().size, 4.0);
+    let group_back = style_of(true);
+    assert!((group_back.fill_opacity - 0.4).abs() < 0.01);
+    assert_eq!(group_back.outer_glow.unwrap().size, 12.0);
+    assert!(opened.layer_warnings.iter().flatten().all(|w| !matches!(
+        w,
+        crate::ImportWarning::LayerStylesIgnored | crate::ImportWarning::LayerStylesApproximated
+    )));
     std::fs::remove_file(&path).ok();
 }
