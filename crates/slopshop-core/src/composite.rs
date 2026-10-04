@@ -144,6 +144,7 @@ pub fn steps(document: &Document) -> Vec<Step<'_>> {
         Plan {
             canvas: document.size(),
             display: None,
+            looks: None,
         },
         &mut steps,
     );
@@ -157,10 +158,27 @@ pub fn display_steps(document: &Document) -> Vec<Step<'_>> {
     display_plan(document).0
 }
 
+/// [`display_steps`] with the `looks` the display asked for (ADR 0034): a layer whose stack has
+/// a filter and is not evaluated shows its look, the entries above the filter evaluated over it.
+pub fn display_steps_with<'a>(
+    document: &'a Document,
+    looks: Option<&'a crate::stack::Looks>,
+) -> Vec<Step<'a>> {
+    display_plan_with(document, looks).0
+}
+
 /// [`display_steps`], and whether a layer style's effects they show are not drawn yet (ADR
 /// 0032): never waited for either, they are computed in the background while what they drew
 /// last shows, and the display is to be shown again until they are drawn.
 pub fn display_plan(document: &Document) -> (Vec<Step<'_>>, bool) {
+    display_plan_with(document, None)
+}
+
+/// [`display_plan`] with the `looks` the display asked for (see [`display_steps_with`]).
+pub fn display_plan_with<'a>(
+    document: &'a Document,
+    looks: Option<&'a crate::stack::Looks>,
+) -> (Vec<Step<'a>>, bool) {
     let mut steps = Vec::new();
     let pending = Cell::new(false);
     push_steps(
@@ -169,6 +187,7 @@ pub fn display_plan(document: &Document) -> (Vec<Step<'_>>, bool) {
         Plan {
             canvas: document.size(),
             display: Some(&pending),
+            looks,
         },
         &mut steps,
     );
@@ -179,9 +198,11 @@ pub fn display_plan(document: &Document) -> (Vec<Step<'_>>, bool) {
 /// are not drawn yet (stacks not evaluated yet are steps of their own, effects not drawn yet
 /// are not waited for).
 #[derive(Debug, Clone, Copy)]
-struct Plan<'p> {
+struct Plan<'p, 'a> {
     canvas: Size,
     display: Option<&'p Cell<bool>>,
+    /// What the display shows of layers whose stack has a filter (by layer).
+    looks: Option<&'a crate::stack::Looks>,
 }
 
 /// How a layer takes part in compositing.
@@ -301,7 +322,12 @@ fn hidden_layers(layers: &[Layer], parent: Affine, canvas: Size) -> Vec<bool> {
 
 /// Steps of sibling `layers` (in a space mapped to the document by `parent`): each base with the
 /// clipped layers above it (ADR 0016), except the ones hidden by an opaque layer above them.
-fn push_steps<'a>(layers: &'a [Layer], parent: Affine, plan: Plan<'_>, steps: &mut Vec<Step<'a>>) {
+fn push_steps<'a>(
+    layers: &'a [Layer],
+    parent: Affine,
+    plan: Plan<'_, 'a>,
+    steps: &mut Vec<Step<'a>>,
+) {
     let hidden = hidden_layers(layers, parent, plan.canvas);
     let mut i = 0;
     while i < layers.len() {
@@ -359,7 +385,7 @@ fn push_layer<'a>(
     layer: &'a Layer,
     role: Role,
     parent: Affine,
-    plan: Plan<'_>,
+    plan: Plan<'_, 'a>,
     steps: &mut Vec<Step<'a>>,
 ) {
     let transform = layer.transform.then(parent);
@@ -401,13 +427,33 @@ fn push_layer<'a>(
             stack: Some(stack),
         } = &layer.content
         && image.ready_image().is_none()
+        // A filter is not evaluated by the display (ADR 0034): its quick look stands in for
+        // it, the entries above evaluated over it; without one, what the layer showed before.
+        && !(stack.has_shown_filter()
+            && image.preview().is_none()
+            && plan.looks.and_then(|l| l.get(&layer.id)).is_none()
+            && image.meanwhile().is_some())
     {
         stacked = true;
+        let look = plan
+            .looks
+            .and_then(|l| l.get(&layer.id))
+            .map(|look| &**look)
+            .or_else(|| image.preview())
+            .filter(|_| stack.has_shown_filter());
+        let (original, placed, entries) = match look {
+            Some(look) => (
+                look.image.as_ref(),
+                look.placement().then(transform),
+                &look.above[..],
+            ),
+            None => (stack.original().as_ref(), transform, stack.entries()),
+        };
         steps.push(Step::StackOriginal {
-            original: stack.original(),
-            transform,
+            original,
+            transform: placed,
         });
-        for entry in stack.entries().iter().filter(|e| !e.hidden()) {
+        for entry in entries.iter().filter(|e| !e.hidden()) {
             match entry {
                 crate::stack::Entry::Paint(paint) => {
                     steps.push(Step::StackPaint { paint, transform });
@@ -418,6 +464,9 @@ fn push_layer<'a>(
                         .iter()
                         .map(|effect| Step::StackEffect { effect, transform }),
                 ),
+                // Nothing shown before (a document just opened): the stack without its filters
+                // for a moment.
+                crate::stack::Entry::Filter(_) => {}
             }
         }
     }

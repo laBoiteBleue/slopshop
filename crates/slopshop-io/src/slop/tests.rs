@@ -271,6 +271,15 @@ fn assert_same_stack(a: Option<&LayerStack>, b: Option<&LayerStack>, what: &str)
                     }
                 }
             }
+            (Entry::Filter(p), Entry::Filter(q)) => {
+                assert_eq!(p.steps().len(), q.steps().len(), "{what}");
+                for (s, t) in p.steps().iter().zip(q.steps()) {
+                    assert_eq!(s.filter, t.filter, "{what}");
+                    assert_eq!(s.to_document, t.to_document, "{what}");
+                    assert_eq!(s.space, t.space, "{what}");
+                    assert_eq!(s.selection.is_some(), t.selection.is_some(), "{what}");
+                }
+            }
             _ => panic!("{what}: entries differ"),
         }
     }
@@ -1692,5 +1701,98 @@ fn hidden_entries_round_trip() {
     };
     assert!(read.entries()[0].hidden());
     assert!(!read.entries()[1].hidden());
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn filter_entries_round_trip() {
+    let mut doc = golden_document();
+    let id = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { stack: Some(_), .. } => Some(l.id),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    for radius in [3.5, 1.25] {
+        Edit::apply_filter(
+            &doc,
+            id,
+            slopshop_core::filter::Filter::GaussianBlur { radius },
+        )
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let path = temp_path("filter-entries.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &loaded.layer(id).unwrap().content
+    else {
+        panic!("a layer with a stack");
+    };
+    // Two blurs in a row: one blur, on top of the Invert and the paint.
+    assert_eq!(read.entries().len(), 3);
+    let Entry::Filter(filter) = &read.entries()[2] else {
+        panic!("a filter entry");
+    };
+    assert_eq!(filter.steps().len(), 1);
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn entries_applied_several_times_in_older_files_are_read_as_an_entry_each() {
+    use slopshop_core::adjust::Adjustment;
+    use slopshop_core::stack::EffectEntry;
+    let mut doc = golden_document();
+    let (id, stack) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster {
+                stack: Some(stack), ..
+            } => Some((l.id, stack.clone())),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    let step = |levels| {
+        Arc::new(Effect {
+            adjustment: Adjustment::Posterize { levels },
+            selection: None,
+            to_document: slopshop_core::Affine::IDENTITY,
+            space: doc.blend_space(),
+        })
+    };
+    // ×2, as files written before ADR 0034's combining kept it.
+    let mut entries = stack.entries().to_vec();
+    entries.push(Entry::Effect(Arc::new(
+        EffectEntry::new(vec![step(4.0), step(9.0)]).unwrap(),
+    )));
+    let twice = LayerStack::with_entries(Arc::clone(stack.original()), entries).unwrap();
+    Edit::SetLayerStack {
+        id,
+        stack: twice,
+        shown: None,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("applied-twice.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &loaded.layer(id).unwrap().content
+    else {
+        panic!("a layer with a stack");
+    };
+    assert_eq!(read.entries().len(), stack.entries().len() + 2);
+    for entry in &read.entries()[stack.entries().len()..] {
+        let Entry::Effect(effect) = entry else {
+            panic!("an effect entry");
+        };
+        assert_eq!(effect.steps().len(), 1);
+    }
     fs::remove_file(&path).ok();
 }

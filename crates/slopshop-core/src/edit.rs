@@ -779,6 +779,40 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// Filter > … (ADR 0034): `filter` applied to raster layer `id` (the active one), within the
+    /// selection, as an entry on top of its stack. [`EditError::NoLayers`] when the layer is
+    /// hidden, as Photoshop refuses.
+    pub fn apply_filter(
+        doc: &Document,
+        id: LayerId,
+        filter: crate::filter::Filter,
+    ) -> Result<Edit, EditError> {
+        if !filter.is_valid() {
+            return Err(EditError::InvalidAdjustment);
+        }
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let LayerContent::Raster { image, .. } = &layer.content else {
+            return Err(EditError::NotRaster(id));
+        };
+        if !layer.visible {
+            return Err(EditError::NoLayers);
+        }
+        let stack = layer.content.stack().ok_or(EditError::NotRaster(id))?;
+        let step = crate::stack::FilterStep {
+            filter,
+            selection: doc.selection().cloned(),
+            to_document: layer.transform.then(doc.parent_transform(id)),
+            space: doc.blend_space(),
+        };
+        Ok(Edit::SetLayerStack {
+            id,
+            stack: stack
+                .with_filter(step, image.ready_image().cloned())
+                .map_err(EditError::Stack)?,
+            shown: None,
+        })
+    }
+
     /// The edit that deletes entry `index` (bottom to top) of raster layer `id`'s stack (ADR
     /// 0029): the neighbours that become alike merge, and what was above it is evaluated
     /// again where it reaches.
@@ -792,22 +826,28 @@ impl Edit {
     }
 
     /// The edit that sets entry `index` of raster layer `id`'s stack (ADR 0034): hidden or
-    /// shown by its eye, and for an effect, its steps' adjustments when given (one per step, of
-    /// its kind; each keeps the selection it was applied with). What is above it is evaluated
-    /// again where the entry reaches.
+    /// shown by its eye, and for an effect or a filter, its steps' settings when given (one per
+    /// step, of its kind; each keeps the selection it was applied with). What is above it is
+    /// evaluated again where the entry reaches.
     pub fn set_entry(
         doc: &Document,
         id: LayerId,
         index: usize,
-        adjustments: Option<&[crate::adjust::Adjustment]>,
+        operations: Option<&[crate::stack::Operation]>,
         hidden: bool,
     ) -> Result<Edit, EditError> {
+        use crate::stack::Operation;
         let stack = Self::stack_of(doc, id)?;
-        if adjustments.is_some_and(|a| a.iter().any(|a| !a.is_valid())) {
+        if operations.is_some_and(|o| {
+            o.iter().any(|o| match o {
+                Operation::Adjustment(a) => !a.is_valid(),
+                Operation::Filter(f) => !f.is_valid(),
+            })
+        }) {
             return Err(EditError::InvalidAdjustment);
         }
-        let edited = match adjustments {
-            Some(adjustments) => stack.with_steps(index, adjustments),
+        let edited = match operations {
+            Some(operations) => stack.with_steps(index, operations),
             None => Ok(stack.clone()),
         };
         Ok(Edit::SetLayerStack {
@@ -3096,6 +3136,7 @@ mod tests {
     #[test]
     fn an_entry_is_edited_again_and_hidden() {
         use crate::adjust::Adjustment;
+        use crate::stack::Operation;
         let size = Size::new(8, 8);
         let mut doc = Document::new(size);
         let id = raster_layer(&mut doc, image(size, false, 10));
@@ -3108,7 +3149,7 @@ mod tests {
         let before = shown(&doc, id).1.unwrap();
 
         // Edited: the pixels follow, from the entry up, as a stack evaluated anew would show.
-        let lower = [Adjustment::Threshold { level: 0.01 }];
+        let lower = [Operation::Adjustment(Adjustment::Threshold { level: 0.01 })];
         let undo = Edit::set_entry(&doc, id, 0, Some(&lower), false)
             .unwrap()
             .apply(&mut doc)
@@ -3138,7 +3179,7 @@ mod tests {
         assert_eq!(shown(&doc, id).1.unwrap().entries().len(), 2);
 
         // Refused: a step of another kind, another count of steps, adjustments for paint.
-        let invert = [Adjustment::Invert];
+        let invert = [Operation::Adjustment(Adjustment::Invert)];
         assert_eq!(
             Edit::set_entry(&doc, id, 0, Some(&invert), false),
             Err(EditError::Stack(crate::stack::StackError::InvalidEffect))
@@ -3153,9 +3194,41 @@ mod tests {
                 2
             )))
         );
-        let invalid = [Adjustment::Threshold { level: f32::NAN }];
+        let invalid = [Operation::Adjustment(Adjustment::Threshold {
+            level: f32::NAN,
+        })];
         assert_eq!(
             Edit::set_entry(&doc, id, 0, Some(&invalid), false),
+            Err(EditError::InvalidAdjustment)
+        );
+    }
+
+    #[test]
+    fn a_filter_applies_to_one_visible_raster_layer() {
+        use crate::filter::Filter;
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let id = raster_layer(&mut doc, image(size, false, 10));
+        let blur = Filter::GaussianBlur { radius: 2.0 };
+        let undo = Edit::apply_filter(&doc, id, blur)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let stack = shown(&doc, id).1.unwrap();
+        assert!(matches!(
+            &stack.entries()[0],
+            crate::stack::Entry::Filter(_)
+        ));
+        // A uniform layer blurred stays as it was, its edges repeating.
+        assert_eq!(shown(&doc, id).0.levels()[0].tiles()[0][0], 10);
+        undo.apply(&mut doc).unwrap();
+        assert!(shown(&doc, id).1.is_none());
+        Edit::SetLayerVisible { id, visible: false }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(Edit::apply_filter(&doc, id, blur), Err(EditError::NoLayers));
+        assert_eq!(
+            Edit::apply_filter(&doc, id, Filter::GaussianBlur { radius: 0.0 }),
             Err(EditError::InvalidAdjustment)
         );
     }

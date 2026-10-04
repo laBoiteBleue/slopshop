@@ -37,6 +37,7 @@ pub mod copy;
 pub mod curve;
 pub mod document;
 pub mod edit;
+pub mod filter;
 pub mod geom;
 pub mod gradient;
 pub mod job;

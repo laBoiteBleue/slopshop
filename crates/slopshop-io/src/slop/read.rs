@@ -512,7 +512,10 @@ fn raster_content(
     image: &Arc<RasterImage>,
     rasters: &HashMap<Hash, Arc<RasterImage>>,
 ) -> Result<LayerContent, FileError> {
-    use slopshop_core::stack::{Effect, EffectEntry, Entry, LayerStack, PaintEntry};
+    use slopshop_core::filter::Filter;
+    use slopshop_core::stack::{
+        Effect, EffectEntry, Entry, FilterEntry, FilterStep, LayerStack, PaintEntry,
+    };
     let invalid = |e: slopshop_core::stack::StackError| corrupt(&format!("invalid stack: {e}"));
     let image_at = |value: Option<&Value>, what: &str| {
         value
@@ -521,6 +524,25 @@ fn raster_content(
             .and_then(|key| rasters.get(&key))
             .cloned()
             .ok_or_else(|| corrupt(&format!("{what} with a missing image")))
+    };
+    // An applied operation's selection and placement (`selection`, `transform`).
+    let placement_of = |params: &serde_json::Map<String, Value>, what: &str| {
+        let selection = match params.get("selection") {
+            None | Some(Value::Null) => None,
+            value => Some(
+                slopshop_core::selection::Selection::new(image_at(value, what)?)
+                    .ok_or_else(|| corrupt(&format!("a {what}'s selection is not gray")))?,
+            ),
+        };
+        let numbers: Vec<f64> = params
+            .get("transform")
+            .and_then(Value::as_array)
+            .map(|v| v.iter().filter_map(Value::as_f64).collect())
+            .unwrap_or_default();
+        let to_document: [f64; 6] = numbers
+            .try_into()
+            .map_err(|_| corrupt(&format!("a {what}'s transform has six numbers")))?;
+        Ok::<_, FileError>((selection, slopshop_core::Affine::from_array(to_document)))
     };
     let space_of = |value: Option<&Value>| {
         let id = value
@@ -599,11 +621,55 @@ fn raster_content(
                     space: space_of(params.get("space"))?,
                 }));
             }
-            stack.push(Entry::Effect(Arc::new(
-                EffectEntry::new(effect)
-                    .map_err(invalid)?
-                    .with_hidden(hidden),
-            )));
+            // Applied several times in a row (older files): an entry each (ADR 0034).
+            for step in effect {
+                stack.push(Entry::Effect(Arc::new(
+                    EffectEntry::new(vec![step])
+                        .map_err(invalid)?
+                        .with_hidden(hidden),
+                )));
+            }
+        } else if let Some(steps) = entry.get("filter").and_then(Value::as_array) {
+            let mut filter = Vec::with_capacity(steps.len());
+            for step in steps {
+                let params = step.as_object().ok_or_else(|| corrupt("invalid filter"))?;
+                let id = params
+                    .get("filter")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| corrupt("a filter without its kind"))?;
+                let values: Vec<f32> = params
+                    .get("values")
+                    .and_then(Value::as_array)
+                    .map(|v| {
+                        v.iter()
+                            .filter_map(Value::as_f64)
+                            .map(|v| v as f32)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // A filter this version does not know comes from a newer SlopShop.
+                let kind = match Filter::from_params(id, &values) {
+                    Some(kind) if kind.is_valid() => kind,
+                    _ if Filter::defaults(id).is_some() => {
+                        return Err(corrupt("a filter's values are out of range"));
+                    }
+                    _ => return Err(FileError::UnknownNodeType(format!("filter {id}"))),
+                };
+                let (selection, to_document) = placement_of(params, "filter")?;
+                filter.push(Arc::new(FilterStep {
+                    filter: kind,
+                    selection,
+                    to_document,
+                    space: space_of(params.get("space"))?,
+                }));
+            }
+            for step in filter {
+                stack.push(Entry::Filter(Arc::new(
+                    FilterEntry::new(vec![step])
+                        .map_err(invalid)?
+                        .with_hidden(hidden),
+                )));
+            }
         } else {
             // An entry this version does not know comes from a newer SlopShop.
             return Err(FileError::UnknownNodeType("stack entry".to_owned()));

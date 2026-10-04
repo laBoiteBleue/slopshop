@@ -309,6 +309,15 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     entry is kept but skipped when the result is evaluated. Only those nodes are written at v10,
     so that older readers refuse them rather than show the entry; `hidden` on a node of an
     earlier version is refused.
+  - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
+    filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
+    `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier
+    (`gaussianBlur`), `values` its parameters (Gaussian Blur: the radius, the standard deviation
+    in the layer's pixels, 0.1 to 1000), the others as an effect step's. A filter reads around
+    each pixel: the result of the entries below it is filtered whole (the layer's edges
+    repeating outward, in premultiplied values of `space`), mixed with what it was by the
+    selection's coverage, and rounded to the original's format. Older readers refuse such an
+    entry as coming from a newer SlopShop, and so does a reader that does not know the filter.
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,

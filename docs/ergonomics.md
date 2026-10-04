@@ -59,12 +59,11 @@ built. Contributors: propose here first.
   layers; clipped layers indented with an arrow, the base underlined). What was applied to a
   layer's pixels (paint, Image > Adjustments; ADR 0029) is listed below it, as Photoshop
   lists smart filters: an arrow at the end of the row unfolds the list (folded at first),
-  newest on top: Paint, or the adjustment's name (×2 when applied twice in a row). Each entry
+  newest on top: Paint, or the adjustment's name. Each entry
   has an eye that hides it without deleting it ([ADR 0034](adr/0034-editable-operations.md)).
   An adjustment is edited again with the icon shown on hover next to the trash (or a
   double-click, or right-click > Edit Settings…): its dialog, previewed on the canvas (Preview
-  off hides the entry meanwhile), OK one undo entry, Cancel takes it back; an entry applied
-  several times in a row chooses which application it edits. What was painted above it
+  off hides the entry meanwhile), OK one undo entry, Cancel takes it back. What was painted above it
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
@@ -147,8 +146,19 @@ built. Contributors: propose here first.
   selection, as one undo entry, the canvas going from the preview straight to the result;
   Invert applies at once. What is applied is
   kept in the layer's stack (ADR 0029), listed below the layer, editable again, hidden by its
-  eye and deletable; the same adjustment applied twice in a row is one entry (×2), two Inverts
-  cancel.
+  eye and deletable; the same adjustment applied twice in a row is one entry when the settings
+  combine exactly (Exposure's stops, a hue shift), two entries otherwise; two Inverts cancel.
+- Filter menu ([ADR 0034](adr/0034-editable-operations.md)), between Select and View as in
+  Photoshop: Repeat (Ctrl+F: the filter applied last, as it was, on the active layer, a new
+  entry; "Repeat Gaussian Blur" once there is one) and Last Filter Settings… (Alt+Ctrl+F: its
+  dialog at those settings), then Blur > Gaussian Blur…: Photoshop's dialog, a radius in pixels
+  (0.1 to 1000, the field and a logarithmic slider), shown live on the canvas (Preview off
+  shows the layer without it), OK one undo entry, Cancel takes it back. A filter applies to the
+  active layer only, within the selection: grayed on a hidden layer, a layer that is not
+  pixels, a targeted mask and in Quick Mask. It is an entry of the layer's stack, listed below
+  it with a funnel, its eye, edited again with its icon (the same dialog); two in a row are one
+  blur (3 then 4 px: 5 px). Painting above it paints over its result; the Restore Eraser reaches the paint
+  above the topmost filter only.
 - Image > Auto Tone (Shift+Ctrl+L), Auto Contrast (Alt+Shift+Ctrl+L), Auto Color
   (Shift+Ctrl+B), Photoshop's three classic algorithms, 0.1 % clipped at each end: Auto
   Contrast stretches the three channels alike (colors keep their relations), Auto Tone each
@@ -444,8 +454,9 @@ maintainer's answers:
 - **Decided, to build**:
   - Entries of a layer's stack are editable: an icon next to the trash on the entry's row
     reopens its dialog (previewed, OK one undo entry), and an eye hides it without deleting it.
-    The same operation applied over an entry of its kind still joins it (×2), each application
-    staying editable (the dialog chooses which); two Inverts that meet cancel and disappear.
+    The same operation applied over an entry of its kind is one entry when their settings
+    combine exactly (two blurs, Exposure's stops, hue shifts; revised 2026-10-04: no "1 of 2"
+    choice), two entries otherwise; two Inverts that meet cancel and disappear.
   - Image > Adjustments keeps applying to every visible pixel layer, an entry on top of each
     stack, edited layer by layer (no link between layers). Filter > … applies to the active
     layer only; grayed when the active layer is not a pixel layer, when its mask is the target,

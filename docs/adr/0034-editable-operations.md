@@ -28,10 +28,14 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
    `SetLayerStack`, a drag of a slider one undo entry. What is above it is evaluated again where
    the old and the new entry reach (widened by the margin of the spatial entries above it);
    what is below is not.
-2. **Alike neighbours still merge.** An operation applied over an entry of its kind joins it
-   (×n), as deleting what separated two of them does; each of its steps stays editable on its
-   own (the dialog chooses the step). Two Inverts that meet cancel and the entry disappears.
-   Editing never merges nor splits entries.
+2. **Neighbours combine only exactly** (revised the same day by the maintainer: no "1 of 2"
+   choice). An operation applied over an entry of its kind, or meeting one when what separated
+   them is deleted, becomes one entry with combined settings when that is exact: two Gaussian
+   Blurs one of the root of the sum of their squared radii, Exposure's stops added (without
+   offset nor gamma), hue shifts added (without saturation nor lightness), within the same
+   selection; two Inverts cancel and disappear. Otherwise (Curves, Levels…, another
+   selection) they stay two entries, each with its settings. Editing never merges nor splits
+   entries. Files of before read an entry applied several times as an entry each.
 3. **Each entry has an eye**: a hidden entry is kept and skipped by the evaluation (saved).
 4. **Targets.** Image > Adjustments (and Auto Tone, Contrast, Color) keep applying to every
    visible raster layer, one entry on top of each stack, each edited on its own layer (no
@@ -103,6 +107,17 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
 - 8-bit layers are rounded after each entry: stacks edited at will make converting a layer to
   a deeper format more pressing.
 - `Footprint` gains a margin; `stack::Effect` grows into the shared operation type.
-- Order of work: entries editable, their eye and the dialog's step choice (adjustments, the
+- *First version (Gaussian Blur, 2026-10-04)*: a filter entry is computed on the CPU, tile by
+  tile with a margin up to a radius of 64, on the layer reduced 4 to 32 times beyond: its memory
+  never grows with the layer (a 233 MP layer once failed to allocate a whole float copy). 12 MP
+  take 0.09 to 0.19 s, 233 MP 1.4 to 3.5 s (32 threads). Its input and result are kept in the
+  entry. The display never waits for the whole layer: it shows a quick look (the filter on a
+  pyramid level of at most 4 MP), then the look at the part it shows, at the level it is seen at
+  (the filter on those tiles and their margin: about a screen of pixels whatever the layer), the
+  entries above evaluated over it by the shader. The whole layer is evaluated only when its
+  pixels are needed (export, tools, the clipboard); thumbnails use the quick look while a filter
+  is the top entry. A change below a filter computes it again over what is shown. The Restore
+  Eraser reaches the paint above the topmost shown filter only. Filters on the GPU come next.
+- Order of work: entries editable and their eye (adjustments, the
   engine and the app); moved pixels replayed; Gaussian Blur in the stack with Repeat and the
   Filter menu; the multi-pass compositor's ADR, then filter layers; the other filters; Liquify.

@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use slopshop_core::adjust::Adjustment;
 use slopshop_core::color::PixelFormat;
+use slopshop_core::filter::Filter;
 use slopshop_core::selection::{SELECTION_FORMAT, Selection};
-use slopshop_core::stack::{Effect, LayerStack, PaintEntry, PaintOp};
+use slopshop_core::stack::{Effect, FilterStep, LayerStack, PaintEntry, PaintOp};
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{
@@ -254,4 +255,61 @@ fn frames_read_back_say_whether_a_stack_is_pending() {
             .unwrap();
         assert_eq!(stats.incomplete, incomplete, "ready {ready}");
     }
+}
+
+#[test]
+fn a_filtered_layer_shows_the_look_at_what_is_seen() {
+    let Some(r) = renderer() else { return };
+    // A sharp edge, which a blur visibly softens.
+    let original = image(PixelFormat::RGBA8_SRGB, |x, _| {
+        let v = if x < W / 2 { 0 } else { 255 };
+        vec![v, v, v, 255]
+    });
+    let unblurred = document(&LayerStack::new(Arc::clone(&original)), true);
+    let blurred = LayerStack::new(Arc::clone(&original))
+        .with_filter(
+            FilterStep {
+                filter: Filter::GaussianBlur { radius: 6.0 },
+                selection: None,
+                to_document: Affine::IDENTITY,
+                space: BlendSpace::Perceptual,
+            },
+            Some(Arc::clone(&original)),
+        )
+        .unwrap();
+    let gpu = document(&blurred, false);
+    let cpu = document(&blurred, true);
+    for (scale, output, most) in [
+        (1.0, Size::new(W, H), 3.0),
+        (2.0, Size::new(W / 2, H / 2), 3.0),
+    ] {
+        let view = ViewTransform {
+            origin: [0.0, 0.0],
+            scale,
+        };
+        // The look at what is seen is computed on a thread of its own: frames ask again
+        // until it is there.
+        let mut done = false;
+        for _ in 0..500 {
+            if !r
+                .profile_view(&gpu, view, output, false)
+                .unwrap()
+                .incomplete
+            {
+                done = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(done, "scale {scale}: the look never came");
+        let a = r.render_view(&gpu, view, output).unwrap();
+        let b = r.render_view(&cpu, view, output).unwrap();
+        let (worst, mean) = differences(&a, &b);
+        assert!(mean <= most, "scale {scale}: {mean} (worst {worst})");
+        // And blurred indeed.
+        let sharp = r.render_view(&unblurred, view, output).unwrap();
+        assert!(differences(&a, &sharp).0 > 50, "scale {scale}: not blurred");
+    }
+    // Shown without evaluating the whole layer.
+    assert!(pending(&gpu));
 }
