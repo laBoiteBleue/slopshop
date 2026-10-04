@@ -85,3 +85,31 @@ test("the Selections panel loads, combines, renames and deletes saved selections
   expect(sent("perform")).toEqual([]);
   localStorage.clear();
 });
+
+test("Window lists the dock's panels, the unfolded one checked; choosing one unfolds it", async () => {
+  localStorage.setItem("slopshop.dock", JSON.stringify({ open: "properties", height: 280 }));
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  const entry = (name: string) => screen.getByRole("menuitemradio", { name: new RegExp(name) });
+  await user.click(screen.getByRole("menuitem", { name: "Window" }));
+  expect(entry("Properties")).toHaveAttribute("aria-checked", "true");
+  expect(entry("Selections")).toHaveAttribute("aria-checked", "false");
+  await user.click(screen.getByText("Selections", { selector: ".dropdown .label" }));
+  expect(screen.getByRole("tabpanel", { name: "Selections" })).toBeInTheDocument();
+  // The unfolded one again folds the dock.
+  await user.click(screen.getByRole("menuitem", { name: "Window" }));
+  await user.click(screen.getByText("Selections", { selector: ".dropdown .label" }));
+  expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+  expect(JSON.parse(localStorage.getItem("slopshop.dock")!)).toMatchObject({ open: null });
+  localStorage.clear();
+});
+
+test("Window waits for a document", async () => {
+  const user = open();
+  await screen.findByText("Open an image or create a document");
+  await user.click(screen.getByRole("menuitem", { name: "Window" }));
+  expect(screen.getByRole("menuitemradio", { name: /Selections/ })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});

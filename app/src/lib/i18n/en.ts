@@ -164,6 +164,7 @@ const en = {
   "menu.layer.maskDelete": "Delete",
   "layers.mask.hint": "Layer mask: click to paint it, Shift+click to disable or enable it",
   "menu.view": "View",
+  "menu.window": "Window",
   "menu.select": "Select",
   "menu.select.allLayers": "All Layers",
   "menu.select.deselectLayers": "Deselect Layers",
