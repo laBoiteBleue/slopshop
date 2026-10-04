@@ -101,7 +101,7 @@ fn target_image(doc: &Document, target: Target) -> Result<Arc<RasterImage>, Stri
             let mask = layer.mask.as_ref().ok_or("the layer has no mask")?;
             Ok(Arc::clone(&mask.image))
         }
-        Target::Selection => Err("the selection cannot move its own pixels".to_owned()),
+        Target::QuickMask => Err("Quick Mask's pixels do not move".to_owned()),
     }
 }
 
@@ -115,7 +115,7 @@ fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> 
             (image, Some(growth), id)
         }
         Target::Mask(id) => (target_image(doc, target)?, None, id),
-        Target::Selection => return Err("the selection cannot move its own pixels".to_owned()),
+        Target::QuickMask => return Err("Quick Mask's pixels do not move".to_owned()),
     };
     let layer = doc.layer(id).ok_or("the moved layer is gone")?;
     let transform = lifted.as_ref().map_or(layer.transform, |g| g.transform);
@@ -224,7 +224,7 @@ pub(crate) fn move_pixels(
     let target = match request.target {
         PaintTarget::Layer => Target::Layer(id),
         PaintTarget::Mask => Target::Mask(id),
-        PaintTarget::Selection => return Err("the selection cannot move its own pixels".into()),
+        PaintTarget::QuickMask => return Err("Quick Mask's pixels do not move".into()),
     };
     // The float is taken out while the pixels are computed: frames keep rendering meanwhile.
     let (mut floating, canvas, blend_space) = {

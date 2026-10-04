@@ -88,3 +88,25 @@ test("a click on the image takes the color shown there (the eyedropper)", async 
   expect(at).toHaveBeenCalled();
   await vi.waitFor(() => expect(hexField()).toHaveValue("0000ff"));
 });
+
+test("for a mask, grays only: one field, the eyedropper taking a color's gray", async () => {
+  const onapply = vi.fn();
+  render(ColorPickerDialog, {
+    title: "Color Picker (Foreground Color)",
+    color: "#ff0000",
+    gray: true,
+    onapply,
+    onclose: vi.fn(),
+    sample: { at: async () => [0, 0, 0] as Rgb, probe: () => true },
+  });
+  const user = userEvent.setup();
+  // The red given becomes its gray; no square, no other field.
+  expect(screen.getAllByRole("spinbutton")).toHaveLength(1);
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  const level = screen.getByRole("spinbutton");
+  expect(level).toHaveValue(Math.round(255 * 0.4985));
+  await user.clear(level);
+  await user.type(level, "128");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  expect(onapply).toHaveBeenCalledWith("#808080");
+});

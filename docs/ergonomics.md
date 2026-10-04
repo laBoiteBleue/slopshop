@@ -226,11 +226,16 @@ built. Contributors: propose here first.
   selection at any zoom, where coverage crosses one half. Quick Mask (Q, Select > Quick Mask
   Mode) shows a soft edge: what the selection leaves out is tinted red, half opaque, fading
   where it is soft; the ants hide meanwhile (the maintainer preferred it to dotted limits around
-  the ants). In Quick Mask the Brush paints the selection (white selects, black unselects, a
-  gray partly, the Eraser unselects) with a pair of colors of its own, black and white at first
-  (D), so that the drawing colors come back on leaving it; the options bar says "Quick Mask"
-  whatever the tool, with Add and Remove (that pair, X swapping it) and the overlay's opacity
-  (an app preference, half by default); the tab's title ends with "(Quick Mask)". Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
+  the ants). Quick Mask works as Photoshop's (maintainer, 2026-10-04): entering it turns the
+  selection into a mask (everything when nothing is selected) and deselects; the painting
+  tools then paint that mask (Brush, Eraser, Edit > Fill and Stroke, Delete: white selects,
+  black leaves out, a gray partly), and a selection made meanwhile with the selection tools
+  limits them, as on any image; leaving it turns the mask back into the selection. Entering
+  and leaving are undo entries. While a mask is painted (Quick Mask, or a layer's mask), the
+  swatches are a pair of grays of their own (black and white at first, D, X swapping them) and
+  the color picker offers grays only (its eyedropper takes a color's gray); the drawing colors
+  come back afterwards. The options bar says "Quick Mask" whatever the tool, with the overlay's
+  opacity (an app preference, half by default); the tab's title ends with "(Quick Mask)". Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
   Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
   dialog with one number of pixels, remembered for the session, the change shown live on the
   image while it is set, Cancel taking it back, OK one undo entry; the canvas edge is not an
@@ -362,7 +367,7 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   their colors, as Photoshop; connected pixels or the whole image); Transform Selection (Free
   Transform's box, handles, fields and right-click menu on the selection's bounds; the outline
   follows live, Enter resamples the selection as a layer is resampled, one undo entry; Esc or
-  undo leaves it as it was; the layers never change); Quick Mask Mode (Q, with its own Add / Remove colors and overlay opacity); Save Selection… (a
+  undo leaves it as it was; the layers never change); Quick Mask Mode (Q, the mask painted by every painting tool in grays, a selection limiting them); Save Selection… (a
   name, "Selection 1" at first; a name already used says it will be replaced) and Load
   Selection (the saved selections by name; a click makes one the selection): named objects of
   the document, kept in `.slop` and following crops, canvas and image size changes and

@@ -24,9 +24,8 @@
     brush = $bindable(),
     eraser = $bindable(),
     transform,
-    quickMask = null,
+    quickMask = false,
     quickMaskOpacity = $bindable(50),
-    onquickmask,
     alignable = false,
     distributable = false,
     onalign,
@@ -56,15 +55,10 @@
     /** Brush and Eraser (ADR 0027): size in document pixels, the rest as shares in [0, 1]. */
     brush: PaintOptions;
     eraser: PaintOptions;
-    /**
-     * Quick Mask on (whatever the tool): what the Brush does to the selection with its colors,
-     * shown as Add / Remove (null for a gray: some of either).
-     */
-    quickMask?: { action: "add" | "remove" | null } | null;
+    /** Quick Mask is on (whatever the tool): said, with its overlay's opacity. */
+    quickMask?: boolean;
     /** Quick Mask's overlay opacity, percent. */
     quickMaskOpacity?: number;
-    /** Add or Remove chosen: the Brush's colors become white or black. */
-    onquickmask?: (action: "add" | "remove") => void;
   } = $props();
 
   type PaintOptions = {
@@ -99,19 +93,6 @@
   {#if quickMask}
     <!-- A mode, not a tool: shown whatever the tool, so that it is never forgotten. -->
     <span class="mode" role="status">{t("quickMask.label")}</span>
-    <div class="segmented" role="group" aria-label={t("quickMask.label")}>
-      {#each ["add", "remove"] as const as action (action)}
-        <button
-          class:on={quickMask.action === action}
-          aria-pressed={quickMask.action === action}
-          title={t(action === "add" ? "quickMask.add.hint" : "quickMask.remove.hint")}
-          onmousedown={keepFocus}
-          onclick={() => onquickmask?.(action)}
-        >
-          {t(action === "add" ? "quickMask.add" : "quickMask.remove")}
-        </button>
-      {/each}
-    </div>
     <SliderField
       label={t("quickMask.opacity")}
       bind:value={quickMaskOpacity}
@@ -305,28 +286,5 @@
     color: #ffffff;
     font-weight: 600;
     white-space: nowrap;
-  }
-
-  .segmented {
-    display: inline-flex;
-    border: 1px solid var(--border-strong);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .segmented button {
-    padding: 2px 10px;
-    border: none;
-    background: transparent;
-    color: var(--text-muted);
-  }
-
-  .segmented button + button {
-    border-left: 1px solid var(--border-strong);
-  }
-
-  .segmented button.on {
-    background: var(--accent);
-    color: #ffffff;
   }
 </style>

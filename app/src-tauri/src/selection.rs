@@ -988,8 +988,10 @@ pub async fn reselect(
     Ok(document.view())
 }
 
-/// Select > Quick Mask Mode (Q): the view tints what the selection leaves out, at `opacity`
-/// percent (an app preference). View state: not an edit, not in the history.
+/// Select > Quick Mask Mode (Q), as Photoshop's: on, the selection becomes a mask the painting
+/// tools paint (a selection made meanwhile limits them); off, the mask becomes the selection.
+/// Each is one undo entry. The view tints what the mask leaves out at `opacity` percent (an
+/// app preference, view state).
 #[tauri::command]
 pub async fn set_quick_mask(
     state: State<'_, AppState>,
@@ -997,10 +999,28 @@ pub async fn set_quick_mask(
     on: bool,
     opacity: u8,
 ) -> Result<DocumentView, String> {
+    quick_mask(&state, document_id, on, opacity)
+}
+
+/// [`set_quick_mask`]'s work.
+pub(crate) fn quick_mask(
+    state: &AppState,
+    document_id: u64,
+    on: bool,
+    opacity: u8,
+) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    document.overlays.quick_mask = on;
     document.overlays.quick_mask_opacity = opacity.min(100);
+    let doc = document.session.document();
+    let edit = if on {
+        Edit::enter_quick_mask(doc).map_err(|e| e.to_string())?
+    } else {
+        Edit::leave_quick_mask(doc)
+    };
+    if let Some(edit) = edit {
+        document.session.perform(edit).map_err(|e| e.to_string())?;
+    }
     Ok(document.view())
 }
 

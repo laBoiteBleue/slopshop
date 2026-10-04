@@ -77,10 +77,8 @@
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import {
-    QUICK_MASK_COLORS,
+    MASK_COLORS,
     loadQuickMaskOpacity,
-    quickMaskAction,
-    quickMaskColors,
     saveQuickMaskOpacity,
     type ColorPair,
   } from "./lib/quickMask";
@@ -590,18 +588,22 @@
   /** The foreground (the Brush's) and background colors, `#rrggbb` sRGB. */
   let colors = $state({ foreground: "#000000", background: "#ffffff" });
   /**
-   * Quick Mask's own pair (white selects, black unselects), so that the drawing colors are as
-   * they were on leaving it; the options bar shows it as Add / Remove.
+   * The grays masks are painted with (Quick Mask, a layer's mask), as Photoshop's: their own
+   * pair, so that the drawing colors are as they were afterwards.
    */
-  let quickMaskPair = $state<ColorPair>({ ...QUICK_MASK_COLORS });
+  let maskColors = $state<ColorPair>({ ...MASK_COLORS });
   /** Quick Mask's overlay opacity, percent: an app preference. */
   let quickMaskOpacity = $state(loadQuickMaskOpacity());
-  /** The colors the swatches show and the Brush paints: Quick Mask's pair while it is on. */
+  /** Painting goes to a mask (Quick Mask's, or the active layer's): colors are grays. */
+  function paintsGray(): boolean {
+    return (active?.quickMask ?? false) || (layersPanel?.paintsMask() ?? false);
+  }
+  /** The colors the swatches show and the tools paint: the mask grays when painting a mask. */
   function paintColors(): ColorPair {
-    return active?.quickMask ? quickMaskPair : colors;
+    return paintsGray() ? maskColors : colors;
   }
   function setPaintColors(pair: ColorPair) {
-    if (active?.quickMask) quickMaskPair = pair;
+    if (paintsGray()) maskColors = pair;
     else colors = pair;
   }
   // The opacity set: saved, and sent to the document in Quick Mask unless it shows it already
@@ -673,12 +675,12 @@
       // Quick Mask paints the selection, whatever the layer; else the active layer's mask
       // when it is the target, or its pixels.
       const target: PaintTarget = doc.quickMask
-        ? "selection"
+        ? "quickMask"
         : layersPanel?.paintsMask()
           ? "mask"
           : "layer";
       // As in Photoshop: only pixels or a mask can be painted, and not while hidden.
-      if (target !== "selection") {
+      if (target !== "quickMask") {
         if (!layer || (target === "layer" && layer.kind !== "raster")) {
           showError(t("paint.needRaster"));
           return;
@@ -722,14 +724,18 @@
 
   // --- Edit > Fill and Stroke, Delete with a selection: paint (ADR 0027, 0029) -----------------
 
-  /** The layer pixels (or the mask, when it is the target) that Fill, Stroke and Delete paint. */
-  type PaintedLayer = { documentId: number; layerId: number; mask: boolean };
+  /**
+   * What Fill, Stroke and Delete paint: the layer's pixels, its mask when it is the target, or
+   * Quick Mask's image while it is on (`target`).
+   */
+  type PaintedLayer = { documentId: number; layerId: number; mask: boolean; target?: PaintTarget };
 
   /** The active layer as a `PaintedLayer`; `null`, with a notice, when it has no pixels. */
   function paintedLayer(): PaintedLayer | null {
     const doc = active;
     if (!doc) return null;
     commitTransform();
+    if (doc.quickMask) return { documentId: doc.id, layerId: 0, mask: true, target: "quickMask" };
     const layer = layersPanel?.selectedLayer() ?? null;
     const mask = layersPanel?.paintsMask() ?? false;
     if (!layer || (!mask && layer.kind !== "raster")) {
@@ -750,7 +756,7 @@
     stroke: StrokeRequest | null = null,
   ) {
     const color = hex === null ? null : hexToSrgb(hex);
-    const kind = target.mask ? "mask" : "layer";
+    const kind = target.target ?? (target.mask ? "mask" : "layer");
     void sync(engine.fill(target.documentId, target.layerId, kind, color, opacity, stroke));
   }
 
@@ -1040,14 +1046,14 @@
       contents === "color"
         ? target.color
         : contents === "foreground" || contents === "background"
-          ? colors[contents]
+          ? paintColors()[contents]
           : FILL_COLORS[contents];
     paintPixels(target, hex, opacity);
   }
 
   function openFill() {
     const target = paintedLayer();
-    if (target) fillDialog = { ...target, color: colors.foreground, picking: false };
+    if (target) fillDialog = { ...target, color: paintColors().foreground, picking: false };
   }
 
   /** Fill's Color…: the picker, then the Fill dialog again with the color chosen. */
@@ -1069,7 +1075,7 @@
 
   function openStroke() {
     const target = paintedLayer();
-    if (target) strokeDialog = { ...target, color: colors.foreground, picking: false };
+    if (target) strokeDialog = { ...target, color: paintColors().foreground, picking: false };
   }
 
   function applyStroke({ width, location, opacity }: StrokeSettings) {
@@ -4010,7 +4016,7 @@
         return;
       }
       case "defaultColors":
-        setPaintColors({ ...QUICK_MASK_COLORS });
+        setPaintColors({ ...MASK_COLORS });
         return;
       case "swapColors": {
         const { foreground, background } = paintColors();
@@ -4136,9 +4142,8 @@
     bind:brush={brushOptions}
     bind:eraser={eraserOptions}
     transform={transforming ? transformBar : undefined}
-    quickMask={active?.quickMask ? { action: quickMaskAction(quickMaskPair) } : null}
+    quickMask={active?.quickMask ?? false}
     bind:quickMaskOpacity
-    onquickmask={(action) => (quickMaskPair = quickMaskColors(action))}
     alignable={(layersPanel?.selectedLayers().length ?? 0) > 0}
     distributable={layersPanel?.canDistributeSelected() ?? false}
     onalign={alignSelected}
@@ -4288,8 +4293,7 @@
               {#snippet overlay(mapping)}
                 {#if active?.selectionKey != null}
                   <SelectionOutline
-                    hidden={active.quickMask ||
-                      (refining?.document === active.id && refineSettings.view !== "ants")}
+                    hidden={refining?.document === active.id && refineSettings.view !== "ants"}
                     shift={outlineShift?.document === active.id
                       ? [outlineShift.x, outlineShift.y]
                       : undefined}
@@ -4561,6 +4565,7 @@
   <ColorPickerDialog
     title={t(which === "foreground" ? "colorPicker.foreground" : "colorPicker.background")}
     color={paintColors()[which]}
+    gray={paintsGray()}
     onapply={(hex) => {
       setPaintColors({ ...paintColors(), [which]: hex });
       colorPicker = null;

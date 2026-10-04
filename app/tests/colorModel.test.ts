@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
+  grayOf,
   hexToRgb,
   hsbToRgb,
   labToRgb,
@@ -63,4 +64,13 @@ test("hex in and out", () => {
   closeAll(hexToRgb(" 00ff80 ") ?? [], [0, 1, 128 / 255]);
   assert.equal(hexToRgb("#12345"), null);
   assert.equal(hexToRgb("zzzzzz"), null);
+});
+
+test("a color's gray is the encoding of its luminance, as the engine paints masks", () => {
+  assert.equal(grayOf([0, 0, 0]), 0);
+  assert.ok(Math.abs(grayOf([1, 1, 1]) - 1) < 1e-9);
+  assert.ok(Math.abs(grayOf([0.5, 0.5, 0.5]) - 0.5) < 1e-9);
+  // Green is far lighter than blue.
+  assert.ok(grayOf([0, 1, 0]) > 0.85);
+  assert.ok(grayOf([0, 0, 1]) < 0.4);
 });

@@ -864,14 +864,11 @@ fn render_overlays(
 }
 
 #[test]
-fn quick_mask_tints_what_the_selection_leaves_out() {
+fn quick_mask_tints_what_its_mask_leaves_out() {
     use slopshop_core::selection::{self, Combine, EdgeOptions, Selection, Shape};
     use slopshop_render::SelectionView;
     use std::sync::Arc;
-    let quick_mask = slopshop_render::ViewOverlays {
-        quick_mask: true,
-        ..Default::default()
-    };
+    let quick_mask = slopshop_render::ViewOverlays::default();
     for cached in [true, false] {
         let Some(r) = renderer() else { return };
         let r = r.with_display_cache(cached);
@@ -883,7 +880,7 @@ fn quick_mask_tints_what_the_selection_leaves_out() {
         assert_eq!(
             pixel(&without, 450, 10),
             [255, 255, 255, 255],
-            "no selection, no tint"
+            "Quick Mask off, no tint"
         );
 
         let shape = Shape::Rectangle {
@@ -901,12 +898,20 @@ fn quick_mask_tints_what_the_selection_leaves_out() {
         })
         .unwrap();
         let plain = render_overlays(&r, s.document(), Default::default(), size);
-        let masked = render_overlays(&r, s.document(), quick_mask, size);
         assert_eq!(
             pixel(&plain, 450, 10),
             [255, 255, 255, 255],
-            "off by default"
+            "a selection is no Quick Mask"
         );
+        // On: the selection is the mask; a selection made meanwhile changes nothing shown.
+        let enter = Edit::enter_quick_mask(s.document()).unwrap().unwrap();
+        s.perform(enter).unwrap();
+        let all = selection::select_all(size).unwrap();
+        s.perform(Edit::SetSelection {
+            selection: Selection::new(Arc::new(all)),
+        })
+        .unwrap();
+        let masked = render_overlays(&r, s.document(), quick_mask, size);
         assert_eq!(
             pixel(&masked, 10, 10),
             [255, 255, 255, 255],
@@ -928,7 +933,18 @@ fn quick_mask_tints_what_the_selection_leaves_out() {
         let opaque = render_overlays(&r, s.document(), opaque, size);
         assert_close(pixel(&light, 450, 290), [255, 191, 191, 255]);
         assert_close(pixel(&opaque, 450, 290), [255, 0, 0, 255]);
-        // Select and Mask's views: on black, the mask in gray.
+        // Off: the mask is the selection again, for Select and Mask's views: on black, the
+        // mask in gray.
+        let leave = Edit::leave_quick_mask(s.document()).unwrap();
+        s.perform(leave).unwrap();
+        assert_eq!(
+            pixel(
+                &render_overlays(&r, s.document(), quick_mask, size),
+                450,
+                290
+            ),
+            [255, 255, 255, 255]
+        );
         let view = |selection_view| slopshop_render::ViewOverlays {
             selection_view,
             ..Default::default()

@@ -11,11 +11,13 @@
   // current one (a click on the current one takes it back). Colors are sRGB; Lab is D50, as
   // Photoshop's. OK applies, Esc or Cancel leaves the color as it was. While it is open the rest
   // of the app waits, except the image: a click or a drag there takes the color shown, as
-  // Photoshop's eyedropper does.
+  // Photoshop's eyedropper does. For a mask (`gray`), only grays: a ramp from black to white
+  // and their level, the eyedropper taking the gray of the color shown.
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
   import {
+    grayOf,
     hexToRgb,
     hsbToRgb,
     labToRgb,
@@ -32,8 +34,11 @@
     onapply,
     onclose,
     sample,
+    gray = false,
   }: {
     title: string;
+    /** A mask's color: grays only. */
+    gray?: boolean;
     /** The current color, `#rrggbb` sRGB. */
     color: string;
     onapply: (hex: string) => void;
@@ -49,20 +54,24 @@
   } = $props();
 
   const SIDE = 256;
-  const initial: Rgb = untrack(() => hexToRgb(color) ?? [0, 0, 0]);
+  const grayOnly = untrack(() => gray);
+  const given: Rgb = untrack(() => hexToRgb(color) ?? [0, 0, 0]);
+  const initial: Rgb = grayOnly ? [grayOf(given), grayOf(given), grayOf(given)] : given;
   /** The color is kept as HSB, so that hue survives grays and saturation survives black. */
   let hsb = $state<Hsb>(rgbToHsb(initial));
-  let channel = $state<ColorChannel>("hue");
+  // Grays: the slider sets brightness, saturation staying 0.
+  let channel = $state<ColorChannel>(grayOnly ? "brightness" : "hue");
   const rgb = $derived(hsbToRgb(hsb));
   const lab = $derived(rgbToLab(rgb));
   const hex = $derived(rgbToHex(rgb));
 
   let dialog: HTMLDialogElement;
-  let square: HTMLCanvasElement;
+  // Absent for grays.
+  let square = $state<HTMLCanvasElement>();
   let slider: HTMLCanvasElement;
 
   function setRgb(next: Rgb) {
-    hsb = rgbToHsb(next, hsb[0]);
+    hsb = grayOnly ? [hsb[0], 0, grayOf(next)] : rgbToHsb(next, hsb[0]);
   }
 
   /** Each channel: its range, and how the square's axes and the slider map to colors. */
@@ -147,9 +156,12 @@
   function draw() {
     const [hx, vy] = PLANES[channel];
     const fixed = valueOf(channel);
-    const squareContext = square.getContext("2d");
     const sliderContext = slider.getContext("2d");
-    if (!squareContext || !sliderContext) return;
+    if (!sliderContext) return;
+    drawSlider(sliderContext);
+    // Grays: no square.
+    const squareContext = square?.getContext("2d");
+    if (!squareContext) return;
     const image = squareContext.createImageData(SIDE, SIDE);
     for (let y = 0; y < SIDE; y++) {
       for (let x = 0; x < SIDE; x++) {
@@ -166,6 +178,10 @@
       }
     }
     squareContext.putImageData(image, 0, 0);
+  }
+
+  /** The slider: the chosen channel from top to bottom. */
+  function drawSlider(sliderContext: CanvasRenderingContext2D) {
     const strip = sliderContext.createImageData(1, SIDE);
     for (let y = 0; y < SIDE; y++) {
       const value = at(RANGES[channel], 1 - y / (SIDE - 1));
@@ -318,25 +334,27 @@
     }}
   >
     <header id="color-picker-title">{title}</header>
-    <div class="body">
-      <div class="square-wrap">
-        <canvas
-          class="square"
-          width={SIDE}
-          height={SIDE}
-          bind:this={square}
-          onpointerdown={(e) => {
-            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            drag(e, "square");
-          }}
-          onpointermove={(e) => drag(e, "square")}
-        ></canvas>
-        <span
-          class="marker"
-          style:left="{fraction(PLANES[channel][0]) * 100}%"
-          style:top="{(1 - fraction(PLANES[channel][1])) * 100}%"
-        ></span>
-      </div>
+    <div class="body" class:gray={grayOnly}>
+      {#if !grayOnly}
+        <div class="square-wrap">
+          <canvas
+            class="square"
+            width={SIDE}
+            height={SIDE}
+            bind:this={square}
+            onpointerdown={(e) => {
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              drag(e, "square");
+            }}
+            onpointermove={(e) => drag(e, "square")}
+          ></canvas>
+          <span
+            class="marker"
+            style:left="{fraction(PLANES[channel][0]) * 100}%"
+            style:top="{(1 - fraction(PLANES[channel][1])) * 100}%"
+          ></span>
+        </div>
+      {/if}
       <div class="slider-wrap">
         <canvas
           class="slider"
@@ -365,35 +383,52 @@
           ></button>
           <span class="caption">{t("colorPicker.current")}</span>
         </div>
-        <div class="fields">
-          {#each FIELDS as field (field.channel)}
-            <label class="radio">
-              <input type="radio" name="channel" value={field.channel} bind:group={channel} />
-              {t(field.label)}
-            </label>
+        {#if grayOnly}
+          <label class="gray-field">
+            {t("colorPicker.gray")}
             <input
               type="number"
               step="1"
-              value={Math.round(valueOf(field.channel) * field.scale)}
-              oninput={(e) => typed(field.channel, field.scale, e.currentTarget.valueAsNumber)}
-              onchange={(e) =>
-                (e.currentTarget.valueAsNumber = Math.round(valueOf(field.channel) * field.scale))}
+              min="0"
+              max="255"
+              value={Math.round(hsb[2] * 255)}
+              oninput={(e) => typed("brightness", 255, e.currentTarget.valueAsNumber)}
+              onchange={(e) => (e.currentTarget.valueAsNumber = Math.round(hsb[2] * 255))}
             />
-            <span class="unit">{field.unit}</span>
-          {/each}
-          <span class="radio">#</span>
-          <input
-            class="hex"
-            type="text"
-            spellcheck="false"
-            value={hex.slice(1)}
-            onchange={(e) => {
-              const parsed = hexToRgb(e.currentTarget.value);
-              if (parsed) setRgb(parsed);
-              e.currentTarget.value = rgbToHex(rgb).slice(1);
-            }}
-          />
-        </div>
+          </label>
+        {:else}
+          <div class="fields">
+            {#each FIELDS as field (field.channel)}
+              <label class="radio">
+                <input type="radio" name="channel" value={field.channel} bind:group={channel} />
+                {t(field.label)}
+              </label>
+              <input
+                type="number"
+                step="1"
+                value={Math.round(valueOf(field.channel) * field.scale)}
+                oninput={(e) => typed(field.channel, field.scale, e.currentTarget.valueAsNumber)}
+                onchange={(e) =>
+                  (e.currentTarget.valueAsNumber = Math.round(
+                    valueOf(field.channel) * field.scale,
+                  ))}
+              />
+              <span class="unit">{field.unit}</span>
+            {/each}
+            <span class="radio">#</span>
+            <input
+              class="hex"
+              type="text"
+              spellcheck="false"
+              value={hex.slice(1)}
+              onchange={(e) => {
+                const parsed = hexToRgb(e.currentTarget.value);
+                if (parsed) setRgb(parsed);
+                e.currentTarget.value = rgbToHex(rgb).slice(1);
+              }}
+            />
+          </div>
+        {/if}
       </div>
     </div>
     <footer>
@@ -405,6 +440,16 @@
 
 <style>
   /* Above everything but the dialog, menus included. */
+  .gray-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .gray-field input {
+    width: 56px;
+  }
+
   .blocker {
     position: fixed;
     inset: 0;

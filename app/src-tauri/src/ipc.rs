@@ -60,7 +60,7 @@ pub struct DocumentView {
     pub selection_key: Option<u64>,
     /// Select > Reselect has a selection to bring back.
     pub can_reselect: bool,
-    /// The view shows Quick Mask (ADR 0024): view state, not part of the document.
+    /// Quick Mask is on (ADR 0024): painting tools paint its image.
     pub quick_mask: bool,
     /// Quick Mask's overlay opacity, percent.
     pub quick_mask_opacity: u8,
@@ -297,7 +297,7 @@ impl DocumentView {
             dirty: false,
             selection_key: doc.selection().map(|s| s.image().id().get()),
             can_reselect: false,
-            quick_mask: false,
+            quick_mask: doc.quick_mask().is_some(),
             quick_mask_opacity: 50,
             saved_selections: doc
                 .saved_selections()

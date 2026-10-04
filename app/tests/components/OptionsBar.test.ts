@@ -71,8 +71,7 @@ test("the Brush and the Eraser keep their own settings", async () => {
   expect(screen.getByText("Flow:")).toBeInTheDocument();
 });
 
-test("Quick Mask is shown whatever the tool, with Add / Remove for the Brush's colors", async () => {
-  const onquickmask = vi.fn();
+test("Quick Mask is said whatever the tool, with its overlay's opacity", () => {
   render(OptionsBar, {
     tool: "move",
     autoSelect: false,
@@ -97,19 +96,12 @@ test("Quick Mask is shown whatever the tool, with Add / Remove for the Brush's c
       pressureSize: false,
       pressureOpacity: false,
     },
-    quickMask: { action: null },
+    quickMask: true,
     quickMaskOpacity: 50,
-    onquickmask,
   });
-  const user = userEvent.setup();
   expect(screen.getByRole("status")).toHaveTextContent("Quick Mask");
-  // A gray paints some of either: neither is on.
-  expect(screen.getByRole("button", { name: "Add" })).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByRole("button", { name: "Remove" })).toHaveAttribute("aria-pressed", "false");
-  await user.click(screen.getByRole("button", { name: "Add" }));
-  await user.click(screen.getByRole("button", { name: "Remove" }));
-  expect(onquickmask.mock.calls).toEqual([["add"], ["remove"]]);
   expect(screen.getByText("Overlay opacity:")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
   // The tool's own options follow.
   expect(check("Auto-Select")).toBeInTheDocument();
 });

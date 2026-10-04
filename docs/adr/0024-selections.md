@@ -73,9 +73,14 @@ its outline (the marching ants) must stay cheap to draw whatever its complexity.
 - Select > Transform Selection reuses Free Transform's box (the UI) and the layers' resampling
   (ADR 0018, EWA from the matching pyramid level, exact for whole-pixel moves): soft edges stay
   soft, and a tile reading only uniform tiles of one value stays uniform.
-- Quick Mask (Q) shows soft edges: a view overlay the GPU draws over the finished frame (after
-  the display cache, in the encoded display space as Photoshop does), sampling the selection's
-  pyramid like a layer's mask, at an opacity the user sets (half by default). Select and
+- Quick Mask (Q) is a state of the document, as Photoshop's channel (amended 2026-10-04 at the
+  maintainer's request): `Document::quick_mask` holds the selection as a gray image the
+  painting tools paint (`Edit::SetQuickMask`), the selection being an ordinary one meanwhile
+  that limits them; entering and leaving are undoable edits (`Edit::enter_quick_mask`,
+  `Edit::leave_quick_mask`), and canvas operations transform the mask with the image. It shows
+  soft edges: a view overlay the GPU draws over the finished frame (after the display cache, in
+  the encoded display space as Photoshop does), sampling the mask's pyramid like a layer's
+  mask, at an opacity the user sets (half by default). Select and
   Mask's views use the same pass: the tint black or white wholly (On Black, On White), or the
   mask itself in gray.
 - Select and Mask's Refine Edge Brush paints, with the Brush's engine, a coverage of where the

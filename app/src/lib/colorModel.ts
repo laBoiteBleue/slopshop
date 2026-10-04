@@ -89,6 +89,14 @@ export function labToRgb([l, a, b]: Lab): { rgb: Rgb; clipped: boolean } {
   };
 }
 
+/**
+ * The gray a color paints in a mask (Quick Mask, a layer's mask), in [0, 1]: the sRGB encoding
+ * of its luminance, as the engine's `gray_of_srgb`.
+ */
+export function grayOf([r, g, b]: Rgb): number {
+  return encode(0.2126 * decode(r) + 0.7152 * decode(g) + 0.0722 * decode(b));
+}
+
 export function rgbToHex(rgb: Rgb): string {
   return `#${rgb
     .map((c) =>

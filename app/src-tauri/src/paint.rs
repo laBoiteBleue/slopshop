@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
-use slopshop_core::selection::{Selection, sample_colors, select_all};
+use slopshop_core::selection::{Selection, sample_colors};
 use slopshop_core::stack::LayerStack;
 use slopshop_core::{
     Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage, Size,
@@ -60,8 +60,8 @@ pub enum PaintTarget {
     Layer,
     /// A layer's mask, in gray.
     Mask,
-    /// The selection in Quick Mask, in gray.
-    Selection,
+    /// Quick Mask's image, in gray (ADR 0024).
+    QuickMask,
 }
 
 /// A stroke's target in a document.
@@ -69,7 +69,7 @@ pub enum PaintTarget {
 pub(crate) enum Target {
     Layer(LayerId),
     Mask(LayerId),
-    Selection,
+    QuickMask,
 }
 
 impl PaintRequest {
@@ -78,7 +78,7 @@ impl PaintRequest {
         match self.target {
             PaintTarget::Layer => Target::Layer(id),
             PaintTarget::Mask => Target::Mask(id),
-            PaintTarget::Selection => Target::Selection,
+            PaintTarget::QuickMask => Target::QuickMask,
         }
     }
 }
@@ -168,10 +168,10 @@ pub(crate) fn paint_edit(target: Target, painted: Painted, growth: Option<&Growt
                 painted: Some(image),
             };
         }
-        // A stroke paints a gray image of the selection's: always a selection.
-        (Target::Selection, Painted::Image(image)) => {
-            return Edit::SetSelection {
-                selection: Selection::new(image),
+        // A stroke paints a gray image of the quick mask's: always a mask.
+        (Target::QuickMask, Painted::Image(image)) => {
+            return Edit::SetQuickMask {
+                mask: Selection::new(image),
             };
         }
         (Target::Layer(id), Painted::Stack(stack, shown)) => (id, stack, shown),
@@ -374,14 +374,16 @@ fn start(
             let to_document = layer.transform.then(doc.parent_transform(id));
             (Arc::clone(&mask.image), to_document, None, gray, selection)
         }
-        // Without a selection everything is selected (Quick Mask shows no tint): black then
-        // unselects from the whole canvas. The selection does not limit its own paint.
-        Target::Selection => {
-            let image = match selection {
-                Some(image) => image,
-                None => Arc::new(select_all(doc.size()).map_err(|e| e.to_string())?),
-            };
-            (image, Affine::IDENTITY, None, gray, None)
+        // Quick Mask's image, within the selection made meanwhile (as Photoshop's channel).
+        Target::QuickMask => {
+            let mask = doc.quick_mask().ok_or("Quick Mask is off")?;
+            (
+                Arc::clone(mask.image()),
+                Affine::IDENTITY,
+                None,
+                gray,
+                selection,
+            )
         }
     };
     let stroke = Stroke::new(
@@ -521,9 +523,6 @@ pub async fn fill(
         let state = app.state::<AppState>();
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
-        if target == PaintTarget::Selection {
-            return Err("the selection cannot fill itself".to_owned());
-        }
         if !(0.0..=1.0).contains(&opacity) {
             return Err("the opacity is between 0 and 1".to_owned());
         }
