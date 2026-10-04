@@ -907,7 +907,9 @@ impl Renderer {
         let gpu = Arc::clone(&self.gpu_filter);
         let gpu: LookFilter = Arc::new(move |job| gpu.look(job));
         let (mut looks, looks_pending) = gather_looks(document, view, output, &gpu);
-        self.filter_layer_looks(document, view, output, &mut caches.tiles, &mut looks);
+        let looks_pending =
+            self.filter_layer_looks(document, view, output, &mut caches.tiles, &mut looks)
+                || looks_pending;
         let pending =
             start_stack_evaluations(document, &looks, self.evaluate_stacks) || looks_pending;
         let uploads = |caches: &GpuCaches| -> u64 {

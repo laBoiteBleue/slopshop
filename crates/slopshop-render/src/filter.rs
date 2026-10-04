@@ -122,28 +122,26 @@ impl GpuFilter {
     }
 
     /// `input` (premultiplied f32 RGBA, `width` × `height`, a buffer of this device) filtered by
-    /// `step` (its placement mapping these pixels to the document), read back as premultiplied
-    /// f32 RGBA: a filter layer's image (ADR 0037). `None` when the GPU does not take it.
-    pub(crate) fn floats(
+    /// `step` (its placement mapping these pixels to the document): submitted, not waited for. A
+    /// filter layer's image (ADR 0037), read back as premultiplied f32 RGBA by [`read_floats`]
+    /// (on a thread of its own). `None` when the GPU does not take it.
+    pub(crate) fn submit_floats(
         &self,
         input: &wgpu::Buffer,
         width: u32,
         height: u32,
         step: &FilterStep,
-    ) -> Option<Vec<f32>> {
+    ) -> Option<wgpu::Buffer> {
         let kernels = Pass::of(step)?;
-        let bytes = self.checked(Input::Floats(input), &kernels, width, height)?;
-        Some(
-            bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect(),
-        )
+        self.submit_checked(Input::Floats(input), &kernels, width, height)
     }
 
-    /// [`Self::run`] where the device takes it, its errors caught.
+    /// The device, for [`read_floats`] on another thread.
+    pub(crate) fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// [`Self::submit_checked`], read back.
     fn checked(
         &self,
         input: Input<'_>,
@@ -151,6 +149,18 @@ impl GpuFilter {
         width: u32,
         height: u32,
     ) -> Option<Vec<u8>> {
+        let readback = self.submit_checked(input, kernels, width, height)?;
+        read(&self.device, &readback)
+    }
+
+    /// [`Self::run`] where the device takes it, its errors caught: the buffer to read back.
+    fn submit_checked(
+        &self,
+        input: Input<'_>,
+        kernels: &[Pass],
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::Buffer> {
         let pixels = u64::from(width) * u64::from(height);
         let limits = self.device.limits();
         // The rows' blur in f32, twice when a blur is kept between two passes.
@@ -179,8 +189,15 @@ impl GpuFilter {
         result.filter(|_| !failed)
     }
 
-    /// `input` filtered by each pass in turn, read back as its rows are (8-bit RGBA, or f32).
-    fn run(&self, input: Input<'_>, kernels: &[Pass], width: u32, height: u32) -> Option<Vec<u8>> {
+    /// `input` filtered by each pass in turn, submitted: the buffer to read back, as its rows are
+    /// (8-bit RGBA, or f32).
+    fn run(
+        &self,
+        input: Input<'_>,
+        kernels: &[Pass],
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::Buffer> {
         let float = matches!(input, Input::Floats(_));
         let bytes = u64::from(width) * u64::from(height) * if float { 16 } else { 4 };
         let float_io = if float { FLOAT_IO } else { 0 };
@@ -305,18 +322,36 @@ impl GpuFilter {
         }
         encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
         self.queue.submit([encoder.finish()]);
-        let slice = readback.slice(..);
-        let (tx, rx) = mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            // The receiver only disappears if we already returned; nothing to report then.
-            let _ = tx.send(result);
-        });
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-        rx.recv().ok()?.ok()?;
-        let bytes = slice.get_mapped_range().ok()?.to_vec();
-        readback.unmap();
-        Some(bytes)
+        Some(readback)
     }
+}
+
+/// What `readback` holds once the work submitted before is done (waited for).
+fn read(device: &wgpu::Device, readback: &wgpu::Buffer) -> Option<Vec<u8>> {
+    let slice = readback.slice(..);
+    let (tx, rx) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        // The receiver only disappears if we already returned; nothing to report then.
+        let _ = tx.send(result);
+    });
+    device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    rx.recv().ok()?.ok()?;
+    let bytes = slice.get_mapped_range().ok()?.to_vec();
+    readback.unmap();
+    Some(bytes)
+}
+
+/// The premultiplied f32 RGBA pixels of [`GpuFilter::submit_floats`]' buffer, waited for.
+pub(crate) fn read_floats(device: &wgpu::Device, readback: &wgpu::Buffer) -> Option<Vec<f32>> {
+    let bytes = read(device, readback)?;
+    Some(
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect(),
+    )
 }
 
 /// What a pass runs (filter.wgsl's entry points).

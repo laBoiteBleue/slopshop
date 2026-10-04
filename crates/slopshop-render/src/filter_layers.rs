@@ -31,13 +31,33 @@ const FILTERED_FORMAT: PixelFormat = PixelFormat {
     alpha: AlphaMode::Premultiplied,
 };
 
-/// The last image computed for each filter layer, with what it was computed from (a hash).
+/// Each filter layer's image shown, and the one being computed (ADR 0037).
 #[derive(Debug, Default)]
-pub(crate) struct FilterLayerImages(Mutex<HashMap<LayerId, (u64, Arc<Preview>)>>);
+pub(crate) struct FilterLayerImages(Mutex<HashMap<LayerId, Kept>>);
+
+#[derive(Debug, Default)]
+struct Kept {
+    /// What it was computed from (a hash, see `filter_layer_looks`), and the image.
+    shown: Option<(u64, Arc<Preview>)>,
+    /// The image being computed, for what.
+    job: Option<(u64, Arc<Mutex<Job>>)>,
+    /// What an image could not be computed for: not tried again.
+    failed: Option<u64>,
+}
+
+/// An image computed on a thread of its own, once the GPU is done.
+#[derive(Debug)]
+enum Job {
+    Running,
+    Done(Arc<Preview>),
+    Failed,
+}
 
 impl Renderer {
-    /// Add to `looks` the images of the filter layers `view` shows (top level only for now),
-    /// computing those whose layers below, filter or area changed.
+    /// Add to `looks` the images of the filter layers `view` shows (top level only for now).
+    /// One whose layers below, filter or area changed is computed in the background, one at a
+    /// time per layer (the latest asked for next), the image computed before shown meanwhile:
+    /// whether some image is not the one asked for yet (the display is to be shown again).
     pub(crate) fn filter_layer_looks(
         &self,
         document: &Document,
@@ -45,7 +65,7 @@ impl Renderer {
         output: Size,
         caches: &mut [Option<TileCache>; 4],
         looks: &mut Looks,
-    ) {
+    ) -> bool {
         let layers = document.layers();
         // The filter layers shown, bottom to top.
         let filters: Vec<(usize, Filter)> = layers
@@ -58,10 +78,10 @@ impl Renderer {
             })
             .collect();
         if filters.is_empty() {
-            return;
+            return false;
         }
         let Some(visible) = visible_document_rect(document.size(), view, output) else {
-            return;
+            return false;
         };
         let canvas = document.size();
         let next_id = document
@@ -70,11 +90,12 @@ impl Renderer {
             .max()
             .unwrap_or(0)
             + 1;
-        let mut kept = self
+        let mut images = self
             .filter_layers
             .0
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let mut pending = false;
         for (n, &(index, filter)) in filters.iter().enumerate() {
             let layer = &layers[index];
             // What it and the filter layers above it read around what is shown.
@@ -104,54 +125,118 @@ impl Renderer {
                 document.blend_space().id().hash(&mut hasher);
                 hasher.finish()
             };
-            if let Some((k, look)) = kept.get(&layer.id)
-                && *k == key
-            {
+            let kept = images.entry(layer.id).or_default();
+            // A job done: its image shows from now on (if it was for an earlier state, until
+            // the next is done).
+            if let Some((job_key, job)) = &kept.job {
+                let done = match &*job.lock().unwrap_or_else(PoisonError::into_inner) {
+                    Job::Running => None,
+                    Job::Done(look) => Some(Some(Arc::clone(look))),
+                    Job::Failed => Some(None),
+                };
+                match done {
+                    Some(Some(look)) => {
+                        kept.shown = Some((*job_key, look));
+                        kept.job = None;
+                    }
+                    Some(None) => {
+                        kept.failed = Some(*job_key);
+                        kept.job = None;
+                    }
+                    None => {}
+                }
+            }
+            if kept.shown.as_ref().is_none_or(|(k, _)| *k != key) {
+                pending = true;
+                if kept.job.is_none() && kept.failed != Some(key) {
+                    let level_view = ViewTransform {
+                        origin: [x0 * f, y0 * f],
+                        scale: f,
+                    };
+                    let origin = [x0 as u32, y0 as u32];
+                    let job = self.start_filtered_below(
+                        &prefix_document(document, below, next_id),
+                        looks,
+                        level_view,
+                        size,
+                        caches,
+                        filter,
+                        origin,
+                    );
+                    kept.job = Some((key, job));
+                }
+            }
+            if let Some((_, look)) = &kept.shown {
                 looks.insert(layer.id, Arc::clone(look));
-                continue;
             }
-            let Ok(prefix) = Document::restore(
-                canvas,
-                WORKING_SPACE,
-                document.blend_space(),
-                below.to_vec(),
-                next_id,
-            ) else {
-                continue;
-            };
-            let start = Instant::now();
-            let level_view = ViewTransform {
-                origin: [x0 * f, y0 * f],
-                scale: f,
-            };
-            let Some(image) = self.filtered_below(&prefix, looks, level_view, size, caches, filter)
-            else {
-                continue;
-            };
-            if std::env::var_os("SLOPSHOP_FILTER_TIMING").is_some() {
-                eprintln!(
-                    "filter layer {}: {}x{} at level {level}, {:?}",
-                    filter.id(),
-                    size.width,
-                    size.height,
-                    start.elapsed()
-                );
-            }
-            let look = Arc::new(Preview {
-                image: Arc::new(image),
-                factor: 1 << level,
-                origin: [x0 as u32, y0 as u32],
-                above: Vec::new(),
-                filter: filter.id(),
-            });
-            kept.insert(layer.id, (key, Arc::clone(&look)));
-            looks.insert(layer.id, look);
         }
+        // Layers gone: their images too.
+        images.retain(|id, _| filters.iter().any(|&(i, _)| layers[i].id == *id));
+        pending
     }
 
     /// `prefix` (what is below a filter layer) composited over `view` into an `size` image of
-    /// the working space, filtered by `filter` scaled to the view's level.
-    fn filtered_below(
+    /// the working space, filtered by `filter` scaled to the view's level: submitted to the GPU,
+    /// then read back and made an image (`origin`: its corner, in the level's pixels) on a thread
+    /// of its own.
+    #[allow(clippy::too_many_arguments)]
+    fn start_filtered_below(
+        &self,
+        prefix: &Option<Document>,
+        looks: &Looks,
+        view: ViewTransform,
+        size: Size,
+        caches: &mut [Option<TileCache>; 4],
+        filter: Filter,
+        origin: [u32; 2],
+    ) -> Arc<Mutex<Job>> {
+        let job = Arc::new(Mutex::new(Job::Running));
+        let readback = prefix.as_ref().and_then(|prefix| {
+            self.submit_filtered_below(prefix, looks, view, size, caches, filter)
+        });
+        let Some(readback) = readback else {
+            *job.lock().unwrap_or_else(PoisonError::into_inner) = Job::Failed;
+            return job;
+        };
+        let device = self.gpu_filter.device().clone();
+        let level = view.scale;
+        let finished = Arc::clone(&job);
+        let start = Instant::now();
+        let spawned = std::thread::Builder::new()
+            .name("filter layer".to_owned())
+            .spawn(move || {
+                let image = crate::filter::read_floats(&device, &readback).and_then(|floats| {
+                    let tiles = half_tiles(&floats, size.width as usize, size.height as usize);
+                    RasterImage::from_level0_tiles_only(size, FILTERED_FORMAT, tiles).ok()
+                });
+                if std::env::var_os("SLOPSHOP_FILTER_TIMING").is_some() {
+                    eprintln!(
+                        "filter layer {}: {}x{} at {level} document pixels a pixel, {:?}",
+                        filter.id(),
+                        size.width,
+                        size.height,
+                        start.elapsed()
+                    );
+                }
+                *finished.lock().unwrap_or_else(PoisonError::into_inner) = match image {
+                    Some(image) => Job::Done(Arc::new(Preview {
+                        image: Arc::new(image),
+                        factor: level as u32,
+                        origin,
+                        above: Vec::new(),
+                        filter: filter.id(),
+                    })),
+                    None => Job::Failed,
+                };
+            });
+        if spawned.is_err() {
+            *job.lock().unwrap_or_else(PoisonError::into_inner) = Job::Failed;
+        }
+        job
+    }
+
+    /// [`Self::start_filtered_below`]'s GPU work: the buffer to read back.
+    fn submit_filtered_below(
         &self,
         prefix: &Document,
         looks: &Looks,
@@ -159,7 +244,7 @@ impl Renderer {
         size: Size,
         caches: &mut [Option<TileCache>; 4],
         filter: Filter,
-    ) -> Option<RasterImage> {
+    ) -> Option<wgpu::Buffer> {
         use wgpu::util::DeviceExt;
         let bytes = size.pixel_count() * 16;
         if bytes > self.max_output_bytes {
@@ -224,12 +309,21 @@ impl Renderer {
                 .then(Affine::translation(view.origin[0], view.origin[1])),
             space: prefix.blend_space(),
         };
-        let floats = self
-            .gpu_filter
-            .floats(&accumulator, size.width, size.height, &step)?;
-        let tiles = half_tiles(&floats, size.width as usize, size.height as usize);
-        RasterImage::from_level0_tiles_only(size, FILTERED_FORMAT, tiles).ok()
+        self.gpu_filter
+            .submit_floats(&accumulator, size.width, size.height, &step)
     }
+}
+
+/// The document of `below` (what is below a filter layer), on `document`'s canvas.
+fn prefix_document(document: &Document, below: &[Layer], next_id: u64) -> Option<Document> {
+    Document::restore(
+        document.size(),
+        WORKING_SPACE,
+        document.blend_space(),
+        below.to_vec(),
+        next_id,
+    )
+    .ok()
 }
 
 /// `pixels` (premultiplied f32 RGBA rows, `width` × `height`) as tiles of half floats, row-major,
