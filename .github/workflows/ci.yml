@@ -83,6 +83,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The Linux runner was left with 48 MB once the Rust cache was restored and the workspace
+      # rebuilt, and a test build failed: remove preinstalled toolchains no job uses.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Install Linux dependencies (Tauri, software Vulkan)
         if: runner.os == 'Linux'
         run: |
