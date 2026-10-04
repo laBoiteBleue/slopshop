@@ -50,7 +50,7 @@ fn rows_main(@builtin(global_invocation_id) id: vec3<u32>) {
     var sum = vec4<f32>(0.0);
     for (var k = -reach; k <= reach; k++) {
         let x = u32(clamp(i32(id.x) + k, 0, last));
-        sum += weights[u32(k + reach)] * premultiplied(packed[line + x]);
+        sum += weights[u32(k + reach)] * load(line + x);
     }
     rows[line + id.x] = sum;
 }
@@ -95,6 +95,37 @@ fn clarity(original: vec4<f32>, fine: vec4<f32>, broad: vec4<f32>) -> vec4<f32> 
     return vec4<f32>(c * alpha, alpha);
 }
 
+// `flags`: the input and output are premultiplied f32 RGBA (four words a pixel, unbounded)
+// rather than 8-bit straight sRGB: a filter layer's accumulator (ADR 0037).
+const FLOAT_IO: u32 = 4u;
+
+// Input pixel `i`, premultiplied.
+fn load(i: u32) -> vec4<f32> {
+    if (params.flags & FLOAT_IO) != 0u {
+        let w = 4u * i;
+        return vec4<f32>(
+            bitcast<f32>(packed[w]),
+            bitcast<f32>(packed[w + 1u]),
+            bitcast<f32>(packed[w + 2u]),
+            bitcast<f32>(packed[w + 3u]),
+        );
+    }
+    return premultiplied(packed[i]);
+}
+
+// Output pixel `i` from premultiplied `v`.
+fn store(i: u32, v: vec4<f32>) {
+    if (params.flags & FLOAT_IO) != 0u {
+        let w = 4u * i;
+        output[w] = bitcast<u32>(v.x);
+        output[w + 1u] = bitcast<u32>(v.y);
+        output[w + 2u] = bitcast<u32>(v.z);
+        output[w + 3u] = bitcast<u32>(v.w);
+        return;
+    }
+    output[i] = encoded(v);
+}
+
 // A byte as the CPU rounds it: half away from zero, after clamping.
 fn byte(v: f32) -> u32 {
     return u32(floor(clamp(v, 0.0, 1.0) * 255.0 + 0.5));
@@ -119,11 +150,11 @@ fn columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     if params.mode == 5u {
-        sum = clarity(premultiplied(packed[i]), rows[kept], sum);
+        sum = clarity(load(i), rows[kept], sum);
     } else if params.mode != 0u {
-        sum = finish(premultiplied(packed[i]), sum);
+        sum = finish(load(i), sum);
     }
-    output[i] = encoded(sum);
+    store(i, sum);
 }
 
 // A premultiplied value as an 8-bit straight pixel; transparent stays all zero.
@@ -140,7 +171,7 @@ fn encoded(sum: vec4<f32>) -> u32 {
 fn input(x: i32, y: i32) -> vec4<f32> {
     let cx = u32(clamp(x, 0, i32(params.width) - 1));
     let cy = u32(clamp(y, 0, i32(params.height) - 1));
-    return premultiplied(packed[cy * params.width + cx]);
+    return load(cy * params.width + cx);
 }
 
 // Motion Blur: the average of the line's samples, each read bilinearly (`Line` on the CPU).
@@ -165,7 +196,7 @@ fn line_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let bottom = mix(input(x0, y0 + 1), input(x0 + 1, y0 + 1), f.x);
         sum += mix(top, bottom, f.y);
     }
-    output[id.y * params.width + id.x] = encoded(sum / f32(params.reach));
+    store(id.y * params.width + id.x, sum / f32(params.reach));
 }
 
 // A 32-bit integer hash, as the CPU's (`filter::hash`).
@@ -199,7 +230,7 @@ fn noise_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.width || id.y >= params.height {
         return;
     }
-    let original = premultiplied(packed[id.y * params.width + id.x]);
+    let original = load(id.y * params.width + id.x);
     var result = original;
     if original.a > 0.0 {
         let x = f32(id.x) + 0.5;
@@ -215,7 +246,7 @@ fn noise_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let color = straight(original) + params.amount / 100.0 * n;
         result = vec4<f32>(color * original.a, original.a);
     }
-    output[id.y * params.width + id.x] = encoded(result);
+    store(id.y * params.width + id.x, result);
 }
 
 // Dust & Scratches: each channel's median of the square of `reach` around the pixel (the CPU's
@@ -257,5 +288,5 @@ fn median_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let original = input(x, y);
     let level = params.threshold / 255.0;
     let differs = any(abs(original - median) > vec4<f32>(level));
-    output[id.y * params.width + id.x] = encoded(select(original, median, differs));
+    store(id.y * params.width + id.x, select(original, median, differs));
 }

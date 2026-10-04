@@ -114,6 +114,43 @@ impl GpuFilter {
             .flatten()
             .collect();
         let (width, height) = (job.size.width, job.size.height);
+        let input = Input::Bytes(rows_of(job, width, height));
+        let bytes = self.checked(input, &kernels, width, height)?;
+        // Level 0 only: a look is shown at the level it is made for.
+        let tiles = tiles_of(&bytes, width, height);
+        RasterImage::from_level0_tiles_only(job.size, job.format, tiles).ok()
+    }
+
+    /// `input` (premultiplied f32 RGBA, `width` × `height`, a buffer of this device) filtered by
+    /// `step` (its placement mapping these pixels to the document), read back as premultiplied
+    /// f32 RGBA: a filter layer's image (ADR 0037). `None` when the GPU does not take it.
+    pub(crate) fn floats(
+        &self,
+        input: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+        step: &FilterStep,
+    ) -> Option<Vec<f32>> {
+        let kernels = Pass::of(step)?;
+        let bytes = self.checked(Input::Floats(input), &kernels, width, height)?;
+        Some(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect(),
+        )
+    }
+
+    /// [`Self::run`] where the device takes it, its errors caught.
+    fn checked(
+        &self,
+        input: Input<'_>,
+        kernels: &[Pass],
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         let pixels = u64::from(width) * u64::from(height);
         let limits = self.device.limits();
         // The rows' blur in f32, twice when a blur is kept between two passes.
@@ -134,27 +171,41 @@ impl GpuFilter {
             wgpu::ErrorFilter::OutOfMemory,
         ]
         .map(|filter| self.device.push_error_scope(filter));
-        let result = self.blur(job, &kernels, width, height);
+        let result = self.run(input, kernels, width, height);
         let mut failed = false;
         for scope in scopes.into_iter().rev() {
             failed |= pollster::block_on(scope.pop()).is_some();
         }
-        let bytes = result.filter(|_| !failed)?;
-        // Level 0 only: a look is shown at the level it is made for.
-        let tiles = tiles_of(&bytes, width, height);
-        RasterImage::from_level0_tiles_only(job.size, job.format, tiles).ok()
+        result.filter(|_| !failed)
     }
 
-    /// The crop's pixels filtered by each pass in turn, as 8-bit RGBA rows.
-    fn blur(&self, job: &LookJob, kernels: &[Pass], width: u32, height: u32) -> Option<Vec<u8>> {
-        let input = rows_of(job, width, height);
-        let bytes = u64::from(width) * u64::from(height) * 4;
+    /// `input` filtered by each pass in turn, read back as its rows are (8-bit RGBA, or f32).
+    fn run(&self, input: Input<'_>, kernels: &[Pass], width: u32, height: u32) -> Option<Vec<u8>> {
+        let float = matches!(input, Input::Floats(_));
+        let bytes = u64::from(width) * u64::from(height) * if float { 16 } else { 4 };
+        let float_io = if float { FLOAT_IO } else { 0 };
         let device = &self.device;
-        let packed = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("filter input"),
-            contents: &input,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("filter"),
         });
+        let packed = match input {
+            Input::Bytes(input) => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("filter input"),
+                contents: &input,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }),
+            // Copied: the passes after the first filter what the last one gave, in place.
+            Input::Floats(buffer) => {
+                let packed = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("filter input"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_buffer_to_buffer(buffer, 0, &packed, 0, bytes);
+                packed
+            }
+        };
         // Twice as large when a blur is kept between two passes (in its second half).
         let kept = if kernels.iter().any(|pass| pass.mode == KEEP) {
             2
@@ -163,7 +214,7 @@ impl GpuFilter {
         };
         let rows = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("filter rows"),
-            size: bytes * 4 * kept,
+            size: u64::from(width) * u64::from(height) * 16 * kept,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -180,9 +231,6 @@ impl GpuFilter {
             mapped_at_creation: false,
         });
         let groups = (width.div_ceil(WORKGROUP), height.div_ceil(WORKGROUP));
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("filter"),
-        });
         // Whether the output holds a step's result the next one filters.
         let mut fresh = false;
         for pass in kernels {
@@ -200,7 +248,7 @@ impl GpuFilter {
                     .chain(pass.amount.to_le_bytes())
                     .chain(pass.threshold.to_le_bytes())
                     .chain(pass.seed.to_le_bytes())
-                    .chain(pass.flags.to_le_bytes())
+                    .chain((pass.flags | float_io).to_le_bytes())
                     .collect::<Vec<u8>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
@@ -286,6 +334,15 @@ enum Kind {
 
 /// The mode of a separable pass whose blur is kept for the next one (filter.wgsl).
 const KEEP: u32 = 4;
+
+/// The flag of passes reading and writing premultiplied f32 pixels (filter.wgsl).
+const FLOAT_IO: u32 = 4;
+
+/// What a run filters: 8-bit straight sRGB rows, or premultiplied f32 pixels on the device.
+enum Input<'a> {
+    Bytes(Vec<u8>),
+    Floats(&'a wgpu::Buffer),
+}
 
 /// A pass as the shader runs it (`Params` in filter.wgsl); a step is one or two.
 struct Pass {

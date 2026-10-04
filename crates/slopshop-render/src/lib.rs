@@ -13,6 +13,7 @@
 
 mod cache;
 mod filter;
+mod filter_layers;
 pub mod present;
 mod region;
 mod tiles;
@@ -203,6 +204,11 @@ pub struct Renderer {
     timestamp_period: Option<f32>,
     /// Filters on the GPU (ADR 0035): the looks at filtered layers the display asks for.
     gpu_filter: Arc<filter::GpuFilter>,
+    /// Filter layers (ADR 0037): `working_main`, what is below one composited in the working
+    /// space; and the images computed last.
+    working_pipeline: wgpu::ComputePipeline,
+    working_bind_group_layout: wgpu::BindGroupLayout,
+    filter_layers: filter_layers::FilterLayerImages,
 }
 
 /// What a viewport frame shows over the image: view state, never part of the document or of
@@ -451,6 +457,12 @@ impl Renderer {
             ]
             .concat(),
         );
+        let (working_bind_group_layout, working_pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "working_main",
+            &[&shared[..], &[uniform(0), storage(9, false)]].concat(),
+        );
         let (fill_bind_group_layout, fill_pipeline) = compute_pipeline(
             &device,
             &module,
@@ -566,6 +578,9 @@ impl Renderer {
             ewa_table,
             timestamp_period,
             gpu_filter,
+            working_pipeline,
+            working_bind_group_layout,
+            filter_layers: filter_layers::FilterLayerImages::default(),
         })
     }
 
@@ -891,7 +906,8 @@ impl Renderer {
         // shows (ADR 0032), and the looks at filtered layers (ADR 0034).
         let gpu = Arc::clone(&self.gpu_filter);
         let gpu: LookFilter = Arc::new(move |job| gpu.look(job));
-        let (looks, looks_pending) = gather_looks(document, view, output, &gpu);
+        let (mut looks, looks_pending) = gather_looks(document, view, output, &gpu);
+        self.filter_layer_looks(document, view, output, &mut caches.tiles, &mut looks);
         let pending =
             start_stack_evaluations(document, &looks, self.evaluate_stacks) || looks_pending;
         let uploads = |caches: &GpuCaches| -> u64 {

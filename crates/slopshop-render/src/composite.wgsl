@@ -1462,6 +1462,23 @@ fn fill_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(cache_target, id.xy, finite(to_display(acc), false));
 }
 
+// A filter layer's accumulator (ADR 0037): what the layers composite over the view `params` (a
+// region of a level, inside the document), premultiplied working-space RGBA as f32, not
+// converted for display: what the filter filters.
+@compute @workgroup_size(8, 8)
+fn working_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.out_size.x || id.y >= params.out_size.y {
+        return;
+    }
+    let pixel = view_pixel(id.xy);
+    var acc = vec4<f32>(0.0);
+    if pixel.coverage > 0.0 {
+        var uncounted = 0u;
+        acc = composite(pixel.footprint, params.layer_count, &uncounted);
+    }
+    export_output[id.y * params.out_size.x + id.x] = acc;
+}
+
 // Quick Mask and Select and Mask's views (ADR 0024): `layers[0].color` tints what the selection
 // leaves out at `layers[0].opacity` (Quick Mask: Photoshop's red, half opaque by default; black
 // or white wholly); with KIND_SHOW_MASK, the selection itself in gray.
