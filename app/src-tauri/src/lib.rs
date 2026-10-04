@@ -15,6 +15,7 @@ mod clipboard;
 mod export;
 mod info;
 mod ipc;
+mod liquify;
 mod move_pixels;
 mod paint;
 mod print;
@@ -137,6 +138,9 @@ struct OpenDocument {
     overlays: ViewOverlays,
     /// Select and Mask is open: what it refines (`refine`).
     refine: Option<refine::RefineSession>,
+    /// Filter > Liquify is open (ADR 0037): the field being edited, shared with the commands
+    /// that draw it, which do not hold the documents' lock meanwhile.
+    liquify: Option<Arc<Mutex<liquify::LiquifySession>>>,
     /// A paint stroke under way, shown in place of its layer's pixels (view state too).
     paint_preview: Option<paint::PaintPreview>,
     /// Selected pixels the Move tool moved, floating until something else happens.
@@ -167,6 +171,7 @@ impl OpenDocument {
             saving: false,
             overlays: ViewOverlays::default(),
             refine: None,
+            liquify: None,
             paint_preview: None,
             floating: None,
             move_preview: None,
@@ -2227,6 +2232,13 @@ pub fn run() {
             refine::refine_close,
             refine::refine_output,
             refine::refine_brush,
+            liquify::liquify_open,
+            liquify::liquify_stroke,
+            liquify::liquify_undo,
+            liquify::liquify_restore_all,
+            liquify::liquify_frame,
+            liquify::liquify_commit,
+            liquify::liquify_close,
             segment::ai_refine_base,
             selection::quick_select,
             paint::paint_stroke,
@@ -4261,5 +4273,195 @@ mod tests {
         };
         assert_eq!((image.size(), stack.is_none()), (size, true));
         assert_eq!(layer.transform, slopshop_core::Affine::IDENTITY);
+    }
+
+    /// A 120 × 100 gradient on one layer, in a new document: its tab and its layer's id.
+    fn liquify_document(state: &AppState) -> (u64, u64) {
+        let mut pixels = Vec::new();
+        for y in 0..100u32 {
+            for x in 0..120u32 {
+                pixels.extend([(x * 2) as u8, (y * 2) as u8, 90, 255]);
+            }
+        }
+        let image = RasterImage::from_pixels(Size::new(120, 100), PixelFormat::RGBA8_SRGB, &pixels)
+            .unwrap();
+        let doc = state
+            .add_document(image_session(image, "photo"), None, Vec::new())
+            .unwrap();
+        (doc.id, doc.layers[0].id)
+    }
+
+    fn drag(tool: &str, from: [f64; 2], to: [f64; 2]) -> liquify::StrokeRequest {
+        serde_json::from_value(serde_json::json!({
+            "tool": tool,
+            "brush": { "size": 40.0, "density": 100.0, "pressure": 100.0, "rate": 100.0 },
+            "begin": true,
+            "points": [from, to],
+            "hold": 0.0,
+            "end": true,
+        }))
+        .unwrap()
+    }
+
+    fn whole_view() -> liquify::ViewRequest {
+        serde_json::from_value(serde_json::json!({
+            "x": 0.0, "y": 0.0, "zoom": 1.0, "width": 120, "height": 100, "overlay": true,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn liquify_is_opened_stroked_undone_and_committed_as_one_entry() {
+        let state = AppState::new();
+        let (doc, layer) = liquify_document(&state);
+        // Not open: nothing to draw, stroke or commit.
+        assert!(liquify::frame_of(&state, doc, whole_view()).is_err());
+        assert!(liquify::commit(&state, doc).is_err());
+        let opened = liquify::open(&state, doc, layer, None).unwrap();
+        assert_eq!((opened.width, opened.height), (120, 100));
+        assert!(!opened.changed && !opened.can_undo && !opened.displaced);
+        let plain = liquify::frame_of(&state, doc, whole_view()).unwrap();
+        assert_eq!(plain.len(), 120 * 100 * 4);
+
+        // A stroke moves pixels: the frame changes, the stroke can be undone and redone.
+        let after = liquify::stroke(
+            &state,
+            doc,
+            &drag("forwardWarp", [30.0, 50.0], [80.0, 50.0]),
+        )
+        .unwrap();
+        assert!(after.changed && after.can_undo && after.displaced && !after.can_redo);
+        let warped = liquify::frame_of(&state, doc, whole_view()).unwrap();
+        assert_ne!(warped, plain);
+        // Nothing of the document changed yet.
+        {
+            let mut documents = state.documents().unwrap();
+            let d = documents.get_mut(doc).unwrap();
+            assert_eq!(d.session.history().1, 0);
+        }
+        let undone = liquify::undo(&state, doc, false).unwrap();
+        assert!(!undone.changed && undone.can_redo && !undone.can_undo);
+        assert_eq!(liquify::frame_of(&state, doc, whole_view()).unwrap(), plain);
+        assert!(liquify::undo(&state, doc, true).unwrap().changed);
+        assert_eq!(
+            liquify::frame_of(&state, doc, whole_view()).unwrap(),
+            warped
+        );
+
+        // Restore All takes everything back, and is itself undone by Undo.
+        let restored = liquify::restore_all(&state, doc).unwrap();
+        assert!(!restored.displaced && restored.can_undo);
+        assert_eq!(liquify::frame_of(&state, doc, whole_view()).unwrap(), plain);
+        liquify::undo(&state, doc, false).unwrap();
+        assert_eq!(
+            liquify::frame_of(&state, doc, whole_view()).unwrap(),
+            warped
+        );
+
+        // OK: one entry of the layer's stack, one undo entry named for it.
+        let view = liquify::commit(&state, doc).unwrap();
+        assert_eq!(view.layers[0].entries.len(), 1);
+        assert_eq!(view.layers[0].entries[0].kind, "liquify");
+        {
+            let mut documents = state.documents().unwrap();
+            let d = documents.get_mut(doc).unwrap();
+            assert!(d.liquify.is_none(), "the workspace closed");
+            let (labels, done) = d.session.history();
+            assert_eq!(done, 1);
+            assert_eq!(labels[0].kind, "liquify");
+        }
+        assert!(liquify::frame_of(&state, doc, whole_view()).is_err());
+        let mut documents = state.documents().unwrap();
+        let d = documents.get_mut(doc).unwrap();
+        d.session.undo().unwrap();
+        assert!(d.view().layers[0].entries.is_empty());
+    }
+
+    #[test]
+    fn a_liquify_entry_is_edited_again_with_its_field() {
+        let state = AppState::new();
+        let (doc, layer) = liquify_document(&state);
+        liquify::open(&state, doc, layer, None).unwrap();
+        liquify::stroke(
+            &state,
+            doc,
+            &drag("forwardWarp", [30.0, 50.0], [80.0, 50.0]),
+        )
+        .unwrap();
+        let warped = liquify::frame_of(&state, doc, whole_view()).unwrap();
+        liquify::commit(&state, doc).unwrap();
+
+        // Reopened on the entry: its field is there, nothing is changed yet, OK adds nothing.
+        let reopened = liquify::open(&state, doc, layer, Some(0)).unwrap();
+        assert!(reopened.displaced && !reopened.changed);
+        assert_eq!(
+            liquify::frame_of(&state, doc, whole_view()).unwrap(),
+            warped
+        );
+        liquify::commit(&state, doc).unwrap();
+        {
+            let mut documents = state.documents().unwrap();
+            assert_eq!(documents.get_mut(doc).unwrap().session.history().1, 1);
+        }
+
+        // Edited: another stroke, one more undo entry, still one liquify entry.
+        liquify::open(&state, doc, layer, Some(0)).unwrap();
+        liquify::stroke(&state, doc, &drag("pushLeft", [60.0, 80.0], [60.0, 20.0])).unwrap();
+        let view = liquify::commit(&state, doc).unwrap();
+        assert_eq!(view.layers[0].entries.len(), 1);
+        {
+            let mut documents = state.documents().unwrap();
+            let d = documents.get_mut(doc).unwrap();
+            let (labels, done) = d.session.history();
+            assert_eq!((done, labels[1].kind), (2, "editEntry"));
+        }
+
+        // Everything restored: the entry goes away.
+        liquify::open(&state, doc, layer, Some(0)).unwrap();
+        liquify::restore_all(&state, doc).unwrap();
+        let view = liquify::commit(&state, doc).unwrap();
+        assert!(view.layers[0].entries.is_empty());
+
+        // Not a Liquify entry: refused.
+        assert!(liquify::open(&state, doc, layer, Some(0)).is_err());
+    }
+
+    #[test]
+    fn liquify_refuses_bad_requests_and_cancels_without_a_trace() {
+        let state = AppState::new();
+        let (doc, layer) = liquify_document(&state);
+        assert!(liquify::open(&state, doc, layer + 100, None).is_err());
+        liquify::open(&state, doc, layer, None).unwrap();
+        for bad in [
+            serde_json::json!({ "tool": "nope", "brush": { "size": 40.0, "density": 100.0, "pressure": 100.0, "rate": 100.0 },
+                "begin": true, "points": [], "hold": 0.0, "end": true }),
+            serde_json::json!({ "tool": "pucker", "brush": { "size": 0.0, "density": 100.0, "pressure": 100.0, "rate": 100.0 },
+                "begin": true, "points": [], "hold": 0.0, "end": true }),
+            // Not begun: no stroke is under way.
+            serde_json::json!({ "tool": "pucker", "brush": { "size": 40.0, "density": 100.0, "pressure": 100.0, "rate": 100.0 },
+                "begin": false, "points": [[1.0, 1.0]], "hold": 0.0, "end": false }),
+        ] {
+            let request: liquify::StrokeRequest = serde_json::from_value(bad).unwrap();
+            assert!(liquify::stroke(&state, doc, &request).is_err());
+        }
+        let huge: liquify::ViewRequest = serde_json::from_value(serde_json::json!({
+            "x": 0.0, "y": 0.0, "zoom": 1.0, "width": 100000, "height": 100000, "overlay": false,
+        }))
+        .unwrap();
+        assert!(liquify::frame_of(&state, doc, huge).is_err());
+
+        // A tool that acts while held, over time.
+        let held: liquify::StrokeRequest = serde_json::from_value(serde_json::json!({
+            "tool": "bloat", "brush": { "size": 60.0, "density": 50.0, "pressure": 100.0, "rate": 100.0 },
+            "begin": true, "points": [[60.0, 50.0]], "hold": 0.2, "end": false,
+        }))
+        .unwrap();
+        assert!(liquify::stroke(&state, doc, &held).unwrap().displaced);
+        // Cancel: nothing is left, and the document did not change.
+        let mut documents = state.documents().unwrap();
+        let d = documents.get_mut(doc).unwrap();
+        d.liquify = None;
+        assert_eq!(d.session.history().1, 0);
+        assert!(d.view().layers[0].entries.is_empty());
     }
 }

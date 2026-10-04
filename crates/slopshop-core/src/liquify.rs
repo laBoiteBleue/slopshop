@@ -364,6 +364,22 @@ impl Field {
             .any(|tile| tile.0.iter().any(|f| *f != 0))
     }
 
+    /// Whether `other` has the very tiles this field has (clones of one another, nothing
+    /// stroked since): cheap, and exact for what a workspace needs to know, whether it changed.
+    pub fn shares_tiles_with(&self, other: &Field) -> bool {
+        fn same<T>(a: &[Option<Arc<T>>], b: &[Option<Arc<T>>]) -> bool {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(x, y)| match (x, y) {
+                    (None, None) => true,
+                    (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+                    _ => false,
+                })
+        }
+        self.size == other.size
+            && same(&self.displacement, &other.displacement)
+            && same(&self.frozen, &other.frozen)
+    }
+
     /// The farthest any pixel reads from, in the layer's pixels: how much margin a crop of the
     /// input needs. A bilinear interpolation never exceeds the largest node.
     pub fn reach(&self) -> f64 {

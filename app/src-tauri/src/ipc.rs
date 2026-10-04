@@ -345,7 +345,7 @@ impl StyleDto {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryView {
-    /// `paint` or `effect`.
+    /// `paint`, `effect`, `filter` or `liquify`.
     pub kind: &'static str,
     /// An effect's adjustment (`Adjustment::id`), translated by the UI.
     pub adjustment: Option<&'static str>,
@@ -477,6 +477,15 @@ impl LayerView {
                     .map(|entry| match entry {
                         Entry::Paint(_) => EntryView {
                             kind: "paint",
+                            adjustment: None,
+                            count: 1,
+                            hidden: entry.hidden(),
+                            steps: Vec::new(),
+                            filter: None,
+                            filter_steps: Vec::new(),
+                        },
+                        Entry::Liquify(_) => EntryView {
+                            kind: "liquify",
                             adjustment: None,
                             count: 1,
                             hidden: entry.hidden(),

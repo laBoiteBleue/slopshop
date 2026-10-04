@@ -2846,9 +2846,31 @@ impl LayerStack {
         })
     }
 
+    /// What entry `index` is applied to: the result of the entries below it (its own cache when
+    /// it is a Liquify entry that knows it).
+    pub fn evaluate_below(&self, index: usize) -> Result<Arc<RasterImage>, StackError> {
+        if index > self.entries.len() {
+            return Err(StackError::IndexOutOfRange(index));
+        }
+        let below = self.below(index);
+        if let Some(Entry::Liquify(liquify)) = self.entries.get(index)
+            && let Some((known, input)) = liquify.known_input()
+            && known == below
+        {
+            return Ok(input);
+        }
+        below.evaluate()
+    }
+
     /// The stack with the field of Liquify entry `index` replaced by `field`: an entry edited
-    /// again in its workspace. It keeps its eye and what it is applied to.
-    pub fn with_field(&self, index: usize, field: Arc<Field>) -> Result<Self, StackError> {
+    /// again in its workspace. It keeps its eye and what it is applied to; `input` (what the
+    /// entry is applied to, as [`Self::evaluate_below`] gives it) when it did not know.
+    pub fn with_field(
+        &self,
+        index: usize,
+        field: Arc<Field>,
+        input: Option<Arc<RasterImage>>,
+    ) -> Result<Self, StackError> {
         let Entry::Liquify(old) = self
             .entries
             .get(index)
@@ -2857,8 +2879,12 @@ impl LayerStack {
             return Err(StackError::InvalidEffect);
         };
         let mut edited = LiquifyEntry::new(field, old.space).with_hidden(old.hidden);
-        if let Some((below, input)) = old.known_input() {
-            edited = edited.knowing(below, input);
+        match (old.known_input(), input) {
+            (Some((below, input)), _) => edited = edited.knowing(below, input),
+            (None, Some(input)) if input.size() == self.original.size() => {
+                edited = edited.knowing(self.below(index), input);
+            }
+            _ => {}
         }
         let edited = Entry::Liquify(Arc::new(edited));
         self.check(&edited)?;
@@ -5378,7 +5404,9 @@ mod tests {
         assert!(!hidden.has_shown_filter() && hidden.entries()[0].hidden());
         assert_eq!(difference(&hidden.evaluate().unwrap(), &original), 0);
         // Another field in its place: the eye and what it was applied to stay.
-        let other = hidden.with_field(0, Arc::new(Field::new(size()))).unwrap();
+        let other = hidden
+            .with_field(0, Arc::new(Field::new(size())), None)
+            .unwrap();
         let Entry::Liquify(edited) = &other.entries()[0] else {
             panic!("a liquify entry");
         };
@@ -5389,17 +5417,17 @@ mod tests {
             LayerStack::new(Arc::clone(&original))
                 .with_effect(effect(Adjustment::Invert, None))
                 .unwrap()
-                .with_field(0, pushed()),
+                .with_field(0, pushed(), None),
             Err(StackError::InvalidEffect)
         ));
         assert_eq!(
             stack
-                .with_field(0, Arc::new(Field::new(Size::new(10, 10))))
+                .with_field(0, Arc::new(Field::new(Size::new(10, 10))), None)
                 .unwrap_err(),
             StackError::SizeMismatch
         );
         assert_eq!(
-            stack.with_field(3, pushed()).unwrap_err(),
+            stack.with_field(3, pushed(), None).unwrap_err(),
             StackError::IndexOutOfRange(3)
         );
         // Deleted: the layer is as it was.
@@ -5503,5 +5531,47 @@ mod tests {
         assert_eq!(entry.field().size(), Size::new(3 * T, 3 * T + 40));
         let result = grown.evaluate().unwrap();
         assert_eq!(result.size(), Size::new(3 * T, 3 * T + 40));
+    }
+
+    #[test]
+    fn what_a_liquify_is_applied_to_is_what_is_below_it() {
+        let original = gradient(true);
+        let plain = LayerStack::new(Arc::clone(&original));
+        let unknown = plain
+            .with_liquify(pushed(), BlendSpace::Perceptual, None)
+            .unwrap();
+        let Entry::Liquify(entry) = &unknown.entries()[0] else {
+            panic!("a liquify entry");
+        };
+        assert!(entry.known_input().is_none());
+        assert!(Arc::ptr_eq(&unknown.evaluate_below(0).unwrap(), &original));
+        // Above a paint: the paint's result.
+        let paint = painted(
+            &empty(&original),
+            gray(1.0),
+            |x, _| {
+                if x < 9 { 1.0 } else { 0.0 }
+            },
+        );
+        let stacked = plain
+            .with_top_paint(paint)
+            .unwrap()
+            .with_liquify(pushed(), BlendSpace::Perceptual, None)
+            .unwrap();
+        let below = stacked.evaluate_below(1).unwrap();
+        assert_eq!(pixel(&below, 3, 3), vec![255, 255, 255, 255]);
+        assert_eq!(
+            stacked.evaluate_below(5).unwrap_err(),
+            StackError::IndexOutOfRange(5)
+        );
+        // An entry edited with what it is applied to learns it.
+        let seeded = unknown
+            .with_field(0, pushed(), Some(Arc::clone(&original)))
+            .unwrap();
+        let Entry::Liquify(entry) = &seeded.entries()[0] else {
+            panic!("a liquify entry");
+        };
+        assert!(Arc::ptr_eq(&entry.known_input().unwrap().1, &original));
+        assert!(seeded.look_at([0.0, 0.0, 50.0, 50.0], 0).unwrap().is_some());
     }
 }
