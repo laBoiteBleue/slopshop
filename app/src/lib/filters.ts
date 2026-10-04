@@ -7,8 +7,9 @@ import type { MessageKey } from "./i18n/en";
 /** A filter's settings as edits send them (`Filter::params` order in the engine). */
 export type FilterSettings = { filter: FilterId; values: number[] };
 
-/** One number setting of a filter's dialog. */
-export type FilterParam = {
+/** A number setting of a filter's dialog: a field, its unit, a slider below. */
+export type NumberParam = {
+  kind: "number";
   key: string;
   label: MessageKey;
   /** What its value counts, after the field. */
@@ -21,8 +22,22 @@ export type FilterParam = {
   scale: "linear" | "log";
 };
 
+/**
+ * One setting of a filter's dialog: a number; one of `options` (their index); a check box (0 or
+ * 1); or a seed, not shown, drawn anew each time the filter is applied (`withNewSeeds`).
+ */
+export type FilterParam =
+  | NumberParam
+  | { kind: "choice"; key: string; label: MessageKey; options: MessageKey[] }
+  | { kind: "check"; key: string; label: MessageKey }
+  | { kind: "seed"; key: string };
+
+/** The seeds a filter takes: whole numbers below 2^24 (the engine's `NOISE_SEEDS`). */
+export const SEEDS = 2 ** 24;
+
 /** A radius in pixels, Photoshop's: a Gaussian's standard deviation, 0.1 to 1000. */
-const radius = (label: MessageKey): FilterParam => ({
+const radius = (label: MessageKey): NumberParam => ({
+  kind: "number",
   key: "radius",
   label,
   unit: "filter.pixels",
@@ -38,6 +53,7 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
   motionBlur: {
     params: [
       {
+        kind: "number",
         key: "angle",
         label: "filter.motionBlur.angle",
         unit: "filter.degrees",
@@ -47,6 +63,7 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
         scale: "linear",
       },
       {
+        kind: "number",
         key: "distance",
         label: "filter.motionBlur.distance",
         unit: "filter.pixels",
@@ -61,6 +78,7 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
   unsharpMask: {
     params: [
       {
+        kind: "number",
         key: "amount",
         label: "filter.unsharpMask.amount",
         unit: "filter.percent",
@@ -71,6 +89,7 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
       },
       radius("filter.unsharpMask.radius"),
       {
+        kind: "number",
         key: "threshold",
         label: "filter.unsharpMask.threshold",
         unit: "filter.levels",
@@ -82,11 +101,45 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     ],
     defaults: [100, 1, 0],
   },
+  addNoise: {
+    params: [
+      {
+        kind: "number",
+        key: "amount",
+        label: "filter.addNoise.amount",
+        unit: "filter.percent",
+        min: 0.1,
+        max: 400,
+        decimals: 1,
+        scale: "log",
+      },
+      {
+        kind: "choice",
+        key: "distribution",
+        label: "filter.addNoise.distribution",
+        options: ["filter.addNoise.uniform", "filter.addNoise.gaussian"],
+      },
+      { kind: "check", key: "monochromatic", label: "filter.addNoise.monochromatic" },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [12.5, 0, 0, 0],
+  },
   highPass: { params: [radius("filter.highPass.radius")], defaults: [10] },
 };
 
+/** `values` of `filter` with each seed drawn anew: the filter applied again, another grain. */
+export function withNewSeeds(
+  filter: FilterId,
+  values: number[],
+  random: () => number = Math.random,
+): number[] {
+  return values.map((v, i) =>
+    FILTERS[filter].params[i]?.kind === "seed" ? Math.floor(random() * SEEDS) : v,
+  );
+}
+
 /** A slider position (0–1000) for value `v` of `param`. */
-export function sliderPosition(param: FilterParam, v: number): number {
+export function sliderPosition(param: NumberParam, v: number): number {
   const { min, max } = param;
   const clamped = Math.min(Math.max(v, min), max);
   return param.scale === "log"
@@ -95,7 +148,7 @@ export function sliderPosition(param: FilterParam, v: number): number {
 }
 
 /** The value of `param` at slider position `p` (0–1000), rounded to its decimals. */
-export function sliderValue(param: FilterParam, p: number): number {
+export function sliderValue(param: NumberParam, p: number): number {
   const { min, max } = param;
   const v =
     param.scale === "log" ? min * Math.pow(max / min, p / 1000) : min + ((max - min) * p) / 1000;
@@ -105,6 +158,7 @@ export function sliderValue(param: FilterParam, p: number): number {
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.blur", filters: ["gaussianBlur", "motionBlur"] },
+  { label: "menu.filter.noise", filters: ["addNoise"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask"] },
   { label: "menu.filter.other", filters: ["highPass"] },
 ];
@@ -112,10 +166,20 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
 /** Whether `values` are settings `filter` accepts. */
 export function validValues(filter: FilterId, values: number[]): boolean {
   const params = FILTERS[filter].params;
-  return (
-    values.length === params.length &&
-    values.every((v, i) => Number.isFinite(v) && v >= params[i].min && v <= params[i].max)
-  );
+  return values.length === params.length && values.every((v, i) => validValue(params[i], v));
+}
+
+function validValue(param: FilterParam, v: number): boolean {
+  switch (param.kind) {
+    case "number":
+      return Number.isFinite(v) && v >= param.min && v <= param.max;
+    case "choice":
+      return Number.isInteger(v) && v >= 0 && v < param.options.length;
+    case "check":
+      return v === 0 || v === 1;
+    case "seed":
+      return Number.isInteger(v) && v >= 0 && v < SEEDS;
+  }
 }
 
 /**

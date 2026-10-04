@@ -10,6 +10,8 @@ import {
   sliderPosition,
   sliderValue,
   validValues,
+  withNewSeeds,
+  type NumberParam,
 } from "../src/lib/filters";
 import { editableEntry } from "../src/lib/stackEntries";
 
@@ -53,7 +55,35 @@ test("Motion Blur: an angle of -90 to 90 degrees, a distance of 1 to 2000 pixels
     expect(validValues("motionBlur", values)).toBe(false);
   }
   // The angle's slider is even, its middle the horizontal.
-  expect(sliderValue(FILTERS.motionBlur.params[0], 500)).toBe(0);
+  expect(sliderValue(FILTERS.motionBlur.params[0] as NumberParam, 500)).toBe(0);
+});
+
+test("Add Noise: an amount of 0.1 to 400 %, uniform or Gaussian, monochromatic or not, a seed", () => {
+  expect(FILTERS.addNoise.defaults).toEqual([12.5, 0, 0, 0]);
+  expect(validValues("addNoise", [0.1, 1, 1, 2 ** 24 - 1])).toBe(true);
+  for (const values of [
+    [0, 0, 0, 0],
+    [401, 0, 0, 0],
+    [10, 2, 0, 0],
+    [10, 0.5, 0, 0],
+    [10, 0, 2, 0],
+    [10, 0, 0, 1.5],
+    [10, 0, 0, 2 ** 24],
+  ]) {
+    expect(validValues("addNoise", values)).toBe(false);
+  }
+});
+
+test("applied anew, a filter draws new seeds and keeps its other settings", () => {
+  expect(withNewSeeds("addNoise", [30, 1, 0, 5], () => 0.5)).toEqual([30, 1, 0, 2 ** 23]);
+  expect(withNewSeeds("addNoise", [30, 1, 0, 5], () => 0.999999999)).toEqual([
+    30,
+    1,
+    0,
+    2 ** 24 - 1,
+  ]);
+  // No seed: as it was.
+  expect(withNewSeeds("unsharpMask", [100, 1, 0], () => 0.5)).toEqual([100, 1, 0]);
 });
 
 test("High Pass takes a radius of 0.1 to 1000 pixels, 10 at first", () => {
@@ -69,7 +99,7 @@ test("every filter's defaults are valid, and every filter is in a submenu once",
 });
 
 test("sliders: a radius moves by ratios, an amount or a threshold evenly", () => {
-  const [amount, radius, threshold] = FILTERS.unsharpMask.params;
+  const [amount, radius, threshold] = FILTERS.unsharpMask.params as NumberParam[];
   // 1 pixel is a quarter of the way from 0.1 to 1000, 10 halfway.
   expect(sliderPosition(radius, 1)).toBeCloseTo(250, 6);
   expect(sliderValue(radius, 500)).toBe(10);

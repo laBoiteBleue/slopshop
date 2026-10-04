@@ -67,30 +67,56 @@
   <form onsubmit={submit}>
     <div class="settings">
       {#each params as param, i (param.key)}
-        <div class="row">
-          <label for="filter-{param.key}">{t(param.label)}</label>
-          <!-- svelte-ignore a11y_autofocus -->
+        {#if param.kind === "choice"}
+          <fieldset>
+            <legend>{t(param.label)}</legend>
+            {#each param.options as option, n (option)}
+              <label class="check">
+                <input
+                  type="radio"
+                  name="filter-{param.key}"
+                  checked={current[i] === n}
+                  onchange={() => (current[i] = n)}
+                />
+                {t(option)}
+              </label>
+            {/each}
+          </fieldset>
+        {:else if param.kind === "check"}
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={current[i] === 1}
+              onchange={(e) => (current[i] = e.currentTarget.checked ? 1 : 0)}
+            />
+            {t(param.label)}
+          </label>
+        {:else if param.kind === "number"}
+          <div class="row">
+            <label for="filter-{param.key}">{t(param.label)}</label>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              id="filter-{param.key}"
+              type="number"
+              min={param.min}
+              max={param.max}
+              step="any"
+              autofocus={i === 0}
+              bind:value={current[i]}
+            />
+            <span>{t(param.unit)}</span>
+          </div>
           <input
-            id="filter-{param.key}"
-            type="number"
-            min={param.min}
-            max={param.max}
-            step="any"
-            autofocus={i === 0}
-            bind:value={current[i]}
+            class="slider"
+            type="range"
+            min="0"
+            max="1000"
+            step="1"
+            aria-label={t(param.label)}
+            value={sliderPosition(param, current[i])}
+            oninput={(e) => (current[i] = sliderValue(param, e.currentTarget.valueAsNumber))}
           />
-          <span>{t(param.unit)}</span>
-        </div>
-        <input
-          class="slider"
-          type="range"
-          min="0"
-          max="1000"
-          step="1"
-          aria-label={t(param.label)}
-          value={sliderPosition(param, current[i])}
-          oninput={(e) => (current[i] = sliderValue(param, e.currentTarget.valueAsNumber))}
-        />
+        {/if}
       {/each}
     </div>
     <div class="buttons">
@@ -158,6 +184,15 @@
 
   .slider {
     width: 100%;
+  }
+
+  fieldset {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 4px 8px 6px;
+    border: 1px solid var(--border-dark);
+    border-radius: 3px;
   }
 
   .buttons {

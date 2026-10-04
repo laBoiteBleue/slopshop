@@ -154,7 +154,9 @@ built. Contributors: propose here first.
   entry; "Repeat Gaussian Blur" once there is one) and Last Filter Settings… (Alt+Ctrl+F: its
   dialog at those settings), then Blur > Gaussian Blur…: Photoshop's dialog, a radius in pixels
   (0.1 to 1000, the field and a logarithmic slider), Blur > Motion Blur… (Angle -90 to 90°,
-  Distance 1 to 2000 pixels); Sharpen > Unsharp Mask… (Amount 1 to 500 %,
+  Distance 1 to 2000 pixels); Noise > Add Noise… (Amount 0.1 to 400 %, Distribution Uniform or
+  Gaussian, Monochromatic; each application draws another grain, an entry edited again keeps
+  its own); Sharpen > Unsharp Mask… (Amount 1 to 500 %,
   Radius, Threshold 0 to 255 levels: linear sliders but the radius) and Other > High Pass…
   (Radius), Photoshop's ranges and defaults. A filter's settings show live on the canvas (Preview off
   shows the layer without it), OK one undo entry, Cancel takes it back. A filter applies to the
