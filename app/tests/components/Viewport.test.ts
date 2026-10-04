@@ -272,3 +272,144 @@ test("frames over IPC never march: the SVG overlay draws the ants", async () => 
   expect(await presentsDuring(300)).toBe(0);
   expect(frames).toHaveLength(1);
 });
+
+/** The image's area on the window: right of and below 18-pixel rulers (jsdom lays nothing out). */
+function placeImage(area: HTMLElement) {
+  area.getBoundingClientRect = () => DOMRect.fromRect({ x: 18, y: 18, width: 200, height: 100 });
+}
+
+test("View > Rulers: the document's pixels along the top and the left, labelled", async () => {
+  const { container } = open({ rulers: true });
+  await vi.waitFor(() => expect(container.querySelectorAll("svg.ruler")).toHaveLength(2));
+  const [top, left] = container.querySelectorAll("svg.ruler");
+  // 100%: a label every 100 pixels, from the document's origin at the corner.
+  expect([...top.querySelectorAll("text")].map((t) => t.textContent?.trim())).toEqual([
+    "0",
+    "100",
+    "200",
+  ]);
+  expect([...left.querySelectorAll("text")].map((t) => t.textContent?.trim())).toEqual([
+    "0",
+    "100",
+  ]);
+  expect(open().container.querySelector("svg.ruler")).not.toBeInTheDocument();
+});
+
+test("a guide dragged out of a ruler lands on a whole pixel where it is released", async () => {
+  const onguides = vi.fn();
+  const { area, component, container, user } = open({ rulers: true, onguides });
+  placeImage(area);
+  await component.zoomTo(2);
+  const [top, left] = container.querySelectorAll("svg.ruler");
+  // From the top ruler: a horizontal guide. At 200% from the document's (10, 20), the window's
+  // y = 49 is the document's 20 + (49 - 18) / 2 = 35.5, landing on 36.
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: top, coords: { clientX: 60, clientY: 10 } },
+    { target: area, coords: { clientX: 60, clientY: 49 } },
+  ]);
+  expect(container.querySelector("line.guide.dragged")).toBeInTheDocument();
+  await user.pointer({ keys: "[/MouseLeft]", target: area, coords: { clientX: 60, clientY: 49 } });
+  expect(onguides).toHaveBeenCalledExactlyOnceWith([{ vertical: false, position: 36 }]);
+  // From the left ruler, and back onto it: nothing.
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: left, coords: { clientX: 10, clientY: 60 } },
+    { target: area, coords: { clientX: 80, clientY: 60 } },
+    { keys: "[/MouseLeft]", target: left, coords: { clientX: 10, clientY: 60 } },
+  ]);
+  expect(onguides).toHaveBeenCalledOnce();
+});
+
+test("with the Move tool a guide is moved, or deleted when dragged out of the image", async () => {
+  const onguides = vi.fn();
+  const onguidestart = vi.fn();
+  const guides = [
+    { vertical: true, position: 20 },
+    { vertical: false, position: 30 },
+  ];
+  const { area, component, container, onmovestart, user } = open({
+    rulers: true,
+    guides,
+    guidesMovable: true,
+    onguides,
+    onguidestart,
+  });
+  placeImage(area);
+  await component.zoomTo(2);
+  const grab = () => container.querySelector("line.grab.vertical") as SVGLineElement;
+  // The vertical guide at x = 20: (20 - 10) × 2 = 20 CSS pixels into the image.
+  expect(Number(grab().getAttribute("x1"))).toBe(20.5);
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: grab(), coords: { clientX: 38, clientY: 50 } },
+    { target: area, coords: { clientX: 58, clientY: 50 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 58, clientY: 50 } },
+  ]);
+  expect(onguidestart).toHaveBeenCalledOnce();
+  // Not the Move tool's drag of the layers.
+  expect(onmovestart).not.toHaveBeenCalled();
+  expect(onguides).toHaveBeenLastCalledWith([
+    { vertical: true, position: 30 },
+    { vertical: false, position: 30 },
+  ]);
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: grab(), coords: { clientX: 38, clientY: 50 } },
+    { target: area, coords: { clientX: 300, clientY: 50 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 300, clientY: 50 } },
+  ]);
+  expect(onguides).toHaveBeenLastCalledWith([{ vertical: false, position: 30 }]);
+});
+
+test("a dragged guide snaps where the owner says, Ctrl held letting it free", async () => {
+  const onguides = vi.fn();
+  const snapGuide = vi.fn((at: number, _vertical: boolean, _docPerCss: number, free: boolean) =>
+    free ? at : 50,
+  );
+  const { area, component, container, user } = open({ rulers: true, onguides, snapGuide });
+  placeImage(area);
+  await component.zoomTo(2);
+  const [top] = container.querySelectorAll("svg.ruler");
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: top, coords: { clientX: 60, clientY: 10 } },
+    { target: area, coords: { clientX: 60, clientY: 49 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 60, clientY: 49 } },
+  ]);
+  expect(snapGuide).toHaveBeenLastCalledWith(35.5, false, 0.5, false);
+  expect(onguides).toHaveBeenLastCalledWith([{ vertical: false, position: 50 }]);
+  await user.keyboard("[ControlLeft>]");
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: top, coords: { clientX: 60, clientY: 10 } },
+    { target: area, coords: { clientX: 60, clientY: 49 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 60, clientY: 49 } },
+  ]);
+  await user.keyboard("[/ControlLeft]");
+  expect(onguides).toHaveBeenLastCalledWith([{ vertical: false, position: 36 }]);
+});
+
+test("Hide Extras hides the guides and the smart guides; guides cannot be picked up then", async () => {
+  const guides = [{ vertical: true, position: 20 }];
+  const smartGuides = [{ x1: 20, y1: 20, x2: 20, y2: 40 }];
+  const { component, container, rerender } = open({ guides, smartGuides, guidesMovable: true });
+  await component.zoomTo(2);
+  expect(container.querySelector("svg.guides line.guide")).toBeInTheDocument();
+  expect(container.querySelector("svg.smart-guides")).toBeInTheDocument();
+  await rerender({ extras: false });
+  expect(container.querySelector("svg.guides")).not.toBeInTheDocument();
+  expect(container.querySelector("svg.smart-guides")).not.toBeInTheDocument();
+});
+
+test("the pixel grid shows by itself from 800%, over the canvas", async () => {
+  answer.view = { zoom: 4, origin: [0, 0], fit: false };
+  const { component, container, rerender } = open({ canvasSize: { width: 40, height: 30 } });
+  await component.zoomTo(4);
+  expect(container.querySelector(".pixel-grid")).not.toBeInTheDocument();
+  answer.view = { zoom: 8, origin: [0, 0], fit: false };
+  await component.zoomTo(8);
+  const grid = container.querySelector(".pixel-grid") as HTMLElement;
+  // 40 × 30 pixels at 800%, cut at the viewport's 200 × 100.
+  expect([grid.style.width, grid.style.height, grid.style.backgroundSize]).toEqual([
+    "200px",
+    "100px",
+    "8px 8px",
+  ]);
+  await rerender({ extras: false });
+  expect(container.querySelector(".pixel-grid")).not.toBeInTheDocument();
+});

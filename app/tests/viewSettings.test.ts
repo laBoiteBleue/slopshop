@@ -9,16 +9,18 @@ function memory() {
   };
 }
 
-test("View > Snap is on at first and kept between sessions", () => {
+test("Rulers off and Snap on at first, both kept between sessions", () => {
   const store = memory();
-  expect(loadViewSettings(store)).toEqual(DEFAULT_VIEW_SETTINGS);
-  expect(DEFAULT_VIEW_SETTINGS.snap).toBe(true);
-  saveViewSettings({ snap: false }, store);
-  expect(loadViewSettings(store)).toEqual({ snap: false });
+  expect(loadViewSettings(store)).toEqual({ rulers: false, snap: true });
+  saveViewSettings({ rulers: true, snap: false }, store);
+  expect(loadViewSettings(store)).toEqual({ rulers: true, snap: false });
+  // Saved before the rulers existed: they are off.
+  store.setItem("slopshop.view", '{"snap":false}');
+  expect(loadViewSettings(store)).toEqual({ rulers: false, snap: false });
 });
 
 test("anything odd saved reads as the defaults", () => {
-  for (const saved of ["{", "null", '{"snap":"no"}', "[]"]) {
+  for (const saved of ["{", "null", '{"snap":"no","rulers":1}', "[]"]) {
     const store = memory();
     store.setItem("slopshop.view", saved);
     expect(loadViewSettings(store)).toEqual(DEFAULT_VIEW_SETTINGS);
@@ -32,5 +34,5 @@ test("anything odd saved reads as the defaults", () => {
     },
   };
   expect(loadViewSettings(broken)).toEqual(DEFAULT_VIEW_SETTINGS);
-  expect(() => saveViewSettings({ snap: false }, broken)).not.toThrow();
+  expect(() => saveViewSettings({ rulers: true, snap: false }, broken)).not.toThrow();
 });

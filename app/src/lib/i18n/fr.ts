@@ -260,6 +260,8 @@ const fr: Messages = {
   "menu.view.fit": "Taille écran",
   "menu.view.snap": "Magnétisme",
   "menu.view.actualSize": "100 %",
+  "menu.view.rulers": "Règles",
+  "menu.view.clearGuides": "Effacer les repères",
   "menu.view.hideExtras": "Masquer les aides",
   "menu.view.fullScreen": "Plein écran",
   "menu.window.hidePanels": "Masquer les panneaux",

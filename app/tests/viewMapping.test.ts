@@ -2,7 +2,9 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   NO_VIEW,
+  PIXEL_GRID_ZOOM,
   easeStep,
+  pixelGrid,
   reprojection,
   toDocument,
   toViewport,
@@ -57,4 +59,25 @@ test("wheel deltas in pixels, lines or pages", () => {
   assert.equal(wheelPixels(120, 0, 800), 120);
   assert.equal(wheelPixels(3, 1, 800), 48);
   assert.equal(wheelPixels(-1, 2, 800), -800);
+});
+
+test("the pixel grid shows from 800%, over the visible part of the canvas only", () => {
+  const canvas = { width: 100, height: 50 };
+  assert.equal(pixelGrid({ zoom: 4, origin: [0, 0] }, 1, canvas, 400, 300), null);
+  // 800%, the document's (10, 5) at the viewport's corner, on a 2× display: 4 CSS pixels a cell.
+  const view: View = { zoom: PIXEL_GRID_ZOOM, origin: [10, 5] };
+  const grid = pixelGrid(view, 2, canvas, 300, 100);
+  // The canvas starts 10 × 4 and 5 × 4 CSS pixels before the corner, and goes past the
+  // viewport's other sides.
+  assert.deepEqual(grid, {
+    left: 0,
+    top: 0,
+    width: 300,
+    height: 100,
+    cell: 4,
+    offsetX: -40,
+    offsetY: -20,
+  });
+  // Scrolled away from the canvas: nothing to draw.
+  assert.equal(pixelGrid({ zoom: 8, origin: [500, 0] }, 1, canvas, 300, 100), null);
 });

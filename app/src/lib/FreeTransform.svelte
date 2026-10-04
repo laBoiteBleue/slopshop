@@ -14,7 +14,7 @@
   import { getLocale, t } from "./i18n/index.svelte";
   import type { ViewMapping } from "./Viewport.svelte";
   import SmartGuides from "./SmartGuides.svelte";
-  import { SNAP_CSS_PX, type SmartGuide } from "./snap";
+  import { SNAP_CSS_PX, type SmartGuide, type SnapTarget } from "./snap";
   import {
     boxFrame,
     movedBy,
@@ -50,7 +50,7 @@
      * What moves and scales snap to (the canvas, the other layers), as in Photoshop; none when
      * snapping is off. Ctrl held: no snapping.
      */
-    targets?: Bounds[];
+    targets?: SnapTarget[];
     /** The snaps' smart guides are drawn (View > Hide Extras hides them; the snap stays). */
     smartGuides?: boolean;
     /** The transform since the beginning, a map of the document's space. */

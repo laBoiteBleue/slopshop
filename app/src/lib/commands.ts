@@ -90,6 +90,7 @@ export const SHORTCUTS = {
   fitOnScreen: ["mod+0"],
   actualSize: ["mod+1"],
   // Photoshop's Extras: the selection outline and the guides hidden, the selection kept.
+  rulers: ["mod+r"],
   hideExtras: ["mod+h"],
   // F11 rather than Photoshop's F: every desktop application's full screen.
   fullScreen: ["f11"],

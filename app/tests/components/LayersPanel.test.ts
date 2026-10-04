@@ -54,6 +54,7 @@ function documentOf(layers: LayerView[]): DocumentView {
     quickMask: false,
     quickMaskOpacity: 50,
     savedSelections: [],
+    guides: [],
   } as DocumentView;
 }
 

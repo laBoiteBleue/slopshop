@@ -52,3 +52,47 @@ export function wheelPixels(delta: number, deltaMode: number, pageHeight: number
   const unit = deltaMode === DOM_DELTA_LINE ? 16 : deltaMode === DOM_DELTA_PAGE ? pageHeight : 1;
   return delta * unit;
 }
+
+/** Zoom from which the pixel grid shows by itself (800%): pixels big enough to tell apart. */
+export const PIXEL_GRID_ZOOM = 8;
+
+/**
+ * Where the pixel grid is drawn, in the viewport's CSS pixels: the part of the canvas
+ * (`width` × `height` document pixels) inside the viewport (`viewWidth` × `viewHeight`), its
+ * cells `cell` wide, the first line at (`offsetX`, `offsetY`) from the area's corner (≤ 0);
+ * null below [`PIXEL_GRID_ZOOM`] or with nothing in sight. Only the visible part: a whole
+ * canvas at 800% would be a huge element.
+ */
+export function pixelGrid(
+  view: View,
+  dpr: number,
+  canvas: { width: number; height: number },
+  viewWidth: number,
+  viewHeight: number,
+): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  cell: number;
+  offsetX: number;
+  offsetY: number;
+} | null {
+  if (view.zoom < PIXEL_GRID_ZOOM) return null;
+  const [x0, y0] = toViewport(view, dpr, 0, 0);
+  const [x1, y1] = toViewport(view, dpr, canvas.width, canvas.height);
+  const left = Math.max(x0, 0);
+  const top = Math.max(y0, 0);
+  const right = Math.min(x1, viewWidth);
+  const bottom = Math.min(y1, viewHeight);
+  if (right <= left || bottom <= top) return null;
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top,
+    cell: view.zoom / dpr,
+    offsetX: x0 - left,
+    offsetY: y0 - top,
+  };
+}

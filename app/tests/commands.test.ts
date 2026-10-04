@@ -163,6 +163,7 @@ test("Layer > Arrange is Ctrl+[ and ], by the physical keys (^ and $ on AZERTY)"
 });
 
 test("View: Ctrl+H hides the extras and F11 is full screen; Window: Tab hides the panels", () => {
+  assert.equal(commandAt(press("r", ctrl), false), "rulers");
   assert.equal(commandAt(press("h", ctrl), false), "hideExtras");
   assert.equal(commandAt(press("h", cmd), true), "hideExtras");
   assert.equal(commandAt(press("F11"), false), "fullScreen");

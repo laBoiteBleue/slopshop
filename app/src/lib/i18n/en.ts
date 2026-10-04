@@ -257,6 +257,8 @@ const en = {
   "menu.view.fit": "Fit on Screen",
   "menu.view.snap": "Snap",
   "menu.view.actualSize": "100%",
+  "menu.view.rulers": "Rulers",
+  "menu.view.clearGuides": "Clear Guides",
   "menu.view.hideExtras": "Hide Extras",
   "menu.view.fullScreen": "Full Screen",
   "menu.window.hidePanels": "Hide Panels",

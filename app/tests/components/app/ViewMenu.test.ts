@@ -21,12 +21,15 @@ test("the View menu: zoom, then the extras and Snap, then full screen", async ()
     "Fit on Screen",
     "100%",
     "—",
+    "Rulers",
+    "Clear Guides",
     "Hide Extras",
     "Snap",
     "—",
     "Full Screen",
   ]);
   expect(entry("Hide Extras")).toHaveTextContent("Ctrl+H");
+  expect(entry("Rulers")).toHaveTextContent("Ctrl+R");
   expect(entry("Full Screen")).toHaveTextContent("F11");
 });
 
@@ -64,7 +67,10 @@ test("View > Snap is remembered for the next session", async () => {
   await openMenu(user, "View");
   expect(entry("Snap")).toHaveAttribute("aria-checked", "true");
   await user.click(entry("Snap"));
-  expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toEqual({ snap: false });
+  expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toEqual({
+    rulers: false,
+    snap: false,
+  });
   await openMenu(user, "View");
   expect(entry("Snap")).toHaveAttribute("aria-checked", "false");
 });
@@ -108,4 +114,47 @@ test("Tab hides the toolbar, the options bar and the panels; a Window panel show
   await user.keyboard("{Tab}");
   await user.keyboard("{Tab}");
   expect(hidden()).toBe(0);
+});
+
+test("Ctrl+R shows the rulers, remembered for the next session", async () => {
+  localStorage.clear();
+  onTestFinished(() => localStorage.clear());
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  expect(document.querySelector("svg.ruler")).not.toBeInTheDocument();
+  await user.keyboard("{Control>}r{/Control}");
+  await vi.waitFor(() => expect(document.querySelectorAll("svg.ruler")).toHaveLength(2));
+  expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toEqual({ rulers: true, snap: true });
+  await openMenu(user, "View");
+  expect(entry("Rulers")).toHaveAttribute("aria-checked", "true");
+  await user.click(entry("Rulers"));
+  expect(document.querySelector("svg.ruler")).not.toBeInTheDocument();
+});
+
+test("the document's guides are drawn; View > Clear Guides deletes them all, one undo entry", async () => {
+  const user = open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat")]),
+    guides: [
+      { vertical: true, position: 20 },
+      { vertical: false, position: 30 },
+    ],
+  });
+  await screen.findByText("cat.jpg");
+  await vi.waitFor(() =>
+    expect(document.querySelectorAll("svg.guides line.guide")).toHaveLength(2),
+  );
+  await openMenu(user, "View");
+  await user.click(entry("Clear Guides"));
+  await vi.waitFor(() =>
+    expect(sent("perform")).toContainEqual(
+      expect.objectContaining({ edit: { kind: "setGuides", guides: [] } }),
+    ),
+  );
+});
+
+test("Clear Guides waits for a guide", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await openMenu(user, "View");
+  expect(entry("Clear Guides")).toHaveAttribute("aria-disabled", "true");
 });

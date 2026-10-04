@@ -6,7 +6,7 @@
 
 import * as affine from "./affine";
 import type { Bounds, Matrix } from "./engine";
-import { snapHandle, snapMove, type AxisSnap, type SmartGuide } from "./snap";
+import { snapHandle, snapMove, type AxisSnap, type SmartGuide, type SnapTarget } from "./snap";
 
 /** Rotation steps with Shift. */
 export const ROTATION_STEP = Math.PI / 12;
@@ -158,7 +158,7 @@ export function movedBy(
   dx: number,
   dy: number,
   shift: boolean,
-  targets: Bounds[],
+  targets: SnapTarget[],
   threshold: number,
 ): { dx: number; dy: number; guides: SmartGuide[] } {
   if (shift) {
@@ -185,7 +185,7 @@ export function snappedScale(
   handle: number,
   p: Point,
   keys: Keys,
-  targets: Bounds[],
+  targets: SnapTarget[],
   threshold: number,
 ): { matrix: Matrix; guides: SmartGuide[] } | null {
   const unrotated = Math.abs(start[1]) < 1e-9 && Math.abs(start[2]) < 1e-9;
