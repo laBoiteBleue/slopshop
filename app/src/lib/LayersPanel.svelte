@@ -905,8 +905,10 @@
           </span>
         {/if}
         {#if layer.baking}
-          <!-- Being baked (ADR 0031): the layer it becomes, its thumbnail once its pixels come. -->
-          <span class="thumb baking" title={t("layers.baking")}></span>
+          <!-- Being baked (ADR 0031): the layer it becomes, shown small until its pixels come. -->
+          <span class="thumb baking" title={t("layers.baking")}>
+            <LayerThumbnail {documentId} {layer} size={36} />
+          </span>
         {:else if layer.kind === "group"}
           <button
             class="fold"

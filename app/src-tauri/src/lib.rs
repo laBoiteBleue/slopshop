@@ -1562,19 +1562,36 @@ const MAX_THUMBNAIL_SIDE: u32 = 512;
 /// values as they are). Fill layers have no layer thumbnail (the UI shows their color).
 #[tauri::command]
 async fn layer_thumbnail(
+    app: AppHandle,
     state: State<'_, AppState>,
     document_id: u64,
     layer_id: u64,
     max_side: u32,
     mask: bool,
 ) -> Result<Response, String> {
+    let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
+    let id = LayerId::from_raw(layer_id);
+    // Being baked (ADR 0031): what it will show, from a snapshot, before its pixels come.
+    let baking = {
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        (!mask && document.baking.contains(&id)).then(|| document.session.document().clone())
+    };
+    if let Some(doc) = baking {
+        let (size, pixels) = selection::on_worker(move || {
+            let state = app.state::<AppState>();
+            bake::baking_thumbnail(state.renderer()?, &doc, id, max_side)
+        })
+        .await?;
+        return Ok(Response::new(thumbnail_bytes(size, pixels)));
+    }
     let image = {
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
         let layer = document
             .session
             .document()
-            .layer(LayerId::from_raw(layer_id))
+            .layer(id)
             .ok_or("unknown layer")?;
         match (&layer.content, &layer.mask, mask) {
             (_, Some(layer_mask), true) => {
@@ -1594,7 +1611,6 @@ async fn layer_thumbnail(
             }
         }
     };
-    let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
     let thumbnail = tauri::async_runtime::spawn_blocking(move || {
         let image = image.get();
         if mask {
@@ -1605,11 +1621,20 @@ async fn layer_thumbnail(
     })
     .await
     .map_err(|e| e.to_string())?;
-    let mut bytes = Vec::with_capacity(8 + thumbnail.pixels.len());
-    bytes.extend(thumbnail.size.width.to_le_bytes());
-    bytes.extend(thumbnail.size.height.to_le_bytes());
-    bytes.extend(thumbnail.pixels);
-    Ok(Response::new(bytes))
+    Ok(Response::new(thumbnail_bytes(
+        thumbnail.size,
+        thumbnail.pixels,
+    )))
+}
+
+/// A thumbnail as [`layer_thumbnail`] sends it: width and height (`u32` little-endian), then
+/// the pixels.
+fn thumbnail_bytes(size: Size, pixels: Vec<u8>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8 + pixels.len());
+    bytes.extend(size.width.to_le_bytes());
+    bytes.extend(size.height.to_le_bytes());
+    bytes.extend(pixels);
+    bytes
 }
 
 /// Show a file in the system's file manager, selected (e.g. an exported file).

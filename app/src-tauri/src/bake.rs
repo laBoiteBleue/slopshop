@@ -10,7 +10,10 @@ use std::sync::Arc;
 use serde::Deserialize;
 use slopshop_core::bake::{self, BakePlan, Merge};
 use slopshop_core::copy::{MERGED_FORMAT, Rows};
-use slopshop_core::{BlendMode, Edit, Layer, LayerContent, LayerId, RasterImage, Rect, Session};
+use slopshop_core::view::ViewTransform;
+use slopshop_core::{
+    BlendMode, Document, Edit, Layer, LayerContent, LayerId, RasterImage, Rect, Session, Size,
+};
 use slopshop_render::Renderer;
 use tauri::{AppHandle, Manager};
 
@@ -204,6 +207,39 @@ pub async fn bake_layers(
     Ok(view)
 }
 
+/// The thumbnail of layer `id` of `doc` while it is being baked, before its pixels come: what
+/// it will show, rendered at thumbnail size from the pyramids' coarse levels (milliseconds,
+/// where the composite at full size takes a while). At most `max_side` pixels on its longer
+/// side, never enlarged, as a pixel layer's thumbnail; RGBA8 sRGB, straight alpha. Blocking.
+pub fn baking_thumbnail(
+    renderer: &Renderer,
+    doc: &Document,
+    id: LayerId,
+    max_side: u32,
+) -> Result<(Size, Vec<u8>), String> {
+    let plans = bake::rasterize_plans(doc, &[id]).map_err(|e| e.to_string())?;
+    let plan = plans.first().ok_or("nothing to bake")?;
+    let region = plan.region();
+    let (size, view) = thumbnail_view(region, max_side);
+    let frame = renderer
+        .render_view(&plan.scratch, view, size)
+        .map_err(|e| e.to_string())?;
+    Ok((size, frame.data))
+}
+
+/// The size of a thumbnail of `region` (at most `max_side` on its longer side, never
+/// enlarged) and the view showing `region` in it.
+fn thumbnail_view(region: Rect, max_side: u32) -> (Size, ViewTransform) {
+    let longest = region.width.max(region.height).max(1);
+    let scale = (f64::from(max_side.max(1)) / f64::from(longest)).min(1.0);
+    let side = |v: u32| ((f64::from(v) * scale).round() as u32).max(1);
+    let view = ViewTransform {
+        origin: [f64::from(region.x), f64::from(region.y)],
+        scale: 1.0 / scale,
+    };
+    (Size::new(side(region.width), side(region.height)), view)
+}
+
 /// Composite `pending` on a worker, then put it in place and send the document again.
 async fn finish(app: AppHandle, document_id: u64, pending: Pending) -> Result<(), String> {
     let worker = app.clone();
@@ -292,6 +328,39 @@ mod tests {
 
     fn is_raster(layer: &Layer) -> bool {
         matches!(layer.content, LayerContent::Raster { .. })
+    }
+
+    #[test]
+    fn a_baking_thumbnail_shows_the_region_fitted_never_enlarged() {
+        let (size, view) = thumbnail_view(Rect::new(256, 10, 4000, 3000), 64);
+        assert_eq!(size, Size::new(64, 48));
+        assert_eq!(view.origin, [256.0, 10.0]);
+        assert!((view.scale - 62.5).abs() < 1e-9);
+        let (size, view) = thumbnail_view(Rect::new(0, 0, 20, 10), 64);
+        assert_eq!((size, view.scale), (Size::new(20, 10), 1.0));
+    }
+
+    #[test]
+    fn a_baking_layer_s_thumbnail_is_the_one_it_gets() {
+        let Ok(renderer) = Renderer::new() else {
+            assert_ne!(std::env::var("SLOPSHOP_REQUIRE_GPU").as_deref(), Ok("1"));
+            return;
+        };
+        let (mut s, ids) = session();
+        let request = format!(r#"{{"kind":"merge","ids":[{},{}]}}"#, ids[0], ids[2]);
+        let pending = start(&mut s, serde_json::from_str(&request).unwrap(), Vec::new()).unwrap();
+        let id = pending.plans[0].layer();
+        let (size, early) = baking_thumbnail(&renderer, s.document(), id, 4).unwrap();
+        let (made, joins) = composites(pending);
+        land(&mut s, made, joins).unwrap();
+        let LayerContent::Raster { image, .. } = &s.document().layer(id).unwrap().content else {
+            panic!("the merge's pixels expected");
+        };
+        let later = slopshop_core::thumbnail::raster_thumbnail(&image.get(), 4);
+        assert_eq!(size, later.size);
+        for (a, b) in early.iter().zip(&later.pixels) {
+            assert!(a.abs_diff(*b) <= 2, "{early:?} vs {:?}", later.pixels);
+        }
     }
 
     #[test]

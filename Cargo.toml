@@ -60,6 +60,10 @@ opt-level = 2
 [profile.dev.package.slopshop-io]
 opt-level = 2
 
+# And for the GPU crate's readbacks and conversions (Bake to Pixels, Copy Merged, exports).
+[profile.dev.package.slopshop-render]
+opt-level = 2
+
 [workspace.lints.rust]
 # `unsafe` must be isolated and justified: opt in locally with `#[allow(unsafe_code)]`.
 unsafe_code = "deny"
