@@ -282,9 +282,11 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       their own (ADR 0029, point 6): applying, deleting and undoing are instant
 - [x] Frames over the IPC (macOS, Linux) rendered again until a stack's pixels are evaluated,
       as native presents (Windows) are
-- [ ] Editable operations ([ADR 0034](adr/0034-editable-operations.md)): entries of a stack
+- [x] Editable operations ([ADR 0034](adr/0034-editable-operations.md)): entries of a stack
       edited again (an icon reopens their dialog, each step of a ×2 entry), an eye per entry,
-      the selection loaded or replaced; moved pixels replayed when an entry below them changes
+      `.slop` 0.20
+- [ ] An applied adjustment's selection loaded as the selection or replaced; moved pixels
+      replayed when an entry below them changes
 - [ ] Filter menu: Gaussian Blur as a stack entry (a cached result the entries above start
       from, CPU and GPU alike), Repeat Last Filter (Ctrl+F); then Blur, Sharpen, Noise, Distort,
       Pixelate, Stylize

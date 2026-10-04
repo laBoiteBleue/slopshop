@@ -50,6 +50,8 @@ const fr: Messages = {
   "menu.image.autoContrast": "Contraste automatique",
   "menu.image.autoColor": "Couleur automatique",
   "adjustDialog.preview": "Aperçu",
+  "adjustDialog.step": "Application",
+  "adjustDialog.stepOf": "{n} sur {count}",
   "menu.image.imageSize": "Taille de l'image…",
   "menu.image.canvasSize": "Taille de la zone de travail…",
   "menu.image.rotation": "Rotation de l'image",
@@ -853,6 +855,9 @@ const fr: Messages = {
   "layers.entry.count": "{name} ×{n}",
   "layers.entry.delete": "Supprimer",
   "layers.entry.deleteHint": "Supprimer (ce qui a été appliqué au-dessus suit)",
+  "layers.entry.edit": "Modifier les réglages…",
+  "layers.entry.show": "Afficher",
+  "layers.entry.hide": "Masquer",
 
   "viewport.renderFailed": "Échec du rendu : {error}",
 

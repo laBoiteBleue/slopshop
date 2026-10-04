@@ -264,6 +264,78 @@ test("a styled layer shows fx; its effects unfold below it, each eye turns one o
   });
 });
 
+test("a layer's stack unfolds below it: each entry has an eye, an edit icon when it has settings", async () => {
+  const levels = {
+    id: "levels" as const,
+    values: [0, 1, 1, 0, 1],
+    curves: null,
+    curveSamples: null,
+    gradient: null,
+  };
+  const entries = [
+    { kind: "paint" as const, adjustment: null, count: 1, hidden: false, steps: [] },
+    {
+      kind: "effect" as const,
+      adjustment: "invert" as const,
+      count: 1,
+      hidden: false,
+      steps: [{ ...levels, id: "invert" as const, values: [] }],
+    },
+    {
+      kind: "effect" as const,
+      adjustment: "levels" as const,
+      count: 2,
+      hidden: true,
+      steps: [levels, levels],
+    },
+  ];
+  const onentryedit = vi.fn();
+  const { onedit, user, rerender, props } = open([
+    layer(1, "Background"),
+    layer(2, "Photo", { entries }),
+  ]);
+  await rerender({ ...props, onentryedit });
+  await user.click(within(row("Photo")).getByRole("button", { expanded: false }));
+  const entry = (name: string) => screen.getByText(name).closest("li")!;
+  // Newest on top; a hidden entry dimmed, its eye offering to show it.
+  expect(
+    [...document.querySelectorAll("li.entry .entry-name")].map((el) => el.textContent?.trim()),
+  ).toEqual(["Levels ×2", "Invert", "Paint"]);
+  expect(entry("Levels ×2")).toHaveClass("off");
+  await user.click(within(entry("Levels ×2")).getByRole("button", { name: "Show" }));
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setStackEntry",
+    id: 2,
+    index: 2,
+    hidden: false,
+  });
+  await user.click(within(entry("Paint")).getByRole("button", { name: "Hide" }));
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setStackEntry",
+    id: 2,
+    index: 0,
+    hidden: true,
+  });
+  // Settings to edit: Levels, not Invert nor paint.
+  expect(within(entry("Invert")).queryByRole("button", { name: "Edit Settings…" })).toBeNull();
+  expect(within(entry("Paint")).queryByRole("button", { name: "Edit Settings…" })).toBeNull();
+  await user.click(within(entry("Levels ×2")).getByRole("button", { name: "Edit Settings…" }));
+  expect(onentryedit).toHaveBeenLastCalledWith(expect.objectContaining({ id: 2 }), 2);
+  onentryedit.mockClear();
+  await user.dblClick(entry("Invert"));
+  expect(onentryedit).not.toHaveBeenCalled();
+  await user.dblClick(entry("Levels ×2"));
+  expect(onentryedit).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), 2);
+  // The right-click menu: edit, show or hide, delete.
+  await user.pointer({ keys: "[MouseRight]", target: entry("Levels ×2") });
+  const menu = screen.getByRole("menu");
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((el) => el.textContent?.trim()),
+  ).toEqual(["Edit Settings…", "Show", "Delete"]);
+});
+
 test("a double-click on a pixel layer's row opens Layer Style; Fill sets its Fill Opacity", async () => {
   const { onedit, onstyle, user } = open([layer(1, "Background"), layer(2, "Logo")]);
   await user.click(row("Logo"));

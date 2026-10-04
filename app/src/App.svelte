@@ -17,6 +17,7 @@
     onRecentFiles,
     onOpenEvents,
     type AdjustmentId,
+    type AdjustmentSettings,
     type BrushRequest,
     type StrokeRequest,
     type ClipboardContents,
@@ -110,6 +111,14 @@
   } from "./lib/imageEdits";
   import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
+  import {
+    editableEntry,
+    entryEdit,
+    sameSettings,
+    stepSettings,
+    withStep,
+    type SettingsChange,
+  } from "./lib/stackEntries";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./lib/align";
   import { canFlatten, canMergeVisible, canRasterize } from "./lib/bake";
   import {
@@ -960,6 +969,98 @@
     const dialog = adjustDialog;
     adjustDialog = null;
     if (dialog) endPreview(cancelGesture(dialog.documentId));
+  }
+
+  /**
+   * An entry of a layer's stack edited again (ADR 0034): the adjustment dialog on step `step`
+   * of entry `index` of layer `layerId`. The canvas follows the settings live (a gesture), the
+   * entry hidden while Preview is off; OK makes it one undo entry with the eye the entry had,
+   * Cancel takes it all back.
+   */
+  let entryDialog = $state<{
+    documentId: number;
+    layerId: number;
+    index: number;
+    step: number;
+    preview: boolean;
+    /** The entry's eye when the dialog opened. */
+    hidden: boolean;
+    original: AdjustmentSettings[];
+    settings: AdjustmentSettings[];
+  } | null>(null);
+
+  /** The settings the entry dialog shows: its step's, as the engine has them. */
+  let entryShown = $derived.by(() => {
+    const dialog = entryDialog;
+    const doc = dialog && tabs.find((d) => d.id === dialog.documentId);
+    const layer = doc && findLayer(doc.layers, dialog.layerId);
+    return (dialog && layer?.entries[dialog.index]?.steps[dialog.step]) ?? null;
+  });
+
+  /** Edit entry `index` of `layer`'s stack again, its newest application first. */
+  function openEntry(layer: LayerView, index: number) {
+    const doc = active;
+    const entry = layer.entries[index];
+    if (!doc || !entry || !editableEntry(entry) || adjustDialog || entryDialog) return;
+    const settings = stepSettings(entry);
+    entryDialog = {
+      documentId: doc.id,
+      layerId: layer.id,
+      index,
+      step: settings.length - 1,
+      preview: true,
+      hidden: entry.hidden,
+      original: settings,
+      settings,
+    };
+    // A hidden entry shows while it is edited.
+    if (entry.hidden) showEntry(entryDialog);
+  }
+
+  /** The canvas shows the dialog's settings, whole each time (live edits merge). */
+  function showEntry(dialog: NonNullable<typeof entryDialog>) {
+    void live(
+      dialog.documentId,
+      entryEdit(dialog.layerId, dialog.index, dialog.settings, !dialog.preview),
+    );
+  }
+
+  function entryLive(change: SettingsChange) {
+    if (!entryDialog) return;
+    entryDialog = {
+      ...entryDialog,
+      settings: withStep(entryDialog.settings, entryDialog.step, change),
+    };
+    showEntry(entryDialog);
+  }
+
+  function entryPreview(preview: boolean) {
+    if (!entryDialog) return;
+    entryDialog = { ...entryDialog, preview };
+    showEntry(entryDialog);
+  }
+
+  /** OK: the settings chosen, one undo entry (none when nothing changed). */
+  function applyEntry() {
+    const dialog = entryDialog;
+    entryDialog = null;
+    if (!dialog) return;
+    if (sameSettings(dialog.settings, dialog.original)) {
+      void cancelGesture(dialog.documentId);
+      return;
+    }
+    void sync(
+      engine.replaceGesture(
+        dialog.documentId,
+        entryEdit(dialog.layerId, dialog.index, dialog.settings, dialog.hidden),
+      ),
+    );
+  }
+
+  function cancelEntry() {
+    const dialog = entryDialog;
+    entryDialog = null;
+    if (dialog) void cancelGesture(dialog.documentId);
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
@@ -4484,6 +4585,7 @@
             hidden={previewHidden}
             onfillcolor={pickFillLayerColor}
             onstyle={openStyle}
+            onentryedit={openEntry}
           />
         {/key}
         <PanelDock bind:dock panels={dockPanels}>
@@ -4636,6 +4738,20 @@
     y={canvasMenu.y}
     items={canvasMenuItems}
     onclose={() => (canvasMenu = null)}
+  />
+{/if}
+{#if entryDialog && entryShown}
+  <AdjustDialog
+    adjustment={entryShown}
+    preview={entryDialog.preview}
+    steps={entryDialog.settings.length}
+    step={entryDialog.step}
+    onstep={(step) => entryDialog && (entryDialog = { ...entryDialog, step })}
+    onlive={(values, gradient) => entryLive({ values, gradient })}
+    oncurves={(curves) => entryLive({ curves })}
+    onpreview={entryPreview}
+    onok={applyEntry}
+    oncancel={cancelEntry}
   />
 {/if}
 {#if adjustDialog && adjustShown}

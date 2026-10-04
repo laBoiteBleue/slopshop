@@ -55,6 +55,7 @@
   import type { StylePage } from "./LayerStyleDialog.svelte";
   import { canDistribute } from "./align";
   import { mergeKind } from "./bake";
+  import { editableEntry } from "./stackEntries";
 
   let {
     doc,
@@ -68,6 +69,7 @@
     hidden = [],
     onfillcolor,
     onstyle,
+    onentryedit,
   }: {
     doc: DocumentView;
     /** A double-click on a fill layer's thumbnail: the app lets its color be chosen. */
@@ -75,6 +77,8 @@
     /** A double-click on a pixel or fill layer's row, or on one of its effects: the app opens
      * Layer Style (ADR 0032) on `page`. */
     onstyle?: (layer: LayerView, page: StylePage) => void;
+    /** Edit entry `index` of `layer`'s stack again (its icon, a double-click; ADR 0034). */
+    onentryedit?: (layer: LayerView, index: number) => void;
     /** The right-click menu of the layers (built by the app: the Layer menu's commands). */
     contextMenu?: MenuItem[];
     /** The right-click menu of the empty area below the layers (built by the app). */
@@ -135,6 +139,12 @@
   /** Delete entry `index` (bottom to top) of `layer`'s stack. */
   function deleteEntry(layer: LayerView, index: number) {
     void edit({ kind: "deleteStackEntry", id: layer.id, index });
+  }
+
+  /** Hide or show entry `index` of `layer`'s stack by its eye (ADR 0034). */
+  function toggleEntry(layer: LayerView, index: number) {
+    const entry = layer.entries[index];
+    if (entry) void edit({ kind: "setStackEntry", id: layer.id, index, hidden: !entry.hidden });
   }
 
   /** The right-click menu of an entry, where it is open. */
@@ -1050,17 +1060,38 @@
           <li
             class="entry"
             class:hidden-layer={!shown}
+            class:off={entry.hidden}
+            ondblclick={() => editableEntry(entry) && onentryedit?.(layer, index)}
             oncontextmenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
               entryMenu = { x: e.clientX, y: e.clientY, layer, index };
             }}
           >
-            <span class="entry-indent" style:width="{30 + depth * 16 + 24}px"></span>
+            <span class="entry-indent" style:width="{30 + depth * 16 + 12}px"></span>
+            <button
+              class="effect-eye"
+              title={t(entry.hidden ? "layers.entry.show" : "layers.entry.hide")}
+              aria-label={t(entry.hidden ? "layers.entry.show" : "layers.entry.hide")}
+              aria-pressed={!entry.hidden}
+              onclick={() => toggleEntry(layer, index)}
+            >
+              <Icon name="eye" size={12} />
+            </button>
             <span class="entry-icon">
               <Icon name={entry.kind === "paint" ? "brush" : "adjust"} size={12} />
             </span>
             <span class="entry-name">{entryLabel(entry)}</span>
+            {#if editableEntry(entry)}
+              <button
+                class="entry-delete"
+                title={t("layers.entry.edit")}
+                aria-label={t("layers.entry.edit")}
+                onclick={() => onentryedit?.(layer, index)}
+              >
+                <Icon name="sliders" size={12} />
+              </button>
+            {/if}
             <button
               class="entry-delete"
               title={t("layers.entry.deleteHint")}
@@ -1086,6 +1117,20 @@
       x={entryMenu.x}
       y={entryMenu.y}
       items={[
+        ...(layer.entries[index] && editableEntry(layer.entries[index])
+          ? [
+              {
+                kind: "command" as const,
+                label: t("layers.entry.edit"),
+                run: () => onentryedit?.(layer, index),
+              },
+            ]
+          : []),
+        {
+          kind: "command",
+          label: t(layer.entries[index]?.hidden ? "layers.entry.show" : "layers.entry.hide"),
+          run: () => toggleEntry(layer, index),
+        },
         { kind: "command", label: t("layers.entry.delete"), run: () => deleteEntry(layer, index) },
       ]}
       onclose={() => (entryMenu = null)}
@@ -1199,8 +1244,9 @@
     color: var(--text-muted);
   }
 
-  .entry.effect.off .entry-name,
-  .entry.effect.off .effect-eye {
+  .entry.off .entry-name,
+  .entry.off .entry-icon,
+  .entry.off .effect-eye {
     opacity: 0.4;
   }
 

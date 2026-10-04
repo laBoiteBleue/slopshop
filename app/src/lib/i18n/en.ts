@@ -50,6 +50,8 @@ const en = {
   "menu.image.autoContrast": "Auto Contrast",
   "menu.image.autoColor": "Auto Color",
   "adjustDialog.preview": "Preview",
+  "adjustDialog.step": "Application",
+  "adjustDialog.stepOf": "{n} of {count}",
   "menu.image.imageSize": "Image Size…",
   "menu.image.canvasSize": "Canvas Size…",
   "menu.image.rotation": "Image Rotation",
@@ -834,6 +836,9 @@ const en = {
   "layers.entry.count": "{name} ×{n}",
   "layers.entry.delete": "Delete",
   "layers.entry.deleteHint": "Delete (what was applied above it follows)",
+  "layers.entry.edit": "Edit Settings…",
+  "layers.entry.show": "Show",
+  "layers.entry.hide": "Hide",
 
   "viewport.renderFailed": "Render failed: {error}",
 

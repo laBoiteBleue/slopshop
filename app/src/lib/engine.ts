@@ -14,6 +14,28 @@ export type StackEntryView = {
   adjustment: AdjustmentId | null;
   /** How many times an effect of this kind was applied in a row (1 for paint). */
   count: number;
+  /** Hidden by its eye (ADR 0034). */
+  hidden: boolean;
+  /** An effect's steps with their settings, bottom to top (none for paint): edited again. */
+  steps: AdjustmentView[];
+};
+
+/** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
+export type AdjustmentView = {
+  id: AdjustmentId;
+  values: number[];
+  curves: number[][][] | null;
+  curveSamples: number[][] | null;
+  /** Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says). */
+  gradient: number[][] | null;
+};
+
+/** An adjustment's settings as edits send them (`curves` and `gradient` as `setAdjustment`). */
+export type AdjustmentSettings = {
+  adjustment: AdjustmentId;
+  values: number[];
+  curves?: number[][][];
+  gradient?: number[][];
 };
 
 export type LayerView = {
@@ -55,14 +77,7 @@ export type LayerView = {
   /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). Curves:
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
    * curves, and `curveSamples`, each curve's output (0–1) at evenly spaced inputs. */
-  adjustment: {
-    id: AdjustmentId;
-    values: number[];
-    curves: number[][][] | null;
-    curveSamples: number[][] | null;
-    /** Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says). */
-    gradient: number[][] | null;
-  } | null;
+  adjustment: AdjustmentView | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
@@ -321,6 +336,15 @@ export type EditRequest =
   | { kind: "deletePaint"; ids: number[] }
   /** Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029). */
   | { kind: "deleteStackEntry"; id: number; index: number }
+  /** Entry `index` of a raster layer's stack hidden or shown by its eye, and for an effect,
+   * the settings of every step when given (ADR 0034). */
+  | {
+      kind: "setStackEntry";
+      id: number;
+      index: number;
+      hidden: boolean;
+      steps?: AdjustmentSettings[];
+    }
   /** Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
    * `ids`, within the selection (`values` and `curves` as `setAdjustment`). */
   | {
