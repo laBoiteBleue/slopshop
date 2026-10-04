@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::blend::BlendMode;
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use crate::edit::{Edit, EditError};
+use crate::selection::Selection;
 
 /// What [`Session::insert_layer_copies`] made.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +29,12 @@ pub struct Session {
     redo: Vec<Edit>,
     /// Inverses of the edits applied by the gesture in progress, in application order.
     gesture: Vec<Edit>,
+    /// The selection before the gesture in progress, if it has begun.
+    gesture_selection: Option<Option<Selection>>,
+    /// The selection a committed change last removed or replaced: Select > Reselect brings it
+    /// back (the maintainer's choice, 2026-10-04: replaced too, not only deselected). Undo and
+    /// redo do not count, nor a gesture's steps.
+    last_selection: Option<Selection>,
 }
 
 impl Session {
@@ -37,6 +44,8 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             gesture: Vec::new(),
+            gesture_selection: None,
+            last_selection: None,
         }
     }
 
@@ -70,9 +79,29 @@ impl Session {
             return Ok(());
         }
         self.end_gesture();
+        let before = self.document.selection().cloned();
         let inverse = edit.apply(&mut self.document)?;
         self.push_undo(inverse);
+        self.remember_selection(before);
         Ok(())
+    }
+
+    /// `before` replaced or removed by a committed change: what Reselect brings back.
+    fn remember_selection(&mut self, before: Option<Selection>) {
+        if let Some(before) = before
+            && self.document.selection() != Some(&before)
+        {
+            self.last_selection = Some(before);
+        }
+    }
+
+    /// Select > Reselect: the selection a committed change last removed or replaced, while it
+    /// is not the selection and still fits the canvas.
+    pub fn reselectable(&self) -> Option<&Selection> {
+        let doc = &self.document;
+        self.last_selection
+            .as_ref()
+            .filter(|s| doc.selection() != Some(*s) && s.image().size() == doc.size())
     }
 
     /// Apply `edit` as the end of the last history entry, made when the document was at
@@ -106,7 +135,11 @@ impl Session {
     /// changes immediately, and all edits of the gesture become a single history entry when
     /// [`Self::end_gesture`] is called.
     pub fn perform_in_gesture(&mut self, edit: Edit) -> Result<(), EditError> {
+        let before = self.document.selection().cloned();
         let inverse = edit.apply(&mut self.document)?;
+        if self.gesture.is_empty() {
+            self.gesture_selection = Some(before);
+        }
         self.gesture.push(inverse);
         Ok(())
     }
@@ -263,6 +296,7 @@ impl Session {
     /// Record the gesture in progress as one undoable entry. No-op if there is none.
     pub fn end_gesture(&mut self) {
         let mut inverses = std::mem::take(&mut self.gesture);
+        let before = self.gesture_selection.take().flatten();
         let entry = match inverses.len() {
             0 => return,
             1 => inverses.remove(0),
@@ -272,12 +306,14 @@ impl Session {
             }
         };
         self.push_undo(entry);
+        self.remember_selection(before);
     }
 
     /// Revert the gesture in progress, leaving no history entry (a transform cancelled with
     /// Esc). Returns `Ok(false)` if there was none.
     pub fn cancel_gesture(&mut self) -> Result<bool, EditError> {
         let inverses = std::mem::take(&mut self.gesture);
+        self.gesture_selection = None;
         if inverses.is_empty() {
             return Ok(false);
         }
@@ -334,6 +370,72 @@ mod tests {
     use crate::blend::BlendMode;
     use crate::color::LinearRgba;
     use crate::document::{Layer, LayerContent};
+
+    /// A selection of `rect` (left, top, right, bottom) on a 100 × 80 canvas.
+    fn rect_selection(rect: [f64; 4]) -> Selection {
+        use crate::selection::{Combine, EdgeOptions, Shape, select_shape};
+        let [left, top, right, bottom] = rect;
+        let shape = Shape::Rectangle {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        let size = crate::geom::Size::new(100, 80);
+        let image = select_shape(size, None, &shape, EdgeOptions::default(), Combine::Replace)
+            .unwrap()
+            .unwrap();
+        Selection::new(Arc::new(image)).unwrap()
+    }
+
+    #[test]
+    fn reselect_brings_back_the_selection_last_removed_or_replaced() {
+        let mut s = Session::new(Document::new(crate::geom::Size::new(100, 80)));
+        let (a, b) = (
+            rect_selection([0.0, 0.0, 10.0, 10.0]),
+            rect_selection([20.0, 20.0, 40.0, 40.0]),
+        );
+        let select = |s: &mut Session, sel: Option<&Selection>| {
+            s.perform(Edit::SetSelection {
+                selection: sel.cloned(),
+            })
+            .unwrap();
+        };
+        assert!(s.reselectable().is_none());
+        select(&mut s, Some(&a));
+        assert!(s.reselectable().is_none());
+        // Replaced: A comes back; twice, they swap.
+        select(&mut s, Some(&b));
+        assert_eq!(s.reselectable(), Some(&a));
+        select(&mut s, Some(&a));
+        assert_eq!(s.reselectable(), Some(&b));
+        // Deselected: the one removed.
+        select(&mut s, None);
+        assert_eq!(s.reselectable(), Some(&a));
+        // Undo does not count; nor what is the selection already.
+        s.undo().unwrap();
+        assert_eq!(s.document().selection(), Some(&a));
+        assert!(s.reselectable().is_none());
+        // A gesture counts once, from the selection before it; a cancelled one not at all.
+        s.perform_in_gesture(Edit::SetSelection {
+            selection: Some(b.clone()),
+        })
+        .unwrap();
+        s.perform_in_gesture(Edit::SetSelection { selection: None })
+            .unwrap();
+        s.cancel_gesture().unwrap();
+        assert!(s.reselectable().is_none());
+        s.perform_in_gesture(Edit::SetSelection {
+            selection: Some(b.clone()),
+        })
+        .unwrap();
+        s.perform_in_gesture(Edit::SetSelection {
+            selection: Some(b.clone()),
+        })
+        .unwrap();
+        s.end_gesture();
+        assert_eq!(s.reselectable(), Some(&a));
+    }
     use crate::geom::Size;
 
     fn add_layer(session: &mut Session, name: &str) -> LayerId {

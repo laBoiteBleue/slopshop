@@ -695,7 +695,8 @@ const en = {
   "selections.combined.subtract": "Subtracted from the selection",
   "selections.combined.intersect": "Intersected with the selection",
   "selections.last": "Last Selection",
-  "selections.last.hint": "The selection Deselect removed last (Select > Reselect, Shift+Ctrl+D)",
+  "selections.last.hint":
+    "The selection last removed or replaced (Select > Reselect, Shift+Ctrl+D)",
   "selections.empty":
     "No saved selection. Select > Save Selection… or the + below keeps the current one.",
   "selections.hint":
