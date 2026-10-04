@@ -413,3 +413,74 @@ fn a_styled_layer_shows_at_once_and_its_effects_once_drawn() {
     let expected = direct.render_view(s.document(), view, size).unwrap();
     assert_frames_match(&last.data, &expected.data, "effects drawn");
 }
+
+/// A document of the background `bg` and a half-transparent layer showing `painted`.
+fn painted_document(bg: &Arc<RasterImage>, painted: &Arc<RasterImage>) -> Document {
+    let size = painted.size();
+    let mut s = Session::new(Document::new(size));
+    let bg = raster(&mut s, Arc::clone(bg));
+    push(&mut s, bg);
+    let mut top = raster(&mut s, Arc::clone(painted));
+    top.opacity = 0.5;
+    push(&mut s, top);
+    s.document().clone()
+}
+
+/// `image` with its level-0 tile (`col`, `row`) replaced by one filled with `value`: the next
+/// frame of a stroke, sharing every other tile (ADR 0027).
+fn stroked(image: &RasterImage, col: u32, row: u32, value: u8) -> Arc<RasterImage> {
+    let tile = vec![value; RasterImage::tile_bytes(image.format())];
+    let replaced = vec![(slopshop_core::tile::TileCoord { col, row }, Arc::from(tile))];
+    Arc::new(image.with_tiles(replaced).unwrap())
+}
+
+#[test]
+fn a_stroke_s_frames_recomposite_only_the_tiles_over_the_raster_tiles_they_change() {
+    let (Some(r), Some(direct)) = (renderer(true), renderer(false)) else {
+        return;
+    };
+    // A raster tile cache of 3 tiles forgets the tiles of dropped frames at once: only the display
+    // cache keeps them from being mistaken for others.
+    let r = r.with_tile_capacity(3);
+    // 4 × 2 display tiles at 100 %, as many raster tiles in each layer.
+    let size = Size::new(1024, 512);
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 1.0,
+    };
+    let bg = image(size, |x, y| [(x % 251) as u8, (y % 241) as u8, 90, 255]);
+    let mut painted = image(size, |x, y| [(x ^ y) as u8, 40, 200, 255]);
+    let first = painted_document(&bg, &painted);
+    let stats = frame(&r, &first);
+    assert_eq!((stats.tiles_composited, stats.tiles_reused), (8, 0));
+
+    // Frames of a stroke: a new image per frame, the one before it dropped (its tiles, which
+    // the display cache must keep from being taken for others, are freed otherwise).
+    let mut previous = Vec::new();
+    for step in 0..24u32 {
+        // Twice the same tile in a row, then the next: freed tiles and new ones meet.
+        let (col, row) = ((step / 2) % 4, (step / 8) % 2);
+        let next = stroked(&painted, col, row, 10 + step as u8 * 9);
+        previous.push(painted);
+        painted = next;
+        let document = painted_document(&bg, &painted);
+        let stats = frame(&r, &document);
+        assert_eq!(
+            (stats.tiles_composited, stats.tiles_reused),
+            (1, 7),
+            "frame {step}"
+        );
+        let a = r.render_view(&document, view, size).unwrap();
+        let b = direct.render_view(&document, view, size).unwrap();
+        assert_frames_match(&a.data, &b.data, &format!("frame {step}"));
+        // Only the first image stays: the stroke's other frames are gone.
+        if previous.len() > 1 {
+            previous.pop();
+        }
+    }
+
+    // Undo: the first image again, its tiles still cached (their keys are the tiles').
+    let again = painted_document(&bg, &previous.remove(0));
+    let stats = frame(&r, &again);
+    assert_eq!((stats.tiles_composited, stats.tiles_reused), (0, 8));
+}
