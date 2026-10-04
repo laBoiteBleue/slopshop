@@ -1916,6 +1916,9 @@ pub struct Preview {
     pub factor: u32,
     pub origin: [u32; 2],
     pub above: Vec<Entry>,
+    /// The filter it shows (`Filter::id`): a look stands in for another state's only when that
+    /// state shows the same filter (a setting changed), never another one.
+    pub filter: &'static str,
 }
 
 impl Preview {
@@ -1980,6 +1983,7 @@ impl LookJob {
     /// The look showing `image` (the filtered crop, computed elsewhere).
     pub fn finished(&self, image: Arc<RasterImage>) -> Preview {
         Preview {
+            filter: self.steps.last().map_or("", |step| step.filter.id()),
             image,
             factor: self.factor,
             origin: self.origin,
@@ -2026,25 +2030,24 @@ impl Pixels {
             .as_ref()
             .filter(|(_, before)| stack.has_shown_filter() || before.has_shown_filter())
             .and_then(|(pixels, _)| pixels.stand_in().cloned());
-        // An earlier quick look stands while the entries above the filter are the same; a state
-        // without a filter (a preview replaced, going back before applying again) passes it on.
-        let inherited = earlier.as_ref().and_then(|(pixels, _)| {
-            let preview = pixels.preview()?;
-            match stack.last_filter() {
-                None => Some(preview.clone()),
-                Some(index) => {
-                    (stack.entries[index + 1..] == preview.above[..]).then(|| preview.clone())
-                }
+        // An earlier quick look stands while the filter and the entries above it are the same
+        // (a setting changed); a state without a filter (a preview replaced, going back before
+        // applying again) passes it on. Another filter (one cancelled, then another opened) starts
+        // from what the layer shows.
+        let stands = |preview: &Preview| match stack.last_filter() {
+            None => true,
+            Some(index) => {
+                stack.entries[index + 1..] == preview.above[..]
+                    && stack.filter_shown(index) == Some(preview.filter)
             }
-        });
-        // The look shown before stands likewise, while the entries above the filter are the same.
-        let inherited_look = earlier.as_ref().and_then(|(pixels, _)| {
-            let look = pixels.shown_look()?;
-            match stack.last_filter() {
-                None => Some(look),
-                Some(index) => (stack.entries[index + 1..] == look.above[..]).then_some(look),
-            }
-        });
+        };
+        let inherited = earlier
+            .as_ref()
+            .and_then(|(pixels, _)| pixels.preview().filter(|p| stands(p)).cloned());
+        // The look shown before stands likewise.
+        let inherited_look = earlier
+            .as_ref()
+            .and_then(|(pixels, _)| pixels.shown_look().filter(|l| stands(l)));
         // Back to what a filter of the earlier state applied to: known already. What was shown
         // is passed on to the next state (a preview replaced goes back, then on again).
         if let Some(image) = earlier
@@ -2745,6 +2748,14 @@ impl LayerStack {
     }
 
     /// Whether a filter is shown in the stack: its result cannot be evaluated tile by tile.
+    /// The filter entry `index` shows (its last step's `Filter::id`), if it is one.
+    fn filter_shown(&self, index: usize) -> Option<&'static str> {
+        match self.entries.get(index)? {
+            Entry::Filter(filter) => filter.steps.last().map(|step| step.filter.id()),
+            _ => None,
+        }
+    }
+
     pub fn has_shown_filter(&self) -> bool {
         self.last_filter().is_some()
     }
@@ -2827,6 +2838,7 @@ impl LayerStack {
             image = Arc::new(filtered(&coarse_step, &image, true)?);
         }
         Ok(Some(Preview {
+            filter: filter.steps.last().map_or("", |step| step.filter.id()),
             image,
             factor: 1 << level,
             origin: [0, 0],
