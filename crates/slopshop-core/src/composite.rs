@@ -466,7 +466,7 @@ fn push_layer<'a>(
                 ),
                 // Nothing shown before (a document just opened): the stack without its filters
                 // for a moment.
-                crate::stack::Entry::Filter(_) => {}
+                crate::stack::Entry::Filter(_) | crate::stack::Entry::Liquify(_) => {}
             }
         }
     }
