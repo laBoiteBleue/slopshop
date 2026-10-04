@@ -60,6 +60,7 @@
   import SliderField from "./SliderField.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
   import { keepFocus } from "./platform";
 
@@ -170,7 +171,7 @@
 <svelte:window onkeydown={track} onkeyup={track} />
 
 <section class="panel" aria-labelledby="color-range-title">
-  <header id="color-range-title">{t("colorRange.title")}</header>
+  <header id="color-range-title" {@attach movable("color-range")}>{t("colorRange.title")}</header>
   <div class="body">
     <div class="eyedroppers" role="radiogroup" aria-label={t("colorRange.title")}>
       {#each EYEDROPPERS as entry (entry.kind)}

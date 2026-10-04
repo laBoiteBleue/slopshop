@@ -4,6 +4,7 @@
   import { onMount, untrack } from "svelte";
   import type { SavedSelectionView } from "./engine";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import { nextSelectionName, savedNamed } from "./savedSelections";
 
   let {
@@ -50,7 +51,9 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="save-selection-title">{t("saveSelection.title")}</header>
+    <header id="save-selection-title" {@attach movable("save-selection")}>
+      {t("saveSelection.title")}
+    </header>
     <div class="fields">
       <label for="save-selection-name">{t("saveSelection.name")}</label>
       <input

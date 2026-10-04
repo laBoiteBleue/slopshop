@@ -4,6 +4,7 @@
   import { onMount, untrack } from "svelte";
   import type { TrimBasis, TrimSettings } from "./engine";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
 
   let {
@@ -56,7 +57,7 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="trim-title">{t("trimDialog.title")}</header>
+    <header id="trim-title" {@attach movable("trim")}>{t("trimDialog.title")}</header>
     <fieldset>
       <legend>{t("trimDialog.basedOn")}</legend>
       {#each BASES as [basis, label] (basis)}

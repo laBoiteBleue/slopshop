@@ -7,6 +7,7 @@
   import { onMount, untrack } from "svelte";
   import { engine, type PageSize, type VectorInfo } from "./engine";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   let {
     path,
@@ -159,7 +160,7 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="vector-title">
+    <header id="vector-title" {@attach movable("vector")}>
       {t(kind === "pdf" ? "vectorDialog.titlePdf" : "vectorDialog.titleSvg")} — {name}
     </header>
     <div class="body">

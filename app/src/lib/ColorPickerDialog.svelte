@@ -15,6 +15,7 @@
   // and their level, the eyedropper taking the gray of the color shown.
   import { onMount, untrack } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
   import {
     grayOf,
@@ -349,7 +350,7 @@
       onapply(hex);
     }}
   >
-    <header id="color-picker-title">{title}</header>
+    <header id="color-picker-title" {@attach movable("color-picker")}>{title}</header>
     <div class="body" class:gray={grayOnly}>
       {#if !grayOnly}
         <div class="square-wrap">

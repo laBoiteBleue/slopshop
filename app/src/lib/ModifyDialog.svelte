@@ -5,6 +5,7 @@
   import { onMount, untrack } from "svelte";
   import type { SelectionModify } from "./engine";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
 
   let {
@@ -73,7 +74,7 @@
   }}
 >
   <form onsubmit={submit}>
-    <header id="modify-title">{t(TITLES[kind])}</header>
+    <header id="modify-title" {@attach movable("modify")}>{t(TITLES[kind])}</header>
     <div class="fields">
       <label for="modify-amount">{t(LABELS[kind])}</label>
       <!-- svelte-ignore a11y_autofocus -->

@@ -8,6 +8,7 @@
   import { componentName, failureMessage } from "./ai";
   import { formatBytes } from "./format";
   import { getLocale, locales, setLocale, t, type Locale } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -57,7 +58,7 @@
     if (!downloading) onclose();
   }}
 >
-  <header id="preferences-title">{t("preferences.title")}</header>
+  <header id="preferences-title" {@attach movable("preferences")}>{t("preferences.title")}</header>
   <section class="body" aria-labelledby="preferences-language">
     <h2 id="preferences-language">{t("preferences.language")}</h2>
     <select

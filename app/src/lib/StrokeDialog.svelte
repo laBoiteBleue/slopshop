@@ -24,6 +24,7 @@
   // own). The color swatch opens the color picker. Enter applies, Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import SliderField from "./SliderField.svelte";
 
   let {
@@ -72,7 +73,7 @@
     onclose();
   }}
 >
-  <header id="stroke-title">{t("stroke.title")}</header>
+  <header id="stroke-title" {@attach movable("stroke")}>{t("stroke.title")}</header>
   <form onsubmit={submit}>
     <div class="fields">
       <fieldset>

@@ -6,6 +6,7 @@
   import { onMount, untrack } from "svelte";
   import { engine } from "./engine";
   import { getLocale, t } from "./i18n/index.svelte";
+  import { movable } from "./dialogDrag";
   import type { MessageKey } from "./i18n/en";
   import Icon from "./Icon.svelte";
   import { PAPERS, layoutOf, printImage, type PaperId, type PrintSettings } from "./print";
@@ -155,7 +156,7 @@
     if (!printing) onclose();
   }}
 >
-  <header id="print-title">{t("print.title")}</header>
+  <header id="print-title" {@attach movable("print")}>{t("print.title")}</header>
   <form
     onsubmit={(e) => {
       e.preventDefault();
