@@ -1429,6 +1429,19 @@ pub fn magic_wand(
     options: WandOptions,
     combine: Combine,
 ) -> Result<Option<RasterImage>, SelectionError> {
+    magic_wand_from(source, None, current, seed, options, combine)
+}
+
+/// [`magic_wand`] reading the composited pixels from `pixels` (a GPU renderer, say) instead of
+/// the CPU compositor; see [`PixelSource`].
+pub fn magic_wand_from(
+    source: &crate::document::Document,
+    pixels: Option<&PixelSource<'_>>,
+    current: Option<&RasterImage>,
+    seed: (u32, u32),
+    options: WandOptions,
+    combine: Combine,
+) -> Result<Option<RasterImage>, SelectionError> {
     let canvas = source.size();
     if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
         return Err(SelectionError::InvalidShape);
@@ -1437,7 +1450,7 @@ pub fn magic_wand(
     if seed.0 >= canvas.width || seed.1 >= canvas.height {
         return finish(canvas, current, mask, combine);
     }
-    let sampler = WandSampler::new(source);
+    let sampler = WandSampler::new(source, pixels);
     let (col, row) = (seed.0 as usize / T, seed.1 as usize / T);
     let reference = sampler.tile(col, row, &mask)[(seed.1 as usize % T) * T + seed.0 as usize % T];
     let tolerance = options.tolerance;
@@ -1468,44 +1481,37 @@ pub fn grow(
     current: &RasterImage,
     options: WandOptions,
 ) -> Result<Option<RasterImage>, SelectionError> {
+    grow_from(source, None, current, options)
+}
+
+/// [`grow`] reading the composited pixels from `pixels` instead of the CPU compositor; see
+/// [`PixelSource`].
+pub fn grow_from(
+    source: &crate::document::Document,
+    pixels: Option<&PixelSource<'_>>,
+    current: &RasterImage,
+    options: WandOptions,
+) -> Result<Option<RasterImage>, SelectionError> {
     let canvas = source.size();
     if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
         return Err(SelectionError::InvalidShape);
     }
     let selected = Mask::from_image(canvas, current)?;
-    let sampler = WandSampler::new(source);
+    let sampler = WandSampler::new(source, pixels);
     // Each tile's selected colors' range, and its selected pixels next to an unselected one
     // (the fill reaches the others from them), on every core.
     let tiles: Vec<usize> = (0..selected.tiles.len())
         .filter(|&i| !matches!(selected.tiles[i], Tile::Const(v) if v < HALF))
         .collect();
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let per_thread = tiles.len().div_ceil(threads).max(1);
-    let (shape, sampler_ref) = (&selected, &sampler);
-    let mut found: Vec<GrowTile> = Vec::new();
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = tiles
-            .chunks(per_thread)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    chunk
-                        .iter()
-                        .map(|&index| grow_seeds(sampler_ref, shape, index))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        for worker in workers {
-            // Invariant: reading colors does not panic.
-            found.extend(
-                worker
-                    .join()
-                    .expect("grow worker panicked")
-                    .into_iter()
-                    .flatten(),
-            );
-        }
-    });
+    let shape = &selected;
+    let mut found: Vec<GrowTile> = sampler
+        .map_tiles(shape, &tiles, &|| false, &|index, colors| {
+            grow_seeds(&colors, shape, index)
+        })
+        .into_iter()
+        .flatten()
+        .collect();
+    found.sort_by_key(|tile| tile.index);
     let mut low = [f32::MAX; 4];
     let mut high = [f32::MIN; 4];
     let mut seeds = Vec::new();
@@ -1538,11 +1544,10 @@ struct GrowTile {
 }
 
 /// Tile `index` of `selected` for [`grow`]; `None` if none of its pixels is selected.
-fn grow_seeds(sampler: &WandSampler<'_>, selected: &Mask, index: usize) -> Option<GrowTile> {
+fn grow_seeds(pixels: &[[f32; 4]], selected: &Mask, index: usize) -> Option<GrowTile> {
     let (col, row) = (index % selected.columns, index / selected.columns);
     let (w, h) = selected.valid(col, row);
     let values = selected.tiles[index].values();
-    let pixels = sampler.tile(col, row, selected);
     let (x0, y0) = ((col * T) as i64, (row * T) as i64);
     let inside = |x: i64, y: i64| selected.get(x, y) >= HALF;
     let mut low = [f32::MAX; 4];
@@ -1593,40 +1598,20 @@ fn wand_mask(
         flood(sampler, &mut mask, seeds, similar);
     } else {
         let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-        let per_thread = tiles.len().div_ceil(threads).max(1);
         let shape = &mask;
-        let mut done: Vec<(usize, Tile)> = Vec::new();
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = tiles
-                .chunks(per_thread)
-                .map(|chunk| {
-                    scope.spawn(move || {
-                        chunk
-                            .iter()
-                            .map(|&index| {
-                                let (col, row) = (index % shape.columns, index / shape.columns);
-                                let pixels = sampler.tile(col, row, shape);
-                                let (w, h) = shape.valid(col, row);
-                                let mut values = vec![0u16; T * T];
-                                for y in 0..h {
-                                    for x in 0..w {
-                                        if similar(pixels[y * T + x]) {
-                                            values[y * T + x] = FULL;
-                                        }
-                                    }
-                                }
-                                pad(&mut values, w, h);
-                                (index, computed_tile(values))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            for worker in workers {
-                // Invariant: comparing colors does not panic.
-                done.extend(worker.join().expect("magic wand worker panicked"));
+        let done = sampler.map_tiles(shape, &tiles, &|| false, &|index, pixels| {
+            let (col, row) = (index % shape.columns, index / shape.columns);
+            let (w, h) = shape.valid(col, row);
+            let mut values = vec![0u16; T * T];
+            for y in 0..h {
+                for x in 0..w {
+                    if similar(pixels[y * T + x]) {
+                        values[y * T + x] = FULL;
+                    }
+                }
             }
+            pad(&mut values, w, h);
+            (index, computed_tile(values))
         });
         for (index, tile) in done {
             mask.tiles[index] = tile;
@@ -1638,18 +1623,47 @@ fn wand_mask(
     mask
 }
 
+/// Where the selection tools read the composited pixels (ADR 0024): fills `out` with `region` of
+/// the document exactly as [`crate::composite::composite_region`] does (premultiplied RGBA
+/// `f32` in the working space, row-major, `region.width` pixels a row). A GPU renderer can be
+/// one (`slopshop_render::export_renderer`): `slopshop-core` cannot name it, so the caller
+/// passes it in (dependency direction: core <- render). `Err` (the source cannot render this
+/// region) makes the sampler composite it on the CPU instead, so a source may fail without the
+/// selection being wrong. It is called from one thread at a time, for regions of several tiles
+/// at once: a call has a cost of its own.
+pub type PixelSource<'a> =
+    dyn Fn(&crate::document::Document, Rect, &mut [f32]) -> Result<(), String> + Sync + 'a;
+
+/// Most tiles of a row that one call of a [`PixelSource`] covers (2 MP, 32 MB of `f32`).
+const SOURCE_RUN_TILES: usize = 32;
+
+/// Rendered regions in flight between the thread asking a [`PixelSource`] for them and the ones
+/// reading their colors: one being filled, one waiting, one being read.
+const SOURCE_BUFFERS: usize = 3;
+
+/// A row of consecutive tiles composited by one call of a [`PixelSource`].
+struct Run {
+    /// The pixels of the tiles, side by side.
+    region: Rect,
+    /// The tiles' indices, left to right.
+    tiles: Vec<usize>,
+}
+
 /// The composited colors of a document, tile by tile, as displayed: whole 8-bit sRGB values
 /// (0–255), straight alpha (transparent pixels read as transparent black).
 struct WandSampler<'a> {
     document: &'a crate::document::Document,
     to_srgb: crate::color::Mat3,
+    /// Where the composited pixels come from, else the CPU compositor.
+    pixels: Option<&'a PixelSource<'a>>,
 }
 
 impl<'a> WandSampler<'a> {
-    fn new(document: &'a crate::document::Document) -> Self {
+    fn new(document: &'a crate::document::Document, pixels: Option<&'a PixelSource<'a>>) -> Self {
         Self {
             document,
             to_srgb: document.working_space().matrix_to(&ColorSpace::LINEAR_SRGB),
+            pixels,
         }
     }
 
@@ -1671,9 +1685,30 @@ impl<'a> WandSampler<'a> {
         let mut rgba = vec![0f32; w * h * 4];
         let mut out = vec![[0f32; 4]; w * h];
         // Callers composite tiles on every core already: one thread per tile.
-        if crate::composite::composite_region_serial(self.document, region, &mut rgba).is_err() {
-            return out;
+        if self.composite(region, &mut rgba, false) {
+            self.convert(&rgba, &mut out);
         }
+        out
+    }
+
+    /// `region` composited into `rgba`, by the source if there is one and it can, else by the
+    /// CPU compositor (on every core if `parallel`); whether it worked.
+    fn composite(&self, region: Rect, rgba: &mut [f32], parallel: bool) -> bool {
+        if let Some(source) = self.pixels
+            && source(self.document, region, rgba).is_ok()
+        {
+            return true;
+        }
+        let composite = if parallel {
+            crate::composite::composite_region
+        } else {
+            crate::composite::composite_region_serial
+        };
+        composite(self.document, region, rgba).is_ok()
+    }
+
+    /// Premultiplied working-space pixels `rgba` as displayed colors in `out`.
+    fn convert(&self, rgba: &[f32], out: &mut [[f32; 4]]) {
         for (color, p) in out.iter_mut().zip(rgba.as_chunks::<4>().0) {
             let a = p[3].clamp(0.0, 1.0);
             if a > 0.0 {
@@ -1689,8 +1724,154 @@ impl<'a> WandSampler<'a> {
                 *color = [r, g, b, (a * 255.0).round()];
             }
         }
-        out
     }
+
+    /// `work(index, colors)` for each of the `tiles` (indices into `mask`), on every core, in no
+    /// particular order, the colors being [`Self::tile`]'s; the results, without those of the
+    /// tiles skipped once `stop()`.
+    ///
+    /// Without a [`PixelSource`] each tile is composited alone, on its thread. With one, the
+    /// tiles are composited a row of up to [`SOURCE_RUN_TILES`] at a time by one thread, which
+    /// asks the source while the others read the colors of the previous rows, at most
+    /// [`SOURCE_BUFFERS`] rows being in memory.
+    fn map_tiles<R: Send>(
+        &self,
+        mask: &Mask,
+        tiles: &[usize],
+        stop: &(dyn Fn() -> bool + Sync),
+        work: &(dyn Fn(usize, Vec<[f32; 4]>) -> R + Sync),
+    ) -> Vec<R> {
+        if self.pixels.is_none() {
+            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let per_thread = tiles.len().div_ceil(threads).max(1);
+            return std::thread::scope(|scope| {
+                let workers: Vec<_> = tiles
+                    .chunks(per_thread)
+                    .map(|chunk| {
+                        scope.spawn(move || {
+                            chunk
+                                .iter()
+                                .take_while(|_| !stop())
+                                .map(|&index| {
+                                    let (col, row) = (index % mask.columns, index / mask.columns);
+                                    work(index, self.tile(col, row, mask))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    // Invariant: compositing and reading colors do not panic.
+                    .flat_map(|w| w.join().expect("tile worker panicked"))
+                    .collect()
+            });
+        }
+        let runs = source_runs(mask, tiles);
+        let runs = &runs;
+        std::thread::scope(|scope| {
+            let (full, rendered) = std::sync::mpsc::sync_channel::<(usize, Vec<f32>)>(1);
+            let (give_back, free) = std::sync::mpsc::channel::<Vec<f32>>();
+            for _ in 0..SOURCE_BUFFERS {
+                // The receiver is alive: it is moved to the producer below.
+                let _ = give_back.send(Vec::new());
+            }
+            scope.spawn(move || {
+                for (i, run) in runs.iter().enumerate() {
+                    let Ok(mut rgba) = free.recv() else { break };
+                    if stop() {
+                        break;
+                    }
+                    rgba.resize(run.region.size().pixel_count() as usize * 4, 0.0);
+                    if !self.composite(run.region, &mut rgba, true) {
+                        rgba.fill(0.0);
+                    }
+                    if full.send((i, rgba)).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut results = Vec::new();
+            for (i, rgba) in rendered {
+                results.extend(self.read_run(mask, &runs[i], &rgba, stop, work));
+                // The producer is gone once it has rendered every run: nothing to give back.
+                let _ = give_back.send(rgba);
+            }
+            results
+        })
+    }
+
+    /// `work` on the tiles of `run`, their colors read from its pixels `rgba`, on every core.
+    fn read_run<R: Send>(
+        &self,
+        mask: &Mask,
+        run: &Run,
+        rgba: &[f32],
+        stop: &(dyn Fn() -> bool + Sync),
+        work: &(dyn Fn(usize, Vec<[f32; 4]>) -> R + Sync),
+    ) -> Vec<R> {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let per_thread = run.tiles.len().div_ceil(threads).max(1);
+        let stride = run.region.width as usize * 4;
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = run
+                .tiles
+                .chunks(per_thread)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .take_while(|_| !stop())
+                            .map(|&index| {
+                                let (col, row) = (index % mask.columns, index / mask.columns);
+                                let (w, h) = mask.valid(col, row);
+                                let left = (col * T - run.region.x as usize) * 4;
+                                let mut colors = vec![[0f32; 4]; T * T];
+                                for y in 0..h {
+                                    let line = &rgba[y * stride + left..][..w * 4];
+                                    self.convert(line, &mut colors[y * T..y * T + w]);
+                                }
+                                work(index, colors)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                // Invariant: reading colors does not panic.
+                .flat_map(|w| w.join().expect("tile worker panicked"))
+                .collect()
+        })
+    }
+}
+
+/// `tiles` (indices into `mask`) grouped in rows of consecutive tiles, each composited by one
+/// call of a [`PixelSource`], in reading order.
+fn source_runs(mask: &Mask, tiles: &[usize]) -> Vec<Run> {
+    let mut sorted = tiles.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut runs: Vec<Run> = Vec::new();
+    for index in sorted {
+        let (col, row) = (index % mask.columns, index / mask.columns);
+        let (w, h) = mask.valid(col, row);
+        if let Some(run) = runs.last_mut() {
+            let last = run.tiles[run.tiles.len() - 1];
+            // Only a row's last tile is narrower than T: the next one starts a run of its own.
+            if last + 1 == index && last / mask.columns == row && run.tiles.len() < SOURCE_RUN_TILES
+            {
+                run.tiles.push(index);
+                run.region.width += w as u32;
+                continue;
+            }
+        }
+        runs.push(Run {
+            region: Rect::new((col * T) as u32, (row * T) as u32, w as u32, h as u32),
+            tiles: vec![index],
+        });
+    }
+    runs
 }
 
 /// `round(srgb_encode(v) × 255)` for `v` clamped to `[0, 1]`, without a power per call: the
@@ -1769,22 +1950,10 @@ fn flood(
             }
         }
         let shape = &*mask;
-        let composited: Vec<(usize, Vec<[u8; 4]>)> = std::thread::scope(|scope| {
-            let workers: Vec<_> = missing
-                .iter()
-                .map(|&index| {
-                    scope.spawn(move || {
-                        let tile = sampler.tile(index % columns, index / columns, shape);
-                        (index, tile.iter().map(|p| p.map(|v| v as u8)).collect())
-                    })
-                })
-                .collect();
-            workers
-                .into_iter()
-                // Invariant: compositing a tile does not panic.
-                .map(|w| w.join().expect("magic wand compositing panicked"))
-                .collect()
-        });
+        let composited: Vec<(usize, Vec<[u8; 4]>)> =
+            sampler.map_tiles(shape, &missing, &|| false, &|index, tile| {
+                (index, tile.iter().map(|p| p.map(|v| v as u8)).collect())
+            });
         for (index, pixels) in composited {
             cache.insert(index, (clock, pixels));
         }
@@ -2052,11 +2221,21 @@ impl ColorRange {
 /// The colors of `source` at `points` (document pixels), as displayed: whole 8-bit sRGB values,
 /// straight alpha. Points outside the canvas are skipped.
 pub fn sample_colors(source: &crate::document::Document, points: &[(u32, u32)]) -> Vec<[f32; 4]> {
+    sample_colors_from(source, None, points)
+}
+
+/// [`sample_colors`] reading the composited pixels from `pixels` instead of the CPU compositor:
+/// the colors a Color Range compares with must come from the same source as the ones it tests.
+pub fn sample_colors_from(
+    source: &crate::document::Document,
+    pixels: Option<&PixelSource<'_>>,
+    points: &[(u32, u32)],
+) -> Vec<[f32; 4]> {
     let size = source.size();
     let Ok(mask) = Mask::new(size) else {
         return Vec::new();
     };
-    let sampler = WandSampler::new(source);
+    let sampler = WandSampler::new(source, pixels);
     let mut tiles: HashMap<(usize, usize), Vec<[f32; 4]>> = HashMap::new();
     points
         .iter()
@@ -2101,7 +2280,7 @@ pub fn sample_region(
         (right - left) as u32,
         (bottom - top) as u32,
     );
-    let colors = WandSampler::new(source).region(inside);
+    let colors = WandSampler::new(source, None).region(inside);
     let (dx, dy) = ((left - x) as usize, (top - y) as usize);
     let iw = inside.width as usize;
     for (row, line) in colors.chunks_exact(iw).enumerate() {
@@ -2138,60 +2317,69 @@ pub fn color_range_with(
     progress: &(dyn Fn(usize, usize) + Sync),
     cancel: &crate::job::CancelToken,
 ) -> Result<Option<RasterImage>, SelectionError> {
+    color_range_from(source, None, current, range, progress, cancel)
+}
+
+/// [`color_range_with`] reading the composited pixels from `pixels` instead of the CPU
+/// compositor; see [`PixelSource`].
+pub fn color_range_from(
+    source: &crate::document::Document,
+    pixels: Option<&PixelSource<'_>>,
+    current: Option<&RasterImage>,
+    range: &ColorRange,
+    progress: &(dyn Fn(usize, usize) + Sync),
+    cancel: &crate::job::CancelToken,
+) -> Result<Option<RasterImage>, SelectionError> {
     if !range.is_valid() {
         return Err(SelectionError::InvalidShape);
     }
     let canvas = source.size();
     let mut mask = Mask::new(canvas)?;
-    let sampler = WandSampler::new(source);
-    let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let per_thread = tiles.len().div_ceil(threads).max(1);
-    let (shape, sampler) = (&mask, &sampler);
-    let total = tiles.len();
+    let sampler = WandSampler::new(source, pixels);
+    let total = mask.tiles.len();
     let counted = std::sync::atomic::AtomicUsize::new(0);
-    let counted = &counted;
-    let mut done: Vec<(usize, Tile)> = Vec::new();
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = tiles
-            .chunks(per_thread)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    chunk
-                        .iter()
-                        .take_while(|_| !cancel.is_cancelled())
-                        .map(|&index| {
-                            let n = counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            progress(n + 1, total);
-                            let (col, row) = (index % shape.columns, index / shape.columns);
-                            let (w, h) = shape.valid(col, row);
-                            let (x0, y0) = ((col * T) as f64, (row * T) as f64);
-                            // Localized, tiles out of reach are not even composited.
-                            if range.out_of_reach([x0, y0, x0 + w as f64, y0 + h as f64]) {
-                                let value = if range.invert { FULL } else { 0 };
-                                return (index, Tile::Const(value));
-                            }
-                            let pixels = sampler.tile(col, row, shape);
-                            let mut values = vec![0u16; T * T];
-                            for y in 0..h {
-                                for x in 0..w {
-                                    let at = (x0 + x as f64 + 0.5, y0 + y as f64 + 0.5);
-                                    let c = range.coverage(pixels[y * T + x], Some(at));
-                                    values[y * T + x] = (c * f32::from(FULL)).round() as u16;
-                                }
-                            }
-                            pad(&mut values, w, h);
-                            (index, computed_tile(values))
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        for worker in workers {
-            // Invariant: comparing colors does not panic.
-            done.extend(worker.join().expect("color range worker panicked"));
+    let tick = || {
+        let n = counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        progress(n + 1, total);
+    };
+    // Localized, tiles out of reach are not even composited.
+    let mut reached: Vec<usize> = Vec::new();
+    for index in 0..total {
+        if cancel.is_cancelled() {
+            return Err(SelectionError::Cancelled);
         }
-    });
+        let (col, row) = (index % mask.columns, index / mask.columns);
+        let (w, h) = mask.valid(col, row);
+        let (x0, y0) = ((col * T) as f64, (row * T) as f64);
+        if range.out_of_reach([x0, y0, x0 + w as f64, y0 + h as f64]) {
+            mask.tiles[index] = Tile::Const(if range.invert { FULL } else { 0 });
+            tick();
+        } else {
+            reached.push(index);
+        }
+    }
+    let shape = &mask;
+    let done = sampler.map_tiles(
+        shape,
+        &reached,
+        &|| cancel.is_cancelled(),
+        &|index, pixels| {
+            let (col, row) = (index % shape.columns, index / shape.columns);
+            let (w, h) = shape.valid(col, row);
+            let (x0, y0) = ((col * T) as f64, (row * T) as f64);
+            let mut values = vec![0u16; T * T];
+            for y in 0..h {
+                for x in 0..w {
+                    let at = (x0 + x as f64 + 0.5, y0 + y as f64 + 0.5);
+                    let c = range.coverage(pixels[y * T + x], Some(at));
+                    values[y * T + x] = (c * f32::from(FULL)).round() as u16;
+                }
+            }
+            pad(&mut values, w, h);
+            tick();
+            (index, computed_tile(values))
+        },
+    );
     if cancel.is_cancelled() {
         return Err(SelectionError::Cancelled);
     }
@@ -4113,6 +4301,218 @@ mod tests {
         assert_eq!(left, (u32::from(FULL) * 6 / 9) as u16);
         assert_eq!(right, (u32::from(FULL) * 3 / 9) as u16);
         assert_eq!(soft.at(0, 1), FULL);
+    }
+
+    /// Whether two selections of the same canvas hold the same coverage everywhere.
+    fn same_selection(a: &Option<RasterImage>, b: &Option<RasterImage>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                let size = a.size();
+                let all = Rect::new(0, 0, size.width, size.height);
+                let grid = |s: &RasterImage| {
+                    sample_grid(s, all, size.width as usize, size.height as usize)
+                };
+                size == b.size() && grid(a) == grid(b)
+            }
+            _ => false,
+        }
+    }
+
+    /// The CPU compositor as a [`PixelSource`], counting the regions it is asked for.
+    fn counting_source(
+        calls: &std::sync::Mutex<Vec<Rect>>,
+    ) -> impl Fn(&crate::document::Document, Rect, &mut [f32]) -> Result<(), String> + Sync + '_
+    {
+        move |document, region, out| {
+            calls.lock().unwrap().push(region);
+            crate::composite::composite_region(document, region, out)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    #[test]
+    fn a_pixel_source_gives_the_same_selections_as_the_cpu_compositor() {
+        let doc = wand_document();
+        let canvas = Size::new(600, 300);
+        let calls = std::sync::Mutex::new(Vec::new());
+        let source = counting_source(&calls);
+        let pixels: Option<&PixelSource<'_>> = Some(&source);
+        for (tolerance, contiguous, anti_alias) in
+            [(32.0, true, false), (4.0, true, true), (32.0, false, false)]
+        {
+            let options = WandOptions {
+                tolerance,
+                contiguous,
+                anti_alias,
+            };
+            for seed in [(100, 150), (460, 120), (590, 290)] {
+                let cpu = magic_wand(&doc, None, seed, options, Combine::Replace).unwrap();
+                let from =
+                    magic_wand_from(&doc, pixels, None, seed, options, Combine::Replace).unwrap();
+                assert!(same_selection(&cpu, &from), "{options:?} at {seed:?}");
+            }
+            let inside_red = select(canvas, &rect(100.0, 100.0, 120.0, 120.0));
+            let across = select(canvas, &rect(290.0, 200.0, 310.0, 210.0));
+            for current in [&inside_red, &across] {
+                let cpu = grow(&doc, current, options).unwrap();
+                let from = grow_from(&doc, pixels, current, options).unwrap();
+                assert!(same_selection(&cpu, &from), "grow {options:?}");
+            }
+        }
+        let points = [(100, 150), (450, 120), (299, 5), (599, 299)];
+        assert_eq!(
+            sample_colors(&doc, &points),
+            sample_colors_from(&doc, pixels, &points)
+        );
+        let within = select(canvas, &rect(0.0, 0.0, 400.0, 250.0));
+        for (fuzziness, invert, localized) in [(40.0, false, None), (0.0, true, Some(80.0))] {
+            let range = ColorRange {
+                included: sample_colors(&doc, &[(100, 150)]),
+                excluded: sample_colors(&doc, &[(500, 200)]),
+                fuzziness,
+                invert,
+                localized: localized.map(|radius| Localized {
+                    points: vec![(100.5, 150.5)],
+                    radius,
+                }),
+            };
+            let token = crate::job::CancelToken::new();
+            for current in [None, Some(&within)] {
+                let cpu = color_range_with(&doc, current, &range, &|_, _| {}, &token).unwrap();
+                let from =
+                    color_range_from(&doc, pixels, current, &range, &|_, _| {}, &token).unwrap();
+                assert!(same_selection(&cpu, &from), "color range {range:?}");
+            }
+        }
+        // It was asked for the pixels, a row of tiles at a time (600 x 256 and 600 x 44), never
+        // for more than the canvas.
+        let calls = calls.lock().unwrap();
+        assert!(!calls.is_empty());
+        assert!(calls.iter().any(|r| r.width == 600 && r.height == 256));
+        assert!(
+            calls
+                .iter()
+                .all(|r| r.right() <= 600 && r.bottom() <= 300 && !r.is_empty())
+        );
+    }
+
+    #[test]
+    fn the_colors_come_from_the_pixel_source() {
+        // A source painting everything blue: the wand sees a blue canvas, whatever the document.
+        let doc = wand_document();
+        let blue = |_: &crate::document::Document, region: Rect, out: &mut [f32]| {
+            for px in out.chunks_exact_mut(4) {
+                px.copy_from_slice(&[0.0, 0.0, 1.0, 1.0]);
+            }
+            assert_eq!(out.len() as u64, region.size().pixel_count() * 4);
+            Ok(())
+        };
+        let options = WandOptions {
+            tolerance: 0.0,
+            contiguous: true,
+            anti_alias: false,
+        };
+        let all = magic_wand_from(
+            &doc,
+            Some(&blue),
+            None,
+            (100, 150),
+            options,
+            Combine::Replace,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(bounds(&all), Some(Rect::new(0, 0, 600, 300)));
+        assert_eq!(all.gray_at(599, 299), 1.0);
+        assert_eq!(
+            sample_colors_from(&doc, Some(&blue), &[(10, 10)])[0][..3],
+            [0.0, 0.0, 255.0]
+        );
+    }
+
+    #[test]
+    fn a_source_that_fails_is_replaced_by_the_cpu_compositor() {
+        let doc = wand_document();
+        let failing = |_: &crate::document::Document, _: Rect, _: &mut [f32]| Err("no GPU".into());
+        let options = WandOptions {
+            tolerance: 32.0,
+            contiguous: false,
+            anti_alias: false,
+        };
+        let cpu = magic_wand(&doc, None, (100, 150), options, Combine::Replace).unwrap();
+        let from = magic_wand_from(
+            &doc,
+            Some(&failing),
+            None,
+            (100, 150),
+            options,
+            Combine::Replace,
+        )
+        .unwrap();
+        assert!(same_selection(&cpu, &from));
+        assert_eq!(
+            sample_colors_from(&doc, Some(&failing), &[(100, 150)]),
+            vec![[255.0, 0.0, 0.0, 255.0]]
+        );
+    }
+
+    #[test]
+    fn a_color_range_with_a_pixel_source_reports_progress_and_can_be_cancelled() {
+        let doc = wand_document();
+        let calls = std::sync::Mutex::new(Vec::new());
+        let source = counting_source(&calls);
+        let range = ColorRange {
+            included: sample_colors(&doc, &[(100, 150)]),
+            excluded: Vec::new(),
+            fuzziness: 40.0,
+            invert: false,
+            localized: None,
+        };
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let report = |n: usize, total: usize| {
+            done.fetch_max(n, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(total, 6);
+        };
+        let token = crate::job::CancelToken::new();
+        color_range_from(&doc, Some(&source), None, &range, &report, &token).unwrap();
+        assert_eq!(done.into_inner(), 6);
+        token.cancel();
+        assert_eq!(
+            color_range_from(&doc, Some(&source), None, &range, &|_, _| {}, &token),
+            Err(SelectionError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn tiles_are_grouped_in_rows_for_a_pixel_source() {
+        let mask = Mask::new(Size::new(600, 300)).unwrap();
+        // 3 x 2 tiles: the last column and row are partial.
+        let runs = source_runs(&mask, &(0..6).collect::<Vec<_>>());
+        let regions: Vec<Rect> = runs.iter().map(|r| r.region).collect();
+        assert_eq!(
+            regions,
+            [Rect::new(0, 0, 600, 256), Rect::new(0, 256, 600, 44)]
+        );
+        assert_eq!(runs[0].tiles, [0, 1, 2]);
+        // Only the tiles asked for, a run ending where the row's tiles do not touch.
+        let runs = source_runs(&mask, &[5, 0, 2, 3, 4, 0]);
+        let regions: Vec<Rect> = runs.iter().map(|r| r.region).collect();
+        assert_eq!(
+            regions,
+            [
+                Rect::new(0, 0, 256, 256),
+                Rect::new(512, 0, 88, 256),
+                Rect::new(0, 256, 600, 44),
+            ]
+        );
+        // Wide canvases are cut at the most tiles a call covers.
+        let wide = Mask::new(Size::new(T as u32 * (SOURCE_RUN_TILES as u32 + 2), 10)).unwrap();
+        let runs = source_runs(&wide, &(0..wide.tiles.len()).collect::<Vec<_>>());
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].tiles.len(), SOURCE_RUN_TILES);
+        assert_eq!(runs[1].tiles.len(), 2);
     }
 
     #[test]
