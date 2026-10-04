@@ -37,7 +37,9 @@
 
   /** What is shown: a raster (the layer's, or its mask), or a fill's color. */
   let key = $derived(mask ? (layer.mask?.contentKey ?? null) : layer.contentKey);
-  let isImage = $derived(mask || layer.kind === "raster");
+  /** Being baked (ADR 0031): what it will show, rendered small before its pixels come. */
+  let baking = $derived(!mask && layer.baking === true);
+  let isImage = $derived(mask || layer.kind === "raster" || baking);
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   /** Whether the row has been scrolled into view: thumbnails are rendered only then. */
@@ -73,8 +75,9 @@
     // Device pixels, so that the thumbnail stays sharp on high-density screens.
     const maxSide = Math.round(size * window.devicePixelRatio);
     // Masks are shown raw, layers as light: never the same thumbnail for one image.
-    const cacheKey = `${mask ? "mask" : "layer"}:${key}:${maxSide}`;
-    const known = cache.get(cacheKey);
+    // Not kept while baking: the same layer bakes other content another time.
+    const cacheKey = baking ? null : `${mask ? "mask" : "layer"}:${key}:${maxSide}`;
+    const known = cacheKey === null ? undefined : cache.get(cacheKey);
     if (known) {
       draw(known);
       return;
@@ -83,7 +86,7 @@
     engine
       .layerThumbnail(documentId, layer.id, maxSide, mask)
       .then((image) => {
-        remember(cacheKey, image);
+        if (cacheKey !== null) remember(cacheKey, image);
         if (!cancelled) draw(image);
       })
       .catch(() => {

@@ -289,3 +289,10 @@ test("a double-click on a group's row opens Layer Style, not on an adjustment la
   await user.dblClick(row("Curves"));
   expect(onstyle).not.toHaveBeenCalled();
 });
+
+test("a layer being baked shows its thumbnail, dimmed, in place of its kind's", () => {
+  open([layer(1, "Background"), layer(2, "Merged", { kind: "group", baking: true })]);
+  const thumb = row("Merged").querySelector(".thumb.baking");
+  expect(thumb?.querySelector("canvas")).not.toBeNull();
+  expect(row("Merged").querySelector(".fold")).toBeNull();
+});

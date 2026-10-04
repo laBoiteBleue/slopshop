@@ -208,3 +208,17 @@ test("a thumbnail the engine cannot give leaves the box empty", async () => {
   // Not drawn: the canvas keeps its default size.
   expect(canvas()?.width).toBe(300);
 });
+
+test("a layer being baked shows what it will be at once, asked again at each bake", async () => {
+  const group = layer({ kind: "group", contentKey: 0, baking: true });
+  const first = show(group);
+  await scrollIntoView();
+  await waitFor(() => expect(first.canvas()?.width).toBe(4));
+  expect(requests).toEqual([{ documentId: 1, layerId: 7, maxSide: 36, mask: false }]);
+  first.unmount();
+  // Baked another time (undone, changed, baked again): not taken from the cache.
+  const second = show(group);
+  await scrollIntoView();
+  await waitFor(() => expect(second.canvas()?.width).toBe(4));
+  expect(requests).toHaveLength(2);
+});
