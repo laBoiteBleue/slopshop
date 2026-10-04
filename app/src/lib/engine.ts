@@ -1372,7 +1372,8 @@ export const engine = {
     serial(() => invoke<DocumentView>("add_layer_masks", { documentId, layerIds, kind })),
   /**
    * The Magic Wand at document pixel (x, y): colors within `tolerance` (0–255) of it, connected
-   * or not; it samples the composited document, or only `layerId`'s layer.
+   * or not; it samples the composited document, or only `layerId`'s layer. Its progress comes
+   * as `task`'s (`onAiProgress`), which `aiCancel` cancels.
    */
   magicWand: (
     documentId: number,
@@ -1380,9 +1381,10 @@ export const engine = {
     options: { tolerance: number; contiguous: boolean; antiAlias: boolean },
     layerId: number | null,
     mode: SelectionMode,
+    task: number,
   ) =>
     serial(() =>
-      invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode }),
+      invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode, task }),
     ),
   /** The selection's bounds (pixels selected even partly), `null` without one. */
   selectionBounds: (documentId: number) =>
@@ -1410,13 +1412,15 @@ export const engine = {
     serial(() => invoke<DocumentView>("transform_selection", { documentId, matrix })),
   /**
    * Select > Grow (`contiguous`) and Similar: the Magic Wand's tolerance around the selection's
-   * colors, added to it; it samples as the Magic Wand does.
+   * colors, added to it; it samples, and tells its progress, as the Magic Wand does.
    */
   growSelection: (
     documentId: number,
     options: { tolerance: number; contiguous: boolean; antiAlias: boolean },
     layerId: number | null,
-  ) => serial(() => invoke<DocumentView>("grow_selection", { documentId, ...options, layerId })),
+    task: number,
+  ) =>
+    serial(() => invoke<DocumentView>("grow_selection", { documentId, ...options, layerId, task })),
   /** Select > Color Range's preview: width, height and 8-bit coverage per pixel. */
   colorRangePreview: async (documentId: number, request: ColorRangeRequest, maxSide: number) => {
     const buffer = await invoke<ArrayBuffer>("color_range_preview", {

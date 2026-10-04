@@ -1429,11 +1429,24 @@ pub fn magic_wand(
     options: WandOptions,
     combine: Combine,
 ) -> Result<Option<RasterImage>, SelectionError> {
-    magic_wand_from(source, None, current, seed, options, combine)
+    let cancel = crate::job::CancelToken::new();
+    magic_wand_from(
+        source,
+        None,
+        current,
+        seed,
+        options,
+        combine,
+        &|_, _| {},
+        &cancel,
+    )
 }
 
 /// [`magic_wand`] reading the composited pixels from `pixels` (a GPU renderer, say) instead of
-/// the CPU compositor; see [`PixelSource`].
+/// the CPU compositor (see [`PixelSource`]), `progress(done, total)` told as tiles are read
+/// (from any thread; a contiguous fill counts against every tile of the canvas, the most it can
+/// read), stopping with [`SelectionError::Cancelled`] once `cancel` is.
+#[allow(clippy::too_many_arguments)]
 pub fn magic_wand_from(
     source: &crate::document::Document,
     pixels: Option<&PixelSource<'_>>,
@@ -1441,6 +1454,8 @@ pub fn magic_wand_from(
     seed: (u32, u32),
     options: WandOptions,
     combine: Combine,
+    progress: &(dyn Fn(usize, usize) + Sync),
+    cancel: &crate::job::CancelToken,
 ) -> Result<Option<RasterImage>, SelectionError> {
     let canvas = source.size();
     if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
@@ -1459,7 +1474,8 @@ pub fn magic_wand_from(
         vec![(seed.0 as usize % T, seed.1 as usize % T)],
     )];
     let similar = move |p: [f32; 4]| within(p, reference, reference, tolerance);
-    let mask = wand_mask(&sampler, mask, seeds, options, &similar);
+    let ticker = Ticker::new(mask.tiles.len(), progress);
+    let mask = wand_mask(&sampler, mask, seeds, options, &similar, &ticker, cancel)?;
     finish(canvas, current, mask, combine)
 }
 
@@ -1481,16 +1497,20 @@ pub fn grow(
     current: &RasterImage,
     options: WandOptions,
 ) -> Result<Option<RasterImage>, SelectionError> {
-    grow_from(source, None, current, options)
+    let cancel = crate::job::CancelToken::new();
+    grow_from(source, None, current, options, &|_, _| {}, &cancel)
 }
 
-/// [`grow`] reading the composited pixels from `pixels` instead of the CPU compositor; see
-/// [`PixelSource`].
+/// [`grow`] reading the composited pixels from `pixels` instead of the CPU compositor (see
+/// [`PixelSource`]), its progress told and its cancellation heard as the Magic Wand's
+/// ([`magic_wand_from`]): the selected tiles, then the wand's.
 pub fn grow_from(
     source: &crate::document::Document,
     pixels: Option<&PixelSource<'_>>,
     current: &RasterImage,
     options: WandOptions,
+    progress: &(dyn Fn(usize, usize) + Sync),
+    cancel: &crate::job::CancelToken,
 ) -> Result<Option<RasterImage>, SelectionError> {
     let canvas = source.size();
     if !options.tolerance.is_finite() || !(0.0..=255.0).contains(&options.tolerance) {
@@ -1504,13 +1524,23 @@ pub fn grow_from(
         .filter(|&i| !matches!(selected.tiles[i], Tile::Const(v) if v < HALF))
         .collect();
     let shape = &selected;
+    let ticker = Ticker::new(tiles.len() + selected.tiles.len(), progress);
     let mut found: Vec<GrowTile> = sampler
-        .map_tiles(shape, &tiles, &|| false, &|index, colors| {
-            grow_seeds(&colors, shape, index)
-        })
+        .map_tiles(
+            shape,
+            &tiles,
+            &|| cancel.is_cancelled(),
+            &|index, colors| {
+                ticker.tick();
+                grow_seeds(&colors, shape, index)
+            },
+        )
         .into_iter()
         .flatten()
         .collect();
+    if cancel.is_cancelled() {
+        return Err(SelectionError::Cancelled);
+    }
     found.sort_by_key(|tile| tile.index);
     let mut low = [f32::MAX; 4];
     let mut high = [f32::MIN; 4];
@@ -1528,7 +1558,7 @@ pub fn grow_from(
     if low[0] <= high[0] {
         let tolerance = options.tolerance;
         let similar = move |p: [f32; 4]| within(p, low, high, tolerance);
-        mask = wand_mask(&sampler, mask, seeds, options, &similar);
+        mask = wand_mask(&sampler, mask, seeds, options, &similar, &ticker, cancel)?;
     }
     finish(canvas, Some(current), mask, Combine::Add)
 }
@@ -1586,20 +1616,25 @@ fn grow_seeds(pixels: &[[f32; 4]], selected: &Mask, index: usize) -> Option<Grow
 
 /// The Magic Wand's selection of the pixels whose color `similar` accepts: those connected to
 /// `seeds` (a tile's index and positions in it) when `options.contiguous`, else every one,
-/// anti-aliased on request. `mask` is empty, the size of the canvas.
+/// anti-aliased on request. `mask` is empty, the size of the canvas. Each tile read ticks
+/// `ticker`; once `cancel` is, it stops with [`SelectionError::Cancelled`].
 fn wand_mask(
     sampler: &WandSampler<'_>,
     mut mask: Mask,
     seeds: Vec<(usize, Vec<(usize, usize)>)>,
     options: WandOptions,
     similar: &(impl Fn([f32; 4]) -> bool + Sync),
-) -> Mask {
+    ticker: &Ticker<'_>,
+    cancel: &crate::job::CancelToken,
+) -> Result<Mask, SelectionError> {
+    let stop = || cancel.is_cancelled();
     if options.contiguous {
-        flood(sampler, &mut mask, seeds, similar);
+        flood(sampler, &mut mask, seeds, similar, ticker, &stop);
     } else {
         let tiles: Vec<usize> = (0..mask.tiles.len()).collect();
         let shape = &mask;
-        let done = sampler.map_tiles(shape, &tiles, &|| false, &|index, pixels| {
+        let done = sampler.map_tiles(shape, &tiles, &stop, &|index, pixels| {
+            ticker.tick();
             let (col, row) = (index % shape.columns, index / shape.columns);
             let (w, h) = shape.valid(col, row);
             let mut values = vec![0u16; T * T];
@@ -1617,10 +1652,43 @@ fn wand_mask(
             mask.tiles[index] = tile;
         }
     }
+    if stop() {
+        return Err(SelectionError::Cancelled);
+    }
     if options.anti_alias {
         mask = soften(&mask);
     }
-    mask
+    ticker.finish();
+    Ok(mask)
+}
+
+/// A long selection's progress, counted in tiles from any thread and told as
+/// `progress(done, total)`, `done` never beyond `total`.
+struct Ticker<'a> {
+    done: std::sync::atomic::AtomicUsize,
+    total: usize,
+    progress: &'a (dyn Fn(usize, usize) + Sync),
+}
+
+impl<'a> Ticker<'a> {
+    fn new(total: usize, progress: &'a (dyn Fn(usize, usize) + Sync)) -> Self {
+        Self {
+            done: std::sync::atomic::AtomicUsize::new(0),
+            total,
+            progress,
+        }
+    }
+
+    /// One more tile done.
+    fn tick(&self) {
+        let n = self.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        (self.progress)(n.min(self.total), self.total);
+    }
+
+    /// All done, whatever was counted (a contiguous fill reads fewer tiles than it counts on).
+    fn finish(&self) {
+        (self.progress)(self.total, self.total);
+    }
 }
 
 /// Where the selection tools read the composited pixels (ADR 0024): fills `out` with `region` of
@@ -1919,19 +1987,22 @@ fn srgb_byte(v: f32) -> u8 {
 /// The contiguous fill from `seeds` (a tile's index and positions in it), tile by tile: each
 /// tile is filled from the pixels where the fill entered it (a scanline fill), and passes on the
 /// pixels where it leaves it. The tiles a wave of the fill reaches are composited together, on
-/// every core, and kept in a bounded cache (8-bit colors: 256 KB a tile).
+/// every core, and kept in a bounded cache (8-bit colors: 256 KB a tile). Each tile composited
+/// ticks `ticker`; the fill stops, unfinished, once `stop()`.
 fn flood(
     sampler: &WandSampler<'_>,
     mask: &mut Mask,
     seeds: Vec<(usize, Vec<(usize, usize)>)>,
     similar: &(impl Fn([f32; 4]) -> bool + Sync),
+    ticker: &Ticker<'_>,
+    stop: &(dyn Fn() -> bool + Sync),
 ) {
     let (columns, rows) = (mask.columns, mask.rows);
     let mut selected: HashMap<usize, Vec<u16>> = HashMap::new();
     let mut cache: HashMap<usize, (u64, Vec<[u8; 4]>)> = HashMap::new();
     let mut clock = 0u64;
     let mut pending = seeds;
-    while !pending.is_empty() {
+    while !pending.is_empty() && !stop() {
         clock += 1;
         // This wave: at most half the cache's tiles, so that they all stay cached meanwhile.
         let mut wave: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
@@ -1968,7 +2039,8 @@ fn flood(
         }
         let shape = &*mask;
         let composited: Vec<(usize, Vec<[u8; 4]>)> =
-            sampler.map_tiles(shape, &missing, &|| false, &|index, tile| {
+            sampler.map_tiles(shape, &missing, stop, &|index, tile| {
+                ticker.tick();
                 (index, tile.iter().map(|p| p.map(|v| v as u8)).collect())
             });
         for (index, pixels) in composited {
@@ -4366,15 +4438,32 @@ mod tests {
             };
             for seed in [(100, 150), (460, 120), (590, 290)] {
                 let cpu = magic_wand(&doc, None, seed, options, Combine::Replace).unwrap();
-                let from =
-                    magic_wand_from(&doc, pixels, None, seed, options, Combine::Replace).unwrap();
+                let from = magic_wand_from(
+                    &doc,
+                    pixels,
+                    None,
+                    seed,
+                    options,
+                    Combine::Replace,
+                    &|_, _| {},
+                    &crate::job::CancelToken::new(),
+                )
+                .unwrap();
                 assert!(same_selection(&cpu, &from), "{options:?} at {seed:?}");
             }
             let inside_red = select(canvas, &rect(100.0, 100.0, 120.0, 120.0));
             let across = select(canvas, &rect(290.0, 200.0, 310.0, 210.0));
             for current in [&inside_red, &across] {
                 let cpu = grow(&doc, current, options).unwrap();
-                let from = grow_from(&doc, pixels, current, options).unwrap();
+                let from = grow_from(
+                    &doc,
+                    pixels,
+                    current,
+                    options,
+                    &|_, _| {},
+                    &crate::job::CancelToken::new(),
+                )
+                .unwrap();
                 assert!(same_selection(&cpu, &from), "grow {options:?}");
             }
         }
@@ -4438,6 +4527,8 @@ mod tests {
             (100, 150),
             options,
             Combine::Replace,
+            &|_, _| {},
+            &crate::job::CancelToken::new(),
         )
         .unwrap()
         .unwrap();
@@ -4466,6 +4557,8 @@ mod tests {
             (100, 150),
             options,
             Combine::Replace,
+            &|_, _| {},
+            &crate::job::CancelToken::new(),
         )
         .unwrap();
         assert!(same_selection(&cpu, &from));
@@ -4500,6 +4593,73 @@ mod tests {
             color_range_from(&doc, Some(&source), None, &range, &|_, _| {}, &token),
             Err(SelectionError::Cancelled)
         );
+    }
+
+    #[test]
+    fn the_magic_wand_and_grow_report_progress_and_can_be_cancelled() {
+        let doc = wand_document();
+        let calls = std::sync::Mutex::new(Vec::new());
+        let source = counting_source(&calls);
+        let canvas = Size::new(600, 300);
+        // 3 x 2 tiles; Grow first reads the one tile its selection is in.
+        let current = select(canvas, &rect(100.0, 100.0, 120.0, 120.0));
+        for pixels in [None, Some(&source as &PixelSource<'_>)] {
+            for contiguous in [true, false] {
+                let options = WandOptions {
+                    tolerance: 32.0,
+                    contiguous,
+                    anti_alias: true,
+                };
+                // Told from any thread, never beyond the total, and done at the end.
+                let told = std::sync::Mutex::new(Vec::new());
+                let report = |n: usize, total: usize| told.lock().unwrap().push((n, total));
+                let token = crate::job::CancelToken::new();
+                let seed = (100, 150);
+                magic_wand_from(
+                    &doc,
+                    pixels,
+                    None,
+                    seed,
+                    options,
+                    Combine::Replace,
+                    &report,
+                    &token,
+                )
+                .unwrap();
+                let wand = std::mem::take(&mut *told.lock().unwrap());
+                assert!(
+                    wand.iter().all(|&(n, total)| total == 6 && n <= 6),
+                    "{wand:?}"
+                );
+                assert_eq!(wand.last(), Some(&(6, 6)));
+                grow_from(&doc, pixels, &current, options, &report, &token).unwrap();
+                let grown = told.into_inner().unwrap();
+                assert!(
+                    grown.iter().all(|&(n, total)| total == 7 && n <= 7),
+                    "{grown:?}"
+                );
+                assert_eq!(grown.last(), Some(&(7, 7)));
+                token.cancel();
+                let none = &|_: usize, _: usize| {};
+                assert_eq!(
+                    magic_wand_from(
+                        &doc,
+                        pixels,
+                        None,
+                        seed,
+                        options,
+                        Combine::Replace,
+                        none,
+                        &token
+                    ),
+                    Err(SelectionError::Cancelled)
+                );
+                assert_eq!(
+                    grow_from(&doc, pixels, &current, options, none, &token),
+                    Err(SelectionError::Cancelled)
+                );
+            }
+        }
     }
 
     #[test]
