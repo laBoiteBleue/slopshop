@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::PixelFormat;
-use slopshop_core::filter::Filter;
+use slopshop_core::filter::{Filter, LINE_UP_TO, line_offsets};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::LookJob;
 use wgpu::util::DeviceExt;
@@ -27,6 +27,7 @@ pub(crate) struct GpuFilter {
     layout: wgpu::BindGroupLayout,
     rows: wgpu::ComputePipeline,
     columns: wgpu::ComputePipeline,
+    line: wgpu::ComputePipeline,
 }
 
 impl GpuFilter {
@@ -85,6 +86,7 @@ impl GpuFilter {
             layout,
             rows: pipeline("rows_main"),
             columns: pipeline("columns_main"),
+            line: pipeline("line_main"),
         }
     }
 
@@ -167,6 +169,7 @@ impl GpuFilter {
                 // The next step filters what the last one gave.
                 encoder.copy_buffer_to_buffer(&output, 0, &packed, 0, bytes);
             }
+            // Half a kernel's width, or a line's samples (two offsets each).
             let reach = (pass.weights.len() / 2) as u32;
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("filter params"),
@@ -214,7 +217,12 @@ impl GpuFilter {
                     },
                 ],
             });
-            for pipeline in [&self.rows, &self.columns] {
+            let pipelines = if pass.line {
+                vec![&self.line]
+            } else {
+                vec![&self.rows, &self.columns]
+            };
+            for pipeline in pipelines {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("filter"),
                     timestamp_writes: None,
@@ -240,28 +248,47 @@ impl GpuFilter {
     }
 }
 
-/// A step as the shader runs it: the blur's kernel, then what each pixel becomes from it
-/// (`Params` in filter.wgsl).
+/// A step as the shader runs it: the blur's kernel, then what each pixel becomes from it; or a
+/// Motion Blur's line, its samples' offsets in `weights` (`Params` in filter.wgsl).
 struct Pass {
     weights: Vec<f32>,
+    line: bool,
     mode: u32,
     amount: f32,
     threshold: f32,
 }
 
 impl Pass {
-    /// `filter`'s pass, or `None` when its blur reaches too far.
+    /// `filter`'s pass, or `None` when it reaches too far (the CPU reduces the layer then).
     fn of(filter: Filter) -> Option<Self> {
-        let weights = gaussian(f64::from(filter.blur_radius()))?;
+        if let Filter::MotionBlur { angle, distance } = filter {
+            if f64::from(distance) > LINE_UP_TO {
+                return None;
+            }
+            return Some(Self {
+                weights: line_offsets(f64::from(angle), f64::from(distance))
+                    .into_iter()
+                    .flatten()
+                    .map(|v| v as f32)
+                    .collect(),
+                line: true,
+                mode: 0,
+                amount: 0.0,
+                threshold: 0.0,
+            });
+        }
+        let weights = gaussian(f64::from(filter.blur_radius()?))?;
         let (mode, amount, threshold) = match filter {
             Filter::GaussianBlur { .. } => (0, 0.0, 0.0),
             Filter::UnsharpMask {
                 amount, threshold, ..
             } => (1, amount, threshold),
             Filter::HighPass { .. } => (2, 0.0, 0.0),
+            Filter::MotionBlur { .. } => return None,
         };
         Some(Self {
             weights,
+            line: false,
             mode,
             amount,
             threshold,
