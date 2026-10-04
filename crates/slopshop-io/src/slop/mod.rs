@@ -20,6 +20,7 @@
 mod format;
 mod manifest;
 mod read;
+mod style;
 mod write;
 
 use std::collections::HashMap;

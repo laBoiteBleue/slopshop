@@ -1702,6 +1702,7 @@ fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
     )
     .unwrap();
     assert!(report.notices.contains(&ExportNotice::PixelsOutsideCanvas));
+    assert!(!report.notices.contains(&ExportNotice::StylesNotWritten));
     std::fs::remove_file(&path).ok();
     let huge = Document::new(Size::new(PSD_MAX_SIDE + 1, 10));
     assert!(matches!(
@@ -3268,4 +3269,41 @@ fn the_resolution_survives_a_round_trip() {
     };
     std::fs::remove_file(&path).ok();
     assert_eq!(read, 240.0);
+}
+
+#[test]
+fn layered_psd_reports_layer_styles_it_does_not_write() {
+    let mut doc = layered_document();
+    let styled = doc
+        .all_layers()
+        .find(|l| matches!(l.content, LayerContent::Raster { .. }))
+        .unwrap()
+        .id;
+    Edit::SetLayerStyle {
+        id: styled,
+        style: Some(Box::new(slopshop_core::style::LayerStyle {
+            stroke: Some(slopshop_core::style::Stroke::default()),
+            ..Default::default()
+        })),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("styled.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U8,
+        space: ColorSpace::SRGB,
+        dither: true,
+        large: false,
+    };
+    let report = export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(report.notices.contains(&ExportNotice::StylesNotWritten));
+    std::fs::remove_file(&path).ok();
 }

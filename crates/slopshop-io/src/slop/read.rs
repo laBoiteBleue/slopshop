@@ -25,8 +25,8 @@ use super::format::{
 };
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_TRANSFORMED,
-    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED,
+    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -329,7 +329,9 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
-    let known_raster = (1..=NODE_VERSION_STACK).contains(&node.version);
+    let known_raster = (1..=NODE_VERSION_STYLED).contains(&node.version);
+    // A fill's nodes skip the versions of paint and stacks: a styled fill is version 8.
+    let known_fill = known_version || node.version == NODE_VERSION_STYLED;
     let content = match node.kind.as_str() {
         NODE_RASTER if known_raster => {
             let key = node
@@ -343,7 +345,7 @@ pub(super) fn read_node(
                 .ok_or_else(|| corrupt("raster node with a missing image"))?;
             raster_content(node, manifest, image, rasters)?
         }
-        NODE_FILL if known_version => {
+        NODE_FILL if known_fill => {
             let color = node
                 .params
                 .get("color")
@@ -396,11 +398,20 @@ pub(super) fn read_node(
             .and_then(Value::as_bool)
             .unwrap_or(false);
     let transform = node_transform(node)?;
+    let style = match node.params.get("style") {
+        None | Some(Value::Null) => None,
+        Some(value) if node.version >= NODE_VERSION_STYLED => Some(
+            super::style::from_json(value)
+                .map(slopshop_core::style::Style::new)
+                .ok_or_else(|| corrupt("invalid layer style"))?,
+        ),
+        Some(_) => return Err(corrupt("a style needs node version 8")),
+    };
     if !node.extra.is_empty() {
         residue.nodes.insert(id, node.extra.clone());
     }
     Ok(Layer {
-        style: None,
+        style,
         transform,
         clipped,
         id: LayerId::from_raw(id),

@@ -174,6 +174,9 @@ pub fn export_psd(
     if writer.cropped {
         report.notices.push(ExportNotice::PixelsOutsideCanvas);
     }
+    if document.all_layers().any(|l| l.style.is_some()) {
+        report.notices.push(ExportNotice::StylesNotWritten);
+    }
     Ok(report)
 }
 
@@ -425,7 +428,7 @@ impl Writer<'_, '_> {
     }
 
     /// A document holding only `layer`, placed as in the document, at full opacity, in normal
-    /// mode, unmasked (its mask is written apart): its own pixels.
+    /// mode, unmasked (its mask is written apart), without its style: its own pixels.
     fn isolated(&self, layer: &Layer) -> Document {
         let mut copy = layer.clone();
         copy.id = LayerId::from_raw(1);
@@ -433,6 +436,8 @@ impl Writer<'_, '_> {
         copy.opacity = 1.0;
         copy.blend_mode = BlendMode::Normal;
         copy.clipped = false;
+        // Its own pixels: its effects are not written yet (`StylesNotWritten`).
+        copy.style = None;
         copy.transform = layer
             .transform
             .then(self.document.parent_transform(layer.id));
