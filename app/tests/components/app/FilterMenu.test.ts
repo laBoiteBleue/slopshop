@@ -83,6 +83,27 @@ test("Noise > Add Noise: Gaussian and monochromatic, a new seed each time it is 
   expect(again.values[3]).not.toBe(first.values[3]);
 });
 
+test("Noise > Dust & Scratches: a radius and a threshold", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Noise", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Dust & Scratches…" }));
+  await screen.findByRole("dialog", { name: "Dust & Scratches" });
+  const threshold = screen.getByRole("spinbutton", { name: "Threshold" });
+  await user.clear(threshold);
+  await user.type(threshold, "12");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "dustAndScratches",
+      values: [1, 12],
+    }),
+  );
+});
+
 test("Sharpen > Unsharp Mask and Other > High Pass apply to the active layer", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });

@@ -124,6 +124,31 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     ],
     defaults: [12.5, 0, 0, 0],
   },
+  dustAndScratches: {
+    params: [
+      {
+        kind: "number",
+        key: "radius",
+        label: "filter.dustAndScratches.radius",
+        unit: "filter.pixels",
+        min: 1,
+        max: 500,
+        decimals: 0,
+        scale: "log",
+      },
+      {
+        kind: "number",
+        key: "threshold",
+        label: "filter.dustAndScratches.threshold",
+        unit: "filter.levels",
+        min: 0,
+        max: 255,
+        decimals: 0,
+        scale: "linear",
+      },
+    ],
+    defaults: [1, 0],
+  },
   highPass: { params: [radius("filter.highPass.radius")], defaults: [10] },
 };
 
@@ -158,7 +183,7 @@ export function sliderValue(param: NumberParam, p: number): number {
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.blur", filters: ["gaussianBlur", "motionBlur"] },
-  { label: "menu.filter.noise", filters: ["addNoise"] },
+  { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask"] },
   { label: "menu.filter.other", filters: ["highPass"] },
 ];
@@ -172,7 +197,13 @@ export function validValues(filter: FilterId, values: number[]): boolean {
 function validValue(param: FilterParam, v: number): boolean {
   switch (param.kind) {
     case "number":
-      return Number.isFinite(v) && v >= param.min && v <= param.max;
+      // Without decimals, a whole number (Dust & Scratches' radius, a square of pixels).
+      return (
+        Number.isFinite(v) &&
+        v >= param.min &&
+        v <= param.max &&
+        (param.decimals > 0 || Number.isInteger(v))
+      );
     case "choice":
       return Number.isInteger(v) && v >= 0 && v < param.options.length;
     case "check":

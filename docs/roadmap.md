@@ -310,8 +310,10 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Blur > Motion Blur (a line of samples; beyond 256 pixels on the layer reduced; CPU and GPU)
 - [x] Noise > Add Noise (uniform or Gaussian, monochromatic; a grain of the document pixel and
       a seed drawn each time it is applied; CPU and GPU)
-- [ ] The other classical filters, the maintainer's short list (2026-10-04): Dust & Scratches,
-      Clarity / Texture; then Liquify
+- [x] Noise > Dust & Scratches (an exact median of a square, on the CPU; beyond a radius of 8 on
+      the layer reduced)
+- [ ] The other classical filters, the maintainer's short list (2026-10-04): Clarity /
+      Texture; then Liquify; Dust & Scratches on the GPU
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
 - [ ] Liquify as a stack entry (a displacement field, its own workspace)
