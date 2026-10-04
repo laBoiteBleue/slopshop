@@ -386,6 +386,10 @@ pub struct Document {
     /// What the next operation applies to (ADR 0024): a gray coverage mask at the origin;
     /// `None` when nothing is selected. Not saved with the document.
     selection: Option<crate::selection::Selection>,
+    /// Quick Mask (ADR 0024, as Photoshop's): while it is on, the selection being edited as a
+    /// gray image of its own (1 selected, 0 left out) that painting tools paint, `selection`
+    /// then being an ordinary selection limiting them. Not saved with the document.
+    quick_mask: Option<crate::selection::Selection>,
     /// Selections kept by name, in the order they were saved; saved with the document.
     saved_selections: Vec<SavedSelection>,
     next_saved_selection_id: u64,
@@ -404,6 +408,7 @@ impl Document {
             resolution: DEFAULT_RESOLUTION,
             layers: Vec::new(),
             selection: None,
+            quick_mask: None,
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
             next_layer_id: 1,
@@ -435,6 +440,7 @@ impl Document {
             resolution: DEFAULT_RESOLUTION,
             layers,
             selection: None,
+            quick_mask: None,
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
             next_layer_id,
@@ -478,6 +484,11 @@ impl Document {
         self.saved_selections = saved;
         self.next_saved_selection_id = next_id;
         Ok(self)
+    }
+
+    /// Quick Mask's image while it is on (`None`: off).
+    pub fn quick_mask(&self) -> Option<&crate::selection::Selection> {
+        self.quick_mask.as_ref()
     }
 
     /// The selections saved by name, in the order they were saved.
@@ -664,6 +675,13 @@ impl Document {
         selection: Option<crate::selection::Selection>,
     ) -> Option<crate::selection::Selection> {
         std::mem::replace(&mut self.selection, selection)
+    }
+
+    pub(crate) fn set_quick_mask(
+        &mut self,
+        mask: Option<crate::selection::Selection>,
+    ) -> Option<crate::selection::Selection> {
+        std::mem::replace(&mut self.quick_mask, mask)
     }
 
     pub(crate) fn saved_selections_mut(&mut self) -> &mut Vec<SavedSelection> {

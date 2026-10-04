@@ -183,7 +183,7 @@ test("Select > Modify shows each amount live; OK applies it, Cancel takes it bac
   await vi.waitFor(() => expect(sent("cancel_gesture")).toEqual([{ documentId: 1 }]));
 });
 
-test("Q enters Quick Mask: named in the tab and the options bar, with its own Add / Remove colors", async () => {
+test("Q enters Quick Mask: named in the tab and the options bar; the tools paint its mask in grays", async () => {
   localStorage.clear();
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
   await screen.findByText("cat.jpg");
@@ -197,23 +197,41 @@ test("Q enters Quick Mask: named in the tab and the options bar, with its own Ad
   );
   await vi.waitFor(() => expect(screen.getByText("(Quick Mask)")).toBeInTheDocument());
   expect(screen.getByRole("status")).toHaveTextContent("Quick Mask");
-  const add = screen.getByRole("button", { name: "Add" });
-  const remove = screen.getByRole("button", { name: "Remove" });
-  // Photoshop's default colors: black, the Brush removes.
-  expect(remove).toHaveAttribute("aria-pressed", "true");
-  await user.click(add);
-  expect(add).toHaveAttribute("aria-pressed", "true");
-  // X swaps the pair, D resets it.
+  // No Add / Remove: the mask's grays, black first (D), X swapping them.
+  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+  expect(foreground()).toHaveStyle({ background: "#000000" });
   await user.keyboard("x");
-  expect(remove).toHaveAttribute("aria-pressed", "true");
-  await user.keyboard("x");
-  await user.keyboard("d");
-  expect(remove).toHaveAttribute("aria-pressed", "true");
+  expect(foreground()).toHaveStyle({ background: "#ffffff" });
+  // The color picker offers grays only.
+  await user.click(foreground());
+  expect(await screen.findByText("Gray:")).toBeInTheDocument();
+  expect(screen.queryByText("#")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  // The Brush paints Quick Mask's image.
+  await user.keyboard("b");
+  const canvas = document.querySelector("svg.paint") as SVGSVGElement;
+  await fireEvent.pointerDown(canvas, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 10, clientY: 10 });
+  await vi.waitFor(() =>
+    expect(sent("paint_stroke")[0]).toMatchObject({
+      request: { target: "quickMask", color: [1, 1, 1] },
+    }),
+  );
   // Leaving it: the drawing colors as they were.
   await user.keyboard("q");
   await vi.waitFor(() => expect(screen.queryByText("(Quick Mask)")).not.toBeInTheDocument());
-  expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
   expect(foreground().getAttribute("style")).toBe(drawing);
+});
+
+test("in Quick Mask, Fill paints its mask", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), quickMask: true });
+  await screen.findByText("cat.jpg");
+  await user.keyboard("{Shift>}{F5}{/Shift}");
+  const dialog = await screen.findByRole("dialog", { name: "Fill" });
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("fill")[0]).toMatchObject({ documentId: 1, target: "quickMask", color: [0, 0, 0] }),
+  );
 });
 
 test("Quick Mask's overlay opacity is sent as it changes, and kept for next time", async () => {

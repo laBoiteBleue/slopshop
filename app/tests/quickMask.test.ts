@@ -1,10 +1,8 @@
 import { expect, test } from "vitest";
 import {
   DEFAULT_QUICK_MASK_OPACITY,
-  QUICK_MASK_COLORS,
+  MASK_COLORS,
   loadQuickMaskOpacity,
-  quickMaskAction,
-  quickMaskColors,
   saveQuickMaskOpacity,
 } from "../src/lib/quickMask";
 
@@ -17,20 +15,8 @@ function memory() {
   };
 }
 
-test("white paints the selection in, black out, a gray neither wholly", () => {
-  expect(quickMaskAction({ foreground: "#FFFFFF", background: "#000000" })).toBe("add");
-  expect(quickMaskAction({ foreground: "#000000", background: "#ffffff" })).toBe("remove");
-  expect(quickMaskAction({ foreground: "#808080", background: "#ffffff" })).toBeNull();
-});
-
-test("Add and Remove are the two pairs X swaps between", () => {
-  const add = quickMaskColors("add");
-  const remove = quickMaskColors("remove");
-  expect(quickMaskAction(add)).toBe("add");
-  expect(quickMaskAction(remove)).toBe("remove");
-  expect({ foreground: add.background, background: add.foreground }).toEqual(remove);
-  // Photoshop's default colors remove, as black paints the mask there.
-  expect(quickMaskAction(QUICK_MASK_COLORS)).toBe("remove");
+test("masks start with Photoshop's default colors: black paints, white behind", () => {
+  expect(MASK_COLORS).toEqual({ foreground: "#000000", background: "#ffffff" });
 });
 
 test("the overlay's opacity is kept between sessions, in range", () => {

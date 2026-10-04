@@ -134,6 +134,10 @@ pub enum Edit {
     SetSelection {
         selection: Option<crate::selection::Selection>,
     },
+    /// Quick Mask on (`Some`: its image) or off (ADR 0024). See [`Edit::enter_quick_mask`].
+    SetQuickMask {
+        mask: Option<crate::selection::Selection>,
+    },
     /// Select > Save Selection: keep `saved` at `index` among the saved selections. Its id comes
     /// from [`Document::allocate_saved_selection_id`] and is not in use.
     InsertSavedSelection {
@@ -338,6 +342,17 @@ impl Edit {
             Edit::SetSelection { selection } => Edit::SetSelection {
                 selection: doc.set_selection(selection),
             },
+            Edit::SetQuickMask { mask } => {
+                if mask
+                    .as_ref()
+                    .is_some_and(|m| !m.image().format().layout.is_gray())
+                {
+                    return Err(EditError::InvalidMask);
+                }
+                Edit::SetQuickMask {
+                    mask: doc.set_quick_mask(mask),
+                }
+            }
             Edit::InsertSavedSelection { index, saved } => {
                 let id = saved.id;
                 let allocated = id.get() != 0 && id.get() < doc.next_saved_selection_id();
@@ -846,21 +861,28 @@ impl Edit {
         if doc.selection().is_some() {
             edits.push(Edit::SetSelection { selection: None });
         }
-        // Saved selections follow the image, as Photoshop's alpha channels do (resampled like
-        // a layer, exact for whole-pixel moves); one left with nothing keeps an empty mask.
-        for saved in doc.saved_selections() {
-            let image = crate::selection::transformed(size, saved.selection.image(), by)
+        // Quick Mask's image and the saved selections follow the image, as Photoshop's
+        // channels do (resampled like a layer, exact for whole-pixel moves); one left with
+        // nothing keeps an empty mask.
+        let reframed = |mask: &crate::selection::Selection| -> Result<_, EditError> {
+            let image = crate::selection::transformed(size, mask.image(), by)
                 .map_err(|_| EditError::InvalidTransform)?;
             let image = match image {
                 Some(image) => image,
                 None => crate::selection::uniform_mask(size, false)
                     .map_err(|_| EditError::EmptyCanvas)?,
             };
-            let selection =
-                crate::selection::Selection::new(Arc::new(image)).ok_or(EditError::InvalidMask)?;
+            crate::selection::Selection::new(Arc::new(image)).ok_or(EditError::InvalidMask)
+        };
+        if let Some(mask) = doc.quick_mask() {
+            edits.push(Edit::SetQuickMask {
+                mask: Some(reframed(mask)?),
+            });
+        }
+        for saved in doc.saved_selections() {
             edits.push(Edit::SetSavedSelection {
                 id: saved.id,
-                selection,
+                selection: reframed(&saved.selection)?,
             });
         }
         for layer in doc.layers() {
@@ -872,6 +894,38 @@ impl Edit {
             });
         }
         Ok(Edit::Batch(edits))
+    }
+
+    /// Quick Mask on, as Photoshop's: the selection becomes the mask painting tools paint
+    /// (everything when nothing is selected), and nothing is selected, so that a selection
+    /// made meanwhile limits the painting. One undo entry. `None` when it is on already.
+    pub fn enter_quick_mask(doc: &Document) -> Result<Option<Edit>, EditError> {
+        if doc.quick_mask().is_some() {
+            return Ok(None);
+        }
+        let mask = match doc.selection() {
+            Some(selection) => selection.clone(),
+            None => {
+                let all =
+                    crate::selection::select_all(doc.size()).map_err(|_| EditError::EmptyCanvas)?;
+                crate::selection::Selection::new(Arc::new(all)).ok_or(EditError::InvalidMask)?
+            }
+        };
+        Ok(Some(Edit::Batch(vec![
+            Edit::SetQuickMask { mask: Some(mask) },
+            Edit::SetSelection { selection: None },
+        ])))
+    }
+
+    /// Quick Mask off: its mask becomes the selection (nothing selected when it masks
+    /// everything), the selection made meanwhile dropped. One undo entry. `None` when it is off.
+    pub fn leave_quick_mask(doc: &Document) -> Option<Edit> {
+        let mask = doc.quick_mask()?;
+        let selection = crate::selection::bounds(mask.image()).map(|_| mask.clone());
+        Some(Edit::Batch(vec![
+            Edit::SetSelection { selection },
+            Edit::SetQuickMask { mask: None },
+        ]))
     }
 
     /// The edit that resamples the whole image to `size` (Image > Image Size, ADR 0018): the
@@ -1850,6 +1904,89 @@ mod tests {
         let empty = mask(&doc);
         assert_eq!(empty.size(), Size::new(10, 10));
         assert!(crate::selection::bounds(&empty).is_none());
+    }
+
+    #[test]
+    fn quick_mask_holds_the_selection_while_a_selection_limits_its_painting() {
+        let size = Size::new(100, 80);
+        let mut doc = Document::new(size);
+        let square = selection_of(size, [10.0, 10.0, 30.0, 30.0]);
+        Edit::SetSelection {
+            selection: Some(square.clone()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        // On: the selection is the mask, nothing is selected.
+        let enter = Edit::enter_quick_mask(&doc).unwrap().unwrap();
+        let undo_enter = enter.apply(&mut doc).unwrap();
+        assert_eq!(doc.quick_mask(), Some(&square));
+        assert!(doc.selection().is_none());
+        assert!(Edit::enter_quick_mask(&doc).unwrap().is_none());
+        // A selection made meanwhile is dropped on leaving: the mask is the selection.
+        Edit::SetSelection {
+            selection: Some(selection_of(size, [50.0, 50.0, 60.0, 60.0])),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let undo_leave = Edit::leave_quick_mask(&doc)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert!(doc.quick_mask().is_none());
+        assert_eq!(doc.selection(), Some(&square));
+        assert!(Edit::leave_quick_mask(&doc).is_none());
+        // Both undoable: back in Quick Mask with the selection made meanwhile, then out.
+        undo_leave.apply(&mut doc).unwrap();
+        assert_eq!(doc.quick_mask(), Some(&square));
+        assert!(doc.selection().is_some());
+        undo_enter.apply(&mut doc).unwrap();
+        assert!(doc.quick_mask().is_none());
+        // Nothing selected: the mask selects everything; a mask masking everything leaves
+        // nothing selected.
+        Edit::SetSelection { selection: None }
+            .apply(&mut doc)
+            .unwrap();
+        Edit::enter_quick_mask(&doc)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.quick_mask().unwrap().image().gray_at(99, 79), 1.0);
+        let empty = crate::selection::uniform_mask(size, false).unwrap();
+        Edit::SetQuickMask {
+            mask: crate::selection::Selection::new(Arc::new(empty)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::leave_quick_mask(&doc)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert!(doc.selection().is_none());
+    }
+
+    #[test]
+    fn quick_mask_follows_a_crop() {
+        let size = Size::new(100, 80);
+        let mut doc = Document::new(size);
+        Edit::SetSelection {
+            selection: Some(selection_of(size, [60.0, 40.0, 90.0, 70.0])),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::enter_quick_mask(&doc)
+            .unwrap()
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        Edit::crop(&doc, [50, 30, 50, 50])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let mask = doc.quick_mask().unwrap().image();
+        assert_eq!(mask.size(), Size::new(50, 50));
+        assert_eq!(mask.gray_at(10, 10), 1.0);
+        assert_eq!(mask.gray_at(9, 10), 0.0);
     }
 
     #[test]

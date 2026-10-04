@@ -1,29 +1,13 @@
-// Quick Mask (Q, ADR 0024): painting edits the selection. White selects and black unselects, as
-// in Photoshop, with a pair of colors of its own so that the drawing colors come back on leaving
-// it; the options bar shows that pair as Add / Remove, so nobody needs the convention. The
-// overlay's opacity is an app preference.
+// Masks are painted in grays (Quick Mask, ADR 0024, and a layer's mask): white selects or shows,
+// black leaves out or hides, as in Photoshop. They have a pair of gray colors of their own, so
+// that the drawing colors come back afterwards. Quick Mask's overlay opacity is an app
+// preference.
 
 /** The foreground and background colors, `#rrggbb` sRGB. */
 export type ColorPair = { foreground: string; background: string };
 
-/** Photoshop's default colors (D): black paints, so the brush removes from the selection. */
-export const QUICK_MASK_COLORS: ColorPair = { foreground: "#000000", background: "#ffffff" };
-
-/** What the Brush does to the selection with `colors`: white adds, black removes, a gray does
- * some of either (neither button is on). */
-export function quickMaskAction(colors: ColorPair): "add" | "remove" | null {
-  const foreground = colors.foreground.toLowerCase();
-  if (foreground === "#ffffff") return "add";
-  if (foreground === "#000000") return "remove";
-  return null;
-}
-
-/** The pair that makes the Brush `action` (the other color behind it, for X). */
-export function quickMaskColors(action: "add" | "remove"): ColorPair {
-  return action === "add"
-    ? { foreground: "#ffffff", background: "#000000" }
-    : { foreground: "#000000", background: "#ffffff" };
-}
+/** Photoshop's default colors (D): black paints, so the Brush masks or hides. */
+export const MASK_COLORS: ColorPair = { foreground: "#000000", background: "#ffffff" };
 
 const OPACITY_KEY = "slopshop.quickMaskOpacity";
 /** Half opaque, as Photoshop. */

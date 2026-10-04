@@ -220,7 +220,6 @@ impl OpenDocument {
         view.path = self.path.as_ref().map(|p| p.display().to_string());
         view.dirty = self.dirty();
         view.can_reselect = self.reselectable().is_some();
-        view.quick_mask = self.overlays.quick_mask;
         view.quick_mask_opacity = self.overlays.quick_mask_opacity;
         if !self.baking.is_empty() {
             mark_baking(&mut view.layers, &self.baking);
@@ -2660,7 +2659,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stroke_in_quick_mask_paints_the_selection() {
+    fn a_stroke_in_quick_mask_paints_its_mask_within_the_selection() {
         let state = AppState::new();
         let doc = state
             .add_document(blank_session(), None, Vec::new())
@@ -2675,27 +2674,57 @@ mod tests {
                 .layers()[0]
                 .id
         };
-        let selection = |state: &AppState| {
+        let mask = |state: &AppState| {
             let mut documents = state.documents().unwrap();
             let document = documents.get_mut(doc.id).unwrap();
-            document.session.document().selection().cloned()
+            document.session.document().quick_mask().cloned()
         };
-        // Nothing selected is everything selected: black unselects where it paints.
-        let request = dab(background, paint::PaintTarget::Selection, Some([0.0; 3]));
+        // Off: nothing to paint.
+        let request = dab(background, paint::PaintTarget::QuickMask, Some([0.0; 3]));
+        assert!(paint::paint(&state, doc.id, request).is_err());
+        // On without a selection: everything selected; black masks where it paints.
+        selection::quick_mask(&state, doc.id, true, 50).unwrap();
+        let request = dab(background, paint::PaintTarget::QuickMask, Some([0.0; 3]));
         paint::paint(&state, doc.id, request).unwrap().unwrap();
-        let selected = selection(&state).expect("a selection");
-        assert_eq!(selected.image().gray_at(50, 50), 0.0);
-        assert_eq!(selected.image().gray_at(150, 150), 1.0);
-        // White selects again; the background layer is never painted.
-        let request = dab(background, paint::PaintTarget::Selection, Some([1.0; 3]));
+        let painted = mask(&state).expect("a quick mask");
+        assert_eq!(painted.image().gray_at(50, 50), 0.0);
+        assert_eq!(painted.image().gray_at(150, 150), 1.0);
+        // A selection made meanwhile limits the paint, and stays: white unmasks only there.
+        let left = slopshop_core::selection::select_shape(
+            Size::new(6000, 4000),
+            None,
+            &slopshop_core::selection::Shape::Rectangle {
+                left: 0.0,
+                top: 0.0,
+                right: 50.0,
+                bottom: 4000.0,
+            },
+            slopshop_core::selection::EdgeOptions::default(),
+            slopshop_core::selection::Combine::Replace,
+        )
+        .unwrap();
+        selection::set_selection(&state, doc.id, left).unwrap();
+        let request = dab(background, paint::PaintTarget::QuickMask, Some([1.0; 3]));
         paint::paint(&state, doc.id, request).unwrap().unwrap();
-        assert_eq!(selection(&state).unwrap().image().gray_at(50, 50), 1.0);
+        let repainted = mask(&state).unwrap();
+        assert_eq!(repainted.image().gray_at(45, 50), 1.0);
+        assert_eq!(repainted.image().gray_at(55, 50), 0.0);
+        // Off: the mask is the selection; the background layer was never painted.
+        selection::quick_mask(&state, doc.id, false, 50).unwrap();
         let mut documents = state.documents().unwrap();
         let document = documents.get_mut(doc.id).unwrap();
+        let selected = document
+            .session
+            .document()
+            .selection()
+            .expect("a selection");
+        assert_eq!(selected.image().gray_at(55, 50), 0.0);
+        assert_eq!(selected.image().gray_at(150, 150), 1.0);
+        assert!(document.session.document().quick_mask().is_none());
         assert!(!document.session.document().layers()[0].is_painted());
+        // Leaving is one undo entry: back in Quick Mask.
         document.session.undo().unwrap();
-        document.session.undo().unwrap();
-        assert!(document.session.document().selection().is_none());
+        assert!(document.session.document().quick_mask().is_some());
     }
 
     #[test]

@@ -204,11 +204,8 @@ pub struct Renderer {
 pub struct ViewOverlays {
     /// Select and Mask's view of the selection, while it is open (over Quick Mask's).
     pub selection_view: SelectionView,
-    /// Quick Mask (ADR 0024): the area the selection leaves out tinted red, at
-    /// `quick_mask_opacity` where nothing is selected, fading where the selection is soft.
-    /// Nothing without a selection.
-    pub quick_mask: bool,
-    /// Percent, 0–100 (half opaque by default, as Photoshop).
+    /// Quick Mask's tint (the document's quick mask, ADR 0024): what it leaves out tinted red
+    /// at this opacity, fading where it is soft. Percent, 0–100 (half opaque by default, as Photoshop).
     pub quick_mask_opacity: u8,
 }
 
@@ -231,7 +228,6 @@ impl Default for ViewOverlays {
     fn default() -> Self {
         Self {
             selection_view: SelectionView::Off,
-            quick_mask: false,
             quick_mask_opacity: 50,
         }
     }
@@ -905,20 +901,21 @@ impl Renderer {
     ) {
         let opacity = f32::from(overlays.quick_mask_opacity.min(100)) / 100.0;
         // What the pass draws: a tint and its opacity, or the mask itself.
+        let quick_mask = frame.document.quick_mask();
         let shown = match overlays.selection_view {
-            SelectionView::Off => overlays
-                .quick_mask
-                .then_some(([1.0, 0.0, 0.0], opacity, false)),
+            SelectionView::Off => quick_mask.map(|_| ([1.0, 0.0, 0.0], opacity, false)),
             SelectionView::Overlay => Some(([1.0, 0.0, 0.0], opacity, false)),
             SelectionView::OnBlack => Some(([0.0; 3], 1.0, false)),
             SelectionView::OnWhite => Some(([1.0; 3], 1.0, false)),
             SelectionView::Mask => Some(([0.0; 3], 1.0, true)),
         };
-        // Quick Mask without a selection: everything is selected, nothing to tint. Select and
-        // Mask's views without one: nothing is left selected.
-        let selection = frame.document.selection();
-        let views = overlays.selection_view != SelectionView::Off;
-        if let Some((tint, opacity, mask)) = shown.filter(|_| selection.is_some() || views) {
+        // Quick Mask shows its own image; Select and Mask's views the selection (without one,
+        // nothing is left selected).
+        let selection = match overlays.selection_view {
+            SelectionView::Off => quick_mask,
+            _ => frame.document.selection(),
+        };
+        if let Some((tint, opacity, mask)) = shown {
             // The tiles the frame reads stay resident only until it is submitted: submit it
             // first, so that the overlay's uploads cannot replace them under it.
             self.queue.submit([encoder.finish()]);

@@ -237,7 +237,7 @@ export type DocumentView = {
   selectionKey: number | null;
   /** Select > Reselect has a selection to bring back. */
   canReselect: boolean;
-  /** The view shows Quick Mask (view state, not in the document or its history). */
+  /** Quick Mask is on: painting tools paint its image (each change in the history). */
   quickMask: boolean;
   /** Quick Mask's overlay opacity, percent. */
   quickMaskOpacity: number;
@@ -1028,7 +1028,8 @@ export type BrushRequest = {
 };
 
 /** What a stroke paints (see `paint::PaintTarget`): masks and the selection in gray. */
-export type PaintTarget = "layer" | "mask" | "selection";
+/** A raster layer's pixels, its mask, or Quick Mask's image. */
+export type PaintTarget = "layer" | "mask" | "quickMask";
 
 /** A file a document comes from (File > Document Info); `bytes` null when it is gone. */
 export type FileInfo = { path: string; bytes: number | null };
@@ -1080,7 +1081,7 @@ export type MovePixelsRequest = {
   /** Requests of one drag share its id. */
   drag: number;
   /** The layer's pixels or its mask. */
-  target: Exclude<PaintTarget, "selection">;
+  target: Exclude<PaintTarget, "quickMask">;
   layerId: number;
   /** The move since the drag began, whole document pixels. */
   dx: number;
@@ -1563,12 +1564,13 @@ export const engine = {
    * Edit > Fill and Stroke, Delete with a selection: a raster layer erased (`color` null) or
    * painted with `color` (sRGB-encoded RGB in [0, 1]) at `opacity`, as paint (ADR 0027), in the
    * selection, along its outline with `stroke`, or everywhere without a selection; its mask
-   * (`target` "mask"): hidden, or painted with the color's gray. One undo entry.
+   * (`target` "mask") or Quick Mask's image ("quickMask"): hidden, or painted with the color's
+   * gray. One undo entry.
    */
   fill: (
     documentId: number,
     layerId: number,
-    target: Exclude<PaintTarget, "selection">,
+    target: PaintTarget,
     color: [number, number, number] | null,
     opacity: number,
     stroke: StrokeRequest | null,
