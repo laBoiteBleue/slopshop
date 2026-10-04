@@ -1422,6 +1422,34 @@ pub struct PresentInfo {
     pub render_ms: f32,
 }
 
+/// The marching ants the engine draws in a natively presented view (ADR 0024), as the UI asks
+/// with each present. Frames over IPC leave them to the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AntsRequest {
+    /// Where the selection is drawn: `[a, b, c, d, e, f]` of an affine map of document pixels
+    /// (a drag's shift, Transform Selection's live matrix; the identity otherwise).
+    pub matrix: [f64; 6],
+    /// The dashes march with the clock (not with reduced motion).
+    pub march: bool,
+}
+
+impl AntsRequest {
+    /// The ants to draw, `elapsed` after the engine started, or `None` for a map that is not
+    /// finite (nothing sensible to draw).
+    pub fn ants(self, elapsed: std::time::Duration) -> Option<slopshop_render::Ants> {
+        let matrix = slopshop_core::Affine::from_array(self.matrix);
+        if !matrix.is_finite() {
+            return None;
+        }
+        Some(if self.march {
+            slopshop_render::Ants::at(elapsed, matrix)
+        } else {
+            slopshop_render::Ants::still(matrix)
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewInfo {
@@ -2250,6 +2278,31 @@ mod tests {
         serde_json::from_str(json).unwrap()
     }
 
+    #[test]
+    fn ants_request_gives_the_ants_of_the_moment() {
+        use std::time::Duration;
+        let json = r#"{"matrix":[1,0,0,1,30,-20],"march":true}"#;
+        let request: AntsRequest = serde_json::from_str(json).unwrap();
+        let moved = slopshop_core::Affine::translation(30.0, -20.0);
+        assert_eq!(
+            request.ants(Duration::ZERO),
+            Some(slopshop_render::Ants::at(Duration::ZERO, moved))
+        );
+        // The dashes march with time...
+        let later = request.ants(slopshop_render::Ants::STEP * 3).unwrap();
+        assert_eq!((later.phase, later.transform), (3, moved));
+        // ...except with reduced motion, and a map that is not finite draws nothing.
+        let still = AntsRequest {
+            march: false,
+            ..request
+        };
+        assert_eq!(still.ants(Duration::from_secs(5)).unwrap().phase, 0);
+        let broken = AntsRequest {
+            matrix: [f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0],
+            ..request
+        };
+        assert_eq!(broken.ants(Duration::ZERO), None);
+    }
     #[test]
     fn named_spaces_have_distinct_ids() {
         let ids: Vec<&str> = NAMED_SPACES.iter().filter_map(ColorSpace::id).collect();
