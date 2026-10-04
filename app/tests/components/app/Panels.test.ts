@@ -126,3 +126,11 @@ test("a press on the empty part of the Selections panel's list deselects in the 
   await vi.waitFor(() => expect(sent("deselect")).toEqual([{ documentId: 1 }]));
   localStorage.clear();
 });
+
+test("the Selections panel's Last Selection row reselects", async () => {
+  localStorage.setItem("slopshop.dock", JSON.stringify({ open: "selections", height: 280 }));
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), canReselect: true });
+  await user.click(await screen.findByRole("button", { name: "Last Selection" }));
+  await vi.waitFor(() => expect(sent("reselect")).toEqual([{ documentId: 1 }]));
+  localStorage.clear();
+});

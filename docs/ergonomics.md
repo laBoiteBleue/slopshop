@@ -381,7 +381,9 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   Selection (the saved selections by name; a click makes one the selection): named objects of
   the document, kept in `.slop` and following crops, canvas and image size changes and
   rotations, each change one undo entry (the `.slop` compatibility may break until version 1,
-  maintainer, 2026-10-04). The Selections panel lists them: a click loads one, Shift+click
+  maintainer, 2026-10-04). The Selections panel lists them under a pinned Last Selection row
+  (the maintainer's idea: what Deselect removed last, as Select > Reselect; greyed when there
+  is none): a click loads one, Shift+click
   adds it, Alt+click subtracts it, Shift+Alt+click intersects (the selection tools' keys);
   double-click renames; the right-click menu also replaces one with the current selection or
   deletes it; + saves the current selection, the trash or Delete removes the row clicked last;

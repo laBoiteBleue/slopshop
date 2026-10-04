@@ -4494,6 +4494,8 @@
                 onrename={(id, name) => void sync(engine.renameSavedSelection(active.id, id, name))}
                 ondelete={(id) => void sync(engine.deleteSavedSelection(active.id, id))}
                 ondeselect={() => selectionCommand(engine.deselect)}
+                canReselect={active.canReselect}
+                onreselect={() => selectionCommand(engine.reselect)}
               />
             {/if}
           {/snippet}

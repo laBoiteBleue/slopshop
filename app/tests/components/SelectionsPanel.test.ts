@@ -128,3 +128,25 @@ test("a press on the empty part of the list deselects in the image; elsewhere, n
   await fireEvent.pointerDown(screen.getByRole("listbox"), { button: 0 });
   expect(ondeselect).toHaveBeenCalledOnce();
 });
+
+test("the pinned Last Selection row brings back what Deselect removed, greyed when nothing", async () => {
+  const onreselect = vi.fn();
+  const props = {
+    saved: [],
+    selected: false,
+    onload: vi.fn(),
+    onsave: vi.fn(),
+    onreplace: vi.fn(),
+    onrename: vi.fn(),
+    ondelete: vi.fn(),
+    canReselect: true,
+    onreselect,
+  };
+  const { rerender } = render(SelectionsPanel, props);
+  const user = userEvent.setup();
+  // Shown even without saved selections.
+  await user.click(screen.getByRole("button", { name: "Last Selection" }));
+  expect(onreselect).toHaveBeenCalledOnce();
+  await rerender({ ...props, canReselect: false });
+  expect(screen.getByRole("button", { name: "Last Selection" })).toBeDisabled();
+});
