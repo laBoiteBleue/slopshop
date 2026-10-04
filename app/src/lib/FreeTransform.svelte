@@ -18,6 +18,7 @@
   import {
     boxFrame,
     movedBy,
+    onWholePixels,
     resizeCursor,
     rotatedTo,
     scalePercent,
@@ -196,7 +197,7 @@
         threshold,
       );
       shown = moved.guides;
-      matrix = affine.andThen(start, affine.translation(moved.dx, moved.dy));
+      matrix = onWholePixels(box, affine.andThen(start, affine.translation(moved.dx, moved.dy)));
       text = t("transform.readout.move", { dx: number(moved.dx, 0), dy: number(moved.dy, 0) });
     } else if (drag.kind === "rotate") {
       const rotated = rotatedTo(frame, start, drag.startRotation, from, p, e.shiftKey);
@@ -206,7 +207,7 @@
       // The dragged handle snaps to the other layers' edges and centers, or to their sizes,
       // and the scale follows.
       const snapped = snappedScale(frame, start, drag.handle, p, keys, snapTo, threshold);
-      matrix = snapped?.matrix ?? scaledTo(frame, start, drag.handle, p, keys);
+      matrix = onWholePixels(box, snapped?.matrix ?? scaledTo(frame, start, drag.handle, p, keys));
       shown = snapped?.guides ?? [];
       // Relative to the size when the transform began.
       const scale = scalePercent(matrix);

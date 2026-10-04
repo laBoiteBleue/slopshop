@@ -6,6 +6,7 @@ import {
   boundsUnder,
   boxFrame,
   movedBy,
+  onWholePixels,
   resizeCursor,
   rotatedTo,
   scalePercent,
@@ -155,4 +156,23 @@ test("bounds, scale and cursors as shown", () => {
   assert.equal(resizeCursor([-10, 10], [0, 0], false), 3);
   // A skewing side handle: along its side.
   assert.equal(resizeCursor([10, 0], [0, 0], true), 2);
+});
+
+test("an upright box keeps its edges on whole pixels; a turned one is left as it is", () => {
+  const box = { left: 0, top: 0, right: 100, bottom: 50 };
+  const edges = (m: [number, number, number, number, number, number]) => [
+    ...apply(m, box.left, box.top),
+    ...apply(m, box.right, box.bottom),
+  ];
+  // Moved by a fraction and scaled to 33.3%: the edges land on the nearest whole pixels.
+  closeAll(edges(onWholePixels(box, [0.333, 0, 0, 0.333, 10.4, 7.6])), [10, 8, 44, 24]);
+  // Flipped: the right edge goes left, still on whole pixels.
+  closeAll(edges(onWholePixels(box, [-1, 0, 0, 1, 100.3, 0])), [100, 0, 0, 50]);
+  // Shrunk to nothing on one axis: a pixel is kept.
+  closeAll(edges(onWholePixels(box, [0.001, 0, 0, 1, 0, 0])), [0, 0, 1, 50]);
+  // Already on whole pixels: unchanged.
+  assert.deepEqual(onWholePixels(box, [2, 0, 0, 1, 3, 4]), [2, 0, 0, 1, 3, 4]);
+  // Turned: not upright, unchanged.
+  const turned = rotation(0.3);
+  assert.deepEqual(onWholePixels(box, turned), turned);
 });
