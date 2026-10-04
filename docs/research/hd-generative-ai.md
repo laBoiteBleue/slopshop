@@ -123,7 +123,7 @@ Independent of the final choice:
 
 - **Inference runtime** inside a Rust application: ONNX Runtime, candle, burn, or a local
   sidecar process. Affects packaging, GPU sharing with wgpu, and model availability.
-- **Model families and licenses** compatible with an MIT-licensed, local-first editor.
+- **Model families and licenses** compatible with a GPL-3.0-licensed, local-first editor.
 - **Minimum hardware** and CPU fallback policy (AI stays optional).
 
 ## References
