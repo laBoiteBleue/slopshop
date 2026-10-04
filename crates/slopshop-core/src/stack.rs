@@ -1845,6 +1845,9 @@ struct LazyPixels {
     stack: Option<LayerStack>,
     /// The look at the part of the layer the display shows (see [`Pixels::look_for`]).
     region: Mutex<Region>,
+    /// The look an earlier state showed, shown until this one's is computed: a slider dragged
+    /// over a filter, or its dialog's OK, keeps what was shown instead of the layer unfiltered.
+    inherited_look: Option<Arc<Preview>>,
 }
 
 /// The look at part of a layer, the part asked for last, and whether one is being computed.
@@ -1967,6 +1970,7 @@ impl Pixels {
             passes_on: false,
             stack: None,
             region: Mutex::default(),
+            inherited_look: None,
         };
         let _ = lazy.ready.set(image);
         Self(Arc::new(lazy))
@@ -1992,6 +1996,14 @@ impl Pixels {
                 }
             }
         });
+        // The look shown before stands likewise, while the entries above the filter are the same.
+        let inherited_look = earlier.as_ref().and_then(|(pixels, _)| {
+            let look = pixels.shown_look()?;
+            match stack.last_filter() {
+                None => Some(look),
+                Some(index) => (stack.entries[index + 1..] == look.above[..]).then_some(look),
+            }
+        });
         // Back to what a filter of the earlier state applied to: known already. What was shown
         // is passed on to the next state (a preview replaced goes back, then on again).
         if let Some(image) = earlier
@@ -2013,6 +2025,7 @@ impl Pixels {
                 passes_on: true,
                 stack: None,
                 region: Mutex::default(),
+                inherited_look: inherited_look.clone(),
             };
             let _ = lazy.ready.set(image);
             return Self(Arc::new(lazy));
@@ -2030,6 +2043,7 @@ impl Pixels {
             inherited,
             passes_on: false,
             region: Mutex::default(),
+            inherited_look,
         }))
     }
 
@@ -2187,8 +2201,26 @@ impl Pixels {
                 region.computing = false;
             }
         }
-        let fallback = self.preview().cloned().map(Arc::new);
+        // Meanwhile: the look shown before when it shows this part at this level (the setting
+        // being changed shows the last one, never the layer unfiltered), else the quick look.
+        let fallback = self
+            .0
+            .inherited_look
+            .as_ref()
+            .filter(|l| l.covers(rect, level))
+            .cloned()
+            .or_else(|| self.preview().cloned().map(Arc::new));
         (fallback, true)
+    }
+
+    /// The look these pixels show of their layer: the one computed for them, else the one they
+    /// inherited, passed on to the next state.
+    fn shown_look(&self) -> Option<Arc<Preview>> {
+        let region = self.0.region.lock().unwrap_or_else(PoisonError::into_inner);
+        region
+            .look
+            .clone()
+            .or_else(|| self.0.inherited_look.clone())
     }
 
     /// The pixels if they are evaluated, else a quick look at them of at most `max_pixels`
@@ -4431,6 +4463,32 @@ mod tests {
         // Evaluated: the pixels themselves.
         let image = pixels.get();
         assert!(Arc::ptr_eq(&pixels.quick_look(150 * 130).unwrap(), &image));
+    }
+
+    #[test]
+    fn the_look_shown_stands_until_the_next_one_is_computed() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let first_stack = plain
+            .with_filter(blur(3.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        let first = Pixels::pending(first_stack.clone(), None);
+        let rect = [100.0, 50.0, 200.0, 150.0];
+        let look = Arc::new(first_stack.look_at(rect, 0).unwrap().unwrap());
+        first.0.region.lock().unwrap().look = Some(Arc::clone(&look));
+        // A setting changed: back below the filter, then the filter again at another radius.
+        let back = Pixels::pending(plain.clone(), Some((first, first_stack)));
+        let second_stack = plain
+            .with_filter(blur(7.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        let second = Pixels::pending(second_stack, Some((back, plain)));
+        // Shown meanwhile: the look the first showed, not the layer unfiltered.
+        let (shown, again) = second.look_for(rect, 0, None);
+        assert!(again);
+        assert!(Arc::ptr_eq(&shown.unwrap(), &look));
+        // Elsewhere, or at another level, it does not stand.
+        let (other, _) = second.look_for([0.0, 0.0, 40.0, 40.0], 1, None);
+        assert!(other.is_none_or(|o| !Arc::ptr_eq(&o, &look)));
     }
 
     #[test]
