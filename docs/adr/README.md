@@ -37,5 +37,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0030 | [The panels dock](0030-panel-dock.md) | accepted |
 | 0031 | [Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten](0031-bake-to-pixels.md) | accepted |
 | 0032 | [Layer styles: effects drawn from a layer's shape](0032-layer-styles.md) | accepted |
+| 0033 | [Project license: GPL-3.0-only](0033-project-license.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
