@@ -141,6 +141,9 @@ struct OpenDocument {
     floating: Option<move_pixels::Floating>,
     /// A drag of selected pixels under way, shown floating (view state too).
     move_preview: Option<move_pixels::MovePreview>,
+    /// The document with the previews applied, and the revision it was made at: the frames of
+    /// an unchanged preview share it, and what its layer styles drew (ADR 0032).
+    previewed: std::sync::Mutex<Option<(u64, slopshop_core::Document)>>,
     /// Layers whose pixels are being composited (Layer > Bake to Pixels, ADR 0031): a merge's
     /// group, shown as the layer it becomes until its pixels replace it.
     baking: std::collections::HashSet<LayerId>,
@@ -165,6 +168,7 @@ impl OpenDocument {
             paint_preview: None,
             floating: None,
             move_preview: None,
+            previewed: std::sync::Mutex::new(None),
             baking: std::collections::HashSet::new(),
         }
     }
@@ -174,15 +178,47 @@ impl OpenDocument {
     /// document's revision (the preview is not a revision). Cheap: raster pixels are shared,
     /// never copied.
     fn snapshot(&self) -> (slopshop_core::Document, u64) {
-        let mut doc = self.session.document().clone();
-        let revision = doc.revision();
+        let document = self.session.document();
+        let revision = document.revision();
+        if self.paint_preview.is_none() && self.move_preview.is_none() {
+            return (document.clone(), revision);
+        }
+        let mut previewed = self
+            .previewed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, doc)) = &*previewed
+            && *at == revision
+        {
+            return (doc.clone(), revision);
+        }
+        let mut doc = document.clone();
         if let Some(preview) = &self.paint_preview {
             preview.apply_to(&mut doc);
         }
         if let Some(preview) = &self.move_preview {
             preview.apply_to(&mut doc);
         }
+        *previewed = Some((revision, doc.clone()));
         (doc, revision)
+    }
+
+    /// The paint stroke under way to show, or none.
+    fn set_paint_preview(&mut self, preview: Option<paint::PaintPreview>) {
+        self.paint_preview = preview;
+        *self
+            .previewed
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    /// The drag of selected pixels under way to show, or none.
+    fn set_move_preview(&mut self, preview: Option<move_pixels::MovePreview>) {
+        self.move_preview = preview;
+        *self
+            .previewed
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// Changed since it was opened, created or last saved.
@@ -2405,6 +2441,70 @@ mod tests {
         assert!(document.session.document().layers()[0].is_painted());
         document.session.undo().unwrap();
         assert!(!document.session.document().layers()[0].is_painted());
+    }
+
+    #[test]
+    fn frames_of_a_stroke_under_way_share_what_its_layer_s_style_draws() {
+        let state = AppState::new();
+        let doc = state
+            .add_document(blank_session(), None, Vec::new())
+            .unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let edit: crate::ipc::EditRequest =
+                serde_json::from_str(r#"{"kind":"addEmptyLayer","name":"Layer 1","index":0}"#)
+                    .unwrap();
+            let edit = edit.into_edit(&mut document.session).unwrap();
+            document.session.perform(edit).unwrap();
+            let id = document.session.document().layers()[0].id;
+            document
+                .session
+                .perform(Edit::SetLayerStyle {
+                    id,
+                    style: Some(Box::new(slopshop_core::style::LayerStyle {
+                        stroke: Some(slopshop_core::style::Stroke::default()),
+                        ..Default::default()
+                    })),
+                })
+                .unwrap();
+            id.get()
+        };
+        let batch = |samples: Vec<[f64; 3]>, end: bool| paint::PaintRequest {
+            restore: false,
+            stroke: 3,
+            target: paint::PaintTarget::Layer,
+            layer_id: layer,
+            brush: paint::BrushRequest {
+                size: 20.0,
+                hardness: 1.0,
+                spacing: 0.25,
+                flow: 1.0,
+                opacity: 1.0,
+                pressure_size: false,
+                pressure_opacity: false,
+            },
+            color: Some([1.0, 0.0, 0.0]),
+            samples,
+            end,
+        };
+        let style = |doc: &slopshop_core::Document| doc.layers()[0].style.clone().unwrap();
+        paint::paint(&state, doc.id, batch(vec![[50.0, 50.0, 1.0]], false)).unwrap();
+        let first = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let (a, _) = document.snapshot();
+            let (b, _) = document.snapshot();
+            // Two frames of the same stroke: one style, its effects computed once.
+            assert!(style(&a).ptr_eq(&style(&b)));
+            style(&a)
+        };
+        // The stroke goes on: the view shows it, with its style drawn again.
+        paint::paint(&state, doc.id, batch(vec![[80.0, 50.0, 1.0]], false)).unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let (c, _) = document.snapshot();
+        assert!(!style(&c).ptr_eq(&first));
     }
 
     #[test]

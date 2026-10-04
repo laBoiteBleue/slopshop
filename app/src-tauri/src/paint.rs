@@ -458,7 +458,7 @@ pub(crate) fn paint(
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
         let view = if request.end {
-            document.paint_preview = None;
+            document.set_paint_preview(None);
             if has_paint {
                 document
                     .session
@@ -467,11 +467,11 @@ pub(crate) fn paint(
             }
             Some(document.view())
         } else {
-            document.paint_preview = Some(PaintPreview {
+            document.set_paint_preview(Some(PaintPreview {
                 target: active.target,
                 painted,
                 growth: active.growth.clone(),
-            });
+            }));
             *state.paint.stroke.lock().map_err(|e| e.to_string())? = Some(active);
             None
         };

@@ -349,3 +349,67 @@ fn progressive_frames_composite_a_budget_of_tiles_and_fill_in_from_a_coarser_lev
     let stats = r.profile_view(s.document(), view, size, true).unwrap();
     assert_eq!((stats.tiles_composited, stats.incomplete), (0, false));
 }
+
+#[test]
+fn a_styled_layer_shows_at_once_and_its_effects_once_drawn() {
+    use slopshop_core::style::{DropShadow, LayerStyle, Stroke};
+    let (Some(r), Some(direct)) = (renderer(true), renderer(false)) else {
+        return;
+    };
+    let size = Size::new(512, 384);
+    let mut s = Session::new(Document::new(size));
+    let bg = layer(
+        &mut s,
+        LayerContent::Fill {
+            color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+        },
+    );
+    push(&mut s, bg);
+    let mut square = raster(
+        &mut s,
+        image(Size::new(100, 100), |_, _| [200, 60, 30, 255]),
+    );
+    square.transform = Affine::translation(150.0, 90.0);
+    let id = push(&mut s, square);
+    s.perform(Edit::SetLayerStyle {
+        id,
+        style: Some(Box::new(LayerStyle {
+            drop_shadow: Some(DropShadow {
+                size: 20.0,
+                distance: 15.0,
+                ..DropShadow::default()
+            }),
+            stroke: Some(Stroke {
+                size: 6.0,
+                ..Stroke::default()
+            }),
+            ..LayerStyle::default()
+        })),
+    })
+    .unwrap();
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 1.0,
+    };
+    // In the stroke, 3 pixels left of the square.
+    let stroke_px = |data: &[u8]| {
+        let i = (140 * size.width as usize + 147) * 4;
+        [data[i], data[i + 1], data[i + 2]]
+    };
+    // The first frame does not wait for the effects: computed meanwhile.
+    let (first, stats) = r.render_view_progressive(s.document(), view, size).unwrap();
+    assert!(stats.incomplete);
+    assert_eq!(stroke_px(&first.data), [255, 255, 255]);
+    let start = std::time::Instant::now();
+    let last = loop {
+        let (frame, stats) = r.render_view_progressive(s.document(), view, size).unwrap();
+        if !stats.incomplete {
+            break frame;
+        }
+        assert!(start.elapsed().as_secs() < 30, "effects never shown");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert_eq!(stroke_px(&last.data), [0, 0, 0]);
+    let expected = direct.render_view(s.document(), view, size).unwrap();
+    assert_frames_match(&last.data, &expected.data, "effects drawn");
+}

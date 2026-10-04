@@ -305,7 +305,9 @@ impl Edit {
                 }
             }
             Edit::SetLayerVisible { id, visible } => {
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc
+                    .layer_mut_same_shape(id)
+                    .ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.visible, visible);
                 Edit::SetLayerVisible {
                     id,
@@ -314,7 +316,9 @@ impl Edit {
             }
             Edit::SetLayerOpacity { id, opacity } => {
                 validate_opacity(opacity)?;
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc
+                    .layer_mut_same_shape(id)
+                    .ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.opacity, opacity);
                 Edit::SetLayerOpacity {
                     id,
@@ -322,12 +326,14 @@ impl Edit {
                 }
             }
             Edit::RenameLayer { id, name } => {
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
-                let previous = std::mem::replace(&mut layer.name, name);
+                let current = doc.layer_name_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(current, name);
                 Edit::RenameLayer { id, name: previous }
             }
             Edit::SetLayerBlendMode { id, mode } => {
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc
+                    .layer_mut_same_shape(id)
+                    .ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.blend_mode, mode);
                 Edit::SetLayerBlendMode { id, mode: previous }
             }
@@ -496,7 +502,7 @@ impl Edit {
             }
             Edit::SetLayerTransform { id, transform } => {
                 validate_transform(transform)?;
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc.layer_mut_moved(id).ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.transform, transform);
                 Edit::SetLayerTransform {
                     id,
@@ -538,19 +544,28 @@ impl Edit {
                 if style.as_ref().is_some_and(|s| !s.is_valid()) {
                     return Err(EditError::InvalidStyle);
                 }
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc
+                    .layer_mut_same_shape(id)
+                    .ok_or(EditError::UnknownLayer(id))?;
                 // Pixel and fill layers and groups (adjustment layers have no shape).
                 if matches!(layer.content, LayerContent::Adjustment { .. }) {
                     return Err(EditError::InvalidStyle);
                 }
-                let previous = std::mem::replace(&mut layer.style, style.map(|s| Style::new(*s)));
+                // The same shape: what it gave the previous style serves the new one.
+                let style = style.map(|s| match &layer.style {
+                    Some(previous) => previous.restyled(*s),
+                    None => Style::new(*s),
+                });
+                let previous = std::mem::replace(&mut layer.style, style);
                 Edit::SetLayerStyle {
                     id,
                     style: previous.map(|s| Box::new(*s.settings())),
                 }
             }
             Edit::SetLayerClipped { id, clipped } => {
-                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let layer = doc
+                    .layer_mut_same_shape(id)
+                    .ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.clipped, clipped);
                 Edit::SetLayerClipped {
                     id,

@@ -262,7 +262,7 @@ pub(crate) fn move_pixels(
             };
             let mut documents = state.documents()?;
             let document = documents.get_mut(document_id)?;
-            document.move_preview = Some(preview);
+            document.set_move_preview(Some(preview));
             document.floating = Some(floating);
             return Ok(None);
         }
@@ -280,7 +280,7 @@ pub(crate) fn move_pixels(
 
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    document.move_preview = None;
+    document.set_move_preview(None);
     let session = &mut document.session;
     session.cancel_gesture().map_err(|e| e.to_string())?;
     let shifted = (request.dx, request.dy) != (0, 0);

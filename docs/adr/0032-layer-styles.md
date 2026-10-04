@@ -49,6 +49,16 @@ Stroke effect positions).
    Zoomed out, effects are computed on the coarser level with distances scaled (close, as
    adjustment views are). The GPU computes them later, as an optimization behind the same
    model.
+   *Done (2026-10-04)*: the layer's coverage is computed once for all its effects (with room
+   for a size to grow), each effect's mask kept by its geometry while the shape is the same: a
+   color, mode, opacity or Fill change only recolors, an effect turned on again comes back, a
+   layer moved by whole pixels moves its masks, and renaming, hiding, a new opacity or mode
+   keep them. The display never waits for effects: computed in the background (one
+   computation per layer at a time, the newest asked for next), what the layer's style drew
+   last shows meanwhile and the frame asks to be shown again (as stacks do); exports and
+   exact renders wait. The frames of a paint stroke under way share one preview document, so
+   its effects are computed once per change, not per frame. Coarser levels and the GPU are
+   still to come.
 5. **Files**: `.slop` nodes gain `params.style` (a new node version); PSD import reads `lfx2`
    into the effects SlopShop draws (reporting the others), PSD export writes them back.
    *Done (2026-10-04)*: Drop Shadow, Outer Glow, Inner Shadow, Inner Glow (from the edge),
