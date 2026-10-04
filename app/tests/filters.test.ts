@@ -74,6 +74,19 @@ test("Add Noise: an amount of 0.1 to 400 %, uniform or Gaussian, monochromatic o
   }
 });
 
+test("Dust & Scratches: a whole radius of 1 to 500 pixels, a threshold of 0 to 255 levels", () => {
+  expect(FILTERS.dustAndScratches.defaults).toEqual([1, 0]);
+  expect(validValues("dustAndScratches", [500, 255])).toBe(true);
+  for (const values of [
+    [0, 0],
+    [1.5, 0],
+    [501, 0],
+    [3, 256],
+  ]) {
+    expect(validValues("dustAndScratches", values)).toBe(false);
+  }
+});
+
 test("applied anew, a filter draws new seeds and keeps its other settings", () => {
   expect(withNewSeeds("addNoise", [30, 1, 0, 5], () => 0.5)).toEqual([30, 1, 0, 2 ** 23]);
   expect(withNewSeeds("addNoise", [30, 1, 0, 5], () => 0.999999999)).toEqual([
