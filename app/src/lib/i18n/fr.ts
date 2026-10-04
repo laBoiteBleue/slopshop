@@ -351,7 +351,7 @@ const fr: Messages = {
   "key.backspace": "Retour arrière",
   "about.title": "À propos de SlopShop",
   "about.text":
-    "SlopShop {version}, pré-alpha.\nUn éditeur d'images open source et non destructif. Licence MIT.",
+    "SlopShop {version}, pré-alpha.\nUn éditeur d'images open source et non destructif. Licence GNU GPL v3.",
 
   "document.untitled": "Sans titre",
   "newDocument.title": "Nouveau",

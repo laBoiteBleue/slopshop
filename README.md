@@ -174,4 +174,15 @@ Photoshop handles, what SlopShop supports, the priorities and how to add a forma
 
 ## License
 
-[MIT](LICENSE)
+Copyright (C) 2026 The SlopShop contributors.
+
+SlopShop is free software, distributed under the GNU General Public License, version 3 only
+(`GPL-3.0-only`). You may use, study, modify and redistribute it under the terms of that
+license; see [LICENSE](LICENSE) for the exact conditions.
+
+Third-party dependencies keep their own licenses. The AI models and runtimes that SlopShop can
+download on request are not part of SlopShop: each comes under its own license, shown before
+the download.
+
+The name "SlopShop" and the project's logo are not licensed under the GPL: any rights in the
+name and the branding are separate from the license of the code.
