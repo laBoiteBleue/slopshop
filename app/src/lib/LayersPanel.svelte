@@ -51,7 +51,15 @@
     type LayerSelection,
   } from "./layerSelection";
   import { isTextField } from "./keymap";
-  import { effectsOf, fillEdit, hasEffects, styleEdit, withEffect } from "./layerStyle";
+  import {
+    effectsOf,
+    fillEdit,
+    hasEffects,
+    styleEdit,
+    usesFill,
+    withEffect,
+    withoutEffect,
+  } from "./layerStyle";
   import type { StylePage } from "./LayerStyleDialog.svelte";
   import { canDistribute } from "./align";
   import { mergeKind } from "./bake";
@@ -560,8 +568,11 @@
   }
 
   // Fill (ADR 0032): the selected layers' Fill Opacity (adjustment layers have none), live
-  // while dragging (one undo entry per drag), as Opacity.
-  let styleable = $derived(selected !== null && selected.kind !== "adjustment");
+  // while dragging (one undo entry per drag), as Opacity. Shown when it means something for
+  // the active layer: an effect, or a Fill already set.
+  let showsFill = $derived(
+    selected !== null && selected.kind !== "adjustment" && usesFill(selected.style),
+  );
   let fillDraft = $state<{ layerId: number; percent: number } | null>(null);
   let shownFill = $derived(
     fillDraft !== null && fillDraft.layerId === selected?.id
@@ -841,33 +852,33 @@
     <span class="unit">%</span>
   </div>
   <!-- Fill Opacity (ADR 0032): the content's opacity, its effects untouched. -->
-  <div class="options fill">
-    <label for="layer-fill">{t("layers.fill")}</label>
-    <input
-      class="opacity-range"
-      type="range"
-      min="0"
-      max="100"
-      value={shownFill}
-      style:--fill="{shownFill}%"
-      disabled={!styleable}
-      aria-label={t("layers.fill")}
-      onpointerdown={onFillPointerDown}
-      oninput={(e) => onFillInput(e.currentTarget.value)}
-    />
-    <input
-      id="layer-fill"
-      class="opacity-field"
-      type="number"
-      min="0"
-      max="100"
-      autocomplete="off"
-      value={shownFill}
-      disabled={!styleable}
-      onchange={(e) => onFillFieldChange(e.currentTarget)}
-    />
-    <span class="unit">%</span>
-  </div>
+  {#if showsFill}
+    <div class="options fill">
+      <label for="layer-fill">{t("layers.fill")}</label>
+      <input
+        class="opacity-range"
+        type="range"
+        min="0"
+        max="100"
+        value={shownFill}
+        style:--fill="{shownFill}%"
+        aria-label={t("layers.fill")}
+        onpointerdown={onFillPointerDown}
+        oninput={(e) => onFillInput(e.currentTarget.value)}
+      />
+      <input
+        id="layer-fill"
+        class="opacity-field"
+        type="number"
+        min="0"
+        max="100"
+        autocomplete="off"
+        value={shownFill}
+        onchange={(e) => onFillFieldChange(e.currentTarget)}
+      />
+      <span class="unit">%</span>
+    </div>
+  {/if}
 
   <!-- A click in the empty area below the layers deselects them, as in Photoshop. -->
   <ul
@@ -1050,6 +1061,15 @@
               <Icon name="eye" size={12} />
             </button>
             <span class="entry-name">{t(`style.${effect.id}`)}</span>
+            <button
+              class="entry-delete"
+              title={t("layers.effect.delete")}
+              aria-label={t("layers.effect.delete")}
+              onclick={() =>
+                void edit(styleEdit(layer.id, withoutEffect(layer.style ?? null, effect.id)))}
+            >
+              <Icon name="trash" size={12} />
+            </button>
           </li>
         {/each}
       {/if}

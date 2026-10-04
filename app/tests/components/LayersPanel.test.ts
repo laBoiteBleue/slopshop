@@ -337,7 +337,8 @@ test("a layer's stack unfolds below it: each entry has an eye, an edit icon when
 });
 
 test("a double-click on a pixel layer's row opens Layer Style; Fill sets its Fill Opacity", async () => {
-  const { onedit, onstyle, user } = open([layer(1, "Background"), layer(2, "Logo")]);
+  const style = withEffect(null, "stroke", true);
+  const { onedit, onstyle, user } = open([layer(1, "Background"), layer(2, "Logo", { style })]);
   await user.click(row("Logo"));
   await user.dblClick(row("Logo"));
   expect(onstyle).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), "blending");
@@ -348,7 +349,43 @@ test("a double-click on a pixel layer's row opens Layer Style; Fill sets its Fil
   expect(onedit).toHaveBeenLastCalledWith(1, {
     kind: "setLayerStyle",
     id: 2,
-    style: { ...PLAIN, fillOpacity: 0.3 },
+    style: { ...style, fillOpacity: 0.3 },
+  });
+});
+
+test("Fill shows only where it means something: an effect, or a Fill already set", async () => {
+  const { user } = open([
+    layer(1, "Plain"),
+    layer(2, "Styled", { style: withEffect(null, "dropShadow", false) }),
+    layer(3, "Faded", { style: { ...PLAIN, fillOpacity: 0.4 } }),
+    layer(4, "Curves", { kind: "adjustment", style: withEffect(null, "stroke", true) }),
+  ]);
+  const fill = () => screen.queryByRole("spinbutton", { name: "Fill" });
+  await user.click(row("Plain"));
+  expect(fill()).toBeNull();
+  // Opacity stays, whatever the layer.
+  expect(screen.getByRole("slider", { name: "Opacity" })).toBeInTheDocument();
+  await user.click(row("Styled"));
+  expect(fill()).toHaveValue(100);
+  await user.click(row("Faded"));
+  expect(fill()).toHaveValue(40);
+  await user.click(row("Curves"));
+  expect(fill()).toBeNull();
+});
+
+test("an effect's trash deletes it, its settings with it", async () => {
+  const style = withEffect(withEffect(null, "stroke", true), "dropShadow", true);
+  const { onedit, user } = open([layer(1, "Background"), layer(2, "Logo", { style })]);
+  await user.click(within(row("Logo")).getByRole("button", { expanded: false }));
+  await user.click(
+    within(screen.getByText("Drop Shadow").closest("li")!).getByRole("button", {
+      name: "Delete the effect",
+    }),
+  );
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerStyle",
+    id: 2,
+    style: { ...style, dropShadow: null },
   });
 });
 

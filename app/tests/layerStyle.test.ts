@@ -9,8 +9,10 @@ import {
   hasEffects,
   simplified,
   styleEdit,
+  usesFill,
   withEffect,
   withFill,
+  withoutEffect,
 } from "../src/lib/layerStyle";
 
 function layer(id: number, changes: Partial<LayerView> = {}): LayerView {
@@ -107,4 +109,20 @@ test("the glows and Inner Shadow come at Photoshop's defaults, in the dialog's o
     effectsOf(style).map((e) => e.id),
     ["stroke", "innerShadow", "innerGlow", "colorOverlay", "outerGlow", "dropShadow"],
   );
+});
+
+test("deleting an effect drops its settings; the last one leaves no style", () => {
+  const both = withEffect(withEffect(null, "stroke", true), "dropShadow", false);
+  assert.deepEqual(withoutEffect(both, "dropShadow"), withEffect(null, "stroke", true));
+  assert.equal(withoutEffect(withEffect(null, "stroke", true), "stroke"), null);
+  // A Fill set stays.
+  const faded = { ...withEffect(null, "stroke", true), fillOpacity: 0.5 };
+  assert.deepEqual(withoutEffect(faded, "stroke"), { ...PLAIN, fillOpacity: 0.5 });
+});
+
+test("Fill means something with an effect, even off, or once set", () => {
+  assert.equal(usesFill(null), false);
+  assert.equal(usesFill(PLAIN), false);
+  assert.equal(usesFill(withEffect(null, "stroke", false)), true);
+  assert.equal(usesFill({ ...PLAIN, fillOpacity: 0.3 }), true);
 });
