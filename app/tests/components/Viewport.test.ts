@@ -2,7 +2,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ViewInfo, ViewRequest } from "../../src/lib/engine";
+import type { Matrix, ViewInfo, ViewRequest } from "../../src/lib/engine";
 import Viewport from "../../src/lib/Viewport.svelte";
 
 // The viewport is 200 × 100 CSS pixels at 100% display scale (jsdom's devicePixelRatio is 1).
@@ -40,6 +40,8 @@ function frame(
 /** What the engine was asked, and how it answers: frames show the latest view, as its do. */
 let frames: { documentId: number; width: number; height: number }[];
 let views: ViewRequest[];
+/** The native presents asked, with the ants they carry. */
+let presents: { documentId: number; ants: unknown }[];
 let current: ViewInfo;
 let answer: { frame: () => ArrayBuffer; view: ViewInfo };
 
@@ -47,6 +49,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", FixedSizeObserver);
   frames = [];
   views = [];
+  presents = [];
   current = { zoom: 1, origin: [0, 0], fit: true };
   answer = {
     frame: () => frame(2, 1, current),
@@ -56,6 +59,18 @@ beforeEach(() => {
     if (cmd === "render_view") {
       frames.push(args as (typeof frames)[number]);
       return answer.frame();
+    }
+    if (cmd === "present_view") {
+      presents.push(args as (typeof presents)[number]);
+      return {
+        presented: true,
+        complete: true,
+        revision: 1,
+        zoom: 1,
+        origin: [0, 0],
+        fit: true,
+        renderMs: 1,
+      };
     }
     if (cmd === "view") {
       views.push((args as { request: ViewRequest }).request);
@@ -190,4 +205,71 @@ test("smart guides are drawn where the view shows them", async () => {
   expect(guide.style.left).toBe("20px");
   expect(guide.style.top).toBe("0px");
   expect(guide.style.height).toBe("40px");
+});
+
+// --- Native presentation: the engine draws the selection's ants in the view -----------------
+
+const ANTS = { matrix: [1, 0, 0, 1, 0, 0] as Matrix, march: true };
+
+/** Presents made while `ms` pass. */
+async function presentsDuring(ms: number): Promise<number> {
+  const before = presents.length;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  return presents.length - before;
+}
+
+test("a native present carries the ants to draw, where the selection is shown", async () => {
+  const moved = { matrix: [1, 0, 0, 1, 30, -20] as Matrix, march: false };
+  open({ native: true, ants: moved });
+  await vi.waitFor(() => expect(presents).not.toHaveLength(0));
+  expect(presents[0]).toMatchObject({ documentId: 1, ants: moved });
+  expect(frames).toEqual([]);
+});
+
+test("without ants, a native present asks for none", async () => {
+  open({ native: true });
+  await vi.waitFor(() => expect(presents).not.toHaveLength(0));
+  expect(presents[0].ants).toBeNull();
+});
+
+test("the view is presented again while the ants march, and not before they are shown", async () => {
+  const { rerender } = open({ native: true });
+  await vi.waitFor(() => expect(presents).not.toHaveLength(0));
+  // Nothing marches: the view rests after its first present.
+  expect(await presentsDuring(300)).toBe(0);
+  await rerender({ ants: ANTS });
+  // The ants appearing is a present; then one about every 66 ms.
+  await vi.waitFor(() => expect(presents.length).toBeGreaterThanOrEqual(5), { timeout: 2000 });
+  await rerender({ ants: null });
+  // Gone: the timer stops with them (a last present in flight may land).
+  await presentsDuring(100);
+  expect(await presentsDuring(300)).toBe(0);
+});
+
+test("ants that stand still (reduced motion) are presented once, not again and again", async () => {
+  const { rerender } = open({ native: true, ants: { ...ANTS, march: false } });
+  await vi.waitFor(() => expect(presents).not.toHaveLength(0));
+  await presentsDuring(100);
+  expect(await presentsDuring(300)).toBe(0);
+  // Moved (a drag's shift): one more present, with where they are now.
+  const moved = { matrix: [1, 0, 0, 1, 4, 0] as Matrix, march: false };
+  await rerender({ ants: moved });
+  await vi.waitFor(() => expect(presents.at(-1)?.ants).toEqual(moved));
+  await presentsDuring(100);
+  expect(await presentsDuring(300)).toBe(0);
+});
+
+test("the same ants again present nothing new", async () => {
+  const { rerender } = open({ native: true, ants: { ...ANTS, march: false } });
+  await vi.waitFor(() => expect(presents).not.toHaveLength(0));
+  await presentsDuring(100);
+  await rerender({ ants: { matrix: [1, 0, 0, 1, 0, 0], march: false } });
+  expect(await presentsDuring(300)).toBe(0);
+});
+
+test("frames over IPC never march: the SVG overlay draws the ants", async () => {
+  const { onframe } = open({ ants: ANTS });
+  await vi.waitFor(() => expect(onframe).toHaveBeenCalled());
+  expect(await presentsDuring(300)).toBe(0);
+  expect(frames).toHaveLength(1);
 });
