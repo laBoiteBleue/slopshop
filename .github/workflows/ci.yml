@@ -107,7 +107,19 @@ jobs:
         run: cargo clippy -p slopshop-ai --all-targets --features helper,install --locked -- -D warnings
 
       - name: Test
+        if: runner.os != 'Windows'
         run: cargo test --workspace --locked
+
+      # Windows runners render on WARP (software Direct3D 12), where the renderer's GPU
+      # integration tests take over 10 minutes: Linux runs them on lavapipe, and the maintainer
+      # on a real GPU under Windows. Clippy still builds them here.
+      - name: Test (without the renderer's GPU integration tests)
+        if: runner.os == 'Windows'
+        # bash stops at the first failing command (pwsh would only report the last one).
+        shell: bash
+        run: |
+          cargo test --workspace --exclude slopshop-render --locked
+          cargo test -p slopshop-render --lib --locked
 
       - name: Test (AI helper)
         run: cargo test -p slopshop-ai --features helper,install --locked
