@@ -643,7 +643,8 @@ impl LayerColors {
 }
 
 /// A layer's pixels read as premultiplied values of a blend space, and written back.
-struct PremulPixels<'a> {
+#[derive(Debug)]
+pub(crate) struct PremulPixels<'a> {
     level: &'a crate::raster::RasterLevel,
     size: Size,
     codec: Codec,
@@ -654,11 +655,17 @@ struct PremulPixels<'a> {
 }
 
 impl<'a> PremulPixels<'a> {
-    fn new(image: &'a RasterImage, space: BlendSpace) -> Self {
+    pub(crate) fn new(image: &'a RasterImage, space: BlendSpace) -> Self {
+        Self::at_level(image, space, 0)
+    }
+
+    /// The pixels of pyramid level `level` (clamped to the coarsest).
+    pub(crate) fn at_level(image: &'a RasterImage, space: BlendSpace, level: usize) -> Self {
         let stored = image.stored_format();
+        let level = &image.levels()[level.min(image.levels().len() - 1)];
         Self {
-            level: &image.levels()[0],
-            size: image.size(),
+            level,
+            size: level.size(),
             codec: Codec::new(stored),
             colors: LayerColors::new(image.format()),
             blender: Blender::new(space),
@@ -666,7 +673,35 @@ impl<'a> PremulPixels<'a> {
         }
     }
 
-    fn read(&self, px: &[u8]) -> [f64; 4] {
+    pub(crate) fn bytes_per_pixel(&self) -> usize {
+        self.codec.bytes_per_pixel
+    }
+
+    /// The bytes of pixel (`x`, `y`), the edges repeating outward.
+    pub(crate) fn raw(&self, x: i64, y: i64) -> Option<&[u8]> {
+        let x = x.clamp(0, i64::from(self.size.width) - 1) as u32;
+        let y = y.clamp(0, i64::from(self.size.height) - 1) as u32;
+        let tile = self.level.tile(TileCoord {
+            col: x / TILE_SIZE,
+            row: y / TILE_SIZE,
+        })?;
+        let bpp = self.codec.bytes_per_pixel;
+        let at = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * bpp;
+        tile.get(at..at + bpp)
+    }
+
+    /// Pixel (`x`, `y`) as blend values, the edges repeating outward.
+    pub(crate) fn tap(&self, x: i64, y: i64) -> [f64; 4] {
+        self.raw(x, y).map_or([0.0; 4], |px| self.read(px))
+    }
+
+    /// Premultiplied blend values as premultiplied linear working-space color: what the
+    /// display's conversion takes.
+    pub(crate) fn to_linear(&self, values: [f64; 4]) -> [f32; 4] {
+        self.blender.decode_premultiplied(&values).map(|v| v as f32)
+    }
+
+    pub(crate) fn read(&self, px: &[u8]) -> [f64; 4] {
         if self.as_stored {
             read_stored(px)
         } else {
@@ -675,7 +710,7 @@ impl<'a> PremulPixels<'a> {
         }
     }
 
-    fn write(&self, values: [f64; 4], px: &mut [u8]) {
+    pub(crate) fn write(&self, values: [f64; 4], px: &mut [u8]) {
         if self.as_stored {
             write_stored(values, px);
         } else {
