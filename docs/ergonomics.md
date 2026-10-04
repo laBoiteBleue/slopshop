@@ -313,7 +313,9 @@ Decided, nothing to build:
 - No Image > Mode: a document has no mode or depth (each layer keeps its own format, the
   composite is float), CMYK and Lab are refused at import. Image > Blend Space is the
   document's one color setting.
-- Entries of a layer's stack stay not editable, deletable (ADR 0029).
+- ~~Entries of a layer's stack stay not editable, deletable (ADR 0029).~~ Revised on
+  2026-10-04: entries are editable ([ADR 0034](adr/0034-editable-operations.md), Filter menu
+  below).
 - An adjustment applied with a selection keeps it as a soft mask: a feathered selection
   applies it partly (ADR 0029).
 
@@ -321,7 +323,8 @@ Open:
 
 - Converting layers to a deeper format (an 8-bit layer is rounded after each entry of its
   stack, so stacked adjustments can band).
-- Showing or editing the selection an applied adjustment keeps.
+- ~~Showing or editing the selection an applied adjustment keeps.~~ Decided on 2026-10-04:
+  loaded as the selection, replaced by the current one (Filter menu below).
 
 ### Layers panel
 
@@ -415,9 +418,46 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   - French labels follow Photoshop FR where a Photoshop user would look: Grow is
     « Généraliser », Similar « Similaire », Border « Cadre… » (« Contour… » is Edit > Stroke).
   - The selection an Image > Adjustments effect keeps (ADR 0029) is an implicit mask dedicated
-    to that effect: not exposed, not edited.
+    to that effect: not exposed, not painted (from 2026-10-04 it can be loaded as the selection
+    and replaced by the current one, [ADR 0034](adr/0034-editable-operations.md)).
 - **Decided, not added**: Sky, Person, Hair and other subject kinds (evaluated separately if
   ever useful); Find Layers, Similar Layers, Isolate Layers (the Layers panel's business).
+
+### Filter menu and editable operations (audit of 2026-10-04)
+
+Photoshop's filters without its Smart Objects: what is applied to a layer stays in its stack
+with its parameters and is edited again ([ADR 0034](adr/0034-editable-operations.md)). The
+maintainer's answers:
+
+- **Decided, to build**:
+  - Entries of a layer's stack are editable: an icon next to the trash on the entry's row
+    reopens its dialog (previewed, OK one undo entry), and an eye hides it without deleting it.
+    The same operation applied over an entry of its kind still joins it (×2), each application
+    staying editable (the dialog chooses which); two Inverts that meet cancel and disappear.
+  - Image > Adjustments keeps applying to every visible pixel layer, an entry on top of each
+    stack, edited layer by layer (no link between layers). Filter > … applies to the active
+    layer only; grayed when the active layer is not a pixel layer, when its mask is the target,
+    and in Quick Mask (its features kept to the minimum).
+  - The selection an operation is applied with stays its mask: Ctrl+click on the entry loads
+    it as the selection, the entry's dialog replaces it by the current one. A new adjustment,
+    fill or filter layer made with a selection gets a layer mask from it (Photoshop).
+  - Editing an old entry changes the render of what was done above it: paint follows by
+    construction, and the tools that took pixels from below (moved pixels; Clone Stamp,
+    Healing, Smudge, Mixer when they come) replay their gesture on the new result. Better than
+    Photoshop forcing a rasterize.
+  - Filter menu, no dead entries: Repeat Last Filter (Ctrl+F: a new entry, same settings, on
+    the active layer; Alt+Ctrl+F reopens its dialog), Blur > Gaussian Blur first, then Blur,
+    Sharpen, Noise, Distort, Pixelate, Stylize as each works.
+  - Filter layers, after Gaussian Blur works in the stack: Layer > New Filter Layer at the top
+    level beside New Adjustment Layer. Two concepts for the user (Adjustment Layer, Filter
+    Layer), one in the engine. A filter layer changes what is below it as an adjustment layer
+    does; its opacity is the effect's strength; the canvas edge is repeated.
+  - Liquify (Fluidité): a stack entry, edited again in its own workspace; later.
+- **Decided, not added**: Convert for Smart Filters, Filter Gallery (the stack does it), Camera
+  Raw Filter (its tools as native operations), Neural Filters and any category named after a
+  technology, render generators as filters (fill layers instead), linking the entries one
+  Image > Adjustments made on several layers, a single "Effect Layer" concept ("Effects" names
+  layer styles), the transform as an entry of the stack (it stays a property of the layer).
 
 ### Tabs and documents
 

@@ -197,7 +197,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 Order (maintainer, 2026-10-01): the tools, then selections, then painting, so that the brush
 respects the selection from the start. Painting ([ADR 0027](adr/0027-painting.md)) never writes
 a layer's original pixels or mask. A layer's paint and applied effects form a stack inside it
-([ADR 0029](adr/0029-layer-stack.md)): entries removable one by one, never edited; a mask's
+([ADR 0029](adr/0029-layer-stack.md)): entries removable one by one, and editable since
+[ADR 0034](adr/0034-editable-operations.md); a mask's
 paint is a painted image sharing the untouched tiles, removable as a whole.
 
 - [x] Toolbar and options bar ([ADR 0013](adr/0013-familiar-layout.md)): the Move and Crop
@@ -281,6 +282,15 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       their own (ADR 0029, point 6): applying, deleting and undoing are instant
 - [x] Frames over the IPC (macOS, Linux) rendered again until a stack's pixels are evaluated,
       as native presents (Windows) are
+- [ ] Editable operations ([ADR 0034](adr/0034-editable-operations.md)): entries of a stack
+      edited again (an icon reopens their dialog, each step of a ×2 entry), an eye per entry,
+      the selection loaded or replaced; moved pixels replayed when an entry below them changes
+- [ ] Filter menu: Gaussian Blur as a stack entry (a cached result the entries above start
+      from, CPU and GPU alike), Repeat Last Filter (Ctrl+F); then Blur, Sharpen, Noise, Distort,
+      Pixelate, Stylize
+- [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
+      layers masked by the selection
+- [ ] Liquify as a stack entry (a displacement field, its own workspace)
 
 ## Phase 4 — Very large images
 
@@ -322,8 +332,8 @@ first.
       affine one (rendering, `.slop`, export, painting in the layer's grid): an ADR.
 - [ ] Proposed: **content-aware scaling** as an option of Free Transform's scaling (protecting
       what matters while the rest stretches), not a command of its own.
-- [ ] Proposed: **Liquify**-like brush deformations kept as a displacement field on the layer,
-      editable and removable.
+- [ ] **Liquify**: brush deformations kept as a displacement field, an entry of the layer's
+      stack, editable and removable ([ADR 0034](adr/0034-editable-operations.md)).
 
 ## Phase 5 — Extensibility and distribution
 
