@@ -1,0 +1,313 @@
+//! Filters on the GPU (ADR 0035): the looks at filtered layers (`stack::LookJob`) the display
+//! asks for, computed by compute passes (filter.wgsl) on a thread of their own and read back as
+//! the look's image. Only the common case for now: 8-bit RGBA sRGB layers in a perceptual
+//! document, steps without a selection, a reach of at most [`MAX_REACH`] pixels; the CPU
+//! computes the others (`LookJob::run`).
+
+use std::sync::mpsc;
+
+use slopshop_core::blend::BlendSpace;
+use slopshop_core::color::PixelFormat;
+use slopshop_core::filter::Filter;
+use slopshop_core::raster::{RasterImage, TILE_SIZE};
+use slopshop_core::stack::LookJob;
+use wgpu::util::DeviceExt;
+
+/// The farthest a pixel's result reads, in pixels on each side.
+const MAX_REACH: u32 = 1024;
+
+/// Pixels a side of a workgroup (filter.wgsl).
+const WORKGROUP: u32 = 16;
+
+/// The GPU's filter pipelines.
+#[derive(Debug)]
+pub(crate) struct GpuFilter {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    layout: wgpu::BindGroupLayout,
+    rows: wgpu::ComputePipeline,
+    columns: wgpu::ComputePipeline,
+}
+
+impl GpuFilter {
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("filter"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("filter.wgsl").into()),
+        });
+        let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("filter"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                storage(1, true),
+                storage(2, true),
+                storage(3, false),
+                storage(4, false),
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("filter"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = |entry_point| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry_point),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some(entry_point),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+        };
+        Self {
+            device: device.clone(),
+            queue: queue.clone(),
+            layout,
+            rows: pipeline("rows_main"),
+            columns: pipeline("columns_main"),
+        }
+    }
+
+    /// The filtered crop of `job`, or `None` when the GPU does not take it (another format, a
+    /// selection, too far a reach, a GPU error): the CPU computes it then.
+    pub(crate) fn look(&self, job: &LookJob) -> Option<RasterImage> {
+        if job.format != PixelFormat::RGBA8_SRGB {
+            return None;
+        }
+        let kernels: Vec<Vec<f32>> = job
+            .steps
+            .iter()
+            .map(|step| {
+                if step.selection.is_some() || step.space != BlendSpace::Perceptual {
+                    return None;
+                }
+                match step.filter {
+                    Filter::GaussianBlur { radius } => gaussian(f64::from(radius)),
+                }
+            })
+            .collect::<Option<_>>()?;
+        let (width, height) = (job.size.width, job.size.height);
+        let pixels = u64::from(width) * u64::from(height);
+        let limits = self.device.limits();
+        if pixels == 0
+            || pixels * 16 > limits.max_storage_buffer_binding_size
+            || pixels * 16 > limits.max_buffer_size
+        {
+            return None;
+        }
+        let scopes = [
+            wgpu::ErrorFilter::Internal,
+            wgpu::ErrorFilter::Validation,
+            wgpu::ErrorFilter::OutOfMemory,
+        ]
+        .map(|filter| self.device.push_error_scope(filter));
+        let result = self.blur(job, &kernels, width, height);
+        let mut failed = false;
+        for scope in scopes.into_iter().rev() {
+            failed |= pollster::block_on(scope.pop()).is_some();
+        }
+        let bytes = result.filter(|_| !failed)?;
+        // Level 0 only: a look is shown at the level it is made for.
+        let tiles = tiles_of(&bytes, width, height);
+        RasterImage::from_level0_tiles_only(job.size, job.format, tiles).ok()
+    }
+
+    /// The crop's pixels blurred by each kernel in turn, as 8-bit RGBA rows.
+    fn blur(
+        &self,
+        job: &LookJob,
+        kernels: &[Vec<f32>],
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
+        let input = rows_of(job, width, height);
+        let bytes = u64::from(width) * u64::from(height) * 4;
+        let device = &self.device;
+        let packed = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("filter input"),
+            contents: &input,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let rows = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filter rows"),
+            size: bytes * 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let output = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filter output"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filter readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let groups = (width.div_ceil(WORKGROUP), height.div_ceil(WORKGROUP));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("filter"),
+        });
+        for (n, kernel) in kernels.iter().enumerate() {
+            if n > 0 {
+                // The next step filters what the last one gave.
+                encoder.copy_buffer_to_buffer(&output, 0, &packed, 0, bytes);
+            }
+            let reach = (kernel.len() / 2) as u32;
+            let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("filter params"),
+                contents: &[width, height, reach, 0]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let weights = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("filter weights"),
+                contents: &kernel
+                    .iter()
+                    .flat_map(|w| w.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("filter"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: weights.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: packed.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: rows.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: output.as_entire_binding(),
+                    },
+                ],
+            });
+            for pipeline in [&self.rows, &self.columns] {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("filter"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(groups.0, groups.1, 1);
+            }
+        }
+        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+        self.queue.submit([encoder.finish()]);
+        let slice = readback.slice(..);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            // The receiver only disappears if we already returned; nothing to report then.
+            let _ = tx.send(result);
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        rx.recv().ok()?.ok()?;
+        let bytes = slice.get_mapped_range().ok()?.to_vec();
+        readback.unmap();
+        Some(bytes)
+    }
+}
+
+/// The exact Gaussian of standard deviation `sigma` along one axis (three sigmas a side),
+/// normalized; `None` beyond [`MAX_REACH`].
+fn gaussian(sigma: f64) -> Option<Vec<f32>> {
+    let reach = (3.0 * sigma).ceil().max(1.0) as i64;
+    if reach > i64::from(MAX_REACH) {
+        return None;
+    }
+    let weights: Vec<f64> = (-reach..=reach)
+        .map(|i| (-((i * i) as f64) / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let total: f64 = weights.iter().sum();
+    Some(weights.iter().map(|w| (w / total) as f32).collect())
+}
+
+/// Contiguous 8-bit RGBA rows (`width` × `height`) as tiles, row-major, edge tiles padded by
+/// repeating their last row and column as images pad them.
+fn tiles_of(rows: &[u8], width: u32, height: u32) -> Vec<std::sync::Arc<[u8]>> {
+    let t = TILE_SIZE as usize;
+    let (width, height) = (width as usize, height as usize);
+    let (columns, tile_rows) = (width.div_ceil(t), height.div_ceil(t));
+    let mut tiles = Vec::with_capacity(columns * tile_rows);
+    for tile_row in 0..tile_rows {
+        for col in 0..columns {
+            let (x0, y0) = (col * t, tile_row * t);
+            let (w, h) = (t.min(width - x0), t.min(height - y0));
+            let mut tile = vec![0u8; t * t * 4];
+            for ty in 0..t {
+                let y = y0 + ty.min(h - 1);
+                let line = &rows[(y * width + x0) * 4..(y * width + x0 + w) * 4];
+                let out = &mut tile[ty * t * 4..(ty + 1) * t * 4];
+                out[..w * 4].copy_from_slice(line);
+                let last = [
+                    line[(w - 1) * 4],
+                    line[(w - 1) * 4 + 1],
+                    line[(w - 1) * 4 + 2],
+                    line[(w - 1) * 4 + 3],
+                ];
+                for px in out[w * 4..].chunks_mut(4) {
+                    px.copy_from_slice(&last);
+                }
+            }
+            tiles.push(std::sync::Arc::from(tile));
+        }
+    }
+    tiles
+}
+
+/// The crop's tiles as contiguous 8-bit RGBA rows (`width` × `height`).
+fn rows_of(job: &LookJob, width: u32, height: u32) -> Vec<u8> {
+    let t = TILE_SIZE as usize;
+    let columns = (width as usize).div_ceil(t);
+    let (width, height) = (width as usize, height as usize);
+    let mut out = vec![0u8; width * height * 4];
+    for (y, row) in out.chunks_mut(width * 4).enumerate() {
+        let (tile_row, ty) = (y / t, y % t);
+        for col in 0..columns {
+            let Some(tile) = job.tiles.get(tile_row * columns + col) else {
+                continue;
+            };
+            let x0 = col * t;
+            let w = t.min(width - x0);
+            row[x0 * 4..(x0 + w) * 4].copy_from_slice(&tile[ty * t * 4..(ty * t + w) * 4]);
+        }
+        debug_assert!(height > 0);
+    }
+    out
+}

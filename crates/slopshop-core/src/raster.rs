@@ -293,6 +293,27 @@ impl RasterImage {
         })
     }
 
+    /// [`Self::from_level0_tiles`] without the pyramid: level 0 only, for what is shown at the
+    /// level it was made for and never sampled coarser (a filter's look at part of a layer, ADR
+    /// 0035). Its average is its first tile's.
+    pub fn from_level0_tiles_only(
+        size: Size,
+        format: PixelFormat,
+        tiles: Vec<Arc<[u8]>>,
+    ) -> Result<Self, RasterError> {
+        check_format(size, format)?;
+        let stored = Codec::new(stored_format(format));
+        let level = checked_level(0, size, tiles, &stored)?;
+        let average = average_of(&level, &stored);
+        Ok(Self {
+            id: ImageId::next(),
+            format,
+            levels: vec![level],
+            average,
+            content_bounds: OnceLock::new(),
+        })
+    }
+
     /// An image of `size` holding `pixels` (packed rows of `format`, `rect.size()` of them) in
     /// `rect` and the pixel `background` (one pixel of `format`) everywhere else: a layer
     /// smaller than its canvas (e.g. a Photoshop layer). The tiles that hold only background
