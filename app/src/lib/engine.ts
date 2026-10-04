@@ -27,7 +27,13 @@ export type StackEntryView = {
 
 /** The filters (Filter in crates/slopshop-core/src/filter.rs). */
 export type FilterId =
-  "gaussianBlur" | "motionBlur" | "unsharpMask" | "addNoise" | "dustAndScratches" | "highPass";
+  | "gaussianBlur"
+  | "motionBlur"
+  | "unsharpMask"
+  | "addNoise"
+  | "dustAndScratches"
+  | "clarityTexture"
+  | "highPass";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {

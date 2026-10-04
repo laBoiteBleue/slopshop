@@ -312,8 +312,9 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       a seed drawn each time it is applied; CPU and GPU)
 - [x] Noise > Dust & Scratches (an exact median of a square, on the CPU; beyond a radius of 8 on
       the layer reduced)
-- [ ] The other classical filters, the maintainer's short list (2026-10-04): Clarity /
-      Texture; then Liquify; Dust & Scratches on the GPU
+- [x] Sharpen > Clarity and Texture (Lightroom's -100 to 100: pushed from a fine and a broad
+      blur, Clarity in the midtones; on the CPU)
+- [ ] Liquify; Dust & Scratches, Clarity and Texture on the GPU
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
 - [ ] Liquify as a stack entry (a displacement field, its own workspace)

@@ -87,6 +87,15 @@ test("Dust & Scratches: a whole radius of 1 to 500 pixels, a threshold of 0 to 2
   }
 });
 
+test("Clarity and Texture: two strengths of -100 to 100, nothing at first", () => {
+  expect(FILTERS.clarityTexture.defaults).toEqual([0, 0]);
+  expect(validValues("clarityTexture", [-100, 100])).toBe(true);
+  expect(validValues("clarityTexture", [-101, 0])).toBe(false);
+  expect(validValues("clarityTexture", [0, 100.5])).toBe(false);
+  // Even sliders, 0 in the middle.
+  expect(sliderValue(FILTERS.clarityTexture.params[1] as NumberParam, 500)).toBe(0);
+});
+
 test("applied anew, a filter draws new seeds and keeps its other settings", () => {
   expect(withNewSeeds("addNoise", [30, 1, 0, 5], () => 0.5)).toEqual([30, 1, 0, 2 ** 23]);
   expect(withNewSeeds("addNoise", [30, 1, 0, 5], () => 0.999999999)).toEqual([

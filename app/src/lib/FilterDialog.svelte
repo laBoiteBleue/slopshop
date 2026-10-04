@@ -104,7 +104,7 @@
               autofocus={i === 0}
               bind:value={current[i]}
             />
-            <span>{t(param.unit)}</span>
+            {#if param.unit}<span>{t(param.unit)}</span>{/if}
           </div>
           <input
             class="slider"
