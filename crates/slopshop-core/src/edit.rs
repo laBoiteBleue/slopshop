@@ -189,8 +189,7 @@ pub enum EditError {
     NoMask(LayerId),
     /// The layer is not a fill layer.
     NotAFill(LayerId),
-    /// A style out of Photoshop's ranges, or on a layer that is neither a pixel nor a fill
-    /// layer (ADR 0032).
+    /// A style out of Photoshop's ranges, or on an adjustment layer (ADR 0032).
     InvalidStyle,
     /// The layer is not a group (as a parent, or for a group edit).
     NotAGroup(LayerId),
@@ -295,6 +294,10 @@ impl Edit {
             Edit::RemoveLayer { id } => {
                 let (parent, index) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
                 let layer = siblings_mut(doc, parent)?.remove(index);
+                // The group it left draws its effects again.
+                if let Some(parent) = parent {
+                    doc.layer_mut(parent);
+                }
                 Edit::InsertLayer {
                     parent,
                     index,
@@ -480,8 +483,11 @@ impl Edit {
                 check_depth(doc, parent, height)?;
                 let layer = siblings_mut(doc, from_parent)?.remove(from);
                 siblings_mut(doc, parent)?.insert(index, layer);
-                // Its effects drawn again where it lands.
+                // Its effects drawn again where it lands, and the group it left.
                 doc.layer_mut(id);
+                if let Some(from_parent) = from_parent {
+                    doc.layer_mut(from_parent);
+                }
                 Edit::MoveLayer {
                     id,
                     parent: from_parent,
@@ -533,11 +539,8 @@ impl Edit {
                     return Err(EditError::InvalidStyle);
                 }
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
-                // Pixel and fill layers: groups' styles are not drawn yet.
-                if !matches!(
-                    layer.content,
-                    LayerContent::Raster { .. } | LayerContent::Fill { .. }
-                ) {
+                // Pixel and fill layers and groups (adjustment layers have no shape).
+                if matches!(layer.content, LayerContent::Adjustment { .. }) {
                     return Err(EditError::InvalidStyle);
                 }
                 let previous = std::mem::replace(&mut layer.style, style.map(|s| Style::new(*s)));

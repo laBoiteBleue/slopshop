@@ -312,6 +312,25 @@ fn find(layers: &[Layer], id: LayerId) -> Option<&Layer> {
     None
 }
 
+/// The groups around `id` (not `id`'s subtree) have their own style drawn again: a group's
+/// effects are drawn from what is inside it (ADR 0032). Whether `id` was found.
+fn redraw_groups_around(layers: &mut [Layer], id: LayerId) -> bool {
+    for layer in layers.iter_mut() {
+        if layer.id == id {
+            return true;
+        }
+        if let LayerContent::Group { children, .. } = &mut layer.content
+            && redraw_groups_around(children, id)
+        {
+            if let Some(style) = &mut layer.style {
+                *style = style.redrawn();
+            }
+            return true;
+        }
+    }
+    false
+}
+
 fn find_mut(layers: &mut [Layer], id: LayerId) -> Option<&mut Layer> {
     for layer in layers.iter_mut() {
         if layer.id == id {
@@ -688,8 +707,10 @@ impl Document {
         &mut self.saved_selections
     }
 
-    /// The layer `id`, to change: its effects (and those inside it) are drawn again.
+    /// The layer `id`, to change: its effects (those inside it, and those of the groups around
+    /// it) are drawn again.
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
+        redraw_groups_around(&mut self.layers, id);
         let layer = find_mut(&mut self.layers, id)?;
         layer.redraw_styles();
         Some(layer)
