@@ -1,5 +1,5 @@
 import { fireEvent, screen, within } from "@testing-library/svelte";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { calls, documentView, layer, layerNames, menuLabels, open, respond, sent } from "./harness";
 
 // The Select menu and what it opens: Grow and Similar, Transform Selection, Color Range,
@@ -362,4 +362,35 @@ test("Color Range shows its progress and the cancel button while it computes", a
   await user.click(cancel);
   await vi.waitFor(() => expect(sent("ai_cancel")).toEqual([{ task }]));
   finish!();
+});
+
+test("Transform Selection applied: the new outline is drawn as the engine made it, not transformed again", async () => {
+  // A triangle outline, whatever the selection (see `parseOutline` in engine.ts).
+  respond("selection_outline", () => new Uint32Array([1, 3, 10, 10, 50, 10, 50, 50]).buffer);
+  respond("transform_selection", (_, doc) => ({ ...doc, selectionKey: 8 }));
+  // jsdom lays nothing out: the overlay is told its size.
+  for (const name of ["clientWidth", "clientHeight"]) {
+    Object.defineProperty(HTMLElement.prototype, name, { configurable: true, get: () => 200 });
+  }
+  onTestFinished(() => {
+    for (const name of ["clientWidth", "clientHeight"]) {
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+    }
+  });
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await screen.findByText("cat.jpg");
+  const ants = () => document.querySelector("path.ants")?.getAttribute("d");
+  await vi.waitFor(() => expect(ants()).toBeTruthy());
+  const before = ants();
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Transform Selection", { selector: ".label" }));
+  await vi.waitFor(() => expect(document.querySelectorAll(".handle")).toHaveLength(8));
+  const svg = document.querySelector(".handle")!.closest("svg")!;
+  await user.pointer({ keys: "[MouseRight]", target: svg, coords: { clientX: 5, clientY: 5 } });
+  await user.click(screen.getByText("Flip Horizontal"));
+  await vi.waitFor(() => expect(ants()).not.toBe(before));
+  await user.keyboard("{Enter}");
+  await vi.waitFor(() => expect(sent("transform_selection")).toHaveLength(1));
+  // The engine's outline of the new selection (the same triangle here), not flipped again.
+  await vi.waitFor(() => expect(ants()).toBe(before));
 });

@@ -1972,7 +1972,8 @@
   };
   let transforming = $state<Transforming | null>(null);
   /** Transform Selection applied, while the engine resamples the selection. */
-  let appliedSelectionMatrix = $state<{ document: number; matrix: Matrix } | null>(null);
+  // Raw: compared by identity when the engine answers.
+  let appliedSelectionMatrix = $state.raw<{ document: number; matrix: Matrix } | null>(null);
 
   /**
    * Free Transform of the selected layers or, for files just dropped on the image, of the new
