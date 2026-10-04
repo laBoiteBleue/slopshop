@@ -313,3 +313,58 @@ fn a_filtered_layer_shows_the_look_at_what_is_seen() {
     // Shown without evaluating the whole layer.
     assert!(pending(&gpu));
 }
+
+#[test]
+fn a_filter_setting_changed_live_never_shows_the_layer_unfiltered() {
+    let Some(r) = renderer() else { return };
+    let original = image(PixelFormat::RGBA8_SRGB, |x, _| {
+        let v = if x < W / 2 { 0 } else { 255 };
+        vec![v, v, v, 255]
+    });
+    let unfiltered = document(&LayerStack::new(Arc::clone(&original)), true);
+    let mut session = slopshop_core::Session::new(document(&LayerStack::new(original), true));
+    let id = session.document().layers()[0].id;
+    let blur = |radius| slopshop_core::filter::Filter::GaussianBlur { radius };
+    let view = ViewTransform {
+        origin: [0.0, 0.0],
+        scale: 1.0,
+    };
+    let output = Size::new(W, H);
+    let sharp = r.render_view(&unfiltered, view, output).unwrap();
+    // The dialog's live preview: the filter applied in a gesture, then replaced at each setting.
+    session
+        .perform_in_gesture(Edit::apply_filter(session.document(), id, blur(3.0)).unwrap())
+        .unwrap();
+    for _ in 0..500 {
+        if !r
+            .profile_view(session.document(), view, output, false)
+            .unwrap()
+            .incomplete
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    for radius in [5.0, 8.0, 12.0] {
+        session.cancel_gesture().unwrap();
+        session
+            .perform_in_gesture(Edit::apply_filter(session.document(), id, blur(radius)).unwrap())
+            .unwrap();
+        // At once, before the new look is computed: still blurred.
+        let frame = r.render_view(session.document(), view, output).unwrap();
+        assert!(
+            differences(&frame, &sharp).0 > 50,
+            "radius {radius}: the layer showed unfiltered"
+        );
+        for _ in 0..500 {
+            if !r
+                .profile_view(session.document(), view, output, false)
+                .unwrap()
+                .incomplete
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
