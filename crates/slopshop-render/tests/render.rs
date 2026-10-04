@@ -1,4 +1,5 @@
-//! GPU rendering tests. Skipped when no adapter is available, unless `SLOPSHOP_REQUIRE_GPU=1`.
+//! GPU rendering tests. Skipped when no adapter is available, unless `SLOPSHOP_REQUIRE_GPU=1`, or
+//! when `SLOPSHOP_SKIP_GPU_TESTS=1`.
 
 use slopshop_core::color::{PixelFormat, srgb_encode};
 use slopshop_core::view::ViewTransform;
@@ -6,6 +7,12 @@ use slopshop_core::{BlendMode, Document, Edit, Layer, LayerContent, LinearRgba, 
 use slopshop_render::{Frame, RenderError, Renderer};
 
 fn renderer() -> Option<Renderer> {
+    // Windows CI runners render on WARP (software Direct3D 12), far too slow for these tests:
+    // Linux CI runs them on lavapipe.
+    if std::env::var("SLOPSHOP_SKIP_GPU_TESTS").as_deref() == Ok("1") {
+        eprintln!("skipping GPU test: SLOPSHOP_SKIP_GPU_TESTS=1");
+        return None;
+    }
     match Renderer::new() {
         Ok(r) => Some(r),
         Err(e) if std::env::var("SLOPSHOP_REQUIRE_GPU").as_deref() == Ok("1") => {
