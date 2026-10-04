@@ -10,6 +10,7 @@
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
   import type { SavedSelectionView, SelectionMode } from "./engine";
+  import type { CombinedRow } from "./savedSelections";
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import { keepFocus } from "./platform";
@@ -25,6 +26,7 @@
     ondeselect,
     canReselect = false,
     onreselect,
+    combined = [],
   }: {
     saved: SavedSelectionView[];
     /** Something is selected now: it can be saved, or replace a saved one. */
@@ -42,7 +44,18 @@
     /** Select > Reselect has a selection to bring back: the pinned first row does it. */
     canReselect?: boolean;
     onreselect?: () => void;
+    /** The saved selections the image's selection is made of, and how: shown on their rows. */
+    combined?: CombinedRow[];
   } = $props();
+
+  /** The sign of a row in the combination (a plain load: none). */
+  const SIGNS: Record<SelectionMode, string> = {
+    replace: "",
+    add: "+",
+    subtract: "−",
+    intersect: "∩",
+  };
+  const combinedMode = (id: number) => combined.find((row) => row.id === id)?.mode ?? null;
 
   /** The row last clicked: Delete removes it. */
   let current = $state<number | null>(null);
@@ -161,6 +174,7 @@
           role="option"
           aria-selected={current === entry.id}
           class:current={current === entry.id}
+          class:combined={combinedMode(entry.id) !== null}
           title={t("selections.hint")}
           onclick={(e) => click(e, entry)}
           ondblclick={() => (renaming = entry.id)}
@@ -185,11 +199,16 @@
           {:else}
             <span class="name">{entry.name}</span>
           {/if}
+          {#if combinedMode(entry.id)}
+            {@const mode = combinedMode(entry.id) as SelectionMode}
+            <span class="sign" title={t(`selections.combined.${mode}`)}>{SIGNS[mode]}</span>
+          {/if}
         </li>
       {/each}
     </ul>
   {/if}
   <div class="footer" bind:this={footer}>
+    <span class="keys">{t("selections.keys")}</span>
     <button
       type="button"
       class="icon-btn"
@@ -300,8 +319,30 @@
     min-width: 0;
   }
 
+  /* In the selection now: the accent along the row, and its sign. */
+  li.combined {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .sign {
+    margin-left: auto;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .keys {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .footer {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 2px;
     padding: 2px 6px;

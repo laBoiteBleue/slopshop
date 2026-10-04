@@ -1,7 +1,7 @@
 import { fireEvent, screen } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
-import { documentView, layer, layerNames, open, row, sent } from "./harness";
+import { documentView, layer, layerNames, open, respond, row, sent } from "./harness";
 
 // The panels below Layers: the dock's tabs, Properties and the Selections panel.
 
@@ -132,5 +132,33 @@ test("the Selections panel's Last Selection row reselects", async () => {
   const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), canReselect: true });
   await user.click(await screen.findByRole("button", { name: "Last Selection" }));
   await vi.waitFor(() => expect(sent("reselect")).toEqual([{ documentId: 1 }]));
+  localStorage.clear();
+});
+
+test("the Selections panel marks the saved selections combined, until the selection changes otherwise", async () => {
+  let key = 7;
+  respond("load_selection", (_, doc) => ({ ...doc, selectionKey: ++key }));
+  respond("deselect", (_, doc) => ({ ...doc, selectionKey: null }));
+  localStorage.setItem("slopshop.dock", JSON.stringify({ open: "selections", height: 280 }));
+  const user = open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat")]),
+    selectionKey: 7,
+    savedSelections: [
+      { id: 4, name: "Hair" },
+      { id: 5, name: "Shirt" },
+    ],
+  });
+  const option = async (name: string) => screen.findByRole("option", { name: new RegExp(name) });
+  await user.click(await option("Hair"));
+  await user.keyboard("{Shift>}");
+  await user.click(await option("Shirt"));
+  await user.keyboard("{/Shift}");
+  await vi.waitFor(() =>
+    expect(screen.getByTitle("Added to the selection")).toHaveTextContent("+"),
+  );
+  expect(await option("Hair")).toHaveClass("combined");
+  // Deselected: the marks go.
+  await user.keyboard("{Control>}d{/Control}");
+  await vi.waitFor(() => expect(document.querySelectorAll("li.combined")).toHaveLength(0));
   localStorage.clear();
 });
