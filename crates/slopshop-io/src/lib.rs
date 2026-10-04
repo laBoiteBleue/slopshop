@@ -84,9 +84,13 @@ pub enum ImportWarning {
     /// Hue/Saturation color ranges, legacy Brightness/Contrast, a blend mode other than normal):
     /// the adjustment is close, not identical.
     AdjustmentsApproximated,
-    /// Layer styles (effects) and advanced blending options are not supported yet: they were
-    /// left out.
+    /// Advanced blending options ("Blend If"), effects on groups or an unreadable style block are
+    /// not supported yet: they were left out.
     LayerStylesIgnored,
+    /// Some layer effects are not drawn by SlopShop yet (Bevel & Emboss, Satin, gradient and
+    /// pattern overlays, gradient glows, contours, several effects of one kind): the style is
+    /// close, not identical (ADR 0032).
+    LayerStylesApproximated,
     /// Text, shapes, smart objects and vector masks were imported as their pixels.
     LayersRasterized,
     /// Parts of layers lay outside the canvas: they were cropped.
@@ -119,6 +123,7 @@ impl ImportWarning {
             ImportWarning::AdjustmentLayersSkipped => "adjustmentLayersSkipped",
             ImportWarning::AdjustmentsApproximated => "adjustmentsApproximated",
             ImportWarning::LayerStylesIgnored => "layerStylesIgnored",
+            ImportWarning::LayerStylesApproximated => "layerStylesApproximated",
             ImportWarning::LayersRasterized => "layersRasterized",
             ImportWarning::PixelsOutsideCanvas => "pixelsOutsideCanvas",
             ImportWarning::MasksSimplified => "masksSimplified",

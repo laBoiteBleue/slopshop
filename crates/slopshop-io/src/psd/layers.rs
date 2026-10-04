@@ -32,11 +32,13 @@ use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType, WORKING_SPACE,
 };
 use slopshop_core::curve::Curve;
+use slopshop_core::style::{LayerStyle, Style};
 use slopshop_core::{
     BlendMode, BlendSpace, Document, Layer, LayerContent, LayerId, LayerMask, LinearRgba,
     RasterImage, Rect, Size,
 };
 
+use super::effects;
 use super::{Header, Input, Mode, Samples, corrupt, unpack_bits, unpredict};
 use crate::{ImportError, ImportWarning, ImportedLayers, MAX_IMPORT_BYTES, resolve_color_space};
 
@@ -47,6 +49,8 @@ const LONG_KEYS: [&[u8; 4]; 13] = [
     b"LMsk", b"Lr16", b"Lr32", b"Layr", b"Mt16", b"Mt32", b"Mtrn", b"Alph", b"FMsk", b"lnk2",
     b"FEid", b"FXid", b"PxSD",
 ];
+/// Photoshop's global light angle when a document does not say (degrees).
+const GLOBAL_ANGLE: f64 = 120.0;
 /// Layer styles (effects).
 const STYLE_KEYS: [&[u8; 4]; 2] = [b"lfx2", b"lmfx"];
 /// Layers whose pixels Photoshop renders from other data: text, smart objects, vector shapes
@@ -163,8 +167,10 @@ struct Record {
     mask: Option<(i16, Mask)>,
     name: String,
     kind: Kind,
-    /// Effects, or blending ranges other than the default.
+    /// Blending ranges other than the default ("Blend If").
     styles: bool,
+    /// The effects block (`lmfx` when there is one, else `lfx2`), ADR 0032.
+    effects: Option<Vec<u8>>,
     /// Pixels rendered from other data (text, shapes, smart objects, fills, vector masks).
     rasterized: bool,
     /// Mask density or feather, or a vector mask beside the pixel mask, left out.
@@ -395,9 +401,33 @@ fn read_layer_info<R: Read + Seek>(
         };
         let mut notes = Vec::new();
         let fill_differs = record.fill < 255 && fill_is_not_opacity(blend_mode);
-        if record.styles || !known_mode || fill_differs {
+        // Pixel and fill layers and groups take a style (ADR 0032): their effects and Fill.
+        let styleable = !matches!(built.content, LayerContent::Adjustment { .. });
+        let mut style = LayerStyle::default();
+        let mut ignored = record.styles || !known_mode || fill_differs;
+        if let Some(block) = &record.effects {
+            match effects::read(block, header.global_angle.unwrap_or(GLOBAL_ANGLE)) {
+                Some(read) if styleable => {
+                    if read.approximated {
+                        notes.push(ImportWarning::LayerStylesApproximated);
+                    }
+                    style = read.style;
+                }
+                // Effects on adjustment layers, or an unreadable block.
+                _ => ignored = true,
+            }
+        }
+        if ignored {
             notes.push(ImportWarning::LayerStylesIgnored);
         }
+        // Fill is the style's Fill Opacity; elsewhere it fades the layer as its opacity does.
+        let fill = f32::from(record.fill) / 255.0;
+        let opacity_fill = if styleable {
+            style.fill_opacity = fill;
+            1.0
+        } else {
+            fill
+        };
         if record.rasterized {
             notes.push(ImportWarning::LayersRasterized);
         }
@@ -427,12 +457,12 @@ fn read_layer_info<R: Read + Seek>(
         };
         let id = LayerId::from_raw(next_id);
         next_id += 1;
-        let opacity = f32::from(record.opacity) / 255.0 * f32::from(record.fill) / 255.0;
+        let opacity = f32::from(record.opacity) / 255.0 * opacity_fill;
         if !notes.is_empty() {
             notes_of.insert(id, notes);
         }
         let layer = Layer {
-            style: None,
+            style: (style != LayerStyle::default()).then(|| Style::new(style)),
             transform: slopshop_core::Affine::IDENTITY,
             clipped: record.clipping,
             id,
@@ -533,6 +563,7 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         styles: !blend_ranges
             .chunks(4)
             .all(|range| range == [0, 0, 255, 255]),
+        effects: None,
         rasterized: false,
         masks_simplified: false,
         solid_color: None,
@@ -570,7 +601,12 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
                 }
             }
             b"iOpa" if !block.is_empty() => record.fill = block[0],
-            key if STYLE_KEYS.contains(&key) => record.styles = true,
+            // `lmfx` holds every effect (several of one kind too); `lfx2` the first of each.
+            key if STYLE_KEYS.contains(&key) => {
+                if key == b"lmfx" || record.effects.is_none() {
+                    record.effects = Some(block.to_vec());
+                }
+            }
             b"vmsk" | b"vsms" => {
                 vector_mask = true;
                 record.rasterized = true;

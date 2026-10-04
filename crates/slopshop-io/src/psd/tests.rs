@@ -869,10 +869,10 @@ fn groups_adjustments_clipping_and_styles_are_reported() {
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].name, "child");
     assert!(children[0].visible && children[0].opacity == 1.0);
-    assert!(
-        (layers[3].opacity - 128.0 / 255.0).abs() < 1e-6,
-        "fill opacity"
-    );
+    // Fill is the style's Fill Opacity (ADR 0032), the layer's opacity untouched.
+    assert_eq!(layers[3].opacity, 1.0);
+    let fill = layers[3].style.as_ref().unwrap().settings().fill_opacity;
+    assert!((fill - 128.0 / 255.0).abs() < 1e-6, "fill opacity");
     assert_eq!(layers[3].blend_mode, slopshop_core::BlendMode::Subtract);
     // Clipped to the group below it (ADR 0016).
     assert!(layers[1].clipped && !layers[2].clipped);

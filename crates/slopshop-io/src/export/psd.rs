@@ -25,6 +25,7 @@ use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, Sa
 use slopshop_core::convert::{ConversionReport, ConvertOptions, Converter};
 use slopshop_core::curve::Curve;
 use slopshop_core::document::{Document, Layer, LayerContent, LayerId, LayerMask};
+use slopshop_core::style::LayerStyle;
 use slopshop_core::{BlendMode, CancelToken, LinearRgba, Progress, Rect, Size};
 
 use super::{BAND_ROWS, ExportError, ExportNotice, ExportReport, WHITE_MATTE};
@@ -173,9 +174,6 @@ pub fn export_psd(
     }
     if writer.cropped {
         report.notices.push(ExportNotice::PixelsOutsideCanvas);
-    }
-    if document.all_layers().any(|l| l.style.is_some()) {
-        report.notices.push(ExportNotice::StylesNotWritten);
     }
     Ok(report)
 }
@@ -353,6 +351,9 @@ impl Writer<'_, '_> {
                 }
                 section.extend(group.blend_key);
                 group.blocks.push((*b"lsct", section));
+                if let Some(style) = &layer.style {
+                    push_style(&mut group.blocks, style.settings());
+                }
                 self.add_mask(layer, &mut group)?;
                 out.push(group);
                 continue;
@@ -383,6 +384,9 @@ impl Writer<'_, '_> {
                         }
                         None => empty_channels(),
                     };
+                    if let Some(style) = &layer.style {
+                        push_style(&mut record.blocks, style.settings());
+                    }
                 }
                 LayerContent::Adjustment { adjustment } => {
                     record.channels = empty_channels();
@@ -428,7 +432,8 @@ impl Writer<'_, '_> {
     }
 
     /// A document holding only `layer`, placed as in the document, at full opacity, in normal
-    /// mode, unmasked (its mask is written apart), without its style: its own pixels.
+    /// mode, unmasked (its mask is written apart), without its style (written apart): its own
+    /// pixels.
     fn isolated(&self, layer: &Layer) -> Document {
         let mut copy = layer.clone();
         copy.id = LayerId::from_raw(1);
@@ -436,7 +441,7 @@ impl Writer<'_, '_> {
         copy.opacity = 1.0;
         copy.blend_mode = BlendMode::Normal;
         copy.clipped = false;
-        // Its own pixels: its effects are not written yet (`StylesNotWritten`).
+        // Its own pixels: its style is written as Photoshop's (`lfx2`, `iOpa`).
         copy.style = None;
         copy.transform = layer
             .transform
@@ -1230,4 +1235,13 @@ mod tests {
             BlendMode::ALL.iter().map(|&m| blend_key(m)).collect();
         assert_eq!(keys.len(), BlendMode::ALL.len());
     }
+}
+
+/// A layer's style as Photoshop's (ADR 0032): its effects (`lfx2`) and Fill (`iOpa`).
+fn push_style(blocks: &mut Vec<([u8; 4], Vec<u8>)>, style: &LayerStyle) {
+    if let Some(effects) = crate::psd::effects::write(style) {
+        blocks.push((*b"lfx2", effects));
+    }
+    let fill = (style.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    blocks.push((*b"iOpa", vec![fill, 0, 0, 0]));
 }
