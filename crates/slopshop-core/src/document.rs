@@ -69,6 +69,40 @@ pub struct SavedSelection {
     pub selection: crate::selection::Selection,
 }
 
+/// Which way a guide runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuideAxis {
+    /// Top to bottom, at a distance from the canvas's left edge.
+    Vertical,
+    /// Left to right, at a distance from the canvas's top edge.
+    Horizontal,
+}
+
+/// A guide (View > Rulers): a line across the document that gestures snap to, never printed.
+/// Its position is in document pixels from the canvas's left or top edge; it may be outside
+/// the canvas, and need not be whole (a length in another unit). Canvas operations move it
+/// with the image.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Guide {
+    pub axis: GuideAxis,
+    pub position: f64,
+}
+
+/// Most guides a document holds: far more than anyone places by hand, few enough for a file
+/// reader to accept without a second thought.
+pub const MAX_GUIDES: usize = 10_000;
+
+/// Guides are positioned within this many pixels of the canvas's origin.
+pub const MAX_GUIDE_POSITION: f64 = 1e9;
+
+/// `guides` can be a document's: few enough, at finite positions in range.
+pub fn valid_guides(guides: &[Guide]) -> bool {
+    guides.len() <= MAX_GUIDES
+        && guides
+            .iter()
+            .all(|g| g.position.is_finite() && g.position.abs() <= MAX_GUIDE_POSITION)
+}
+
 /// Deepest nesting of groups (ADR 0015): no layer is inside more groups than this. Photoshop
 /// allows 10; the GPU compositor keeps one accumulator per level.
 pub const MAX_GROUP_DEPTH: usize = 16;
@@ -425,6 +459,8 @@ pub struct Document {
     /// Selections kept by name, in the order they were saved; saved with the document.
     saved_selections: Vec<SavedSelection>,
     next_saved_selection_id: u64,
+    /// The guides, in the order they were placed; saved with the document.
+    guides: Vec<Guide>,
     next_layer_id: u64,
     revision: u64,
 }
@@ -443,6 +479,7 @@ impl Document {
             quick_mask: None,
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
+            guides: Vec::new(),
             next_layer_id: 1,
             revision: 0,
         }
@@ -475,6 +512,7 @@ impl Document {
             quick_mask: None,
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
+            guides: Vec::new(),
             next_layer_id,
             revision: 0,
         })
@@ -516,6 +554,20 @@ impl Document {
         self.saved_selections = saved;
         self.next_saved_selection_id = next_id;
         Ok(self)
+    }
+
+    /// The document with the guides of a file.
+    pub fn with_guides(mut self, guides: Vec<Guide>) -> Result<Self, RestoreError> {
+        if !valid_guides(&guides) {
+            return Err(RestoreError::InvalidGuides);
+        }
+        self.guides = guides;
+        Ok(self)
+    }
+
+    /// The guides, in the order they were placed.
+    pub fn guides(&self) -> &[Guide] {
+        &self.guides
     }
 
     /// Quick Mask's image while it is on (`None`: off).
@@ -720,6 +772,11 @@ impl Document {
         &mut self.saved_selections
     }
 
+    /// Put `guides` in place of the document's, returning those.
+    pub(crate) fn replace_guides(&mut self, guides: Vec<Guide>) -> Vec<Guide> {
+        std::mem::replace(&mut self.guides, guides)
+    }
+
     /// The layer `id`, to change: its effects (those inside it, and those of the groups around
     /// it) are drawn again.
     pub(crate) fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
@@ -848,11 +905,14 @@ pub enum RestoreError {
     /// A saved selection whose id is 0, repeated or not below the counter, or whose mask is
     /// not gray.
     InvalidSavedSelection(SavedSelectionId),
+    /// Too many guides, or one at a position that is not finite or out of range.
+    InvalidGuides,
 }
 
 impl fmt::Display for RestoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            RestoreError::InvalidGuides => write!(f, "invalid guides"),
             RestoreError::InvalidResolution => write!(f, "invalid resolution"),
             RestoreError::InvalidSavedSelection(id) => write!(f, "{id} is invalid"),
             RestoreError::UnsupportedWorkingSpace(space) => {

@@ -1796,3 +1796,57 @@ fn entries_applied_several_times_in_older_files_are_read_as_an_entry_each() {
     }
     fs::remove_file(&path).ok();
 }
+
+#[test]
+fn guides_round_trip_in_their_order_and_unknown_axes_are_newer() {
+    use slopshop_core::document::{Guide, GuideAxis};
+    let mut doc = sample_document();
+    let guides = vec![
+        Guide {
+            axis: GuideAxis::Vertical,
+            position: 12.0,
+        },
+        Guide {
+            axis: GuideAxis::Horizontal,
+            position: -3.5,
+        },
+        Guide {
+            axis: GuideAxis::Vertical,
+            position: 1.25,
+        },
+    ];
+    Edit::SetGuides {
+        guides: guides.clone(),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("guides.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    assert_eq!(loaded.guides(), guides.as_slice());
+    // A document without any reads back none.
+    SlopFile::create(&path, &sample_document()).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert!(loaded.guides().is_empty());
+    fs::remove_file(&path).ok();
+
+    let read = |extra: &str| {
+        let json = format!(
+            r#"{{"size":[1,1],"working_space":{{"primaries":{{"r":[0.708,0.292],"g":[0.17,0.797],"b":[0.131,0.046],"w":[0.3127,0.329]}},"transfer":{{"kind":"linear"}}}},"next_node_id":1,"stack":[]{extra}}}"#
+        );
+        read::document_guides(&serde_json::from_str(&json).unwrap()).map_err(|e| e.code())
+    };
+    assert_eq!(read(""), Ok(Vec::new()));
+    assert_eq!(
+        read(r#","guides":[{"axis":"horizontal","position":4}]"#),
+        Ok(vec![Guide {
+            axis: GuideAxis::Horizontal,
+            position: 4.0
+        }])
+    );
+    assert_eq!(
+        read(r#","guides":[{"axis":"diagonal","position":4}]"#),
+        Err("newerVersion")
+    );
+}

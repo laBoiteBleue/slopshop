@@ -14,8 +14,8 @@ use std::sync::Arc;
 use crate::blend::{BlendMode, BlendSpace};
 use crate::color::LinearRgba;
 use crate::document::{
-    Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH, SavedSelection,
-    SavedSelectionId,
+    Document, Guide, GuideAxis, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH,
+    SavedSelection, SavedSelectionId,
 };
 use crate::geom::Size;
 use crate::raster::RasterImage;
@@ -156,6 +156,10 @@ pub enum Edit {
         id: SavedSelectionId,
         selection: crate::selection::Selection,
     },
+    /// The document's guides, all of them: one placed, moved or removed, or all cleared.
+    SetGuides {
+        guides: Vec<Guide>,
+    },
     /// Several edits applied in order as a single unit: all of them or none.
     Batch(Vec<Edit>),
 }
@@ -215,6 +219,8 @@ pub enum EditError {
     UnknownSavedSelection(SavedSelectionId),
     /// A saved selection's id not handed out by this document, or already in use.
     InvalidSavedSelectionId(SavedSelectionId),
+    /// Too many guides, or one at a position that is not finite or out of range.
+    InvalidGuides,
 }
 
 impl fmt::Display for EditError {
@@ -262,6 +268,7 @@ impl fmt::Display for EditError {
             EditError::InvalidSavedSelectionId(id) => {
                 write!(f, "{id} was not allocated by this document or is in use")
             }
+            EditError::InvalidGuides => write!(f, "invalid guides"),
             EditError::InvalidTransform => {
                 write!(f, "a transform must be finite and invertible")
             }
@@ -393,6 +400,14 @@ impl Edit {
                 let saved = saved_selection_mut(doc, id)?;
                 let selection = std::mem::replace(&mut saved.selection, selection);
                 Edit::SetSavedSelection { id, selection }
+            }
+            Edit::SetGuides { guides } => {
+                if !crate::document::valid_guides(&guides) {
+                    return Err(EditError::InvalidGuides);
+                }
+                Edit::SetGuides {
+                    guides: doc.replace_guides(guides),
+                }
             }
             Edit::SetCanvasSize { size } => {
                 if size.is_empty() {
@@ -629,6 +644,35 @@ fn saved_selection_mut(
         .iter_mut()
         .find(|s| s.id == id)
         .ok_or(EditError::UnknownSavedSelection(id))
+}
+
+/// Where `guides` go when the image is mapped by `by` (Crop, Canvas Size, Image Size, Image
+/// Rotation): with the image when `by` keeps lines upright (moves, scales, flips, quarter
+/// turns, which make a vertical guide horizontal); where they are otherwise (an arbitrary
+/// rotation), as Photoshop leaves them.
+fn reframed_guides(guides: &[Guide], by: Affine) -> Vec<Guide> {
+    // `by` maps (x, y) to (a x + c y + e, b x + d y + f).
+    let upright = by.b == 0.0 && by.c == 0.0;
+    let turned = by.a == 0.0 && by.d == 0.0;
+    let guide = |axis, position: f64| Guide {
+        axis,
+        position: position.clamp(
+            -crate::document::MAX_GUIDE_POSITION,
+            crate::document::MAX_GUIDE_POSITION,
+        ),
+    };
+    guides
+        .iter()
+        .map(|g| match g.axis {
+            GuideAxis::Vertical if upright => guide(GuideAxis::Vertical, by.a * g.position + by.e),
+            GuideAxis::Horizontal if upright => {
+                guide(GuideAxis::Horizontal, by.d * g.position + by.f)
+            }
+            GuideAxis::Vertical if turned => guide(GuideAxis::Horizontal, by.b * g.position + by.f),
+            GuideAxis::Horizontal if turned => guide(GuideAxis::Vertical, by.c * g.position + by.e),
+            _ => *g,
+        })
+        .collect()
 }
 
 fn siblings_mut(doc: &mut Document, parent: Option<LayerId>) -> Result<&mut Vec<Layer>, EditError> {
@@ -978,6 +1022,11 @@ impl Edit {
             edits.push(Edit::SetSavedSelection {
                 id: saved.id,
                 selection: reframed(&saved.selection)?,
+            });
+        }
+        if !doc.guides().is_empty() {
+            edits.push(Edit::SetGuides {
+                guides: reframed_guides(doc.guides(), by),
             });
         }
         for layer in doc.layers() {
@@ -1867,6 +1916,104 @@ mod tests {
             .unwrap()
             .unwrap();
         crate::selection::Selection::new(Arc::new(image)).unwrap()
+    }
+
+    fn vertical(position: f64) -> Guide {
+        Guide {
+            axis: GuideAxis::Vertical,
+            position,
+        }
+    }
+
+    fn horizontal(position: f64) -> Guide {
+        Guide {
+            axis: GuideAxis::Horizontal,
+            position,
+        }
+    }
+
+    #[test]
+    fn guides_are_set_undoably_and_checked() {
+        let mut doc = Document::new(Size::new(100, 80));
+        let guides = vec![vertical(10.0), horizontal(20.5)];
+        let undo = Edit::SetGuides {
+            guides: guides.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.guides(), guides.as_slice());
+        let redo = undo.apply(&mut doc).unwrap();
+        assert!(doc.guides().is_empty());
+        redo.apply(&mut doc).unwrap();
+        assert_eq!(doc.guides(), guides.as_slice());
+        // Off the canvas is fine; not a number, out of range or too many is not.
+        assert!(
+            Edit::SetGuides {
+                guides: vec![vertical(-30.0), horizontal(500.0)],
+            }
+            .apply(&mut doc)
+            .is_ok()
+        );
+        for bad in [
+            vec![vertical(f64::NAN)],
+            vec![horizontal(f64::INFINITY)],
+            vec![vertical(2e9)],
+            vec![vertical(1.0); crate::document::MAX_GUIDES + 1],
+        ] {
+            let before = doc.guides().to_vec();
+            assert_eq!(
+                Edit::SetGuides { guides: bad }.apply(&mut doc),
+                Err(EditError::InvalidGuides)
+            );
+            assert_eq!(doc.guides(), before.as_slice());
+        }
+    }
+
+    #[test]
+    fn guides_follow_the_image_through_canvas_operations() {
+        let mut doc = Document::new(Size::new(100, 80));
+        Edit::SetGuides {
+            guides: vec![vertical(30.0), horizontal(20.0)],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let after = |edit: Edit| {
+            let mut doc = doc.clone();
+            edit.apply(&mut doc).unwrap();
+            doc.guides().to_vec()
+        };
+        // Crop: the area's corner becomes the origin.
+        assert_eq!(
+            after(Edit::crop(&doc, [10, 5, 50, 50]).unwrap()),
+            [vertical(20.0), horizontal(15.0)]
+        );
+        // Canvas Size, centered: 20 more pixels each way, 10 on each side.
+        assert_eq!(
+            after(Edit::canvas_size(&doc, Size::new(120, 100), (0.5, 0.5)).unwrap()),
+            [vertical(40.0), horizontal(30.0)]
+        );
+        // Image Size: scaled.
+        assert_eq!(
+            after(Edit::resize_image(&doc, Size::new(200, 40)).unwrap()),
+            [vertical(60.0), horizontal(10.0)]
+        );
+        // A quarter turn clockwise: x = 30 becomes y = 30, y = 20 becomes x = 80 - 20.
+        assert_eq!(
+            after(Edit::rotate_image(&doc, ImageTurn::Clockwise).unwrap()),
+            [horizontal(30.0), vertical(60.0)]
+        );
+        assert_eq!(
+            after(Edit::rotate_image(&doc, ImageTurn::FlipHorizontal).unwrap()),
+            [vertical(70.0), horizontal(20.0)]
+        );
+        // Undone with the operation.
+        let mut cropped = doc.clone();
+        let undo = Edit::crop(&doc, [10, 5, 50, 50])
+            .unwrap()
+            .apply(&mut cropped)
+            .unwrap();
+        undo.apply(&mut cropped).unwrap();
+        assert_eq!(cropped.guides(), doc.guides());
     }
 
     #[test]

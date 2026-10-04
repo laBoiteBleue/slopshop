@@ -238,6 +238,12 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   next saved selection id to allocate; absent, one above the largest id. Their images are
   stored like the layers'. A writer of an older schema drops them (it keeps unknown fields but
   not images no node references): before 1.0, compatibility may break.
+  `guides` (0.22): the guides (View > Rulers), in the order they were placed, each
+  `{ "axis": "vertical", "position": 120 }`: `vertical` at `position` document pixels from the
+  canvas's left edge, `horizontal` from its top edge; a finite number within 1e9 of the
+  origin, possibly fractional or outside the canvas; at most 10 000 guides. Absent: none. An
+  unknown `axis` is refused as made by a newer SlopShop. A writer of an older schema keeps
+  them as an unknown field, without moving them when the canvas changes.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.

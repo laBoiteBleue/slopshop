@@ -11,8 +11,8 @@ use serde_json::{Map, Value};
 use slopshop_core::adjust::PARAM_COUNT;
 use slopshop_core::color::LinearRgba;
 use slopshop_core::document::{
-    Document, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH, SavedSelection,
-    SavedSelectionId,
+    Document, Guide, GuideAxis, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH,
+    MAX_GUIDES, SavedSelection, SavedSelectionId,
 };
 use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
@@ -298,6 +298,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     }
     let blend_space = document_blend_space(doc)?;
     let (saved, next_saved) = saved_selections(doc, &rasters)?;
+    let guides = document_guides(doc)?;
     let document = Document::restore(
         Size::new(doc.size[0], doc.size[1]),
         doc.working_space.to_space(),
@@ -307,6 +308,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     )
     .and_then(|document| document.with_resolution(document_resolution(doc)))
     .and_then(|document| document.with_saved_selections(saved, next_saved))
+    .and_then(|document| document.with_guides(guides))
     .map_err(FileError::Document)?;
     Ok((document, index, records, residue))
 }
@@ -789,6 +791,27 @@ pub(super) fn document_blend_space(doc: &DocumentDto) -> Result<BlendSpace, File
         Some(id) => BlendSpace::from_id(id)
             .ok_or_else(|| FileError::UnknownNodeType(format!("blend space {id}"))),
     }
+}
+
+/// The guides (schema 0.22); their positions are checked when the document is restored.
+pub(super) fn document_guides(doc: &DocumentDto) -> Result<Vec<Guide>, FileError> {
+    if doc.guides.len() > MAX_GUIDES {
+        return Err(corrupt("too many guides"));
+    }
+    doc.guides
+        .iter()
+        .map(|g| {
+            let axis = match g.axis.as_str() {
+                "vertical" => GuideAxis::Vertical,
+                "horizontal" => GuideAxis::Horizontal,
+                other => return Err(FileError::UnknownNodeType(format!("guide axis {other}"))),
+            };
+            Ok(Guide {
+                axis,
+                position: g.position,
+            })
+        })
+        .collect()
 }
 
 /// The selections saved by name (schema 0.16) and their id counter (one above the largest id
