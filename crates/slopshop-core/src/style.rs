@@ -16,25 +16,14 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::blend::{BlendMode, BlendSpace};
-use crate::color::{
-    AlphaMode, ChannelLayout, LinearRgba, PixelFormat, SampleType, WORKING_SPACE, f32_to_f16,
-};
+use crate::color::{LinearRgba, WORKING_SPACE};
 use crate::composite::composite_region;
-use crate::document::{Document, Layer, LayerContent, LayerId};
+use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use crate::geom::{Rect, Size};
 use crate::pick;
-use crate::raster::RasterImage;
+use crate::raster::{RasterImage, parallel_for_each};
 use crate::selection::{self, MAX_FEATHER, MAX_MODIFY, Modify, SELECTION_FORMAT, StrokeLocation};
 use crate::transform::Affine;
-
-/// The format of the images effects draw: premultiplied working-space half floats (as Copy
-/// Merged's).
-const EFFECT_FORMAT: PixelFormat = PixelFormat {
-    layout: ChannelLayout::Rgba,
-    sample: SampleType::F16,
-    color_space: WORKING_SPACE,
-    alpha: AlphaMode::Premultiplied,
-};
 
 /// The farthest a Drop Shadow is offset, in pixels (Photoshop's).
 pub const MAX_DISTANCE: f64 = 30_000.0;
@@ -345,34 +334,44 @@ fn coverage(
     );
     let mut pixels = vec![0.0f32; area.size().pixel_count() as usize * 4];
     composite_region(&scratch, area, &mut pixels).ok()?;
-    let gray: Vec<u8> = pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|px| (((px[3].clamp(0.0, 1.0)) * 65535.0).round() as u16).to_ne_bytes())
+    let mut gray = vec![0u8; pixels.len() / 4 * 2];
+    // Rows on every core.
+    let row = area.width as usize;
+    let mut rows: Vec<(&[f32], &mut [u8])> = pixels
+        .chunks(row * 4)
+        .zip(gray.chunks_mut(row * 2))
         .collect();
+    parallel_for_each(&mut rows, |(src, dst)| {
+        for (px, out) in src
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(dst.as_chunks_mut::<2>().0)
+        {
+            *out = ((px[3].clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes();
+        }
+    });
     let image = RasterImage::from_pixels(area.size(), SELECTION_FORMAT, &gray).ok()?;
     Some((area, Arc::new(image)))
 }
 
-/// `color` (straight, working space) over `coverage`, premultiplied: what an effect draws.
-fn colored(coverage: &RasterImage, color: LinearRgba) -> Option<Arc<RasterImage>> {
-    let size = coverage.size();
-    let samples = selection::sample_grid(
-        coverage,
-        Rect::new(0, 0, size.width, size.height),
-        size.width as usize,
-        size.height as usize,
-    );
-    let mut bytes = Vec::with_capacity(samples.len() * 8);
-    for c in samples {
-        for v in [color.r * c, color.g * c, color.b * c, c] {
-            bytes.extend_from_slice(&f32_to_f16(v).to_ne_bytes());
-        }
-    }
-    RasterImage::from_pixels(size, EFFECT_FORMAT, &bytes)
-        .ok()
-        .map(Arc::new)
+/// An effect drawing `color` where `coverage` shows, placed by `at`: a fill masked by the
+/// coverage (no color image is built).
+fn colored(
+    coverage: Arc<RasterImage>,
+    color: LinearRgba,
+    mode: BlendMode,
+    opacity: f32,
+    at: Affine,
+) -> Layer {
+    let mut layer = effect_layer(LayerContent::Fill { color }, mode, opacity, at);
+    layer.mask = Some(LayerMask {
+        image: coverage,
+        enabled: true,
+        replaces_alpha: false,
+        original: None,
+    });
+    layer
 }
 
 /// The margin of the grown canvas, the reach of an effect, whole pixels.
@@ -407,13 +406,13 @@ fn drop_shadow(
     if sigma > 0.0 {
         shape = Arc::new(selection::modify(size, &shape, Modify::Feather(sigma)).ok()??);
     }
-    let image = colored(&shape, shadow.color)?;
     let at = Affine::translation(
         f64::from(area.x) - f64::from(m) + dx,
         f64::from(area.y) - f64::from(m) + dy,
     );
-    Some(effect_layer(
-        LayerContent::raster(image),
+    Some(colored(
+        shape,
+        shadow.color,
         shadow.mode,
         shadow.opacity,
         at,
@@ -431,13 +430,13 @@ fn stroke_effect(
     let m = margin(reach);
     let (area, shape) = coverage(layer, to_document, canvas, reach, m)?;
     let band = selection::stroke_band(area.size(), &shape, stroke.size, stroke.position).ok()??;
-    let image = colored(&band, stroke.color)?;
     let at = Affine::translation(
         f64::from(area.x) - f64::from(m),
         f64::from(area.y) - f64::from(m),
     );
-    Some(effect_layer(
-        LayerContent::raster(image),
+    Some(colored(
+        Arc::new(band),
+        stroke.color,
         stroke.mode,
         stroke.opacity,
         at,
@@ -447,7 +446,7 @@ fn stroke_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::ColorSpace;
+    use crate::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType};
     use crate::edit::{Edit, EditError};
 
     /// A 64 × 64 document with an opaque white box at (20, 20)–(30, 30), and its id.
