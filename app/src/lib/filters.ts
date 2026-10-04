@@ -35,6 +35,29 @@ const radius = (label: MessageKey): FilterParam => ({
 /** Each filter's settings (the engine's `Filter::params` order), Photoshop's ranges and defaults. */
 export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number[] }> = {
   gaussianBlur: { params: [radius("filter.gaussianBlur.radius")], defaults: [1] },
+  motionBlur: {
+    params: [
+      {
+        key: "angle",
+        label: "filter.motionBlur.angle",
+        unit: "filter.degrees",
+        min: -90,
+        max: 90,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        key: "distance",
+        label: "filter.motionBlur.distance",
+        unit: "filter.pixels",
+        min: 1,
+        max: 2000,
+        decimals: 0,
+        scale: "log",
+      },
+    ],
+    defaults: [0, 10],
+  },
   unsharpMask: {
     params: [
       {
@@ -81,7 +104,7 @@ export function sliderValue(param: FilterParam, p: number): number {
 
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
-  { label: "menu.filter.blur", filters: ["gaussianBlur"] },
+  { label: "menu.filter.blur", filters: ["gaussianBlur", "motionBlur"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask"] },
   { label: "menu.filter.other", filters: ["highPass"] },
 ];

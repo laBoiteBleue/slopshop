@@ -41,6 +41,21 @@ test("Unsharp Mask: amount 1 to 500 %, radius 0.1 to 1000 pixels, threshold 0 to
   }
 });
 
+test("Motion Blur: an angle of -90 to 90 degrees, a distance of 1 to 2000 pixels", () => {
+  expect(FILTERS.motionBlur.defaults).toEqual([0, 10]);
+  expect(validValues("motionBlur", [-90, 1])).toBe(true);
+  expect(validValues("motionBlur", [90, 2000])).toBe(true);
+  for (const values of [
+    [91, 10],
+    [0, 0.5],
+    [0, 2001],
+  ]) {
+    expect(validValues("motionBlur", values)).toBe(false);
+  }
+  // The angle's slider is even, its middle the horizontal.
+  expect(sliderValue(FILTERS.motionBlur.params[0], 500)).toBe(0);
+});
+
 test("High Pass takes a radius of 0.1 to 1000 pixels, 10 at first", () => {
   expect(FILTERS.highPass.defaults).toEqual([10]);
   expect(validValues("highPass", [0.1])).toBe(true);
