@@ -27,7 +27,7 @@ use crate::color::{
     ChannelLayout, IDENTITY, LinearRgba, Mat3, PixelFormat, SampleType, WORKING_SPACE, f16_to_f32,
     f32_to_f16, mat_vec,
 };
-use crate::filter::{Filter, GaussianPlan};
+use crate::filter::Filter;
 use crate::geom::Size;
 use crate::paint::MaskReader;
 use crate::raster::{
@@ -759,7 +759,7 @@ fn filtered(
     let t = TILE_SIZE as usize;
     let level = &input.levels()[0];
     let filter = step.filter;
-    let plan = GaussianPlan::new(f64::from(filter.blur_radius()));
+    let plan = filter.plan();
     // A large radius: the layer reduced by the plan's factor (averages of blocks), blurred.
     let factor = plan.factor;
     let (small_width, small_height) = (
@@ -788,7 +788,7 @@ fn filtered(
                 *out = sum.map(|v| v * weight);
             }
         });
-        plan.blur.image(small, small_width, small_height)
+        plan.kernel.image(small, small_width, small_height)
     });
     // Read back between the reduced pixels' centers.
     let interpolated = |small: &[[f32; 4]], x: usize, y: usize| -> [f64; 4] {
@@ -821,7 +821,7 @@ fn filtered(
         let (w, h) = valid_area(size, *coord);
         let (x0, y0) = (coord.col as usize * t, coord.row as usize * t);
         // A small radius: the tile and its margin, blurred on this thread.
-        let margin = plan.blur.reach();
+        let margin = plan.kernel.reach();
         let (rw, rh) = (w + 2 * margin, h + 2 * margin);
         let region = reduced.is_none().then(|| {
             let mut region = vec![[0.0f32; 4]; rw * rh];
@@ -829,7 +829,7 @@ fn filtered(
                 let (x, y) = (x0 as i64 - margin as i64, (y0 + y) as i64 - margin as i64);
                 pixels.row(x, y, row);
             }
-            plan.blur.region(&mut region, rw, rh);
+            plan.kernel.region(&mut region, rw, rh);
             region
         });
         let mut bytes = tile.to_vec();
@@ -4227,6 +4227,45 @@ mod tests {
         assert!(pixel(&high, 148, 50)[0] < 100);
         assert!(pixel(&high, 151, 50)[0] > 156);
         assert!((140..160).all(|x| pixel(&high, x, 50)[3] == 255));
+    }
+
+    #[test]
+    fn a_motion_blur_softens_edges_across_its_line_only() {
+        // A vertical edge: blurred along the rows, it softens; along the columns, it stays.
+        let original = halves();
+        let motion = |angle, distance| {
+            let filter = Filter::MotionBlur { angle, distance };
+            LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter,
+                        ..blur(1.0, None)
+                    },
+                    None,
+                )
+                .unwrap()
+                .evaluate()
+                .unwrap()
+        };
+        let along = motion(90.0, 40.0);
+        assert_eq!(difference(&along, &original), 0);
+        // Long enough to be sampled on the layer reduced (4 times): softened across by a few
+        // pixels only, along the edge.
+        let long = motion(-90.0, 600.0);
+        for x in (0..144).chain(156..300) {
+            for y in [0, 130, 259] {
+                assert_eq!(pixel(&long, x, y), pixel(&original, x, y), "({x}, {y})");
+            }
+        }
+        let across = motion(0.0, 20.0);
+        let ramp: Vec<u8> = (138..162).map(|x| pixel(&across, x, 50)[0]).collect();
+        assert!(ramp.windows(2).all(|w| w[0] <= w[1]), "{ramp:?}");
+        assert!(ramp[2] > 0 && ramp[21] < 255, "{ramp:?}");
+        // The same on every row, and untouched beyond the line's reach.
+        for y in [0, 120, 259] {
+            assert_eq!(pixel(&across, 145, y), pixel(&across, 145, 50));
+        }
+        assert_eq!(pixel(&across, 120, 50), pixel(&original, 120, 50));
     }
 
     #[test]

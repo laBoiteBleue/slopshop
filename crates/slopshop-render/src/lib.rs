@@ -2589,6 +2589,20 @@ mod tests {
             (blur(20.0), 4),
             (sharpen, 2),
             (Filter::HighPass { radius: 4.0 }, 1),
+            (
+                Filter::MotionBlur {
+                    angle: 30.0,
+                    distance: 25.0,
+                },
+                1,
+            ),
+            (
+                Filter::MotionBlur {
+                    angle: -90.0,
+                    distance: 7.5,
+                },
+                1,
+            ),
         ] {
             let stack = LayerStack::new(Arc::clone(&original))
                 .with_filter(

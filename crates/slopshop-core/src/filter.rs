@@ -9,6 +9,15 @@ use crate::raster::parallel_for_each;
 pub const MIN_BLUR_RADIUS: f32 = 0.1;
 pub const MAX_BLUR_RADIUS: f32 = 1000.0;
 
+/// Motion Blur's angle range in degrees, and distance range in pixels (Photoshop's).
+pub const MAX_MOTION_ANGLE: f32 = 90.0;
+pub const MIN_MOTION_DISTANCE: f32 = 1.0;
+pub const MAX_MOTION_DISTANCE: f32 = 2000.0;
+
+/// Up to this length in pixels, a Motion Blur samples its line on the layer itself; beyond, on
+/// the layer reduced (see [`Plan::line`]), whatever the distance costs about the same.
+pub const LINE_UP_TO: f64 = 256.0;
+
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
 pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
@@ -33,6 +42,9 @@ const REDUCED_UP_TO: f64 = 32.0;
 pub enum Filter {
     /// Photoshop's Gaussian Blur: `radius` is the standard deviation, in the layer's pixels.
     GaussianBlur { radius: f32 },
+    /// Photoshop's Motion Blur: each pixel the average of the line of `distance` pixels through
+    /// it at `angle` degrees (counterclockwise from the horizontal).
+    MotionBlur { angle: f32, distance: f32 },
     /// Photoshop's Unsharp Mask: each color pushed away from its Gaussian blur of `radius` by
     /// `amount` percent of their difference, where that difference reaches `threshold` levels
     /// (of 8 bits) on some channel.
@@ -48,12 +60,13 @@ pub enum Filter {
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 3] = ["gaussianBlur", "unsharpMask", "highPass"];
+    pub const IDS: [&'static str; 4] = ["gaussianBlur", "motionBlur", "unsharpMask", "highPass"];
 
     /// The identifier the UI and files know it by.
     pub fn id(&self) -> &'static str {
         match self {
             Self::GaussianBlur { .. } => "gaussianBlur",
+            Self::MotionBlur { .. } => "motionBlur",
             Self::UnsharpMask { .. } => "unsharpMask",
             Self::HighPass { .. } => "highPass",
         }
@@ -63,6 +76,7 @@ impl Filter {
     pub fn params(&self) -> Vec<f32> {
         match *self {
             Self::GaussianBlur { radius } | Self::HighPass { radius } => vec![radius],
+            Self::MotionBlur { angle, distance } => vec![angle, distance],
             Self::UnsharpMask {
                 amount,
                 radius,
@@ -76,6 +90,7 @@ impl Filter {
     pub fn from_params(id: &str, values: &[f32]) -> Option<Self> {
         match (id, values) {
             ("gaussianBlur", &[radius]) => Some(Self::GaussianBlur { radius }),
+            ("motionBlur", &[angle, distance]) => Some(Self::MotionBlur { angle, distance }),
             ("unsharpMask", &[amount, radius, threshold]) => Some(Self::UnsharpMask {
                 amount,
                 radius,
@@ -90,6 +105,10 @@ impl Filter {
     pub fn defaults(id: &str) -> Option<Self> {
         match id {
             "gaussianBlur" => Some(Self::GaussianBlur { radius: 1.0 }),
+            "motionBlur" => Some(Self::MotionBlur {
+                angle: 0.0,
+                distance: 10.0,
+            }),
             "unsharpMask" => Some(Self::UnsharpMask {
                 amount: 100.0,
                 radius: 1.0,
@@ -104,6 +123,12 @@ impl Filter {
         let radius = |r: f32| r.is_finite() && (MIN_BLUR_RADIUS..=MAX_BLUR_RADIUS).contains(&r);
         match *self {
             Self::GaussianBlur { radius: r } | Self::HighPass { radius: r } => radius(r),
+            Self::MotionBlur { angle, distance } => {
+                angle.is_finite()
+                    && (-MAX_MOTION_ANGLE..=MAX_MOTION_ANGLE).contains(&angle)
+                    && distance.is_finite()
+                    && (MIN_MOTION_DISTANCE..=MAX_MOTION_DISTANCE).contains(&distance)
+            }
             Self::UnsharpMask {
                 amount,
                 radius: r,
@@ -118,21 +143,26 @@ impl Filter {
         }
     }
 
-    /// The radius of the Gaussian blur the filter is made from.
-    pub fn blur_radius(&self) -> f32 {
+    /// The radius of the Gaussian blur the filter is made from, if it is.
+    pub fn blur_radius(&self) -> Option<f32> {
         match *self {
             Self::GaussianBlur { radius }
             | Self::UnsharpMask { radius, .. }
-            | Self::HighPass { radius } => radius,
+            | Self::HighPass { radius } => Some(radius),
+            Self::MotionBlur { .. } => None,
         }
     }
 
     /// The filter on the layer reduced `factor` times (a pyramid level, a look): its distances
     /// divided, no less than the smallest it takes.
     pub fn scaled(&self, factor: f32) -> Self {
-        let radius = (self.blur_radius() / factor).max(MIN_BLUR_RADIUS);
+        let radius = (self.blur_radius().unwrap_or(MIN_BLUR_RADIUS) / factor).max(MIN_BLUR_RADIUS);
         match *self {
             Self::GaussianBlur { .. } => Self::GaussianBlur { radius },
+            Self::MotionBlur { angle, distance } => Self::MotionBlur {
+                angle,
+                distance: (distance / factor).max(MIN_MOTION_DISTANCE),
+            },
             Self::UnsharpMask {
                 amount, threshold, ..
             } => Self::UnsharpMask {
@@ -145,14 +175,27 @@ impl Filter {
     }
 
     /// How far a pixel's result reads, in pixels on each side, with some room (a look's
-    /// margin): three and a half sigmas of its blur.
+    /// margin): three and a half sigmas of a blur, half a line.
     pub fn reach(&self) -> f64 {
-        3.5 * f64::from(self.blur_radius()) + 2.0
+        match *self {
+            Self::MotionBlur { distance, .. } => f64::from(distance) / 2.0 + 2.0,
+            _ => 3.5 * f64::from(self.blur_radius().unwrap_or(0.0)) + 2.0,
+        }
+    }
+
+    /// How the filter is computed over a layer: what it blurs by, at what reduction.
+    pub(crate) fn plan(&self) -> Plan {
+        match *self {
+            Self::MotionBlur { angle, distance } => {
+                Plan::line(f64::from(angle), f64::from(distance))
+            }
+            _ => Plan::gaussian(f64::from(self.blur_radius().unwrap_or(MIN_BLUR_RADIUS))),
+        }
     }
 
     /// Whether a pixel's result depends on its own value besides its blur's.
     pub(crate) fn reads_original(&self) -> bool {
-        !matches!(self, Self::GaussianBlur { .. })
+        !matches!(self, Self::GaussianBlur { .. } | Self::MotionBlur { .. })
     }
 
     /// A pixel's result from its premultiplied value `original` and its blur's `blurred`, in
@@ -173,7 +216,7 @@ impl Filter {
             [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
         };
         match *self {
-            Self::GaussianBlur { .. } => blurred,
+            Self::GaussianBlur { .. } | Self::MotionBlur { .. } => blurred,
             Self::UnsharpMask {
                 amount, threshold, ..
             } => {
@@ -271,22 +314,24 @@ impl Blur {
     }
 }
 
-/// How a Gaussian Blur is computed over a layer, whatever its size (ADR 0034): up to
-/// [`TILED_UP_TO`], directly, tile by tile with a margin of [`Blur::reach`]; beyond, the layer
-/// reduced by `factor` (a power of two, at least 4, so that the reduced layer is at most a
-/// sixteenth of it) is blurred by what is left of the radius and read back interpolated.
+/// How a filter's blur is computed over a layer, whatever its size (ADR 0034): directly, tile by
+/// tile with a margin of [`Kernel::reach`]; or, when that would reach too far, on the layer
+/// reduced by `factor` (a power of two, averages of blocks), read back interpolated.
 #[derive(Debug, Clone)]
-pub(crate) struct GaussianPlan {
+pub(crate) struct Plan {
     pub(crate) factor: usize,
-    pub(crate) blur: Blur,
+    pub(crate) kernel: Kernel,
 }
 
-impl GaussianPlan {
-    pub(crate) fn new(sigma: f64) -> Self {
+impl Plan {
+    /// A Gaussian of standard deviation `sigma`: up to [`TILED_UP_TO`] directly; beyond, the
+    /// layer reduced at least 4 times (so that it is at most a sixteenth of it), blurred by what
+    /// is left of the radius.
+    pub(crate) fn gaussian(sigma: f64) -> Self {
         if sigma <= TILED_UP_TO {
             return Self {
                 factor: 1,
-                blur: Blur::gaussian(sigma),
+                kernel: Kernel::Gaussian(Blur::gaussian(sigma)),
             };
         }
         let factor = 1usize << (sigma / REDUCED_UP_TO).log2().ceil().max(2.0) as u32;
@@ -296,7 +341,146 @@ impl GaussianPlan {
         let reduced = (sigma * sigma / (f * f) - 0.25).max(1.0).sqrt();
         Self {
             factor,
-            blur: Blur::gaussian(reduced),
+            kernel: Kernel::Gaussian(Blur::gaussian(reduced)),
+        }
+    }
+
+    /// A line of `distance` pixels at `angle` degrees: up to [`LINE_UP_TO`] directly; beyond,
+    /// the layer reduced so that the line is at most that long (a few reduced pixels of
+    /// softness across it, hidden by the length along it).
+    pub(crate) fn line(angle: f64, distance: f64) -> Self {
+        let factor = if distance <= LINE_UP_TO {
+            1
+        } else {
+            1usize << (distance / LINE_UP_TO).log2().ceil() as u32
+        };
+        Self {
+            factor,
+            kernel: Kernel::Line(Line::new(angle, distance / factor as f64)),
+        }
+    }
+}
+
+/// What a filter blurs a region or an image by.
+#[derive(Debug, Clone)]
+pub(crate) enum Kernel {
+    Gaussian(Blur),
+    Line(Line),
+}
+
+impl Kernel {
+    /// How far a pixel's result reads, in pixels on each side.
+    pub(crate) fn reach(&self) -> usize {
+        match self {
+            Self::Gaussian(blur) => blur.reach(),
+            Self::Line(line) => line.reach(),
+        }
+    }
+
+    /// `region` (`width` × `height` pixels) blurred in place on the calling thread, its edges
+    /// repeating outward.
+    pub(crate) fn region(&self, region: &mut [[f32; 4]], width: usize, height: usize) {
+        match self {
+            Self::Gaussian(blur) => blur.region(region, width, height),
+            Self::Line(line) => {
+                let source = region.to_vec();
+                line.rows(&source, width, height, 0, region);
+            }
+        }
+    }
+
+    /// `image` (`width` × `height` pixels) blurred, its edges repeating outward, on every core.
+    pub(crate) fn image(&self, image: Vec<[f32; 4]>, width: usize, height: usize) -> Vec<[f32; 4]> {
+        match self {
+            Self::Gaussian(blur) => blur.image(image, width, height),
+            Self::Line(line) => {
+                let mut out = vec![[0.0f32; 4]; image.len()];
+                if width == 0 {
+                    return out;
+                }
+                let mut bands: Vec<(usize, &mut [[f32; 4]])> =
+                    out.chunks_mut(width * BAND_ROWS).enumerate().collect();
+                parallel_for_each(&mut bands, |(index, band)| {
+                    line.rows(&image, width, height, *index * BAND_ROWS, band);
+                });
+                out
+            }
+        }
+    }
+}
+
+/// The samples of a line of `length` pixels at `angle` degrees (counterclockwise from the
+/// horizontal) through a pixel: their offsets from it, x right and y down, a pixel apart or less
+/// from one end to the other (the GPU samples the same, ADR 0035).
+pub fn line_offsets(angle: f64, length: f64) -> Vec<[f64; 2]> {
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let samples = (length.ceil() as usize + 1).max(2);
+    (0..samples)
+        .map(|i| {
+            let t = length * (i as f64 / (samples - 1) as f64 - 0.5);
+            [t * cos, -t * sin]
+        })
+        .collect()
+}
+
+/// Motion Blur's line: equally weighted samples, a pixel apart or less, from one end of the
+/// line through the pixel to the other, read bilinearly.
+#[derive(Debug, Clone)]
+pub(crate) struct Line {
+    /// Each sample's offset from the pixel, x right and y down.
+    offsets: Vec<[f64; 2]>,
+}
+
+impl Line {
+    /// A line of `length` pixels at `angle` degrees, counterclockwise from the horizontal.
+    pub(crate) fn new(angle: f64, length: f64) -> Self {
+        Self {
+            offsets: line_offsets(angle, length),
+        }
+    }
+
+    pub(crate) fn reach(&self) -> usize {
+        self.offsets
+            .iter()
+            .map(|o| o[0].abs().max(o[1].abs()).ceil() as usize + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Rows `first..` of `src` (`width` × `height`) blurred into `out` (whole rows), the edges
+    /// repeating outward.
+    fn rows(
+        &self,
+        src: &[[f32; 4]],
+        width: usize,
+        height: usize,
+        first: usize,
+        out: &mut [[f32; 4]],
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let weight = 1.0 / self.offsets.len() as f64;
+        let (last_x, last_y) = ((width - 1) as f64, (height - 1) as f64);
+        let at = |x: usize, y: usize| src[y * width + x].map(f64::from);
+        for (n, row) in out.chunks_mut(width).enumerate() {
+            let y = (first + n) as f64;
+            for (x, px) in row.iter_mut().enumerate() {
+                let mut sum = [0.0f64; 4];
+                for [dx, dy] in &self.offsets {
+                    let sx = (x as f64 + dx).clamp(0.0, last_x);
+                    let sy = (y + dy).clamp(0.0, last_y);
+                    let (x0, y0) = (sx.floor() as usize, sy.floor() as usize);
+                    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+                    let (a, b) = (sx - x0 as f64, sy - y0 as f64);
+                    let (p00, p10, p01, p11) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+                    for c in 0..4 {
+                        sum[c] += (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b)
+                            + (p01[c] * (1.0 - a) + p11[c] * a) * b;
+                    }
+                }
+                *px = sum.map(|v| (v * weight) as f32);
+            }
         }
     }
 }
@@ -453,6 +637,16 @@ mod tests {
         ] {
             assert!(!wrong.is_valid(), "{wrong:?}");
         }
+        let motion = |angle, distance| Filter::MotionBlur { angle, distance };
+        assert!(motion(-90.0, 2000.0).is_valid() && motion(90.0, 1.0).is_valid());
+        for wrong in [motion(91.0, 10.0), motion(0.0, 0.5), motion(0.0, 2001.0)] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(
+            motion(30.0, 100.0).scaled(4.0),
+            motion(30.0, 25.0),
+            "the angle stays"
+        );
         for id in Filter::IDS {
             let filter = Filter::defaults(id).expect("every filter has defaults");
             assert!(filter.is_valid(), "{id}");
@@ -616,16 +810,57 @@ mod tests {
 
     #[test]
     fn large_radii_are_blurred_reduced_at_least_four_times() {
-        assert_eq!(GaussianPlan::new(64.0).factor, 1);
+        assert_eq!(Plan::gaussian(64.0).factor, 1);
         for (sigma, factor) in [(65.0, 4), (128.0, 4), (129.0, 8), (1000.0, 32)] {
-            let plan = GaussianPlan::new(sigma);
+            let plan = Plan::gaussian(sigma);
             assert_eq!(plan.factor, factor, "sigma {sigma}");
             assert!(
-                plan.blur.reach() <= 200,
+                plan.kernel.reach() <= 200,
                 "sigma {sigma}: {}",
-                plan.blur.reach()
+                plan.kernel.reach()
             );
         }
+    }
+
+    #[test]
+    fn a_long_line_is_sampled_on_the_layer_reduced() {
+        assert_eq!(Plan::line(30.0, 256.0).factor, 1);
+        for (distance, factor) in [(257.0, 2), (512.0, 2), (2000.0, 8)] {
+            let plan = Plan::line(0.0, distance);
+            assert_eq!(plan.factor, factor, "distance {distance}");
+            assert!(plan.kernel.reach() <= 130, "distance {distance}");
+        }
+    }
+
+    #[test]
+    fn a_motion_blur_spreads_a_point_along_its_line_only() {
+        // A point in a 41 × 41 image, blurred over 11 pixels: horizontally, it becomes a
+        // segment of the row; at 90 degrees, of the column; at 45, of the diagonal. Its mass
+        // stays where the line is.
+        let (w, h) = (41, 41);
+        let mut image = vec![[0.0f32; 4]; w * h];
+        image[20 * w + 20] = [1.0; 4];
+        for (angle, along) in [(0.0, (1, 0)), (90.0, (0, -1)), (45.0, (1, -1))] {
+            let kernel = Plan::line(angle, 10.0).kernel;
+            let out = kernel.image(image.clone(), w, h);
+            let mass: f32 = out.iter().map(|px| px[3]).sum();
+            assert!((mass - 1.0).abs() < 1e-4, "{angle}: {mass}");
+            // Along the line, a few pixels out: some of the point; across it, none.
+            let (dx, dy) = along;
+            let on = |k: i64| out[((20 + dy * k) as usize) * w + (20 + dx * k) as usize][3];
+            assert!(on(2) > 0.02 && on(-2) > 0.02, "{angle}");
+            // Three pixels across the line, (-dy, dx) from the point.
+            let across = out[((20 + dx * 3) as usize) * w + (20 - dy * 3) as usize][3];
+            assert!(across < 1e-6, "{angle}: {across}");
+            // Nothing beyond its ends.
+            assert!(on(8) < 1e-6 && on(-8) < 1e-6, "{angle}");
+        }
+        // The region path is the image path.
+        let kernel = Plan::line(30.0, 7.0).kernel;
+        let whole = kernel.image(image.clone(), w, h);
+        let mut region = image;
+        kernel.region(&mut region, w, h);
+        assert_eq!(whole, region);
     }
 
     #[test]
