@@ -66,6 +66,17 @@ test("Unsharp Mask: its amount in percent, its radius in pixels, its threshold i
   expect(onok).toHaveBeenCalledWith([250, 1, 51]);
 });
 
+test("Clarity and Texture: two strengths, no unit after them", async () => {
+  const { onok, user } = open([0, 0], { filter: "clarityTexture" });
+  expect(screen.getByRole("dialog", { name: "Clarity and Texture" })).toBeInTheDocument();
+  expect(screen.queryByText("pixels")).toBeNull();
+  const clarity = screen.getByRole("spinbutton", { name: "Clarity" });
+  await user.clear(clarity);
+  await user.type(clarity, "-40");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  expect(onok).toHaveBeenCalledWith([0, -40]);
+});
+
 test("Preview, Cancel and Escape; the app's keys wait meanwhile", async () => {
   const { onpreview, oncancel, onok, user } = open();
   const appKeys = vi.fn();

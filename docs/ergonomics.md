@@ -157,7 +157,9 @@ built. Contributors: propose here first.
   Distance 1 to 2000 pixels); Noise > Add Noise… (Amount 0.1 to 400 %, Distribution Uniform or
   Gaussian, Monochromatic; each application draws another grain, an entry edited again keeps
   its own), Noise > Dust & Scratches… (Radius 1 to 500 whole pixels, Threshold 0 to 255
-  levels); Sharpen > Unsharp Mask… (Amount 1 to 500 %,
+  levels); Sharpen > Clarity and Texture… (Lightroom's two strengths, -100 to 100, nothing at
+  first: Texture the fine details, Clarity the broad local contrast of the midtones; not in
+  Photoshop's Filter menu, placed with the sharpening filters), Sharpen > Unsharp Mask… (Amount 1 to 500 %,
   Radius, Threshold 0 to 255 levels: linear sliders but the radius) and Other > High Pass…
   (Radius), Photoshop's ranges and defaults. A filter's settings show live on the canvas (Preview off
   shows the layer without it), OK one undo entry, Cancel takes it back. A filter applies to the

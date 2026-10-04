@@ -12,8 +12,8 @@ export type NumberParam = {
   kind: "number";
   key: string;
   label: MessageKey;
-  /** What its value counts, after the field. */
-  unit: MessageKey;
+  /** What its value counts, after the field (nothing for a strength from -100 to 100). */
+  unit?: MessageKey;
   min: number;
   max: number;
   /** Decimals the field keeps. */
@@ -45,6 +45,17 @@ const radius = (label: MessageKey): NumberParam => ({
   max: 1000,
   decimals: 1,
   scale: "log",
+});
+
+/** A strength from -100 to 100, Lightroom's: 0 does nothing, below it the opposite. */
+const strength = (key: string, label: MessageKey): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  min: -100,
+  max: 100,
+  decimals: 0,
+  scale: "linear",
 });
 
 /** Each filter's settings (the engine's `Filter::params` order), Photoshop's ranges and defaults. */
@@ -149,6 +160,13 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     ],
     defaults: [1, 0],
   },
+  clarityTexture: {
+    params: [
+      strength("texture", "filter.clarityTexture.texture"),
+      strength("clarity", "filter.clarityTexture.clarity"),
+    ],
+    defaults: [0, 0],
+  },
   highPass: { params: [radius("filter.highPass.radius")], defaults: [10] },
 };
 
@@ -184,7 +202,7 @@ export function sliderValue(param: NumberParam, p: number): number {
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.blur", filters: ["gaussianBlur", "motionBlur"] },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches"] },
-  { label: "menu.filter.sharpen", filters: ["unsharpMask"] },
+  { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
   { label: "menu.filter.other", filters: ["highPass"] },
 ];
 
