@@ -29,6 +29,7 @@ use crate::color::{
 };
 use crate::filter::Filter;
 use crate::geom::Size;
+use crate::liquify::{Field, FieldError};
 use crate::paint::MaskReader;
 use crate::raster::{
     Codec, RasterError, RasterImage, TILE_SIZE, pad_tile, parallel_for_each, stored_format,
@@ -59,6 +60,7 @@ pub enum Entry {
     Paint(Arc<PaintEntry>),
     Effect(Arc<EffectEntry>),
     Filter(Arc<FilterEntry>),
+    Liquify(Arc<LiquifyEntry>),
 }
 
 impl PartialEq for Entry {
@@ -67,6 +69,7 @@ impl PartialEq for Entry {
             (Self::Paint(a), Self::Paint(b)) => Arc::ptr_eq(a, b),
             (Self::Effect(a), Self::Effect(b)) => Arc::ptr_eq(a, b),
             (Self::Filter(a), Self::Filter(b)) => Arc::ptr_eq(a, b),
+            (Self::Liquify(a), Self::Liquify(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -79,6 +82,7 @@ impl Entry {
             Self::Paint(p) => p.hidden,
             Self::Effect(e) => e.hidden,
             Self::Filter(f) => f.hidden,
+            Self::Liquify(l) => l.hidden,
         }
     }
 }
@@ -463,6 +467,92 @@ impl FilterEntry {
     }
 }
 
+/// A Liquify entry (ADR 0037): a displacement field warping the result of what is below it, the
+/// layer's pixels read from where the field says. Like a filter it is a materialization point:
+/// what it was applied to and its result are cached, the entries above evaluate from that result,
+/// and the display shows a look at the part it shows. Edited again in its own workspace, which
+/// replaces its field.
+#[derive(Debug)]
+pub struct LiquifyEntry {
+    field: Arc<Field>,
+    /// The blend space the pixels are interpolated in.
+    space: BlendSpace,
+    /// How far the field reads from, in the layer's pixels (the margin a crop needs).
+    reach: f64,
+    hidden: bool,
+    cache: Mutex<Option<FilterCache>>,
+}
+
+impl LiquifyEntry {
+    pub fn new(field: Arc<Field>, space: BlendSpace) -> Self {
+        Self {
+            reach: field.reach(),
+            field,
+            space,
+            hidden: false,
+            cache: Mutex::new(None),
+        }
+    }
+
+    pub fn field(&self) -> &Arc<Field> {
+        &self.field
+    }
+
+    pub fn space(&self) -> BlendSpace {
+        self.space
+    }
+
+    /// Hidden by its eye: kept in the stack, not evaluated.
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// This entry, hidden or shown.
+    pub fn with_hidden(self, hidden: bool) -> Self {
+        Self { hidden, ..self }
+    }
+
+    /// This entry knowing what it is applied to (see [`FilterEntry::knowing`]).
+    fn knowing(self, below: LayerStack, input: Arc<RasterImage>) -> Self {
+        Self {
+            cache: Mutex::new(Some(FilterCache {
+                below,
+                input,
+                output: None,
+            })),
+            ..self
+        }
+    }
+
+    /// What this entry knows of what it was applied to.
+    fn known_input(&self) -> Option<(LayerStack, Arc<RasterImage>)> {
+        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        cache
+            .as_ref()
+            .map(|c| (c.below.clone(), Arc::clone(&c.input)))
+    }
+
+    /// The result of the entry over `below`: from its cache, or computed now.
+    fn output(&self, below: &LayerStack) -> Result<Arc<RasterImage>, StackError> {
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let known = cache.as_ref().filter(|c| c.below == *below);
+        if let Some(output) = known.and_then(|c| c.output.as_ref()) {
+            return Ok(Arc::clone(output));
+        }
+        let input = match known {
+            Some(c) => Arc::clone(&c.input),
+            None => below.evaluate()?,
+        };
+        let image = Arc::new(crate::liquify::warp_layer(&input, &self.field, self.space)?);
+        *cache = Some(FilterCache {
+            below: below.clone(),
+            input,
+            output: Some(Arc::clone(&image)),
+        });
+        Ok(image)
+    }
+}
+
 /// Why a stack, an entry or a tile was refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StackError {
@@ -476,6 +566,8 @@ pub enum StackError {
     TileOutside(TileCoord),
     /// An effect that is not valid, or an entry mixing kinds.
     InvalidEffect,
+    /// A Liquify field that does not fit its layer.
+    Field(FieldError),
     /// No entry at this index.
     IndexOutOfRange(usize),
     Raster(RasterError),
@@ -489,6 +581,7 @@ impl fmt::Display for StackError {
             StackError::TileLength => write!(f, "paint tile of the wrong length"),
             StackError::TileOutside(coord) => write!(f, "paint tile {coord:?} outside its layer"),
             StackError::InvalidEffect => write!(f, "invalid effect"),
+            StackError::Field(e) => write!(f, "{e}"),
             StackError::IndexOutOfRange(index) => write!(f, "no entry at index {index}"),
             StackError::Raster(e) => write!(f, "{e}"),
         }
@@ -496,6 +589,12 @@ impl fmt::Display for StackError {
 }
 
 impl std::error::Error for StackError {}
+
+impl From<FieldError> for StackError {
+    fn from(e: FieldError) -> Self {
+        StackError::Field(e)
+    }
+}
 
 impl From<RasterError> for StackError {
     fn from(e: RasterError) -> Self {
@@ -1602,7 +1701,7 @@ fn atoms(entries: &[Entry]) -> Vec<Atom<'_>> {
             Entry::Paint(p) => out.push(Atom::Paint(p)),
             Entry::Effect(e) => out.extend(e.steps.iter().map(Atom::Effect)),
             // Evaluated whole, before: see `LayerStack::flat`.
-            Entry::Filter(_) => {}
+            Entry::Filter(_) | Entry::Liquify(_) => {}
         }
     }
     out
@@ -1998,11 +2097,30 @@ pub struct LookJob {
     pub factor: u32,
     pub origin: [u32; 2],
     pub above: Vec<Entry>,
+    /// A Liquify entry's look: `steps` is empty, the tiles are what the field reads from.
+    pub warp: Option<WarpJob>,
+}
+
+/// What a Liquify look draws (see [`LayerStack::look_job`]): the field to read through and the
+/// part of the level it draws (the job's tiles hold that part and the margin the field reads
+/// from).
+#[derive(Debug, Clone)]
+pub struct WarpJob {
+    pub field: Arc<Field>,
+    pub space: BlendSpace,
+    /// The drawn part's first pixel at the look's level, and its size.
+    pub out_origin: [u32; 2],
+    pub out_size: Size,
+    /// With a pyramid of its own (a quick look of the whole layer).
+    pub pyramid: bool,
 }
 
 impl LookJob {
     /// The look, computed on the CPU.
     pub fn run(&self) -> Result<Preview, StackError> {
+        if let Some(warp) = &self.warp {
+            return self.warped(warp);
+        }
         // Read and made at level 0 only: a look is shown at the level it is made for.
         let mut image = Arc::new(RasterImage::from_level0_tiles_only(
             self.size,
@@ -2015,13 +2133,49 @@ impl LookJob {
         Ok(self.finished(image))
     }
 
+    /// A Liquify look, computed on the CPU.
+    fn warped(&self, warp: &WarpJob) -> Result<Preview, StackError> {
+        let crop = RasterImage::from_level0_tiles_only(self.size, self.format, self.tiles.clone())?;
+        let factor = f64::from(self.factor);
+        let source = crate::liquify::Source::new(
+            &crop,
+            warp.space,
+            0,
+            [
+                f64::from(self.origin[0]) * factor,
+                f64::from(self.origin[1]) * factor,
+            ],
+            factor,
+            warp.field.size(),
+        );
+        let placement = crate::liquify::Placement {
+            origin: [
+                f64::from(warp.out_origin[0]) * factor,
+                f64::from(warp.out_origin[1]) * factor,
+            ],
+            step: factor,
+        };
+        let image = crate::liquify::warp_image(
+            &source,
+            &warp.field,
+            placement,
+            warp.out_size,
+            self.format,
+            warp.pyramid,
+        )?;
+        Ok(self.finished(Arc::new(image)))
+    }
+
     /// The look showing `image` (the filtered crop, computed elsewhere).
     pub fn finished(&self, image: Arc<RasterImage>) -> Preview {
         Preview {
-            filter: self.steps.last().map_or("", |step| step.filter.id()),
+            filter: match &self.warp {
+                Some(_) => "liquify",
+                None => self.steps.last().map_or("", |step| step.filter.id()),
+            },
             image,
             factor: self.factor,
-            origin: self.origin,
+            origin: self.warp.as_ref().map_or(self.origin, |w| w.out_origin),
             above: self.above.clone(),
         }
     }
@@ -2412,6 +2566,11 @@ impl LayerStack {
                     return Err(StackError::InvalidEffect);
                 }
             }
+            Entry::Liquify(liquify) => {
+                if liquify.field.size() != self.original.size() {
+                    return Err(StackError::SizeMismatch);
+                }
+            }
         }
         Ok(())
     }
@@ -2545,6 +2704,13 @@ impl LayerStack {
                         })
                         .collect(),
                 })),
+                Entry::Liquify(liquify) => Entry::Liquify(Arc::new(LiquifyEntry {
+                    field: Arc::new(liquify.field.grown(offset, size)),
+                    space: liquify.space,
+                    reach: liquify.reach,
+                    hidden: liquify.hidden,
+                    cache: Mutex::new(None),
+                })),
                 Entry::Effect(effect) => Entry::Effect(Arc::new(EffectEntry {
                     hidden: effect.hidden,
                     steps: effect
@@ -2619,6 +2785,53 @@ impl LayerStack {
         })
     }
 
+    /// The stack with a Liquify entry of `field` on top (ADR 0037), warping what is below it in
+    /// `space`. `shown`: what the layer shows (this stack's result, when it is evaluated), what
+    /// the warp is applied to.
+    pub fn with_liquify(
+        &self,
+        field: Arc<Field>,
+        space: BlendSpace,
+        shown: Option<Arc<RasterImage>>,
+    ) -> Result<Self, StackError> {
+        let mut entry = LiquifyEntry::new(field, space);
+        if let Some(input) = shown.filter(|input| input.size() == self.original.size()) {
+            entry = entry.knowing(self.clone(), input);
+        }
+        let entry = Entry::Liquify(Arc::new(entry));
+        self.check(&entry)?;
+        let mut entries = self.entries.clone();
+        entries.push(entry);
+        Ok(Self {
+            original: Arc::clone(&self.original),
+            entries,
+        })
+    }
+
+    /// The stack with the field of Liquify entry `index` replaced by `field`: an entry edited
+    /// again in its workspace. It keeps its eye and what it is applied to.
+    pub fn with_field(&self, index: usize, field: Arc<Field>) -> Result<Self, StackError> {
+        let Entry::Liquify(old) = self
+            .entries
+            .get(index)
+            .ok_or(StackError::IndexOutOfRange(index))?
+        else {
+            return Err(StackError::InvalidEffect);
+        };
+        let mut edited = LiquifyEntry::new(field, old.space).with_hidden(old.hidden);
+        if let Some((below, input)) = old.known_input() {
+            edited = edited.knowing(below, input);
+        }
+        let edited = Entry::Liquify(Arc::new(edited));
+        self.check(&edited)?;
+        let mut entries = self.entries.clone();
+        entries[index] = edited;
+        Ok(Self {
+            original: Arc::clone(&self.original),
+            entries,
+        })
+    }
+
     /// The stack without entry `index`; the neighbours that meet merge: two paints exactly, two
     /// effects or filters whose settings combine exactly as one entry, two Inverts cancel.
     pub fn without(&self, index: usize) -> Result<Self, StackError> {
@@ -2679,6 +2892,19 @@ impl LayerStack {
                 hidden,
             })),
             // What it computed stays good: hiding a filter changes what is above it only.
+            Entry::Liquify(liquify) => Entry::Liquify(Arc::new(LiquifyEntry {
+                field: Arc::clone(&liquify.field),
+                space: liquify.space,
+                reach: liquify.reach,
+                hidden,
+                cache: Mutex::new(
+                    liquify
+                        .cache
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone(),
+                ),
+            })),
             Entry::Filter(filter) => Entry::Filter(Arc::new(FilterEntry {
                 steps: filter.steps.clone(),
                 hidden,
@@ -2774,7 +3000,7 @@ impl LayerStack {
         let format = self.original.format();
         let lowers_alpha = self.entries.iter().any(|e| match e {
             Entry::Paint(p) => p.lowers_alpha(),
-            Entry::Effect(_) | Entry::Filter(_) => false,
+            Entry::Effect(_) | Entry::Filter(_) | Entry::Liquify(_) => false,
         });
         if format.layout.has_alpha() || !lowers_alpha {
             return format;
@@ -2787,6 +3013,7 @@ impl LayerStack {
     fn filter_shown(&self, index: usize) -> Option<&'static str> {
         match self.entries.get(index)? {
             Entry::Filter(filter) => filter.steps.last().map(|step| step.filter.id()),
+            Entry::Liquify(_) => Some("liquify"),
             _ => None,
         }
     }
@@ -2808,6 +3035,14 @@ impl LayerStack {
                         && input.size() == stack.original.size()
                 })
                 .map(|(_, input)| input),
+            Entry::Liquify(liquify) => liquify
+                .known_input()
+                .filter(|(below, input)| {
+                    below == stack
+                        && input.format() == stack.format()
+                        && input.size() == stack.original.size()
+                })
+                .map(|(_, input)| input),
             _ => None,
         })
     }
@@ -2816,7 +3051,7 @@ impl LayerStack {
     fn last_filter(&self) -> Option<usize> {
         self.entries
             .iter()
-            .rposition(|e| matches!(e, Entry::Filter(f) if !f.hidden))
+            .rposition(|e| matches!(e, Entry::Filter(_) | Entry::Liquify(_)) && !e.hidden())
     }
 
     /// The stack of the entries below `index`.
@@ -2836,10 +3071,14 @@ impl LayerStack {
         let Some(index) = self.last_filter() else {
             return Ok(None);
         };
-        let Entry::Filter(filter) = &self.entries[index] else {
-            return Ok(None);
-        };
         let below = self.below(index);
+        let filter = match &self.entries[index] {
+            Entry::Filter(filter) => filter,
+            Entry::Liquify(liquify) => {
+                return self.liquify_preview(index, liquify, &below, max_pixels);
+            }
+            _ => return Ok(None),
+        };
         let Some((known, input)) = filter.known_input() else {
             return Ok(None);
         };
@@ -2896,8 +3135,16 @@ impl LayerStack {
     /// What [`Self::look_at`] computes, to be computed elsewhere (on the GPU, ADR 0035).
     pub fn look_job(&self, rect: [f64; 4], level: usize) -> Option<LookJob> {
         let index = self.last_filter()?;
-        let Entry::Filter(filter) = &self.entries[index] else {
-            return None;
+        let filter = match &self.entries[index] {
+            Entry::Filter(filter) => filter,
+            Entry::Liquify(liquify) => {
+                let (known, input) = liquify.known_input()?;
+                if known != self.below(index) {
+                    return None;
+                }
+                return self.liquify_job(index, liquify, &input, rect, level);
+            }
+            _ => return None,
         };
         let (known, input) = filter.known_input()?;
         if known != self.below(index) {
@@ -2964,6 +3211,126 @@ impl LayerStack {
             factor: 1 << level,
             origin,
             above: self.entries[index + 1..].to_vec(),
+            warp: None,
+        })
+    }
+
+    /// [`Self::preview`] of a Liquify entry: its warp of what is below it at the coarsest
+    /// pyramid level of at most `max_pixels`, whole.
+    fn liquify_preview(
+        &self,
+        index: usize,
+        liquify: &LiquifyEntry,
+        below: &LayerStack,
+        max_pixels: u64,
+    ) -> Result<Option<Preview>, StackError> {
+        let Some((known, input)) = liquify.known_input() else {
+            return Ok(None);
+        };
+        if known != *below {
+            return Ok(None);
+        }
+        let Some(level) = input
+            .levels()
+            .iter()
+            .position(|l| u64::from(l.size().width) * u64::from(l.size().height) <= max_pixels)
+            .filter(|&level| level > 0)
+        else {
+            return Ok(None);
+        };
+        let size = input.size();
+        let whole = [0.0, 0.0, f64::from(size.width), f64::from(size.height)];
+        let Some(mut job) = self.liquify_job(index, liquify, &input, whole, level) else {
+            return Ok(None);
+        };
+        // Shown at any zoom out to the whole layer: with its own pyramid.
+        if let Some(warp) = job.warp.as_mut() {
+            warp.pyramid = true;
+        }
+        job.run().map(Some)
+    }
+
+    /// The look at `rect` of a Liquify entry (see [`Self::look_job`]): the tiles of what is
+    /// below it that `rect` covers at `level`, with a margin of the field's reach, and the field
+    /// to read through.
+    fn liquify_job(
+        &self,
+        index: usize,
+        liquify: &LiquifyEntry,
+        input: &Arc<RasterImage>,
+        rect: [f64; 4],
+        level: usize,
+    ) -> Option<LookJob> {
+        let whole = input.size();
+        if rect[0] >= f64::from(whole.width)
+            || rect[1] >= f64::from(whole.height)
+            || rect[2] <= 0.0
+            || rect[3] <= 0.0
+            || rect[0] >= rect[2]
+            || rect[1] >= rect[3]
+        {
+            return None;
+        }
+        let level = level.min(input.levels().len() - 1);
+        let factor = 1u32 << level;
+        let f = f64::from(factor);
+        let coarse = &input.levels()[level];
+        let size = coarse.size();
+        let t = f64::from(TILE_SIZE);
+        let (columns, rows) = (coarse.grid().columns(), coarse.grid().rows());
+        // What is drawn: the tiles of this level that `rect` covers.
+        let col0 = ((rect[0] / f / t).floor().max(0.0) as u32).min(columns);
+        let row0 = ((rect[1] / f / t).floor().max(0.0) as u32).min(rows);
+        let col1 = ((rect[2] / f / t).ceil().max(0.0) as u32).min(columns);
+        let row1 = ((rect[3] / f / t).ceil().max(0.0) as u32).min(rows);
+        if col0 >= col1 || row0 >= row1 {
+            return None;
+        }
+        let out_origin = [col0 * TILE_SIZE, row0 * TILE_SIZE];
+        let out_size = Size::new(
+            (col1 * TILE_SIZE).min(size.width) - out_origin[0],
+            (row1 * TILE_SIZE).min(size.height) - out_origin[1],
+        );
+        // What is read: those tiles and a margin of how far the field reads from.
+        let margin = liquify.reach / f + 2.0;
+        let (x0, y0) = (
+            f64::from(out_origin[0]) - margin,
+            f64::from(out_origin[1]) - margin,
+        );
+        let (x1, y1) = (
+            f64::from(out_origin[0] + out_size.width) + margin,
+            f64::from(out_origin[1] + out_size.height) + margin,
+        );
+        let icol0 = ((x0 / t).floor().max(0.0) as u32).min(columns);
+        let irow0 = ((y0 / t).floor().max(0.0) as u32).min(rows);
+        let icol1 = ((x1 / t).ceil().max(0.0) as u32).min(columns);
+        let irow1 = ((y1 / t).ceil().max(0.0) as u32).min(rows);
+        let mut tiles = Vec::with_capacity(((icol1 - icol0) * (irow1 - irow0)) as usize);
+        for row in irow0..irow1 {
+            for col in icol0..icol1 {
+                tiles.push(Arc::clone(coarse.tile(TileCoord { col, row })?));
+            }
+        }
+        let origin = [icol0 * TILE_SIZE, irow0 * TILE_SIZE];
+        let crop = Size::new(
+            (icol1 * TILE_SIZE).min(size.width) - origin[0],
+            (irow1 * TILE_SIZE).min(size.height) - origin[1],
+        );
+        Some(LookJob {
+            tiles,
+            size: crop,
+            format: input.format(),
+            steps: Vec::new(),
+            factor,
+            origin,
+            above: self.entries[index + 1..].to_vec(),
+            warp: Some(WarpJob {
+                field: Arc::clone(&liquify.field),
+                space: liquify.space,
+                out_origin,
+                out_size,
+                pyramid: false,
+            }),
         })
     }
 
@@ -2974,11 +3341,13 @@ impl LayerStack {
         let Some(index) = self.last_filter() else {
             return Ok(self.clone());
         };
-        let Entry::Filter(filter) = &self.entries[index] else {
-            return Ok(self.clone());
+        let output = match &self.entries[index] {
+            Entry::Filter(filter) => filter.output(&self.below(index))?,
+            Entry::Liquify(liquify) => liquify.output(&self.below(index))?,
+            _ => return Ok(self.clone()),
         };
         Ok(LayerStack {
-            original: filter.output(&self.below(index))?,
+            original: output,
             entries: self.entries[index + 1..].to_vec(),
         })
     }
@@ -4894,5 +5263,203 @@ mod tests {
                 .unwrap_err(),
             StackError::SizeMismatch
         );
+    }
+
+    /// A field with a stroke across the middle of the layer, moving the pixels right.
+    fn pushed() -> Arc<Field> {
+        use crate::liquify::{Brush, Stroke, Tool};
+        let mut field = Field::new(size());
+        let brush = Brush {
+            size: 120.0,
+            density: 100.0,
+            pressure: 100.0,
+            rate: 100.0,
+        };
+        let mut stroke = Stroke::new(Tool::ForwardWarp, brush);
+        stroke.move_to(&mut field, [100.0, 130.0]);
+        stroke.move_to(&mut field, [190.0, 130.0]);
+        stroke.finish(&mut field);
+        Arc::new(field)
+    }
+
+    fn liquified(original: &Arc<RasterImage>) -> LayerStack {
+        LayerStack::new(Arc::clone(original))
+            .with_liquify(pushed(), BlendSpace::Perceptual, Some(Arc::clone(original)))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_liquify_entry_warps_what_is_below_it_and_what_is_above_follows() {
+        let original = gradient(true);
+        let stack = liquified(&original);
+        assert!(stack.has_shown_filter());
+        let warped = stack.evaluate().unwrap();
+        // Where the stroke moved pixels they differ, elsewhere they are the original's own.
+        assert_ne!(pixel(&warped, 150, 130), pixel(&original, 150, 130));
+        assert_eq!(pixel(&warped, 5, 5), pixel(&original, 5, 5));
+        assert_eq!(pixel(&warped, 295, 255), pixel(&original, 295, 255));
+        // Paint above it lands on the warped pixels.
+        let paint = painted(
+            &empty(&original),
+            gray(1.0),
+            |x, _| {
+                if x < 9 { 1.0 } else { 0.0 }
+            },
+        );
+        let over = stack.with_top_paint(paint).unwrap();
+        let result = over.evaluate().unwrap();
+        assert_eq!(pixel(&result, 150, 130), pixel(&warped, 150, 130));
+        assert_eq!(pixel(&result, 3, 3), vec![255, 255, 255, 255]);
+        // And an effect above it is applied over the warp.
+        let inverted = stack
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        let w = pixel(&warped, 150, 130);
+        assert_eq!(
+            pixel(&inverted, 150, 130),
+            vec![255 - w[0], 255 - w[1], 255 - w[2], 255]
+        );
+    }
+
+    #[test]
+    fn a_liquify_entry_is_edited_hidden_and_keeps_what_it_knows() {
+        let original = gradient(true);
+        let stack = liquified(&original);
+        let Entry::Liquify(entry) = &stack.entries()[0] else {
+            panic!("a liquify entry");
+        };
+        assert!(entry.known_input().is_some());
+        // Hidden: kept, not shown.
+        let hidden = stack.with_hidden(0, true).unwrap();
+        assert!(!hidden.has_shown_filter() && hidden.entries()[0].hidden());
+        assert_eq!(difference(&hidden.evaluate().unwrap(), &original), 0);
+        // Another field in its place: the eye and what it was applied to stay.
+        let other = hidden.with_field(0, Arc::new(Field::new(size()))).unwrap();
+        let Entry::Liquify(edited) = &other.entries()[0] else {
+            panic!("a liquify entry");
+        };
+        assert!(edited.hidden());
+        assert!(Arc::ptr_eq(&edited.known_input().unwrap().1, &original));
+        // Only a liquify entry takes a field; and only one of the layer's size.
+        assert!(matches!(
+            LayerStack::new(Arc::clone(&original))
+                .with_effect(effect(Adjustment::Invert, None))
+                .unwrap()
+                .with_field(0, pushed()),
+            Err(StackError::InvalidEffect)
+        ));
+        assert_eq!(
+            stack
+                .with_field(0, Arc::new(Field::new(Size::new(10, 10))))
+                .unwrap_err(),
+            StackError::SizeMismatch
+        );
+        assert_eq!(
+            stack.with_field(3, pushed()).unwrap_err(),
+            StackError::IndexOutOfRange(3)
+        );
+        // Deleted: the layer is as it was.
+        assert!(stack.without(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_liquify_look_at_level_zero_is_the_whole_evaluation_there() {
+        let original = gradient(true);
+        let stack = liquified(&original);
+        let whole = stack.evaluate().unwrap();
+        let rect = [90.0, 100.0, 210.0, 160.0];
+        let look = stack.look_at(rect, 0).unwrap().unwrap();
+        assert_eq!(look.factor, 1);
+        assert_eq!(look.filter, "liquify");
+        assert!(look.covers(rect, 0));
+        let [ox, oy] = look.origin.map(i64::from);
+        let part = PremulPixels::new(&look.image, BlendSpace::Perceptual);
+        let exact = PremulPixels::new(&whole, BlendSpace::Perceptual);
+        for (x, y) in [(90, 100), (150, 130), (200, 150), (209, 159)] {
+            assert_eq!(part.at(x - ox, y - oy), exact.at(x, y), "({x}, {y})");
+        }
+        // Outside the layer: nothing.
+        assert!(
+            stack
+                .look_at([400.0, 400.0, 500.0, 500.0], 0)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_liquify_look_at_a_coarse_level_agrees_within_the_averaging() {
+        let original = gradient(true);
+        let stack = liquified(&original);
+        let whole = stack.evaluate().unwrap();
+        let look = stack.look_at([0.0, 0.0, 300.0, 260.0], 1).unwrap().unwrap();
+        assert_eq!((look.factor, look.image.size()), (2, Size::new(150, 130)));
+        for (x, y) in [(40u32, 40u32), (75, 65), (100, 70)] {
+            let a = pixel(&look.image, x, y);
+            let b = pixel(&whole, x * 2, y * 2);
+            for c in 0..3 {
+                assert!(a[c].abs_diff(b[c]) <= 8, "({x}, {y}): {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_liquify_preview_stands_in_for_the_whole_layer() {
+        let original = gradient(true);
+        let plain = LayerStack::new(Arc::clone(&original));
+        let known = || {
+            plain
+                .with_liquify(
+                    pushed(),
+                    BlendSpace::Perceptual,
+                    Some(Arc::clone(&original)),
+                )
+                .unwrap()
+        };
+        let stack = known()
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap();
+        let preview = stack.preview(150 * 130).unwrap().unwrap();
+        assert_eq!((preview.factor, preview.filter), (2, "liquify"));
+        assert_eq!(preview.image.size(), Size::new(150, 130));
+        assert_eq!(preview.above, stack.entries()[1..]);
+        // Small enough whole, or nothing known below: none.
+        assert!(stack.preview(u64::MAX).unwrap().is_none());
+        let unknown = plain
+            .with_liquify(pushed(), BlendSpace::Perceptual, None)
+            .unwrap();
+        assert!(unknown.preview(150 * 130).unwrap().is_none());
+        // Thumbnails take the quick look while a liquify is the top entry.
+        let pixels = Pixels::pending(known(), None);
+        assert_eq!(
+            pixels.quick_look(150 * 130).unwrap().size(),
+            Size::new(150, 130)
+        );
+        assert!(pixels.ready_image().is_none(), "nothing evaluated whole");
+        assert_eq!(pixels.get().size(), size());
+    }
+
+    #[test]
+    fn a_grown_layer_keeps_its_liquify_where_it_was() {
+        let original = gradient(true);
+        let stack = liquified(&original);
+        let grown = stack.grown((1, 1), Size::new(3 * T, 3 * T + 40)).unwrap();
+        let Entry::Liquify(entry) = &grown.entries()[0] else {
+            panic!("a liquify entry");
+        };
+        let Entry::Liquify(before) = &stack.entries()[0] else {
+            panic!("a liquify entry");
+        };
+        assert_eq!(
+            entry
+                .field()
+                .displacement_at([150.0 + f64::from(T), 130.0 + f64::from(T)]),
+            before.field().displacement_at([150.0, 130.0])
+        );
+        assert_eq!(entry.field().size(), Size::new(3 * T, 3 * T + 40));
+        let result = grown.evaluate().unwrap();
+        assert_eq!(result.size(), Size::new(3 * T, 3 * T + 40));
     }
 }

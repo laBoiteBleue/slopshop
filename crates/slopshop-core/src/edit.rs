@@ -861,6 +861,55 @@ impl Edit {
         })
     }
 
+    /// Filter > Liquify (ADR 0037): a Liquify entry of `field` on top of raster layer `id`'s
+    /// stack, warping what it shows now (`shown`: its evaluated pixels, when they are, what the
+    /// entry is applied to). [`EditError::NoLayers`] when the layer is hidden, as the other
+    /// filters; the selection is not used (Photoshop's Liquify ignores it).
+    pub fn apply_liquify(
+        doc: &Document,
+        id: LayerId,
+        field: Arc<crate::liquify::Field>,
+        shown: Option<Arc<RasterImage>>,
+    ) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        if !matches!(layer.content, LayerContent::Raster { .. }) {
+            return Err(EditError::NotRaster(id));
+        }
+        if !layer.visible {
+            return Err(EditError::NoLayers);
+        }
+        let stack = layer.content.stack().ok_or(EditError::NotRaster(id))?;
+        Ok(Edit::SetLayerStack {
+            id,
+            stack: stack
+                .with_liquify(field, doc.blend_space(), shown)
+                .map_err(EditError::Stack)?,
+            shown: None,
+        })
+    }
+
+    /// The edit that gives Liquify entry `index` of raster layer `id`'s stack `field`, as its
+    /// workspace left it: an entry edited again (ADR 0037). A field that displaces nothing (all
+    /// restored) removes the entry. It keeps its eye.
+    pub fn set_liquify(
+        doc: &Document,
+        id: LayerId,
+        index: usize,
+        field: Arc<crate::liquify::Field>,
+    ) -> Result<Edit, EditError> {
+        let stack = Self::stack_of(doc, id)?;
+        let edited = if field.is_identity() {
+            stack.without(index)
+        } else {
+            stack.with_field(index, field)
+        };
+        Ok(Edit::SetLayerStack {
+            id,
+            stack: edited.map_err(EditError::Stack)?,
+            shown: None,
+        })
+    }
+
     /// The edit that deletes entry `index` (bottom to top) of raster layer `id`'s stack (ADR
     /// 0029): the neighbours that become alike merge, and what was above it is evaluated
     /// again where it reaches.
@@ -3504,5 +3553,127 @@ mod tests {
         let layer = doc.layer(id).unwrap();
         assert!(!layer.is_painted());
         assert!(Arc::ptr_eq(&layer.mask.as_ref().unwrap().image, &mask));
+    }
+
+    /// A field that pushed the pixels around (10, 20) to the right.
+    fn pushed(size: Size, to: f64) -> Arc<crate::liquify::Field> {
+        use crate::liquify::{Brush, Field, Stroke, Tool};
+        let mut field = Field::new(size);
+        let brush = Brush {
+            size: 30.0,
+            density: 100.0,
+            pressure: 100.0,
+            rate: 100.0,
+        };
+        let mut stroke = Stroke::new(Tool::ForwardWarp, brush);
+        stroke.move_to(&mut field, [10.0, 20.0]);
+        stroke.move_to(&mut field, [to, 20.0]);
+        stroke.finish(&mut field);
+        Arc::new(field)
+    }
+
+    fn ramp(size: Size) -> Arc<RasterImage> {
+        let mut pixels = Vec::new();
+        for y in 0..size.height {
+            for x in 0..size.width {
+                pixels.extend([(x * 3) as u8, (y * 4) as u8, 90, 255]);
+            }
+        }
+        Arc::new(
+            RasterImage::from_pixels(size, crate::color::PixelFormat::RGBA8_SRGB, &pixels).unwrap(),
+        )
+    }
+
+    fn pixel_of(image: &RasterImage, x: u32, y: u32) -> [u8; 4] {
+        let tile = &image.levels()[0].tiles()[0];
+        let at = (y * crate::raster::TILE_SIZE + x) as usize * 4;
+        [tile[at], tile[at + 1], tile[at + 2], tile[at + 3]]
+    }
+
+    #[test]
+    fn liquify_is_an_entry_applied_edited_hidden_and_undone() {
+        let size = Size::new(64, 48);
+        let mut doc = Document::new(size);
+        let original = ramp(size);
+        let id = raster_layer(&mut doc, Arc::clone(&original));
+
+        let apply = Edit::apply_liquify(&doc, id, pushed(size, 40.0), None).unwrap();
+        let undo = apply.apply(&mut doc).unwrap();
+        let (image_now, kept) = shown(&doc, id);
+        let stack = kept.expect("a stack");
+        assert!(matches!(stack.entries(), [crate::stack::Entry::Liquify(_)]));
+        // The content under the brush moved right: its pixel reads from further left.
+        assert_ne!(pixel_of(&image_now, 20, 20), pixel_of(&original, 20, 20));
+        // Far from it, nothing moved.
+        assert_eq!(pixel_of(&image_now, 60, 40), pixel_of(&original, 60, 40));
+        let redo = undo.apply(&mut doc).unwrap();
+        let (image_now, kept) = shown(&doc, id);
+        assert!(kept.is_none() && Arc::ptr_eq(&image_now, &original));
+
+        // Applied again, then edited: another field replaces it, the eye stays.
+        redo.apply(&mut doc).unwrap();
+        let hide = Edit::set_entry(&doc, id, 0, None, true).unwrap();
+        hide.apply(&mut doc).unwrap();
+        assert_eq!(
+            pixel_of(&shown(&doc, id).0, 20, 20),
+            pixel_of(&original, 20, 20)
+        );
+        let edit = Edit::set_liquify(&doc, id, 0, pushed(size, 55.0)).unwrap();
+        let undo_edit = edit.apply(&mut doc).unwrap();
+        let stack = shown(&doc, id).1.unwrap();
+        assert!(stack.entries()[0].hidden(), "it keeps its eye");
+        Edit::set_entry(&doc, id, 0, None, false)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let far = pixel_of(&shown(&doc, id).0, 40, 20);
+        undo_edit.apply(&mut doc).unwrap();
+        // Undone: the earlier field again.
+        assert_ne!(
+            pixel_of(&shown(&doc, id).0, 40, 20),
+            far,
+            "the earlier field shows other pixels there"
+        );
+
+        // A field with nothing left in it removes the entry.
+        let restored = Arc::new(pushed(size, 40.0).restored());
+        Edit::set_liquify(&doc, id, 0, restored)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert!(shown(&doc, id).1.is_none());
+    }
+
+    #[test]
+    fn liquify_refuses_what_filters_refuse() {
+        let size = Size::new(32, 32);
+        let mut doc = Document::new(size);
+        let fill = fill_layer(&mut doc, "fill");
+        let fill_id = fill.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: fill,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let field = Arc::new(crate::liquify::Field::new(size));
+        assert_eq!(
+            Edit::apply_liquify(&doc, fill_id, Arc::clone(&field), None),
+            Err(EditError::NotRaster(fill_id))
+        );
+        let id = raster_layer(&mut doc, ramp(size));
+        // A field of another size than the layer.
+        let other = Arc::new(crate::liquify::Field::new(Size::new(40, 40)));
+        assert!(Edit::apply_liquify(&doc, id, other, None).is_err());
+        Edit::SetLayerVisible { id, visible: false }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(
+            Edit::apply_liquify(&doc, id, field, None),
+            Err(EditError::NoLayers)
+        );
+        // Not a Liquify entry.
+        assert!(Edit::set_liquify(&doc, id, 0, pushed(size, 20.0)).is_err());
     }
 }

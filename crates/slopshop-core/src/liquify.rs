@@ -1062,13 +1062,14 @@ fn grid_of(size: Size) -> Vec<TileCoord> {
 }
 
 /// A grid of `size` pixels at `placement` seen through `field` from `source`: a whole image of
-/// the source's format, without a pyramid (what is shown at the level it was made for).
+/// the source's format, without a pyramid unless `pyramid` (what is shown at the level it was made for).
 pub fn warp_image(
     source: &Source<'_>,
     field: &Field,
     placement: Placement,
     size: Size,
     format: PixelFormat,
+    pyramid: bool,
 ) -> Result<RasterImage, RasterError> {
     let mut work: Vec<(TileCoord, Option<Arc<[u8]>>)> =
         grid_of(size).into_iter().map(|c| (c, None)).collect();
@@ -1076,7 +1077,11 @@ pub fn warp_image(
         *out = Some(warp_tile(source, field, placement, size, *coord));
     });
     let tiles = work.into_iter().filter_map(|(_, tile)| tile).collect();
-    RasterImage::from_level0_tiles_only(size, format, tiles)
+    if pyramid {
+        RasterImage::from_level0_tiles(size, format, tiles)
+    } else {
+        RasterImage::from_level0_tiles_only(size, format, tiles)
+    }
 }
 
 /// `input` warped by `field` (the layer's whole result), in `space`: the tiles whose
@@ -1832,6 +1837,7 @@ mod tests {
             placement,
             Size::new(300, 300),
             image.format(),
+            false,
         )
         .unwrap();
         for (x, y) in [(50u32, 50u32), (120, 200), (250, 100)] {
