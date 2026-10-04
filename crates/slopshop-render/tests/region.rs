@@ -32,6 +32,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
             parent: None,
             index,
             layer: Layer {
+                style: None,
                 transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
@@ -786,6 +787,7 @@ fn push_into(
             parent,
             index,
             layer: Layer {
+                style: None,
                 transform: slopshop_core::Affine::IDENTITY,
                 clipped: false,
                 id,
@@ -1502,6 +1504,69 @@ fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
             );
             let what = format!("{space:?} {adjustment:?}");
             assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        }
+    }
+}
+
+#[test]
+fn styled_layers_match_the_cpu_reference_compositor() {
+    use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
+    let Some(r) = renderer() else { return };
+    let size = Size::new(96, 80);
+    let format = PixelFormat {
+        layout: ChannelLayout::Rgba,
+        sample: SampleType::U8,
+        color_space: ColorSpace::SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let mut s = Session::new(Document::new(size));
+    push_layer(&mut s, raster(&image(size, format, pattern)), 1.0);
+    // A soft-edged disc, partly off the canvas on the right.
+    let disc = image(size, format, |x, y| {
+        let d = ((f64::from(x) - 80.0).powi(2) + (f64::from(y) - 40.0).powi(2)).sqrt();
+        let a = ((24.0 - d) * 64.0).clamp(0.0, 255.0) as u8;
+        vec![40, 160, 220, a]
+    });
+    let id = push_layer(&mut s, raster(&disc), 0.9);
+    let styles = [
+        LayerStyle {
+            drop_shadow: Some(DropShadow {
+                spread: 30.0,
+                size: 8.0,
+                distance: 9.0,
+                ..DropShadow::default()
+            }),
+            ..LayerStyle::default()
+        },
+        LayerStyle {
+            fill_opacity: 0.4,
+            stroke: Some(Stroke {
+                size: 4.0,
+                position: slopshop_core::selection::StrokeLocation::Center,
+                ..Stroke::default()
+            }),
+            color_overlay: Some(ColorOverlay {
+                mode: BlendMode::Multiply,
+                opacity: 0.6,
+                ..ColorOverlay::default()
+            }),
+            ..LayerStyle::default()
+        },
+    ];
+    for (k, style) in styles.into_iter().enumerate() {
+        s.perform(Edit::SetLayerStyle {
+            id,
+            style: Some(Box::new(style)),
+        })
+        .unwrap();
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            s.perform(Edit::SetBlendSpace { space }).unwrap();
+            assert_matches_cpu(
+                &r,
+                s.document(),
+                size.bounds(),
+                &format!("style {k} {space:?}"),
+            );
         }
     }
 }

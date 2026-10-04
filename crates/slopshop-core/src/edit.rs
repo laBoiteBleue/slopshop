@@ -20,6 +20,7 @@ use crate::document::{
 use crate::geom::Size;
 use crate::raster::RasterImage;
 use crate::stack::Pixels;
+use crate::style::Style;
 use crate::transform::Affine;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +114,12 @@ pub enum Edit {
         id: LayerId,
         adjustment: crate::adjust::Adjustment,
     },
+    /// A layer's style (ADR 0032): its effects and Fill Opacity; `None` removes it.
+    SetLayerStyle {
+        id: LayerId,
+        /// Boxed: much larger than the other edits.
+        style: Option<Box<crate::style::LayerStyle>>,
+    },
     /// Clip a layer to the layer below it, or release it (ADR 0016).
     SetLayerClipped {
         id: LayerId,
@@ -178,6 +185,9 @@ pub enum EditError {
     NoMask(LayerId),
     /// The layer is not a fill layer.
     NotAFill(LayerId),
+    /// A style out of Photoshop's ranges, or on a layer that is neither a pixel nor a fill
+    /// layer (ADR 0032).
+    InvalidStyle,
     /// The layer is not a group (as a parent, or for a group edit).
     NotAGroup(LayerId),
     /// A group cannot go inside itself or one of its descendants.
@@ -235,6 +245,7 @@ impl fmt::Display for EditError {
             }
             EditError::NotRaster(id) => write!(f, "{id} is not a raster layer"),
             EditError::NotAFill(id) => write!(f, "{id} is not a fill layer"),
+            EditError::InvalidStyle => write!(f, "invalid layer style"),
             EditError::Stack(e) => write!(f, "{e}"),
             EditError::NoMask(id) => write!(f, "{id} has no mask"),
             EditError::NotAGroup(id) => write!(f, "{id} is not a group"),
@@ -273,6 +284,8 @@ impl Edit {
                 validate_new_layer(doc, parent, index, &layer)?;
                 let id = layer.id;
                 siblings_mut(doc, parent)?.insert(index, layer);
+                // Its effects drawn again where it lands.
+                doc.layer_mut(id);
                 Edit::RemoveLayer { id }
             }
             Edit::RemoveLayer { id } => {
@@ -452,6 +465,8 @@ impl Edit {
                 check_depth(doc, parent, height)?;
                 let layer = siblings_mut(doc, from_parent)?.remove(from);
                 siblings_mut(doc, parent)?.insert(index, layer);
+                // Its effects drawn again where it lands.
+                doc.layer_mut(id);
                 Edit::MoveLayer {
                     id,
                     parent: from_parent,
@@ -496,6 +511,24 @@ impl Edit {
                 Edit::SetAdjustment {
                     id,
                     adjustment: previous,
+                }
+            }
+            Edit::SetLayerStyle { id, style } => {
+                if style.as_ref().is_some_and(|s| !s.is_valid()) {
+                    return Err(EditError::InvalidStyle);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                // Pixel and fill layers: groups' styles are not drawn yet.
+                if !matches!(
+                    layer.content,
+                    LayerContent::Raster { .. } | LayerContent::Fill { .. }
+                ) {
+                    return Err(EditError::InvalidStyle);
+                }
+                let previous = std::mem::replace(&mut layer.style, style.map(|s| Style::new(*s)));
+                Edit::SetLayerStyle {
+                    id,
+                    style: previous.map(|s| Box::new(*s.settings())),
                 }
             }
             Edit::SetLayerClipped { id, clipped } => {
@@ -1285,6 +1318,7 @@ mod tests {
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
+            style: None,
             transform: crate::transform::Affine::IDENTITY,
             clipped: false,
             id: doc.allocate_layer_id(),
@@ -1414,6 +1448,7 @@ mod tests {
         let ids = stack(&mut doc, &["a"]);
         let id = doc.allocate_layer_id();
         let layer = Layer {
+            style: None,
             id,
             name: "adjust".into(),
             visible: true,
