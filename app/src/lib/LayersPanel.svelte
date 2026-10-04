@@ -915,7 +915,7 @@
           </span>
         {/if}
         {#if layer.baking}
-          <!-- Being baked (ADR 0031): the layer it becomes, shown small until its pixels come. -->
+          <!-- Being baked (ADR 0031): what it becomes, shown small until its pixels come. -->
           <span class="thumb baking" title={t("layers.baking")}>
             <LayerThumbnail {documentId} {layer} size={36} />
           </span>
@@ -1375,10 +1375,6 @@
     background: var(--hover);
   }
 
-  .thumb.baking {
-    background: var(--panel-header);
-    opacity: 0.6;
-  }
 
   .thumb {
     display: flex;

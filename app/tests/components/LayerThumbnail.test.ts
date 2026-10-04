@@ -201,7 +201,8 @@ test("the layer and its mask do not share a thumbnail even with the same content
 
 test("a thumbnail the engine cannot give leaves the box empty", async () => {
   answer = () => Promise.reject("no such layer");
-  const { canvas } = show(layer());
+  // A layer never shown before (otherwise its last thumbnail stays).
+  const { canvas } = show(layer({ id: 71 }));
   await scrollIntoView();
   await waitFor(() => expect(requests).toHaveLength(1));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -221,4 +222,16 @@ test("a layer being baked shows what it will be at once, asked again at each bak
   await scrollIntoView();
   await waitFor(() => expect(second.canvas()?.width).toBe(4));
   expect(requests).toHaveLength(2);
+});
+
+test("a new box shows the layer's last thumbnail until its own comes, never an empty one", async () => {
+  const before = show(layer({ id: 9, kind: "group", contentKey: 0, baking: true }));
+  await scrollIntoView();
+  await waitFor(() => expect(before.canvas()?.width).toBe(4));
+  before.unmount();
+  // Its pixels came: the row's new box, while the engine has not answered yet.
+  answer = () => new Promise(() => {});
+  const after = show(layer({ id: 9 }));
+  await Promise.resolve();
+  expect(after.canvas()?.width).toBe(4);
 });
