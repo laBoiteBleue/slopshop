@@ -133,6 +133,7 @@
   import TrimDialog from "./lib/TrimDialog.svelte";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
   import { latestWins } from "./lib/latest";
+  import { combinedRows, loadedRows, type Combination } from "./lib/savedSelections";
   import StrokeTrail from "./lib/StrokeTrail.svelte";
   import SelectAndMaskPanel, {
     DEFAULT_REFINE,
@@ -1623,6 +1624,23 @@
       void sync(engine.refineClose(session.document));
     }
   });
+
+  /**
+   * What the selection was made of from the Selections panel (its rows show it), as long as it
+   * is still that selection.
+   */
+  let selectionsCombination = $state.raw<Combination | null>(null);
+
+  /** A saved selection loaded into the image (`mode`: Shift adds, Alt subtracts, both intersect). */
+  async function loadSavedSelection(id: number, mode: SelectionMode) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    const rows = loadedRows(selectionsCombination, doc.id, doc.selectionKey, id, mode);
+    await sync(engine.loadSelection(doc.id, id, mode));
+    const after = tabs.find((d) => d.id === doc.id);
+    selectionsCombination = { document: doc.id, key: after?.selectionKey ?? null, rows };
+  }
 
   /** Select > Save Selection is asking a name, for this document. */
   let saveSelectionFor = $state<number | null>(null);
@@ -4487,8 +4505,8 @@
               <SelectionsPanel
                 saved={active.savedSelections}
                 selected={active.selectionKey != null}
-                onload={(id, mode) =>
-                  selectionCommand((doc) => engine.loadSelection(doc, id, mode))}
+                onload={loadSavedSelection}
+                combined={combinedRows(selectionsCombination, active.id, active.selectionKey)}
                 onsave={openSaveSelection}
                 onreplace={(id) => selectionCommand((doc) => engine.saveSelection(doc, "", id))}
                 onrename={(id, name) => void sync(engine.renameSavedSelection(active.id, id, name))}

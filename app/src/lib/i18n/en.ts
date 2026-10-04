@@ -689,6 +689,11 @@ const en = {
   "dock.resize": "Resize the panels below Layers",
   "dock.fold": "Fold the panel (click again to unfold it)",
   "selections.title": "Selections",
+  "selections.keys": "Shift: add · Alt: subtract · both: intersect",
+  "selections.combined.replace": "In the selection",
+  "selections.combined.add": "Added to the selection",
+  "selections.combined.subtract": "Subtracted from the selection",
+  "selections.combined.intersect": "Intersected with the selection",
   "selections.last": "Last Selection",
   "selections.last.hint": "The selection Deselect removed last (Select > Reselect, Shift+Ctrl+D)",
   "selections.empty":

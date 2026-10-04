@@ -388,7 +388,11 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   double-click renames; the right-click menu also replaces one with the current selection or
   deletes it; + saves the current selection, the trash or Delete removes the row clicked last;
   a press outside the rows deselects the row, and on the empty part of the list deselects in
-  the image too (as a press under the layers deselects them).
+  the image too (as a press under the layers deselects them). The rows the selection is made
+  of are marked (an accent along the row, and +, − or ∩ for how they were combined) until the
+  selection changes otherwise; a line under the list recalls the keys (the maintainer's
+  choice, 2026-10-04, rather than selecting several rows as in the Layers panel, where Shift
+  means something else).
   The right column (ADR 0030, maintainer's choice of 2026-10-04): Layers on top, below it a
   dock of tab icons (Properties, Selections) whose unfolded panel's tab folds it down to the
   icons; its top edge resizes it; remembered; selecting an adjustment or fill layer unfolds

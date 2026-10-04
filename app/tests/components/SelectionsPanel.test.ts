@@ -150,3 +150,29 @@ test("the pinned Last Selection row brings back what Deselect removed, greyed wh
   await rerender({ ...props, canReselect: false });
   expect(screen.getByRole("button", { name: "Last Selection" })).toBeDisabled();
 });
+
+test("the rows the selection is made of are marked with how they were combined", () => {
+  render(SelectionsPanel, {
+    saved: [
+      { id: 1, name: "Hair" },
+      { id: 2, name: "Shirt" },
+      { id: 3, name: "Sky" },
+    ],
+    selected: true,
+    onload: vi.fn(),
+    onsave: vi.fn(),
+    onreplace: vi.fn(),
+    onrename: vi.fn(),
+    ondelete: vi.fn(),
+    combined: [
+      { id: 1, mode: "replace" },
+      { id: 2, mode: "subtract" },
+    ],
+  });
+  expect(row("Hair")).toHaveClass("combined");
+  expect(row("Shirt")).toHaveClass("combined");
+  expect(row("Sky")).not.toHaveClass("combined");
+  expect(screen.getByTitle("Subtracted from the selection")).toHaveTextContent("−");
+  // The keys, said under the list.
+  expect(screen.getByText("Shift: add · Alt: subtract · both: intersect")).toBeInTheDocument();
+});

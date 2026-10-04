@@ -707,6 +707,11 @@ const fr: Messages = {
   "dock.resize": "Redimensionner les panneaux sous Calques",
   "dock.fold": "Replier le panneau (cliquer de nouveau pour le déplier)",
   "selections.title": "Sélections",
+  "selections.keys": "Maj : ajouter · Alt : soustraire · les deux : intersection",
+  "selections.combined.replace": "Dans la sélection",
+  "selections.combined.add": "Ajoutée à la sélection",
+  "selections.combined.subtract": "Soustraite de la sélection",
+  "selections.combined.intersect": "Intersection avec la sélection",
   "selections.last": "Dernière sélection",
   "selections.last.hint":
     "La sélection retirée en dernier par Désélectionner (Sélection > Resélectionner, Maj+Ctrl+D)",
