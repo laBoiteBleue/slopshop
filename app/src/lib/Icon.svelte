@@ -25,6 +25,20 @@
     // The same links apart (proportions free).
     linkBroken:
       "M8.5 4.5a3.5 3.5 0 0 1 7 0v2a3.5 3.5 0 0 1-7 0Z M8.5 17.5a3.5 3.5 0 0 1 7 0v2a3.5 3.5 0 0 1-7 0Z M5 12h3 M16 12h3",
+    // Liquify's tools (ADR 0037).
+    liquifyForward: "M3 13c3-5 6 4 9-1s5-3 7-1 M16 6l5 5-5 5",
+    liquifyReconstruct: "M5 9h9a5 5 0 0 1 0 10H8 M8 5L4 9l4 4",
+    liquifySmooth: "M3 9c3-4 6 4 9 0s6 4 9 0 M3 16c3-4 6 4 9 0s6 4 9 0",
+    liquifyTwirl:
+      "M12 12a1.5 1.5 0 0 1 3 0 3.5 3.5 0 0 1-7 0 5.5 5.5 0 0 1 11 0 M19 12l-2 2.2-2.2-2",
+    liquifyPucker:
+      "M4 4l5 5 M9 5v4H5 M20 4l-5 5 M15 5v4h4 M4 20l5-5 M9 19v-4H5 M20 20l-5-5 M15 19v-4h4",
+    liquifyBloat:
+      "M9 9L4 4 M4 8V4h4 M15 9l5-5 M16 4h4v4 M9 15l-5 5 M4 16v4h4 M15 15l5 5 M16 20h4v-4",
+    liquifyPushLeft: "M19 12H5 M9 8l-4 4 4 4 M21 5v14",
+    liquifyFreeze: "M5 5h14v14H5Z M5 12l7-7 M5 19L19 5 M12 19l7-7",
+    liquifyThaw:
+      "M5 5h3 M11 5h2 M16 5h3v3 M19 11v2 M19 16v3h-3 M13 19h-2 M8 19H5v-3 M5 13v-2 M5 8V5 M9 15l6-6",
     // Tools.
     pointer: "M6 3v15.5l4.2-4 2.9 6.5 2.7-1.2-2.9-6.4H18Z",
     // Align and Distribute (the Move tool's options): boxes against a line, or evenly spaced.

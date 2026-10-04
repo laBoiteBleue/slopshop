@@ -147,9 +147,11 @@
     const name =
       entry.kind === "filter" && entry.filter
         ? t(`filter.${entry.filter}`)
-        : entry.kind === "paint" || entry.adjustment === null
-          ? t("layers.entry.paint")
-          : t(`adjustment.${entry.adjustment}`);
+        : entry.kind === "liquify"
+          ? t("layers.entry.liquify")
+          : entry.kind === "paint" || entry.adjustment === null
+            ? t("layers.entry.paint")
+            : t(`adjustment.${entry.adjustment}`);
     return entry.count > 1 ? t("layers.entry.count", { name, n: entry.count }) : name;
   }
 
@@ -1112,7 +1114,7 @@
               <Icon
                 name={entry.kind === "paint"
                   ? "brush"
-                  : entry.kind === "filter"
+                  : entry.kind === "filter" || entry.kind === "liquify"
                     ? "filter"
                     : "adjust"}
                 size={12}
