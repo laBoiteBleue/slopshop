@@ -503,6 +503,9 @@ pub enum ExportNotice {
     ColorDiscarded(u64),
     /// Parts of layers lay outside the canvas: the layered file keeps only what is inside.
     PixelsOutsideCanvas,
+    /// Layer styles (ADR 0032) are not written as Photoshop's yet: the layers hold their own
+    /// pixels, the merged image shows the effects.
+    StylesNotWritten,
     /// Pixels were changed to fit an indexed format (GIF): their color replaced by the nearest
     /// one of the palette (at most 256 colors), or their transparency made on or off. Counted
     /// in pixels.
@@ -522,6 +525,7 @@ impl ExportNotice {
             ExportNotice::AlphaFlattened(_) => "alphaFlattened",
             ExportNotice::ColorDiscarded(_) => "colorDiscarded",
             ExportNotice::PixelsOutsideCanvas => "pixelsOutsideCanvas",
+            ExportNotice::StylesNotWritten => "stylesNotWritten",
             ExportNotice::ColorsQuantized(_) => "colorsQuantized",
         }
     }
@@ -538,7 +542,8 @@ impl ExportNotice {
             | ExportNotice::ColorsQuantized(n) => *n = n.saturating_add(more),
             ExportNotice::PrecisionReduced
             | ExportNotice::BigTiff
-            | ExportNotice::PixelsOutsideCanvas => {}
+            | ExportNotice::PixelsOutsideCanvas
+            | ExportNotice::StylesNotWritten => {}
         }
     }
 
@@ -554,7 +559,8 @@ impl ExportNotice {
             | ExportNotice::ColorsQuantized(n) => Some(n),
             ExportNotice::PrecisionReduced
             | ExportNotice::BigTiff
-            | ExportNotice::PixelsOutsideCanvas => None,
+            | ExportNotice::PixelsOutsideCanvas
+            | ExportNotice::StylesNotWritten => None,
         }
     }
 }

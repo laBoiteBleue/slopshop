@@ -283,6 +283,7 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
         assert_eq!(x.transform, y.transform, "{}", x.name);
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
+        assert_eq!(x.style, y.style, "{}", x.name);
         match (&x.mask, &y.mask) {
             (None, None) => {}
             (Some(m), Some(n)) => {
@@ -1559,4 +1560,76 @@ fn selective_color_keeps_its_ranges_and_method() {
         _ => panic!("not an adjustment layer"),
     }
     fs::remove_file(&path).ok();
+}
+
+#[test]
+fn layer_styles_round_trip_and_bad_ones_are_refused() {
+    use slopshop_core::selection::StrokeLocation;
+    use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
+    let mut doc = Document::new(Size::new(40, 30));
+    let format = PixelFormat {
+        layout: ChannelLayout::Rgba,
+        sample: SampleType::U8,
+        color_space: ColorSpace::SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let pixels = noise(40 * 30 * 4, 7);
+    let raster = Arc::new(RasterImage::from_pixels(Size::new(40, 30), format, &pixels).unwrap());
+    let photo = push(&mut doc, "photo", LayerContent::raster(raster), 1.0);
+    let fill = push(
+        &mut doc,
+        "fill",
+        LayerContent::Fill {
+            color: LinearRgba::new(0.2, 0.4, 0.6, 1.0),
+        },
+        0.5,
+    );
+    let styles = [
+        LayerStyle {
+            fill_opacity: 0.3,
+            drop_shadow: Some(DropShadow {
+                enabled: false,
+                angle: -33.5,
+                spread: 12.0,
+                ..DropShadow::default()
+            }),
+            stroke: Some(Stroke {
+                position: StrokeLocation::Center,
+                size: 7.25,
+                ..Stroke::default()
+            }),
+            ..LayerStyle::default()
+        },
+        LayerStyle {
+            color_overlay: Some(ColorOverlay {
+                mode: BlendMode::Screen,
+                opacity: 0.125,
+                ..ColorOverlay::default()
+            }),
+            ..LayerStyle::default()
+        },
+    ];
+    for (id, style) in [photo, fill].into_iter().zip(styles) {
+        Edit::SetLayerStyle {
+            id: slopshop_core::LayerId::from_raw(id),
+            style: Some(Box::new(style)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let path = temp_path("styles.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    fs::remove_file(&path).ok();
+
+    // Styles are refused when they are out of range.
+    let mut bad = serde_json::json!({ "fill_opacity": 2.0 });
+    assert_eq!(super::style::from_json(&bad), None);
+    bad = serde_json::json!({ "fill_opacity": 1.0, "stroke": { "size": 3 } });
+    assert_eq!(super::style::from_json(&bad), None);
+    assert_eq!(
+        super::style::from_json(&serde_json::json!({ "fill_opacity": 1.0 })),
+        Some(LayerStyle::default())
+    );
 }

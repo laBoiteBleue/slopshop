@@ -20,8 +20,8 @@ use super::format::{
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
     NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED,
-    NODE_VERSION_STACK, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
+    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
+    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -580,6 +580,9 @@ fn build_manifest(
             _ => Map::new(),
         };
         params.insert("blend_mode".to_owned(), Value::from(layer.blend_mode.id()));
+        if let Some(style) = &layer.style {
+            params.insert("style".to_owned(), super::style::to_json(style.settings()));
+        }
         if layer.clipped {
             params.insert("clipped".to_owned(), Value::from(true));
         }
@@ -605,7 +608,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if matches!(layer.content, LayerContent::Raster { stack: Some(_), .. }) {
+                version: if layer.style.is_some() {
+                    NODE_VERSION_STYLED
+                } else if matches!(layer.content, LayerContent::Raster { stack: Some(_), .. }) {
                     NODE_VERSION_STACK
                 } else if layer.is_painted() {
                     NODE_VERSION_PAINTED
