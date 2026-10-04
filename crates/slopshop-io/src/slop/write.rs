@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value, json};
 use slopshop_core::adjust::{Adjustment, LEVELS_IDENTITY};
 use slopshop_core::color::SampleType;
-use slopshop_core::document::{Document, LayerContent};
+use slopshop_core::document::{Document, GuideAxis, LayerContent};
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
 use slopshop_core::stack::{Entry, StackError};
 
@@ -18,7 +18,7 @@ use super::format::{
     RecordHeader, RecordRef, SLOT_LEN, SLOT_OFFSETS, Slot, encode_blob, encode_index, record_span,
 };
 use super::manifest::{
-    ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
+    ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
     NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
     NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED,
     NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR,
@@ -724,6 +724,18 @@ fn build_manifest(
                 })
                 .collect(),
             next_selection_id: Some(document.next_saved_selection_id()),
+            guides: document
+                .guides()
+                .iter()
+                .map(|g| GuideDto {
+                    axis: match g.axis {
+                        GuideAxis::Vertical => "vertical",
+                        GuideAxis::Horizontal => "horizontal",
+                    }
+                    .to_owned(),
+                    position: g.position,
+                })
+                .collect(),
             extra: residue.document.clone(),
         },
         nodes,

@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 21;
+pub(crate) const SCHEMA_MINOR: u32 = 22;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -119,8 +119,19 @@ pub(crate) struct DocumentDto {
     /// The saved selections' id counter (schema 0.16). Absent: one above the largest id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_selection_id: Option<u64>,
+    /// The guides (schema 0.22, View > Rulers), in the order they were placed. Absent: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<GuideDto>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// A guide (schema 0.22): `axis` is `vertical` (at a distance from the left edge) or
+/// `horizontal` (from the top edge), `position` in document pixels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GuideDto {
+    pub axis: String,
+    pub position: f64,
 }
 
 /// A selection saved by name (Select > Save Selection, schema 0.16): its mask is a gray

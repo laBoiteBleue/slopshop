@@ -14,8 +14,8 @@ use slopshop_core::curve::Curve;
 use slopshop_core::stack::Entry;
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
-    Arrange, BlendMode, BlendSpace, Document, Edit, ImageTurn, Layer, LayerContent, LayerId,
-    LinearRgba, Session, Size,
+    Arrange, BlendMode, BlendSpace, Document, Edit, Guide, GuideAxis, ImageTurn, Layer,
+    LayerContent, LayerId, LinearRgba, Session, Size,
 };
 use slopshop_io::export::{
     AvifDepth, ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
@@ -66,6 +66,39 @@ pub struct DocumentView {
     pub quick_mask_opacity: u8,
     /// The selections saved by name (Select > Save Selection), in the order they were saved.
     pub saved_selections: Vec<SavedSelectionView>,
+    /// The guides (View > Rulers), in the order they were placed.
+    pub guides: Vec<GuideView>,
+}
+
+/// A guide, both ways: `vertical` at `position` document pixels from the canvas's left edge,
+/// else horizontal from its top edge.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideView {
+    pub vertical: bool,
+    pub position: f64,
+}
+
+impl From<&Guide> for GuideView {
+    fn from(guide: &Guide) -> Self {
+        Self {
+            vertical: guide.axis == GuideAxis::Vertical,
+            position: guide.position,
+        }
+    }
+}
+
+impl From<GuideView> for Guide {
+    fn from(view: GuideView) -> Self {
+        Guide {
+            axis: if view.vertical {
+                GuideAxis::Vertical
+            } else {
+                GuideAxis::Horizontal
+            },
+            position: view.position,
+        }
+    }
 }
 
 /// A selection saved by name: what Select > Load Selection lists.
@@ -369,6 +402,7 @@ impl DocumentView {
                     name: s.name.clone(),
                 })
                 .collect(),
+            guides: doc.guides().iter().map(GuideView::from).collect(),
         }
     }
 }
@@ -838,6 +872,10 @@ pub enum EditRequest {
     /// `space`: `perceptual` or `linear`.
     SetBlendSpace {
         space: String,
+    },
+    /// The document's guides, all of them (one placed, moved or removed, or all cleared).
+    SetGuides {
+        guides: Vec<GuideView>,
     },
     SetLayerMaskEnabled {
         id: u64,
@@ -1318,6 +1356,9 @@ impl EditRequest {
             EditRequest::SetLayerBlendMode { id, mode } => Edit::SetLayerBlendMode {
                 id: LayerId::from_raw(id),
                 mode: BlendMode::from_id(&mode).ok_or(format!("unknown blend mode {mode:?}"))?,
+            },
+            EditRequest::SetGuides { guides } => Edit::SetGuides {
+                guides: guides.into_iter().map(Guide::from).collect(),
             },
             EditRequest::SetBlendSpace { space } => Edit::SetBlendSpace {
                 space: BlendSpace::from_id(&space)
