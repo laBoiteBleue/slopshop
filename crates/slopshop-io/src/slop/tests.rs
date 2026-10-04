@@ -280,6 +280,13 @@ fn assert_same_stack(a: Option<&LayerStack>, b: Option<&LayerStack>, what: &str)
                     assert_eq!(s.selection.is_some(), t.selection.is_some(), "{what}");
                 }
             }
+            (Entry::Liquify(p), Entry::Liquify(q)) => {
+                assert_eq!(p.space(), q.space(), "{what}");
+                assert_eq!(p.field().cell(), q.field().cell(), "{what}");
+                let ((pd, pf), (qd, qf)) = (p.images().unwrap(), q.images().unwrap());
+                assert_same_image(&pd, &qd, &format!("{what} liquify field"));
+                assert_same_image(&pf, &qf, &format!("{what} liquify freeze"));
+            }
             _ => panic!("{what}: entries differ"),
         }
     }
@@ -1741,6 +1748,112 @@ fn filter_entries_round_trip() {
     };
     assert_eq!(filter.steps().len(), 1);
     fs::remove_file(&path).ok();
+}
+
+/// A field that pushed pixels around and froze a spot, over a layer of `size`.
+fn liquified_field(size: slopshop_core::Size) -> Arc<slopshop_core::liquify::Field> {
+    use slopshop_core::liquify::{Brush, Field, Stroke, Tool};
+    let mut field = Field::new(size);
+    let brush = Brush {
+        size: 16.0,
+        density: 100.0,
+        pressure: 100.0,
+        rate: 100.0,
+    };
+    for (tool, from, to) in [
+        (Tool::ForwardWarp, [8.0, 10.0], [24.0, 12.0]),
+        (Tool::Freeze, [30.0, 22.0], [30.0, 22.0]),
+    ] {
+        let mut stroke = Stroke::new(tool, brush);
+        stroke.move_to(&mut field, from);
+        stroke.move_to(&mut field, to);
+        stroke.finish(&mut field);
+    }
+    Arc::new(field)
+}
+
+#[test]
+fn liquify_entries_round_trip() {
+    let mut doc = golden_document();
+    let id = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { stack: Some(_), .. } => Some(l.id),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    let size = match &doc.layer(id).unwrap().content {
+        LayerContent::Raster { stack: Some(s), .. } => s.original().size(),
+        _ => unreachable!(),
+    };
+    let field = liquified_field(size);
+    Edit::apply_liquify(&doc, id, Arc::clone(&field), None)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    // A second one, hidden: its eye is kept too.
+    Edit::apply_liquify(&doc, id, liquified_field(size), None)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let count = match &doc.layer(id).unwrap().content {
+        LayerContent::Raster { stack: Some(s), .. } => s.entries().len(),
+        _ => unreachable!(),
+    };
+    Edit::set_entry(&doc, id, count - 1, None, true)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let path = temp_path("liquify-entries.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &loaded.layer(id).unwrap().content
+    else {
+        panic!("a layer with a stack");
+    };
+    let [.., Entry::Liquify(first), Entry::Liquify(second)] = read.entries() else {
+        panic!("two liquify entries");
+    };
+    assert!(!first.hidden() && second.hidden());
+    // What was read is what was stored: the field, its freeze, its cell.
+    assert!(!first.field().is_identity() && first.field().has_frozen());
+    for p in [[16.0, 11.0], [30.0, 22.0], [2.0, 2.0]] {
+        assert_eq!(
+            first.field().displacement_at(p),
+            field.displacement_at(p),
+            "{p:?}"
+        );
+        assert_eq!(first.field().frozen_at(p), field.frozen_at(p));
+    }
+    // Saved again unchanged: nothing new to write for it (the images are the same).
+    let (again, mut file) = SlopFile::open(&path).unwrap();
+    let report = file.save(&again).unwrap();
+    assert!(
+        report.bytes_written < 64 * 1024,
+        "{} bytes written for nothing new",
+        report.bytes_written
+    );
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_liquify_entry_with_images_that_do_not_fit_is_refused() {
+    use slopshop_core::liquify::Field;
+    // The images of a field over a larger layer: a corrupt entry, not a panic.
+    let big = Field::new(slopshop_core::Size::new(900, 900));
+    let (displacement, frozen) = big.to_images().unwrap();
+    assert!(
+        Field::from_images(
+            slopshop_core::Size::new(100, 100),
+            1,
+            &displacement,
+            &frozen
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -184,6 +184,10 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
                                 .filter_map(|s| s.selection.as_ref())
                                 .map(|s| Arc::clone(s.image())),
                         ),
+                        Entry::Liquify(liquify) => {
+                            let (displacement, frozen) = liquify.images().map_err(stack_error)?;
+                            out.extend([displacement, frozen]);
+                        }
                     }
                 }
             }
@@ -558,6 +562,17 @@ fn build_manifest(
                                     })
                                     .collect();
                                 json!({ "effect": steps })
+                            }
+                            Entry::Liquify(liquify) => {
+                                // Schema 0.23 (ADR 0037): the field's displacements and
+                                // freeze as images of one pixel per node, `cell` pixels apart.
+                                let images = liquify.images().ok();
+                                json!({ "liquify": {
+                                    "displacement": images.as_ref().and_then(|(d, _)| key(d)),
+                                    "frozen": images.as_ref().and_then(|(_, f)| key(f)),
+                                    "cell": liquify.field().cell(),
+                                    "space": liquify.space().id(),
+                                }})
                             }
                             Entry::Filter(filter) => {
                                 let steps: Vec<Value> = filter

@@ -481,6 +481,8 @@ pub struct LiquifyEntry {
     reach: f64,
     hidden: bool,
     cache: Mutex<Option<FilterCache>>,
+    /// The field and its freeze as whole images, made once when asked (files store them so).
+    images: OnceLock<(Arc<RasterImage>, Arc<RasterImage>)>,
 }
 
 impl LiquifyEntry {
@@ -491,7 +493,42 @@ impl LiquifyEntry {
             space,
             hidden: false,
             cache: Mutex::new(None),
+            images: OnceLock::new(),
         }
+    }
+
+    /// An entry read back from its images ([`Self::images`]) over a layer of `size`, `cell`
+    /// pixels a node.
+    pub fn from_images(
+        size: Size,
+        cell: u32,
+        space: BlendSpace,
+        displacement: Arc<RasterImage>,
+        frozen: Arc<RasterImage>,
+    ) -> Result<Self, StackError> {
+        let field = Field::from_images(size, cell, &displacement, &frozen)?;
+        let entry = Self::new(Arc::new(field), space);
+        let _ = entry.images.set((displacement, frozen));
+        Ok(entry)
+    }
+
+    /// The field's displacements and freeze as whole images of one pixel per node (what files
+    /// store): every tile it did not touch is one shared zero tile. Made once.
+    pub fn images(&self) -> Result<(Arc<RasterImage>, Arc<RasterImage>), StackError> {
+        if let Some(images) = self.images.get() {
+            return Ok(images.clone());
+        }
+        let (displacement, frozen) = self.field.to_images()?;
+        let images = (Arc::new(displacement), Arc::new(frozen));
+        Ok(self.images.get_or_init(|| images).clone())
+    }
+
+    /// This entry with the images it has made (they describe the same field).
+    fn sharing_images(self, from: &LiquifyEntry) -> Self {
+        if let Some(images) = from.images.get() {
+            let _ = self.images.set(images.clone());
+        }
+        self
     }
 
     pub fn field(&self) -> &Arc<Field> {
@@ -2710,6 +2747,7 @@ impl LayerStack {
                     reach: liquify.reach,
                     hidden: liquify.hidden,
                     cache: Mutex::new(None),
+                    images: OnceLock::new(),
                 })),
                 Entry::Effect(effect) => Entry::Effect(Arc::new(EffectEntry {
                     hidden: effect.hidden,
@@ -2892,19 +2930,23 @@ impl LayerStack {
                 hidden,
             })),
             // What it computed stays good: hiding a filter changes what is above it only.
-            Entry::Liquify(liquify) => Entry::Liquify(Arc::new(LiquifyEntry {
-                field: Arc::clone(&liquify.field),
-                space: liquify.space,
-                reach: liquify.reach,
-                hidden,
-                cache: Mutex::new(
-                    liquify
-                        .cache
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .clone(),
-                ),
-            })),
+            Entry::Liquify(liquify) => Entry::Liquify(Arc::new(
+                LiquifyEntry {
+                    field: Arc::clone(&liquify.field),
+                    space: liquify.space,
+                    reach: liquify.reach,
+                    hidden,
+                    cache: Mutex::new(
+                        liquify
+                            .cache
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .clone(),
+                    ),
+                    images: OnceLock::new(),
+                }
+                .sharing_images(liquify),
+            )),
             Entry::Filter(filter) => Entry::Filter(Arc::new(FilterEntry {
                 steps: filter.steps.clone(),
                 hidden,

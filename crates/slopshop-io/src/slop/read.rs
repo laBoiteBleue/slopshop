@@ -516,7 +516,7 @@ fn raster_content(
 ) -> Result<LayerContent, FileError> {
     use slopshop_core::filter::Filter;
     use slopshop_core::stack::{
-        Effect, EffectEntry, Entry, FilterEntry, FilterStep, LayerStack, PaintEntry,
+        Effect, EffectEntry, Entry, FilterEntry, FilterStep, LayerStack, LiquifyEntry, PaintEntry,
     };
     let invalid = |e: slopshop_core::stack::StackError| corrupt(&format!("invalid stack: {e}"));
     let image_at = |value: Option<&Value>, what: &str| {
@@ -672,6 +672,25 @@ fn raster_content(
                         .with_hidden(hidden),
                 )));
             }
+        } else if let Some(params) = entry.get("liquify").and_then(Value::as_object) {
+            // Schema 0.23 (ADR 0037).
+            let displacement = image_at(params.get("displacement"), "liquify")?;
+            let frozen = image_at(params.get("frozen"), "liquify")?;
+            let cell = params
+                .get("cell")
+                .and_then(Value::as_u64)
+                .and_then(|cell| u32::try_from(cell).ok())
+                .ok_or_else(|| corrupt("a liquify entry without its cell"))?;
+            let liquify = LiquifyEntry::from_images(
+                image.size(),
+                cell,
+                space_of(params.get("space"))?,
+                displacement,
+                frozen,
+            )
+            .map_err(invalid)?
+            .with_hidden(hidden);
+            stack.push(Entry::Liquify(Arc::new(liquify)));
         } else {
             // An entry this version does not know comes from a newer SlopShop.
             return Err(FileError::UnknownNodeType("stack entry".to_owned()));
