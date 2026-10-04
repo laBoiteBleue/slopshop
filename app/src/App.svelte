@@ -989,7 +989,7 @@
   /** Layer Style on `page` for `layer` (a pixel or fill layer); an effect's page turns it on. */
   function openStyle(layer: LayerView, page: StylePage) {
     const doc = active;
-    if (!doc || (layer.kind !== "raster" && layer.kind !== "fill")) return;
+    if (!doc || layer.kind === "adjustment") return;
     let style = layer.style ?? null;
     if (page !== "blending" && !style?.[page]?.enabled) {
       style = withEffect(style, page, true);
@@ -3813,7 +3813,7 @@
           {
             kind: "submenu",
             label: t("menu.layer.style"),
-            disabled: layer?.kind !== "raster" && layer?.kind !== "fill",
+            disabled: !layer || layer.kind === "adjustment",
             items: [
               cmd(t("menu.layer.style.blending"), () => layer && openStyle(layer, "blending")),
               separator,

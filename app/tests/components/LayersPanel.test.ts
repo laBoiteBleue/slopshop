@@ -279,3 +279,13 @@ test("a double-click on a pixel layer's row opens Layer Style; Fill sets its Fil
     style: { ...PLAIN, fillOpacity: 0.3 },
   });
 });
+
+test("a double-click on a group's row opens Layer Style, not on an adjustment layer's", async () => {
+  const curves = layer(6, "Curves", { kind: "adjustment" });
+  const { onstyle, user } = open([...LAYERS, curves]);
+  await user.dblClick(row("Group"));
+  expect(onstyle).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), "blending");
+  onstyle.mockClear();
+  await user.dblClick(row("Curves"));
+  expect(onstyle).not.toHaveBeenCalled();
+});

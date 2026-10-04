@@ -67,7 +67,7 @@ test("a layer's effects are listed in Photoshop's order", () => {
   assert.deepEqual(effectsOf(null), []);
 });
 
-test("Fill reaches the selected pixel and fill layers only, in one edit", () => {
+test("Fill reaches the selected layers but adjustment layers, in one edit", () => {
   const styled = withEffect(null, "stroke", true);
   const edit = fillEdit(
     [
@@ -82,10 +82,11 @@ test("Fill reaches the selected pixel and fill layers only, in one edit", () => 
     kind: "batch",
     edits: [
       { kind: "setLayerStyle", id: 1, style: { ...styled, fillOpacity: 0.25 } },
+      { kind: "setLayerStyle", id: 2, style: { ...PLAIN, fillOpacity: 0.25 } },
       { kind: "setLayerStyle", id: 3, style: { ...PLAIN, fillOpacity: 0.25 } },
     ],
   });
-  assert.equal(fillEdit([layer(2, { kind: "group" })], 0.5), null);
+  assert.equal(fillEdit([layer(4, { kind: "adjustment" })], 0.5), null);
 });
 
 test("the glows and Inner Shadow come at Photoshop's defaults, in the dialog's order", () => {
