@@ -1002,6 +1002,18 @@ export type GpuInfo = {
   driver: string;
 };
 
+/** What Help > About shows. */
+export type AppInfo = {
+  version: string;
+  /** SPDX expression, e.g. "GPL-3.0-only". */
+  license: string;
+  /** The project's page. */
+  repository: string;
+};
+
+/** A page of the project the Help menu opens (the engine knows the addresses). */
+export type ProjectPage = "home" | "newIssue" | "contributing";
+
 // Tauri runs async commands concurrently, so two quick requests could reach the engine in the
 // wrong order. Mutations go through a queue that keeps them in submission order; view
 // requests have their own queue (their order relative to edits does not matter). Opens take
@@ -1504,6 +1516,9 @@ export const engine = {
     serial(() => invoke<boolean>("copy", { documentId, request })),
   /** Show a file (e.g. an exported one) selected in the system's file manager. */
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
+  appInfo: () => invoke<AppInfo>("app_info"),
+  /** Opens a page of the project in the browser. */
+  openProjectPage: (page: ProjectPage) => invoke<void>("open_project_page", { page }),
   /**
    * The AI components `feature` needs on this machine, or without a feature every one it can
    * use (and any other still installed). `null`: AI is not offered on this platform yet.

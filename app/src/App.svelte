@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
@@ -25,7 +24,9 @@
     type CopyRequest,
     type PasteKind,
     type PaintTarget,
+    type AppInfo,
     type DocumentInfo,
+    type ProjectPage,
     type DocumentView,
     type BakeRequest,
     type EditRequest,
@@ -96,6 +97,7 @@
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
+  import AboutDialog from "./lib/AboutDialog.svelte";
   import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
   import PrintDialog from "./lib/PrintDialog.svelte";
   import { baseName, recentLabels } from "./lib/recent";
@@ -3367,9 +3369,20 @@
       .catch((e) => showError(String(e)));
   }
 
+  /** Help > About SlopShop's dialog, while open. */
+  let about = $state<AppInfo | null>(null);
+
   async function showAbout() {
-    const version = await getVersion().catch(() => "?");
-    await message(t("about.text", { version }), { title: t("about.title"), kind: "info" });
+    try {
+      about = await engine.appInfo();
+    } catch (e) {
+      showError(String(e));
+    }
+  }
+
+  /** A page of the project (Help menu), in the browser. */
+  function openProjectPage(page: ProjectPage) {
+    engine.openProjectPage(page).catch((e) => showError(String(e)));
   }
 
   function command(label: string, run: () => void, shortcut?: string, disabled = false): MenuItem {
@@ -4323,7 +4336,15 @@
       },
       {
         label: t("menu.help"),
-        items: [cmd(t("menu.help.about"), () => void showAbout())],
+        items: [
+          // The same list as Edit > Keyboard Shortcuts, where Photoshop customizes them.
+          cmd(t("menu.help.keyboardShortcuts"), () => (shortcutsList = true)),
+          separator,
+          cmd(t("menu.help.reportBug"), () => openProjectPage("newIssue")),
+          cmd(t("menu.help.contribute"), () => openProjectPage("contributing")),
+          separator,
+          cmd(t("menu.help.about"), () => void showAbout()),
+        ],
       },
     ];
   });
@@ -4948,6 +4969,10 @@
       onclose={() => (printDialog = null)}
     />
   {/if}
+{/if}
+
+{#if about}
+  <AboutDialog info={about} onclose={() => (about = null)} />
 {/if}
 
 {#if documentInfo}

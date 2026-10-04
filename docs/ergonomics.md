@@ -329,6 +329,11 @@ built. Contributors: propose here first.
   image a loupe, above right of the pointer, magnifies the 13 × 13 pixels around it with the
   sampled one framed in the middle and its color on the ring (Photoshop's sampling ring; the
   loupe is ours, for precision).
+- Help menu, an open-source project's only: Keyboard Shortcuts (the list of Edit > Keyboard
+  Shortcuts), Report a Bug (GitHub's new issue form) and Contribute to SlopShop
+  (`CONTRIBUTING.md`) in the browser, About SlopShop (version as built, license, a link to the
+  project). Nothing of Photoshop's online services. Not yet: Documentation (no user
+  documentation is published) and Check for Updates (no releases nor update mechanism).
 
 ## Proposed
 

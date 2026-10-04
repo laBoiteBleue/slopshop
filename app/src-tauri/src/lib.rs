@@ -7,6 +7,7 @@
 //! Threading: every command is `async` (so it never runs on the main/UI thread) and heavy work
 //! (GPU, decoding) runs in `spawn_blocking` or a worker thread.
 
+mod about;
 mod acquire;
 mod ai;
 mod bake;
@@ -2150,6 +2151,8 @@ pub fn run() {
             presenter_mode,
             present_view,
             reveal_in_folder,
+            about::app_info,
+            about::open_project_page,
             ai::ai_components,
             ai::ai_runtime,
             ai::ai_install,
