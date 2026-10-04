@@ -33,10 +33,11 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0026 | [Quick Selection by color](0026-quick-selection.md) | accepted |
 | 0027 | [Painting: brush strokes on tiles](0027-painting.md) | accepted (points 3–5 revised by 0029) |
 | 0028 | [Document resolution (pixels per inch)](0028-resolution.md) | accepted |
-| 0029 | [A layer's own stack: paint and applied effects](0029-layer-stack.md) | accepted |
+| 0029 | [A layer's own stack: paint and applied effects](0029-layer-stack.md) | accepted (points 3–5 revised by 0034) |
 | 0030 | [The panels dock](0030-panel-dock.md) | accepted |
 | 0031 | [Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten](0031-bake-to-pixels.md) | accepted |
 | 0032 | [Layer styles: effects drawn from a layer's shape](0032-layer-styles.md) | accepted |
 | 0033 | [Project license: GPL-3.0-only](0033-project-license.md) | accepted |
+| 0034 | [Editable operations: the stack's entries, filters and filter layers](0034-editable-operations.md) | proposed |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
