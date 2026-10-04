@@ -1678,11 +1678,11 @@ export const engine = {
   /**
    * The eyedropper's loupe: the colors shown around a document point, `2 × radius + 1` pixels a
    * side, the one under it in the middle; RGBA 8-bit sRGB, straight alpha, clear off the canvas.
+   * Only reads: not queued behind the edits (an answer from before one is told apart by the
+   * revision it was asked at).
    */
   samplePatch: async (documentId: number, x: number, y: number, radius: number) =>
-    new Uint8ClampedArray(
-      await serial(() => invoke<ArrayBuffer>("sample_patch", { documentId, x, y, radius })),
-    ),
+    new Uint8ClampedArray(await invoke<ArrayBuffer>("sample_patch", { documentId, x, y, radius })),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),

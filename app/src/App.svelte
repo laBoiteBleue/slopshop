@@ -164,6 +164,7 @@
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
   import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
+  import type { LoupeSource } from "./lib/eyedropper";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
   import ObjectSelectionTool, { type ObjectHover } from "./lib/ObjectSelectionTool.svelte";
   import AiDownloadDialog from "./lib/AiDownloadDialog.svelte";
@@ -676,18 +677,20 @@
       const shown = await engine.sampleColor(doc.id, point[0], point[1]);
       return shown ? (shown.map((v) => v / 255) as [number, number, number]) : null;
     },
-    patch: async (clientX: number, clientY: number, radius: number) => {
-      const point = canvasPointAt(clientX, clientY);
-      return point ? loupePatch(point[0], point[1], radius) : null;
+    get loupe() {
+      return loupeSource;
     },
   };
 
-  /** The eyedropper's loupe: the pixels shown around a document point; none off the canvas. */
-  async function loupePatch(x: number, y: number, radius: number) {
-    const doc = active;
-    if (!doc || outsideCanvas(doc, x, y)) return null;
-    return engine.samplePatch(doc.id, x, y, radius);
-  }
+  /** The eyedropper's loupe: the pixels shown in the active document. */
+  const loupeSource = $derived<LoupeSource>({
+    point: canvasPointAt,
+    pixels: async (x, y, radius) => {
+      const doc = active;
+      return doc ? engine.samplePatch(doc.id, x, y, radius) : null;
+    },
+    version: active ? `${active.id}:${active.revision}` : null,
+  });
   /** The stroke being sent: samples wait while a batch is in flight (none is ever dropped). */
   let paintRun: {
     id: number;
@@ -4861,7 +4864,7 @@
                     {mapping}
                     kind={colorRange.eyedropper}
                     onsample={(x, y, keys) => colorRange && sampleAt(colorRange, x, y, keys)}
-                    patch={loupePatch}
+                    loupe={loupeSource}
                   />
                 {:else if tool === "wand"}
                   <SelectionDrag {mapping} {...outlineDragProps}>

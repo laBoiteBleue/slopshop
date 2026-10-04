@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
 import {
+  LOUPE_OUTER,
   LOUPE_SIDE,
-  LOUPE_SIZE,
-  centerColor,
+  centerHex,
   eyedropperCursor,
   eyedropperFromKeys,
-  loupePlacement,
+  tagAbove,
 } from "../src/lib/eyedropper";
 
 test("each eyedropper has its own pointer, the tip as the hotspot, a crosshair as fallback", () => {
@@ -27,21 +27,16 @@ test("Shift adds and Alt takes away, whichever eyedropper is chosen", () => {
   expect(eyedropperFromKeys("subtract", { shiftKey: true, altKey: true })).toBe("add");
 });
 
-test("the loupe sits above right of the pointer, on the other side where the window ends", () => {
-  const view = { width: 1000, height: 800 };
-  expect(loupePlacement(500, 400, view)).toEqual({ left: 524, top: 400 - 24 - LOUPE_SIZE });
-  // Near the right edge: to the left. Near the top: below.
-  expect(loupePlacement(950, 400, view).left).toBe(950 - 24 - LOUPE_SIZE);
-  expect(loupePlacement(500, 50, view).top).toBe(74);
-  // A window too small for either side: kept inside.
-  expect(loupePlacement(60, 60, { width: 150, height: 150 })).toEqual({ left: 0, top: 20 });
+test("the value's tag goes under the loupe, above it at the bottom of the window", () => {
+  expect(tagAbove(400, 800)).toBe(false);
+  expect(tagAbove(800 - LOUPE_OUTER / 2 - 10, 800)).toBe(true);
 });
 
-test("the ring shows the sampled pixel's color, none where nothing is shown", () => {
+test("the ring and the tag show the sampled pixel's color, none where nothing is shown", () => {
   const patch = new Uint8ClampedArray(LOUPE_SIDE * LOUPE_SIDE * 4);
-  expect(centerColor(patch)).toBeNull();
+  expect(centerHex(patch)).toBeNull();
   const middle = ((LOUPE_SIDE * LOUPE_SIDE - 1) / 2) * 4;
-  patch.set([12, 34, 56, 255], middle);
-  expect(centerColor(patch)).toBe("rgb(12 34 56)");
-  expect(centerColor(new Uint8ClampedArray(4))).toBeNull();
+  patch.set([12, 34, 255, 255], middle);
+  expect(centerHex(patch)).toBe("#0c22ff");
+  expect(centerHex(new Uint8ClampedArray(4))).toBeNull();
 });

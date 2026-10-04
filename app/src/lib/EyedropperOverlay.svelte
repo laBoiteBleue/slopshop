@@ -4,8 +4,8 @@
   import {
     eyedropperCursor,
     eyedropperFromKeys,
-    LOUPE_RADIUS,
     type EyedropperKind,
+    type LoupeSource,
   } from "./eyedropper";
   import Loupe from "./Loupe.svelte";
   import type { ViewMapping } from "./Viewport.svelte";
@@ -14,28 +14,26 @@
     mapping,
     kind,
     onsample,
-    patch,
+    loupe,
   }: {
     mapping: ViewMapping;
     /** The eyedropper chosen, which Shift and Alt override. */
     kind: EyedropperKind;
     /** A click at document point (`x`, `y`), with the keys held. */
     onsample: (x: number, y: number, keys: { shiftKey: boolean; altKey: boolean }) => void;
-    /** The pixels shown around document point (`x`), `radius` on each side (see Loupe). */
-    patch: (x: number, y: number, radius: number) => Promise<Uint8ClampedArray<ArrayBuffer> | null>;
+    /** The pixels the loupe shows. */
+    loupe: LoupeSource;
   } = $props();
 
   let keys = $state({ shiftKey: false, altKey: false });
   /** The pointer over the image, window pixels. */
   let hover = $state<{ x: number; y: number } | null>(null);
+  /** The loupe is drawn: it is the pointer. */
+  let loupeShown = $state(false);
+  const shownKind = $derived(eyedropperFromKeys(kind, keys));
 
   function track(e: PointerEvent | KeyboardEvent) {
     keys = { shiftKey: e.shiftKey, altKey: e.altKey };
-  }
-
-  function loupePatch(clientX: number, clientY: number) {
-    const [x, y] = mapping.toDocument(clientX, clientY);
-    return patch(x, y, LOUPE_RADIUS);
   }
 </script>
 
@@ -45,7 +43,7 @@
   class="eyedropper"
   class:hand={mapping.hand}
   role="presentation"
-  style:cursor={eyedropperCursor(eyedropperFromKeys(kind, keys))}
+  style:cursor={loupeShown ? "none" : eyedropperCursor(shownKind)}
   onpointerdown={(e) => {
     if (e.button !== 0 || mapping.hand) return;
     const [x, y] = mapping.toDocument(e.clientX, e.clientY);
@@ -58,7 +56,7 @@
   onpointerleave={() => (hover = null)}
 ></div>
 {#if hover && !mapping.hand}
-  <Loupe x={hover.x} y={hover.y} patch={loupePatch} />
+  <Loupe x={hover.x} y={hover.y} source={loupe} sign={shownKind} bind:shown={loupeShown} />
 {/if}
 
 <style>

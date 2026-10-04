@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import ColorPickerDialog from "../../src/lib/ColorPickerDialog.svelte";
 import type { Rgb } from "../../src/lib/colorModel";
-import { eyedropperCursor, LOUPE_RADIUS } from "../../src/lib/eyedropper";
+import { eyedropperCursor, type LoupeSource } from "../../src/lib/eyedropper";
 
 /** The number fields, in order: H S B, R G B, L a b. */
 const NAMES = ["H", "S", "B", "R", "G", "Blue", "L", "a", "b"] as const;
@@ -13,11 +13,7 @@ function open(
   sample?: {
     at: () => Promise<Rgb | null>;
     probe?: (x: number, y: number) => boolean;
-    patch?: (
-      x: number,
-      y: number,
-      radius: number,
-    ) => Promise<Uint8ClampedArray<ArrayBuffer> | null>;
+    loupe?: LoupeSource;
   },
 ) {
   const onapply = vi.fn();
@@ -123,15 +119,25 @@ test("for a mask, grays only: one field, the eyedropper taking a color's gray", 
   expect(onapply).toHaveBeenCalledWith("#808080");
 });
 
-test("over the image the pointer is the eyedropper, with a loupe of the pixels around it", async () => {
-  const patch = vi.fn(async () => null);
+test("over the image the pointer is the eyedropper, then the loupe, its ring showing the current color", async () => {
+  // An opaque blue image, the window showing it at 100%.
+  const pixels = vi.fn(async (_x: number, _y: number, radius: number) => {
+    const out = new Uint8ClampedArray((2 * radius + 1) ** 2 * 4);
+    for (let i = 0; i < out.length; i += 4) out.set([0, 0, 255, 255], i);
+    return out;
+  });
+  const loupe = { point: (x: number, y: number) => [x, y] as [number, number], pixels, version: 1 };
   // The image ends at x = 100.
-  open("#ff0000", { at: async () => null, probe: (x) => x < 100, patch });
+  open("#ff0000", { at: async () => null, probe: (x) => x < 100, loupe });
   const blocker = document.querySelector(".blocker") as HTMLElement;
   await fireEvent.pointerMove(blocker, { clientX: 40, clientY: 30 });
   expect(blocker.style.cursor).toBe(eyedropperCursor("pick"));
-  await vi.waitFor(() => expect(patch).toHaveBeenCalledWith(40, 30, LOUPE_RADIUS));
-  expect(document.querySelector(".loupe")).not.toBeNull();
+  await vi.waitFor(() => expect(document.querySelector(".loupe")).toHaveClass("shown"));
+  expect(pixels).toHaveBeenCalledWith(40, 30, expect.any(Number));
+  expect(blocker.style.cursor).toBe("none");
+  const shown = document.querySelector(".loupe") as HTMLElement;
+  expect(shown.style.getPropertyValue("--new")).toBe("#0000ff");
+  expect(shown.style.getPropertyValue("--current")).toBe("#ff0000");
   // Off the image: the normal pointer, no loupe.
   await fireEvent.pointerMove(blocker, { clientX: 140, clientY: 30 });
   expect(blocker.style.cursor).toBe("");
