@@ -314,7 +314,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       the layer reduced)
 - [x] Sharpen > Clarity and Texture (Lightroom's -100 to 100: pushed from a fine and a broad
       blur, Clarity in the midtones; on the CPU)
-- [ ] Liquify; Dust & Scratches, Clarity and Texture on the GPU
+- [x] Dust & Scratches, Clarity and Texture on the GPU (looks)
+- [ ] Liquify
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
 - [ ] Liquify as a stack entry (a displacement field, its own workspace)

@@ -10,12 +10,15 @@ struct Params {
     // Half the kernel's width: `weights` holds 2 * reach + 1 values.
     reach: u32,
     // What a pixel becomes from its blur: 0 the blur (Gaussian Blur), 1 Unsharp Mask, 2 High
-    // Pass. (`line_main`, Motion Blur, has its own entry point: `reach` is its samples' count,
-    // `weights` their offsets, x then y; so has `noise_main`, Add Noise: `weights` is the crop's
-    // map to the document, a to f.)
+    // Pass, 4 kept in `aux` for the next pass (Texture's fine blur), 5 Clarity and Texture from
+    // it and this blur. (`line_main`, Motion Blur, has its own entry point: `reach` is its
+    // samples' count, `weights` their offsets, x then y; so has `noise_main`, Add Noise:
+    // `weights` is the crop's map to the document, a to f; and `median_main`, Dust & Scratches:
+    // `reach` is its radius.)
     mode: u32,
-    // Unsharp Mask's and Add Noise's amount (percent); Unsharp Mask's threshold (levels of 8
-    // bits).
+    // Unsharp Mask's and Add Noise's amount (percent), Unsharp Mask's and Dust & Scratches'
+    // threshold (levels of 8 bits); for Clarity and Texture, Texture's strength and Clarity's
+    // (its fraction of 1 times `CLARITY_STRENGTH`).
     amount: f32,
     threshold: f32,
     // Add Noise's seed, and its flags: 1 Gaussian, 2 monochromatic.
@@ -26,6 +29,8 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> weights: array<f32>;
 @group(0) @binding(2) var<storage, read> packed: array<u32>;
+// The rows' blur; past `width * height`, a blur kept between two passes (Texture's, for
+// Clarity's pass): devices may bind no more than four storage buffers.
 @group(0) @binding(3) var<storage, read_write> rows: array<vec4<f32>>;
 @group(0) @binding(4) var<storage, read_write> output: array<u32>;
 
@@ -76,6 +81,20 @@ fn finish(original: vec4<f32>, blurred: vec4<f32>) -> vec4<f32> {
     return vec4<f32>((o - b + 0.5) * alpha, alpha);
 }
 
+// Clarity and Texture (`Filter::finish`): the color pushed from its fine blur by Texture, and
+// from its broad blur by Clarity in the midtones (Rec. 709 luma), alpha kept.
+fn clarity(original: vec4<f32>, fine: vec4<f32>, broad: vec4<f32>) -> vec4<f32> {
+    let alpha = original.a;
+    if alpha <= 0.0 {
+        return original;
+    }
+    let o = straight(original);
+    let luma = dot(o, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let midtones = clamp(1.0 - (2.0 * luma - 1.0) * (2.0 * luma - 1.0), 0.0, 1.0);
+    let c = o + params.amount * (o - straight(fine)) + params.threshold * midtones * (o - straight(broad));
+    return vec4<f32>(c * alpha, alpha);
+}
+
 // A byte as the CPU rounds it: half away from zero, after clamping.
 fn byte(v: f32) -> u32 {
     return u32(floor(clamp(v, 0.0, 1.0) * 255.0 + 0.5));
@@ -93,10 +112,18 @@ fn columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let y = u32(clamp(i32(id.y) + k, 0, last));
         sum += weights[u32(k + reach)] * rows[y * params.width + id.x];
     }
-    if params.mode != 0u {
-        sum = finish(premultiplied(packed[id.y * params.width + id.x]), sum);
+    let i = id.y * params.width + id.x;
+    let kept = params.width * params.height + i;
+    if params.mode == 4u {
+        rows[kept] = sum;
+        return;
     }
-    output[id.y * params.width + id.x] = encoded(sum);
+    if params.mode == 5u {
+        sum = clarity(premultiplied(packed[i]), rows[kept], sum);
+    } else if params.mode != 0u {
+        sum = finish(premultiplied(packed[i]), sum);
+    }
+    output[i] = encoded(sum);
 }
 
 // A premultiplied value as an 8-bit straight pixel; transparent stays all zero.
@@ -189,4 +216,46 @@ fn noise_main(@builtin(global_invocation_id) id: vec3<u32>) {
         result = vec4<f32>(color * original.a, original.a);
     }
     output[id.y * params.width + id.x] = encoded(result);
+}
+
+// Dust & Scratches: each channel's median of the square of `reach` around the pixel (the CPU's
+// `Kernel::Median`, exact): a bisection on the value, the count of the window's values at or
+// below it telling which side the median is on, then the smallest value above the lower bound.
+// After 24 halvings the bounds are closer than any two values of 8-bit pixels apart, so that
+// value is the median. The pixel becomes it where it differs by more than the threshold.
+@compute @workgroup_size(16, 16)
+fn median_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let r = i32(params.reach);
+    let x = i32(id.x);
+    let y = i32(id.y);
+    let side = u32(2 * r + 1);
+    let middle = vec4<u32>(side * side / 2u);
+    var lo = vec4<f32>(-1.0);
+    var hi = vec4<f32>(2.0);
+    for (var step = 0; step < 24; step++) {
+        let mid = (lo + hi) * 0.5;
+        var count = vec4<u32>(0u);
+        for (var dy = -r; dy <= r; dy++) {
+            for (var dx = -r; dx <= r; dx++) {
+                count += select(vec4<u32>(0u), vec4<u32>(1u), input(x + dx, y + dy) <= mid);
+            }
+        }
+        let above = count > middle;
+        hi = select(hi, mid, above);
+        lo = select(mid, lo, above);
+    }
+    var median = vec4<f32>(3.0);
+    for (var dy = -r; dy <= r; dy++) {
+        for (var dx = -r; dx <= r; dx++) {
+            let p = input(x + dx, y + dy);
+            median = select(median, min(median, p), p > lo);
+        }
+    }
+    let original = input(x, y);
+    let level = params.threshold / 255.0;
+    let differs = any(abs(original - median) > vec4<f32>(level));
+    output[id.y * params.width + id.x] = encoded(select(original, median, differs));
 }

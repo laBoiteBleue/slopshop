@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::PixelFormat;
-use slopshop_core::filter::{Filter, LINE_UP_TO, line_offsets};
+use slopshop_core::filter::{CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, line_offsets};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
 use wgpu::util::DeviceExt;
@@ -29,6 +29,7 @@ pub(crate) struct GpuFilter {
     columns: wgpu::ComputePipeline,
     line: wgpu::ComputePipeline,
     noise: wgpu::ComputePipeline,
+    median: wgpu::ComputePipeline,
 }
 
 impl GpuFilter {
@@ -89,6 +90,7 @@ impl GpuFilter {
             columns: pipeline("columns_main"),
             line: pipeline("line_main"),
             noise: pipeline("noise_main"),
+            median: pipeline("median_main"),
         }
     }
 
@@ -107,13 +109,22 @@ impl GpuFilter {
                 }
                 Pass::of(step)
             })
-            .collect::<Option<_>>()?;
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let (width, height) = (job.size.width, job.size.height);
         let pixels = u64::from(width) * u64::from(height);
         let limits = self.device.limits();
+        // The rows' blur in f32, twice when a blur is kept between two passes.
+        let scratch = if kernels.iter().any(|pass| pass.mode == KEEP) {
+            32
+        } else {
+            16
+        };
         if pixels == 0
-            || pixels * 16 > limits.max_storage_buffer_binding_size
-            || pixels * 16 > limits.max_buffer_size
+            || pixels * scratch > limits.max_storage_buffer_binding_size
+            || pixels * scratch > limits.max_buffer_size
         {
             return None;
         }
@@ -144,9 +155,15 @@ impl GpuFilter {
             contents: &input,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
+        // Twice as large when a blur is kept between two passes (in its second half).
+        let kept = if kernels.iter().any(|pass| pass.mode == KEEP) {
+            2
+        } else {
+            1
+        };
         let rows = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("filter rows"),
-            size: bytes * 4,
+            size: bytes * 4 * kept,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -166,13 +183,15 @@ impl GpuFilter {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("filter"),
         });
-        for (n, pass) in kernels.iter().enumerate() {
-            if n > 0 {
-                // The next step filters what the last one gave.
+        // Whether the output holds a step's result the next one filters.
+        let mut fresh = false;
+        for pass in kernels {
+            if fresh {
                 encoder.copy_buffer_to_buffer(&output, 0, &packed, 0, bytes);
+                fresh = false;
             }
-            // Half a kernel's width, or a line's samples (two offsets each).
-            let reach = (pass.weights.len() / 2) as u32;
+            fresh |= pass.mode != KEEP;
+            let reach = pass.reach;
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("filter params"),
                 contents: &[width, height, reach, pass.mode]
@@ -224,6 +243,7 @@ impl GpuFilter {
                 Kind::Separable => vec![&self.rows, &self.columns],
                 Kind::Line => vec![&self.line],
                 Kind::Noise => vec![&self.noise],
+                Kind::Median => vec![&self.median],
             };
             for pipeline in pipelines {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -260,12 +280,19 @@ enum Kind {
     Line,
     /// Add Noise: `weights` holds the crop's map to the document.
     Noise,
+    /// Dust & Scratches' median of the square of `reach`.
+    Median,
 }
 
-/// A step as the shader runs it (`Params` in filter.wgsl).
+/// The mode of a separable pass whose blur is kept for the next one (filter.wgsl).
+const KEEP: u32 = 4;
+
+/// A pass as the shader runs it (`Params` in filter.wgsl); a step is one or two.
 struct Pass {
     kind: Kind,
     weights: Vec<f32>,
+    /// Half a kernel's width, a line's samples, or a median's radius.
+    reach: u32,
     mode: u32,
     amount: f32,
     threshold: f32,
@@ -274,11 +301,27 @@ struct Pass {
 }
 
 impl Pass {
-    /// `step`'s pass, or `None` when it reaches too far (the CPU reduces the layer then).
-    fn of(step: &FilterStep) -> Option<Self> {
+    /// A Gaussian of standard deviation `sigma`, each pixel then made from it by `mode`.
+    fn separable(sigma: f32, mode: u32) -> Option<Self> {
+        let weights = gaussian(f64::from(sigma))?;
+        Some(Self {
+            kind: Kind::Separable,
+            reach: (weights.len() / 2) as u32,
+            weights,
+            mode,
+            amount: 0.0,
+            threshold: 0.0,
+            seed: 0,
+            flags: 0,
+        })
+    }
+
+    /// `step`'s passes, or `None` when it reaches too far (the CPU reduces the layer then).
+    fn of(step: &FilterStep) -> Option<Vec<Self>> {
         let none = Self {
             kind: Kind::Separable,
-            weights: Vec::new(),
+            weights: vec![0.0],
+            reach: 0,
             mode: 0,
             amount: 0.0,
             threshold: 0.0,
@@ -291,15 +334,17 @@ impl Pass {
                 if f64::from(distance) > LINE_UP_TO {
                     return None;
                 }
-                return Some(Self {
+                let weights: Vec<f32> = line_offsets(f64::from(angle), f64::from(distance))
+                    .into_iter()
+                    .flatten()
+                    .map(|v| v as f32)
+                    .collect();
+                return Some(vec![Self {
                     kind: Kind::Line,
-                    weights: line_offsets(f64::from(angle), f64::from(distance))
-                        .into_iter()
-                        .flatten()
-                        .map(|v| v as f32)
-                        .collect(),
+                    reach: (weights.len() / 2) as u32,
+                    weights,
                     ..none
-                });
+                }]);
             }
             Filter::AddNoise {
                 amount,
@@ -308,7 +353,7 @@ impl Pass {
                 seed,
             } => {
                 let map = step.to_document;
-                return Some(Self {
+                return Some(vec![Self {
                     kind: Kind::Noise,
                     weights: [map.a, map.b, map.c, map.d, map.e, map.f]
                         .map(|v| v as f32)
@@ -317,30 +362,45 @@ impl Pass {
                     seed,
                     flags: u32::from(gaussian) | u32::from(monochromatic) << 1,
                     ..none
-                });
+                }]);
+            }
+            Filter::DustAndScratches { radius, threshold } => {
+                // Beyond, the CPU takes the median on the layer reduced.
+                if f64::from(radius) > MEDIAN_UP_TO {
+                    return None;
+                }
+                return Some(vec![Self {
+                    kind: Kind::Median,
+                    reach: radius as u32,
+                    threshold,
+                    ..none
+                }]);
+            }
+            Filter::ClarityTexture {
+                texture, clarity, ..
+            } => {
+                let [fine, broad] = filter.clarity_radii()?;
+                let clarity = Self {
+                    amount: texture / 100.0,
+                    threshold: (f64::from(clarity) / 100.0 * CLARITY_STRENGTH) as f32,
+                    ..Self::separable(broad, 5)?
+                };
+                return Some(vec![Self::separable(fine, KEEP)?, clarity]);
             }
             _ => {}
         }
-        let weights = gaussian(f64::from(filter.blur_radius()?))?;
         let (mode, amount, threshold) = match filter {
-            Filter::GaussianBlur { .. } => (0, 0.0, 0.0),
             Filter::UnsharpMask {
                 amount, threshold, ..
             } => (1, amount, threshold),
             Filter::HighPass { .. } => (2, 0.0, 0.0),
-            // Dust & Scratches' median: computed by the CPU for now.
-            Filter::MotionBlur { .. }
-            | Filter::AddNoise { .. }
-            | Filter::DustAndScratches { .. }
-            | Filter::ClarityTexture { .. } => return None,
+            _ => (0, 0.0, 0.0),
         };
-        Some(Self {
-            weights,
-            mode,
+        Some(vec![Self {
             amount,
             threshold,
-            ..none
-        })
+            ..Self::separable(filter.blur_radius()?, mode)?
+        }])
     }
 }
 

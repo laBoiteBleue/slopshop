@@ -32,7 +32,7 @@ pub const MAX_MEDIAN_RADIUS: f32 = 500.0;
 
 /// Up to this radius, a median is taken on the layer itself; beyond, on the layer reduced (see
 /// [`Plan::median`]).
-const MEDIAN_UP_TO: f64 = 8.0;
+pub const MEDIAN_UP_TO: f64 = 8.0;
 
 /// Clarity and Texture's range (Lightroom's), and the radii of the blurs they push the colors
 /// from, in the layer's pixels: Texture's fine details, Clarity's broad local contrast.
@@ -41,7 +41,7 @@ const TEXTURE_RADIUS: f32 = 3.0;
 const CLARITY_RADIUS: f32 = 25.0;
 
 /// How strongly Clarity pushes the midtones at 100 (Texture pushes by its whole difference).
-const CLARITY_STRENGTH: f64 = 0.6;
+pub const CLARITY_STRENGTH: f64 = 0.6;
 
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
@@ -285,6 +285,16 @@ impl Filter {
         }
     }
 
+    /// Clarity and Texture's blurs' radii, Texture's then Clarity's (see [`Self::plans`]).
+    pub fn clarity_radii(&self) -> Option<[f32; 2]> {
+        match *self {
+            Self::ClarityTexture { scale, .. } => {
+                Some([TEXTURE_RADIUS, CLARITY_RADIUS].map(|r| (r / scale).max(MIN_BLUR_RADIUS)))
+            }
+            _ => None,
+        }
+    }
+
     /// The filter on the layer reduced `factor` times (a pyramid level, a look): its distances
     /// divided, no less than the smallest it takes.
     pub fn scaled(&self, factor: f32) -> Self {
@@ -349,8 +359,10 @@ impl Filter {
     /// and Texture blur twice ([`Self::finish`] gets one blur per plan, in this order).
     pub(crate) fn plans(&self) -> Vec<Plan> {
         match *self {
-            Self::ClarityTexture { scale, .. } => [TEXTURE_RADIUS, CLARITY_RADIUS]
-                .map(|r| Plan::gaussian(f64::from((r / scale).max(MIN_BLUR_RADIUS))))
+            Self::ClarityTexture { .. } => self
+                .clarity_radii()
+                .unwrap_or_default()
+                .map(|r| Plan::gaussian(f64::from(r)))
                 .to_vec(),
             _ => vec![self.plan()],
         }
