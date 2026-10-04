@@ -131,8 +131,6 @@ struct OpenDocument {
     saved_revision: u64,
     /// A save of this document is running.
     saving: bool,
-    /// The selection Select > Deselect removed last, for Select > Reselect.
-    last_selection: Option<slopshop_core::selection::Selection>,
     /// What the view shows over the image (Quick Mask): view state, like the viewport.
     overlays: ViewOverlays,
     /// Select and Mask is open: what it refines (`refine`).
@@ -162,7 +160,6 @@ impl OpenDocument {
             source: None,
             saved_revision,
             saving: false,
-            last_selection: None,
             overlays: ViewOverlays::default(),
             refine: None,
             paint_preview: None,
@@ -188,15 +185,6 @@ impl OpenDocument {
         (doc, revision)
     }
 
-    /// The selection Reselect would bring back: the last one deselected, while nothing is
-    /// selected and it still fits the canvas.
-    fn reselectable(&self) -> Option<&slopshop_core::selection::Selection> {
-        let doc = self.session.document();
-        self.last_selection
-            .as_ref()
-            .filter(|s| doc.selection().is_none() && s.image().size() == doc.size())
-    }
-
     /// Changed since it was opened, created or last saved.
     fn dirty(&self) -> bool {
         self.session.document().revision() != self.saved_revision
@@ -219,7 +207,7 @@ impl OpenDocument {
         let mut view = DocumentView::new(&self.session, &self.meta, self.warnings());
         view.path = self.path.as_ref().map(|p| p.display().to_string());
         view.dirty = self.dirty();
-        view.can_reselect = self.reselectable().is_some();
+        view.can_reselect = self.session.reselectable().is_some();
         view.quick_mask_opacity = self.overlays.quick_mask_opacity;
         if !self.baking.is_empty() {
             mark_baking(&mut view.layers, &self.baking);

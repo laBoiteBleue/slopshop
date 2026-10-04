@@ -236,7 +236,9 @@ built. Contributors: propose here first.
   swatches are a pair of grays of their own (black and white at first, D, X swapping them) and
   the color picker offers grays only (its eyedropper takes a color's gray); the drawing colors
   come back afterwards. The options bar says "Quick Mask" whatever the tool, with the overlay's
-  opacity (an app preference, half by default); the tab's title ends with "(Quick Mask)". Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D),
+  opacity (an app preference, half by default); the tab's title ends with "(Quick Mask)". Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D: the selection a change last removed or replaced, not only a
+  deselected one, the maintainer's choice of 2026-10-04; twice, the two swap; undo and a
+  gesture's steps do not count),
   Inverse (Shift+Ctrl+I), Modify (Border, Smooth, Expand, Contract, Feather with Shift+F6: a
   dialog with one number of pixels, remembered for the session, the change shown live on the
   image while it is set, Cancel taking it back, OK one undo entry; the canvas edge is not an
@@ -382,8 +384,7 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   the document, kept in `.slop` and following crops, canvas and image size changes and
   rotations, each change one undo entry (the `.slop` compatibility may break until version 1,
   maintainer, 2026-10-04). The Selections panel lists them under a pinned Last Selection row
-  (the maintainer's idea: what Deselect removed last, as Select > Reselect; greyed when there
-  is none): a click loads one, Shift+click
+  (the maintainer's idea: Select > Reselect; greyed when there is none): a click loads one, Shift+click
   adds it, Alt+click subtracts it, Shift+Alt+click intersects (the selection tools' keys);
   double-click renames; the right-click menu also replaces one with the current selection or
   deletes it; + saves the current selection, the trash or Delete removes the row clicked last;

@@ -949,7 +949,7 @@ pub async fn delete_saved_selection(
     Ok(document.view())
 }
 
-/// Select > Deselect: the selection is kept for Reselect.
+/// Select > Deselect: the session keeps the selection for Reselect.
 #[tauri::command]
 pub async fn deselect(
     state: State<'_, AppState>,
@@ -957,18 +957,18 @@ pub async fn deselect(
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    let Some(current) = document.session.document().selection().cloned() else {
+    if document.session.document().selection().is_none() {
         return Ok(document.view());
-    };
+    }
     document
         .session
         .perform(Edit::SetSelection { selection: None })
         .map_err(|e| e.to_string())?;
-    document.last_selection = Some(current);
     Ok(document.view())
 }
 
-/// Select > Reselect: the selection last removed by Deselect, if it still fits the canvas.
+/// Select > Reselect: the selection a committed change last removed or replaced, if it still
+/// fits the canvas (the one now becomes the next to bring back: twice, they swap).
 #[tauri::command]
 pub async fn reselect(
     state: State<'_, AppState>,
@@ -976,7 +976,7 @@ pub async fn reselect(
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
-    let Some(last) = document.reselectable().cloned() else {
+    let Some(last) = document.session.reselectable().cloned() else {
         return Ok(document.view());
     };
     document

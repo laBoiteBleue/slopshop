@@ -714,7 +714,7 @@ const fr: Messages = {
   "selections.combined.intersect": "Intersection avec la sélection",
   "selections.last": "Dernière sélection",
   "selections.last.hint":
-    "La sélection retirée en dernier par Désélectionner (Sélection > Resélectionner, Maj+Ctrl+D)",
+    "La sélection retirée ou remplacée en dernier (Sélection > Resélectionner, Maj+Ctrl+D)",
   "selections.empty":
     "Aucune sélection mémorisée. Sélection > Mémoriser la sélection… ou le + ci-dessous garde la sélection actuelle.",
   "selections.hint":
