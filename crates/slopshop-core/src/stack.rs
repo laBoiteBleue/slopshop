@@ -4269,6 +4269,42 @@ mod tests {
     }
 
     #[test]
+    fn dust_and_scratches_takes_specks_out_of_a_layer_above_its_threshold() {
+        // A gray speck of 2 × 2 on black, by the edge with white.
+        let original = image(PixelFormat::RGBA8_SRGB, |x, y| {
+            let v = if (40..42).contains(&x) && (60..62).contains(&y) {
+                100
+            } else if x < 150 {
+                0
+            } else {
+                255
+            };
+            vec![v, v, v, 255]
+        });
+        let cleaned = |radius, threshold| {
+            let filter = Filter::DustAndScratches { radius, threshold };
+            LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter,
+                        ..blur(1.0, None)
+                    },
+                    None,
+                )
+                .unwrap()
+                .evaluate()
+                .unwrap()
+        };
+        let gone = cleaned(2.0, 0.0);
+        assert_eq!(pixel(&gone, 40, 60), [0, 0, 0, 255]);
+        // The edge stays where it was.
+        assert_eq!(pixel(&gone, 149, 60), [0, 0, 0, 255]);
+        assert_eq!(pixel(&gone, 150, 60), [255, 255, 255, 255]);
+        // A threshold above the speck's difference keeps it.
+        assert_eq!(pixel(&cleaned(2.0, 120.0), 40, 60), [100, 100, 100, 255]);
+    }
+
+    #[test]
     fn rows_are_read_as_pixels_are_the_edges_repeating() {
         let original = gradient(true);
         let reader = PremulPixels::new(&original, BlendSpace::Perceptual);

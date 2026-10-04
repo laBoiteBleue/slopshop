@@ -328,7 +328,10 @@ impl Pass {
                 amount, threshold, ..
             } => (1, amount, threshold),
             Filter::HighPass { .. } => (2, 0.0, 0.0),
-            Filter::MotionBlur { .. } | Filter::AddNoise { .. } => return None,
+            // Dust & Scratches' median: computed by the CPU for now.
+            Filter::MotionBlur { .. }
+            | Filter::AddNoise { .. }
+            | Filter::DustAndScratches { .. } => return None,
         };
         Some(Self {
             weights,
