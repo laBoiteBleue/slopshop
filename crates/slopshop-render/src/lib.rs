@@ -561,7 +561,31 @@ impl Renderer {
         output: Size,
         out: &mut Vec<u8>,
     ) -> Result<FrameStats, RenderError> {
-        self.read_view_into(document, view, overlays, output, false, out)
+        let options = cache::FrameOptions::default();
+        self.read_view_into(document, view, overlays, output, options, out)
+    }
+
+    /// Like [`Self::render_view`], but the frame keeps the document's alpha (straight, as a
+    /// pixel layer's thumbnail) instead of showing it over the checkerboard, and is transparent
+    /// outside the document: for thumbnails of composites.
+    pub fn render_view_transparent(
+        &self,
+        document: &Document,
+        view: ViewTransform,
+        output: Size,
+    ) -> Result<Frame, RenderError> {
+        let mut data = Vec::new();
+        let options = cache::FrameOptions {
+            transparent: true,
+            ..cache::FrameOptions::default()
+        };
+        let overlays = ViewOverlays::default();
+        self.read_view_into(document, view, overlays, output, options, &mut data)?;
+        Ok(Frame {
+            size: output,
+            format: OUTPUT_FORMAT,
+            data,
+        })
     }
 
     /// [`Self::render_view`] composited progressively, as [`Self::present_view`] does: when
@@ -576,7 +600,11 @@ impl Renderer {
     ) -> Result<(Frame, FrameStats), RenderError> {
         let mut data = Vec::new();
         let overlays = ViewOverlays::default();
-        let stats = self.read_view_into(document, view, overlays, output, true, &mut data)?;
+        let options = cache::FrameOptions {
+            progressive: true,
+            ..cache::FrameOptions::default()
+        };
+        let stats = self.read_view_into(document, view, overlays, output, options, &mut data)?;
         let frame = Frame {
             size: output,
             format: OUTPUT_FORMAT,
@@ -585,14 +613,15 @@ impl Renderer {
         Ok((frame, stats))
     }
 
-    /// [`Self::render_view_into`], progressive or not, with the frame's statistics.
+    /// [`Self::render_view_into`] with `options` (progressive, transparent), with the frame's
+    /// statistics.
     fn read_view_into(
         &self,
         document: &Document,
         view: ViewTransform,
         overlays: ViewOverlays,
         output: Size,
-        progressive: bool,
+        options: cache::FrameOptions<'_>,
         out: &mut Vec<u8>,
     ) -> Result<FrameStats, RenderError> {
         let byte_len = self.output_byte_len(output)?;
@@ -604,10 +633,6 @@ impl Renderer {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            let options = cache::FrameOptions {
-                timestamps: None,
-                progressive,
-            };
             let stats = self.composite(
                 document,
                 view,
@@ -663,6 +688,7 @@ impl Renderer {
             let options = cache::FrameOptions {
                 timestamps: queries.as_ref(),
                 progressive,
+                transparent: false,
             };
             let mut stats = self.composite(
                 document,
@@ -829,7 +855,13 @@ impl Renderer {
         stats.prepare = start.elapsed();
         stats.layers = layers.count;
         stats.tiles_uploaded = uploads(caches).saturating_sub(uploaded_before);
-        let params = params_bytes(document.size(), view, output, layers.count);
+        let params = params_bytes(
+            document.size(),
+            view,
+            output,
+            layers.count,
+            options.transparent,
+        );
 
         use wgpu::util::DeviceExt;
         let params_buffer = self
@@ -974,7 +1006,7 @@ impl Renderer {
             set_mask_fields(&mut fields, &plan, &mut prepared.tile_table, slots);
         }
         fields.write(&mut prepared.bytes);
-        let params = params_bytes(doc_size, frame.view, frame.output, 1);
+        let params = params_bytes(doc_size, frame.view, frame.output, 1, false);
         use wgpu::util::DeviceExt;
         let params_buffer = self
             .device
@@ -2071,10 +2103,17 @@ fn tile_range(visible: [f64; 4], factor: f64, columns: u32, rows: u32) -> Rect {
     )
 }
 
-/// Uniform block matching `Params` in `composite.wgsl` (80 bytes, std140-compatible).
-fn params_bytes(doc: Size, view: ViewTransform, output: Size, layer_count: u32) -> Vec<u8> {
+/// Uniform block matching `Params` in `composite.wgsl` (96 bytes, std140-compatible).
+/// `transparent`: the frame keeps the document's alpha (thumbnails), no checkerboard.
+fn params_bytes(
+    doc: Size,
+    view: ViewTransform,
+    output: Size,
+    layer_count: u32,
+    transparent: bool,
+) -> Vec<u8> {
     // f32 is plenty for display: at 100k px the step is ~0.01 px.
-    let mut bytes = Vec::with_capacity(80);
+    let mut bytes = Vec::with_capacity(96);
     bytes.extend((view.origin[0] as f32).to_le_bytes());
     bytes.extend((view.origin[1] as f32).to_le_bytes());
     bytes.extend((view.scale as f32).to_le_bytes());
@@ -2085,6 +2124,9 @@ fn params_bytes(doc: Size, view: ViewTransform, output: Size, layer_count: u32) 
     for v in display_matrix().iter().flatten() {
         bytes.extend(v.to_le_bytes());
     }
+    bytes.extend(u32::from(transparent).to_le_bytes());
+    // The struct's size rounds up to its 16-byte alignment.
+    bytes.resize(96, 0);
     bytes
 }
 
@@ -2168,6 +2210,59 @@ mod tests {
         assert!(r.caches.is_poisoned());
         assert_eq!(view(&r, &document).unwrap().data, before.data);
         assert!(!r.caches.is_poisoned());
+    }
+
+    #[test]
+    fn transparent_frames_keep_the_document_s_alpha() {
+        let Some(r) = renderer() else { return };
+        let mut document = Document::new(Size::new(16, 16));
+        let format = slopshop_core::color::PixelFormat::RGBA8_SRGB;
+        // Straight orange at alpha 128 (sRGB-encoded samples).
+        let image =
+            RasterImage::from_pixels(Size::new(16, 16), format, &[240, 120, 30, 128].repeat(256))
+                .expect("16 × 16 RGBA8 pixels");
+        let layer = Layer {
+            style: None,
+            transform: Affine::IDENTITY,
+            clipped: false,
+            id: document.allocate_layer_id(),
+            name: "image".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            content: LayerContent::Raster {
+                stack: None,
+                image: slopshop_core::stack::Pixels::ready(image.into()),
+            },
+        };
+        slopshop_core::Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut document)
+        .expect("a valid layer");
+        // Four pixels to the left of the document, then the document.
+        let view = ViewTransform {
+            origin: [-4.0, 0.0],
+            scale: 1.0,
+        };
+        let frame = r
+            .render_view_transparent(&document, view, Size::new(12, 4))
+            .expect("a frame");
+        let pixel = |x: usize| &frame.data[x * 4..x * 4 + 4];
+        assert_eq!(pixel(0), [0, 0, 0, 0]);
+        let inside = pixel(8);
+        assert!(inside[3].abs_diff(128) <= 1, "{inside:?}");
+        for (got, want) in inside[..3].iter().zip([240u8, 120, 30]) {
+            assert!(got.abs_diff(want) <= 2, "{inside:?}");
+        }
+        // The view itself still shows it over the checkerboard, opaque.
+        let shown = r
+            .render_view(&document, view, Size::new(12, 4))
+            .expect("a frame");
+        assert_eq!(shown.data[8 * 4 + 3], 255);
     }
 
     #[test]
