@@ -120,3 +120,46 @@ test("a matrix (Transform Selection) draws the outline mapped by it, live", asyn
     "M10.5 10.5L50.5 10.5L50.5 50.5",
   );
 });
+
+test("applied, the transformed outline stays until the new selection's outline arrives", async () => {
+  // The engine answers the new selection's outline only when told.
+  let release: (() => void) | null = null;
+  clearMocks();
+  mockIPC((command, args) => {
+    if (command !== "selection_outline") return undefined;
+    requests.push(args as Record<string, unknown>);
+    if (requests.length === 1) return TRIANGLE;
+    return new Promise((resolve) => (release = () => resolve(TRIANGLE)));
+  });
+  const { container, rerender } = open({ matrix: [2, 0, 0, 2, 5, 0] });
+  await waitFor(() =>
+    expect(container.querySelector("path.ants")).toHaveAttribute(
+      "d",
+      "M25.5 20.5L105.5 20.5L105.5 100.5",
+    ),
+  );
+  // The new selection is in, its outline not fetched yet: still the transformed one.
+  await rerender({ selectionKey: 2, matrix: undefined });
+  expect(container.querySelector("path.ants")).toHaveAttribute(
+    "d",
+    "M25.5 20.5L105.5 20.5L105.5 100.5",
+  );
+  await waitFor(() => expect(release).not.toBeNull());
+  release!();
+  await waitFor(() =>
+    expect(container.querySelector("path.ants")).toHaveAttribute(
+      "d",
+      "M10.5 10.5L50.5 10.5L50.5 50.5",
+    ),
+  );
+});
+
+test("cancelled, the outline is back at once", async () => {
+  const { container, rerender } = open({ matrix: [2, 0, 0, 2, 5, 0] });
+  await waitFor(() => expect(container.querySelector("path.ants")).toBeInTheDocument());
+  await rerender({ matrix: undefined });
+  expect(container.querySelector("path.ants")).toHaveAttribute(
+    "d",
+    "M10.5 10.5L50.5 10.5L50.5 50.5",
+  );
+});
