@@ -97,3 +97,15 @@ test("a press on the empty part of the list deselects the row, as in the Layers 
   await user.keyboard("{Delete}");
   expect(ondelete).not.toHaveBeenCalled();
 });
+
+test("a press anywhere but on a row deselects it (the image, another panel); the trash keeps it", async () => {
+  const { ondelete, user } = open();
+  await user.click(row("Shirt"));
+  // The trash acts on the row clicked last.
+  await user.click(screen.getByRole("button", { name: "Delete Saved Selection" }));
+  expect(ondelete).toHaveBeenLastCalledWith(2);
+  await user.click(row("Hair"));
+  await fireEvent.pointerDown(document.body, { button: 0 });
+  expect(row("Hair")).toHaveAttribute("aria-selected", "false");
+  expect(screen.getByRole("button", { name: "Delete Saved Selection" })).toBeDisabled();
+});

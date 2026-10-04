@@ -3,8 +3,9 @@
   // objects rather than Photoshop's alpha channels. A click loads one (it becomes the
   // selection); Shift+click adds it, Alt+click subtracts it, Shift+Alt+click intersects, as the
   // selection tools' keys do. A double-click renames; the right-click menu has every command;
-  // Delete removes the row last clicked, a press on the empty part of the list deselects it.
-  // "+" saves the current selection.
+  // Delete removes the row last clicked; a press anywhere but on a row (the empty part of the
+  // list, the image, another panel) deselects it, the panel's buttons and menu aside. "+" saves
+  // the current selection.
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
   import type { SavedSelectionView, SelectionMode } from "./engine";
@@ -35,6 +36,21 @@
 
   /** The row last clicked: Delete removes it. */
   let current = $state<number | null>(null);
+  let rows = $state<HTMLElement>();
+  let footer = $state<HTMLElement>();
+
+  // A press outside the rows deselects the row; the panel's buttons act on it, and its menu
+  // was opened for it.
+  $effect(() => {
+    const press = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (menu || !target) return;
+      const onRow = rows?.contains(target) && target !== rows;
+      if (!onRow && !footer?.contains(target)) current = null;
+    };
+    window.addEventListener("pointerdown", press, true);
+    return () => window.removeEventListener("pointerdown", press, true);
+  });
   let renaming = $state<number | null>(null);
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
@@ -107,16 +123,13 @@
     <p class="empty">{t("selections.empty")}</p>
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <!-- A press on the empty part of the list deselects its row, as in the Layers panel. -->
     <ul
       class="list"
       role="listbox"
       aria-label={t("selections.title")}
       tabindex="0"
+      bind:this={rows}
       {onkeydown}
-      onpointerdown={(e) => {
-        if (e.button === 0 && e.target === e.currentTarget) current = null;
-      }}
     >
       {#each saved as entry (entry.id)}
         <li
@@ -151,7 +164,7 @@
       {/each}
     </ul>
   {/if}
-  <div class="footer">
+  <div class="footer" bind:this={footer}>
     <button
       type="button"
       class="icon-btn"
