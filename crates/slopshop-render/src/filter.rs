@@ -97,6 +97,10 @@ impl GpuFilter {
     /// The filtered crop of `job`, or `None` when the GPU does not take it (another format, a
     /// selection, too far a reach, a GPU error): the CPU computes it then.
     pub(crate) fn look(&self, job: &LookJob) -> Option<RasterImage> {
+        // A Liquify look is warped on the CPU (ADR 0037).
+        if job.warp.is_some() {
+            return None;
+        }
         if job.format != PixelFormat::RGBA8_SRGB {
             return None;
         }

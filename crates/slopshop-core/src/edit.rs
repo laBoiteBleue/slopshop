@@ -889,19 +889,21 @@ impl Edit {
     }
 
     /// The edit that gives Liquify entry `index` of raster layer `id`'s stack `field`, as its
-    /// workspace left it: an entry edited again (ADR 0037). A field that displaces nothing (all
-    /// restored) removes the entry. It keeps its eye.
+    /// workspace left it: an entry edited again (ADR 0037); `input` is what the entry is applied
+    /// to, when the workspace evaluated it. A field that displaces nothing (all restored)
+    /// removes the entry. It keeps its eye.
     pub fn set_liquify(
         doc: &Document,
         id: LayerId,
         index: usize,
         field: Arc<crate::liquify::Field>,
+        input: Option<Arc<RasterImage>>,
     ) -> Result<Edit, EditError> {
         let stack = Self::stack_of(doc, id)?;
         let edited = if field.is_identity() {
             stack.without(index)
         } else {
-            stack.with_field(index, field)
+            stack.with_field(index, field, input)
         };
         Ok(Edit::SetLayerStack {
             id,
@@ -3618,7 +3620,7 @@ mod tests {
             pixel_of(&shown(&doc, id).0, 20, 20),
             pixel_of(&original, 20, 20)
         );
-        let edit = Edit::set_liquify(&doc, id, 0, pushed(size, 55.0)).unwrap();
+        let edit = Edit::set_liquify(&doc, id, 0, pushed(size, 55.0), None).unwrap();
         let undo_edit = edit.apply(&mut doc).unwrap();
         let stack = shown(&doc, id).1.unwrap();
         assert!(stack.entries()[0].hidden(), "it keeps its eye");
@@ -3637,7 +3639,7 @@ mod tests {
 
         // A field with nothing left in it removes the entry.
         let restored = Arc::new(pushed(size, 40.0).restored());
-        Edit::set_liquify(&doc, id, 0, restored)
+        Edit::set_liquify(&doc, id, 0, restored, None)
             .unwrap()
             .apply(&mut doc)
             .unwrap();
@@ -3674,6 +3676,6 @@ mod tests {
             Err(EditError::NoLayers)
         );
         // Not a Liquify entry.
-        assert!(Edit::set_liquify(&doc, id, 0, pushed(size, 20.0)).is_err());
+        assert!(Edit::set_liquify(&doc, id, 0, pushed(size, 20.0), None).is_err());
     }
 }
