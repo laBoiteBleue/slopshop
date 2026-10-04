@@ -113,3 +113,16 @@ test("Window waits for a document", async () => {
     "true",
   );
 });
+
+test("a press on the empty part of the Selections panel's list deselects in the image", async () => {
+  localStorage.setItem("slopshop.dock", JSON.stringify({ open: "selections", height: 280 }));
+  open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat")]),
+    selectionKey: 7,
+    savedSelections: [{ id: 4, name: "Hair" }],
+  });
+  const list = await screen.findByRole("listbox", { name: "Selections" });
+  await fireEvent.pointerDown(list, { button: 0 });
+  await vi.waitFor(() => expect(sent("deselect")).toEqual([{ documentId: 1 }]));
+  localStorage.clear();
+});
