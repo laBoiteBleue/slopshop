@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import {
     BLEND_MODE_GROUPS,
     type BlendModeId,
@@ -64,6 +64,7 @@
   import { canDistribute } from "./align";
   import { mergeKind } from "./bake";
   import { editableEntry } from "./stackEntries";
+  import { LayersUi } from "./layersUi.svelte";
 
   let {
     doc,
@@ -78,8 +79,14 @@
     onfillcolor,
     onstyle,
     onentryedit,
+    ui = new LayersUi(),
   }: {
     doc: DocumentView;
+    /**
+     * What the panel remembers of the document (selection, folds, mask targets, scroll): the
+     * app keeps it per tab, so that switching tabs back finds it as it was left.
+     */
+    ui?: LayersUi;
     /** A double-click on a fill layer's thumbnail: the app lets its color be chosen. */
     onfillcolor?: (layer: LayerView) => void;
     /** A double-click on a pixel or fill layer's row, or on one of its effects: the app opens
@@ -124,15 +131,15 @@
 
   // Panels list layers top to bottom, like every image editor. Groups (ADR 0015) show their
   // layers indented below them, unless folded (see layerTree.ts).
-  /** Groups folded in the panel (UI state, like the selection). */
-  let collapsed = $state<Set<number>>(new Set());
+  /** Groups folded in the panel (UI state, like the selection: kept in `ui`). */
+  let collapsed = $derived(ui.collapsed);
   /** Layers whose stack entries are shown below them (ADR 0029; UI state, folded at first). */
-  let unfolded = $state<Set<number>>(new Set());
+  let unfolded = $derived(ui.unfolded);
 
   function toggleEntries(id: number) {
     const next = new Set(unfolded);
     if (!next.delete(id)) next.add(id);
-    unfolded = next;
+    ui.unfolded = next;
   }
 
   /** The label of an entry: paint, the adjustment or the filter applied (×n in a row). */
@@ -167,27 +174,23 @@
   function toggleFold(id: number) {
     const next = new Set(collapsed);
     if (!next.delete(id)) next.add(id);
-    collapsed = next;
+    ui.collapsed = next;
   }
 
-  // The selection's rules are in layerSelection.ts.
-  let selectedIds = $state<number[]>([]);
-  let activeId = $state<number | null>(null);
-  let anchorId: number | null = null;
+  // The selection's rules are in layerSelection.ts; it is kept in `ui`.
+  let selectedIds = $derived(ui.selection.ids);
+  let activeId = $derived(ui.selection.active);
   let selectedSet = $derived(new Set(selectedIds));
   let selected = $derived(allLayers.find((l) => l.id === activeId) ?? null);
   /** Selected layers, depth first, bottom to top. */
   let selection = $derived(allLayers.filter((l) => selectedSet.has(l.id)));
-  let knownIds = new Set<number>();
 
   function current(): LayerSelection {
-    return { ids: selectedIds, active: activeId, anchor: anchorId };
+    return ui.selection;
   }
 
   function apply(next: LayerSelection) {
-    selectedIds = next.ids;
-    activeId = next.active;
-    anchorId = next.anchor;
+    ui.selection = next;
   }
 
   function select(ids: number[], active: number | null) {
@@ -199,8 +202,8 @@
 
   $effect(() => {
     const order = allLayers.map((l) => l.id).filter((id) => !hiddenSet.has(id));
-    const known = knownIds;
-    knownIds = new Set(order);
+    const known = ui.known;
+    ui.known = new Set(order);
     untrack(() => apply(afterLayersChange(current(), known, order)));
   });
 
@@ -225,6 +228,11 @@
   }
 
   let list: HTMLUListElement;
+
+  // The list comes back scrolled where it was left (kept in `ui` while it scrolls).
+  onMount(() => {
+    list.scrollTop = ui.scroll;
+  });
 
   /**
    * A solid color fill layer of `color` (`#rrggbb`: the foreground color) above the active
@@ -252,19 +260,19 @@
    * Layers whose mask, rather than their pixels, is what painting reaches (UI state, as in
    * Photoshop: a click on a thumbnail chooses, a frame shows it on the active layer).
    */
-  let maskTargets = $state<Set<number>>(new Set());
+  let maskTargets = $derived(ui.maskTargets);
 
   function targetMask(id: number, mask: boolean) {
     if (maskTargets.has(id) === mask) return;
     const next = new Set(maskTargets);
     if (mask) next.add(id);
     else next.delete(id);
-    maskTargets = next;
+    ui.maskTargets = next;
   }
 
   /** New masks become the target of painting, as in Photoshop. */
   export function targetMasks(ids: number[]) {
-    maskTargets = new Set([...maskTargets, ...ids]);
+    ui.maskTargets = new Set([...maskTargets, ...ids]);
   }
 
   /** Painting reaches the active layer's mask rather than its pixels. */
@@ -469,7 +477,7 @@
   export function selectOnly(id: number) {
     const next = new Set(collapsed);
     for (const at of ancestors(tree, id)) next.delete(at);
-    if (next.size !== collapsed.size) collapsed = next;
+    if (next.size !== collapsed.size) ui.collapsed = next;
     select([id], id);
   }
 
@@ -887,6 +895,7 @@
     bind:this={list}
     tabindex="-1"
     class:dragging={drag?.active}
+    onscroll={() => (ui.scroll = list.scrollTop)}
     onpointerdown={(e) => {
       if (e.button === 0 && e.target === e.currentTarget) deselectLayers();
     }}

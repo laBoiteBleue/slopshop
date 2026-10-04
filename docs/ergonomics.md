@@ -47,7 +47,8 @@ built. Contributors: propose here first.
   layer in a multi-selection shows or hides the whole selection.
 - A layered file imported into a document arrives as one group named after it.
 - Tabs: reorder by dragging, rename by double-click, drop a tab on another image to copy its
-  layers, Ctrl+Tab.
+  layers, Ctrl+Tab; switching tabs back finds the Layers panel as it was left (selected
+  layers, folded groups and stacks, mask targets, scroll).
 - Layers panel: thumbnails, visibility, live opacity, blend modes, rename (double-click, F2),
   drag to reorder; several layers with Ctrl/Shift+click, Select > All Layers (Alt+Ctrl+A); a
   click in the empty area deselects; Delete deletes; groups as folders that fold, Ctrl+G,

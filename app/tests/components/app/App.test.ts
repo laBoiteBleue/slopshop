@@ -1,6 +1,6 @@
 import { fireEvent, screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
-import { documentView, layer, layerNames, open, sent } from "./harness";
+import { documentView, layer, layerNames, open, row, sent } from "./harness";
 
 // The app's shell: the welcome page, tabs, File > New, undo, the toolbar's letters, Delete
 // and the panels' width.
@@ -22,6 +22,23 @@ test("documents open at startup are tabs; the last one shows its layers and is d
   await vi.waitFor(() =>
     expect(sent("render_view")).toContainEqual(expect.objectContaining({ documentId: 2 })),
   );
+});
+
+test("switching tabs back finds the layers selected as they were left", async () => {
+  const user = open(
+    documentView(1, "cat.jpg", [layer(1, "Background"), layer(2, "Cat")]),
+    documentView(2, "dog.png", [layer(1, "Dog")]),
+  );
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Dog"]));
+  await user.keyboard("{Control>}{Tab}{/Control}");
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
+  await user.click(row("Background"));
+  await user.keyboard("{Control>}{Tab}{/Control}");
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Dog"]));
+  await user.keyboard("{Control>}{Tab}{/Control}");
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
+  expect(row("Background")).toHaveClass("selected");
+  expect(row("Cat")).not.toHaveClass("selected");
 });
 
 test("File > New creates an untitled document in a new tab", async () => {
