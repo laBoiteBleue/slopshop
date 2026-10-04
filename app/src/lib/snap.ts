@@ -8,7 +8,7 @@ import type { Bounds } from "./engine";
  * A smart guide: a line in document pixels. A `measure` (an equal size) ends with short
  * perpendicular ticks, like the serifs of an I.
  */
-export type Guide = { x1: number; y1: number; x2: number; y2: number; measure?: boolean };
+export type SmartGuide = { x1: number; y1: number; x2: number; y2: number; measure?: boolean };
 
 /** Snapping distance, in screen (CSS) pixels. */
 export const SNAP_CSS_PX = 6;
@@ -52,9 +52,9 @@ function nearest(
   return found;
 }
 
-/** Guides for alignments on `x` and `y`, spanning `box` and the targets aligned with. */
-function guidesFor(box: Bounds, x: Line | null, y: Line | null): Guide[] {
-  const guides: Guide[] = [];
+/** Smart guides for alignments on `x` and `y`, spanning `box` and the targets aligned with. */
+function guidesFor(box: Bounds, x: Line | null, y: Line | null): SmartGuide[] {
+  const guides: SmartGuide[] = [];
   if (x) {
     guides.push({
       x1: x.at,
@@ -84,7 +84,7 @@ export function snapMove(
   y: number,
   targets: Bounds[],
   threshold: number,
-): { x: number; y: number; guides: Guide[] } {
+): { x: number; y: number; guides: SmartGuide[] } {
   const moved = {
     left: box.left + x,
     top: box.top + y,
@@ -113,7 +113,7 @@ export function snapMove(
 }
 
 /** How a dragged handle snaps on one axis: the shift to apply, and the guides to draw. */
-export type AxisSnap = { shift: number; guides: (box: Bounds) => Guide[] };
+export type AxisSnap = { shift: number; guides: (box: Bounds) => SmartGuide[] };
 
 /**
  * Where a handle dragged along `axis` snaps (Free Transform's scaling, as in Photoshop): onto
@@ -149,7 +149,7 @@ export function snapHandle(
     const shift = anchor + (direction * size) / span - handle;
     // The same size: a measure across the middle of the box and of the target.
     const middle = (lo: number, hi: number) => (lo + hi) / 2;
-    const across = (b: Bounds): Guide =>
+    const across = (b: Bounds): SmartGuide =>
       vertical
         ? { x1: b.left, x2: b.right, y1: middle(b.top, b.bottom), y2: middle(b.top, b.bottom) }
         : { x1: middle(b.left, b.right), x2: middle(b.left, b.right), y1: b.top, y2: b.bottom };

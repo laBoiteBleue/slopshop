@@ -18,13 +18,14 @@ const CANVAS: Bounds = { left: 0, top: 0, right: 200, bottom: 100 };
 
 type Point = [number, number];
 
-function open(options: { targets?: Bounds[]; hand?: boolean } = {}) {
+function open(options: { targets?: Bounds[]; hand?: boolean; smartGuides?: boolean } = {}) {
   const onapply = vi.fn();
   const oncancel = vi.fn();
   const { container } = render(CropBox, {
     mapping: { ...MAPPING, hand: options.hand ?? false },
     canvas: CANVAS,
     targets: options.targets ?? [],
+    smartGuides: options.smartGuides ?? true,
     onapply,
     oncancel,
   });
@@ -157,4 +158,14 @@ test("while Space pans the viewport, a drag changes nothing", async () => {
   await drag(user, handles[RIGHT], svg, [200, 50], [150, 50]);
   await user.keyboard("{Enter}");
   expect(onapply).toHaveBeenCalledExactlyOnceWith(CANVAS);
+});
+
+test("with the smart guides hidden (View > Hide Extras), an edge still snaps, unseen", async () => {
+  const targets: Bounds[] = [{ left: 0, top: 0, right: 100, bottom: 100 }];
+  const { container, onapply, svg, handles, user } = open({ targets, smartGuides: false });
+  await press(user, handles[RIGHT], svg, [200, 50], [97, 50]);
+  expect(container.querySelector(".guide")).not.toBeInTheDocument();
+  await release(user, svg, [97, 50]);
+  await user.keyboard("{Enter}");
+  expect(onapply.mock.lastCall?.[0].right).toBe(100);
 });

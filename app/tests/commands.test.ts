@@ -161,3 +161,16 @@ test("Layer > Arrange is Ctrl+[ and ], by the physical keys (^ and $ on AZERTY)"
   // Alone, the brackets are the brushes' (keymap.ts), not a command.
   assert.equal(commandAt(bracket("]", "BracketRight", {}), false), null);
 });
+
+test("View: Ctrl+H hides the extras and F11 is full screen; Window: Tab hides the panels", () => {
+  assert.equal(commandAt(press("h", ctrl), false), "hideExtras");
+  assert.equal(commandAt(press("h", cmd), true), "hideExtras");
+  assert.equal(commandAt(press("F11"), false), "fullScreen");
+  assert.equal(commandAt(press("Tab"), false), "hidePanels");
+  // Shift+Tab moves the focus back, as everywhere.
+  assert.equal(commandAt(press("Tab", { shiftKey: true }), false), null);
+  const names = { shift: "Maj", alt: "Alt", delete: "Suppr", backspace: "Retour arrière" };
+  assert.equal(formatShortcut("tab", names, false), "Tab");
+  assert.equal(formatShortcut("tab", names, true), "⇥");
+  assert.equal(formatShortcut("f11", names, false), "F11");
+});

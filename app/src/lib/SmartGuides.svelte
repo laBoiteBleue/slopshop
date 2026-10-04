@@ -3,10 +3,10 @@
 <script lang="ts">
   // Smart guides of a snap, magenta as in Photoshop, drawn inside an overlay's <svg>. Measures
   // (equal sizes) end with short ticks, like the serifs of an I, a fixed size on screen.
-  import type { Guide } from "./snap";
+  import type { SmartGuide } from "./snap";
   import type { ViewMapping } from "./Viewport.svelte";
 
-  let { guides, mapping }: { guides: Guide[]; mapping: ViewMapping } = $props();
+  let { guides, mapping }: { guides: SmartGuide[]; mapping: ViewMapping } = $props();
 
   /** Half the length of a measure's end ticks, in CSS pixels. */
   const SERIF_PX = 4;

@@ -3,7 +3,7 @@
 // lands (snapped, whole pixels).
 
 import type { Bounds, LayerView } from "./engine";
-import { snapMove, type Guide } from "./snap";
+import { snapMove, type SmartGuide } from "./snap";
 import { isSelectionTool, type ToolId } from "./tools";
 
 /** What moving selected pixels takes: the active layer's pixels, or its mask when targeted. */
@@ -44,9 +44,9 @@ export function landing(
   moving: Bounds | null,
   targets: Bounds[],
   threshold: number,
-): { x: number; y: number; guides: Guide[] } {
+): { x: number; y: number; guides: SmartGuide[] } {
   let { x, y } = raw;
-  let guides: Guide[] = [];
+  let guides: SmartGuide[] = [];
   if (moving) {
     const snapped = snapMove(moving, x, y, targets, threshold);
     ({ x, y } = snapped);

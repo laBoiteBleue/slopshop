@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import type { Guide } from "./snap";
+  import type { SmartGuide } from "./snap";
 
   /** How an overlay (e.g. Free Transform's box) maps between the document and the viewport. */
   export type ViewMapping = {
@@ -46,6 +46,7 @@
     type View,
   } from "./viewMapping";
   import { isTextField } from "./keymap";
+  import SmartGuides from "./SmartGuides.svelte";
 
   let {
     documentId,
@@ -59,7 +60,7 @@
     onmove,
     onmoveend,
     ondoubleclick,
-    guides = [],
+    smartGuides = [],
     overlay,
   }: {
     /** Open document. Read once: the viewport is recreated for another document. */
@@ -93,8 +94,8 @@
     onmoveend?: () => void;
     /** A double-click on the image with the Move tool (Free Transform, as in Photoshop). */
     ondoubleclick?: () => void;
-    /** Smart guides to draw over the image, in document pixels. */
-    guides?: Guide[];
+    /** Smart guides of the Move tool's snap, drawn over the image, in document pixels. */
+    smartGuides?: SmartGuide[];
     /** Drawn over the image, following the view (it handles its own pointer events). */
     overlay?: Snippet<[ViewMapping]>;
   } = $props();
@@ -540,11 +541,6 @@
     );
   }
 
-  /** Where a document point is in the viewport, in CSS pixels. */
-  function toViewport(x: number, y: number): [number, number] {
-    return viewportAt(target ?? NO_VIEW, window.devicePixelRatio, x, y);
-  }
-
   const mapping: ViewMapping | null = $derived.by(() => {
     const view = targetView;
     if (!view) return null;
@@ -614,17 +610,11 @@
   }}
 >
   <canvas bind:this={canvas} class:hidden={presentsNatively}></canvas>
-  {#each guides as guide, i (i)}
-    {@const [x1, y1] = toViewport(guide.x1, guide.y1)}
-    {@const [x2, y2] = toViewport(guide.x2, guide.y2)}
-    <div
-      class="guide"
-      style:left="{Math.round(Math.min(x1, x2))}px"
-      style:top="{Math.round(Math.min(y1, y2))}px"
-      style:width="{Math.max(1, Math.round(Math.abs(x2 - x1)))}px"
-      style:height="{Math.max(1, Math.round(Math.abs(y2 - y1)))}px"
-    ></div>
-  {/each}
+  {#if mapping && smartGuides.length > 0}
+    <svg class="smart-guides" aria-hidden="true">
+      <SmartGuides guides={smartGuides} {mapping} />
+    </svg>
+  {/if}
   {#if overlay && mapping}
     {@render overlay(mapping)}
   {/if}
@@ -670,10 +660,12 @@
     pointer-events: none;
   }
 
-  /* Smart guides, magenta as in Photoshop. */
-  .guide {
+  .smart-guides {
     position: absolute;
-    background: #ff2bd6;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
     pointer-events: none;
   }
 

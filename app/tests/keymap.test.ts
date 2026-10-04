@@ -146,3 +146,10 @@ test("text fields are text areas and text or number inputs", () => {
   assert.ok(!isTextField({ tagName: "SELECT" } as unknown as EventTarget));
   assert.ok(!isTextField(null));
 });
+
+test("Tab hides the panels, except in a text field, a list or a dialog, which keep it", () => {
+  assert.deepEqual(keyAction(press("Tab"), context()), { kind: "command", id: "hidePanels" });
+  assert.equal(kind(press("Tab", { inTextField: true })), "none");
+  assert.equal(kind(press("Tab", { inSelect: true })), "none");
+  assert.equal(kind(press("Tab"), context({ dialogOpen: () => true })), "none");
+});

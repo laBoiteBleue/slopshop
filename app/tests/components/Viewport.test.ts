@@ -199,12 +199,11 @@ test("the app's zoom commands: fit, presets and a set zoom", async () => {
 test("smart guides are drawn where the view shows them", async () => {
   const { component, container, rerender } = open();
   await component.zoomTo(2);
-  await rerender({ guides: [{ x1: 20, y1: 20, x2: 20, y2: 40 }] });
-  const guide = container.querySelector(".guide") as HTMLElement;
+  await rerender({ smartGuides: [{ x1: 20, y1: 20, x2: 20, y2: 40 }] });
+  const guide = container.querySelector("svg.smart-guides line.guide") as SVGLineElement;
   // (20 - 10) × 2 = 20 CSS pixels from the left; 20 document pixels tall at 200%.
-  expect(guide.style.left).toBe("20px");
-  expect(guide.style.top).toBe("0px");
-  expect(guide.style.height).toBe("40px");
+  const at = (name: string) => Number(guide.getAttribute(name));
+  expect([at("x1"), at("y1"), at("x2"), at("y2")]).toEqual([20, 0, 20, 40]);
 });
 
 // --- Native presentation: the engine draws the selection's ants in the view -----------------

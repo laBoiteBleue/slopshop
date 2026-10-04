@@ -1,7 +1,7 @@
 import { render } from "@testing-library/svelte";
 import { expect, test } from "vitest";
-import Guides from "../../src/lib/Guides.svelte";
-import type { Guide } from "../../src/lib/snap";
+import SmartGuides from "../../src/lib/SmartGuides.svelte";
+import type { SmartGuide } from "../../src/lib/snap";
 import type { ViewMapping } from "../../src/lib/Viewport.svelte";
 
 /** The viewport shows the document at 200%, 10 px from the window's corner. */
@@ -12,8 +12,8 @@ const MAPPING: ViewMapping = {
   hand: false,
 };
 
-function lines(guides: Guide[]) {
-  const { container } = render(Guides, { guides, mapping: MAPPING });
+function lines(guides: SmartGuide[]) {
+  const { container } = render(SmartGuides, { guides, mapping: MAPPING });
   return [...container.querySelectorAll("line.guide")].map((line) =>
     ["x1", "y1", "x2", "y2"].map((name) => Number(line.getAttribute(name))),
   );
