@@ -7,6 +7,7 @@ import ColorRangeDialog, {
   type ColorRangeState,
 } from "../../src/lib/ColorRangeDialog.svelte";
 import { reactive } from "./reactive.svelte";
+import { eyedropperCursor } from "../../src/lib/eyedropper";
 
 /** The previews the engine was asked for. */
 let previews: Record<string, unknown>[];
@@ -222,4 +223,16 @@ test("colorRangeRequest sends what the dialog shows", () => {
     localized: 30,
     layerId: null,
   });
+});
+
+test("on the preview the pointer is the eyedropper a click would use", async () => {
+  const { range, preview, user } = open();
+  expect(preview.style.cursor).toBe(eyedropperCursor("pick"));
+  await user.click(screen.getByRole("radio", { name: "Subtract from sample (Alt)" }));
+  expect(range.eyedropper).toBe("subtract");
+  expect(preview.style.cursor).toBe(eyedropperCursor("subtract"));
+  await user.keyboard("{Shift>}");
+  expect(preview.style.cursor).toBe(eyedropperCursor("add"));
+  await user.keyboard("{/Shift}");
+  expect(preview.style.cursor).toBe(eyedropperCursor("subtract"));
 });

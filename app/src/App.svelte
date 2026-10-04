@@ -140,6 +140,7 @@
   } from "./lib/SelectAndMaskPanel.svelte";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
+  import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
   import ObjectSelectionTool, { type ObjectHover } from "./lib/ObjectSelectionTool.svelte";
   import AiDownloadDialog from "./lib/AiDownloadDialog.svelte";
@@ -642,7 +643,18 @@
       const shown = await engine.sampleColor(doc.id, point[0], point[1]);
       return shown ? (shown.map((v) => v / 255) as [number, number, number]) : null;
     },
+    patch: async (clientX: number, clientY: number, radius: number) => {
+      const point = canvasPointAt(clientX, clientY);
+      return point ? loupePatch(point[0], point[1], radius) : null;
+    },
   };
+
+  /** The eyedropper's loupe: the pixels shown around a document point; none off the canvas. */
+  async function loupePatch(x: number, y: number, radius: number) {
+    const doc = active;
+    if (!doc || outsideCanvas(doc, x, y)) return null;
+    return engine.samplePatch(doc.id, x, y, radius);
+  }
   /** The stroke being sent: samples wait while a batch is in flight (none is ever dropped). */
   let paintRun: {
     id: number;
@@ -4342,15 +4354,12 @@
                   />
                 {:else if colorRange && colorRange.document === active?.id}
                   <!-- Color Range open: a click on the image samples a color. -->
-                  <div
-                    class="sample-overlay"
-                    role="presentation"
-                    onpointerdown={(e) => {
-                      if (e.button !== 0 || mapping.hand || !colorRange) return;
-                      const [x, y] = mapping.toDocument(e.clientX, e.clientY);
-                      sampleAt(colorRange, x, y, e);
-                    }}
-                  ></div>
+                  <EyedropperOverlay
+                    {mapping}
+                    kind={colorRange.eyedropper}
+                    onsample={(x, y, keys) => colorRange && sampleAt(colorRange, x, y, keys)}
+                    patch={loupePatch}
+                  />
                 {:else if tool === "wand"}
                   <SelectionDrag {mapping} {...outlineDragProps}>
                     <WandTool {mapping} mode={selectionMode} onpick={magicWand} />
@@ -5135,13 +5144,6 @@
     min-width: 0;
     min-height: 0;
     background: var(--pasteboard);
-  }
-
-  /* Color Range open: clicks on the image sample colors. */
-  .sample-overlay {
-    position: absolute;
-    inset: 0;
-    cursor: crosshair;
   }
 
   .stage.see-through {

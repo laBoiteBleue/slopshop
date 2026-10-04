@@ -1,13 +1,25 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import ColorPickerDialog from "../../src/lib/ColorPickerDialog.svelte";
 import type { Rgb } from "../../src/lib/colorModel";
+import { eyedropperCursor, LOUPE_RADIUS } from "../../src/lib/eyedropper";
 
 /** The number fields, in order: H S B, R G B, L a b. */
 const NAMES = ["H", "S", "B", "R", "G", "Blue", "L", "a", "b"] as const;
 
-function open(color = "#ff0000", sample?: { at: () => Promise<Rgb | null> }) {
+function open(
+  color = "#ff0000",
+  sample?: {
+    at: () => Promise<Rgb | null>;
+    probe?: (x: number, y: number) => boolean;
+    patch?: (
+      x: number,
+      y: number,
+      radius: number,
+    ) => Promise<Uint8ClampedArray<ArrayBuffer> | null>;
+  },
+) {
   const onapply = vi.fn();
   const onclose = vi.fn();
   render(ColorPickerDialog, {
@@ -15,7 +27,7 @@ function open(color = "#ff0000", sample?: { at: () => Promise<Rgb | null> }) {
     color,
     onapply,
     onclose,
-    sample: sample && { at: sample.at, probe: () => true },
+    sample: sample && { probe: () => true, ...sample },
   });
   return { onapply, onclose, user: userEvent.setup() };
 }
@@ -109,4 +121,19 @@ test("for a mask, grays only: one field, the eyedropper taking a color's gray", 
   await user.type(level, "128");
   await user.click(screen.getByRole("button", { name: "OK" }));
   expect(onapply).toHaveBeenCalledWith("#808080");
+});
+
+test("over the image the pointer is the eyedropper, with a loupe of the pixels around it", async () => {
+  const patch = vi.fn(async () => null);
+  // The image ends at x = 100.
+  open("#ff0000", { at: async () => null, probe: (x) => x < 100, patch });
+  const blocker = document.querySelector(".blocker") as HTMLElement;
+  await fireEvent.pointerMove(blocker, { clientX: 40, clientY: 30 });
+  expect(blocker.style.cursor).toBe(eyedropperCursor("pick"));
+  await vi.waitFor(() => expect(patch).toHaveBeenCalledWith(40, 30, LOUPE_RADIUS));
+  expect(document.querySelector(".loupe")).not.toBeNull();
+  // Off the image: the normal pointer, no loupe.
+  await fireEvent.pointerMove(blocker, { clientX: 140, clientY: 30 });
+  expect(blocker.style.cursor).toBe("");
+  expect(document.querySelector(".loupe")).toBeNull();
 });
