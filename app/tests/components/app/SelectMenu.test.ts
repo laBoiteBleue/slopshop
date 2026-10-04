@@ -65,10 +65,49 @@ test("Select > Grow and Similar use the Magic Wand's tolerance on its sampled la
   await user.click(screen.getByText("Similar", { selector: ".label" }));
   await vi.waitFor(() =>
     expect(sent("grow_selection")).toEqual([
-      { documentId: 1, tolerance: 32, contiguous: true, antiAlias: true, layerId: 1 },
-      { documentId: 1, tolerance: 32, contiguous: false, antiAlias: true, layerId: 1 },
+      { documentId: 1, tolerance: 32, contiguous: true, antiAlias: true, layerId: 1, task: 1 },
+      { documentId: 1, tolerance: 32, contiguous: false, antiAlias: true, layerId: 1, task: 2 },
     ]),
   );
+});
+
+test("Select > Similar shows its progress, and Esc cancels it", async () => {
+  let finish: (() => void) | null = null;
+  respond("grow_selection", (_, doc) => new Promise((resolve) => (finish = () => resolve(doc))));
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Similar", { selector: ".label" }));
+  await vi.waitFor(() => expect(sent("grow_selection")).toHaveLength(1));
+  const task = sent("grow_selection")[0].task as number;
+  await screen.findByRole("button", { name: "Cancel (Esc)" }, { timeout: 2000 });
+  expect(screen.getByText(/Selecting similar colors/)).toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  await vi.waitFor(() => expect(sent("ai_cancel")).toEqual([{ task }]));
+  finish!();
+});
+
+test("the Magic Wand shows its progress while it computes, with its cancel button", async () => {
+  let finish: (() => void) | null = null;
+  respond("magic_wand", (_, doc) => new Promise((resolve) => (finish = () => resolve(doc))));
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.keyboard("w");
+  // W picks the slot, Shift+W goes through its tools (Photoshop's way).
+  for (let i = 0; i < 3 && !document.querySelector("svg.wand"); i++) {
+    await user.keyboard("{Shift>}w{/Shift}");
+  }
+  const wand = document.querySelector("svg.wand") as SVGSVGElement;
+  await user.pointer({ keys: "[MouseLeft]", target: wand, coords: { clientX: 10, clientY: 10 } });
+  await vi.waitFor(() => expect(sent("magic_wand")).toHaveLength(1));
+  const task = sent("magic_wand")[0].task as number;
+  expect(typeof task).toBe("number");
+  // After a moment, the card with its cancel button (a quick click shows nothing).
+  const cancel = await screen.findByRole("button", { name: "Cancel (Esc)" }, { timeout: 2000 });
+  expect(screen.getByText(/Selecting with the Magic Wand/)).toBeInTheDocument();
+  await user.click(cancel);
+  await vi.waitFor(() => expect(sent("ai_cancel")).toEqual([{ task }]));
+  finish!();
 });
 
 test("Grow and Similar wait for a selection", async () => {

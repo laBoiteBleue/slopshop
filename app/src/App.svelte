@@ -1430,14 +1430,10 @@
     }
     // The active layer, unless every layer is sampled (or none is active).
     const layer = wand.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
-    void sync(
-      engine.magicWand(
-        doc.id,
-        { x, y },
-        { tolerance: wand.tolerance, contiguous: wand.contiguous, antiAlias },
-        layer,
-        mode ?? selectionMode,
-      ),
+    const options = { tolerance: wand.tolerance, contiguous: wand.contiguous, antiAlias };
+    // Seconds on a large document: its progress shows, and Esc cancels it.
+    void runAi("wand.task", (task) =>
+      engine.magicWand(doc.id, { x, y }, options, layer, mode ?? selectionMode, task),
     );
   }
 
@@ -1994,9 +1990,14 @@
    * colors, sampling what the Magic Wand samples.
    */
   function growSelection(contiguous: boolean) {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
     const layer = wand.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
-    selectionCommand((id) =>
-      engine.growSelection(id, { tolerance: wand.tolerance, contiguous, antiAlias }, layer),
+    const options = { tolerance: wand.tolerance, contiguous, antiAlias };
+    // As the Magic Wand: its progress shows, and Esc cancels it.
+    void runAi(contiguous ? "grow.task" : "similar.task", (task) =>
+      engine.growSelection(doc.id, options, layer, task),
     );
   }
 

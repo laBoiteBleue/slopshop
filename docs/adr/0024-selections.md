@@ -175,3 +175,6 @@ GPU never makes a selection wrong.
   all of them are 5 to 11 times faster (14 to 25 s down to 2 to 3.5 s). Reading 8-bit values on
   the GPU rather than `f32` (a quarter of the readback) would cut the rest, as would a
   speculative prefetch of the contiguous fill's next tiles: not done.
+- Progress: Magic Wand, Grow and Similar show theirs and are cancelled (Esc) as Color Range is,
+  counted in tiles read; a contiguous fill counts against every tile of the canvas, the most it
+  can read, and jumps to the end when it stops sooner.

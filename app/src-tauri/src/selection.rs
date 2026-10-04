@@ -171,12 +171,12 @@ pub async fn select_shape(
 
 /// The Magic Wand at document pixel (`x`, `y`): similar colors, within `tolerance` (0–255),
 /// connected or not, combined by `mode`. It samples the composited document, or with
-/// `layer_id` only that layer (placed as in the document).
+/// `layer_id` only that layer (placed as in the document). Its progress is reported, and it can
+/// be cancelled, as the UI's `task` (as Color Range is).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn magic_wand(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     document_id: u64,
     x: u32,
     y: u32,
@@ -185,72 +185,137 @@ pub async fn magic_wand(
     anti_alias: bool,
     layer_id: Option<u64>,
     mode: String,
-) -> Result<DocumentView, String> {
-    let combine = combine(&mode)?;
-    let (source, current) = {
-        let mut documents = state.documents()?;
-        let doc = documents.get_mut(document_id)?.session.document();
-        let current = doc.selection().map(|s| Arc::clone(s.image()));
-        (sampled_document(doc, layer_id)?, current)
-    };
+    task: u64,
+) -> Result<DocumentView, AiFailure> {
+    let combine = combine(&mode).map_err(internal)?;
     let options = selection::WandOptions {
         tolerance,
         contiguous,
         anti_alias,
     };
-    let image = on_worker(move || {
-        use tauri::Manager;
-        let state = app.state::<AppState>();
-        let gpu = gpu_pixels(state.renderer().ok());
-        let pixels = gpu.as_ref().map(|p| p as &PixelSource<'_>);
-        selection::magic_wand_from(
-            &source,
-            pixels,
-            current.as_deref(),
-            (x, y),
-            options,
-            combine,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await?;
-    set_selection(&state, document_id, image)
+    sampling_task(
+        &app,
+        document_id,
+        layer_id,
+        task,
+        "magicWand",
+        move |sampling| {
+            selection::magic_wand_from(
+                sampling.source,
+                sampling.pixels,
+                sampling.current,
+                (x, y),
+                options,
+                combine,
+                sampling.progress,
+                sampling.cancel,
+            )
+            .map_err(failure)
+        },
+    )
+    .await
 }
 
 /// Select > Grow (`contiguous`) and Select > Similar: the Magic Wand's tolerance and
 /// anti-aliasing around the selection's colors, added to it as one undo entry. It samples as
-/// the Magic Wand does: the composited document, or with `layer_id` only that layer.
+/// the Magic Wand does, its progress reported and cancelled as the Magic Wand's.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn grow_selection(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     document_id: u64,
     tolerance: f32,
     contiguous: bool,
     anti_alias: bool,
     layer_id: Option<u64>,
-) -> Result<DocumentView, String> {
-    let (source, current) = {
-        let mut documents = state.documents()?;
-        let doc = documents.get_mut(document_id)?.session.document();
-        let current = doc.selection().map(|s| Arc::clone(s.image()));
-        (sampled_document(doc, layer_id)?, current)
-    };
-    let current = current.ok_or("nothing is selected")?;
+    task: u64,
+) -> Result<DocumentView, AiFailure> {
     let options = selection::WandOptions {
         tolerance,
         contiguous,
         anti_alias,
     };
-    let image = on_worker(move || {
-        use tauri::Manager;
-        let state = app.state::<AppState>();
-        let gpu = gpu_pixels(state.renderer().ok());
-        let pixels = gpu.as_ref().map(|p| p as &PixelSource<'_>);
-        selection::grow_from(&source, pixels, &current, options).map_err(|e| e.to_string())
+    sampling_task(&app, document_id, layer_id, task, "grow", move |sampling| {
+        let current = sampling
+            .current
+            .ok_or_else(|| internal("nothing is selected"))?;
+        selection::grow_from(
+            sampling.source,
+            sampling.pixels,
+            current,
+            options,
+            sampling.progress,
+            sampling.cancel,
+        )
+        .map_err(failure)
     })
-    .await?;
-    set_selection(&state, document_id, image)
+    .await
+}
+
+/// What a selection tool that samples colors works from ([`sampling_task`]).
+struct Sampling<'a> {
+    /// The composited document, or one holding only the layer to sample.
+    source: &'a Document,
+    /// Where its composited pixels come from (the GPU), else the CPU compositor.
+    pixels: Option<&'a PixelSource<'a>>,
+    current: Option<&'a RasterImage>,
+    progress: &'a (dyn Fn(usize, usize) + Sync),
+    cancel: &'a slopshop_core::job::CancelToken,
+}
+
+/// The internal failure `e`, as the UI's task reports it.
+fn internal(e: impl ToString) -> AiFailure {
+    AiFailure::new("internal", e.to_string())
+}
+
+/// A selection's failure as the UI's task reports it: a cancellation is `cancelled`.
+fn failure(e: selection::SelectionError) -> AiFailure {
+    match e {
+        selection::SelectionError::Cancelled => AiFailure::new("cancelled", ""),
+        other => internal(other),
+    }
+}
+
+/// Runs `select` on a worker thread as the UI's `task` (`stage` in its progress): what it
+/// samples (document `document_id`, or only `layer_id`'s layer), its pixels from the GPU when
+/// there is one; the selection it gives set as one undo entry.
+async fn sampling_task(
+    app: &tauri::AppHandle,
+    document_id: u64,
+    layer_id: Option<u64>,
+    task: u64,
+    stage: &'static str,
+    select: impl FnOnce(Sampling<'_>) -> Result<Option<RasterImage>, AiFailure> + Send + 'static,
+) -> Result<DocumentView, AiFailure> {
+    use tauri::Manager;
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (source, current) = {
+            let mut documents = state.documents().map_err(internal)?;
+            let doc = documents
+                .get_mut(document_id)
+                .map_err(internal)?
+                .session
+                .document();
+            let current = doc.selection().map(|s| Arc::clone(s.image()));
+            (sampled_document(doc, layer_id).map_err(internal)?, current)
+        };
+        let task = Task::start(&app, task);
+        let progress = task.shared(stage);
+        let report = |done: usize, total: usize| progress.report(done, total);
+        let gpu = gpu_pixels(state.renderer().ok());
+        let image = select(Sampling {
+            source: &source,
+            pixels: gpu.as_ref().map(|p| p as &PixelSource<'_>),
+            current: current.as_deref(),
+            progress: &report,
+            cancel: task.cancel_token(),
+        })?;
+        set_selection(&state, document_id, image).map_err(internal)
+    })
+    .await
+    .map_err(internal)?
 }
 
 /// Quick Selection works on the region in view at most this many pixels on a side (the colors
@@ -1307,6 +1372,8 @@ mod tests {
             (10, 10),
             options,
             Combine::Replace,
+            &|_, _| {},
+            &slopshop_core::job::CancelToken::new(),
         )
         .unwrap()
         .unwrap();

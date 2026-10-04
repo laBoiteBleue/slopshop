@@ -232,7 +232,17 @@ fn compare(renderer: &Renderer, doc: &Document, label: &str) -> Vec<(String, usi
                 anti_alias,
             };
             let cpu = magic_wand(doc, None, seed, options, Combine::Replace).unwrap();
-            let gpu = magic_wand_from(doc, pixels, None, seed, options, Combine::Replace).unwrap();
+            let gpu = magic_wand_from(
+                doc,
+                pixels,
+                None,
+                seed,
+                options,
+                Combine::Replace,
+                &|_, _| {},
+                &slopshop_core::job::CancelToken::new(),
+            )
+            .unwrap();
             note(
                 format!("wand {seed:?} tolerance {tolerance} contiguous {contiguous}"),
                 differences(&cpu, &gpu),
@@ -261,7 +271,15 @@ fn compare(renderer: &Renderer, doc: &Document, label: &str) -> Vec<(String, usi
             anti_alias: false,
         };
         let cpu = grow(doc, &start, options).unwrap();
-        let gpu = grow_from(doc, pixels, &start, options).unwrap();
+        let gpu = grow_from(
+            doc,
+            pixels,
+            &start,
+            options,
+            &|_, _| {},
+            &slopshop_core::job::CancelToken::new(),
+        )
+        .unwrap();
         note(
             format!("grow tolerance {tolerance} contiguous {contiguous}"),
             differences(&cpu, &gpu),
@@ -369,8 +387,17 @@ fn the_active_layer_alone_selects_the_same_from_the_gpu() {
     };
     for seed in [(450, 300), (650, 300), (10, 10)] {
         let cpu = magic_wand(&alone, None, seed, options, Combine::Replace).unwrap();
-        let gpu =
-            magic_wand_from(&alone, Some(&source), None, seed, options, Combine::Replace).unwrap();
+        let gpu = magic_wand_from(
+            &alone,
+            Some(&source),
+            None,
+            seed,
+            options,
+            Combine::Replace,
+            &|_, _| {},
+            &slopshop_core::job::CancelToken::new(),
+        )
+        .unwrap();
         assert_eq!(differences(&cpu, &gpu), 0, "{seed:?}");
     }
 }
@@ -503,7 +530,19 @@ fn timings_on_a_large_document() {
                 time(
                     &format!("wand {what}, contiguous {contiguous}"),
                     &|| magic_wand(&doc, None, seed, o, Combine::Replace).unwrap(),
-                    &|| magic_wand_from(&doc, pixels, None, seed, o, Combine::Replace).unwrap(),
+                    &|| {
+                        magic_wand_from(
+                            &doc,
+                            pixels,
+                            None,
+                            seed,
+                            o,
+                            Combine::Replace,
+                            &|_, _| {},
+                            &slopshop_core::job::CancelToken::new(),
+                        )
+                        .unwrap()
+                    },
                 );
             }
         }
@@ -526,7 +565,17 @@ fn timings_on_a_large_document() {
             time(
                 &format!("grow patch, contiguous {contiguous}"),
                 &|| grow(&doc, &start, o).unwrap(),
-                &|| grow_from(&doc, pixels, &start, o).unwrap(),
+                &|| {
+                    grow_from(
+                        &doc,
+                        pixels,
+                        &start,
+                        o,
+                        &|_, _| {},
+                        &slopshop_core::job::CancelToken::new(),
+                    )
+                    .unwrap()
+                },
             );
         }
         let range = |colors| ColorRange {
