@@ -99,6 +99,8 @@ pub enum SelectionError {
     /// A coordinate or the feather radius is not finite, or the feather is out of range.
     InvalidShape,
     EmptyCanvas,
+    /// The work was cancelled ([`crate::job::CancelToken`]).
+    Cancelled,
 }
 
 impl std::fmt::Display for SelectionError {
@@ -106,6 +108,7 @@ impl std::fmt::Display for SelectionError {
         match self {
             SelectionError::InvalidShape => write!(f, "invalid selection shape"),
             SelectionError::EmptyCanvas => write!(f, "a canvas must have pixels"),
+            SelectionError::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -2071,6 +2074,24 @@ pub fn color_range(
     current: Option<&RasterImage>,
     range: &ColorRange,
 ) -> Result<Option<RasterImage>, SelectionError> {
+    color_range_with(
+        source,
+        current,
+        range,
+        &|_, _| {},
+        &crate::job::CancelToken::new(),
+    )
+}
+
+/// [`color_range`], `progress(done, total)` told as tiles are done (from any thread), stopping
+/// with [`SelectionError::Cancelled`] once `cancel` is.
+pub fn color_range_with(
+    source: &crate::document::Document,
+    current: Option<&RasterImage>,
+    range: &ColorRange,
+    progress: &(dyn Fn(usize, usize) + Sync),
+    cancel: &crate::job::CancelToken,
+) -> Result<Option<RasterImage>, SelectionError> {
     if !range.is_valid() {
         return Err(SelectionError::InvalidShape);
     }
@@ -2081,6 +2102,9 @@ pub fn color_range(
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let per_thread = tiles.len().div_ceil(threads).max(1);
     let (shape, sampler) = (&mask, &sampler);
+    let total = tiles.len();
+    let counted = std::sync::atomic::AtomicUsize::new(0);
+    let counted = &counted;
     let mut done: Vec<(usize, Tile)> = Vec::new();
     std::thread::scope(|scope| {
         let workers: Vec<_> = tiles
@@ -2089,7 +2113,10 @@ pub fn color_range(
                 scope.spawn(move || {
                     chunk
                         .iter()
+                        .take_while(|_| !cancel.is_cancelled())
                         .map(|&index| {
+                            let n = counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            progress(n + 1, total);
                             let (col, row) = (index % shape.columns, index / shape.columns);
                             let (w, h) = shape.valid(col, row);
                             let (x0, y0) = ((col * T) as f64, (row * T) as f64);
@@ -2119,6 +2146,9 @@ pub fn color_range(
             done.extend(worker.join().expect("color range worker panicked"));
         }
     });
+    if cancel.is_cancelled() {
+        return Err(SelectionError::Cancelled);
+    }
     for (index, tile) in done {
         mask.tiles[index] = tile;
     }
@@ -4085,6 +4115,25 @@ mod tests {
             ..range.clone()
         };
         assert!(color_range(&doc, None, &bad).is_err());
+        // Progress is told for every tile; a cancelled range stops.
+        let (seen, last) = (
+            std::sync::atomic::AtomicUsize::new(0),
+            std::sync::atomic::AtomicUsize::new(0),
+        );
+        let report = |done: usize, total: usize| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            last.fetch_max(done, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(total, 6);
+        };
+        let token = crate::job::CancelToken::new();
+        color_range_with(&doc, None, &range, &report, &token).unwrap();
+        assert_eq!(seen.into_inner(), 6);
+        assert_eq!(last.into_inner(), 6);
+        token.cancel();
+        assert_eq!(
+            color_range_with(&doc, None, &range, &|_, _| {}, &token),
+            Err(SelectionError::Cancelled)
+        );
         // Localized around the sample at (100, 150): the red nearby only, fading with the
         // distance; the red square inside the blue is far.
         let localized = ColorRange {

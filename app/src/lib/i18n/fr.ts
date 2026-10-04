@@ -178,6 +178,7 @@ const fr: Messages = {
   "menu.select.colorRange": "Plage de couleurs…",
   "menu.select.subject": "Sélectionner le sujet",
   "colorRange.title": "Plage de couleurs",
+  "colorRange.task": "Sélection de la plage de couleurs",
   "colorRange.fuzziness": "Tolérance :",
   "colorRange.invert": "Inverser",
   "colorRange.localized": "Localisé",

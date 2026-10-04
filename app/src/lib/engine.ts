@@ -1353,9 +1353,12 @@ export const engine = {
     const height = view.getUint32(4, true);
     return { width, height, gray: new Uint8Array(buffer, 8, width * height) };
   },
-  /** Select > Color Range: the sampled colors, within the selection if any. */
-  colorRange: (documentId: number, request: ColorRangeRequest) =>
-    serial(() => invoke<DocumentView>("color_range", { documentId, request })),
+  /**
+   * Select > Color Range: the sampled colors, within the selection if any. Its progress comes
+   * as AI requests' does, as `task`, which `aiCancel` cancels.
+   */
+  colorRange: (documentId: number, request: ColorRangeRequest, task: number) =>
+    serial(() => invoke<DocumentView>("color_range", { documentId, request, task })),
   /**
    * Select > Modify: the whole selection changed by `amount` pixels. `live`: shown, and replaced
    * by the next call (`cancelGesture` takes it back); otherwise one undo entry.
