@@ -1,6 +1,7 @@
 # 0033 — Project license: GPL-3.0-only
 
-Status: accepted (2026-10-04, the maintainer's decision).
+Status: accepted (2026-10-04, the maintainer's decision; amended the same day: the `.slop`
+specification's license, no outside code contributions yet, the Adobe notice).
 
 ## Context
 
@@ -23,12 +24,16 @@ application.
 3. **The name and the logo are not licensed under the GPL.**
 4. Programs outside this repository, such as a hosted service talking to the client over a
    network API, are separate programs under their own license.
+5. **The `.slop` specification is not under the GPL**, so that other software can implement
+   the format: [file-format.md](../file-format.md) is under CC BY 4.0, and the golden
+   `.slop` files (`crates/slopshop-io/src/slop/fixtures/`) under CC0 1.0. The official texts
+   are in `LICENSES/`.
+6. **No outside code contributions yet.** Issues and discussions are welcome; pull requests
+   from outside wait for contribution terms, which depend on the plugin question below.
+7. The README states that SlopShop is not affiliated with Adobe.
 
 Left open, to decide separately:
 
-- **The `.slop` specification** ([file-format.md](../file-format.md)) has no license of its
-  own and is covered by the repository's. A separate license, so that other software can
-  implement the format, is to decide.
 - **Plugins.** No plugin API exists yet (roadmap phase 5). Whether proprietary plugins are
   possible, and how (process boundary, the license of a plugin SDK, an additional permission
   under section 7 of the GPL), is decided with the plugin architecture. Such a permission
@@ -45,5 +50,6 @@ Left open, to decide separately:
 
 - `deny.toml` allows `GPL-3.0-only` for the `slopshop-*` crates.
 - The About dialog and the README state the new license.
-- Without contribution terms, outside contributions are expected under GPL-3.0-only
-  ("inbound = outbound"); the terms are to settle before the first one is accepted.
+- Contribution terms (a DCO keeps contributions GPL-3.0-only, so a later plugin permission
+  would need every contributor's agreement; a CLA keeps that possible but needs a reviewed
+  text) are chosen with the plugin architecture, before the first outside contribution.

@@ -167,10 +167,11 @@ French**; adding a language means adding one translation catalog (see
 
 ## Contributing
 
-The project is too young for outside contributions to be easy, but issues and discussions are
-welcome. Development rules (for humans and AI agents alike) are in [`CLAUDE.md`](CLAUDE.md).
-Image formats are a good place to start: [docs/formats.md](docs/formats.md) lists every format
-Photoshop handles, what SlopShop supports, the priorities and how to add a format.
+Issues and discussions are welcome. Code contributions from outside the project are not
+accepted yet: their terms are still to be decided ([ADR 0033](docs/adr/0033-project-license.md)).
+Development rules (for humans and AI agents alike) are in [`CLAUDE.md`](CLAUDE.md);
+[docs/formats.md](docs/formats.md) lists every format Photoshop handles, what SlopShop
+supports and the priorities.
 
 ## License
 
@@ -180,9 +181,17 @@ SlopShop is free software, distributed under the GNU General Public License, ver
 (`GPL-3.0-only`). You may use, study, modify and redistribute it under the terms of that
 license; see [LICENSE](LICENSE) for the exact conditions.
 
+The specification of the `.slop` format ([docs/file-format.md](docs/file-format.md)) is under
+[CC BY 4.0](LICENSES/CC-BY-4.0.txt) and its golden files under [CC0 1.0](LICENSES/CC0-1.0.txt),
+so that other software can implement the format.
+
 Third-party dependencies keep their own licenses. The AI models and runtimes that SlopShop can
 download on request are not part of SlopShop: each comes under its own license, shown before
 the download.
 
 The name "SlopShop" and the project's logo are not licensed under the GPL: any rights in the
 name and the branding are separate from the license of the code.
+
+SlopShop is an independent project, not affiliated with, endorsed by or sponsored by Adobe.
+Adobe and Photoshop are either registered trademarks or trademarks of Adobe in the United
+States and/or other countries.
