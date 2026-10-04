@@ -65,9 +65,9 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
    hashes are keyed by the tile's allocation (the cache holds a reference, so the address
    cannot be reused while cached) rather than by the image and position. A stroke then uploads
    and hashes only the tiles it changed, and a shared uniform tile (empty layers, selections) is
-   uploaded once. Composited display tiles (ADR 0022) are recomposited where the painted layer
-   reaches, as after any edit of it; narrowing that to the changed tiles is a later
-   optimization.
+   uploaded once. Composited display tiles (ADR 0022) are keyed by the identities of the
+   raster tiles they read, so a stroke frame recomposites only the display tiles over the
+   tiles it changed (2026-10-04; before, every tile the painted layer reaches).
 7. **Where it paints**: the active raster layer's painted image; its mask's painted image when
    the mask is the target (gray: white shows, black hides; the Brush paints the gray of its
    color, the Eraser and Delete the background color's, as Photoshop's: amended 2026-10-04 at
