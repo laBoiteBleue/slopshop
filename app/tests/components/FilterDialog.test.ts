@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import FilterDialog from "../../src/lib/FilterDialog.svelte";
+import { forgetDialogPlaces } from "../../src/lib/dialogDrag";
 
 function open(values = [1], extra: Record<string, unknown> = {}) {
   const callbacks = {
@@ -91,4 +92,26 @@ test("Preview, Cancel and Escape; the app's keys wait meanwhile", async () => {
   screen.getByRole("dialog").dispatchEvent(new Event("cancel", { cancelable: true }));
   expect(oncancel).toHaveBeenCalledTimes(2);
   expect(onok).not.toHaveBeenCalled();
+});
+
+test("its title bar moves it, and it opens again where it was left", async () => {
+  forgetDialogPlaces();
+  window.innerWidth = 1200;
+  window.innerHeight = 900;
+  vi.spyOn(HTMLDialogElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLDialogElement,
+  ) {
+    const [x = 0, y = 0] = this.style.translate.split(" ").map((v) => parseFloat(v) || 0);
+    return new DOMRect(430 + x, 350 + y, 340, 200);
+  });
+  open([2]);
+  const bar = screen.getByText("Gaussian Blur");
+  await fireEvent.pointerDown(bar, { pointerId: 1, button: 0, clientX: 500, clientY: 360 });
+  await fireEvent.pointerMove(bar, { pointerId: 1, clientX: 380, clientY: 400 });
+  await fireEvent.pointerUp(bar, { pointerId: 1 });
+  expect(screen.getByRole("dialog").style.translate).toBe("-120px 40px");
+  document.body.innerHTML = "";
+  open([2], { filter: "motionBlur", values: [0, 10] });
+  expect(screen.getByRole("dialog").style.translate).toBe("-120px 40px");
+  vi.restoreAllMocks();
 });
