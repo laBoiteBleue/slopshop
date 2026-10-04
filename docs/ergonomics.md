@@ -490,6 +490,34 @@ maintainer's answers:
   Image > Adjustments made on several layers, a single "Effect Layer" concept ("Effects" names
   layer styles), the transform as an entry of the stack (it stays a property of the layer).
 
+### View menu (audit of 2026-10-04)
+
+The maintainer asked for a View menu kept to what a modern editor needs, rather than
+Photoshop's whole menu. View presents the document (zoom, aids, snapping, full screen); the
+working interface (panels) belongs to Window.
+
+- **Done**: Zoom In (Ctrl++), Zoom Out (Ctrl+-), Fit on Screen (Ctrl+0), 100% (Ctrl+1: one
+  image pixel per screen pixel), then Hide Extras (Ctrl+H, Photoshop's Extras: the selection
+  outline and the smart guides hidden for a moment, the selection and the snap kept; handles,
+  the crop frame and pointers always shown; not remembered), Snap (remembered), then Full
+  Screen (F11, the system's full screen: F11 rather than Photoshop's F, every application's
+  key). Window > Hide Panels (Tab, as in Photoshop): the toolbar, the options bar and the
+  panels hidden, in any mode (full screen and Tab is the canvas alone); choosing a panel in
+  Window shows them again.
+- **Decided, to build**: Rulers (Ctrl+R, in pixels; physical units later from a right-click on
+  a ruler). Guides dragged out of a ruler, moved by dragging, deleted by dragging them back
+  onto it, stored in the document, each change undoable; View > Clear Guides. Snap is one
+  switch and snaps to everything (the canvas, the layers, the guides); the magenta smart
+  guides show what snapped, there is no separate Smart Guides switch; Ctrl held moves freely.
+  A pixel grid shown by itself at high zoom, without a menu entry. Moves stay in whole pixels
+  and Free Transform's unrotated edges snap to whole pixels: no "Pixels" snap target.
+- **Decided, not added**: the Show and Snap To submenus, a Smart Guides switch, New Guide…
+  and Lock Guides (later if missed), a regular grid and New Guide Layout (guides cover it),
+  Fill Screen (the wheel does it), screen modes cycled with F, rotating the view (the engine's
+  view, every overlay and the snap would need it), soft proofing and the gamut warning (the
+  engine is not ready: see [ADR 0007](adr/0007-color-management.md)).
+- Ctrl+H is the application's Hide on macOS (Cmd+H): to check on a Mac.
+
 ### Tabs and documents
 
 - [ ] Middle-click closes a tab.
@@ -507,8 +535,8 @@ maintainer's answers:
       "Group / Layer" choice).
 - [ ] Right-click on the canvas lists the layers under the pointer to select one (Photoshop
       with the Move tool).
-- [ ] Alt+wheel zooms without Ctrl; R rotates the view (non-destructive, like Photoshop).
-- [ ] Pixel grid at high zoom; rulers and guides (Ctrl+R, drag from a ruler).
+- [ ] A preference to scroll with the wheel (Ctrl or Alt + wheel zooming), for touchpads,
+      whose two-finger scroll zooms now.
 - [ ] Number keys set the opacity of the selected layers (1 = 10 %, 0 = 100 %), as in
       Photoshop.
 
