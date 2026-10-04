@@ -4493,6 +4493,7 @@
                 onreplace={(id) => selectionCommand((doc) => engine.saveSelection(doc, "", id))}
                 onrename={(id, name) => void sync(engine.renameSavedSelection(active.id, id, name))}
                 ondelete={(id) => void sync(engine.deleteSavedSelection(active.id, id))}
+                ondeselect={() => selectionCommand(engine.deselect)}
               />
             {/if}
           {/snippet}

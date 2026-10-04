@@ -4,7 +4,8 @@
   // selection); Shift+click adds it, Alt+click subtracts it, Shift+Alt+click intersects, as the
   // selection tools' keys do. A double-click renames; the right-click menu has every command;
   // Delete removes the row last clicked; a press anywhere but on a row (the empty part of the
-  // list, the image, another panel) deselects it, the panel's buttons and menu aside. "+" saves
+  // list, the image, another panel) deselects it, the panel's buttons and menu aside; on the
+  // empty part of the list it also deselects in the image. "+" saves
   // the current selection.
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
@@ -21,6 +22,7 @@
     onreplace,
     onrename,
     ondelete,
+    ondeselect,
   }: {
     saved: SavedSelectionView[];
     /** Something is selected now: it can be saved, or replace a saved one. */
@@ -32,6 +34,9 @@
     onreplace: (id: number) => void;
     onrename: (id: number, name: string) => void;
     ondelete: (id: number) => void;
+    /** A press on the empty part of the list: nothing selected in the image (Select > Deselect),
+     * as a press under the layers deselects them. */
+    ondeselect?: () => void;
   } = $props();
 
   /** The row last clicked: Delete removes it. */
@@ -130,6 +135,9 @@
       tabindex="0"
       bind:this={rows}
       {onkeydown}
+      onpointerdown={(e) => {
+        if (e.button === 0 && e.target === e.currentTarget) ondeselect?.();
+      }}
     >
       {#each saved as entry (entry.id)}
         <li

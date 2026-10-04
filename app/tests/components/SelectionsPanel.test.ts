@@ -109,3 +109,22 @@ test("a press anywhere but on a row deselects it (the image, another panel); the
   expect(row("Hair")).toHaveAttribute("aria-selected", "false");
   expect(screen.getByRole("button", { name: "Delete Saved Selection" })).toBeDisabled();
 });
+
+test("a press on the empty part of the list deselects in the image; elsewhere, not", async () => {
+  const ondeselect = vi.fn();
+  render(SelectionsPanel, {
+    saved: [{ id: 1, name: "Hair" }],
+    selected: true,
+    onload: vi.fn(),
+    onsave: vi.fn(),
+    onreplace: vi.fn(),
+    onrename: vi.fn(),
+    ondelete: vi.fn(),
+    ondeselect,
+  });
+  await fireEvent.pointerDown(screen.getByRole("option", { name: /Hair/ }), { button: 0 });
+  await fireEvent.pointerDown(document.body, { button: 0 });
+  expect(ondeselect).not.toHaveBeenCalled();
+  await fireEvent.pointerDown(screen.getByRole("listbox"), { button: 0 });
+  expect(ondeselect).toHaveBeenCalledOnce();
+});

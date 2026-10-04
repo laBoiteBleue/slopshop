@@ -384,7 +384,9 @@ The menu names intentions, never a technology (no "AI" category). The maintainer
   maintainer, 2026-10-04). The Selections panel lists them: a click loads one, Shift+click
   adds it, Alt+click subtracts it, Shift+Alt+click intersects (the selection tools' keys);
   double-click renames; the right-click menu also replaces one with the current selection or
-  deletes it; + saves the current selection, the trash or Delete removes the row clicked last.
+  deletes it; + saves the current selection, the trash or Delete removes the row clicked last;
+  a press outside the rows deselects the row, and on the empty part of the list deselects in
+  the image too (as a press under the layers deselects them).
   The right column (ADR 0030, maintainer's choice of 2026-10-04): Layers on top, below it a
   dock of tab icons (Properties, Selections) whose unfolded panel's tab folds it down to the
   icons; its top edge resizes it; remembered; selecting an adjustment or fill layer unfolds
