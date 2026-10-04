@@ -17,18 +17,89 @@ pub struct Copies {
     pub ids: Vec<LayerId>,
 }
 
+/// What a history entry did, for the History panel: an identifier the UI translates (`kind`,
+/// camelCase), and what was applied when that is part of it (an adjustment's or a filter's id).
+/// Display text is the UI's business.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryLabel {
+    pub kind: &'static str,
+    pub detail: Option<&'static str>,
+}
+
+impl HistoryLabel {
+    pub const fn new(kind: &'static str) -> Self {
+        Self { kind, detail: None }
+    }
+
+    pub const fn with(kind: &'static str, detail: &'static str) -> Self {
+        Self {
+            kind,
+            detail: Some(detail),
+        }
+    }
+
+    /// What `edit` does, said generically: callers that know better (a tool, a menu command)
+    /// name their entries with [`Session::with_label`].
+    pub fn of(edit: &Edit) -> Self {
+        let kind = match edit {
+            Edit::InsertLayer { .. } => "newLayer",
+            Edit::RemoveLayer { .. } => "deleteLayer",
+            Edit::SetLayerVisible { .. } => "visibility",
+            Edit::SetLayerOpacity { .. } => "opacity",
+            Edit::RenameLayer { .. } => "rename",
+            Edit::SetLayerBlendMode { .. } => "blendMode",
+            Edit::SetBlendSpace { .. } => "blendSpace",
+            Edit::SetResolution { .. } => "resolution",
+            Edit::SetCanvasSize { .. } => "canvasSize",
+            Edit::SetLayerMask { .. } => "mask",
+            Edit::SetLayerMaskEnabled { .. } => "maskEnabled",
+            Edit::MoveLayer { .. } => "arrange",
+            Edit::SetLayerTransform { .. } => "transform",
+            Edit::SetLayerStack { .. } => "pixels",
+            Edit::SetMaskPaint { .. } => "maskPixels",
+            Edit::SetFillColor { .. } => "fillColor",
+            Edit::SetAdjustment { adjustment, .. } => {
+                return Self::with("adjustmentSettings", adjustment.id());
+            }
+            Edit::SetLayerStyle { .. } => "layerStyle",
+            Edit::SetLayerClipped { .. } => "clipping",
+            Edit::SetGroupPassThrough { .. } => "passThrough",
+            Edit::SetSelection { .. } => "selection",
+            Edit::SetQuickMask { .. } => "quickMask",
+            Edit::SetGuides { .. } => "guides",
+            Edit::InsertSavedSelection { .. } => "saveSelection",
+            Edit::RemoveSavedSelection { .. } => "deleteSavedSelection",
+            Edit::RenameSavedSelection { .. } => "renameSavedSelection",
+            Edit::SetSavedSelection { .. } => "replaceSavedSelection",
+            Edit::Batch(edits) => return edits.first().map_or(Self::new("edit"), Self::of),
+        };
+        Self::new(kind)
+    }
+}
+
+/// One step of the history: the edit that goes back (or forward) over it, and what it did.
+#[derive(Debug)]
+struct Entry {
+    edit: Edit,
+    label: HistoryLabel,
+}
+
 /// An editing session: the document and the inverse edits needed to undo/redo.
 ///
 /// History is linear: performing a new edit discards the redo stack. Continuous interactions
-/// (e.g. a slider drag) are *gestures*: applied live, recorded as one entry. Bounding history
-/// memory is not needed yet.
+/// (e.g. a slider drag) are *gestures*: applied live, recorded as one entry. Each entry has a
+/// [`HistoryLabel`]. Bounding history memory is not needed yet.
 #[derive(Debug)]
 pub struct Session {
     document: Document,
-    undo: Vec<Edit>,
-    redo: Vec<Edit>,
+    undo: Vec<Entry>,
+    redo: Vec<Entry>,
     /// Inverses of the edits applied by the gesture in progress, in application order.
     gesture: Vec<Edit>,
+    /// What the gesture in progress does (set by its first edit).
+    gesture_label: HistoryLabel,
+    /// The label entries recorded now get (see [`Self::with_label`]); `None`: their edit's.
+    label: Option<HistoryLabel>,
     /// The selection before the gesture in progress, if it has begun.
     gesture_selection: Option<Option<Selection>>,
     /// The selection a committed change last removed or replaced: Select > Reselect brings it
@@ -44,6 +115,8 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             gesture: Vec::new(),
+            gesture_label: HistoryLabel::new("edit"),
+            label: None,
             gesture_selection: None,
             last_selection: None,
         }
@@ -71,6 +144,47 @@ impl Session {
         !self.redo.is_empty()
     }
 
+    /// Run `f`, the entries it records named `label` (when given; else after their edit). A
+    /// gesture started within keeps the label until it ends.
+    pub fn with_label<R>(
+        &mut self,
+        label: Option<HistoryLabel>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let inner = label.or(self.label);
+        let outer = std::mem::replace(&mut self.label, inner);
+        let result = f(self);
+        self.label = outer;
+        result
+    }
+
+    /// The history, oldest first: the entries done (the gesture in progress last), then those
+    /// undone that redo would bring back, nearest first; and how many are done.
+    pub fn history(&self) -> (Vec<HistoryLabel>, usize) {
+        let mut labels: Vec<HistoryLabel> = self.undo.iter().map(|e| e.label).collect();
+        if !self.gesture.is_empty() {
+            labels.push(self.gesture_label);
+        }
+        let done = labels.len();
+        labels.extend(self.redo.iter().rev().map(|e| e.label));
+        (labels, done)
+    }
+
+    /// Undo or redo until `done` entries of [`Self::history`] are done (0: the document as it
+    /// was opened), ending any gesture first. Stops early at the end of the history. Returns
+    /// whether anything changed.
+    pub fn go_to(&mut self, done: usize) -> Result<bool, EditError> {
+        self.end_gesture();
+        let mut changed = false;
+        while self.undo.len() > done && self.undo()? {
+            changed = true;
+        }
+        while self.undo.len() < done && self.redo()? {
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     /// Apply an edit and record it. Ends any gesture in progress first. On error nothing
     /// changes, history included.
     pub fn perform(&mut self, edit: Edit) -> Result<(), EditError> {
@@ -80,8 +194,9 @@ impl Session {
         }
         self.end_gesture();
         let before = self.document.selection().cloned();
+        let label = self.label.unwrap_or_else(|| HistoryLabel::of(&edit));
         let inverse = edit.apply(&mut self.document)?;
-        self.push_undo(inverse);
+        self.push_undo(inverse, label);
         self.remember_selection(before);
         Ok(())
     }
@@ -116,7 +231,10 @@ impl Session {
         match self.undo.pop() {
             Some(last) if continues => match edit.apply(&mut self.document) {
                 Ok(inverse) => {
-                    self.undo.push(Edit::Batch(vec![inverse, last]));
+                    self.undo.push(Entry {
+                        edit: Edit::Batch(vec![inverse, last.edit]),
+                        label: self.label.unwrap_or(last.label),
+                    });
                     Ok(())
                 }
                 Err(e) => {
@@ -136,9 +254,11 @@ impl Session {
     /// [`Self::end_gesture`] is called.
     pub fn perform_in_gesture(&mut self, edit: Edit) -> Result<(), EditError> {
         let before = self.document.selection().cloned();
+        let label = self.label.unwrap_or_else(|| HistoryLabel::of(&edit));
         let inverse = edit.apply(&mut self.document)?;
         if self.gesture.is_empty() {
             self.gesture_selection = Some(before);
+            self.gesture_label = label;
         }
         self.gesture.push(inverse);
         Ok(())
@@ -305,7 +425,7 @@ impl Session {
                 Edit::Batch(inverses)
             }
         };
-        self.push_undo(entry);
+        self.push_undo(entry, self.gesture_label);
         self.remember_selection(before);
     }
 
@@ -336,28 +456,34 @@ impl Session {
         Self::step(&mut self.document, &mut self.redo, &mut self.undo)
     }
 
-    fn push_undo(&mut self, inverse: Edit) {
-        self.undo.push(inverse);
+    fn push_undo(&mut self, inverse: Edit, label: HistoryLabel) {
+        self.undo.push(Entry {
+            edit: inverse,
+            label,
+        });
         self.redo.clear();
     }
 
     fn step(
         doc: &mut Document,
-        from: &mut Vec<Edit>,
-        to: &mut Vec<Edit>,
+        from: &mut Vec<Entry>,
+        to: &mut Vec<Entry>,
     ) -> Result<bool, EditError> {
-        let Some(edit) = from.pop() else {
+        let Some(entry) = from.pop() else {
             return Ok(false);
         };
         // Inverses are exact, so this can only fail on a bug. Keep the entry in that case so
         // history is not silently lost.
-        match edit.clone().apply(doc) {
+        match entry.edit.clone().apply(doc) {
             Ok(inverse) => {
-                to.push(inverse);
+                to.push(Entry {
+                    edit: inverse,
+                    label: entry.label,
+                });
                 Ok(true)
             }
             Err(err) => {
-                from.push(edit);
+                from.push(entry);
                 Err(err)
             }
         }
@@ -499,6 +625,92 @@ mod tests {
         while s.undo().unwrap() {}
         assert!(s.document().layers().is_empty());
         assert!(s.can_redo());
+    }
+
+    /// The kinds of `session`'s history, and how many are done.
+    fn kinds(session: &Session) -> (Vec<&'static str>, usize) {
+        let (labels, done) = session.history();
+        (labels.iter().map(|l| l.kind).collect(), done)
+    }
+
+    #[test]
+    fn entries_are_named_after_their_edit_unless_their_caller_names_them() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        s.with_label(Some(HistoryLabel::with("filter", "gaussianBlur")), |s| {
+            s.perform(Edit::SetLayerVisible {
+                id: a,
+                visible: false,
+            })
+        })
+        .unwrap();
+        // Unnamed within: the edit's own label; a batch is named after its first edit.
+        s.with_label(None, |s| {
+            s.perform(Edit::Batch(vec![Edit::SetLayerOpacity {
+                id: a,
+                opacity: 0.5,
+            }]))
+        })
+        .unwrap();
+        let (labels, done) = s.history();
+        assert_eq!(done, 3);
+        assert_eq!(labels[0], HistoryLabel::new("newLayer"));
+        assert_eq!(labels[1], HistoryLabel::with("filter", "gaussianBlur"));
+        assert_eq!(labels[2], HistoryLabel::new("opacity"));
+    }
+
+    #[test]
+    fn a_gesture_keeps_the_label_it_started_with() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        s.with_label(Some(HistoryLabel::new("brush")), |s| {
+            s.perform_in_gesture(Edit::SetLayerOpacity {
+                id: a,
+                opacity: 0.5,
+            })
+        })
+        .unwrap();
+        // In progress: listed last.
+        assert_eq!(kinds(&s), (vec!["newLayer", "brush"], 2));
+        s.perform_in_gesture(Edit::SetLayerOpacity {
+            id: a,
+            opacity: 0.25,
+        })
+        .unwrap();
+        s.end_gesture();
+        assert_eq!(kinds(&s), (vec!["newLayer", "brush"], 2));
+    }
+
+    #[test]
+    fn going_to_an_entry_undoes_or_redoes_up_to_it_and_keeps_the_labels() {
+        let mut s = Session::new(Document::new(Size::new(16, 16)));
+        let a = add_layer(&mut s, "a");
+        add_layer(&mut s, "b");
+        s.perform(Edit::SetLayerVisible {
+            id: a,
+            visible: false,
+        })
+        .unwrap();
+        assert!(s.go_to(1).unwrap());
+        assert_eq!(names(&s), ["a"]);
+        assert!(s.document().layer(a).unwrap().visible);
+        // Undone entries stay listed after the current one, until a new edit.
+        assert_eq!(kinds(&s), (vec!["newLayer", "newLayer", "visibility"], 1));
+        assert!(s.go_to(3).unwrap());
+        assert!(!s.document().layer(a).unwrap().visible);
+        assert!(!s.go_to(3).unwrap());
+        // Past the end: as far as it goes.
+        assert!(s.go_to(0).unwrap());
+        assert!(s.document().layers().is_empty());
+        assert!(s.go_to(99).unwrap());
+        assert_eq!(kinds(&s).1, 3);
+        s.go_to(1).unwrap();
+        s.perform(Edit::RenameLayer {
+            id: a,
+            name: "c".into(),
+        })
+        .unwrap();
+        assert_eq!(kinds(&s), (vec!["newLayer", "rename"], 2));
     }
 
     #[test]

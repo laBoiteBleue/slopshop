@@ -14,8 +14,8 @@ use slopshop_core::curve::Curve;
 use slopshop_core::stack::Entry;
 use slopshop_core::view::{Viewport, ZoomStep};
 use slopshop_core::{
-    Arrange, BlendMode, BlendSpace, Document, Edit, Guide, GuideAxis, ImageTurn, Layer,
-    LayerContent, LayerId, LinearRgba, Session, Size,
+    Arrange, BlendMode, BlendSpace, Document, Edit, Guide, GuideAxis, HistoryLabel, ImageTurn,
+    Layer, LayerContent, LayerId, LinearRgba, Session, Size,
 };
 use slopshop_io::export::{
     AvifDepth, ExportError, ExportFormat, ExportFormatKind, ExportNotice, ExportSpec, ExrSample,
@@ -891,7 +891,97 @@ pub enum EditRequest {
     },
 }
 
+/// A document's history for the History panel (ADR 0036): what each entry did, oldest first
+/// (the entries undone last, which redo brings back, after the others), and how many are done.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryView {
+    pub entries: Vec<HistoryEntryView>,
+    pub done: usize,
+}
+
+/// One entry: an identifier the UI translates (`history.<kind>`), and the adjustment or filter
+/// it applied when that is part of its name.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct HistoryEntryView {
+    pub kind: &'static str,
+    pub detail: Option<&'static str>,
+}
+
+impl HistoryView {
+    pub fn new(session: &Session) -> Self {
+        let (labels, done) = session.history();
+        Self {
+            entries: labels
+                .into_iter()
+                .map(|label| HistoryEntryView {
+                    kind: label.kind,
+                    detail: label.detail,
+                })
+                .collect(),
+            done,
+        }
+    }
+}
+
 impl EditRequest {
+    /// What its history entry is called, when the request says more than its edit does (a
+    /// new adjustment layer rather than a new layer, the filter applied…).
+    pub fn history_label(&self) -> Option<HistoryLabel> {
+        let adjustment = |id: &str| Adjustment::defaults(id).map(|a| a.id());
+        let filter = |id: &str| {
+            slopshop_core::filter::Filter::IDS
+                .into_iter()
+                .find(|f| *f == id)
+        };
+        let label = |kind, detail: Option<&'static str>| HistoryLabel { kind, detail };
+        Some(match self {
+            Self::AddFillLayer { .. } => HistoryLabel::new("newFillLayer"),
+            Self::AddGroup { .. } => HistoryLabel::new("newGroup"),
+            Self::AddAdjustmentLayer { adjustment: id, .. } => {
+                label("newAdjustmentLayer", adjustment(id))
+            }
+            Self::AddEmptyLayer { .. } => HistoryLabel::new("newLayer"),
+            Self::MoveLayers { .. } => HistoryLabel::new("arrange"),
+            Self::DeletePaint { .. } => HistoryLabel::new("deletePaint"),
+            Self::DeleteStackEntry { .. } => HistoryLabel::new("deleteEntry"),
+            Self::SetStackEntry {
+                steps: None,
+                filters: None,
+                ..
+            } => HistoryLabel::new("entryVisibility"),
+            Self::SetStackEntry { .. } => HistoryLabel::new("editEntry"),
+            Self::ApplyFilter { filter: id, .. } => label("filter", filter(id)),
+            Self::ApplyEffect { adjustment: id, .. } => label("adjustment", adjustment(id)),
+            Self::AutoLevels { correction, .. } => match correction.as_str() {
+                "tone" => HistoryLabel::new("autoTone"),
+                "contrast" => HistoryLabel::new("autoContrast"),
+                _ => HistoryLabel::new("autoColor"),
+            },
+            Self::GroupLayers { .. } => HistoryLabel::new("groupLayers"),
+            Self::Ungroup { .. } => HistoryLabel::new("ungroup"),
+            Self::AlignLayers { .. } => HistoryLabel::new("align"),
+            Self::DistributeLayers { .. } => HistoryLabel::new("distribute"),
+            Self::ArrangeLayers { .. } => HistoryLabel::new("arrange"),
+            Self::DuplicateLayers { .. } => HistoryLabel::new("duplicateLayers"),
+            Self::DuplicateTransformLayers { .. } => HistoryLabel::new("transformAgain"),
+            Self::TranslateLayers { .. } => HistoryLabel::new("move"),
+            Self::TransformLayers { .. } => HistoryLabel::new("transform"),
+            Self::ResizeImage { .. } => HistoryLabel::new("imageSize"),
+            Self::CanvasSize { .. } => HistoryLabel::new("canvasSize"),
+            Self::Crop { .. } => HistoryLabel::new("crop"),
+            Self::RotateImage { .. } | Self::RotateImageBy { .. } => {
+                HistoryLabel::new("rotateImage")
+            }
+            Self::RevealAll => HistoryLabel::new("revealAll"),
+            Self::Trim { .. } => HistoryLabel::new("trim"),
+            Self::RemoveLayerMask { .. } => HistoryLabel::new("deleteMask"),
+            Self::Batch { edits } => return edits.first()?.history_label(),
+            // Their edit says it (opacity, visibility, rename…).
+            _ => return None,
+        })
+    }
+
     /// Build the core edit. Needs the session to allocate ids for new layers. Fails on an
     /// unknown blend mode or blend space identifier.
     pub fn into_edit(self, session: &mut Session) -> Result<Edit, String> {
@@ -2344,6 +2434,83 @@ mod tests {
         };
         assert_eq!(broken.ants(Duration::ZERO), None);
     }
+
+    #[test]
+    fn requests_name_their_history_entries_or_leave_it_to_their_edit() {
+        let label = |json: &str| {
+            serde_json::from_str::<EditRequest>(json)
+                .unwrap()
+                .history_label()
+        };
+        assert_eq!(
+            label(r#"{"kind":"applyFilter","id":1,"filter":"gaussianBlur","values":[2]}"#),
+            Some(HistoryLabel::with("filter", "gaussianBlur"))
+        );
+        assert_eq!(
+            label(r#"{"kind":"addAdjustmentLayer","name":"L","adjustment":"levels","index":0}"#),
+            Some(HistoryLabel::with("newAdjustmentLayer", "levels"))
+        );
+        assert_eq!(
+            label(r#"{"kind":"applyEffect","ids":[1],"adjustment":"nope","values":[]}"#),
+            Some(HistoryLabel {
+                kind: "adjustment",
+                detail: None
+            })
+        );
+        assert_eq!(
+            label(r#"{"kind":"setStackEntry","id":1,"index":0,"hidden":true}"#),
+            Some(HistoryLabel::new("entryVisibility"))
+        );
+        assert_eq!(
+            label(
+                r#"{"kind":"batch","edits":[{"kind":"translateLayers","ids":[1],"dx":1,"dy":0}]}"#
+            ),
+            Some(HistoryLabel::new("move"))
+        );
+        // Said by the edit itself.
+        assert_eq!(
+            label(r#"{"kind":"setLayerOpacity","id":1,"opacity":0.5}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn the_history_lists_what_is_done_then_what_redo_brings_back() {
+        let mut session = Session::new(Document::new(Size::new(8, 8)));
+        session.perform(Edit::SetResolution { ppi: 300.0 }).unwrap();
+        session
+            .with_label(Some(HistoryLabel::new("imageSize")), |s| {
+                s.perform(Edit::SetResolution { ppi: 150.0 })
+            })
+            .unwrap();
+        session.undo().unwrap();
+        let view = HistoryView::new(&session);
+        assert_eq!(view.done, 1);
+        assert_eq!(
+            view.entries,
+            [
+                HistoryEntryView {
+                    kind: "resolution",
+                    detail: None
+                },
+                HistoryEntryView {
+                    kind: "imageSize",
+                    detail: None
+                },
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&view).unwrap(),
+            serde_json::json!({
+                "entries": [
+                    { "kind": "resolution", "detail": null },
+                    { "kind": "imageSize", "detail": null }
+                ],
+                "done": 1
+            })
+        );
+    }
+
     #[test]
     fn named_spaces_have_distinct_ids() {
         let ids: Vec<&str> = NAMED_SPACES.iter().filter_map(ColorSpace::id).collect();

@@ -2,6 +2,7 @@
 //! built on a worker thread, then set on the document as one undoable edit; the UI only ever
 //! receives the outline, sized to the view.
 
+use slopshop_core::HistoryLabel;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
@@ -90,12 +91,13 @@ fn snapshot(
     Ok((doc.size(), doc.selection().map(|s| Arc::clone(s.image()))))
 }
 
-/// Make `image` (or nothing) the selection, as one undo entry; nothing is recorded when it is
-/// already so.
+/// Make `image` (or nothing) the selection, as one undo entry named `label`; nothing is
+/// recorded when it is already so.
 pub(crate) fn set_selection(
     state: &AppState,
     document_id: u64,
     image: Option<RasterImage>,
+    label: HistoryLabel,
 ) -> Result<DocumentView, String> {
     let selection = match image {
         Some(image) => Some(Selection::new(Arc::new(image)).ok_or("a selection is gray")?),
@@ -106,7 +108,7 @@ pub(crate) fn set_selection(
     if selection.is_some() || document.session.document().selection().is_some() {
         document
             .session
-            .perform(Edit::SetSelection { selection })
+            .with_label(Some(label), |s| s.perform(Edit::SetSelection { selection }))
             .map_err(|e| e.to_string())?;
     }
     Ok(document.view())
@@ -135,6 +137,18 @@ pub(crate) fn gpu_pixels(
     })
 }
 
+/// Select > Modify's entries, by the change made.
+fn modify_label(how: &selection::Modify) -> &'static str {
+    match how {
+        selection::Modify::Feather(_) => "feather",
+        selection::Modify::Expand(_) => "expand",
+        selection::Modify::Contract(_) => "contract",
+        selection::Modify::Border(_) => "border",
+        selection::Modify::Smooth(_) => "smooth",
+        selection::Modify::Contrast(_) => "edgeContrast",
+    }
+}
+
 pub(crate) async fn on_worker<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -155,6 +169,11 @@ pub async fn select_shape(
     feather: f64,
 ) -> Result<DocumentView, String> {
     let combine = combine(&mode)?;
+    let label = HistoryLabel::new(match &shape {
+        ShapeRequest::Rectangle { .. } => "rectangularMarquee",
+        ShapeRequest::Ellipse { .. } => "ellipticalMarquee",
+        ShapeRequest::Polygon { .. } => "lasso",
+    });
     let (canvas, current) = snapshot(&state, document_id)?;
     let shape = Shape::from(shape);
     let edges = EdgeOptions {
@@ -166,7 +185,7 @@ pub async fn select_shape(
             .map_err(|e| e.to_string())
     })
     .await?;
-    set_selection(&state, document_id, image)
+    set_selection(&state, document_id, image, label)
 }
 
 /// The Magic Wand at document pixel (`x`, `y`): similar colors, within `tolerance` (0–255),
@@ -199,6 +218,7 @@ pub async fn magic_wand(
         layer_id,
         task,
         "magicWand",
+        HistoryLabel::new("magicWand"),
         move |sampling| {
             selection::magic_wand_from(
                 sampling.source,
@@ -235,20 +255,29 @@ pub async fn grow_selection(
         contiguous,
         anti_alias,
     };
-    sampling_task(&app, document_id, layer_id, task, "grow", move |sampling| {
-        let current = sampling
-            .current
-            .ok_or_else(|| internal("nothing is selected"))?;
-        selection::grow_from(
-            sampling.source,
-            sampling.pixels,
-            current,
-            options,
-            sampling.progress,
-            sampling.cancel,
-        )
-        .map_err(failure)
-    })
+    let label = HistoryLabel::new(if contiguous { "grow" } else { "similar" });
+    sampling_task(
+        &app,
+        document_id,
+        layer_id,
+        task,
+        "grow",
+        label,
+        move |sampling| {
+            let current = sampling
+                .current
+                .ok_or_else(|| internal("nothing is selected"))?;
+            selection::grow_from(
+                sampling.source,
+                sampling.pixels,
+                current,
+                options,
+                sampling.progress,
+                sampling.cancel,
+            )
+            .map_err(failure)
+        },
+    )
     .await
 }
 
@@ -278,13 +307,14 @@ fn failure(e: selection::SelectionError) -> AiFailure {
 
 /// Runs `select` on a worker thread as the UI's `task` (`stage` in its progress): what it
 /// samples (document `document_id`, or only `layer_id`'s layer), its pixels from the GPU when
-/// there is one; the selection it gives set as one undo entry.
+/// there is one; the selection it gives set as one undo entry named `label`.
 async fn sampling_task(
     app: &tauri::AppHandle,
     document_id: u64,
     layer_id: Option<u64>,
     task: u64,
     stage: &'static str,
+    label: HistoryLabel,
     select: impl FnOnce(Sampling<'_>) -> Result<Option<RasterImage>, AiFailure> + Send + 'static,
 ) -> Result<DocumentView, AiFailure> {
     use tauri::Manager;
@@ -312,7 +342,7 @@ async fn sampling_task(
             progress: &report,
             cancel: task.cancel_token(),
         })?;
-        set_selection(&state, document_id, image).map_err(internal)
+        set_selection(&state, document_id, image, label).map_err(internal)
     })
     .await
     .map_err(internal)?
@@ -584,7 +614,9 @@ pub async fn quick_select(
         session.cancel_gesture().map_err(|e| e.to_string())?;
         if selection.is_some() || session.document().selection().is_some() {
             session
-                .perform_in_gesture(Edit::SetSelection { selection })
+                .with_label(Some(HistoryLabel::new("quickSelection")), |s| {
+                    s.perform_in_gesture(Edit::SetSelection { selection })
+                })
                 .map_err(|e| e.to_string())?;
         }
         if !request.live {
@@ -788,7 +820,7 @@ pub async fn color_range(
             selection::SelectionError::Cancelled => AiFailure::new("cancelled", ""),
             other => internal(other.to_string()),
         })?;
-        set_selection(&state, document_id, image).map_err(internal)
+        set_selection(&state, document_id, image, HistoryLabel::new("colorRange")).map_err(internal)
     })
     .await
     .map_err(|e| internal(e.to_string()))?
@@ -802,7 +834,12 @@ pub async fn select_all(
 ) -> Result<DocumentView, String> {
     let (canvas, _) = snapshot(&state, document_id)?;
     let image = on_worker(move || selection::select_all(canvas).map_err(|e| e.to_string())).await?;
-    set_selection(&state, document_id, Some(image))
+    set_selection(
+        &state,
+        document_id,
+        Some(image),
+        HistoryLabel::new("selectAll"),
+    )
 }
 
 /// Select > Inverse.
@@ -815,7 +852,7 @@ pub async fn invert_selection(
     let image =
         on_worker(move || selection::invert(canvas, current.as_deref()).map_err(|e| e.to_string()))
             .await?;
-    set_selection(&state, document_id, image)
+    set_selection(&state, document_id, image, HistoryLabel::new("inverse"))
 }
 
 /// The selection moved by (`dx`, `dy`) whole pixels, its pixels left where they are (a
@@ -836,7 +873,12 @@ pub async fn translate_selection(
         selection::translated(canvas, &current, dx, dy).map_err(|e| e.to_string())
     })
     .await?;
-    set_selection(&state, document_id, image)
+    set_selection(
+        &state,
+        document_id,
+        image,
+        HistoryLabel::new("moveSelection"),
+    )
 }
 
 /// The selection's bounds (every pixel selected even partly), `None` without a selection: the
@@ -882,7 +924,12 @@ pub async fn transform_selection(
         selection::transformed(canvas, &current, transform).map_err(|e| e.to_string())
     })
     .await?;
-    set_selection(&state, document_id, image)
+    set_selection(
+        &state,
+        document_id,
+        image,
+        HistoryLabel::new("transformSelection"),
+    )
 }
 
 /// Select > Modify (`kind`: `feather`, `expand`, `contract`, `border`, `smooth`) by `amount`
@@ -935,7 +982,9 @@ pub(crate) fn modify(
     let session = &mut document.session;
     session.cancel_gesture().map_err(|e| e.to_string())?;
     session
-        .perform_in_gesture(Edit::SetSelection { selection })
+        .with_label(Some(HistoryLabel::new(modify_label(&how))), |s| {
+            s.perform_in_gesture(Edit::SetSelection { selection })
+        })
         .map_err(|e| e.to_string())?;
     if !live {
         session.end_gesture();
@@ -1013,7 +1062,9 @@ pub async fn load_selection(
         if selection.is_some() || document.session.document().selection().is_some() {
             document
                 .session
-                .perform(Edit::SetSelection { selection })
+                .with_label(Some(HistoryLabel::new("loadSelection")), |s| {
+                    s.perform(Edit::SetSelection { selection })
+                })
                 .map_err(|e| e.to_string())?;
         }
         return Ok(document.view());
@@ -1023,7 +1074,12 @@ pub async fn load_selection(
             .map_err(|e| e.to_string())
     })
     .await?;
-    set_selection(&state, document_id, image)
+    set_selection(
+        &state,
+        document_id,
+        image,
+        HistoryLabel::new("loadSelection"),
+    )
 }
 
 /// A saved selection renamed (Selections panel), one undo entry.
@@ -1074,7 +1130,9 @@ pub async fn deselect(
     }
     document
         .session
-        .perform(Edit::SetSelection { selection: None })
+        .with_label(Some(HistoryLabel::new("deselect")), |s| {
+            s.perform(Edit::SetSelection { selection: None })
+        })
         .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
@@ -1093,8 +1151,10 @@ pub async fn reselect(
     };
     document
         .session
-        .perform(Edit::SetSelection {
-            selection: Some(last),
+        .with_label(Some(HistoryLabel::new("reselect")), |s| {
+            s.perform(Edit::SetSelection {
+                selection: Some(last),
+            })
         })
         .map_err(|e| e.to_string())?;
     Ok(document.view())
@@ -1233,7 +1293,9 @@ pub async fn add_layer_masks(
     }
     document
         .session
-        .perform(Edit::Batch(edits))
+        .with_label(Some(HistoryLabel::new("addMask")), |s| {
+            s.perform(Edit::Batch(edits))
+        })
         .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
@@ -1260,7 +1322,10 @@ pub async fn crop_to_selection(
         i64::from(bounds.height),
     ];
     let crop = Edit::crop(document.session.document(), area).map_err(|e| e.to_string())?;
-    document.session.perform(crop).map_err(|e| e.to_string())?;
+    document
+        .session
+        .with_label(Some(HistoryLabel::new("crop")), |s| s.perform(crop))
+        .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
 

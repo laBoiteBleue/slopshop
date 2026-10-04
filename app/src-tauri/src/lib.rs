@@ -31,6 +31,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use slopshop_core::HistoryLabel;
 use slopshop_core::color::PixelFormat;
 use slopshop_core::view::Viewport;
 use slopshop_core::{
@@ -47,7 +48,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::export::ExportJobs;
 use crate::ipc::{
     AntsRequest, DocumentMeta, DocumentView, EditRequest, FRAME_HEADER_LEN, FrameHeader, GpuInfo,
-    PresentInfo, SaveFailed, ViewInfo, ViewRequest,
+    HistoryView, PresentInfo, SaveFailed, ViewInfo, ViewRequest,
 };
 
 /// How the viewport reaches the screen (ADR 0002):
@@ -383,7 +384,9 @@ fn insert_layer_copies(
     let other_space = space != target.session.document().blend_space();
     let copies = target
         .session
-        .insert_layer_copies(layers, group)
+        .with_label(Some(HistoryLabel::new("place")), |s| {
+            s.insert_layer_copies(layers, group)
+        })
         .map_err(|e| e.to_string())?;
     for (id, mut warnings) in copies.ids.into_iter().zip(warnings) {
         if other_space {
@@ -1037,7 +1040,9 @@ fn insert_image(
                     },
                 },
             };
-            session.perform(edit).map_err(|e| e.to_string())?;
+            session
+                .with_label(Some(HistoryLabel::new("place")), |s| s.perform(edit))
+                .map_err(|e| e.to_string())?;
             if !warnings.is_empty() {
                 document.layer_warnings.insert(layer_id, warnings);
             }
@@ -1570,9 +1575,11 @@ async fn add_mask_from_transparency(
     let document = documents.get_mut(document_id)?;
     document
         .session
-        .perform(Edit::SetLayerMask {
-            id,
-            mask: Some(mask),
+        .with_label(Some(HistoryLabel::new("addMask")), |s| {
+            s.perform(Edit::SetLayerMask {
+                id,
+                mask: Some(mask),
+            })
         })
         .map_err(|e| e.to_string())?;
     Ok(document.view())
@@ -1688,8 +1695,12 @@ async fn perform(
 ) -> Result<DocumentView, String> {
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
+    let label = edit.history_label();
     let edit = edit.into_edit(&mut document.session)?;
-    document.session.perform(edit).map_err(|e| e.to_string())?;
+    document
+        .session
+        .with_label(label, |s| s.perform(edit))
+        .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
 
@@ -1713,10 +1724,11 @@ async fn perform_live(
             .cancel_gesture()
             .map_err(|e| e.to_string())?;
     }
+    let label = edit.history_label();
     let edit = edit.into_edit(&mut document.session)?;
     document
         .session
-        .perform_in_gesture(edit)
+        .with_label(label, |s| s.perform_in_gesture(edit))
         .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
@@ -1751,8 +1763,12 @@ async fn replace_gesture(
         .session
         .cancel_gesture()
         .map_err(|e| e.to_string())?;
+    let label = edit.history_label();
     let edit = edit.into_edit(&mut document.session)?;
-    document.session.perform(edit).map_err(|e| e.to_string())?;
+    document
+        .session
+        .with_label(label, |s| s.perform(edit))
+        .map_err(|e| e.to_string())?;
     Ok(document.view())
 }
 
@@ -1777,6 +1793,26 @@ async fn redo(state: State<'_, AppState>, document_id: u64) -> Result<DocumentVi
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
     document.session.redo().map_err(|e| e.to_string())?;
+    Ok(document.view())
+}
+
+/// A document's history, for the History panel (asked only while it shows).
+#[tauri::command]
+async fn history(state: State<'_, AppState>, document_id: u64) -> Result<HistoryView, String> {
+    let mut documents = state.documents()?;
+    Ok(HistoryView::new(&documents.get_mut(document_id)?.session))
+}
+
+/// Undo or redo until `done` entries of the history are done (a click in the History panel).
+#[tauri::command]
+async fn go_to_history(
+    state: State<'_, AppState>,
+    document_id: u64,
+    done: usize,
+) -> Result<DocumentView, String> {
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    document.session.go_to(done).map_err(|e| e.to_string())?;
     Ok(document.view())
 }
 
@@ -2145,6 +2181,8 @@ pub fn run() {
             replace_gesture,
             undo,
             redo,
+            history,
+            go_to_history,
             gpu_info,
             view,
             render_view,
@@ -2838,7 +2876,13 @@ mod tests {
             slopshop_core::selection::Combine::Replace,
         )
         .unwrap();
-        selection::set_selection(&state, doc.id, left).unwrap();
+        selection::set_selection(
+            &state,
+            doc.id,
+            left,
+            slopshop_core::HistoryLabel::new("selection"),
+        )
+        .unwrap();
         let request = dab(background, paint::PaintTarget::QuickMask, Some([1.0; 3]));
         paint::paint(&state, doc.id, request).unwrap().unwrap();
         let repainted = mask(&state).unwrap();
@@ -2882,7 +2926,13 @@ mod tests {
             sel::Combine::Replace,
         )
         .unwrap();
-        selection::set_selection(&state, doc.id, square).unwrap();
+        selection::set_selection(
+            &state,
+            doc.id,
+            square,
+            slopshop_core::HistoryLabel::new("selection"),
+        )
+        .unwrap();
         let at = |state: &AppState, x: u32| {
             let mut documents = state.documents().unwrap();
             let document = documents.get_mut(doc.id).unwrap();
@@ -2938,7 +2988,13 @@ mod tests {
             sel::Combine::Replace,
         )
         .unwrap();
-        selection::set_selection(&state, doc.id, square).unwrap();
+        selection::set_selection(
+            &state,
+            doc.id,
+            square,
+            slopshop_core::HistoryLabel::new("selection"),
+        )
+        .unwrap();
         let with = |f: &mut dyn FnMut(&mut OpenDocument)| {
             let mut documents = state.documents().unwrap();
             f(documents.get_mut(doc.id).unwrap());
@@ -3001,7 +3057,13 @@ mod tests {
             .add_document(blank_session(), None, Vec::new())
             .unwrap();
         let select_all = slopshop_core::selection::select_all(Size::new(6000, 4000)).unwrap();
-        selection::set_selection(&state, doc.id, Some(select_all)).unwrap();
+        selection::set_selection(
+            &state,
+            doc.id,
+            Some(select_all),
+            slopshop_core::HistoryLabel::new("selection"),
+        )
+        .unwrap();
         // Closed: no stroke.
         assert!(refine::brush(&state, doc.id, &[[10.0, 10.0, 1.0]], 20.0, false).is_err());
         {

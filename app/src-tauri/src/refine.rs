@@ -6,6 +6,7 @@
 //! mask, as one undo entry. The view of the selection (ants, overlay, on black or white, the
 //! mask) is view state.
 
+use slopshop_core::HistoryLabel;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -326,7 +327,9 @@ pub(crate) fn output(
         edits.push(Edit::SetSelection { selection: None });
     }
     session
-        .perform(Edit::Batch(edits))
+        .with_label(Some(HistoryLabel::new("selectAndMask")), |s| {
+            s.perform(Edit::Batch(edits))
+        })
         .map_err(|e| e.to_string())?;
     close_session(document);
     Ok(document.view())

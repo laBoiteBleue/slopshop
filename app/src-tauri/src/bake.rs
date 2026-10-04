@@ -191,7 +191,17 @@ pub async fn bake_layers(
         let state = app.state::<AppState>();
         let mut documents = state.documents()?;
         let open = documents.get_mut(document_id)?;
-        let pending = start(&mut open.session, request, baked)?;
+        let label = slopshop_core::HistoryLabel::new(match &request {
+            BakeRequest::Rasterize { .. } => "rasterize",
+            BakeRequest::Merge { .. } => "merge",
+            BakeRequest::MergeVisible => "mergeVisible",
+            BakeRequest::Flatten { .. } => "flatten",
+            BakeRequest::Visible { .. } => "stampVisible",
+        });
+        // Its pixels, when they come, complete the same entry (`land`, `perform_after`).
+        let pending = open
+            .session
+            .with_label(Some(label), |s| start(s, request, baked))?;
         open.baking
             .extend(pending.plans.iter().map(BakePlan::layer));
         (pending, open.view())
