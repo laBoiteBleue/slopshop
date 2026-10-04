@@ -13,12 +13,12 @@ const MAPPING: ViewMapping = {
   hand: false,
 };
 
-function open() {
+function open(mapping: ViewMapping = MAPPING) {
   const onchange = vi.fn();
   const oncommit = vi.fn();
   const oncancel = vi.fn();
   const { container } = render(FreeTransform, {
-    mapping: MAPPING,
+    mapping,
     box: { left: 0, top: 0, right: 100, bottom: 50 },
     matrix: [1, 0, 0, 1, 0, 0] as Matrix,
     pivot: [50, 25] as [number, number],
@@ -115,4 +115,22 @@ test("the right-click menu turns the box about the pivot", async () => {
   await user.pointer({ keys: "[MouseRight]", target: svg, coords: { clientX: 10, clientY: 10 } });
   await user.click(screen.getByText("Flip Horizontal"));
   expect(last(onchange)).toEqual([-1, 0, 0, 1, 100, 0]);
+});
+
+test("at 200%, moves and scales keep the box's edges on whole pixels", async () => {
+  const zoomed: ViewMapping = {
+    toViewport: (x, y) => [x * 2, y * 2],
+    toDocument: (x, y) => [x / 2, y / 2],
+    docPerCss: 0.5,
+    hand: false,
+  };
+  const { onchange, svg, body, handles, user } = open(zoomed);
+  // 21 × 11 CSS pixels: 10.5 × 5.5 document pixels, landing on 11 × 6.
+  await drag(user, body, svg, [100, 50], [121, 61]);
+  expect(last(onchange)).toEqual([1, 0, 0, 1, 11, 6]);
+  // The right side to x = 120.5 + 11: the right edge lands on a whole pixel.
+  await drag(user, handles[3], svg, [222, 62], [263, 62]);
+  const [a, , , , e] = last(onchange);
+  expect(a * 100 + e).toBe(Math.round(a * 100 + e));
+  expect(e).toBe(11);
 });

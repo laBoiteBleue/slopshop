@@ -243,3 +243,25 @@ export function resizeCursor(handle: Point, center: Point, skews: boolean): numb
   const step = Math.round((((angle % 180) + 180) % 180) / 45) % 4;
   return skews ? (step + 2) % 4 : step;
 }
+
+/**
+ * `m` with the box's edges on whole pixels while the box stays upright (moves and scales, flips
+ * included), so that its pixels are not blurred by a fraction of a pixel; a turned or skewed box
+ * as it is. Opposite edges never meet: the box keeps at least a pixel each way.
+ */
+export function onWholePixels(box: Bounds, m: Matrix): Matrix {
+  const upright = Math.abs(m[1]) < 1e-9 && Math.abs(m[2]) < 1e-9;
+  if (!upright) return m;
+  // One axis: `scale` and `offset` map the box's `lo` and `hi` edges.
+  const axis = (scale: number, offset: number, lo: number, hi: number): [number, number] => {
+    if (hi <= lo) return [scale, offset];
+    const a = Math.round(scale * lo + offset);
+    let b = Math.round(scale * hi + offset);
+    if (b === a) b = a + (scale < 0 ? -1 : 1);
+    const s = (b - a) / (hi - lo);
+    return [s, a - s * lo];
+  };
+  const [a, e] = axis(m[0], m[4], box.left, box.right);
+  const [d, f] = axis(m[3], m[5], box.top, box.bottom);
+  return [a, 0, 0, d, e, f];
+}
