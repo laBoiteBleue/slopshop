@@ -135,12 +135,14 @@
     unfolded = next;
   }
 
-  /** The label of an entry: paint, or the adjustment applied (×n when applied in a row). */
+  /** The label of an entry: paint, the adjustment or the filter applied (×n in a row). */
   function entryLabel(entry: StackEntryView): string {
     const name =
-      entry.kind === "paint" || entry.adjustment === null
-        ? t("layers.entry.paint")
-        : t(`adjustment.${entry.adjustment}`);
+      entry.kind === "filter" && entry.filter
+        ? t(`filter.${entry.filter}`)
+        : entry.kind === "paint" || entry.adjustment === null
+          ? t("layers.entry.paint")
+          : t(`adjustment.${entry.adjustment}`);
     return entry.count > 1 ? t("layers.entry.count", { name, n: entry.count }) : name;
   }
 
@@ -1099,7 +1101,14 @@
               <Icon name="eye" size={12} />
             </button>
             <span class="entry-icon">
-              <Icon name={entry.kind === "paint" ? "brush" : "adjust"} size={12} />
+              <Icon
+                name={entry.kind === "paint"
+                  ? "brush"
+                  : entry.kind === "filter"
+                    ? "filter"
+                    : "adjust"}
+                size={12}
+              />
             </span>
             <span class="entry-name">{entryLabel(entry)}</span>
             {#if editableEntry(entry)}

@@ -24,6 +24,8 @@ function entry(changes: Partial<StackEntryView>): StackEntryView {
     count: 1,
     hidden: false,
     steps: [levels],
+    filter: null,
+    filterSteps: [],
     ...changes,
   };
 }

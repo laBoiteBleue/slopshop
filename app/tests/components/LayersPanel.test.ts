@@ -272,14 +272,16 @@ test("a layer's stack unfolds below it: each entry has an eye, an edit icon when
     curveSamples: null,
     gradient: null,
   };
+  const none = { filter: null, filterSteps: [] };
   const entries = [
-    { kind: "paint" as const, adjustment: null, count: 1, hidden: false, steps: [] },
+    { kind: "paint" as const, adjustment: null, count: 1, hidden: false, steps: [], ...none },
     {
       kind: "effect" as const,
       adjustment: "invert" as const,
       count: 1,
       hidden: false,
       steps: [{ ...levels, id: "invert" as const, values: [] }],
+      ...none,
     },
     {
       kind: "effect" as const,
@@ -287,6 +289,7 @@ test("a layer's stack unfolds below it: each entry has an eye, an edit icon when
       count: 2,
       hidden: true,
       steps: [levels, levels],
+      ...none,
     },
   ];
   const onentryedit = vi.fn();

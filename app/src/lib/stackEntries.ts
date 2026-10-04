@@ -3,8 +3,9 @@
 
 import type { AdjustmentSettings, AdjustmentView, EditRequest, StackEntryView } from "./engine";
 
-/** Whether `entry` has settings to edit again: an applied adjustment other than Invert. */
+/** Whether `entry` has settings to edit again: a filter, or an adjustment other than Invert. */
 export function editableEntry(entry: StackEntryView): boolean {
+  if (entry.kind === "filter") return entry.filterSteps.length > 0;
   return entry.kind === "effect" && entry.steps.length > 0 && entry.adjustment !== "invert";
 }
 

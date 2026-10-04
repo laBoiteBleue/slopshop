@@ -19,6 +19,8 @@ async function editing(hidden = false) {
         adjustment: "hueSaturation",
         count: 1,
         hidden,
+        filter: null,
+        filterSteps: [],
         steps: [
           {
             id: "hueSaturation",

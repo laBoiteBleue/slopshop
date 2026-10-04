@@ -81,6 +81,9 @@ export const SHORTCUTS = {
   feather: ["shift+f6"],
   quickMask: ["q"],
   selectAllLayers: ["alt+mod+a"],
+  // Filter: Photoshop's historical Last Filter (Ctrl+F), and with its dialog (Alt+Ctrl+F).
+  repeatFilter: ["mod+f"],
+  repeatFilterSettings: ["alt+mod+f"],
   // View
   zoomIn: ["mod++"],
   zoomOut: ["mod+-"],
