@@ -296,9 +296,10 @@ fn progressive_frames_composite_a_budget_of_tiles_and_fill_in_from_a_coarser_lev
     let (Some(r), Some(direct)) = (renderer(true), renderer(false)) else {
         return;
     };
-    // Many resampled layers covering the whole canvas: costly tiles, and a uniform result, so
-    // that the coarser level shows exactly what the view's level will.
-    let size = Size::new(2048, 1024);
+    // Many resampled layers covering the whole canvas: costly tiles (3 fit a frame's budget),
+    // and a uniform result, so that the coarser level shows exactly what the view's level will.
+    // Small enough for software adapters (CI).
+    let size = Size::new(1024, 512);
     let mut s = Session::new(Document::new(size));
     let bg = layer(
         &mut s,
@@ -310,7 +311,7 @@ fn progressive_frames_composite_a_budget_of_tiles_and_fill_in_from_a_coarser_lev
     for _ in 0..40 {
         let mut veil = raster(
             &mut s,
-            image(Size::new(600, 300), |_, _| [200, 120, 40, 20]),
+            image(Size::new(300, 160), |_, _| [200, 120, 40, 20]),
         );
         veil.transform = Affine::scale(4.0, 4.0).then(Affine::translation(-100.5, -100.25));
         push(&mut s, veil);
@@ -323,8 +324,8 @@ fn progressive_frames_composite_a_budget_of_tiles_and_fill_in_from_a_coarser_lev
 
     let (first, stats) = r.render_view_progressive(s.document(), view, size).unwrap();
     assert!(stats.incomplete);
-    // A few of the 32 tiles, plus the coarser level's.
-    assert!(stats.tiles_composited < 16, "{stats:?}");
+    // A few of the 8 tiles, plus the coarser level's.
+    assert!(stats.tiles_composited < 8, "{stats:?}");
     assert_frames_match(&first.data, &expected.data, "partial frame");
 
     let mut frames = 1;
