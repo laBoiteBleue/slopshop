@@ -26,6 +26,14 @@ pub const MAX_NOISE_AMOUNT: f32 = 400.0;
 /// The seeds Add Noise takes: whole numbers below 2^24, exact in an `f32` parameter.
 pub const NOISE_SEEDS: u32 = 1 << 24;
 
+/// Dust & Scratches' radius range in pixels (Photoshop's).
+pub const MIN_MEDIAN_RADIUS: f32 = 1.0;
+pub const MAX_MEDIAN_RADIUS: f32 = 500.0;
+
+/// Up to this radius, a median is taken on the layer itself; beyond, on the layer reduced (see
+/// [`Plan::median`]).
+const MEDIAN_UP_TO: f64 = 8.0;
+
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
 pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
@@ -74,15 +82,20 @@ pub enum Filter {
         monochromatic: bool,
         seed: u32,
     },
+    /// Photoshop's Dust & Scratches: each pixel that differs from the median of the square of
+    /// `radius` pixels around it by more than `threshold` levels (of 8 bits) on some channel
+    /// becomes that median.
+    DustAndScratches { radius: f32, threshold: f32 },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 5] = [
+    pub const IDS: [&'static str; 6] = [
         "gaussianBlur",
         "motionBlur",
         "unsharpMask",
         "addNoise",
+        "dustAndScratches",
         "highPass",
     ];
 
@@ -94,6 +107,7 @@ impl Filter {
             Self::UnsharpMask { .. } => "unsharpMask",
             Self::HighPass { .. } => "highPass",
             Self::AddNoise { .. } => "addNoise",
+            Self::DustAndScratches { .. } => "dustAndScratches",
         }
     }
 
@@ -118,6 +132,7 @@ impl Filter {
                 f32::from(u8::from(monochromatic)),
                 seed as f32,
             ],
+            Self::DustAndScratches { radius, threshold } => vec![radius, threshold],
         }
     }
 
@@ -133,6 +148,9 @@ impl Filter {
                 threshold,
             }),
             ("highPass", &[radius]) => Some(Self::HighPass { radius }),
+            ("dustAndScratches", &[radius, threshold]) => {
+                Some(Self::DustAndScratches { radius, threshold })
+            }
             ("addNoise", &[amount, gaussian, monochromatic, seed]) => {
                 // Flags are 0 or 1, the seed a whole number in range: anything else is not
                 // this filter's.
@@ -169,6 +187,10 @@ impl Filter {
                 monochromatic: false,
                 seed: 0,
             }),
+            "dustAndScratches" => Some(Self::DustAndScratches {
+                radius: 1.0,
+                threshold: 0.0,
+            }),
             _ => None,
         }
     }
@@ -199,6 +221,13 @@ impl Filter {
                     && (MIN_NOISE_AMOUNT..=MAX_NOISE_AMOUNT).contains(&amount)
                     && seed < NOISE_SEEDS
             }
+            // Whole pixels: a square of them.
+            Self::DustAndScratches { radius, threshold } => {
+                radius.fract() == 0.0
+                    && (MIN_MEDIAN_RADIUS..=MAX_MEDIAN_RADIUS).contains(&radius)
+                    && threshold.is_finite()
+                    && (0.0..=MAX_THRESHOLD).contains(&threshold)
+            }
         }
     }
 
@@ -208,7 +237,7 @@ impl Filter {
             Self::GaussianBlur { radius }
             | Self::UnsharpMask { radius, .. }
             | Self::HighPass { radius } => Some(radius),
-            Self::MotionBlur { .. } | Self::AddNoise { .. } => None,
+            Self::MotionBlur { .. } | Self::AddNoise { .. } | Self::DustAndScratches { .. } => None,
         }
     }
 
@@ -242,6 +271,10 @@ impl Filter {
                 monochromatic,
                 seed,
             },
+            Self::DustAndScratches { radius, threshold } => Self::DustAndScratches {
+                radius: (radius / factor).round().max(MIN_MEDIAN_RADIUS),
+                threshold,
+            },
         }
     }
 
@@ -251,6 +284,7 @@ impl Filter {
         match *self {
             Self::MotionBlur { distance, .. } => f64::from(distance) / 2.0 + 2.0,
             Self::AddNoise { .. } => 0.0,
+            Self::DustAndScratches { radius, .. } => f64::from(radius) + 2.0,
             _ => 3.5 * f64::from(self.blur_radius().unwrap_or(0.0)) + 2.0,
         }
     }
@@ -265,6 +299,7 @@ impl Filter {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
+            Self::DustAndScratches { radius, .. } => Plan::median(f64::from(radius)),
             _ => Plan::gaussian(f64::from(self.blur_radius().unwrap_or(MIN_BLUR_RADIUS))),
         }
     }
@@ -319,6 +354,12 @@ impl Filter {
                 let k = f64::from(amount) / 100.0;
                 let c: [f64; 3] = std::array::from_fn(|i| o[i] + k * n[i]);
                 [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
+            // On the premultiplied values, alpha included: a speck of another opacity goes too.
+            Self::DustAndScratches { threshold, .. } => {
+                let level = f64::from(threshold) / 255.0;
+                let differs = (0..4).any(|c| (original[c] - blurred[c]).abs() > level);
+                if differs { blurred } else { original }
             }
         }
     }
@@ -472,6 +513,21 @@ impl Plan {
         }
     }
 
+    /// The median of a square of `radius` pixels a side from its center: up to
+    /// [`MEDIAN_UP_TO`] directly; beyond, on the layer reduced so that the radius is at most
+    /// that (an approximation of a large median: specks that large are rarely dust).
+    pub(crate) fn median(radius: f64) -> Self {
+        let factor = if radius <= MEDIAN_UP_TO {
+            1
+        } else {
+            1usize << (radius / MEDIAN_UP_TO).log2().ceil() as u32
+        };
+        Self {
+            factor,
+            kernel: Kernel::Median((radius / factor as f64).round().max(1.0) as usize),
+        }
+    }
+
     /// A line of `distance` pixels at `angle` degrees: up to [`LINE_UP_TO`] directly; beyond,
     /// the layer reduced so that the line is at most that long (a few reduced pixels of
     /// softness across it, hidden by the length along it).
@@ -493,6 +549,8 @@ impl Plan {
 pub(crate) enum Kernel {
     Gaussian(Blur),
     Line(Line),
+    /// The median of the square of this radius around each pixel, channel by channel.
+    Median(usize),
     Identity,
 }
 
@@ -502,6 +560,7 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.reach(),
             Self::Line(line) => line.reach(),
+            Self::Median(radius) => *radius,
             Self::Identity => 0,
         }
     }
@@ -515,6 +574,10 @@ impl Kernel {
                 let source = region.to_vec();
                 line.rows(&source, width, height, 0, region);
             }
+            Self::Median(radius) => {
+                let source = region.to_vec();
+                median_rows(&source, width, height, *radius, 0, region);
+            }
             Self::Identity => {}
         }
     }
@@ -524,6 +587,18 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.image(image, width, height),
             Self::Identity => image,
+            Self::Median(radius) => {
+                let mut out = vec![[0.0f32; 4]; image.len()];
+                if width == 0 {
+                    return out;
+                }
+                let mut bands: Vec<(usize, &mut [[f32; 4]])> =
+                    out.chunks_mut(width * BAND_ROWS).enumerate().collect();
+                parallel_for_each(&mut bands, |(index, band)| {
+                    median_rows(&image, width, height, *radius, *index * BAND_ROWS, band);
+                });
+                out
+            }
             Self::Line(line) => {
                 let mut out = vec![[0.0f32; 4]; image.len()];
                 if width == 0 {
@@ -535,6 +610,44 @@ impl Kernel {
                     line.rows(&image, width, height, *index * BAND_ROWS, band);
                 });
                 out
+            }
+        }
+    }
+}
+
+/// Rows `first..` of `src` (`width` × `height`) into `out` (whole rows): each pixel the median
+/// of the square of `radius` around it, channel by channel, the edges repeating outward. Exact:
+/// the middle of the window's values, found by selection.
+fn median_rows(
+    src: &[[f32; 4]],
+    width: usize,
+    height: usize,
+    radius: usize,
+    first: usize,
+    out: &mut [[f32; 4]],
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let r = radius as i64;
+    let side = 2 * radius + 1;
+    let mut window = vec![0.0f32; side * side];
+    for (n, row) in out.chunks_mut(width).enumerate() {
+        let y = (first + n) as i64;
+        for (x, px) in row.iter_mut().enumerate() {
+            for c in 0..4 {
+                let mut k = 0;
+                for dy in -r..=r {
+                    let sy = (y + dy).clamp(0, height as i64 - 1) as usize;
+                    for dx in -r..=r {
+                        let sx = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
+                        window[k] = src[sy * width + sx][c];
+                        k += 1;
+                    }
+                }
+                let middle = window.len() / 2;
+                let (_, median, _) = window.select_nth_unstable_by(middle, f32::total_cmp);
+                px[c] = *median;
             }
         }
     }
@@ -915,6 +1028,66 @@ mod tests {
             filter(100.0, true).scaled(4.0),
             filter(25.0, true),
             "a reduced pixel's noise is weaker"
+        );
+    }
+
+    #[test]
+    fn a_median_takes_specks_out_and_keeps_edges() {
+        // A speck in a flat field, and a straight edge: the median of 3 × 3 removes the one,
+        // keeps the other.
+        let (w, h) = (20, 12);
+        let mut image: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| if i % w < 10 { [0.2; 4] } else { [0.8; 4] })
+            .collect();
+        image[5 * w + 4] = [1.0; 4];
+        let kernel = Plan::median(1.0).kernel;
+        let out = kernel.image(image.clone(), w, h);
+        assert_eq!(out[5 * w + 4], [0.2; 4]);
+        for y in 0..h {
+            assert_eq!(out[y * w + 9], [0.2; 4], "row {y}");
+            assert_eq!(out[y * w + 10], [0.8; 4], "row {y}");
+        }
+        let mut region = image;
+        kernel.region(&mut region, w, h);
+        assert_eq!(region, out);
+        // Large radii on the layer reduced.
+        assert_eq!(Plan::median(8.0).factor, 1);
+        assert_eq!(Plan::median(9.0).factor, 2);
+        assert_eq!(Plan::median(500.0).factor, 64);
+        assert!(Plan::median(500.0).kernel.reach() <= 8);
+    }
+
+    #[test]
+    fn dust_and_scratches_replaces_what_differs_beyond_its_threshold() {
+        let filter = |threshold| Filter::DustAndScratches {
+            radius: 2.0,
+            threshold,
+        };
+        let (speck, median) = ([0.6, 0.5, 0.5, 1.0], [0.5, 0.5, 0.5, 1.0]);
+        // 0.1 is 25.5 levels.
+        assert_eq!(filter(0.0).finish(speck, median, [0, 0]), median);
+        assert_eq!(filter(25.0).finish(speck, median, [0, 0]), median);
+        assert_eq!(filter(26.0).finish(speck, median, [0, 0]), speck);
+        assert!(filter(255.0).is_valid());
+        for wrong in [
+            filter(256.0),
+            Filter::DustAndScratches {
+                radius: 1.5,
+                threshold: 0.0,
+            },
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(
+            Filter::DustAndScratches {
+                radius: 10.0,
+                threshold: 4.0
+            }
+            .scaled(4.0),
+            Filter::DustAndScratches {
+                radius: 3.0,
+                threshold: 4.0
+            }
         );
     }
 
