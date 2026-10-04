@@ -1,5 +1,6 @@
 import { screen } from "@testing-library/svelte";
 import { expect, onTestFinished, test, vi } from "vitest";
+import type { Guide } from "../../../src/lib/engine";
 import { documentView, layer, menuLabels, open, respond, sent } from "./harness";
 
 // The View menu (zoom, Hide Extras, Snap, Full Screen) and Window > Hide Panels.
@@ -157,4 +158,52 @@ test("Clear Guides waits for a guide", async () => {
   await screen.findByText("cat.jpg");
   await openMenu(user, "View");
   expect(entry("Clear Guides")).toHaveAttribute("aria-disabled", "true");
+});
+
+test("a guide placed while Crop is open holds the frame's edges too", async () => {
+  respond("move_snap_targets", () => ({ moving: null, others: [] }));
+  respond("perform", (args, doc) => {
+    const edit = args.edit as { kind: string; guides?: Guide[] };
+    if (edit.kind === "setGuides") doc.guides = edit.guides ?? [];
+    return { ...doc, revision: doc.revision + 1 };
+  });
+  // jsdom lays nothing out: every element is the 400 × 300 image's area, at 100%.
+  const rect = Object.getOwnPropertyDescriptor(Element.prototype, "getBoundingClientRect");
+  Element.prototype.getBoundingClientRect = () => DOMRect.fromRect({ width: 400, height: 300 });
+  onTestFinished(() => {
+    if (rect) Object.defineProperty(Element.prototype, "getBoundingClientRect", rect);
+  });
+  localStorage.setItem("slopshop.view", JSON.stringify({ rulers: true, snap: true }));
+  onTestFinished(() => localStorage.clear());
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("c");
+  await vi.waitFor(() => expect(document.querySelectorAll(".handle")).toHaveLength(8));
+  // Crop is open; a vertical guide is dragged out of the left ruler to x = 250.
+  const left = document.querySelectorAll("svg.ruler")[1];
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: left, coords: { clientX: 5, clientY: 150 } },
+    { target: left, coords: { clientX: 250, clientY: 150 } },
+    { keys: "[/MouseLeft]", target: left, coords: { clientX: 250, clientY: 150 } },
+  ]);
+  await vi.waitFor(() =>
+    expect(sent("perform").map((a) => a.edit)).toContainEqual({
+      kind: "setGuides",
+      guides: [{ vertical: true, position: 250 }],
+    }),
+  );
+  // The frame's right edge dragged near it snaps onto it.
+  const right = document.querySelectorAll(".handle")[3];
+  const svg = right.closest("svg")!;
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: right, coords: { clientX: 400, clientY: 150 } },
+    { target: svg, coords: { clientX: 246, clientY: 150 } },
+    { keys: "[/MouseLeft]", target: svg, coords: { clientX: 246, clientY: 150 } },
+  ]);
+  await user.keyboard("{Enter}");
+  await vi.waitFor(() =>
+    expect(sent("perform").map((a) => a.edit)).toContainEqual(
+      expect.objectContaining({ kind: "crop", x: 0, width: 250 }),
+    ),
+  );
 });
