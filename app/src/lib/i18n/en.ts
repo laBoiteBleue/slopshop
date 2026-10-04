@@ -689,6 +689,8 @@ const en = {
   "dock.resize": "Resize the panels below Layers",
   "dock.fold": "Fold the panel (click again to unfold it)",
   "selections.title": "Selections",
+  "selections.last": "Last Selection",
+  "selections.last.hint": "The selection Deselect removed last (Select > Reselect, Shift+Ctrl+D)",
   "selections.empty":
     "No saved selection. Select > Save Selection… or the + below keeps the current one.",
   "selections.hint":

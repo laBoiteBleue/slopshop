@@ -23,6 +23,8 @@
     onrename,
     ondelete,
     ondeselect,
+    canReselect = false,
+    onreselect,
   }: {
     saved: SavedSelectionView[];
     /** Something is selected now: it can be saved, or replace a saved one. */
@@ -37,6 +39,9 @@
     /** A press on the empty part of the list: nothing selected in the image (Select > Deselect),
      * as a press under the layers deselects them. */
     ondeselect?: () => void;
+    /** Select > Reselect has a selection to bring back: the pinned first row does it. */
+    canReselect?: boolean;
+    onreselect?: () => void;
   } = $props();
 
   /** The row last clicked: Delete removes it. */
@@ -124,6 +129,18 @@
 </script>
 
 <section class="panel" aria-label={t("selections.title")}>
+  <!-- Pinned above the saved ones, never scrolled away: the selection Deselect removed last. -->
+  <button
+    type="button"
+    class="last"
+    title={t("selections.last.hint")}
+    disabled={!canReselect}
+    onmousedown={keepFocus}
+    onclick={() => onreselect?.()}
+  >
+    <Icon name="reselect" size={16} />
+    <span class="name">{t("selections.last")}</span>
+  </button>
   {#if saved.length === 0}
     <p class="empty">{t("selections.empty")}</p>
   {:else}
@@ -211,6 +228,30 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+  }
+
+  .last {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 10px;
+    border: none;
+    border-bottom: 1px solid var(--border-strong);
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    font-style: italic;
+  }
+
+  .last:hover:not(:disabled) {
+    background: var(--hover);
+  }
+
+  .last:disabled {
+    color: var(--text-disabled);
   }
 
   .empty {

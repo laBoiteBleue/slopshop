@@ -707,6 +707,9 @@ const fr: Messages = {
   "dock.resize": "Redimensionner les panneaux sous Calques",
   "dock.fold": "Replier le panneau (cliquer de nouveau pour le déplier)",
   "selections.title": "Sélections",
+  "selections.last": "Dernière sélection",
+  "selections.last.hint":
+    "La sélection retirée en dernier par Désélectionner (Sélection > Resélectionner, Maj+Ctrl+D)",
   "selections.empty":
     "Aucune sélection mémorisée. Sélection > Mémoriser la sélection… ou le + ci-dessous garde la sélection actuelle.",
   "selections.hint":
