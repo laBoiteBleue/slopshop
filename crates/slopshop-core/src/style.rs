@@ -1,5 +1,5 @@
 //! Layer styles (ADR 0032): effects drawn from a layer's shape, editable, as Photoshop's: Drop
-//! Shadow, Stroke and Color Overlay so far.
+//! Shadow, Outer Glow, Inner Shadow, Inner Glow, Color Overlay and Stroke.
 //!
 //! A layer's shape is its coverage in the document (its pixels' alpha through its transform,
 //! its mask applied, as Photoshop's default where the mask shapes the effects too). Effects are
@@ -30,13 +30,18 @@ pub const MAX_DISTANCE: f64 = 30_000.0;
 /// The largest Drop Shadow size, in pixels (Photoshop's).
 pub const MAX_SIZE: f64 = 250.0;
 
-/// A layer's style: its effects (in Photoshop's order, `None` for those not added) and its
-/// Fill Opacity.
+/// A layer's style: its effects (`None` for those not added) and its Fill Opacity.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerStyle {
     /// The opacity of the layer's own content, its effects untouched (Photoshop's "Fill").
     pub fill_opacity: f32,
     pub drop_shadow: Option<DropShadow>,
+    pub outer_glow: Option<Glow>,
+    /// A shadow inside the shape, cast from its edge: a Drop Shadow's settings, `spread` being
+    /// Photoshop's "Choke".
+    pub inner_shadow: Option<DropShadow>,
+    /// A glow inside the shape, from its edge: `spread` being Photoshop's "Choke".
+    pub inner_glow: Option<Glow>,
     pub color_overlay: Option<ColorOverlay>,
     pub stroke: Option<Stroke>,
 }
@@ -46,8 +51,39 @@ impl Default for LayerStyle {
         Self {
             fill_opacity: 1.0,
             drop_shadow: None,
+            outer_glow: None,
+            inner_shadow: None,
+            inner_glow: None,
             color_overlay: None,
             stroke: None,
+        }
+    }
+}
+
+/// A glow around the shape (Outer Glow) or inside it from its edge (Inner Glow), a color fading
+/// out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glow {
+    pub enabled: bool,
+    pub color: LinearRgba,
+    pub mode: BlendMode,
+    pub opacity: f32,
+    /// How much of `size` hardens the shape before it is blurred, percent (Spread; Choke inside).
+    pub spread: f64,
+    /// How far the glow spreads and blurs, pixels.
+    pub size: f64,
+}
+
+impl Default for Glow {
+    /// Photoshop's: pale yellow (sRGB #ffffbe), Screen, 75 %, 5 pixels.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            color: LinearRgba::from_srgb_encoded_to_working(1.0, 1.0, 190.0 / 255.0, 1.0),
+            mode: BlendMode::Screen,
+            opacity: 0.75,
+            spread: 0.0,
+            size: 5.0,
         }
     }
 }
@@ -201,15 +237,25 @@ fn color_ok(color: LinearRgba) -> bool {
 impl LayerStyle {
     /// Settings within Photoshop's ranges, finite colors.
     pub fn is_valid(&self) -> bool {
+        let shadow_ok = |s: DropShadow| {
+            opacity_ok(s.opacity)
+                && color_ok(s.color)
+                && s.angle.is_finite()
+                && (0.0..=MAX_DISTANCE).contains(&s.distance)
+                && (0.0..=100.0).contains(&s.spread)
+                && (0.0..=MAX_SIZE).contains(&s.size)
+        };
+        let glow_ok = |g: Glow| {
+            opacity_ok(g.opacity)
+                && color_ok(g.color)
+                && (0.0..=100.0).contains(&g.spread)
+                && (0.0..=MAX_SIZE).contains(&g.size)
+        };
         opacity_ok(self.fill_opacity)
-            && self.drop_shadow.is_none_or(|s| {
-                opacity_ok(s.opacity)
-                    && color_ok(s.color)
-                    && s.angle.is_finite()
-                    && (0.0..=MAX_DISTANCE).contains(&s.distance)
-                    && (0.0..=100.0).contains(&s.spread)
-                    && (0.0..=MAX_SIZE).contains(&s.size)
-            })
+            && self.drop_shadow.is_none_or(shadow_ok)
+            && self.inner_shadow.is_none_or(shadow_ok)
+            && self.outer_glow.is_none_or(glow_ok)
+            && self.inner_glow.is_none_or(glow_ok)
             && self
                 .color_overlay
                 .is_none_or(|o| opacity_ok(o.opacity) && color_ok(o.color))
@@ -222,14 +268,29 @@ impl LayerStyle {
     pub fn shows(&self) -> bool {
         self.fill_opacity < 1.0
             || self.drop_shadow.is_some_and(|s| s.enabled)
+            || self.inner_shadow.is_some_and(|s| s.enabled)
+            || self.outer_glow.is_some_and(|g| g.enabled)
+            || self.inner_glow.is_some_and(|g| g.enabled)
             || self.color_overlay.is_some_and(|o| o.enabled)
             || self.stroke.is_some_and(|s| s.enabled)
     }
 
+    /// Photoshop's order, bottom to top: Drop Shadow, Outer Glow, the content, Color Overlay,
+    /// Inner Glow, Inner Shadow, Stroke.
     fn draw(&self, layer: &Layer, to_document: Affine, canvas: Size) -> Drawn {
         let mut drawn = Drawn::default();
-        if let Some(shadow) = self.drop_shadow.filter(|s| s.enabled)
-            && let Some(effect) = drop_shadow(layer, to_document, canvas, shadow)
+        let shape = Shape {
+            layer,
+            to_document,
+            canvas,
+        };
+        if let Some(s) = self.drop_shadow.filter(|s| s.enabled)
+            && let Some(effect) = shape.shadow(s, false)
+        {
+            drawn.below.push(effect);
+        }
+        if let Some(g) = self.outer_glow.filter(|g| g.enabled)
+            && let Some(effect) = shape.glow(g, false)
         {
             drawn.below.push(effect);
         }
@@ -242,6 +303,16 @@ impl LayerStyle {
                 overlay.opacity,
                 Affine::IDENTITY,
             ));
+        }
+        if let Some(g) = self.inner_glow.filter(|g| g.enabled)
+            && let Some(effect) = shape.glow(g, true)
+        {
+            drawn.over.push(effect);
+        }
+        if let Some(s) = self.inner_shadow.filter(|s| s.enabled)
+            && let Some(effect) = shape.shadow(s, true)
+        {
+            drawn.over.push(effect);
         }
         if let Some(stroke) = self.stroke.filter(|s| s.enabled)
             && let Some(effect) = stroke_effect(layer, to_document, canvas, stroke)
@@ -379,44 +450,74 @@ fn margin(reach: f64) -> u32 {
     reach.ceil().clamp(0.0, f64::from(u32::MAX / 4)) as u32
 }
 
-/// Drop Shadow: the shape expanded by `spread` percent of `size`, blurred by the rest, offset
-/// away from the light, colored.
-fn drop_shadow(
-    layer: &Layer,
+/// A layer's shape on a canvas: what its blurred effects are drawn from.
+struct Shape<'a> {
+    layer: &'a Layer,
     to_document: Affine,
     canvas: Size,
-    shadow: DropShadow,
-) -> Option<Layer> {
-    let radians = shadow.angle.to_radians();
-    let (dx, dy) = (
-        (-radians.cos() * shadow.distance).round(),
-        (radians.sin() * shadow.distance).round(),
-    );
-    let hard = shadow.size * shadow.spread / 100.0;
-    let soft = (shadow.size - hard).min(MAX_FEATHER);
-    // A Gaussian reaches about three standard deviations; Photoshop's size is about two.
-    let sigma = soft / 2.0;
-    let reach = hard + 3.0 * sigma;
-    let m = margin(reach + dx.abs().max(dy.abs()));
-    let (area, mut shape) = coverage(layer, to_document, canvas, reach, m)?;
-    let size = area.size();
-    if hard > 0.0 {
-        shape = Arc::new(selection::modify(size, &shape, Modify::Expand(hard)).ok()??);
+}
+
+impl Shape<'_> {
+    /// Drop Shadow, or Inner Shadow when `inside`: offset away from the light.
+    fn shadow(&self, s: DropShadow, inside: bool) -> Option<Layer> {
+        let radians = s.angle.to_radians();
+        let offset = (
+            (-radians.cos() * s.distance).round(),
+            (radians.sin() * s.distance).round(),
+        );
+        self.blurred(s.size, s.spread, offset, inside, s.color, s.mode, s.opacity)
     }
-    if sigma > 0.0 {
-        shape = Arc::new(selection::modify(size, &shape, Modify::Feather(sigma)).ok()??);
+
+    /// Outer Glow, or Inner Glow when `inside`: where it is.
+    fn glow(&self, g: Glow, inside: bool) -> Option<Layer> {
+        self.blurred(
+            g.size,
+            g.spread,
+            (0.0, 0.0),
+            inside,
+            g.color,
+            g.mode,
+            g.opacity,
+        )
     }
-    let at = Affine::translation(
-        f64::from(area.x) - f64::from(m) + dx,
-        f64::from(area.y) - f64::from(m) + dy,
-    );
-    Some(colored(
-        shape,
-        shadow.color,
-        shadow.mode,
-        shadow.opacity,
-        at,
-    ))
+
+    /// The shape (inverted when `inside`: what is outside it, to draw inward from the edge)
+    /// expanded by `spread` percent of `size`, blurred by the rest, offset, colored. An inside
+    /// effect is composited atop the content: the shape clips it.
+    #[allow(clippy::too_many_arguments)]
+    fn blurred(
+        &self,
+        size: f64,
+        spread: f64,
+        (dx, dy): (f64, f64),
+        inside: bool,
+        color: LinearRgba,
+        mode: BlendMode,
+        opacity: f32,
+    ) -> Option<Layer> {
+        let hard = size * spread / 100.0;
+        let soft = (size - hard).min(MAX_FEATHER);
+        // A Gaussian reaches about three standard deviations; Photoshop's size is about two.
+        let sigma = soft / 2.0;
+        let reach = hard + 3.0 * sigma + dx.abs().max(dy.abs());
+        let m = margin(reach);
+        let (area, mut shape) = coverage(self.layer, self.to_document, self.canvas, reach, m)?;
+        let area_size = area.size();
+        if inside {
+            shape = Arc::new(selection::invert(area_size, Some(&shape)).ok()??);
+        }
+        if hard > 0.0 {
+            shape = Arc::new(selection::modify(area_size, &shape, Modify::Expand(hard)).ok()??);
+        }
+        if sigma > 0.0 {
+            shape = Arc::new(selection::modify(area_size, &shape, Modify::Feather(sigma)).ok()??);
+        }
+        let at = Affine::translation(
+            f64::from(area.x) - f64::from(m) + dx,
+            f64::from(area.y) - f64::from(m) + dy,
+        );
+        Some(colored(shape, color, mode, opacity, at))
+    }
 }
 
 /// Stroke: the band along the shape's outline, inside, centered on or outside it, colored.
@@ -451,6 +552,11 @@ mod tests {
 
     /// A 64 × 64 document with an opaque white box at (20, 20)–(30, 30), and its id.
     fn document() -> (Document, LayerId) {
+        document_with(255)
+    }
+
+    /// The same with a box of gray `level`.
+    fn document_with(level: u8) -> (Document, LayerId) {
         let mut doc = Document::new(Size::new(64, 64));
         let format = PixelFormat {
             layout: ChannelLayout::Rgba,
@@ -459,7 +565,7 @@ mod tests {
             alpha: AlphaMode::Straight,
         };
         let rect = Rect::new(20, 20, 10, 10);
-        let pixels = [255u8, 255, 255, 255].repeat(100);
+        let pixels = [level, level, level, 255].repeat(100);
         let image = RasterImage::from_placed(doc.size(), format, rect, &pixels, &[0; 4]).unwrap();
         let id = doc.allocate_layer_id();
         Edit::InsertLayer {
@@ -593,6 +699,78 @@ mod tests {
         .unwrap();
         undo.apply(&mut doc).unwrap();
         assert_eq!(doc.layer(id).unwrap().style, None::<Style>);
+        assert_eq!(at(&doc, 31, 25)[3], 0.0);
+    }
+
+    #[test]
+    fn an_outer_glow_lights_around_the_shape() {
+        let (mut doc, id) = document();
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                outer_glow: Some(Glow {
+                    mode: BlendMode::Normal,
+                    opacity: 1.0,
+                    ..Glow::default()
+                }),
+                ..LayerStyle::default()
+            },
+        );
+        // Around the box on every side, fading out; the box itself untouched.
+        for (x, y) in [(19, 25), (30, 25), (25, 19), (25, 30)] {
+            assert!(at(&doc, x, y)[3] > 0.3, "({x}, {y}): {:?}", at(&doc, x, y));
+        }
+        assert!(at(&doc, 30, 25)[3] > at(&doc, 33, 25)[3]);
+        assert_eq!(at(&doc, 40, 40)[3], 0.0);
+        assert_eq!(at(&doc, 25, 25), [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn inner_effects_stay_within_the_shape_from_its_edge() {
+        let (mut doc, id) = document_with(128);
+        let plain = at(&doc, 25, 25);
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                inner_shadow: Some(DropShadow {
+                    mode: BlendMode::Normal,
+                    opacity: 1.0,
+                    distance: 3.0,
+                    size: 2.0,
+                    ..DropShadow::default()
+                }),
+                ..LayerStyle::default()
+            },
+        );
+        // Light from 120°: the shadow falls inside along the top and left edges.
+        assert!(
+            at(&doc, 21, 25)[0] < plain[0] * 0.5,
+            "{:?}",
+            at(&doc, 21, 25)
+        );
+        assert!((at(&doc, 28, 25)[0] - plain[0]).abs() < 1e-3);
+        // Nothing outside the shape.
+        assert_eq!(at(&doc, 18, 25)[3], 0.0);
+
+        let (mut doc, id) = document_with(128);
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                inner_glow: Some(Glow {
+                    mode: BlendMode::Normal,
+                    opacity: 1.0,
+                    color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+                    ..Glow::default()
+                }),
+                ..LayerStyle::default()
+            },
+        );
+        // Brighter along every inner edge than in the middle; nothing outside.
+        assert!(at(&doc, 20, 25)[0] > at(&doc, 25, 25)[0] + 0.1);
+        assert!(at(&doc, 29, 25)[0] > at(&doc, 25, 25)[0] + 0.1);
         assert_eq!(at(&doc, 31, 25)[3], 0.0);
     }
 
