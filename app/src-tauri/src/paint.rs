@@ -16,12 +16,13 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
-use slopshop_core::selection::{Selection, sample_colors};
+use slopshop_core::selection::{Selection, sample_region};
 use slopshop_core::stack::LayerStack;
 use slopshop_core::{
     Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage, Size,
 };
 use tauri::Manager;
+use tauri::ipc::Response;
 
 use crate::AppState;
 use crate::ipc::DocumentView;
@@ -630,8 +631,53 @@ pub(crate) fn sample_color_at(doc: &Document, x: f64, y: f64) -> Option<[u8; 3]>
     if !(x >= 0.0 && y >= 0.0) {
         return None;
     }
-    let [r, g, b, alpha] = *sample_colors(doc, &[(x as u32, y as u32)]).first()?;
+    let [r, g, b, alpha] = *sample_region(doc, x as i64, y as i64, 1, 1).first()?;
     (alpha > 0.0).then(|| [r, g, b].map(|v| v.round().clamp(0.0, 255.0) as u8))
+}
+
+/// The eyedropper's loupe: the colors shown around document point (`x`, `y`), the pixel under
+/// it in the middle of `2 × radius + 1` pixels a side, every visible layer composited. Raw
+/// 8-bit sRGB RGBA, straight alpha, row-major; transparent off the canvas.
+#[tauri::command]
+pub async fn sample_patch(
+    app: tauri::AppHandle,
+    document_id: u64,
+    x: f64,
+    y: f64,
+    radius: u32,
+) -> Result<Response, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        // Cheap: the layers' pixels are shared. The lock is not held while compositing.
+        let doc = state
+            .documents()?
+            .get_mut(document_id)?
+            .session
+            .document()
+            .clone();
+        Ok(Response::new(sample_patch_at(&doc, x, y, radius)))
+    })
+    .await
+}
+
+/// A loupe needs a few pixels, not a region: larger asks are cut down to this.
+const MAX_PATCH_RADIUS: u32 = 32;
+
+/// [`sample_patch`]'s work.
+pub(crate) fn sample_patch_at(doc: &Document, x: f64, y: f64, radius: u32) -> Vec<u8> {
+    let radius = radius.min(MAX_PATCH_RADIUS);
+    let side = 2 * radius + 1;
+    if x.is_nan() || y.is_nan() {
+        return vec![0; side as usize * side as usize * 4];
+    }
+    // Huge values saturate, then fall off the canvas.
+    let (cx, cy) = (x.floor() as i64, y.floor() as i64);
+    let left = cx.saturating_sub(i64::from(radius));
+    let top = cy.saturating_sub(i64::from(radius));
+    sample_region(doc, left, top, side, side)
+        .iter()
+        .flat_map(|c| c.map(|v| v.round().clamp(0.0, 255.0) as u8))
+        .collect()
 }
 
 #[cfg(test)]

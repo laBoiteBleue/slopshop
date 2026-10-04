@@ -2134,6 +2134,7 @@ pub fn run() {
             print::print_page,
             acquire::acquire_image,
             paint::sample_color,
+            paint::sample_patch,
             selection::color_range_preview,
             selection::color_range,
             selection::selection_outline,
@@ -2922,6 +2923,21 @@ mod tests {
         assert_eq!(paint::sample_color_at(shown, -1.0, 10.0), None);
         assert_eq!(paint::sample_color_at(shown, 1e12, 10.0), None);
         assert_eq!(paint::sample_color_at(shown, f64::NAN, 10.0), None);
+        // The loupe: the pixel under the point in the middle, clear off the canvas.
+        let patch = paint::sample_patch_at(shown, 50.5, 50.5, 2);
+        assert_eq!(patch.len(), 5 * 5 * 4);
+        assert_eq!(patch[12 * 4..13 * 4], [255, 0, 0, 255]);
+        let corner = paint::sample_patch_at(shown, 0.5, 0.5, 1);
+        assert_eq!(corner[..3 * 4], [0; 12]);
+        assert_eq!(corner[3 * 4..4 * 4], [0; 4]);
+        assert_eq!(corner[4 * 4..5 * 4], [255; 4]);
+        assert_eq!(
+            paint::sample_patch_at(shown, 50.0, 50.0, 1000).len(),
+            65 * 65 * 4
+        );
+        for far in [1e300, -1e300, f64::NAN] {
+            assert_eq!(paint::sample_patch_at(shown, far, far, 1), vec![0; 9 * 4]);
+        }
         // Nothing shown: no color.
         let clear =
             RasterImage::from_pixels(Size::new(4, 4), PixelFormat::RGBA8_SRGB, &[0; 4 * 4 * 4])
