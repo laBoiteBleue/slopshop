@@ -2575,11 +2575,25 @@ mod tests {
             RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &bytes)
                 .unwrap(),
         );
-        for (radius, most) in [(1.5, 1), (6.0, 1), (20.0, 4)] {
+        let blur = |radius| Filter::GaussianBlur { radius };
+        let sharpen = Filter::UnsharpMask {
+            amount: 150.0,
+            radius: 2.0,
+            threshold: 0.0,
+        };
+        // The CPU's three boxes beyond a radius of 8 are a little off the exact Gaussian; Unsharp
+        // Mask amplifies its blur's rounding.
+        for (filter, most) in [
+            (blur(1.5), 1),
+            (blur(6.0), 1),
+            (blur(20.0), 4),
+            (sharpen, 2),
+            (Filter::HighPass { radius: 4.0 }, 1),
+        ] {
             let stack = LayerStack::new(Arc::clone(&original))
                 .with_filter(
                     FilterStep {
-                        filter: Filter::GaussianBlur { radius },
+                        filter,
                         selection: None,
                         to_document: Affine::IDENTITY,
                         space: BlendSpace::Perceptual,
@@ -2598,7 +2612,7 @@ mod tests {
                 .flat_map(|(s, t)| s.iter().zip(t.iter()).map(|(x, y)| x.abs_diff(*y)))
                 .max()
                 .unwrap_or(0);
-            assert!(worst <= most, "radius {radius}: {worst}");
+            assert!(worst <= most, "{filter:?}: {worst}");
         }
         // Not taken: a selection, or another format (the CPU computes those).
         let gray = Arc::new(

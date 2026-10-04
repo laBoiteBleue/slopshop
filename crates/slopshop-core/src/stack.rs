@@ -332,6 +332,8 @@ impl FilterStep {
                     radius: (a * a + b * b).sqrt(),
                 }
             }
+            // Sharpening twice is not one sharpening of some other settings.
+            _ => return None,
         };
         let combined = FilterStep {
             filter,
@@ -741,9 +743,10 @@ impl<'a> PremulPixels<'a> {
 }
 
 /// `input` (a layer's pixels) with `step` applied (ADR 0034): filtered in premultiplied values
-/// of the step's blend space (the layer's edges repeating outward), mixed with what it was by
-/// the selection's coverage, written in the image's own format. Tile by tile: the memory it
-/// takes does not grow with the layer (see `filter::GaussianPlan`).
+/// of the step's blend space (the layer's edges repeating outward): blurred, then each pixel
+/// made from itself and its blur (`Filter::finish`), mixed with what it was by the selection's
+/// coverage, written in the image's own format. Tile by tile: the memory it takes does not grow
+/// with the layer (see `filter::GaussianPlan`).
 fn filtered(
     step: &FilterStep,
     input: &RasterImage,
@@ -755,9 +758,8 @@ fn filtered(
     let bpp = pixels.codec.bytes_per_pixel;
     let t = TILE_SIZE as usize;
     let level = &input.levels()[0];
-    let plan = match step.filter {
-        Filter::GaussianBlur { radius } => GaussianPlan::new(f64::from(radius)),
-    };
+    let filter = step.filter;
+    let plan = GaussianPlan::new(f64::from(filter.blur_radius()));
     // A large radius: the layer reduced by the plan's factor (averages of blocks), blurred.
     let factor = plan.factor;
     let (small_width, small_height) = (
@@ -846,17 +848,18 @@ fn filtered(
                 if coverage <= 0.0 {
                     continue;
                 }
-                let f = match (&region, &reduced) {
+                let blurred = match (&region, &reduced) {
                     (Some(region), _) => region[(y + margin) * rw + x + margin].map(f64::from),
                     (None, Some(small)) => interpolated(small, x0 + x, y0 + y),
                     (None, None) => continue,
                 };
                 let px = &mut bytes[(y * t + x) * bpp..][..bpp];
-                let r = if coverage >= 1.0 {
-                    f
-                } else {
+                let r = if coverage < 1.0 || filter.reads_original() {
                     let b = pixels.read(px);
+                    let f = filter.finish(b, blurred);
                     std::array::from_fn(|n| b[n] + (f[n] - b[n]) * coverage)
+                } else {
+                    blurred
                 };
                 pixels.write(r, px);
             }
@@ -2779,11 +2782,7 @@ impl LayerStack {
         let scale = Affine::scale(f64::from(factor), f64::from(factor));
         for step in &filter.steps {
             let coarse_step = FilterStep {
-                filter: match step.filter {
-                    Filter::GaussianBlur { radius } => Filter::GaussianBlur {
-                        radius: (radius / factor).max(crate::filter::MIN_BLUR_RADIUS),
-                    },
-                },
+                filter: step.filter.scaled(factor),
                 to_document: scale.then(step.to_document),
                 ..(**step).clone()
             };
@@ -2833,13 +2832,11 @@ impl LayerStack {
         let factor = (1u32 << level) as f32;
         let coarse = &input.levels()[level];
         let size = coarse.size();
-        // How far the filter reads around a pixel at this level (three sigmas, and some).
+        // How far the filter reads around a pixel at this level.
         let reach: f64 = filter
             .steps
             .iter()
-            .map(|step| match step.filter {
-                Filter::GaussianBlur { radius } => 3.5 * f64::from(radius / factor) + 2.0,
-            })
+            .map(|step| step.filter.scaled(factor).reach())
             .sum();
         let t = f64::from(TILE_SIZE);
         let f = f64::from(factor);
@@ -2869,11 +2866,7 @@ impl LayerStack {
             .steps
             .iter()
             .map(|step| FilterStep {
-                filter: match step.filter {
-                    Filter::GaussianBlur { radius } => Filter::GaussianBlur {
-                        radius: (radius / factor).max(crate::filter::MIN_BLUR_RADIUS),
-                    },
-                },
+                filter: step.filter.scaled(factor),
                 to_document: placed.then(step.to_document),
                 ..(**step).clone()
             })
@@ -4192,6 +4185,48 @@ mod tests {
         assert!(ramp[0] > 0 && ramp[11] < 255, "{ramp:?}");
         assert!(pixel(&shown, 149, 50)[0].abs_diff(128) < 30);
         assert!((140..160).all(|x| pixel(&shown, x, 50)[3] == 255));
+    }
+
+    #[test]
+    fn unsharp_mask_and_high_pass_work_on_the_layer_around_its_edges() {
+        let original = halves();
+        let step = |filter| FilterStep {
+            filter,
+            ..blur(1.0, None)
+        };
+        let sharpen = Filter::UnsharpMask {
+            amount: 100.0,
+            radius: 2.0,
+            threshold: 0.0,
+        };
+        let sharp = LayerStack::new(Arc::clone(&original))
+            .with_filter(step(sharpen), None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        // Black and white already: sharpening clips, and leaves what is far from the edge.
+        for (x, y) in [
+            (0, 0),
+            (140, 50),
+            (149, 50),
+            (150, 50),
+            (160, 50),
+            (299, 259),
+        ] {
+            assert_eq!(pixel(&sharp, x, y), pixel(&original, x, y), "({x}, {y})");
+        }
+        let high = LayerStack::new(Arc::clone(&original))
+            .with_filter(step(Filter::HighPass { radius: 2.0 }), None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        // Middle gray far from the edge, darker just before it, lighter just after; opaque.
+        for (x, y) in [(0, 0), (100, 10), (200, 130), (299, 259)] {
+            assert!(pixel(&high, x, y)[0].abs_diff(128) <= 1, "({x}, {y})");
+        }
+        assert!(pixel(&high, 148, 50)[0] < 100);
+        assert!(pixel(&high, 151, 50)[0] > 156);
+        assert!((140..160).all(|x| pixel(&high, x, 50)[3] == 255));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Filters on the GPU (ADR 0035): the looks at filtered layers (`stack::LookJob`) the display
 //! asks for, computed by compute passes (filter.wgsl) on a thread of their own and read back as
-//! the look's image. Only the common case for now: 8-bit RGBA sRGB layers in a perceptual
-//! document, steps without a selection, a reach of at most [`MAX_REACH`] pixels; the CPU
-//! computes the others (`LookJob::run`).
+//! the look's image: Gaussian Blur, and Unsharp Mask and High Pass made from it. Only the common
+//! case for now: 8-bit RGBA sRGB layers in a perceptual document, steps without a selection, a
+//! reach of at most [`MAX_REACH`] pixels; the CPU computes the others (`LookJob::run`).
 
 use std::sync::mpsc;
 
@@ -94,16 +94,14 @@ impl GpuFilter {
         if job.format != PixelFormat::RGBA8_SRGB {
             return None;
         }
-        let kernels: Vec<Vec<f32>> = job
+        let kernels: Vec<Pass> = job
             .steps
             .iter()
             .map(|step| {
                 if step.selection.is_some() || step.space != BlendSpace::Perceptual {
                     return None;
                 }
-                match step.filter {
-                    Filter::GaussianBlur { radius } => gaussian(f64::from(radius)),
-                }
+                Pass::of(step.filter)
             })
             .collect::<Option<_>>()?;
         let (width, height) = (job.size.width, job.size.height);
@@ -132,14 +130,8 @@ impl GpuFilter {
         RasterImage::from_level0_tiles_only(job.size, job.format, tiles).ok()
     }
 
-    /// The crop's pixels blurred by each kernel in turn, as 8-bit RGBA rows.
-    fn blur(
-        &self,
-        job: &LookJob,
-        kernels: &[Vec<f32>],
-        width: u32,
-        height: u32,
-    ) -> Option<Vec<u8>> {
+    /// The crop's pixels filtered by each pass in turn, as 8-bit RGBA rows.
+    fn blur(&self, job: &LookJob, kernels: &[Pass], width: u32, height: u32) -> Option<Vec<u8>> {
         let input = rows_of(job, width, height);
         let bytes = u64::from(width) * u64::from(height) * 4;
         let device = &self.device;
@@ -170,23 +162,27 @@ impl GpuFilter {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("filter"),
         });
-        for (n, kernel) in kernels.iter().enumerate() {
+        for (n, pass) in kernels.iter().enumerate() {
             if n > 0 {
                 // The next step filters what the last one gave.
                 encoder.copy_buffer_to_buffer(&output, 0, &packed, 0, bytes);
             }
-            let reach = (kernel.len() / 2) as u32;
+            let reach = (pass.weights.len() / 2) as u32;
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("filter params"),
-                contents: &[width, height, reach, 0]
+                contents: &[width, height, reach, pass.mode]
                     .iter()
                     .flat_map(|v| v.to_le_bytes())
+                    .chain(pass.amount.to_le_bytes())
+                    .chain(pass.threshold.to_le_bytes())
+                    .chain([0u8; 8])
                     .collect::<Vec<u8>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             let weights = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("filter weights"),
-                contents: &kernel
+                contents: &pass
+                    .weights
                     .iter()
                     .flat_map(|w| w.to_le_bytes())
                     .collect::<Vec<u8>>(),
@@ -241,6 +237,35 @@ impl GpuFilter {
         let bytes = slice.get_mapped_range().ok()?.to_vec();
         readback.unmap();
         Some(bytes)
+    }
+}
+
+/// A step as the shader runs it: the blur's kernel, then what each pixel becomes from it
+/// (`Params` in filter.wgsl).
+struct Pass {
+    weights: Vec<f32>,
+    mode: u32,
+    amount: f32,
+    threshold: f32,
+}
+
+impl Pass {
+    /// `filter`'s pass, or `None` when its blur reaches too far.
+    fn of(filter: Filter) -> Option<Self> {
+        let weights = gaussian(f64::from(filter.blur_radius()))?;
+        let (mode, amount, threshold) = match filter {
+            Filter::GaussianBlur { .. } => (0, 0.0, 0.0),
+            Filter::UnsharpMask {
+                amount, threshold, ..
+            } => (1, amount, threshold),
+            Filter::HighPass { .. } => (2, 0.0, 0.0),
+        };
+        Some(Self {
+            weights,
+            mode,
+            amount,
+            threshold,
+        })
     }
 }
 
