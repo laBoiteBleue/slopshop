@@ -514,8 +514,10 @@ working interface (panels) belongs to Window.
   Screen (F11, the system's full screen: F11 rather than Photoshop's F, every application's
   key). Window > Hide Panels (Tab, as in Photoshop): the toolbar, the options bar and the
   panels hidden, in any mode (full screen and Tab is the canvas alone); choosing a panel in
-  Window shows them again. Rulers (Ctrl+R, remembered) along the top and the left, in
-  pixels, labelled every 1, 2 or 5 × 10ⁿ pixels. Guides, cyan as in Photoshop: dragged out of
+  Window shows them again. Rulers (Ctrl+R, remembered) along the top and the left, labelled
+  every 1, 2 or 5 × 10ⁿ units; a right-click on a ruler chooses its unit (Pixels, Inches,
+  Centimeters, Millimeters, as Photoshop lists them; lengths at the document's resolution;
+  remembered). Guides, cyan as in Photoshop: dragged out of
   a ruler (the top one gives a horizontal guide), moved with the Move tool, deleted by
   dragging them out of the image (onto a ruler), on whole pixels, snapping to the canvas and
   the layers' edges and centers (Ctrl: freely), Escape dropping the one dragged; stored in the
@@ -525,11 +527,13 @@ working interface (panels) belongs to Window.
   separate Smart Guides switch; Ctrl held moves freely. From 800% a pixel grid shows by
   itself over the canvas, without a menu entry. Hide Extras also hides the guides and the
   pixel grid.
-- **Decided, to build**: physical units on the rulers (a right-click on a ruler). Free
-  Transform's unrotated edges snap to whole pixels (moves are already in whole pixels): no
-  "Pixels" snap target.
+  Free Transform's upright box keeps its edges on whole pixels while it is moved or scaled
+  (moves were already in whole pixels): no blur from a fraction of a pixel, and no "Pixels"
+  snap target to choose; the options bar's fields stay exact.
 - **Decided, not added**: the Show and Snap To submenus, a Smart Guides switch, New Guide…
   and Lock Guides (later if missed), a regular grid and New Guide Layout (guides cover it),
+  a wheel scrolling preference (the wheel is for navigation: it zooms, the middle button pans;
+  maintainer, 2026-10-05),
   Fill Screen (the wheel does it), screen modes cycled with F, rotating the view (the engine's
   view, every overlay and the snap would need it), soft proofing and the gamut warning (the
   engine is not ready: see [ADR 0007](adr/0007-color-management.md)).
@@ -552,8 +556,6 @@ working interface (panels) belongs to Window.
       "Group / Layer" choice).
 - [ ] Right-click on the canvas lists the layers under the pointer to select one (Photoshop
       with the Move tool).
-- [ ] A preference to scroll with the wheel (Ctrl or Alt + wheel zooming), for touchpads,
-      whose two-finger scroll zooms now.
 - [ ] Number keys set the opacity of the selected layers (1 = 10 %, 0 = 100 %), as in
       Photoshop.
 

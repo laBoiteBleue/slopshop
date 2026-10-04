@@ -37,6 +37,7 @@
   import { ANTS_INTERVAL_MS } from "./ants";
   import { GUIDE_GRAB_CSS, dropped, dropsOut, guidePosition } from "./guides";
   import Ruler from "./Ruler.svelte";
+  import type { LengthUnit } from "./units";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
   import {
@@ -67,6 +68,9 @@
     smartGuides = [],
     canvasSize = { width: 0, height: 0 },
     rulers = false,
+    rulerUnit = "px",
+    resolution = 72,
+    onrulermenu,
     guides = [],
     extras = true,
     guidesMovable = false,
@@ -112,6 +116,11 @@
     canvasSize?: { width: number; height: number };
     /** View > Rulers: rulers along the top and the left, a guide dragged out of each. */
     rulers?: boolean;
+    /** The rulers' unit, and the document's resolution (pixels per inch) that sizes a length. */
+    rulerUnit?: LengthUnit;
+    resolution?: number;
+    /** A right-click on a ruler, at this window point: the unit's menu. */
+    onrulermenu?: (x: number, y: number) => void;
     /** The document's guides. */
     guides?: Guide[];
     /**
@@ -717,6 +726,9 @@
       start={targetView?.origin[0] ?? 0}
       docPerCss={mapping?.docPerCss ?? 1}
       length={cssSize.width}
+      unit={rulerUnit}
+      ppi={resolution}
+      onmenu={onrulermenu}
       onpress={(e) => startGuideDrag(e, null, false)}
     />
     <Ruler
@@ -724,6 +736,9 @@
       start={targetView?.origin[1] ?? 0}
       docPerCss={mapping?.docPerCss ?? 1}
       length={cssSize.height}
+      unit={rulerUnit}
+      ppi={resolution}
+      onmenu={onrulermenu}
       onpress={(e) => startGuideDrag(e, null, true)}
     />
   {/if}

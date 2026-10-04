@@ -75,6 +75,7 @@ const en = {
   "sizeDialog.constrain": "Constrain proportions",
   "sizeDialog.relative": "Relative",
   "sizeDialog.anchor": "Anchor",
+  "units.px": "Pixels",
   "units.in": "Inches",
   "units.cm": "Centimeters",
   "units.mm": "Millimeters",

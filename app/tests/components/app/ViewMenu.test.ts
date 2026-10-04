@@ -70,6 +70,7 @@ test("View > Snap is remembered for the next session", async () => {
   await user.click(entry("Snap"));
   expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toEqual({
     rulers: false,
+    rulerUnit: "px",
     snap: false,
   });
   await openMenu(user, "View");
@@ -135,7 +136,11 @@ test("Ctrl+R shows the rulers, remembered for the next session", async () => {
   expect(document.querySelector("svg.ruler")).not.toBeInTheDocument();
   await user.keyboard("{Control>}r{/Control}");
   await vi.waitFor(() => expect(document.querySelectorAll("svg.ruler")).toHaveLength(2));
-  expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toEqual({ rulers: true, snap: true });
+  expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toEqual({
+    rulers: true,
+    rulerUnit: "px",
+    snap: true,
+  });
   await openMenu(user, "View");
   expect(entry("Rulers")).toHaveAttribute("aria-checked", "true");
   await user.click(entry("Rulers"));
@@ -216,4 +221,24 @@ test("a guide placed while Crop is open holds the frame's edges too", async () =
       expect.objectContaining({ kind: "crop", x: 0, width: 250 }),
     ),
   );
+});
+
+test("a right-click on a ruler chooses its unit, remembered", async () => {
+  localStorage.setItem("slopshop.view", JSON.stringify({ rulers: true, snap: true }));
+  onTestFinished(() => localStorage.clear());
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await vi.waitFor(() => expect(document.querySelectorAll("svg.ruler")).toHaveLength(2));
+  const top = document.querySelector("svg.ruler")!;
+  await user.pointer({ keys: "[MouseRight]", target: top, coords: { clientX: 40, clientY: 5 } });
+  const labels = [...document.querySelectorAll(".context-menu .label")].map((l) => l.textContent);
+  // Photoshop's order.
+  expect(labels).toEqual(["Pixels", "Inches", "Centimeters", "Millimeters"]);
+  expect(screen.getByRole("menuitemradio", { name: /Pixels/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await user.click(screen.getByText("Inches"));
+  expect(JSON.parse(localStorage.getItem("slopshop.view")!)).toMatchObject({ rulerUnit: "in" });
+  expect(screen.queryByText("Inches")).not.toBeInTheDocument();
 });

@@ -52,3 +52,22 @@ test("a press outside closes it", async () => {
   await user.click(document.body);
   expect(onclose).toHaveBeenCalledOnce();
 });
+
+test("a choice shows its check mark and says it is checked", () => {
+  const items: MenuItem[] = [
+    { kind: "command", label: "Pixels", checked: true, run: vi.fn() },
+    { kind: "command", label: "Inches", checked: false, run: vi.fn() },
+    { kind: "command", label: "Copy", run: vi.fn() },
+  ];
+  render(ContextMenu, { x: 0, y: 0, items, onclose: vi.fn() });
+  expect(screen.getByRole("menuitemradio", { name: /Pixels/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(item("Pixels")).toHaveTextContent("✓");
+  expect(screen.getByRole("menuitemradio", { name: /Inches/ })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  expect(screen.getByRole("menuitem", { name: /Copy/ })).not.toHaveAttribute("aria-checked");
+});

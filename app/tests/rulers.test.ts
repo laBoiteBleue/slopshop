@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { MAJOR_MIN_CSS, MINOR_MIN_CSS, majorStep, rulerTicks } from "../src/lib/rulers";
+import {
+  MAJOR_MIN_CSS,
+  MINOR_MIN_CSS,
+  labelDigits,
+  majorStep,
+  rulerTicks,
+} from "../src/lib/rulers";
 
 test("labels are 1, 2 or 5 × 10ⁿ pixels apart, far enough on screen, never a fraction", () => {
   // 100%: 60 CSS pixels at least, so 100.
@@ -39,4 +45,25 @@ test("nothing to graduate draws no ticks", () => {
   expect(rulerTicks(0, 1, 0)).toEqual([]);
   expect(rulerTicks(Number.NaN, 1, 100)).toEqual([]);
   expect(rulerTicks(0, 0, 100)).toEqual([]);
+});
+
+test("in a length unit, labels may be fractions: 1, 2 or 5 × 10ⁿ, n below 0 too", () => {
+  // 0.01 cm per CSS pixel: 0.6 cm at least, so 1 cm.
+  expect(majorStep(0.01, false)).toBe(1);
+  // 0.005 cm per CSS pixel: 0.3 cm at least, so 0.5 cm; pixels would say 1.
+  expect(majorStep(0.005, false)).toBe(0.5);
+  expect(majorStep(0.005)).toBe(1);
+  expect(majorStep(0.0001, false)).toBeCloseTo(0.01, 12);
+  expect(labelDigits(100)).toBe(0);
+  expect(labelDigits(0.5)).toBe(1);
+  expect(labelDigits(0.2)).toBe(1);
+  expect(labelDigits(0.05)).toBe(2);
+});
+
+test("a centimeter ruler: labels every half centimeter, exact values", () => {
+  // 0.005 cm per CSS pixel, from 0: labels at 0, 0.5, 1… every 100 CSS pixels.
+  const ticks = rulerTicks(0, 0.005, 250, false);
+  const labels = ticks.filter((t) => t.major);
+  expect(labels.map((t) => t.value)).toEqual([0, 0.5, 1]);
+  expect(labels.map((t) => t.at)).toEqual([0, 100, 200]);
 });
