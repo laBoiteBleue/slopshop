@@ -741,6 +741,7 @@ const en = {
   "history.clipping": "Clipping Mask",
   "history.passThrough": "Pass Through",
   "history.selection": "Selection",
+  "history.guides": "Guides",
   "history.quickMask": "Quick Mask",
   "history.saveSelection": "Save Selection",
   "history.deleteSavedSelection": "Delete Saved Selection",
