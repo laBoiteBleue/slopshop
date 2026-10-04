@@ -50,3 +50,8 @@ sources. Rules: never assume sRGB 8-bit, no silent or lossy conversions.
 - Fill colors and other document colors are stored in the working space.
 - Gray sources are treated as D65-neutral luminance.
 - Soft proofing, CMYK and HDR output are future work built on the same model.
+- Soft proofing and a gamut warning (View menu) need, in this order: the display's own
+  profile (read from the system) as the display transform's target instead of sRGB; LUT-based
+  profiles and CMYK through lcms2; CMYK documents or at least CMYK output profiles in the
+  engine; then a proof transform (working space → output profile → display) and a gamut test
+  in the display shader. No menu entry exists before they do (noted 2026-10-04).
