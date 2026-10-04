@@ -26,7 +26,14 @@
 
 <script lang="ts">
   import { untrack, type Snippet } from "svelte";
-  import { engine, type DeviceRect, type ViewInfo, type ViewRequest } from "./engine";
+  import {
+    engine,
+    type AntsRequest,
+    type DeviceRect,
+    type ViewInfo,
+    type ViewRequest,
+  } from "./engine";
+  import { ANTS_INTERVAL_MS } from "./ants";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
   import {
@@ -46,6 +53,7 @@
     quickMask = false,
     quickMaskOpacity = 50,
     native = false,
+    ants = null,
     onframe,
     onmovestart,
     onmove,
@@ -67,6 +75,12 @@
      * instead of sending frames. Read once, like the document.
      */
     native?: boolean;
+    /**
+     * The selection's marching ants, drawn by the engine in the native view (null: none; the
+     * frames' ants are the overlay's). While they are shown, the view is presented again at
+     * a steady rate so that the dashes march; a change of where they are triggers a frame.
+     */
+    ants?: AntsRequest | null;
     onframe?: (stats: FrameStats) => void;
     /**
      * The Move tool (ADR 0017): a left drag on the image starts at document point (`x`, `y`)
@@ -162,7 +176,7 @@
   async function present() {
     const start = performance.now();
     const responsesAtStart = viewResponses;
-    const info = await engine.presentView(docId, deviceRect());
+    const info = await engine.presentView(docId, deviceRect(), ants);
     if (destroyed) return;
     error = null;
     // As frames do: the view presented is the latest one if it did not move meanwhile. Without
@@ -257,16 +271,32 @@
     }
   }
 
+  // The ants: where they are (the engine draws them in the frame), by value, and whether they
+  // march.
+  const antsPlace = $derived(ants ? ants.matrix.join(",") : null);
+  const antsMarch = $derived(presentsNatively && ants !== null && ants.march);
+
   $effect(() => {
     // Dependencies: redraw when the document content, the view, its overlays or the viewport
     // size changes.
     void currentRevision;
     void quickMask;
     void quickMaskOpacity;
+    void antsPlace;
     void viewEpoch;
     void size.width;
     void size.height;
     void draw();
+  });
+
+  // The dashes march with the clock the engine reads: present again at a steady rate, only while
+  // they are shown and moving (and the window is).
+  $effect(() => {
+    if (!antsMarch) return;
+    const timer = setInterval(() => {
+      if (!document.hidden) void draw();
+    }, ANTS_INTERVAL_MS);
+    return () => clearInterval(timer);
   });
 
   $effect(() => {

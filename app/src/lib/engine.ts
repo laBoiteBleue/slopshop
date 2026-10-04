@@ -479,6 +479,14 @@ export type PresenterMode = "frames" | "window";
 /** A canvas area of the window, in physical pixels of its client area. */
 export type DeviceRect = { x: number; y: number; width: number; height: number };
 
+/** The marching ants the engine draws in a native view (AntsRequest in ipc.rs). */
+export type AntsRequest = {
+  /** Where the selection is drawn: an affine map of document pixels (the identity: as it is). */
+  matrix: Matrix;
+  /** The dashes march with the clock (not with reduced motion). */
+  march: boolean;
+};
+
 /** Outcome of a native present (see PresentInfo in app/src-tauri/src/ipc.rs). */
 export type PresentInfo = {
   /** False when nothing was shown (window occluded, swapchain busy): present again later. */
@@ -1691,9 +1699,12 @@ export const engine = {
   redo: (documentId: number) => serial(() => invoke<DocumentView>("redo", { documentId })),
   gpuInfo: () => invoke<GpuInfo>("gpu_info"),
   presenterMode: () => invoke<PresenterMode>("presenter_mode"),
-  /** Native presentation: show a document's current view in `rect` of the window. */
-  presentView: (documentId: number, rect: DeviceRect) =>
-    invoke<PresentInfo>("present_view", { documentId, ...rect }),
+  /**
+   * Native presentation: show a document's current view in `rect` of the window, with the
+   * selection's ants drawn in it when `ants` asks.
+   */
+  presentView: (documentId: number, rect: DeviceRect, ants: AntsRequest | null = null) =>
+    invoke<PresentInfo>("present_view", { documentId, ...rect, ants }),
   /**
    * Change a document's view. Resolves to `null` when merged into a request that was already
    * waiting: that one resolves with the combined result, and this one right after it, so that

@@ -178,6 +178,7 @@
   import ContextMenu from "./lib/ContextMenu.svelte";
   import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
+  import { antsRequest, prefersReducedMotion } from "./lib/ants";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
 
   /** Open documents, in tab order. */
@@ -2280,6 +2281,36 @@
   /** Transform Selection applied, while the engine resamples the selection. */
   // Raw: compared by identity when the engine answers.
   let appliedSelectionMatrix = $state.raw<{ document: number; matrix: Matrix } | null>(null);
+
+  /** The map the active document's selection is drawn under: Transform Selection's, live or applied. */
+  const selectionMatrix = $derived(
+    active && transforming?.selection && transforming.document === active.id
+      ? transforming.matrix
+      : active && appliedSelectionMatrix?.document === active.id
+        ? appliedSelectionMatrix.matrix
+        : undefined,
+  );
+  /** Select and Mask shows the selection another way than its ants (the engine draws none then). */
+  const antsHidden = $derived(
+    active !== null && refining?.document === active.id && refineSettings.view !== "ants",
+  );
+  /**
+   * The ants the engine draws in the native view (ADR 0024); frames over IPC keep the SVG ones.
+   * Quick Mask shows the selection itself.
+   */
+  const nativeAnts = $derived(
+    antsRequest({
+      native: nativeCanvas,
+      selected: active?.selectionKey != null,
+      hidden: antsHidden || (active?.quickMask ?? false),
+      shift:
+        outlineShift && outlineShift.document === active?.id
+          ? [outlineShift.x, outlineShift.y]
+          : undefined,
+      matrix: selectionMatrix,
+      reducedMotion: prefersReducedMotion(),
+    }),
+  );
 
   /**
    * Free Transform of the selected layers or, for files just dropped on the image, of the new
@@ -4611,6 +4642,7 @@
             <Viewport
               bind:this={viewport}
               native={nativeCanvas}
+              ants={nativeAnts}
               documentId={active.id}
               revision={active.revision}
               quickMask={active.quickMask}
@@ -4623,9 +4655,9 @@
               {guides}
             >
               {#snippet overlay(mapping)}
-                {#if active?.selectionKey != null}
+                {#if active?.selectionKey != null && !nativeCanvas}
                   <SelectionOutline
-                    hidden={refining?.document === active.id && refineSettings.view !== "ants"}
+                    hidden={antsHidden}
                     shift={outlineShift?.document === active.id
                       ? [outlineShift.x, outlineShift.y]
                       : undefined}
@@ -4634,11 +4666,7 @@
                     selectionKey={active.selectionKey}
                     width={active.width}
                     height={active.height}
-                    matrix={transforming?.selection && transforming.document === active.id
-                      ? transforming.matrix
-                      : appliedSelectionMatrix?.document === active.id
-                        ? appliedSelectionMatrix.matrix
-                        : undefined}
+                    matrix={selectionMatrix}
                   />
                 {/if}
                 {#if cropping && cropping.document === active?.id}
