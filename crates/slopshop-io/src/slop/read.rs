@@ -330,7 +330,7 @@ pub(super) fn read_node(
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
     let known_raster = (1..=NODE_VERSION_GLOWS).contains(&node.version);
-    // A fill's nodes skip the versions of paint and stacks: a styled fill is version 8 or 9.
+    // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill =
         known_version || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version);
     let content = match node.kind.as_str() {
@@ -362,7 +362,7 @@ pub(super) fn read_node(
                 color: LinearRgba::new(color[0], color[1], color[2], color[3]),
             }
         }
-        NODE_GROUP if (3..=NODE_VERSION_PAINTED).contains(&node.version) => {
+        NODE_GROUP if node.version >= 3 && known_fill => {
             // Checked before going deeper: the file is untrusted.
             if depth >= MAX_GROUP_DEPTH {
                 return Err(corrupt("groups nested too deep"));

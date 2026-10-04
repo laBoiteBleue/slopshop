@@ -1584,6 +1584,15 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
         },
         0.5,
     );
+    let group = push(
+        &mut doc,
+        "group",
+        LayerContent::Group {
+            children: Vec::new(),
+            pass_through: true,
+        },
+        1.0,
+    );
     let styles = [
         LayerStyle {
             fill_opacity: 0.3,
@@ -1621,8 +1630,13 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
             }),
             ..LayerStyle::default()
         },
+        LayerStyle {
+            fill_opacity: 0.6,
+            drop_shadow: Some(DropShadow::default()),
+            ..LayerStyle::default()
+        },
     ];
-    for (id, style) in [photo, fill].into_iter().zip(styles) {
+    for (id, style) in [photo, fill, group].into_iter().zip(styles) {
         Edit::SetLayerStyle {
             id: slopshop_core::LayerId::from_raw(id),
             style: Some(Box::new(style)),

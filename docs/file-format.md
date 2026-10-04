@@ -286,8 +286,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     original's format after each paint and each step. The result itself is not stored: readers
     evaluate it. Only nodes with a stack are written at v7; an entry of another kind comes from
     a newer SlopShop.
-  - v8 (schema 0.17, [ADR 0032](adr/0032-layer-styles.md)) gives a raster or fill node its
-    style: `params.style` is `{"fill_opacity", "drop_shadow", "outer_glow", "inner_shadow",
+  - v8 (schema 0.17, [ADR 0032](adr/0032-layer-styles.md)) gives a raster or fill node, and
+    from schema 0.19 a group node, its style: `params.style` is `{"fill_opacity", "drop_shadow", "outer_glow", "inner_shadow",
     "inner_glow", "color_overlay", "stroke"}`, the effects not added absent. `drop_shadow` holds `enabled`, `color` (linear working-space RGB,
     as a fill's), `mode` (a blend mode), `opacity`, `angle` (degrees, where the light comes
     from), `distance`, `spread` (percent) and `size` (pixels), as `inner_shadow` (its `spread`
@@ -295,8 +295,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `opacity`, `spread` (percent, Choke inside) and `size`; `color_overlay` holds `enabled`,
     `color`, `mode` and `opacity`; `stroke` holds `enabled`, `size`, `position` (`inside`,
     `center` or `outside`), `color`, `mode` and `opacity`. What the effects draw is not stored:
-    readers draw it. Only styled nodes are written at v8 (a styled fill too: fills skip v6 and
-    v7); a style out of range is refused.
+    readers draw it. Only styled nodes are written at v8 (a styled fill or group too: they skip
+    v6 and v7); a style out of range is refused. A group's effects are drawn from what it holds.
   - v9 (schema 0.18) is v8 with `outer_glow`, `inner_shadow` or `inner_glow` in the style: only
     those nodes are written at v9, so that readers of v8 refuse them rather than drop these
     effects.

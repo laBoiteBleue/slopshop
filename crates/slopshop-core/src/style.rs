@@ -368,7 +368,7 @@ fn coverage(
         style: None,
         ..layer.clone()
     };
-    let shows_everywhere = matches!(shape.content, LayerContent::Fill { .. });
+    let shows_everywhere = shows_fill(std::slice::from_ref(&shape));
     let scratch = Document::restore(
         grown,
         WORKING_SPACE,
@@ -424,6 +424,18 @@ fn coverage(
     });
     let image = RasterImage::from_pixels(area.size(), SELECTION_FORMAT, &gray).ok()?;
     Some((area, Arc::new(image)))
+}
+
+/// Some of `layers` is a fill seen through visible groups: it covers the whole canvas.
+fn shows_fill(layers: &[Layer]) -> bool {
+    layers
+        .iter()
+        .filter(|l| l.visible)
+        .any(|l| match &l.content {
+            LayerContent::Fill { .. } => true,
+            LayerContent::Group { children, .. } => shows_fill(children),
+            _ => false,
+        })
 }
 
 /// An effect drawing `color` where `coverage` shows, placed by `at`: a fill masked by the
@@ -772,6 +784,54 @@ mod tests {
         assert!(at(&doc, 20, 25)[0] > at(&doc, 25, 25)[0] + 0.1);
         assert!(at(&doc, 29, 25)[0] > at(&doc, 25, 25)[0] + 0.1);
         assert_eq!(at(&doc, 31, 25)[3], 0.0);
+    }
+
+    #[test]
+    fn a_group_s_effects_are_drawn_from_its_layers_and_follow_them() {
+        let (mut doc, id) = document();
+        let group = doc.allocate_layer_id();
+        Edit::group_layers(
+            &doc,
+            Layer {
+                id: group,
+                name: "group".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::Group {
+                    children: Vec::new(),
+                    pass_through: true,
+                },
+                mask: None,
+                clipped: false,
+                transform: Affine::IDENTITY,
+                style: None,
+            },
+            &[id],
+        )
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+        styled(
+            &mut doc,
+            group,
+            LayerStyle {
+                stroke: Some(Stroke::default()),
+                ..LayerStyle::default()
+            },
+        );
+        assert_eq!(at(&doc, 31, 25), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(at(&doc, 25, 25), [1.0, 1.0, 1.0, 1.0]);
+        // The layer inside moves: the group's stroke goes with it.
+        Edit::SetLayerTransform {
+            id,
+            transform: Affine::translation(10.0, 0.0),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(at(&doc, 41, 25), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(at(&doc, 31, 25), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(at(&doc, 18, 25)[3], 0.0);
     }
 
     #[test]

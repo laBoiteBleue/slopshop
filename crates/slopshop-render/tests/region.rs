@@ -1587,3 +1587,61 @@ fn styled_layers_match_the_cpu_reference_compositor() {
         }
     }
 }
+
+#[test]
+fn styled_groups_match_the_cpu_reference_compositor() {
+    use slopshop_core::style::{DropShadow, Glow, LayerStyle, Stroke};
+    let Some(r) = renderer() else { return };
+    let size = Size::new(96, 80);
+    let format = PixelFormat {
+        layout: ChannelLayout::Rgba,
+        sample: SampleType::U8,
+        color_space: ColorSpace::SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    let mut s = Session::new(Document::new(size));
+    push_layer(&mut s, raster(&image(size, format, pattern)), 1.0);
+    // A pass-through group at 80 % of a soft disc and a multiplied square: its effects follow
+    // both.
+    let styled = push_into(&mut s, None, group(true), BlendMode::Normal, 0.8);
+    let disc = image(size, format, |x, y| {
+        let d = ((f64::from(x) - 30.0).powi(2) + (f64::from(y) - 40.0).powi(2)).sqrt();
+        let a = ((18.0 - d) * 64.0).clamp(0.0, 255.0) as u8;
+        vec![40, 160, 220, a]
+    });
+    push_into(&mut s, Some(styled), raster(&disc), BlendMode::Normal, 1.0);
+    let square = image(size, format, |x, y| {
+        let inside = (50..80).contains(&x) && (20..60).contains(&y);
+        vec![220, 120, 40, if inside { 255 } else { 0 }]
+    });
+    push_into(
+        &mut s,
+        Some(styled),
+        raster(&square),
+        BlendMode::Multiply,
+        0.9,
+    );
+    let style = LayerStyle {
+        fill_opacity: 0.5,
+        drop_shadow: Some(DropShadow {
+            size: 6.0,
+            distance: 5.0,
+            ..DropShadow::default()
+        }),
+        inner_glow: Some(Glow::default()),
+        stroke: Some(Stroke {
+            size: 3.0,
+            ..Stroke::default()
+        }),
+        ..LayerStyle::default()
+    };
+    s.perform(Edit::SetLayerStyle {
+        id: styled,
+        style: Some(Box::new(style)),
+    })
+    .unwrap();
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        assert_matches_cpu(&r, s.document(), size.bounds(), &format!("group {space:?}"));
+    }
+}

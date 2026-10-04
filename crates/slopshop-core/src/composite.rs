@@ -367,12 +367,9 @@ fn push_layer<'a>(
         });
         return;
     }
-    // A styled pixel or fill layer (ADR 0032): its effects below, its content at Fill Opacity
+    // A styled layer (ADR 0032): its effects below, its content at Fill Opacity
     // with the effects recoloring it, its effects above, the whole blended as one.
-    let styled = layer
-        .style
-        .as_ref()
-        .filter(|s| s.settings().shows() && !matches!(layer.content, LayerContent::Group { .. }));
+    let styled = layer.style.as_ref().filter(|s| s.settings().shows());
     let drawn = styled.map(|style| style.drawn(layer, transform, plan.canvas));
     if let Some(drawn) = drawn {
         steps.push(Step::Begin { isolated: true });
@@ -430,28 +427,12 @@ fn push_layer<'a>(
             transform,
             stack: stacked,
         });
-        steps.extend(drawn.over.iter().map(|effect| effect_step(effect, true)));
-        steps.push(Step::End {
-            mask: None,
-            mask_transform: Affine::IDENTITY,
-            mode: BlendMode::Normal,
-            opacity: 1.0,
-            isolated: true,
-            atop: false,
-        });
-        steps.extend(drawn.above.iter().map(|effect| effect_step(effect, false)));
-        steps.push(Step::End {
-            mask: None,
-            mask_transform: Affine::IDENTITY,
-            mode,
-            opacity,
-            isolated: true,
-            atop,
-        });
+        push_style_tail(drawn, mode, opacity, atop, steps);
         return;
     };
-    // A base or a clipped group is composited as a unit: isolated.
-    let passes = *pass_through && role == Role::Plain;
+    // A base or a clipped group is composited as a unit: isolated; so is a styled one, its
+    // content at Fill Opacity inside its effects (ADR 0032).
+    let passes = *pass_through && role == Role::Plain && drawn.is_none();
     let mask = enabled(layer);
     if passes && opacity >= 1.0 && mask.is_none() {
         push_steps(children, transform, plan, steps);
@@ -460,21 +441,62 @@ fn push_layer<'a>(
     let start = steps.len();
     steps.push(Step::Begin { isolated: !passes });
     push_steps(children, transform, plan, steps);
-    if steps.len() == start + 1 {
+    if steps.len() == start + 1 && drawn.is_none() {
         // Nothing visible inside: the group changes nothing.
         steps.truncate(start);
         return;
     }
+    let Some(drawn) = drawn else {
+        steps.push(Step::End {
+            mask,
+            mask_transform: transform,
+            mode: if *pass_through {
+                BlendMode::Normal
+            } else {
+                mode
+            },
+            opacity,
+            isolated: !passes,
+            atop,
+        });
+        return;
+    };
     steps.push(Step::End {
         mask,
         mask_transform: transform,
-        mode: if *pass_through {
-            BlendMode::Normal
-        } else {
-            mode
-        },
+        mode: BlendMode::Normal,
+        opacity: styled.map_or(1.0, |s| s.settings().fill_opacity),
+        isolated: true,
+        atop: false,
+    });
+    push_style_tail(drawn, mode, opacity, atop, steps);
+}
+
+/// The end of a styled layer's steps: the effects recoloring its content (atop it), then those
+/// above it, then the whole blended with the layer's `mode` and `opacity` (`atop` when clipped).
+fn push_style_tail<'a>(
+    drawn: &'a crate::style::Drawn,
+    mode: BlendMode,
+    opacity: f32,
+    atop: bool,
+    steps: &mut Vec<Step<'a>>,
+) {
+    steps.extend(drawn.over.iter().map(|effect| effect_step(effect, true)));
+    steps.push(Step::End {
+        mask: None,
+        mask_transform: Affine::IDENTITY,
+        mode: BlendMode::Normal,
+        opacity: 1.0,
+        isolated: true,
+        atop: false,
+    });
+    steps.extend(drawn.above.iter().map(|effect| effect_step(effect, false)));
+    steps.push(Step::End {
+        mask: None,
+        mask_transform: Affine::IDENTITY,
+        mode,
         opacity,
-        isolated: !passes,
+        isolated: true,
         atop,
     });
 }
