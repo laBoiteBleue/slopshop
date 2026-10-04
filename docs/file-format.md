@@ -304,6 +304,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   - v9 (schema 0.18) is v8 with `outer_glow`, `inner_shadow` or `inner_glow` in the style: only
     those nodes are written at v9, so that readers of v8 refuse them rather than drop these
     effects.
+  - v10 (schema 0.20, [ADR 0034](adr/0034-editable-operations.md)) is a raster node whose stack
+    has an entry hidden by its eye: `"hidden": true` on that entry (absent: shown). A hidden
+    entry is kept but skipped when the result is evaluated. Only those nodes are written at v10,
+    so that older readers refuse them rather than show the entry; `hidden` on a node of an
+    earlier version is refused.
   - `slopshop.adjustment` (schema 0.7, [ADR 0020](adr/0020-adjustment-layers.md)): an adjustment
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,

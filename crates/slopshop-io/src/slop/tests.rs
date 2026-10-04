@@ -248,6 +248,7 @@ fn assert_same_stack(a: Option<&LayerStack>, b: Option<&LayerStack>, what: &str)
     assert_same_image(a.original(), b.original(), &format!("{what} original"));
     assert_eq!(a.entries().len(), b.entries().len(), "{what}");
     for (e, f) in a.entries().iter().zip(b.entries()) {
+        assert_eq!(e.hidden(), f.hidden(), "{what}: an entry's eye");
         match (e, f) {
             (Entry::Paint(p), Entry::Paint(q)) => {
                 assert_eq!(p.space(), q.space(), "{what}");
@@ -1659,4 +1660,37 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
         super::style::from_json(&serde_json::json!({ "fill_opacity": 1.0 })),
         Some(LayerStyle::default())
     );
+}
+
+#[test]
+fn hidden_entries_round_trip() {
+    let mut doc = golden_document();
+    let (id, stack) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster {
+                stack: Some(stack), ..
+            } => Some((l.id, stack.clone())),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    // The Invert below the paint hidden, the paint shown.
+    assert_eq!(stack.entries().len(), 2);
+    Edit::set_entry(&doc, id, 0, None, true)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let path = temp_path("hidden-entries.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &loaded.layer(id).unwrap().content
+    else {
+        panic!("a layer with a stack");
+    };
+    assert!(read.entries()[0].hidden());
+    assert!(!read.entries()[1].hidden());
+    fs::remove_file(&path).ok();
 }

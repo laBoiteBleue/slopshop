@@ -318,6 +318,11 @@ pub struct EntryView {
     pub adjustment: Option<&'static str>,
     /// How many times an effect of this kind was applied in a row (1 for paint).
     pub count: usize,
+    /// Hidden by its eye (ADR 0034).
+    pub hidden: bool,
+    /// An effect's steps, each with its settings, to edit them again (ADR 0034); none for
+    /// paint.
+    pub steps: Vec<AdjustmentView>,
 }
 
 impl DocumentView {
@@ -401,24 +406,7 @@ impl LayerView {
             }),
             swatch,
             adjustment: match &layer.content {
-                LayerContent::Adjustment { adjustment } => Some(AdjustmentView {
-                    id: adjustment.id(),
-                    values: adjustment.params().to_vec(),
-                    curves: adjustment
-                        .curves()
-                        .map(|curves| curves.map(|c| c.points().to_vec())),
-                    curve_samples: adjustment.curves().map(|curves| {
-                        curves.map(|c| {
-                            (0..=CURVE_SAMPLES)
-                                .map(|i| c.value(i as f64 / CURVE_SAMPLES as f64) as f32)
-                                .collect()
-                        })
-                    }),
-                    gradient: match adjustment {
-                        Adjustment::GradientMap { gradient, .. } => Some(gradient_stops(gradient)),
-                        _ => None,
-                    },
-                }),
+                LayerContent::Adjustment { adjustment } => Some(AdjustmentView::new(adjustment)),
                 _ => None,
             },
             children: layer
@@ -445,11 +433,19 @@ impl LayerView {
                             kind: "paint",
                             adjustment: None,
                             count: 1,
+                            hidden: entry.hidden(),
+                            steps: Vec::new(),
                         },
                         Entry::Effect(effect) => EntryView {
                             kind: "effect",
                             adjustment: Some(effect.kind()),
                             count: effect.steps().len(),
+                            hidden: entry.hidden(),
+                            steps: effect
+                                .steps()
+                                .iter()
+                                .map(|step| AdjustmentView::new(&step.adjustment))
+                                .collect(),
                         },
                     })
                     .collect(),
@@ -474,6 +470,29 @@ pub struct AdjustmentView {
     pub curve_samples: Option<[Vec<f32>; 4]>,
     /// Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says).
     pub gradient: Option<Vec<[u16; 4]>>,
+}
+
+impl AdjustmentView {
+    pub fn new(adjustment: &Adjustment) -> Self {
+        Self {
+            id: adjustment.id(),
+            values: adjustment.params().to_vec(),
+            curves: adjustment
+                .curves()
+                .map(|curves| curves.map(|c| c.points().to_vec())),
+            curve_samples: adjustment.curves().map(|curves| {
+                curves.map(|c| {
+                    (0..=CURVE_SAMPLES)
+                        .map(|i| c.value(i as f64 / CURVE_SAMPLES as f64) as f32)
+                        .collect()
+                })
+            }),
+            gradient: match adjustment {
+                Adjustment::GradientMap { gradient, .. } => Some(gradient_stops(gradient)),
+                _ => None,
+            },
+        }
+    }
 }
 
 /// Intervals of [`AdjustmentView::curve_samples`].
@@ -624,6 +643,15 @@ pub enum EditRequest {
     DeleteStackEntry {
         id: u64,
         index: usize,
+    },
+    /// Set entry `index` of a raster layer's stack (ADR 0034): hidden or shown by its eye,
+    /// and for an effect, every step's settings when given (as many as it has, of its kind).
+    SetStackEntry {
+        id: u64,
+        index: usize,
+        hidden: bool,
+        #[serde(default)]
+        steps: Option<Vec<AdjustmentSettings>>,
     },
     /// Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
     /// `ids`, within the selection (values and curves as `SetAdjustment`).
@@ -947,6 +975,29 @@ impl EditRequest {
                 Edit::delete_entry(session.document(), LayerId::from_raw(id), index)
                     .map_err(|e| e.to_string())?
             }
+            EditRequest::SetStackEntry {
+                id,
+                index,
+                hidden,
+                steps,
+            } => {
+                let adjustments = steps
+                    .map(|steps| {
+                        steps
+                            .iter()
+                            .map(AdjustmentSettings::adjustment)
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?;
+                Edit::set_entry(
+                    session.document(),
+                    LayerId::from_raw(id),
+                    index,
+                    adjustments.as_deref(),
+                    hidden,
+                )
+                .map_err(|e| e.to_string())?
+            }
             EditRequest::DeletePaint { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::delete_paint(session.document(), &ids).map_err(|e| e.to_string())?
@@ -1014,19 +1065,16 @@ impl EditRequest {
                 values,
                 curves,
                 gradient,
-            } => {
-                let mut built = Adjustment::from_params(&adjustment, &values).ok_or(format!(
-                    "unknown adjustment {adjustment} or too many values"
-                ))?;
-                if built.curves().is_some() {
-                    built = curves_adjustment(curves.as_deref())?;
+            } => Edit::SetAdjustment {
+                id: LayerId::from_raw(id),
+                adjustment: AdjustmentSettings {
+                    adjustment,
+                    values,
+                    curves,
+                    gradient,
                 }
-                built = with_gradient(built, gradient.as_deref())?;
-                Edit::SetAdjustment {
-                    id: LayerId::from_raw(id),
-                    adjustment: built,
-                }
-            }
+                .adjustment()?,
+            },
             EditRequest::GroupLayers { ids, name } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 let group = new_group(session, name);
@@ -1388,6 +1436,34 @@ impl FrameHeader {
 }
 
 /// A Curves adjustment from four lists of points (composite, red, green, blue).
+/// An adjustment's settings as the UI sends them: its identifier, its parameters (in
+/// `Adjustment::params` order), Curves' points and Gradient Map's stops.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjustmentSettings {
+    adjustment: String,
+    values: Vec<f32>,
+    /// Curves' points (`AdjustmentView::curves`); required for `curves`, ignored otherwise.
+    #[serde(default)]
+    curves: Option<Vec<Vec<[u8; 2]>>>,
+    /// Gradient Map's stops (`AdjustmentView::gradient`); required for `gradientMap`.
+    #[serde(default)]
+    gradient: Option<Vec<[u16; 4]>>,
+}
+
+impl AdjustmentSettings {
+    fn adjustment(&self) -> Result<Adjustment, String> {
+        let adjustment = &self.adjustment;
+        let mut built = Adjustment::from_params(adjustment, &self.values).ok_or(format!(
+            "unknown adjustment {adjustment} or too many values"
+        ))?;
+        if built.curves().is_some() {
+            built = curves_adjustment(self.curves.as_deref())?;
+        }
+        with_gradient(built, self.gradient.as_deref())
+    }
+}
+
 fn curves_adjustment(lists: Option<&[Vec<[u8; 2]>]>) -> Result<Adjustment, String> {
     let lists = lists
         .filter(|lists| lists.len() == 4)
@@ -2583,5 +2659,69 @@ mod tests {
             serde_json::to_string(&refused).unwrap(),
             r#"{"code":"invalidSpec","detail":"x"}"#
         );
+    }
+
+    #[test]
+    fn a_stack_entry_is_set_from_the_ui() {
+        use slopshop_core::color::PixelFormat;
+        use slopshop_core::raster::RasterImage;
+        let size = slopshop_core::Size::new(4, 4);
+        let pixels = vec![10_u8; 4 * 4 * 4];
+        let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let mut document = Document::new(size);
+        let id = document.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "pixels".to_owned(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(std::sync::Arc::new(image)),
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::IDENTITY,
+                style: None,
+            },
+        }
+        .apply(&mut document)
+        .unwrap();
+        let mut session = Session::new(document);
+        session
+            .perform(
+                Edit::apply_effect(
+                    session.document(),
+                    &[id],
+                    Adjustment::Threshold { level: 0.5 },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let request: EditRequest = serde_json::from_str(&format!(
+            r#"{{"kind":"setStackEntry","id":{},"index":0,"hidden":false,
+                "steps":[{{"adjustment":"threshold","values":[0.01]}}]}}"#,
+            id.get()
+        ))
+        .unwrap();
+        let edit = request.into_edit(&mut session).unwrap();
+        session.perform(edit).unwrap();
+        let view = LayerView::new(session.document().layer(id).unwrap());
+        assert_eq!(view.entries.len(), 1);
+        assert!(!view.entries[0].hidden);
+        assert_eq!(view.entries[0].steps[0].id, "threshold");
+        assert!((view.entries[0].steps[0].values[0] - 0.01).abs() < 1e-6);
+        // Hidden, its settings unchanged.
+        let request: EditRequest = serde_json::from_str(&format!(
+            r#"{{"kind":"setStackEntry","id":{},"index":0,"hidden":true}}"#,
+            id.get()
+        ))
+        .unwrap();
+        let edit = request.into_edit(&mut session).unwrap();
+        session.perform(edit).unwrap();
+        let view = LayerView::new(session.document().layer(id).unwrap());
+        assert!(view.entries[0].hidden);
+        assert!((view.entries[0].steps[0].values[0] - 0.01).abs() < 1e-6);
     }
 }

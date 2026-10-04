@@ -66,6 +66,16 @@ impl PartialEq for Entry {
     }
 }
 
+impl Entry {
+    /// Hidden by its eye (ADR 0034): kept in the stack, not evaluated.
+    pub fn hidden(&self) -> bool {
+        match self {
+            Self::Paint(p) => p.hidden,
+            Self::Effect(e) => e.hidden,
+        }
+    }
+}
+
 /// Paint: `P + k·B` over what is below it, on the tiles it touched.
 #[derive(Debug)]
 pub struct PaintEntry {
@@ -79,6 +89,8 @@ pub struct PaintEntry {
     /// What was below it when it was laid, the tiles it reached: the next stroke continuing it
     /// reuses them while the stack below is the same (a cache, never saved).
     below: Mutex<Option<BelowTiles>>,
+    /// Hidden by its eye (ADR 0034): kept, not evaluated.
+    hidden: bool,
 }
 
 /// Tiles of the result of a stack below a paint (see [`PaintEntry`]).
@@ -156,10 +168,12 @@ impl Effect {
 }
 
 /// Effects of one kind applied in a row: one entry (deleting a paint between two effects of the
-/// same kind joins them).
+/// same kind joins them). Each step stays editable (ADR 0034).
 #[derive(Debug)]
 pub struct EffectEntry {
     steps: Vec<Arc<Effect>>,
+    /// Hidden by its eye (ADR 0034): kept, not evaluated.
+    hidden: bool,
 }
 
 impl EffectEntry {
@@ -173,11 +187,30 @@ impl EffectEntry {
         {
             return Err(StackError::InvalidEffect);
         }
-        Ok(Self { steps })
+        Ok(Self {
+            steps,
+            hidden: false,
+        })
     }
 
     pub fn steps(&self) -> &[Arc<Effect>] {
         &self.steps
+    }
+
+    /// Hidden by its eye (ADR 0034): kept in the stack, not evaluated.
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// This entry, hidden or shown.
+    pub fn with_hidden(self, hidden: bool) -> Self {
+        Self { hidden, ..self }
+    }
+
+    /// Whether `above` joins this entry (below it) when they meet: the same kind, both shown
+    /// or both hidden.
+    fn joins(&self, above: &EffectEntry) -> bool {
+        self.kind() == above.kind() && self.hidden == above.hidden
     }
 
     /// The adjustment's kind ([`Adjustment::id`]).
@@ -492,6 +525,7 @@ impl PaintEntry {
             space,
             images: OnceLock::new(),
             below: Mutex::new(None),
+            hidden: false,
             tiles: BTreeMap::new(),
         }
     }
@@ -811,12 +845,44 @@ impl PaintEntry {
             space: self.space,
             images: OnceLock::new(),
             below: Mutex::new(None),
+            hidden: self.hidden,
         })
     }
 
-    /// Whether `above` can merge with this paint (below it): same layer and blend space.
+    /// Whether `above` can merge with this paint (below it): same layer and blend space, both
+    /// shown or both hidden.
     fn merges_with(&self, above: &PaintEntry) -> bool {
-        self.size == above.size && self.format == above.format && self.space == above.space
+        self.size == above.size
+            && self.format == above.format
+            && self.space == above.space
+            && self.hidden == above.hidden
+    }
+
+    /// Hidden by its eye (ADR 0034): kept in the stack, not evaluated.
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// This paint, hidden or shown (read back from a file).
+    pub fn with_hidden(self, hidden: bool) -> Self {
+        Self { hidden, ..self }
+    }
+
+    /// A copy of this paint, hidden or shown: its tiles shared.
+    fn hidden_copy(&self, hidden: bool) -> Self {
+        let images = OnceLock::new();
+        if let Some(made) = self.images.get() {
+            let _ = images.set(made.clone());
+        }
+        Self {
+            size: self.size,
+            format: self.format,
+            space: self.space,
+            tiles: self.tiles.clone(),
+            images,
+            below: Mutex::new(None),
+            hidden,
+        }
     }
 
     /// This paint then `above`, as one: `P₂ + k₂·P₁`, `k₂·k₁`.
@@ -861,6 +927,7 @@ impl PaintEntry {
             space: self.space,
             images: OnceLock::new(),
             below: Mutex::new(None),
+            hidden: self.hidden,
             tiles: work
                 .into_iter()
                 .filter_map(|(coord, tile)| tile.map(|t| (coord, t)))
@@ -972,7 +1039,7 @@ impl Atom<'_> {
 
 fn atoms(entries: &[Entry]) -> Vec<Atom<'_>> {
     let mut out = Vec::new();
-    for entry in entries {
+    for entry in entries.iter().filter(|e| !e.hidden()) {
         match entry {
             Entry::Paint(p) => out.push(Atom::Paint(p)),
             Entry::Effect(e) => out.extend(e.steps.iter().map(Atom::Effect)),
@@ -1454,10 +1521,10 @@ impl LayerStack {
         self.entries.is_empty()
     }
 
-    /// The top entry when it is paint: what a new stroke continues.
+    /// The top entry when it is paint, shown: what a new stroke continues.
     pub fn top_paint(&self) -> Option<&Arc<PaintEntry>> {
         match self.entries.last() {
-            Some(Entry::Paint(paint)) => Some(paint),
+            Some(Entry::Paint(paint)) if !paint.hidden => Some(paint),
             _ => None,
         }
     }
@@ -1535,6 +1602,7 @@ impl LayerStack {
                     space: paint.space,
                     images: OnceLock::new(),
                     below: Mutex::new(None),
+                    hidden: paint.hidden,
                     tiles: paint
                         .tiles
                         .iter()
@@ -1556,6 +1624,7 @@ impl LayerStack {
                         .collect(),
                 })),
                 Entry::Effect(effect) => Entry::Effect(Arc::new(EffectEntry {
+                    hidden: effect.hidden,
                     steps: effect
                         .steps
                         .iter()
@@ -1579,7 +1648,7 @@ impl LayerStack {
         let added = EffectEntry::new(vec![Arc::new(effect)])?;
         let mut entries = self.entries.clone();
         match entries.last() {
-            Some(Entry::Effect(top)) if top.kind() == added.kind() => {
+            Some(Entry::Effect(top)) if top.joins(&added) => {
                 let steps = joined(top, &added);
                 entries.pop();
                 if !steps.is_empty() {
@@ -1610,13 +1679,15 @@ impl LayerStack {
                     entries.splice(seam - 1..=seam, [merged]);
                     break;
                 }
-                (Entry::Effect(below), Entry::Effect(above)) if below.kind() == above.kind() => {
+                (Entry::Effect(below), Entry::Effect(above)) if below.joins(above) => {
                     let steps = joined(below, above);
                     if steps.is_empty() {
                         entries.drain(seam - 1..=seam);
                         seam -= 1;
                     } else {
-                        let merged = Entry::Effect(Arc::new(EffectEntry::new(steps)?));
+                        let merged = Entry::Effect(Arc::new(
+                            EffectEntry::new(steps)?.with_hidden(below.hidden),
+                        ));
                         entries.splice(seam - 1..=seam, [merged]);
                         break;
                     }
@@ -1624,6 +1695,73 @@ impl LayerStack {
                 _ => break,
             }
         }
+        Ok(Self {
+            original: Arc::clone(&self.original),
+            entries,
+        })
+    }
+
+    /// The stack with entry `index` hidden or shown by its eye (ADR 0034). Nothing merges: an
+    /// entry shown again next to one alike stays an entry of its own.
+    pub fn with_hidden(&self, index: usize, hidden: bool) -> Result<Self, StackError> {
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(StackError::IndexOutOfRange(index))?;
+        if entry.hidden() == hidden {
+            return Ok(self.clone());
+        }
+        let changed = match entry {
+            Entry::Paint(paint) => Entry::Paint(Arc::new(paint.hidden_copy(hidden))),
+            Entry::Effect(effect) => Entry::Effect(Arc::new(EffectEntry {
+                steps: effect.steps.clone(),
+                hidden,
+            })),
+        };
+        let mut entries = self.entries.clone();
+        entries[index] = changed;
+        Ok(Self {
+            original: Arc::clone(&self.original),
+            entries,
+        })
+    }
+
+    /// The stack with the steps of effect entry `index` set to `adjustments` (one per step, of
+    /// the entry's kind), each keeping its selection, placement and blend space: an entry edited
+    /// again (ADR 0034). Nothing merges nor splits; the entry keeps its eye.
+    pub fn with_steps(&self, index: usize, adjustments: &[Adjustment]) -> Result<Self, StackError> {
+        let Entry::Effect(effect) = self
+            .entries
+            .get(index)
+            .ok_or(StackError::IndexOutOfRange(index))?
+        else {
+            return Err(StackError::InvalidEffect);
+        };
+        if adjustments.len() != effect.steps.len() {
+            return Err(StackError::InvalidEffect);
+        }
+        let steps = effect
+            .steps
+            .iter()
+            .zip(adjustments)
+            .map(|(step, &adjustment)| {
+                if step.adjustment == adjustment {
+                    Arc::clone(step)
+                } else {
+                    Arc::new(Effect {
+                        adjustment,
+                        ..(**step).clone()
+                    })
+                }
+            })
+            .collect();
+        // Valid steps of the entry's kind only.
+        let edited = EffectEntry::new(steps)?;
+        if edited.kind() != effect.kind() {
+            return Err(StackError::InvalidEffect);
+        }
+        let mut entries = self.entries.clone();
+        entries[index] = Entry::Effect(Arc::new(edited.with_hidden(effect.hidden)));
         Ok(Self {
             original: Arc::clone(&self.original),
             entries,
@@ -1768,6 +1906,7 @@ impl TopPaint {
                     space,
                     images: OnceLock::new(),
                     below: Mutex::new(None),
+                    hidden: false,
                     tiles: top.tiles.clone(),
                 },
             ),
@@ -2053,7 +2192,10 @@ impl RestorePaint {
         let size = self.stack.original.size();
         let mut work: Vec<(usize, TileCoord, Option<PaintTile>)> = Vec::new();
         for (index, entry) in self.stack.entries.iter().enumerate() {
-            if let Entry::Paint(paint) = entry {
+            // A hidden paint is left as it is: the stroke cannot be seen on it.
+            if let Entry::Paint(paint) = entry
+                && !paint.hidden
+            {
                 for (coord, _) in dirty {
                     if contains(size, *coord) && paint.tiles.contains_key(coord) {
                         work.push((index, *coord, None));
@@ -2105,6 +2247,7 @@ impl RestorePaint {
                         tiles: all,
                         images: OnceLock::new(),
                         below: Mutex::new(None),
+                        hidden: paint.hidden,
                     }))
                 }
                 _ => entry.clone(),
@@ -2146,6 +2289,7 @@ impl RestorePaint {
                 tiles,
                 images: OnceLock::new(),
                 below: Mutex::new(None),
+                hidden: paint.hidden,
             }));
         }
         // From the top, so that the indices below stay right.
@@ -2421,6 +2565,115 @@ mod tests {
             .evaluate()
             .unwrap();
         assert_eq!(difference(&deleted.evaluate().unwrap(), &direct), 0);
+    }
+
+    #[test]
+    fn paint_follows_when_an_effect_below_it_is_edited() {
+        let original = gradient(true);
+        let paint = painted(&empty(&original), gray(1.0), |x, _| {
+            if x < 120 { 0.5 } else { 0.0 }
+        });
+        let built = |levels: f32| {
+            LayerStack::new(Arc::clone(&original))
+                .with_effect(effect(Adjustment::Posterize { levels }, None))
+                .unwrap()
+                .with_top_paint(Arc::clone(&paint))
+                .unwrap()
+        };
+        let stack = built(2.0);
+        let edited = stack
+            .with_steps(0, &[Adjustment::Posterize { levels: 4.0 }])
+            .unwrap();
+        // The paint is the same entry, laid over the new result.
+        assert_eq!(edited.entries()[1], stack.entries()[1]);
+        let direct = built(4.0).evaluate().unwrap();
+        assert_eq!(difference(&edited.evaluate().unwrap(), &direct), 0);
+        let shown = stack.evaluate().unwrap();
+        assert_eq!(
+            difference(&edited.reevaluate(&stack, &shown).unwrap(), &direct),
+            0
+        );
+    }
+
+    #[test]
+    fn each_step_of_a_joined_entry_is_edited_on_its_own() {
+        let original = gradient(true);
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_effect(effect(Adjustment::Posterize { levels: 2.0 }, None))
+            .unwrap()
+            .with_effect(effect(Adjustment::Posterize { levels: 8.0 }, None))
+            .unwrap();
+        let Entry::Effect(entry) = &stack.entries()[0] else {
+            panic!("an effect entry");
+        };
+        assert_eq!(entry.steps().len(), 2);
+        let edited = stack
+            .with_steps(
+                0,
+                &[
+                    Adjustment::Posterize { levels: 3.0 },
+                    entry.steps()[1].adjustment,
+                ],
+            )
+            .unwrap();
+        let Entry::Effect(changed) = &edited.entries()[0] else {
+            panic!("an effect entry");
+        };
+        assert_eq!(
+            changed.steps()[0].adjustment,
+            Adjustment::Posterize { levels: 3.0 }
+        );
+        // The step left alone is the same allocation.
+        assert!(Arc::ptr_eq(&changed.steps()[1], &entry.steps()[1]));
+        assert_eq!(
+            stack.with_steps(0, &[Adjustment::Posterize { levels: 3.0 }]),
+            Err(StackError::InvalidEffect)
+        );
+    }
+
+    #[test]
+    fn hidden_entries_are_kept_but_not_applied_and_do_not_merge() {
+        let original = gradient(true);
+        let below = painted(&empty(&original), gray(0.5), |x, _| {
+            if x < 200 { 0.6 } else { 0.0 }
+        });
+        let above = painted(&empty(&original), gray(1.0), |_, y| {
+            if y < 150 { 0.3 } else { 0.0 }
+        });
+        let stack = LayerStack::with_entries(
+            Arc::clone(&original),
+            vec![
+                Entry::Paint(Arc::clone(&below)),
+                Entry::Effect(Arc::new(
+                    EffectEntry::new(vec![Arc::new(effect(Adjustment::Invert, None))]).unwrap(),
+                )),
+                Entry::Paint(Arc::clone(&above)),
+            ],
+        )
+        .unwrap();
+        let hidden = stack.with_hidden(2, true).unwrap();
+        assert!(hidden.entries()[2].hidden());
+        // A stroke does not continue a hidden paint.
+        assert!(hidden.top_paint().is_none());
+        // Deleting what separates them: a hidden paint and a shown one stay apart.
+        let deleted = hidden.without(1).unwrap();
+        assert_eq!(deleted.entries().len(), 2);
+        let only_below = LayerStack::new(Arc::clone(&original))
+            .with_top_paint(Arc::clone(&below))
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        assert_eq!(difference(&deleted.evaluate().unwrap(), &only_below), 0);
+        // Shown again: as before.
+        let shown = hidden.with_hidden(2, false).unwrap();
+        assert_eq!(
+            difference(&shown.evaluate().unwrap(), &stack.evaluate().unwrap()),
+            0
+        );
+        assert_eq!(
+            stack.with_hidden(3, true).unwrap_err(),
+            StackError::IndexOutOfRange(3)
+        );
     }
 
     #[test]
