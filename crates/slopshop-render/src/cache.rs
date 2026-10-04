@@ -263,6 +263,8 @@ pub(crate) struct FrameOptions<'a> {
     /// Composite at most [`FILL_BUDGET`] of missing tiles and show the rest from a coarser
     /// level: the frame reports itself incomplete ([`crate::FrameStats::incomplete`]).
     pub progressive: bool,
+    /// Keep the document's alpha, without the checkerboard (thumbnails).
+    pub transparent: bool,
 }
 
 /// What a frame shows: the document, its steps, the visible area and the view's center.
@@ -321,6 +323,7 @@ struct Present<'a> {
     output: Size,
     output_buffer: &'a wgpu::Buffer,
     levels: Vec<LevelTiles<'a>>,
+    transparent: bool,
 }
 
 /// A fill ready to be dispatched (its buffers live as long as the bind group needs them).
@@ -472,6 +475,7 @@ impl Renderer {
             output,
             output_buffer,
             levels: levels_shown,
+            transparent: options.transparent,
         };
         self.record_present(
             &mut encoder,
@@ -645,7 +649,7 @@ impl Renderer {
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("fill params"),
-                contents: &params_bytes(document.size(), view, TILE_OUTPUT, prepared.count),
+                contents: &params_bytes(document.size(), view, TILE_OUTPUT, prepared.count, false),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let buffers = self.layer_buffers(prepared);
@@ -708,12 +712,13 @@ impl Renderer {
             output,
             output_buffer,
             levels,
+            transparent,
         } = present;
         let params = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("present params"),
-                contents: &params_bytes(doc, view, output, 0),
+                contents: &params_bytes(doc, view, output, 0, transparent),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let cache_params = self

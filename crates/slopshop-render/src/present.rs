@@ -157,8 +157,8 @@ impl Renderer {
             Some(visible) => {
                 let output = padded_output(visible);
                 let options = FrameOptions {
-                    timestamps: None,
                     progressive: true,
+                    ..FrameOptions::default()
                 };
                 let stats = self.composite(
                     document,

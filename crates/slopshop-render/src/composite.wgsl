@@ -29,6 +29,9 @@ struct Params {
     display0: vec4<f32>,
     display1: vec4<f32>,
     display2: vec4<f32>,
+    // 1: the document's own alpha, straight, outside it transparent (thumbnails); 0: over the
+    // checkerboard and the pasteboard, opaque (the view).
+    transparent: u32,
 }
 
 const KIND_FILL: u32 = 0u;
@@ -1379,6 +1382,17 @@ fn to_display(acc: vec4<f32>) -> vec4<f32> {
 // Write output pixel `id`: the document's premultiplied display-space color `display` over the
 // checkerboard, blended with the pasteboard by `coverage`.
 fn write_display(id: vec2<u32>, coverage: f32, display: vec4<f32>) {
+    if params.transparent != 0u {
+        // Straight alpha, as a pixel layer's thumbnail; the document's edge fades out.
+        let alpha = clamp(display.a, 0.0, 1.0) * min(coverage, 1.0);
+        var straight = vec3<f32>(0.0);
+        if display.a > 0.0 {
+            straight = display.rgb / display.a;
+        }
+        let rgb = srgb_encode(clamp(straight, vec3<f32>(0.0), vec3<f32>(1.0)));
+        output[id.y * params.out_size.x + id.x] = pack4x8unorm(vec4<f32>(rgb, alpha));
+        return;
+    }
     var color = PASTEBOARD;
     if coverage > 0.0 {
         let checker = ((id.x / CHECKER_SIZE) + (id.y / CHECKER_SIZE)) % 2u;
