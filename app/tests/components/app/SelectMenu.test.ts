@@ -412,3 +412,34 @@ test("Transform Selection applied: the new outline is drawn as the engine made i
   // The engine's outline of the new selection (the same triangle here), not flipped again.
   await vi.waitFor(() => expect(ants()).toBe(before));
 });
+
+test("on a mask, the Eraser and Delete paint the background color, as Photoshop's", async () => {
+  const user = open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat")]),
+    quickMask: true,
+    selectionKey: 7,
+  });
+  await screen.findByText("cat.jpg");
+  // The mask's grays: black in front, white behind (D); the Eraser paints white.
+  await user.keyboard("e");
+  const canvas = document.querySelector("svg.paint") as SVGSVGElement;
+  await fireEvent.pointerDown(canvas, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 10, clientY: 10 });
+  await vi.waitFor(() =>
+    expect(sent("paint_stroke")[0]).toMatchObject({
+      request: { target: "quickMask", color: [1, 1, 1] },
+    }),
+  );
+  // Delete in the selection: the background color too.
+  await user.keyboard("{Delete}");
+  await vi.waitFor(() =>
+    expect(sent("fill")[0]).toMatchObject({ target: "quickMask", color: [1, 1, 1] }),
+  );
+  // X: the Eraser now paints black.
+  await user.keyboard("x");
+  await fireEvent.pointerDown(canvas, { pointerId: 2, button: 0, clientX: 20, clientY: 10 });
+  await fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 20, clientY: 10 });
+  await vi.waitFor(() =>
+    expect(sent("paint_stroke").at(-1)).toMatchObject({ request: { color: [0, 0, 0] } }),
+  );
+});

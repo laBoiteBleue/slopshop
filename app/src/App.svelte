@@ -713,7 +713,12 @@
         target,
         layerId: layer?.id ?? 0,
         brush: { ...options, spacing: 0.25 },
-        color: isEraser(tool) ? null : hexToSrgb(paintColors().foreground),
+        // On a mask the Eraser paints the background color, as Photoshop's (white at first:
+        // it selects or shows); on pixels it lowers alpha.
+        color:
+          isEraser(tool) && target === "layer"
+            ? null
+            : hexToSrgb(paintColors()[isEraser(tool) ? "background" : "foreground"]),
         restore: tool === "restoreEraser",
         sending: false,
         waiting: [],
@@ -767,8 +772,10 @@
     opacity = 1,
     stroke: StrokeRequest | null = null,
   ) {
-    const color = hex === null ? null : hexToSrgb(hex);
     const kind = target.target ?? (target.mask ? "mask" : "layer");
+    // Erasing a mask (Delete, Cut) paints the background color, as Photoshop does.
+    const erased = hex === null && kind !== "layer" ? paintColors().background : hex;
+    const color = erased === null ? null : hexToSrgb(erased);
     void sync(engine.fill(target.documentId, target.layerId, kind, color, opacity, stroke));
   }
 
