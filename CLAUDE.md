@@ -137,7 +137,10 @@ merge on green CI, or stop for the maintainer when the change needs their decisi
 - UI logic (geometry, key handling, state rules) lives in plain `.ts` modules under
   `app/src/lib`, tested in `app/tests/*.test.ts`; components keep presentation and wiring, and
   their behavior (what a click or a key sends, what is shown) is tested in
-  `app/tests/components/` with Testing Library, the engine's IPC mocked (`mockIPC`).
+  `app/tests/components/` with Testing Library, the engine's IPC mocked (`mockIPC`). Tests of
+  the whole app go in `app/tests/components/app/`, one file per area (menus, panels…), sharing
+  `harness.ts`; a file adds its own IPC answers with `respond`, rather than growing one shared
+  file that every branch appends to.
 - **UI changes come with their tests, as engine changes do (maintainer decision, 2026-10-03).**
   Write them while developing, in the same commits as the code: new or changed logic in
   `app/src/lib` gets module tests; a new or changed control, dialog, panel, shortcut or gesture
