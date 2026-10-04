@@ -1375,7 +1375,6 @@
     background: var(--hover);
   }
 
-
   .thumb {
     display: flex;
     margin: 0 8px;
