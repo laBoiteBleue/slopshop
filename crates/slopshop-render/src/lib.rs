@@ -184,6 +184,9 @@ pub struct Renderer {
     /// Quick Mask (ADR 0024): `quick_mask_main` in composite.wgsl, over a finished frame.
     quick_mask_pipeline: wgpu::ComputePipeline,
     quick_mask_bind_group_layout: wgpu::BindGroupLayout,
+    /// The marching ants (ADR 0024): `ants_main`, with the same bindings as Quick Mask's pass.
+    ants_pipeline: wgpu::ComputePipeline,
+    ants_bind_group_layout: wgpu::BindGroupLayout,
     /// Viewport frames go through the display cache (else they composite every visible layer
     /// for every pixel, as before ADR 0022). `SLOPSHOP_DISPLAY_CACHE=0` turns it off.
     use_display_cache: bool,
@@ -204,13 +207,54 @@ pub struct Renderer {
 
 /// What a viewport frame shows over the image: view state, never part of the document or of
 /// the display cache.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewOverlays {
     /// Select and Mask's view of the selection, while it is open (over Quick Mask's).
     pub selection_view: SelectionView,
     /// Quick Mask's tint (the document's quick mask, ADR 0024): what it leaves out tinted red
     /// at this opacity, fading where it is soft. Percent, 0–100 (half opaque by default, as Photoshop).
     pub quick_mask_opacity: u8,
+    /// The marching ants of the selection, drawn in the frame; `None`: not drawn by the engine
+    /// (the UI draws them, or nothing is selected). Never drawn over Quick Mask or Select and
+    /// Mask's views, which show the selection themselves.
+    pub ants: Option<Ants>,
+}
+
+/// The selection's outline drawn over a frame (ADR 0024): one device pixel wide, on the selected
+/// pixels of the frame beside an unselected one (coverage crossing one half as the frame's own
+/// pixels see it, at any zoom), alternately black and white in dashes of four pixels. The
+/// canvas's edge is not an outline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ants {
+    /// Where the dashes are, modulo 8: the ants march as it advances ([`Ants::at`]).
+    pub phase: u32,
+    /// The selection is drawn placed by this map of document pixels: moved by a drag, or
+    /// transformed live (Select > Transform Selection), without changing the document.
+    pub transform: Affine,
+}
+
+impl Ants {
+    /// Time for the dashes to advance by one pixel (8 pixels in 0.6 s, as the SVG ants did).
+    pub const STEP: Duration = Duration::from_millis(75);
+    /// The length of the pattern: dashes of four pixels, dark then light.
+    const PERIOD: u32 = 8;
+
+    /// The ants as they are `time` after some fixed instant, marching.
+    pub fn at(time: Duration, transform: Affine) -> Self {
+        let steps = time.as_millis() / Self::STEP.as_millis();
+        Self {
+            phase: (steps % u128::from(Self::PERIOD)) as u32,
+            transform,
+        }
+    }
+
+    /// The ants at rest (reduced motion).
+    pub fn still(transform: Affine) -> Self {
+        Self {
+            phase: 0,
+            transform,
+        }
+    }
 }
 
 /// How Select and Mask shows the selection over the image (ADR 0024).
@@ -233,6 +277,7 @@ impl Default for ViewOverlays {
         Self {
             selection_view: SelectionView::Off,
             quick_mask_opacity: 50,
+            ants: None,
         }
     }
 }
@@ -270,6 +315,8 @@ struct SelectionPass<'a> {
     opacity: f32,
     /// The mask in gray instead.
     mask: bool,
+    /// The marching ants instead of a tint (`selection` is then placed as they say).
+    ants: Option<Ants>,
 }
 /// Layer flags (see composite.wgsl).
 const FLAG_PREMULTIPLIED: u32 = 1;
@@ -452,6 +499,12 @@ impl Renderer {
             "quick_mask_main",
             &[&shared[..], &[uniform(0), storage(2, false)]].concat(),
         );
+        let (ants_bind_group_layout, ants_pipeline) = compute_pipeline(
+            &device,
+            &module,
+            "ants_main",
+            &[&shared[..], &[uniform(0), storage(2, false)]].concat(),
+        );
 
         let max_output_bytes = required_limits
             .max_storage_buffer_binding_size
@@ -497,6 +550,8 @@ impl Renderer {
             present_bind_group_layout,
             quick_mask_pipeline,
             quick_mask_bind_group_layout,
+            ants_pipeline,
+            ants_bind_group_layout,
             use_display_cache: std::env::var("SLOPSHOP_DISPLAY_CACHE").as_deref() != Ok("0"),
             evaluate_stacks: true,
             display_capacity: cache::cache_capacity(required_limits.max_texture_array_layers),
@@ -966,31 +1021,45 @@ impl Renderer {
             SelectionView::Off => quick_mask,
             _ => frame.document.selection(),
         };
-        if let Some((tint, opacity, mask)) = shown {
+        let pass = match shown {
+            Some((tint, opacity, mask)) => Some(SelectionPass {
+                selection: selection.map(|s| s.image().as_ref()),
+                tint,
+                opacity,
+                mask,
+                ants: None,
+            }),
+            // The ants, where nothing else shows the selection (none selected: none drawn).
+            None => overlays
+                .ants
+                .zip(frame.document.selection())
+                .map(|(ants, selection)| SelectionPass {
+                    selection: Some(selection.image().as_ref()),
+                    tint: [0.0; 3],
+                    opacity: 1.0,
+                    mask: false,
+                    ants: Some(ants),
+                }),
+        };
+        if let Some(pass) = pass {
             // The tiles the frame reads stay resident only until it is submitted: submit it
             // first, so that the overlay's uploads cannot replace them under it.
             self.queue.submit([encoder.finish()]);
             encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("quick mask"),
+                    label: Some("selection overlay"),
                 });
-            let pass = SelectionPass {
-                selection: selection.map(|s| s.image().as_ref()),
-                tint,
-                opacity,
-                mask,
-            };
-            self.record_quick_mask(&mut encoder, frame, pass, tiles);
+            self.record_selection_pass(&mut encoder, frame, pass, tiles);
         }
         finish(&mut encoder, frame.pixels);
         self.queue.submit([encoder.finish()]);
     }
 
     /// Quick Mask and Select and Mask's views (ADR 0024): the unselected area of the frame
-    /// tinted, or the selection shown in gray, the selection sampled at the view's level like a
-    /// layer's mask.
-    fn record_quick_mask(
+    /// tinted, or the selection shown in gray; or the marching ants: the selection sampled at
+    /// the view's level like a layer's mask.
+    fn record_selection_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Composited<'_>,
@@ -998,9 +1067,10 @@ impl Renderer {
         tiles: &mut [Option<TileCache>; 4],
     ) {
         let doc_size = frame.document.size();
+        let placed_by = pass.ants.map_or(Affine::IDENTITY, |ants| ants.transform);
         let plan = pass.selection.and_then(|selection| {
             visible_document_rect(doc_size, frame.view, frame.output).and_then(|visible| {
-                RasterPlan::new(selection, visible, Affine::IDENTITY, frame.view.scale)
+                RasterPlan::new(selection, visible, placed_by, frame.view.scale)
             })
         });
         let mut prepared = PreparedLayers {
@@ -1016,6 +1086,10 @@ impl Renderer {
             opacity: pass.opacity,
             ..LayerFields::default()
         };
+        if let Some(ants) = pass.ants {
+            // `ants_main` reads its phase (a small whole number, exact as a float) there.
+            fields.color = [(ants.phase % Ants::PERIOD) as f32, 0.0, 0.0, 1.0];
+        }
         if let Some(plan) = plan.filter(|plan| !plan.range().is_empty()) {
             let capacity = self.tile_capacity[plan.format.index()];
             let cache = tiles[plan.format.index()]
@@ -1035,8 +1109,16 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let layer_buffers = self.layer_buffers(prepared);
+        let (pipeline, layout) = if pass.ants.is_some() {
+            (&self.ants_pipeline, &self.ants_bind_group_layout)
+        } else {
+            (
+                &self.quick_mask_pipeline,
+                &self.quick_mask_bind_group_layout,
+            )
+        };
         let bind_group = self.bind_group(
-            &self.quick_mask_bind_group_layout,
+            layout,
             &layer_buffers,
             self.tile_views(tiles),
             [
@@ -1050,13 +1132,13 @@ impl Renderer {
                 },
             ],
         );
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("quick mask"),
+        let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("selection overlay"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.quick_mask_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(
+        compute.set_pipeline(pipeline);
+        compute.set_bind_group(0, &bind_group, &[]);
+        compute.dispatch_workgroups(
             frame.output.width.div_ceil(WORKGROUP_SIZE),
             frame.output.height.div_ceil(WORKGROUP_SIZE),
             1,

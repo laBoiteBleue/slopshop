@@ -12,6 +12,7 @@
 // - `fill_main` and `present_main`, the viewport through the display cache (ADR 0022): the first
 //   composites one tile of a document level into the cache, converted to the display space, the
 //   second shows the view from the cached tiles, like `main` does from the layers.
+// - `quick_mask_main` and `ants_main`, overlays of the selection over a finished frame (ADR 0024).
 // - `export_main`, export (ADR 0008): the working-space values themselves, as f32, one level-0
 //   texel per output pixel, finite values never clamped. Non-finite values are replaced (see
 //   `finite` and `saturated`) and counted in `export_non_finite`, like the CPU reference
@@ -1355,7 +1356,12 @@ struct ViewPixel {
 // pixel it covers. Edge pixels are then antialiased against the pasteboard, never against the
 // checkerboard (whose squares would make the edges shimmer while navigating).
 fn view_pixel(id: vec2<u32>) -> ViewPixel {
-    let corner = params.origin + vec2<f32>(id) * params.scale;
+    return view_pixel_at(vec2<f32>(id));
+}
+
+// The same for the pixel at `id` (whole numbers, maybe beyond the output).
+fn view_pixel_at(id: vec2<f32>) -> ViewPixel {
+    let corner = params.origin + id * params.scale;
     let doc = vec2<f32>(params.doc_size);
     let lo = max(corner, vec2<f32>(0.0));
     let hi = min(corner + params.scale, doc);
@@ -1363,7 +1369,7 @@ fn view_pixel(id: vec2<u32>) -> ViewPixel {
     let coverage = (inside.x * inside.y) / (params.scale * params.scale);
 
     // Zoomed in, resampled layers show document pixels, like export (ADR 0018).
-    let pixel_center = params.origin + (vec2<f32>(id) + 0.5) * params.scale;
+    let pixel_center = params.origin + (id + 0.5) * params.scale;
     let center = select(pixel_center, floor(pixel_center) + 0.5, params.scale <= 1.0);
     return ViewPixel(Footprint(lo, hi, vec2<i32>(0), false, center), coverage);
 }
@@ -1466,6 +1472,62 @@ fn quick_mask_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let amount = layer.opacity * (1.0 - selected) * inside;
     output[index] = pack4x8unorm(vec4<f32>(mix(color.rgb, layer.color.rgb, amount), 1.0));
+}
+
+// The marching ants (ADR 0024) over the finished frame in `output`: `layers[0]` carries the
+// selection as its mask (placed as it says, maybe resampled) and its phase in `color.r`. An
+// output pixel is on the outline when the selection covers it (half or more, as the frame's own
+// pixel sees it) and one of its four neighbours does not: one device pixel wide, inside the
+// selection, black or white by dashes of four along the diagonal so that the pattern marches
+// as the phase advances. Neighbours beyond the canvas count as the pixel itself: its edge is
+// not an outline.
+
+// The selection's coverage at the output pixel `at` (maybe beyond the view), or -1 outside the
+// canvas.
+fn ants_coverage(layer: Layer, at: vec2<i32>) -> f32 {
+    let pixel = view_pixel_at(vec2<f32>(at));
+    if pixel.coverage <= 0.0 {
+        return -1.0;
+    }
+    var resampled = Resampled(vec4<f32>(0.0), 0.0, 0u);
+    let mask = mask_view(layer);
+    if mask.resample_q.w != 0.0 {
+        resampled = resample(mask, pixel.footprint.center, false);
+    }
+    return mask_coverage(layer, pixel.footprint, resampled);
+}
+
+@compute @workgroup_size(8, 8)
+fn ants_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.out_size.x || id.y >= params.out_size.y {
+        return;
+    }
+    let layer = layers[0];
+    if (layer.flags & FLAG_MASK) == 0u {
+        return;
+    }
+    // The pixel, then its left, right, upper and lower neighbours: through one call of
+    // `ants_coverage`, as `resampled_rasters` does for `resample` (see there).
+    var dx = array<i32, 5>(0, -1, 1, 0, 0);
+    var dy = array<i32, 5>(0, 0, 0, -1, 1);
+    var on_outline = false;
+    for (var k = 0u; k < 5u; k++) {
+        let at = vec2<i32>(id.xy) + vec2<i32>(dx[k], dy[k]);
+        let covered = ants_coverage(layer, at);
+        if k == 0u {
+            if covered < 0.5 {
+                // Not selected, or beyond the canvas.
+                return;
+            }
+        } else if covered >= 0.0 && covered < 0.5 {
+            on_outline = true;
+        }
+    }
+    if on_outline {
+        let dark = (((id.x + id.y + u32(layer.color.r)) / 4u) & 1u) == 0u;
+        let value = select(1.0, 0.0, dark);
+        output[id.y * params.out_size.x + id.x] = pack4x8unorm(vec4<f32>(vec3<f32>(value), 1.0));
+    }
 }
 
 // Display cache, present: the cache layer holding texel `texel` of the frame's level `i`, or
