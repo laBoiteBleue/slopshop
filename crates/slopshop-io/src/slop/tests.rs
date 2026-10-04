@@ -1565,7 +1565,7 @@ fn selective_color_keeps_its_ranges_and_method() {
 #[test]
 fn layer_styles_round_trip_and_bad_ones_are_refused() {
     use slopshop_core::selection::StrokeLocation;
-    use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
+    use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
     let mut doc = Document::new(Size::new(40, 30));
     let format = PixelFormat {
         layout: ChannelLayout::Rgba,
@@ -1605,6 +1605,19 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
                 mode: BlendMode::Screen,
                 opacity: 0.125,
                 ..ColorOverlay::default()
+            }),
+            outer_glow: Some(Glow {
+                spread: 40.0,
+                ..Glow::default()
+            }),
+            inner_shadow: Some(DropShadow {
+                distance: 11.0,
+                ..DropShadow::default()
+            }),
+            inner_glow: Some(Glow {
+                enabled: false,
+                size: 21.5,
+                ..Glow::default()
             }),
             ..LayerStyle::default()
         },
