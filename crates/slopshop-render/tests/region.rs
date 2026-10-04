@@ -1510,7 +1510,7 @@ fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
 
 #[test]
 fn styled_layers_match_the_cpu_reference_compositor() {
-    use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
+    use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
     let Some(r) = renderer() else { return };
     let size = Size::new(96, 80);
     let format = PixelFormat {
@@ -1549,6 +1549,23 @@ fn styled_layers_match_the_cpu_reference_compositor() {
                 mode: BlendMode::Multiply,
                 opacity: 0.6,
                 ..ColorOverlay::default()
+            }),
+            ..LayerStyle::default()
+        },
+        LayerStyle {
+            outer_glow: Some(Glow {
+                spread: 20.0,
+                size: 10.0,
+                ..Glow::default()
+            }),
+            inner_shadow: Some(DropShadow {
+                angle: -40.0,
+                distance: 6.0,
+                ..DropShadow::default()
+            }),
+            inner_glow: Some(Glow {
+                mode: BlendMode::Overlay,
+                ..Glow::default()
             }),
             ..LayerStyle::default()
         },
