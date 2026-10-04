@@ -3067,7 +3067,7 @@ mod tests {
         assert_eq!(corner[4 * 4..5 * 4], [255; 4]);
         assert_eq!(
             paint::sample_patch_at(shown, 50.0, 50.0, 1000).len(),
-            65 * 65 * 4
+            129 * 129 * 4
         );
         for far in [1e300, -1e300, f64::NAN] {
             assert_eq!(paint::sample_patch_at(shown, far, far, 1), vec![0; 9 * 4]);
