@@ -305,6 +305,9 @@ const KIND_STACK_PAINT: u32 = 6;
 const KIND_STACK_EFFECT: u32 = 7;
 /// The selection pass shows the mask in gray (Select and Mask's Mask view).
 const KIND_SHOW_MASK: u32 = 8;
+/// A filter layer (ADR 0037): the raster is what is below it, filtered; it replaces the
+/// accumulator (with the blend mode), faded by the opacity and the mask.
+const KIND_FILTER: u32 = 9;
 
 /// What the selection pass draws (Quick Mask, Select and Mask's views).
 struct SelectionPass<'a> {
@@ -1434,6 +1437,16 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
         Step::Adjust {
             layer, transform, ..
         } => [None, enabled_mask(layer).map(|image| (image, *transform))],
+        Step::Filter {
+            layer,
+            filtered,
+            placement,
+            transform,
+            ..
+        } => [
+            Some((*filtered, *placement)),
+            enabled_mask(layer).map(|image| (image, *transform)),
+        ],
         Step::Begin { .. } => [None, None],
         Step::End {
             mask,
@@ -1593,6 +1606,31 @@ fn encode_layers(
                 prepared.count += 1;
                 continue;
             }
+            Step::Filter {
+                layer,
+                mode,
+                opacity,
+                ..
+            } => {
+                // Nothing filtered in this view, or hidden where its enabled mask has nothing.
+                let Some(plan) = plan else { continue };
+                if enabled_mask(layer).is_some() && mask_plan.is_none() {
+                    continue;
+                }
+                let mut fields = LayerFields {
+                    kind: KIND_FILTER,
+                    flags: mode.index() << BLEND_SHIFT | perceptual,
+                    opacity: *opacity,
+                    ..LayerFields::default()
+                };
+                set_raster_fields(&mut fields, plan, &mut prepared.tile_table, table);
+                if let Some(mask) = mask_plan {
+                    set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
+                }
+                fields.write(&mut prepared.bytes);
+                prepared.count += 1;
+                continue;
+            }
             Step::Begin { isolated } => {
                 let fields = LayerFields {
                     kind: KIND_GROUP_BEGIN,
@@ -1661,8 +1699,10 @@ fn encode_layers(
                     fields.flags |= FLAG_STACK_END;
                 }
             }
-            // Groups and adjustments are steps of their own.
-            LayerContent::Group { .. } | LayerContent::Adjustment { .. } => continue,
+            // Groups, adjustments and filters are steps of their own.
+            LayerContent::Group { .. }
+            | LayerContent::Adjustment { .. }
+            | LayerContent::Filter { .. } => continue,
         }
         if let Some(mask) = mask_plan {
             set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
@@ -2117,6 +2157,7 @@ fn shader_source() -> String {
     constants += &format!("const KIND_STACK_PAINT: u32 = {KIND_STACK_PAINT}u;\n");
     constants += &format!("const KIND_STACK_EFFECT: u32 = {KIND_STACK_EFFECT}u;\n");
     constants += &format!("const KIND_SHOW_MASK: u32 = {KIND_SHOW_MASK}u;\n");
+    constants += &format!("const KIND_FILTER: u32 = {KIND_FILTER}u;\n");
     constants += &format!("const FLAG_STACK_END: u32 = {FLAG_STACK_END}u;\n");
     constants += &format!(
         "const CURVE_LUT: u32 = {}u;\n",

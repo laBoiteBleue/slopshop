@@ -133,6 +133,9 @@ pub enum LayerContent {
     Adjustment {
         adjustment: crate::adjust::Adjustment,
     },
+    /// Filters what is composited below it (ADR 0037): no pixels of its own, no bounds; what it
+    /// gives is that filtered, mixed with it by its blend mode, opacity and mask.
+    Filter { filter: crate::filter::Filter },
 }
 
 impl PartialEq for LayerContent {
@@ -159,6 +162,7 @@ impl PartialEq for LayerContent {
                 },
             ) => p == q && a == b,
             (Self::Adjustment { adjustment: a }, Self::Adjustment { adjustment: b }) => a == b,
+            (Self::Filter { filter: a }, Self::Filter { filter: b }) => a == b,
             _ => false,
         }
     }

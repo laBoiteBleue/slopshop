@@ -195,10 +195,14 @@ fn step_reach(
     mask: Option<&RasterPlan<'_>>,
     canvas: Area,
 ) -> Option<Area> {
-    let Step::Layer { layer, .. } = step else {
-        return None;
+    let (layer, filtered) = match step {
+        Step::Layer { layer, .. } => (*layer, false),
+        Step::Filter { layer, .. } => (*layer, true),
+        _ => return None,
     };
     let mut reach = match &layer.content {
+        // A filter layer's image reaches as far as it was computed (ADR 0037).
+        _ if filtered => plan_reach(plan?)?,
         slopshop_core::LayerContent::Raster { .. } => plan_reach(plan?)?,
         _ => canvas,
     };
@@ -238,6 +242,14 @@ fn steps_reaching(steps: &[Step<'_>], reaches: &[Option<Area>], area: Area) -> V
                     content = true;
                 }
                 stack.clear();
+            }
+            // A filter may spread what is below it where there was nothing (ADR 0037): kept
+            // wherever its image reaches.
+            Step::Filter { .. } => {
+                if reaches[i].is_some_and(|reach| overlaps(reach, area)) {
+                    kept.push(i);
+                    content = true;
+                }
             }
             Step::Adjust { .. } => {
                 if content {

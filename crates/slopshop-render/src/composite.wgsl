@@ -1215,7 +1215,8 @@ fn resampled_rasters(layer: Layer, footprint: Footprint) -> array<Resampled, 2> 
 fn samples_raster(layer: Layer) -> bool {
     return (layer.kind == KIND_RASTER && (layer.flags & FLAG_STACK_END) == 0u)
         || layer.kind == KIND_STACK_BEGIN
-        || layer.kind == KIND_STACK_PAINT;
+        || layer.kind == KIND_STACK_PAINT
+        || layer.kind == KIND_FILTER;
 }
 
 fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) -> vec4<f32> {
@@ -1285,6 +1286,24 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
                 coverage *= mask_coverage(layer, footprint, resampled[1]);
             }
             acc = adjust_layer(layer, acc, coverage);
+            if footprint.exact {
+                acc = saturated(acc, count);
+            }
+            continue;
+        }
+        if layer.kind == KIND_FILTER {
+            // What is below, filtered (ADR 0037): it replaces the accumulator, blended onto it
+            // by a mode other than normal, faded by the opacity and the mask.
+            var coverage = layer.opacity;
+            if (layer.flags & FLAG_MASK) != 0u {
+                coverage *= mask_coverage(layer, footprint, resampled[1]);
+            }
+            let mode = (layer.flags >> BLEND_SHIFT) & 0xffu;
+            var filtered = sampled;
+            if mode != MODE_NORMAL && mode != MODE_DISSOLVE {
+                filtered = blend_layer(sampled, acc, layer.flags);
+            }
+            acc = fade(acc, filtered, coverage, (layer.flags & FLAG_PERCEPTUAL) != 0u);
             if footprint.exact {
                 acc = saturated(acc, count);
             }

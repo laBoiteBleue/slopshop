@@ -95,6 +95,17 @@ pub enum Step<'a> {
         opacity: f32,
         transform: Affine,
     },
+    /// A filter layer (ADR 0037): the accumulator replaced by `filtered` (what was composited
+    /// below the layer, filtered: computed apart, placed by `placement`), with `mode` (normal:
+    /// replaced), mixed with it by `opacity` × its mask (placed by `transform`).
+    Filter {
+        layer: &'a Layer,
+        filtered: &'a RasterImage,
+        placement: Affine,
+        mode: BlendMode,
+        opacity: f32,
+        transform: Affine,
+    },
     /// Push the accumulator. An isolated group starts over from transparency; a pass-through
     /// one keeps compositing onto what is below it.
     Begin { isolated: bool },
@@ -403,6 +414,28 @@ fn push_layer<'a>(
         });
         return;
     }
+    if let LayerContent::Filter { .. } = &layer.content {
+        // What is below it, filtered, as the display computed it for what it shows (a look, by
+        // layer); not yet: the layer shows nothing for a moment, the display asks again.
+        // HACK(filter layers prototype, ADR 0037): the CPU compositor (export, tools) leaves
+        // filter layers out until it computes their filtered image itself.
+        match plan.looks.and_then(|l| l.get(&layer.id)) {
+            Some(look) if plan.display.is_some() => steps.push(Step::Filter {
+                layer,
+                filtered: &look.image,
+                placement: look.placement(),
+                mode,
+                opacity,
+                transform,
+            }),
+            _ => {
+                if let Some(pending) = plan.display {
+                    pending.set(true);
+                }
+            }
+        }
+        return;
+    }
     // A styled layer (ADR 0032): its effects below, its content at Fill Opacity
     // with the effects recoloring it, its effects above, the whole blended as one.
     let styled = layer.style.as_ref().filter(|s| s.settings().shows());
@@ -698,8 +731,10 @@ fn source(
                 placement,
             }
         }
-        // Groups and adjustments are steps of their own.
-        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => return None,
+        // Groups, adjustments and filters are steps of their own.
+        LayerContent::Group { .. }
+        | LayerContent::Adjustment { .. }
+        | LayerContent::Filter { .. } => return None,
     };
     Some(Source {
         mode,
@@ -883,6 +918,8 @@ fn composite_region_on(
             }),
             // Only the display's steps hold stacks: here every layer's pixels are evaluated.
             Step::StackOriginal { .. } | Step::StackPaint { .. } | Step::StackEffect { .. } => None,
+            // Only the display's steps hold filter layers for now (see `push_layer`).
+            Step::Filter { .. } => None,
         })
         .collect();
     let blender = Blender::new(document.blend_space());

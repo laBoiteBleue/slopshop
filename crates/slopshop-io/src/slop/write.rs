@@ -19,10 +19,10 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
-    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED,
-    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR,
-    SavedSelectionDto, Schema, Writer,
+    NODE_FILL, NODE_FILTER, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
+    NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -608,6 +608,10 @@ fn build_manifest(
             LayerContent::Adjustment { adjustment } => {
                 (NODE_ADJUSTMENT, adjustment_params(adjustment))
             }
+            LayerContent::Filter { filter } => (
+                NODE_FILTER,
+                json!({ "filter": filter.id(), "values": filter.params() }),
+            ),
         };
         let mut params = match params {
             Value::Object(map) => map,

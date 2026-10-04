@@ -119,7 +119,7 @@ fn covers(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
         }
         LayerContent::Group { children, .. } => hit(children, transform, x, y).is_some(),
         // No pixels of its own: never what is under the pointer.
-        LayerContent::Adjustment { .. } => false,
+        LayerContent::Adjustment { .. } | LayerContent::Filter { .. } => false,
     }
 }
 
@@ -172,7 +172,9 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
                     out.push((layer.id, Bounds::placed(rect, transform)));
                 }
             }
-            LayerContent::Fill { .. } | LayerContent::Adjustment { .. } => {}
+            LayerContent::Fill { .. }
+            | LayerContent::Adjustment { .. }
+            | LayerContent::Filter { .. } => {}
         }
     }
 }
@@ -227,7 +229,7 @@ fn layer_extent(layer: &Layer, transform: Affine) -> Extent {
             within: None,
             everywhere: true,
         },
-        LayerContent::Adjustment { .. } => Extent::default(),
+        LayerContent::Adjustment { .. } | LayerContent::Filter { .. } => Extent::default(),
         LayerContent::Group { children, .. } => layers_extent(children, transform),
         LayerContent::Raster { image, .. } => {
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).

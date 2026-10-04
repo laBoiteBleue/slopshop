@@ -321,7 +321,7 @@ impl Writer<'_, '_> {
                 mask + match &layer.content {
                     LayerContent::Group { children, .. } => self.count_rows(children),
                     LayerContent::Raster { .. } | LayerContent::Fill { .. } => height,
-                    LayerContent::Adjustment { .. } => 0,
+                    LayerContent::Adjustment { .. } | LayerContent::Filter { .. } => 0,
                 }
             })
             .sum()
@@ -392,6 +392,9 @@ impl Writer<'_, '_> {
                     record.channels = empty_channels();
                     record.blocks.extend(adjustment_blocks(adjustment));
                 }
+                // Photoshop has no such layer (but a smart object's filters): an empty layer
+                // keeps its place and its name.
+                LayerContent::Filter { .. } => record.channels = empty_channels(),
                 LayerContent::Group { .. } => {}
             }
             self.add_mask(layer, &mut record)?;

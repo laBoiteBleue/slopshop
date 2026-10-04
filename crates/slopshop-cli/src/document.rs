@@ -162,6 +162,9 @@ fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
                 let used = &adjustment.params()[..adjustment.param_count()];
                 format!("adjustment {} {used:?}", adjustment.id())
             }
+            LayerContent::Filter { filter } => {
+                format!("filter {} {:?}", filter.id(), filter.params())
+            }
             LayerContent::Fill { color } => {
                 format!("fill ({}, {}, {}, {})", color.r, color.g, color.b, color.a)
             }

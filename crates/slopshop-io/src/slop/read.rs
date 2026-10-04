@@ -24,7 +24,7 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
+    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_FILTER, NODE_GROUP, NODE_RASTER,
     NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
     SCHEMA_MAJOR,
@@ -390,6 +390,9 @@ pub(super) fn read_node(
                 adjustment: adjustment_of(&node.params)?,
             }
         }
+        NODE_FILTER if (3..=NODE_VERSION_PAINTED).contains(&node.version) => LayerContent::Filter {
+            filter: filter_of(&node.params)?,
+        },
         _ => return Err(FileError::UnknownNodeType(versioned())),
     };
     let blend_mode = node_blend_mode(node)?;
@@ -449,6 +452,30 @@ fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
 /// An adjustment from its parameters (an adjustment node's, or an effect's): `adjustment`, its
 /// `values` and, for Curves, `curves`. Parameters out of range are refused when the document
 /// is restored.
+/// A filter layer's filter (`params.filter`, `params.values`), within its ranges.
+fn filter_of(params: &Map<String, Value>) -> Result<slopshop_core::filter::Filter, FileError> {
+    let id = params
+        .get("filter")
+        .and_then(Value::as_str)
+        .ok_or_else(|| corrupt("a filter layer without its filter"))?;
+    let values: Vec<f32> = params
+        .get("values")
+        .and_then(Value::as_array)
+        .map(|v| {
+            v.iter()
+                .filter_map(Value::as_f64)
+                .map(|v| v as f32)
+                .collect()
+        })
+        .unwrap_or_default();
+    match slopshop_core::filter::Filter::from_params(id, &values) {
+        Some(filter) if filter.is_valid() => Ok(filter),
+        Some(_) => Err(corrupt("filter parameters out of range")),
+        // A filter this version does not know comes from a newer SlopShop.
+        None => Err(FileError::UnknownNodeType(format!("{NODE_FILTER}:{id}"))),
+    }
+}
+
 fn adjustment_of(
     params: &Map<String, Value>,
 ) -> Result<slopshop_core::adjust::Adjustment, FileError> {

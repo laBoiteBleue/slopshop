@@ -1564,6 +1564,9 @@ async fn add_mask_from_transparency(
             LayerContent::Adjustment { .. } => {
                 return Err("an adjustment layer has no transparency".to_owned());
             }
+            LayerContent::Filter { .. } => {
+                return Err("a filter layer has no transparency".to_owned());
+            }
         }
     };
     let mask =
@@ -1640,6 +1643,9 @@ async fn layer_thumbnail(
             }
             (LayerContent::Adjustment { .. }, _, false) => {
                 return Err("adjustment layers have no thumbnail".to_owned());
+            }
+            (LayerContent::Filter { .. }, _, false) => {
+                return Err("filter layers have no thumbnail".to_owned());
             }
         }
     };

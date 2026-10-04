@@ -119,7 +119,11 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                 }
             }
             LayerContent::Fill { .. } => layers.fill += 1,
-            LayerContent::Adjustment { .. } => layers.adjustment += 1,
+            // HACK(filter layers prototype, ADR 0037): counted with the adjustment layers until
+            // Document Info lists them apart.
+            LayerContent::Adjustment { .. } | LayerContent::Filter { .. } => {
+                layers.adjustment += 1;
+            }
             LayerContent::Group { .. } => layers.group += 1,
         }
         if let Some(mask) = &layer.mask {

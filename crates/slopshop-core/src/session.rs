@@ -61,6 +61,7 @@ impl HistoryLabel {
             Edit::SetAdjustment { adjustment, .. } => {
                 return Self::with("adjustmentSettings", adjustment.id());
             }
+            Edit::SetFilter { filter, .. } => return Self::with("filterSettings", filter.id()),
             Edit::SetLayerStyle { .. } => "layerStyle",
             Edit::SetLayerClipped { .. } => "clipping",
             Edit::SetGroupPassThrough { .. } => "passThrough",

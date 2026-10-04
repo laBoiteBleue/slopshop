@@ -114,6 +114,11 @@ pub enum Edit {
         id: LayerId,
         adjustment: crate::adjust::Adjustment,
     },
+    /// Replace a filter layer's filter (its kind or its parameters, ADR 0037).
+    SetFilter {
+        id: LayerId,
+        filter: crate::filter::Filter,
+    },
     /// A layer's style (ADR 0032): its effects and Fill Opacity; `None` removes it.
     SetLayerStyle {
         id: LayerId,
@@ -180,6 +185,8 @@ pub enum EditError {
     InvalidColor,
     /// Adjustment parameters out of range, or not an adjustment layer (ADR 0020).
     InvalidAdjustment,
+    /// A filter out of its ranges, or not a filter layer's (ADR 0037).
+    InvalidFilter,
     /// Masks are gray images.
     InvalidMask,
     /// Paint of another size than the pixels it covers, or a mask's paint that is not gray
@@ -244,6 +251,9 @@ impl fmt::Display for EditError {
                     f,
                     "adjustment parameters out of range, or not an adjustment layer"
                 )
+            }
+            EditError::InvalidFilter => {
+                write!(f, "filter parameters out of range, or not a filter layer")
             }
             EditError::InvalidMask => write!(f, "a mask must be a gray image"),
             EditError::InvalidPaint => {
@@ -559,6 +569,20 @@ impl Edit {
                     adjustment: previous,
                 }
             }
+            Edit::SetFilter { id, filter } => {
+                if !filter.is_valid() {
+                    return Err(EditError::InvalidFilter);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Filter { filter: current } = &mut layer.content else {
+                    return Err(EditError::InvalidFilter);
+                };
+                let previous = std::mem::replace(current, filter);
+                Edit::SetFilter {
+                    id,
+                    filter: previous,
+                }
+            }
             Edit::SetLayerStyle { id, style } => {
                 if style.as_ref().is_some_and(|s| !s.is_valid()) {
                     return Err(EditError::InvalidStyle);
@@ -566,8 +590,11 @@ impl Edit {
                 let layer = doc
                     .layer_mut_same_shape(id)
                     .ok_or(EditError::UnknownLayer(id))?;
-                // Pixel and fill layers and groups (adjustment layers have no shape).
-                if matches!(layer.content, LayerContent::Adjustment { .. }) {
+                // Pixel and fill layers and groups (adjustment and filter layers have no shape).
+                if matches!(
+                    layer.content,
+                    LayerContent::Adjustment { .. } | LayerContent::Filter { .. }
+                ) {
                     return Err(EditError::InvalidStyle);
                 }
                 // The same shape: what it gave the previous style serves the new one.
