@@ -1,10 +1,11 @@
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { render, screen, within } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DocumentView, LayerView } from "../../src/lib/engine";
 import LayersPanel from "../../src/lib/LayersPanel.svelte";
 import { PLAIN, withEffect } from "../../src/lib/layerStyle";
+import { LayersUi } from "../../src/lib/layersUi.svelte";
 
 // Thumbnails ask the engine: their answers never come (nothing to draw in jsdom).
 beforeEach(() => mockIPC(() => new Promise(() => {})));
@@ -130,6 +131,30 @@ test("the eye hides its layer, or the whole selection it is part of, in one edit
       { kind: "setLayerVisible", id: 5, visible: false },
     ],
   });
+});
+
+test("a panel made again for the same document keeps its selection, folds and scroll", async () => {
+  const ui = new LayersUi();
+  const props = {
+    doc: documentOf(LAYERS),
+    ui,
+    onedit: vi.fn(() => Promise.resolve()),
+    onlive: vi.fn(),
+    ongestureend: vi.fn(() => Promise.resolve()),
+  };
+  const first = render(LayersPanel, props);
+  const user = userEvent.setup();
+  await user.click(row("Background"));
+  await user.click(within(row("Group")).getByRole("button", { expanded: true }));
+  document.querySelector("ul")!.scrollTop = 40;
+  await fireEvent.scroll(document.querySelector("ul")!);
+  first.unmount();
+  // Another tab meanwhile, then this one again.
+  render(LayersPanel, props);
+  expect(selectedNames()).toEqual(["Background"]);
+  expect(screen.queryByText("Sky")).not.toBeInTheDocument();
+  expect(within(row("Group")).getByRole("button", { expanded: false })).toBeInTheDocument();
+  expect(document.querySelector("ul")!.scrollTop).toBe(40);
 });
 
 test("a group folds away its layers", async () => {

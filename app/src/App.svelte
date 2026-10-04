@@ -75,6 +75,7 @@
   import LayerThumbnail from "./lib/LayerThumbnail.svelte";
   import LayersPanel from "./lib/LayersPanel.svelte";
   import PropertiesPanel from "./lib/PropertiesPanel.svelte";
+  import { LayersUis } from "./lib/layersUi.svelte";
   import PanelResizer from "./lib/PanelResizer.svelte";
   import { clampPanelWidth, loadPanelWidth } from "./lib/panelWidth";
   import Viewport, { type FrameStats } from "./lib/Viewport.svelte";
@@ -207,6 +208,9 @@
    * selection would read the closed document (the menus did, and the update stopped there).
    */
   let layersPanel = $derived(active ? layersPanelInstance : null);
+  /** What the Layers panel remembers of each open document (selection, folds, scroll). */
+  const layersUis = new LayersUis();
+  $effect(() => layersUis.keep(tabs.map((d) => d.id)));
   /** The active layer when it is an adjustment or a fill layer: the Properties panel shows it. */
   let selectedProperties = $derived.by(() => {
     const layer = layersPanel?.selectedLayer() ?? null;
@@ -4955,6 +4959,7 @@
           <LayersPanel
             bind:this={layersPanelInstance}
             doc={active}
+            ui={layersUis.of(active.id)}
             onedit={edit}
             onlive={live}
             ongestureend={endGesture}
