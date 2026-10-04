@@ -177,7 +177,8 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
 - [x] Layer > Bake to Pixels ([ADR 0031](adr/0031-bake-to-pixels.md)): Rasterize, Merge
       Layers and Merge Down (Ctrl+E), Merge Visible (Shift+Ctrl+E), Flatten Image; merges
       and New Layer from Visible show at once, their pixels following in the same undo entry
-- [ ] Layer styles (an ADR first)
+- [ ] Layer styles ([ADR 0032](adr/0032-layer-styles.md)): Drop Shadow, Stroke and Color Overlay
+      first, the Layer Style dialog, then the glows and Inner Shadow, PSD import and export
 - [ ] 🔶 Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md))
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation

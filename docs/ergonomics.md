@@ -322,11 +322,11 @@ maintainer's answers to the audit:
 - **Decided, to build**:
   - Gradient and Pattern fill layers come with a gradient engine and patterns, not before (no
     dead entries).
-  - Layer styles (drop shadow, glows, stroke, overlays) as in Photoshop: a list of editable
-    effects per layer, computed after its own stack and mask (they read its final alpha and
-    draw around it), sharing the stack's primitives (blur, fills, blend modes). Not entries of
-    the stack (those are applied before the mask, inside the layer, and never edited). An ADR
-    comes first.
+  - Layer styles (drop shadow, glows, stroke, overlays) as in Photoshop
+    ([ADR 0032](adr/0032-layer-styles.md)): an "fx" mark and the effects listed below the
+    layer, each with an eye; Photoshop's Layer Style dialog (double-click on the layer, the fx
+    button, Layer > Layer Style) with a live preview; Fill Opacity next to Opacity. Drop
+    Shadow, Stroke and Color Overlay first, then the glows and Inner Shadow.
   - Image > Adjustments keeps applying to every visible pixel layer; a layer's stack stays
     listed below it in the layers panel.
 - **Decided, not added**: Apply Layer Mask (masks stay non-destructive), Smart Objects (a
