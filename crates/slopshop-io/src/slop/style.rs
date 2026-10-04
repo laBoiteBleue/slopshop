@@ -4,6 +4,9 @@
 //! { "fill_opacity": 1,
 //!   "drop_shadow": { "enabled": true, "color": [r, g, b], "mode": "multiply", "opacity": 0.75,
 //!                    "angle": 120, "distance": 5, "spread": 0, "size": 5 },
+//!   "outer_glow": { "enabled": true, "color": [r, g, b], "mode": "screen", "opacity": 0.75,
+//!                   "spread": 0, "size": 5 },
+//!   "inner_shadow": { …as drop_shadow… }, "inner_glow": { …as outer_glow… },
 //!   "color_overlay": { "enabled": true, "color": [r, g, b], "mode": "normal", "opacity": 1 },
 //!   "stroke": { "enabled": true, "size": 3, "position": "outside", "color": [r, g, b],
 //!               "mode": "normal", "opacity": 1 } }
@@ -15,7 +18,7 @@ use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
 use slopshop_core::color::LinearRgba;
 use slopshop_core::selection::StrokeLocation;
-use slopshop_core::style::{ColorOverlay, DropShadow, LayerStyle, Stroke};
+use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
 
 fn color(c: LinearRgba) -> Value {
     json!([c.r, c.g, c.b])
@@ -33,20 +36,39 @@ fn position_id(position: StrokeLocation) -> &'static str {
 pub(super) fn to_json(style: &LayerStyle) -> Value {
     let mut value = Map::new();
     value.insert("fill_opacity".into(), json!(style.fill_opacity));
+    let shadow = |s: DropShadow| {
+        json!({
+            "enabled": s.enabled,
+            "color": color(s.color),
+            "mode": s.mode.id(),
+            "opacity": s.opacity,
+            "angle": s.angle,
+            "distance": s.distance,
+            "spread": s.spread,
+            "size": s.size,
+        })
+    };
+    let glow = |g: Glow| {
+        json!({
+            "enabled": g.enabled,
+            "color": color(g.color),
+            "mode": g.mode.id(),
+            "opacity": g.opacity,
+            "spread": g.spread,
+            "size": g.size,
+        })
+    };
     if let Some(s) = style.drop_shadow {
-        value.insert(
-            "drop_shadow".into(),
-            json!({
-                "enabled": s.enabled,
-                "color": color(s.color),
-                "mode": s.mode.id(),
-                "opacity": s.opacity,
-                "angle": s.angle,
-                "distance": s.distance,
-                "spread": s.spread,
-                "size": s.size,
-            }),
-        );
+        value.insert("drop_shadow".into(), shadow(s));
+    }
+    if let Some(g) = style.outer_glow {
+        value.insert("outer_glow".into(), glow(g));
+    }
+    if let Some(s) = style.inner_shadow {
+        value.insert("inner_shadow".into(), shadow(s));
+    }
+    if let Some(g) = style.inner_glow {
+        value.insert("inner_glow".into(), glow(g));
     }
     if let Some(o) = style.color_overlay {
         value.insert(
@@ -119,7 +141,7 @@ fn effect<T>(
 pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
     let style = value.as_object()?;
     let fill_opacity = style.get("fill_opacity")?.as_f64()? as f32;
-    let drop_shadow = effect(style, "drop_shadow", |f| {
+    let shadow = |f: &Fields| {
         Some(DropShadow {
             enabled: f.enabled()?,
             color: f.color()?,
@@ -130,8 +152,21 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
             spread: f.number("spread")?,
             size: f.number("size")?,
         })
-    })
-    .ok()?;
+    };
+    let glow = |f: &Fields| {
+        Some(Glow {
+            enabled: f.enabled()?,
+            color: f.color()?,
+            mode: f.mode()?,
+            opacity: f.opacity()?,
+            spread: f.number("spread")?,
+            size: f.number("size")?,
+        })
+    };
+    let drop_shadow = effect(style, "drop_shadow", shadow).ok()?;
+    let outer_glow = effect(style, "outer_glow", glow).ok()?;
+    let inner_shadow = effect(style, "inner_shadow", shadow).ok()?;
+    let inner_glow = effect(style, "inner_glow", glow).ok()?;
     let color_overlay = effect(style, "color_overlay", |f| {
         Some(ColorOverlay {
             enabled: f.enabled()?,
@@ -161,6 +196,9 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
     let style = LayerStyle {
         fill_opacity,
         drop_shadow,
+        outer_glow,
+        inner_shadow,
+        inner_glow,
         color_overlay,
         stroke,
     };

@@ -19,9 +19,9 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_PAINTED,
-    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
-    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
+    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
+    NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -608,7 +608,12 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer.style.is_some() {
+                version: if layer.style.as_ref().is_some_and(|s| {
+                    let s = s.settings();
+                    s.outer_glow.is_some() || s.inner_shadow.is_some() || s.inner_glow.is_some()
+                }) {
+                    NODE_VERSION_GLOWS
+                } else if layer.style.is_some() {
                     NODE_VERSION_STYLED
                 } else if matches!(layer.content, LayerContent::Raster { stack: Some(_), .. }) {
                     NODE_VERSION_STACK
