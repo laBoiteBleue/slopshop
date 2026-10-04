@@ -3574,6 +3574,42 @@ mod tests {
     }
 
     #[test]
+    fn a_layer_style_goes_through_the_ipc_as_sent() {
+        let mut s = blank_session();
+        let id = s.document().layers()[0].id.get();
+        let json = format!(
+            r#"{{"kind":"setLayerStyle","id":{id},"style":{{"fillOpacity":0.5,
+            "dropShadow":{{"enabled":true,"color":[0.0,0.0,0.0],"mode":"multiply","opacity":0.75,
+              "angle":120,"distance":5,"spread":0,"size":5}},
+            "colorOverlay":null,
+            "stroke":{{"enabled":false,"size":3,"position":"center","color":[1.0,0.5,0.25],
+              "mode":"normal","opacity":1}}}}}}"#
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let style = view.layers[0].style.clone().unwrap();
+        assert_eq!(style.fill_opacity, 0.5);
+        assert_eq!(style.drop_shadow.unwrap().mode, "multiply");
+        let stroke = style.stroke.unwrap();
+        assert_eq!(stroke.position, "center");
+        // sRGB as sent, through the working space.
+        for (got, sent) in stroke.color.iter().zip([1.0, 0.5, 0.25]) {
+            assert!((got - sent).abs() < 1e-5, "{:?}", stroke.color);
+        }
+        s.undo().unwrap();
+        assert_eq!(
+            DocumentView::new(&s, &meta(), Vec::new()).layers[0].style,
+            None
+        );
+        // An unknown mode is refused.
+        let bad = json.replace("\"multiply\"", "\"nope\"");
+        let request: EditRequest = serde_json::from_str(&bad).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
     fn edit_requests_round_trip_through_undo() {
         let mut s = blank_session();
         let json = r#"{"kind":"addFillLayer","name":"Pink","color":[1.0,0.5,0.8,1.0]}"#;
