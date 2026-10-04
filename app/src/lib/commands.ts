@@ -89,6 +89,12 @@ export const SHORTCUTS = {
   zoomOut: ["mod+-"],
   fitOnScreen: ["mod+0"],
   actualSize: ["mod+1"],
+  // Photoshop's Extras: the selection outline and the guides hidden, the selection kept.
+  hideExtras: ["mod+h"],
+  // F11 rather than Photoshop's F: every desktop application's full screen.
+  fullScreen: ["f11"],
+  // Window: Tab hides the panels, as in Photoshop.
+  hidePanels: ["tab"],
 } as const satisfies Record<string, readonly Shortcut[]>;
 
 export type CommandId = keyof typeof SHORTCUTS;
@@ -171,6 +177,7 @@ export type KeyNames = { shift: string; alt: string; delete: string; backspace: 
 const MAC_SYMBOLS: Record<string, string> = {
   delete: "⌦",
   backspace: "⌫",
+  tab: "⇥",
 };
 
 /**
@@ -179,7 +186,12 @@ const MAC_SYMBOLS: Record<string, string> = {
  */
 export function formatShortcut(shortcut: Shortcut, names: KeyNames, mac: boolean): string {
   const s = parseShortcut(shortcut);
-  const named: Record<string, string> = { delete: names.delete, backspace: names.backspace };
+  // Tab is written so on Windows and Linux keyboards, whatever the language.
+  const named: Record<string, string> = {
+    delete: names.delete,
+    backspace: names.backspace,
+    tab: "Tab",
+  };
   if (mac) {
     const key = MAC_SYMBOLS[s.key] ?? s.key.toUpperCase();
     return `${s.alt ? "⌥" : ""}${s.shift ? "⇧" : ""}${s.mod ? "⌘" : ""}${key}`;

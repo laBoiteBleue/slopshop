@@ -9,14 +9,15 @@
   import type { Bounds } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
-  import { SNAP_CSS_PX, snapHandle, snapMove, type Guide } from "./snap";
+  import { SNAP_CSS_PX, snapHandle, snapMove, type SmartGuide } from "./snap";
   import type { ViewMapping } from "./Viewport.svelte";
-  import Guides from "./Guides.svelte";
+  import SmartGuides from "./SmartGuides.svelte";
 
   let {
     mapping,
     canvas,
     targets = [],
+    smartGuides = true,
     onapply,
     oncancel,
   }: {
@@ -25,6 +26,8 @@
     canvas: Bounds;
     /** What the frame's edges snap to; none when snapping is off. Ctrl held: no snapping. */
     targets?: Bounds[];
+    /** The snaps' smart guides are drawn (View > Hide Extras hides them; the snap stays). */
+    smartGuides?: boolean;
     /** Crop to `frame` (whole document pixels). */
     onapply: (frame: Bounds) => void;
     oncancel: () => void;
@@ -35,7 +38,7 @@
 
   // Starts on the canvas as it is when the tool opens.
   let frame = $state<Bounds>(untrack(() => ({ ...canvas })));
-  let guides = $state<Guide[]>([]);
+  let guides = $state<SmartGuide[]>([]);
   let readout = $state<{ text: string; x: number; y: number } | null>(null);
 
   type Drag = {
@@ -118,7 +121,7 @@
     const { start, from } = drag;
     const snaps = targets.length > 0 && !hasShortcutModifier(e);
     const threshold = SNAP_CSS_PX * mapping.docPerCss;
-    let shown: Guide[] = [];
+    let shown: SmartGuide[] = [];
     let next: Bounds;
     if (drag.kind === "move") {
       let [dx, dy] = [px - from[0], py - from[1]];
@@ -269,7 +272,7 @@
       onpointerdown={(e) => begin(e, "resize", i)}
     />
   {/each}
-  <Guides {guides} {mapping} />
+  {#if smartGuides}<SmartGuides {guides} {mapping} />{/if}
 </svg>
 {#if readout}
   <div class="readout" style:left="{readout.x}px" style:top="{readout.y}px">{readout.text}</div>

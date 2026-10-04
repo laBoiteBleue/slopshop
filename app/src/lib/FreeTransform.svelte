@@ -13,8 +13,8 @@
   import type { Bounds, Matrix } from "./engine";
   import { getLocale, t } from "./i18n/index.svelte";
   import type { ViewMapping } from "./Viewport.svelte";
-  import Guides from "./Guides.svelte";
-  import { SNAP_CSS_PX, type Guide } from "./snap";
+  import SmartGuides from "./SmartGuides.svelte";
+  import { SNAP_CSS_PX, type SmartGuide } from "./snap";
   import {
     boxFrame,
     movedBy,
@@ -34,6 +34,7 @@
     matrix = $bindable(),
     pivot = $bindable(),
     targets = [],
+    smartGuides = true,
     onchange,
     oncommit,
     oncancel,
@@ -50,6 +51,8 @@
      * snapping is off. Ctrl held: no snapping.
      */
     targets?: Bounds[];
+    /** The snaps' smart guides are drawn (View > Hide Extras hides them; the snap stays). */
+    smartGuides?: boolean;
     /** The transform since the beginning, a map of the document's space. */
     onchange: (matrix: Matrix) => void;
     oncommit: () => void;
@@ -73,7 +76,7 @@
   const CLICK_SLOP = 3;
   let drag = $state<Drag | null>(null);
   /** Smart guides of the current snap, in document pixels. */
-  let guides = $state<Guide[]>([]);
+  let guides = $state<SmartGuide[]>([]);
   /** What the drag does, shown next to the pointer. */
   let readout = $state<{ text: string; x: number; y: number } | null>(null);
 
@@ -164,7 +167,7 @@
     const snapTo = hasShortcutModifier(e) ? [] : targets;
     const keys = { shift: e.shiftKey, alt: e.altKey };
     const threshold = SNAP_CSS_PX * mapping.docPerCss;
-    let shown: Guide[] = [];
+    let shown: SmartGuide[] = [];
     let text = "";
     if (drag.kind === "pivot") {
       const inverse = affine.invert(matrix);
@@ -300,7 +303,7 @@
     style:cursor={drag ? undefined : "move"}
     onpointerdown={(e) => begin(e, "pivot")}
   />
-  <Guides {guides} {mapping} />
+  {#if smartGuides}<SmartGuides {guides} {mapping} />{/if}
 </svg>
 {#if menuAt}
   <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onclose={() => (menuAt = null)} />

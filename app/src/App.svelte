@@ -49,7 +49,6 @@
     type TrimSettings,
     type Bounds,
     type Matrix,
-    type SnapTargets,
     type MovePixelsRequest,
     type OpenFailed,
     type OpenFinished,
@@ -149,6 +148,7 @@
   import SelectionsPanel from "./lib/SelectionsPanel.svelte";
   import PanelDock from "./lib/PanelDock.svelte";
   import { clickTab, loadDock, saveDock, type DockPanel } from "./lib/panelDock";
+  import { loadViewSettings, saveViewSettings } from "./lib/viewSettings";
   import type { IconName } from "./lib/Icon.svelte";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
@@ -174,7 +174,7 @@
   } from "./lib/ColorRangeDialog.svelte";
   import SelectionOutline from "./lib/SelectionOutline.svelte";
   import SelectionDrag from "./lib/SelectionDrag.svelte";
-  import { SNAP_CSS_PX, type Guide } from "./lib/snap";
+  import { SNAP_CSS_PX, type SmartGuide } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import TransformFields from "./lib/TransformFields.svelte";
   import ContextMenu from "./lib/ContextMenu.svelte";
@@ -210,6 +210,15 @@
     const layer = layersPanel?.selectedLayer() ?? null;
     return layer?.kind === "adjustment" || layer?.kind === "fill" ? layer : null;
   });
+  /**
+   * View > Hide Extras (Ctrl+H, Photoshop's Extras): the selection outline and the smart guides
+   * hidden for a moment, the selection and the snap kept. Not remembered.
+   */
+  let extrasHidden = $state(false);
+  /** Window > Hide Panels (Tab, as in Photoshop): the toolbar, options bar and panels hidden. */
+  let panelsHidden = $state(false);
+  /** View > Full Screen (F11): the window covers the screen, without its title bar. */
+  let fullScreen = $state(false);
   /** The dock below Layers: the panel unfolded, if any, and its height. */
   let dock = $state(loadDock());
   /** Its panels, as its tabs and the Window menu list them. */
@@ -2009,15 +2018,36 @@
   // A drag from inside the selection moves the selected pixels of the active layer (or of its
   // mask when it is the target) with the selection, leaving a hole; Alt copies them.
   let autoSelect = $state(true);
-  /** View > Snap. */
-  let snapping = $state(true);
+  /** View > Snap, remembered. */
+  let snapping = $state(loadViewSettings().snap);
+
+  function toggleSnapping() {
+    snapping = !snapping;
+    saveViewSettings({ snap: snapping });
+  }
+
+  /** What a gesture on `ids` works with: their bounds (null: none, or nothing could be read). */
+  type GestureSnaps = { moving: Bounds | null; targets: Bounds[] };
+
+  /**
+   * What a gesture on the layers `ids` snaps to, for every tool (the Move tool, Free Transform,
+   * Crop): the canvas and the other visible layers, and the bounds of `ids`.
+   */
+  async function snapTargets(doc: DocumentView, ids: number[]): Promise<GestureSnaps> {
+    const found = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+    return {
+      moving: found?.moving ?? null,
+      targets: [canvasBounds(doc), ...(found?.others ?? [])],
+    };
+  }
+
   type MoveDrag = {
     document: number;
     /** Known once Auto-Select answered. */
     ids: number[] | null;
     /** Inside the selection: the selected pixels move instead of the layers. */
     pixels: PixelDrag | null;
-    targets: SnapTargets | null;
+    targets: GestureSnaps | null;
     /** The pointer's movement since the start, and the whole pixels sent so far. */
     raw: { x: number; y: number };
     applied: { x: number; y: number };
@@ -2034,7 +2064,8 @@
   };
   let moveDrag: MoveDrag | null = null;
   let nextPixelDrag = 1;
-  let guides = $state<Guide[]>([]);
+  /** The Move tool's smart guides. */
+  let smartGuides = $state<SmartGuide[]>([]);
 
   function onMoveStart(x: number, y: number, ctrl: boolean, alt: boolean) {
     const doc = active;
@@ -2071,14 +2102,11 @@
         if (!target) return;
         drag.pixels = { ...target, drag: nextPixelDrag++, copy: alt, sent: false };
         if (snapping) {
-          const others = await engine.moveSnapTargets(doc.id, []).catch(() => null);
-          drag.targets = { moving: inside, others: others?.others ?? [] };
+          drag.targets = { ...(await snapTargets(doc, [])), moving: inside };
         }
       } else {
         drag.ids = ids;
-        if (ids.length > 0 && snapping) {
-          drag.targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
-        }
+        if (ids.length > 0 && snapping) drag.targets = await snapTargets(doc, ids);
       }
       if (moveDrag === drag) flushMove(drag);
     })();
@@ -2133,15 +2161,14 @@
   /** Send the whole pixels the drag has moved since it began, snapped (replacing the last). */
   function flushMove(drag: MoveDrag) {
     if (!drag.pixels && (!drag.ids || drag.ids.length === 0)) return;
-    const doc = tabs.find((d) => d.id === drag.document);
-    const snaps = doc && snapping && !drag.free;
+    const snaps = snapping && !drag.free;
     const landed = landing(
       drag.raw,
       snaps ? (drag.targets?.moving ?? null) : null,
-      doc ? [canvasBounds(doc), ...(drag.targets?.others ?? [])] : [],
+      drag.targets?.targets ?? [],
       SNAP_CSS_PX * drag.docPerCss,
     );
-    guides = landed.guides;
+    smartGuides = landed.guides;
     const { x: tx, y: ty } = landed;
     if (tx === drag.applied.x && ty === drag.applied.y) return;
     drag.applied = { x: tx, y: ty };
@@ -2238,7 +2265,7 @@
   function onMoveEnd() {
     const drag = moveDrag;
     moveDrag = null;
-    guides = [];
+    smartGuides = [];
     if (drag?.pixels) {
       // Back where it started, the engine leaves no undo entry.
       if (drag.pixels.sent) {
@@ -2292,9 +2319,13 @@
         ? appliedSelectionMatrix.matrix
         : undefined,
   );
-  /** Select and Mask shows the selection another way than its ants (the engine draws none then). */
+  /**
+   * No ants (the engine draws none then): View > Hide Extras hides them for a moment, and
+   * Select and Mask shows the selection another way.
+   */
   const antsHidden = $derived(
-    active !== null && refining?.document === active.id && refineSettings.view !== "ants",
+    extrasHidden ||
+      (active !== null && refining?.document === active.id && refineSettings.view !== "ants"),
   );
   /**
    * The ants the engine draws in the native view (ADR 0024); frames over IPC keep the SVG ones.
@@ -2332,10 +2363,10 @@
     if (pixels && !place && doc.selectionKey != null && (await floatSelection(doc))) return;
     const ids = place?.ids ?? layersPanel?.selectedLayers().map((l) => l.id) ?? [];
     if (ids.length === 0) return;
-    const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
+    const snaps = await snapTargets(doc, ids);
     // Nothing to transform (empty layers), or the user moved on meanwhile.
-    if (!targets?.moving || active?.id !== doc.id || transforming) return;
-    let box = targets.moving;
+    if (!snaps.moving || active?.id !== doc.id || transforming) return;
+    let box = snaps.moving;
     let placed: Transforming["placed"] = null;
     if (place && !place.at) {
       placed = { matrix: affine.IDENTITY, insertions: place.insertions };
@@ -2356,7 +2387,7 @@
       document: doc.id,
       ids,
       box,
-      targets: [canvasBounds(doc), ...targets.others],
+      targets: snaps.targets,
       matrix: affine.IDENTITY,
       pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
       placed,
@@ -2374,13 +2405,16 @@
     const doc = active;
     if (!doc || transforming || doc.selectionKey == null || doc.quickMask) return;
     if (tool === "crop") tool = "move";
-    const box = await engine.selectionBounds(doc.id).catch(() => null);
+    const [box, snaps] = await Promise.all([
+      engine.selectionBounds(doc.id).catch(() => null),
+      snapTargets(doc, []),
+    ]);
     if (!box || active?.id !== doc.id || transforming) return;
     transforming = {
       document: doc.id,
       ids: [],
       box,
-      targets: [canvasBounds(doc)],
+      targets: snaps.targets,
       matrix: affine.IDENTITY,
       pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
       placed: null,
@@ -2575,8 +2609,7 @@
     const doc = active;
     const ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
     if (!doc || ids.length === 0) return;
-    const targets = await engine.moveSnapTargets(doc.id, ids).catch(() => null);
-    const box = targets?.moving;
+    const box = (await snapTargets(doc, ids)).moving;
     if (!box) return;
     const around = affine.about(by, (box.left + box.right) / 2, (box.top + box.bottom) / 2);
     const matrix: Matrix = [...around];
@@ -2626,14 +2659,9 @@
   async function startCrop(doc: DocumentView) {
     const request = ++cropRequest;
     // Nothing moves: every visible layer is a target.
-    const targets = await engine.moveSnapTargets(doc.id, []).catch(() => null);
+    const { targets } = await snapTargets(doc, []);
     if (request !== cropRequest) return;
-    cropping = {
-      document: doc.id,
-      width: doc.width,
-      height: doc.height,
-      targets: [canvasBounds(doc), ...(targets?.others ?? [])],
-    };
+    cropping = { document: doc.id, width: doc.width, height: doc.height, targets };
   }
 
   $effect(() => {
@@ -3369,6 +3397,15 @@
       .catch((e) => showError(String(e)));
   }
 
+  async function toggleFullScreen() {
+    try {
+      await getCurrentWindow().setFullscreen(!fullScreen);
+      fullScreen = !fullScreen;
+    } catch (e) {
+      showError(String(e));
+    }
+  }
+
   /** Help > About SlopShop's dialog, while open. */
   let about = $state<AppInfo | null>(null);
 
@@ -3724,6 +3761,22 @@
         label: t("menu.view.actualSize"),
         run: () => void viewport?.zoomTo(1),
         disabled: !doc,
+      },
+      hideExtras: {
+        label: t("menu.view.hideExtras"),
+        run: () => (extrasHidden = !extrasHidden),
+        checked: extrasHidden,
+      },
+      fullScreen: {
+        label: t("menu.view.fullScreen"),
+        run: () => void toggleFullScreen(),
+        checked: fullScreen,
+        whileTyping: true,
+      },
+      hidePanels: {
+        label: t("menu.window.hidePanels"),
+        run: () => (panelsHidden = !panelsHidden),
+        checked: panelsHidden,
       },
     };
   });
@@ -4311,28 +4364,40 @@
         items: [
           item("zoomIn"),
           item("zoomOut"),
-          separator,
           item("fitOnScreen"),
-          { ...cmd(t("menu.view.snap"), () => (snapping = !snapping)), checked: snapping },
           item("actualSize"),
+          separator,
+          item("hideExtras"),
+          { ...cmd(t("menu.view.snap"), toggleSnapping), checked: snapping },
+          separator,
+          item("fullScreen"),
         ],
       },
       {
         // Window: the dock's panels, checked while unfolded; choosing one unfolds it (or, already
-        // unfolded, folds the dock), as its tab does. Layers is always shown (ADR 0030).
+        // unfolded, folds the dock), as its tab does, and shows the panels if they were hidden.
+        // Layers is always shown (ADR 0030).
         label: t("menu.window"),
-        items: dockPanels.map((panel) => ({
-          ...cmd(
-            panel.label,
-            () => {
-              dock = clickTab(dock, panel.id);
-              saveDock(dock);
-            },
-            undefined,
-            !doc,
-          ),
-          checked: doc !== null && dock.open === panel.id,
-        })),
+        items: [
+          ...dockPanels.map((panel) => ({
+            ...cmd(
+              panel.label,
+              () => {
+                if (panelsHidden) {
+                  panelsHidden = false;
+                  if (dock.open === panel.id) return;
+                }
+                dock = clickTab(dock, panel.id);
+                saveDock(dock);
+              },
+              undefined,
+              !doc,
+            ),
+            checked: doc !== null && !panelsHidden && dock.open === panel.id,
+          })),
+          separator,
+          item("hidePanels"),
+        ],
       },
       {
         label: t("menu.help"),
@@ -4507,7 +4572,7 @@
 
 <svelte:window {onkeydown} onblur={cancelTabDrag} bind:innerWidth={windowWidth} />
 
-<div class="app">
+<div class="app" class:panels-hidden={panelsHidden}>
   <header class="menubar">
     <img class="logo" src="/favicon.svg" alt="" draggable="false" />
     <MenuBar {menus} onopen={() => void refreshClipboard()} />
@@ -4515,24 +4580,27 @@
     <span class="tag">{t("app.preAlpha")}</span>
   </header>
 
-  <OptionsBar
-    {tool}
-    bind:autoSelect
-    bind:selectionMode
-    bind:feather
-    bind:antiAlias
-    bind:wand
-    bind:quick
-    bind:brush={brushOptions}
-    bind:eraser={eraserOptions}
-    transform={transforming ? transformBar : undefined}
-    quickMask={active?.quickMask ?? false}
-    bind:quickMaskOpacity
-    alignable={(layersPanel?.selectedLayers().length ?? 0) > 0}
-    distributable={layersPanel?.canDistributeSelected() ?? false}
-    onalign={alignSelected}
-    ondistribute={distributeSelected}
-  />
+  <!-- Hidden panels stay mounted (Tab): their state (the layers selected…) must survive. -->
+  <div class="chrome" class:hidden={panelsHidden}>
+    <OptionsBar
+      {tool}
+      bind:autoSelect
+      bind:selectionMode
+      bind:feather
+      bind:antiAlias
+      bind:wand
+      bind:quick
+      bind:brush={brushOptions}
+      bind:eraser={eraserOptions}
+      transform={transforming ? transformBar : undefined}
+      quickMask={active?.quickMask ?? false}
+      bind:quickMaskOpacity
+      alignable={(layersPanel?.selectedLayers().length ?? 0) > 0}
+      distributable={layersPanel?.canDistributeSelected() ?? false}
+      onalign={alignSelected}
+      ondistribute={distributeSelected}
+    />
+  </div>
   {#snippet transformBar()}
     {#if transforming}
       <TransformFields
@@ -4546,6 +4614,7 @@
 
   <main
     class:has-panel={active !== null}
+    class:panels-hidden={panelsHidden}
     style:--panel-width="{shownPanelWidth}px"
     class:transferring={layerTransfer !== null}
     bind:this={mainElement}
@@ -4553,13 +4622,15 @@
     onpointerup={onTransferUp}
     onpointercancel={endTransfer}
   >
-    <Toolbar
-      {tool}
-      choices={toolChoices}
-      onselect={selectTool}
-      bind:colors={paintColors, setPaintColors}
-      onpickcolor={(which) => (colorPicker = which)}
-    />
+    <div class="chrome" class:hidden={panelsHidden}>
+      <Toolbar
+        {tool}
+        choices={toolChoices}
+        onselect={selectTool}
+        bind:colors={paintColors, setPaintColors}
+        onpickcolor={(which) => (colorPicker = which)}
+      />
+    </div>
     <section class="workspace">
       <div
         class="tabbar"
@@ -4673,7 +4744,7 @@
               onmove={tool === "move" && !transforming ? onMoveDrag : undefined}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
-              {guides}
+              smartGuides={extrasHidden ? [] : smartGuides}
             >
               {#snippet overlay(mapping)}
                 {#if active?.selectionKey != null && !nativeCanvas}
@@ -4695,6 +4766,7 @@
                     {mapping}
                     canvas={canvasBounds(active)}
                     targets={snapping ? cropping.targets : []}
+                    smartGuides={!extrasHidden}
                     onapply={applyCrop}
                     oncancel={() => (cropping = null)}
                   />
@@ -4705,6 +4777,7 @@
                     bind:matrix={transforming.matrix}
                     bind:pivot={transforming.pivot}
                     targets={snapping ? transforming.targets : []}
+                    smartGuides={!extrasHidden}
                     onchange={onTransformChange}
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
@@ -4812,7 +4885,7 @@
 
     {#if active}
       <!-- Properties (the selected adjustment layer's, ADR 0020) below Layers: the list never moves. -->
-      <div class="sidebar">
+      <div class="sidebar" class:hidden={panelsHidden}>
         <PanelResizer bind:width={panelWidth} />
         {#key active.id}
           <LayersPanel
@@ -5385,6 +5458,25 @@
 
   main.has-panel {
     grid-template-columns: 40px 1fr var(--panel-width);
+  }
+
+  /* Window > Hide Panels (Tab): the options bar, the toolbar and the panels leave the grid. */
+  .chrome {
+    display: contents;
+  }
+
+  .chrome.hidden,
+  .sidebar.hidden {
+    display: none;
+  }
+
+  .app.panels-hidden {
+    grid-template-rows: 30px 1fr 22px;
+  }
+
+  main.panels-hidden,
+  main.has-panel.panels-hidden {
+    grid-template-columns: 1fr;
   }
 
   /* Native presentation: the canvas area shows the window surface drawn by the engine. */
