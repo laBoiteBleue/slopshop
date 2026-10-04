@@ -660,8 +660,9 @@ pub async fn sample_patch(
     .await
 }
 
-/// A loupe needs a few pixels, not a region: larger asks are cut down to this.
-const MAX_PATCH_RADIUS: u32 = 32;
+/// A loupe keeps a tile of pixels around the pointer, not a region: larger asks are cut down to
+/// this (129² pixels, 66 KB).
+const MAX_PATCH_RADIUS: u32 = 64;
 
 /// [`sample_patch`]'s work.
 pub(crate) fn sample_patch_at(doc: &Document, x: f64, y: f64, radius: u32) -> Vec<u8> {
