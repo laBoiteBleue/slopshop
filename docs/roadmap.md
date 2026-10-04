@@ -221,7 +221,11 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Select > Modify: Border, Smooth, Expand, Contract (exact distance to the outline, rounded
       corners), Feather (Shift+F6)
 - [x] Magic Wand (W): tolerance, contiguous or not, anti-alias, the active layer or every layer;
-      tile by tile with a bounded cache (50 MP: about 1 s)
+      tile by tile with a bounded cache (50 MP: about 1 s with a few layers on the CPU)
+- [x] The selection tools (Magic Wand, Grow, Similar, Color Range) read their pixels from the GPU
+      (the export path, rows of tiles, the CPU compositor as fallback and reference): 50 MP of 9
+      layers 5 to 11 times faster, identical selections on flat colors
+      ([ADR 0024](adr/0024-selections.md#amendment-2026-10-04-the-colors-come-from-the-gpu))
 - [x] Select > Color Range: eyedroppers (sample, add, subtract) on the image or a live
       preview, Fuzziness, Invert, within the selection if any
 - [x] AI runtime ([ADR 0025](adr/0025-ai-selection.md)): the `slopshop-ai` helper (ONNX

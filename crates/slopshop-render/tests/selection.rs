@@ -183,24 +183,29 @@ fn gradients() -> Document {
     s.document().clone()
 }
 
-/// The coverage of a selection at every pixel (nothing selected: zeros).
-fn coverage(selection: &Option<RasterImage>) -> Vec<f32> {
-    let (w, h) = (SIZE.width as usize, SIZE.height as usize);
+/// The coverage of a selection of a canvas of `size` at every pixel (nothing selected: zeros).
+fn coverage(size: Size, selection: &Option<RasterImage>) -> Vec<f32> {
+    let (w, h) = (size.width as usize, size.height as usize);
     match selection {
         Some(image) => {
-            selection::sample_grid(image, Rect::new(0, 0, SIZE.width, SIZE.height), w, h)
+            selection::sample_grid(image, Rect::new(0, 0, size.width, size.height), w, h)
         }
         None => vec![0.0; w * h],
     }
 }
 
-/// The pixels where two selections differ.
-fn differences(a: &Option<RasterImage>, b: &Option<RasterImage>) -> usize {
-    coverage(a)
+/// The pixels where two selections of a canvas of `size` differ.
+fn differences_in(size: Size, a: &Option<RasterImage>, b: &Option<RasterImage>) -> usize {
+    coverage(size, a)
         .iter()
-        .zip(coverage(b))
+        .zip(coverage(size, b))
         .filter(|(a, b)| **a != *b)
         .count()
+}
+
+/// The pixels where two selections of [`SIZE`] differ.
+fn differences(a: &Option<RasterImage>, b: &Option<RasterImage>) -> usize {
+    differences_in(SIZE, a, b)
 }
 
 /// Every tool on `doc`, on the CPU and from the GPU: the number of pixels that differ for each.
@@ -450,16 +455,22 @@ fn timings_on_a_large_document() {
         r.adapter_summary()
     );
     let best = |runs: usize, tool: &dyn Fn() -> Option<RasterImage>| {
-        (0..runs)
-            .map(|_| {
-                let t = std::time::Instant::now();
-                std::hint::black_box(tool());
-                t.elapsed()
-            })
-            .min()
-            .unwrap()
+        let mut best = std::time::Duration::MAX;
+        let mut last = None;
+        for _ in 0..runs {
+            let t = std::time::Instant::now();
+            last = tool();
+            best = best.min(t.elapsed());
+        }
+        (best, last)
     };
-    for overlays in [1u32, 8] {
+    // Overlay layers over the base, `SLOPSHOP_BENCH_OVERLAYS=1,8` by default.
+    let overlays: Vec<u32> = std::env::var("SLOPSHOP_BENCH_OVERLAYS")
+        .unwrap_or_else(|_| "1,8".into())
+        .split(',')
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    for overlays in overlays {
         let doc = large(width, height, overlays);
         let source = gpu_source(&r);
         let pixels: Option<&PixelSource<'_>> = Some(&source);
@@ -467,13 +478,14 @@ fn timings_on_a_large_document() {
         let time = |name: &str,
                     cpu: &dyn Fn() -> Option<RasterImage>,
                     gpu: &dyn Fn() -> Option<RasterImage>| {
-            let gpu_time = best(2, gpu);
-            let cpu_time = best(1, cpu);
+            let (gpu_time, from_gpu) = best(2, gpu);
+            let (cpu_time, from_cpu) = best(1, cpu);
             eprintln!(
-                "{name}: CPU {} ms, GPU {} ms (x{:.1})",
+                "{name}: CPU {} ms, GPU {} ms (x{:.1}), {} pixels differ",
                 cpu_time.as_millis(),
                 gpu_time.as_millis(),
-                cpu_time.as_secs_f64() / gpu_time.as_secs_f64()
+                cpu_time.as_secs_f64() / gpu_time.as_secs_f64(),
+                differences_in(Size::new(width, height), &from_cpu, &from_gpu)
             );
         };
         let options = |tolerance: f32, contiguous: bool| WandOptions {

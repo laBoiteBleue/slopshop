@@ -140,3 +140,38 @@ for frames over IPC, see below):
   engine): macOS and Linux have no native presentation yet, and re-presenting ten times a
   second would cost a frame transfer each, which is the argument of the alternative below. The
   UI draws the SVG only when the engine does not draw the ants.
+
+## Amendment (2026-10-04): the colors come from the GPU
+
+Magic Wand, Grow, Similar and Color Range compared colors of a document composited on the CPU,
+tile by tile. On documents of many layers that dominated (50 MP, 9 layers: 14 to 25 s). They now
+read their pixels from a `PixelSource` (`slopshop_core::selection`): a function filling a region
+with premultiplied working-space pixels, as `composite_region` does. `slopshop-core` cannot name
+the renderer (core ← render), so the app passes `slopshop_render::export_renderer` (the export
+path, ADR 0008) in; the tools' `*_from` functions take it, the older ones are the CPU
+compositor's wrappers, which stays the fallback and the reference. A region the source cannot
+render (a GPU error, too many layers for its tile cache) is composited on the CPU, so a failing
+GPU never makes a selection wrong.
+
+- The conversion to 8-bit display values and every test stay on the CPU, on the very code the
+  CPU compositor's pixels went through: only the compositing moved. The contiguous fill and the
+  coverage are unchanged.
+- With a source, tiles are asked for a row of up to 32 at a time (2 MP, 32 MB of `f32`); three
+  threads ask at once (a GPU call mostly waits on its upload and readback, measured: 3 threads
+  render 50 MP in about half the time of one) while the others read the colors of the rows
+  before; at most five rows are in memory, whatever the canvas.
+- Rounding: the GPU and the CPU composite within float rounding (about 1e-4 relative), and a
+  pixel whose value is at a 8-bit boundary may round the other way. Measured with the tests of
+  `crates/slopshop-render/tests/selection.rs`: flat colors and exact blends select identically
+  (0 pixels in 294,000, for every tool and tolerance tried, and for a 50 MP document of 2 or 9
+  layers); a document of resampled wide-gamut gradients differs in at most a pixel of 294,000
+  per selection (6 displayed colors of 294,000, by one level). The colors a Color Range compares
+  with are sampled from the same source, so a sample is never one level off its own pixel.
+- Cost: a GPU call has a latency (about 3 ms for a tile, 40 ms for a 2 MP row, readback of
+  `f32` pixels bound), so the gain depends on what the CPU spends per pixel. On an RTX 4090
+  Laptop, 50 MP: with 2 layers, tools that read every tile (non contiguous, Color Range) take
+  half the time (0.8 s to 0.4 s); a contiguous fill over a large region is break-even (0.7 s
+  both: waves of a few tiles pay the call latency); with 9 layers (blend modes, a resampled one)
+  all of them are 5 to 11 times faster (14 to 25 s down to 2 to 3.5 s). Reading 8-bit values on
+  the GPU rather than `f32` (a quarter of the readback) would cut the rest, as would a
+  speculative prefetch of the contiguous fill's next tiles: not done.
