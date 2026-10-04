@@ -1724,7 +1724,7 @@ struct Run {
 
 /// The composited colors of a document, tile by tile, as displayed: whole 8-bit sRGB values
 /// (0–255), straight alpha (transparent pixels read as transparent black).
-struct WandSampler<'a> {
+pub(crate) struct WandSampler<'a> {
     document: &'a crate::document::Document,
     to_srgb: crate::color::Mat3,
     /// Where the composited pixels come from, else the CPU compositor.
@@ -1732,7 +1732,10 @@ struct WandSampler<'a> {
 }
 
 impl<'a> WandSampler<'a> {
-    fn new(document: &'a crate::document::Document, pixels: Option<&'a PixelSource<'a>>) -> Self {
+    pub(crate) fn new(
+        document: &'a crate::document::Document,
+        pixels: Option<&'a PixelSource<'a>>,
+    ) -> Self {
         Self {
             document,
             to_srgb: document.working_space().matrix_to(&ColorSpace::LINEAR_SRGB),
@@ -1753,7 +1756,7 @@ impl<'a> WandSampler<'a> {
 
     /// The colors of `region` (within the canvas), row-major; transparent if it cannot be
     /// composited.
-    fn region(&self, region: Rect) -> Vec<[f32; 4]> {
+    pub(crate) fn region(&self, region: Rect) -> Vec<[f32; 4]> {
         let (w, h) = (region.width as usize, region.height as usize);
         let mut rgba = vec![0f32; w * h * 4];
         let mut out = vec![[0f32; 4]; w * h];

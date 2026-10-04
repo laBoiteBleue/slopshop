@@ -1,5 +1,6 @@
 //! File > Document Info: what a document is made of (size, color, layers, pixel formats,
-//! memory) and the files it comes from, as identifiers and numbers the UI translates.
+//! memory) and the files it comes from, as identifiers and numbers the UI translates. And the
+//! Histogram panel's counts (ADR 0036).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -262,4 +263,43 @@ mod tests {
             rgba.memory_bytes() + mask.image.memory_bytes()
         );
     }
+}
+
+/// The Histogram panel's counts: per 8-bit value (0–255), for each channel.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramView {
+    pub red: Vec<f64>,
+    pub green: Vec<f64>,
+    pub blue: Vec<f64>,
+    pub luminosity: Vec<f64>,
+    /// Every `step`-th row and column was counted (1: every pixel).
+    pub step: u32,
+}
+
+impl From<slopshop_core::histogram::Histogram> for HistogramView {
+    fn from(h: slopshop_core::histogram::Histogram) -> Self {
+        Self {
+            red: h.red.to_vec(),
+            green: h.green.to_vec(),
+            blue: h.blue.to_vec(),
+            luminosity: h.luminosity.to_vec(),
+            step: h.step,
+        }
+    }
+}
+
+/// The histogram of document `document_id`'s visible image (within its selection), for the
+/// Histogram panel while it shows.
+#[tauri::command]
+pub async fn histogram(app: AppHandle, document_id: u64) -> Result<HistogramView, String> {
+    let doc = {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        // Cheap: the layers' pixels are shared. The lock is not held while compositing.
+        documents.get_mut(document_id)?.session.document().clone()
+    };
+    tauri::async_runtime::spawn_blocking(move || slopshop_core::histogram::histogram(&doc).into())
+        .await
+        .map_err(|e| e.to_string())
 }

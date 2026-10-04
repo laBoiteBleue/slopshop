@@ -29,18 +29,21 @@ export type PanelContext = {
   loadSelection(id: number, mode: SelectionMode): void;
   /** The saved selections the image's selection is made of, and how. */
   readonly combinedSelections: CombinedRow[];
+  /** The document point under the pointer over the image (document pixels), if any. */
+  readonly pointer: [number, number] | null;
 };
 
-const KEY = Symbol("panels");
+/** The context's key (tests give panels a context of their own). */
+export const PANEL_CONTEXT = Symbol("panels");
 
 /** The app provides the panels' context (once, while it initializes). */
 export function setPanelContext(context: PanelContext) {
-  setContext(KEY, context);
+  setContext(PANEL_CONTEXT, context);
 }
 
 /** A panel's context, from the app. */
 export function panelContext(): PanelContext {
-  const context = getContext<PanelContext | undefined>(KEY);
+  const context = getContext<PanelContext | undefined>(PANEL_CONTEXT);
   if (!context) throw new Error("a panel is shown outside the app's dock");
   return context;
 }

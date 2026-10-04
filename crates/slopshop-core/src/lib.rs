@@ -40,6 +40,7 @@ pub mod edit;
 pub mod filter;
 pub mod geom;
 pub mod gradient;
+pub mod histogram;
 pub mod job;
 mod maxflow;
 pub mod move_pixels;

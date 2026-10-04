@@ -45,6 +45,14 @@ commands hidden in panel flyout menus.
    named after its edit unless its command names it (the tool, the menu command). The panel
    asks for the history only while it shows. No snapshots and no non-linear history (later, if
    asked).
+9. **Histogram and Info** (maintainer's choice of the next panels, 2026-10-04). Histogram: the
+   visible image as displayed (8-bit sRGB, the eyedropper's values), within the selection,
+   Colors (red, green, blue over each other), Luminosity or one color, with Photoshop's mean,
+   standard deviation, median and pixel count; counted by the engine on a grid of at most
+   262,144 pixels (`slopshop_core::histogram`), so it stays quick on any image (it says so
+   when sampled). Info: the color under the pointer (R, G, B, hex) and its pixel, the
+   selection's size and place, the document's size. Both ask the engine only while shown, one
+   request at a time.
 
 ## Alternatives
 
