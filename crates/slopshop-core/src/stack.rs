@@ -450,7 +450,7 @@ impl FilterEntry {
         };
         let mut image = Arc::clone(&input);
         for step in &self.steps {
-            image = Arc::new(filtered(step, &image)?);
+            image = Arc::new(filtered(step, &image, true)?);
         }
         *cache = Some(FilterCache {
             below: below.clone(),
@@ -744,7 +744,11 @@ impl<'a> PremulPixels<'a> {
 /// of the step's blend space (the layer's edges repeating outward), mixed with what it was by
 /// the selection's coverage, written in the image's own format. Tile by tile: the memory it
 /// takes does not grow with the layer (see `filter::GaussianPlan`).
-fn filtered(step: &FilterStep, input: &RasterImage) -> Result<RasterImage, StackError> {
+fn filtered(
+    step: &FilterStep,
+    input: &RasterImage,
+    pyramid: bool,
+) -> Result<RasterImage, StackError> {
     let size = input.size();
     let format = input.format();
     let pixels = PremulPixels::new(input, step.space);
@@ -869,7 +873,11 @@ fn filtered(step: &FilterStep, input: &RasterImage) -> Result<RasterImage, Stack
                 .map_or_else(|| Arc::from(vec![0; t * t * bpp]), Arc::clone),
         })
         .collect();
-    Ok(RasterImage::from_level0_tiles(size, format, tiles)?)
+    Ok(if pyramid {
+        RasterImage::from_level0_tiles(size, format, tiles)?
+    } else {
+        RasterImage::from_level0_tiles_only(size, format, tiles)?
+    })
 }
 
 /// The valid pixels (width, height) of tile `coord` of an image of `size`.
@@ -1875,7 +1883,7 @@ impl Preview {
     }
 
     /// Whether it shows `rect` (`[x0, y0, x1, y1]`, the layer's pixels, within it) at `level`
-    /// or finer.
+    /// (a look has no coarser levels: another level is another look).
     fn covers(&self, rect: [f64; 4], level: usize) -> bool {
         let factor = f64::from(self.factor);
         let size = self.image.size();
@@ -1884,7 +1892,7 @@ impl Preview {
             x0 + f64::from(size.width) * factor,
             y0 + f64::from(size.height) * factor,
         );
-        self.factor <= 1 << level
+        self.factor == 1 << level
             && x0 <= rect[0]
             && y0 <= rect[1]
             && x1 >= rect[2]
@@ -1894,6 +1902,51 @@ impl Preview {
 
 /// The looks the display shows in place of layers whose stack has a filter, by layer.
 pub type Looks = HashMap<crate::document::LayerId, Arc<Preview>>;
+
+/// What a look at part of a layer takes to compute (see [`LayerStack::look_job`]): the tiles
+/// of what is below the topmost filter there (row-major, `size` pixels of `format`, at the
+/// look's level), and the filter's steps scaled to that level and placed from the crop's
+/// pixels. Computed by the CPU ([`Self::run`]) or by the renderer on the GPU (ADR 0035).
+#[derive(Debug, Clone)]
+pub struct LookJob {
+    pub tiles: Vec<Arc<[u8]>>,
+    pub size: Size,
+    pub format: PixelFormat,
+    pub steps: Vec<FilterStep>,
+    pub factor: u32,
+    pub origin: [u32; 2],
+    pub above: Vec<Entry>,
+}
+
+impl LookJob {
+    /// The look, computed on the CPU.
+    pub fn run(&self) -> Result<Preview, StackError> {
+        // Read and made at level 0 only: a look is shown at the level it is made for.
+        let mut image = Arc::new(RasterImage::from_level0_tiles_only(
+            self.size,
+            self.format,
+            self.tiles.clone(),
+        )?);
+        for step in &self.steps {
+            image = Arc::new(filtered(step, &image, false)?);
+        }
+        Ok(self.finished(image))
+    }
+
+    /// The look showing `image` (the filtered crop, computed elsewhere).
+    pub fn finished(&self, image: Arc<RasterImage>) -> Preview {
+        Preview {
+            image,
+            factor: self.factor,
+            origin: self.origin,
+            above: self.above.clone(),
+        }
+    }
+}
+
+/// A look computed elsewhere than on the CPU (the renderer's GPU, ADR 0035): the filtered
+/// crop, or `None` when it does not take that job (the CPU computes it then).
+pub type LookFilter = Arc<dyn Fn(&LookJob) -> Option<RasterImage> + Send + Sync>;
 
 /// The largest preview, in pixels: a few tens of milliseconds to compute.
 const PREVIEW_PIXELS: u64 = 4_000_000;
@@ -2062,7 +2115,12 @@ impl Pixels {
     /// that part once computed, else the quick look while it is computed on a thread of its own
     /// (only the part last asked for), and whether the display must ask again. `None` when the
     /// pixels are there or the stack has no filter.
-    pub fn look_for(&self, rect: [f64; 4], level: usize) -> (Option<Arc<Preview>>, bool) {
+    pub fn look_for(
+        &self,
+        rect: [f64; 4],
+        level: usize,
+        gpu: Option<&LookFilter>,
+    ) -> (Option<Arc<Preview>>, bool) {
         if self.ready_image().is_some() {
             return (None, false);
         }
@@ -2085,6 +2143,7 @@ impl Pixels {
             region.computing = true;
             let pixels = self.clone();
             let stack = stack.clone();
+            let gpu = gpu.cloned();
             let spawned = std::thread::Builder::new()
                 .name("stack look".to_owned())
                 .spawn(move || {
@@ -2107,7 +2166,14 @@ impl Pixels {
                         if Arc::strong_count(&pixels.0) <= 1 {
                             continue;
                         }
-                        if let Ok(Some(look)) = stack.look_at(asked.0, asked.1) {
+                        let Some(job) = stack.look_job(asked.0, asked.1) else {
+                            continue;
+                        };
+                        let look = match gpu.as_ref().and_then(|gpu| gpu(&job)) {
+                            Some(image) => Ok(job.finished(Arc::new(image))),
+                            None => job.run(),
+                        };
+                        if let Ok(look) = look {
                             pixels
                                 .0
                                 .region
@@ -2689,7 +2755,7 @@ impl LayerStack {
                 to_document: scale.then(step.to_document),
                 ..(**step).clone()
             };
-            image = Arc::new(filtered(&coarse_step, &image)?);
+            image = Arc::new(filtered(&coarse_step, &image, true)?);
         }
         Ok(Some(Preview {
             image,
@@ -2705,17 +2771,21 @@ impl LayerStack {
     /// close up. `None` without a shown filter, when what is below it is not known, or when
     /// `rect` misses the layer.
     pub fn look_at(&self, rect: [f64; 4], level: usize) -> Result<Option<Preview>, StackError> {
-        let Some(index) = self.last_filter() else {
-            return Ok(None);
-        };
+        match self.look_job(rect, level) {
+            Some(job) => job.run().map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// What [`Self::look_at`] computes, to be computed elsewhere (on the GPU, ADR 0035).
+    pub fn look_job(&self, rect: [f64; 4], level: usize) -> Option<LookJob> {
+        let index = self.last_filter()?;
         let Entry::Filter(filter) = &self.entries[index] else {
-            return Ok(None);
+            return None;
         };
-        let Some((known, input)) = filter.known_input() else {
-            return Ok(None);
-        };
+        let (known, input) = filter.known_input()?;
         if known != self.below(index) {
-            return Ok(None);
+            return None;
         }
         let whole = input.size();
         if rect[0] >= f64::from(whole.width)
@@ -2725,7 +2795,7 @@ impl LayerStack {
             || rect[0] >= rect[2]
             || rect[1] >= rect[3]
         {
-            return Ok(None);
+            return None;
         }
         let level = level.min(input.levels().len() - 1);
         let factor = (1u32 << level) as f32;
@@ -2747,15 +2817,12 @@ impl LayerStack {
         let col1 = (((rect[2] / f + reach) / t).ceil().max(0.0) as u32).min(columns);
         let row1 = (((rect[3] / f + reach) / t).ceil().max(0.0) as u32).min(rows);
         if col0 >= col1 || row0 >= row1 {
-            return Ok(None);
+            return None;
         }
         let mut tiles = Vec::with_capacity(((col1 - col0) * (row1 - row0)) as usize);
         for row in row0..row1 {
             for col in col0..col1 {
-                let Some(tile) = coarse.tile(TileCoord { col, row }) else {
-                    return Ok(None);
-                };
-                tiles.push(Arc::clone(tile));
+                tiles.push(Arc::clone(coarse.tile(TileCoord { col, row })?));
             }
         }
         let origin = [col0 * TILE_SIZE, row0 * TILE_SIZE];
@@ -2763,12 +2830,13 @@ impl LayerStack {
             (col1 * TILE_SIZE).min(size.width) - origin[0],
             (row1 * TILE_SIZE).min(size.height) - origin[1],
         );
-        let mut image = Arc::new(RasterImage::from_level0_tiles(crop, input.format(), tiles)?);
         // A pixel of the crop is `factor` pixels of the layer, from `origin`.
         let placed = Affine::translation(f64::from(origin[0]), f64::from(origin[1]))
             .then(Affine::scale(f, f));
-        for step in &filter.steps {
-            let crop_step = FilterStep {
+        let steps = filter
+            .steps
+            .iter()
+            .map(|step| FilterStep {
                 filter: match step.filter {
                     Filter::GaussianBlur { radius } => Filter::GaussianBlur {
                         radius: (radius / factor).max(crate::filter::MIN_BLUR_RADIUS),
@@ -2776,15 +2844,17 @@ impl LayerStack {
                 },
                 to_document: placed.then(step.to_document),
                 ..(**step).clone()
-            };
-            image = Arc::new(filtered(&crop_step, &image)?);
-        }
-        Ok(Some(Preview {
-            image,
+            })
+            .collect();
+        Some(LookJob {
+            tiles,
+            size: crop,
+            format: input.format(),
+            steps,
             factor: 1 << level,
             origin,
             above: self.entries[index + 1..].to_vec(),
-        }))
+        })
     }
 
     /// The same result without shown filters: the result of the topmost one as the original,
@@ -4111,7 +4181,7 @@ mod tests {
         let original = halves();
         let (w, h) = (W as usize, H as usize);
         for radius in [70.0, 150.0] {
-            let out = filtered(&blur(radius, None), &original).unwrap();
+            let out = filtered(&blur(radius, None), &original, true).unwrap();
             let reader = PremulPixels::new(&original, BlendSpace::Perceptual);
             let buffer: Vec<[f32; 4]> = (0..w * h)
                 .map(|i| reader.at((i % w) as i64, (i / w) as i64))

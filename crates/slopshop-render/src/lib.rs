@@ -12,6 +12,7 @@
 //! threads, never from a UI thread.
 
 mod cache;
+mod filter;
 pub mod present;
 mod region;
 mod tiles;
@@ -31,7 +32,7 @@ use slopshop_core::composite::{Step, display_plan_with, display_steps_with};
 use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
 use slopshop_core::resample::{self, Filter, Resampling};
-use slopshop_core::stack::Looks;
+use slopshop_core::stack::{LookFilter, Looks};
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{
@@ -197,6 +198,8 @@ pub struct Renderer {
     ewa_table: wgpu::Buffer,
     /// Nanoseconds per timestamp tick, when the device can time passes ([`FrameStats::gpu`]).
     timestamp_period: Option<f32>,
+    /// Filters on the GPU (ADR 0035): the looks at filtered layers the display asks for.
+    gpu_filter: Arc<filter::GpuFilter>,
 }
 
 /// What a viewport frame shows over the image: view state, never part of the document or of
@@ -477,6 +480,7 @@ impl Renderer {
                 .max(1)
         });
         let timestamp_period = (!timestamps.is_empty()).then(|| queue.get_timestamp_period());
+        let gpu_filter = Arc::new(filter::GpuFilter::new(&device, &queue));
         Ok(Self {
             instance,
             adapter_info: adapter.get_info(),
@@ -503,6 +507,7 @@ impl Renderer {
             placeholder_tiles,
             ewa_table,
             timestamp_period,
+            gpu_filter,
         })
     }
 
@@ -826,7 +831,9 @@ impl Renderer {
         // evaluated meanwhile, and the frame asks to be shown again until they are (ADR 0029).
         // Likewise layer styles' effects, computed in the background while what they drew last
         // shows (ADR 0032), and the looks at filtered layers (ADR 0034).
-        let (looks, looks_pending) = gather_looks(document, view, output);
+        let gpu = Arc::clone(&self.gpu_filter);
+        let gpu: LookFilter = Arc::new(move |job| gpu.look(job));
+        let (looks, looks_pending) = gather_looks(document, view, output, &gpu);
         let pending =
             start_stack_evaluations(document, &looks, self.evaluate_stacks) || looks_pending;
         let uploads = |caches: &GpuCaches| -> u64 {
@@ -1268,7 +1275,12 @@ fn start_stack_evaluations(document: &Document, looks: &Looks, start: bool) -> b
 /// (ADR 0034): the look at the part of each in `view`, at the level it is seen at, computed on
 /// a thread of its own when it is not there yet (meanwhile, the quick look); and whether the
 /// frame must be shown again for one.
-fn gather_looks(document: &Document, view: ViewTransform, output: Size) -> (Looks, bool) {
+fn gather_looks(
+    document: &Document,
+    view: ViewTransform,
+    output: Size,
+    gpu: &LookFilter,
+) -> (Looks, bool) {
     let mut looks = Looks::new();
     let mut pending = false;
     let Some(visible) = visible_document_rect(document.size(), view, output) else {
@@ -1300,7 +1312,7 @@ fn gather_looks(document: &Document, view: ViewTransform, output: Size) -> (Look
         } else {
             0
         };
-        let (look, again) = image.look_for(to_layer.map_rect(visible), level);
+        let (look, again) = image.look_for(to_layer.map_rect(visible), level, Some(gpu));
         pending |= again;
         if let Some(look) = look {
             looks.insert(layer.id, look);
@@ -2440,5 +2452,77 @@ mod tests {
         .expect("a valid layer");
         let after = r.profile_view(&repainted, view, output, false).unwrap();
         assert_eq!(after.tiles_uploaded, 1);
+    }
+
+    #[test]
+    fn the_gpu_filters_a_look_as_the_cpu_does() {
+        use slopshop_core::BlendSpace;
+        use slopshop_core::filter::Filter;
+        use slopshop_core::stack::{FilterStep, LayerStack};
+        let Some(r) = renderer() else { return };
+        // A sharp edge with some transparency, over two tiles and a half.
+        let size = Size::new(600, 300);
+        let mut bytes = Vec::new();
+        for y in 0..size.height {
+            for x in 0..size.width {
+                let v = if x < 290 { 20 } else { 230 };
+                let a = if y < 40 { 0 } else { 255 };
+                bytes.extend([v, (y % 256) as u8, 128, a]);
+            }
+        }
+        let original = Arc::new(
+            RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &bytes)
+                .unwrap(),
+        );
+        for (radius, most) in [(1.5, 1), (6.0, 1), (20.0, 4)] {
+            let stack = LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter: Filter::GaussianBlur { radius },
+                        selection: None,
+                        to_document: Affine::IDENTITY,
+                        space: BlendSpace::Perceptual,
+                    },
+                    Some(Arc::clone(&original)),
+                )
+                .unwrap();
+            let job = stack.look_job([200.0, 60.0, 400.0, 250.0], 0).unwrap();
+            let gpu = r.gpu_filter.look(&job).expect("taken by the GPU");
+            let cpu = job.run().unwrap().image;
+            assert_eq!((gpu.size(), gpu.format()), (cpu.size(), cpu.format()));
+            let (a, b) = (gpu.levels()[0].tiles(), cpu.levels()[0].tiles());
+            let worst = a
+                .iter()
+                .zip(b)
+                .flat_map(|(s, t)| s.iter().zip(t.iter()).map(|(x, y)| x.abs_diff(*y)))
+                .max()
+                .unwrap_or(0);
+            assert!(worst <= most, "radius {radius}: {worst}");
+        }
+        // Not taken: a selection, or another format (the CPU computes those).
+        let gray = Arc::new(
+            RasterImage::from_pixels(
+                size,
+                slopshop_core::color::PixelFormat {
+                    layout: slopshop_core::color::ChannelLayout::Gray,
+                    ..slopshop_core::color::PixelFormat::RGBA8_SRGB
+                },
+                &vec![9; (size.width * size.height) as usize],
+            )
+            .unwrap(),
+        );
+        let stack = LayerStack::new(Arc::clone(&gray))
+            .with_filter(
+                FilterStep {
+                    filter: Filter::GaussianBlur { radius: 2.0 },
+                    selection: None,
+                    to_document: Affine::IDENTITY,
+                    space: BlendSpace::Perceptual,
+                },
+                Some(gray),
+            )
+            .unwrap();
+        let job = stack.look_job([0.0, 0.0, 100.0, 100.0], 0).unwrap();
+        assert!(r.gpu_filter.look(&job).is_none());
     }
 }
