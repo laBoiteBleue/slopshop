@@ -4,24 +4,26 @@
 /** What a click samples: a color, one more, or one taken away (Color Range's three). */
 export type EyedropperKind = "pick" | "add" | "subtract";
 
-/** The dropper drawn as the toolbar's icon, its tip at the bottom left; the sign at the top left. */
-const DROPPER = "M14.5 4.5l5 5 M17 2.5l4.5 4.5-3 3-4.5-4.5Z M15.5 8.5L6 18l-2 2";
+/**
+ * A small cross centered on the sampled pixel, open in its middle so that pixel stays visible;
+ * the sign at the top right.
+ */
+const CROSS = "M8 1v5 M8 11v5 M1 8h5 M11 8h5";
 const SIGNS: Record<EyedropperKind, string> = {
   pick: "",
-  add: " M5 3v6 M2 6h6",
-  subtract: " M2 6h6",
+  add: " M18 2v7 M14.5 5.5h7",
+  subtract: " M14.5 5.5h7",
 };
-/** The tip, where the sample is taken. */
-const HOTSPOT = [4, 20];
+/** The cross's middle, where the sample is taken. */
+const HOTSPOT = [8, 8];
 
 /** The CSS cursor of the eyedropper `kind`: white over black, readable on any image. */
 export function eyedropperCursor(kind: EyedropperKind): string {
-  const d = DROPPER + SIGNS[kind];
+  const d = CROSS + SIGNS[kind];
   const svg =
-    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none'" +
-    " stroke-linecap='round' stroke-linejoin='round'>" +
-    `<path d='${d}' stroke='black' stroke-width='3.5'/>` +
-    `<path d='${d}' stroke='white' stroke-width='1.5'/></svg>`;
+    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none'>" +
+    `<path d='${d}' stroke='black' stroke-width='3'/>` +
+    `<path d='${d}' stroke='white' stroke-width='1'/></svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${HOTSPOT[0]} ${HOTSPOT[1]}, crosshair`;
 }
 
@@ -43,17 +45,32 @@ export const LOUPE_CELL = 10;
 export const LOUPE_SIZE = LOUPE_SIDE * LOUPE_CELL;
 /** The ring around the pixels: the new color over the current one (Photoshop's sampling ring). */
 export const LOUPE_RING = 10;
-/** The loupe's side with its ring, screen pixels. */
-export const LOUPE_OUTER = LOUPE_SIZE + 2 * LOUPE_RING;
-/** The value's tag under the loupe: its height with the space from the ring. */
-const TAG = 32;
+/** The gray ring around it and its outline, drawn outside it. */
+export const LOUPE_HALO = 6;
+/** The loupe's side with its rings, screen pixels. */
+export const LOUPE_OUTER = LOUPE_SIZE + 2 * (LOUPE_RING + LOUPE_HALO);
+/** The new color's value under the loupe: its height with the space above it. */
+export const LOUPE_TAG = 28;
+/** Space between the pointer and the loupe, past the cross's 24 px. */
+const GAP = 16;
 
 /**
- * Whether the value's tag goes above the loupe centered on window row `y`: not enough room for it
- * below in a window `height` tall.
+ * Where the loupe (its value under it) goes for the pointer at (`x`, `y`) in a `width × height`
+ * window: above and to the right, clear of the pointer and of what is left of and below it; on
+ * the other side where the window ends.
  */
-export function tagAbove(y: number, height: number): boolean {
-  return y + LOUPE_OUTER / 2 + TAG > height;
+export function loupePlacement(
+  x: number,
+  y: number,
+  view: { width: number; height: number },
+): { left: number; top: number } {
+  const [width, height] = [LOUPE_OUTER, LOUPE_OUTER + LOUPE_TAG];
+  let left = x + GAP;
+  if (left + width > view.width) left = x - GAP - width;
+  let top = y - GAP - height;
+  if (top < 0) top = y + GAP;
+  const clamp = (v: number, max: number) => Math.max(0, Math.min(v, max));
+  return { left: clamp(left, view.width - width), top: clamp(top, view.height - height) };
 }
 
 /** Where the loupe takes its pixels from. */

@@ -57,20 +57,15 @@ test("a click samples the document point under the pointer, with the keys held",
   expect(onsample).toHaveBeenCalledWith(60, 80, expect.objectContaining({ shiftKey: true }));
 });
 
-test("hovering the image shows a loupe of the document pixels around the pointer, which is the pointer then", async () => {
+test("hovering the image shows a loupe of the document pixels around the pointer", async () => {
   const { overlay, pixels, user } = open({ kind: "add" });
   await user.pointer({ target: overlay, coords: { clientX: 30, clientY: 40 } });
   await vi.waitFor(() => expect(document.querySelector(".loupe")).toHaveClass("shown"));
   expect(pixels).toHaveBeenCalledWith(60, 80, expect.any(Number));
-  expect(cursorOf(overlay)).toBe("none");
-  // The eyedropper's sign is on the loupe; Alt shows the one taking away.
-  expect(document.querySelector(".loupe .sign")).toHaveTextContent("+");
-  await user.keyboard("{Alt>}");
-  expect(document.querySelector(".loupe .sign")).toHaveTextContent("−");
-  await user.keyboard("{/Alt}");
+  // The pointer stays the eyedropper's cross, with its sign.
+  expect(cursorOf(overlay)).toBe(eyedropperCursor("add"));
   await user.unhover(overlay);
   expect(document.querySelector(".loupe")).toBeNull();
-  expect(cursorOf(overlay)).toBe(eyedropperCursor("add"));
 });
 
 test("while Space pans, neither a click nor the loupe samples", async () => {

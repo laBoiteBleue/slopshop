@@ -119,7 +119,7 @@ test("for a mask, grays only: one field, the eyedropper taking a color's gray", 
   expect(onapply).toHaveBeenCalledWith("#808080");
 });
 
-test("over the image the pointer is the eyedropper, then the loupe, its ring showing the current color", async () => {
+test("over the image the pointer is the eyedropper, with a loupe whose ring shows the current color", async () => {
   // An opaque blue image, the window showing it at 100%.
   const pixels = vi.fn(async (_x: number, _y: number, radius: number) => {
     const out = new Uint8ClampedArray((2 * radius + 1) ** 2 * 4);
@@ -134,7 +134,7 @@ test("over the image the pointer is the eyedropper, then the loupe, its ring sho
   expect(blocker.style.cursor).toBe(eyedropperCursor("pick"));
   await vi.waitFor(() => expect(document.querySelector(".loupe")).toHaveClass("shown"));
   expect(pixels).toHaveBeenCalledWith(40, 30, expect.any(Number));
-  expect(blocker.style.cursor).toBe("none");
+  expect(blocker.style.cursor).toBe(eyedropperCursor("pick"));
   const shown = document.querySelector(".loupe") as HTMLElement;
   expect(shown.style.getPropertyValue("--new")).toBe("#0000ff");
   expect(shown.style.getPropertyValue("--current")).toBe("#ff0000");
