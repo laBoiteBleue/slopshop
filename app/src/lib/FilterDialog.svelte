@@ -5,6 +5,7 @@
   // leaves everything as it was. Enter applies, Esc cancels. The same dialog edits a filter
   // entry of a stack again.
   import { onMount, untrack } from "svelte";
+  import { movable } from "./dialogDrag";
   import type { FilterId } from "./engine";
   import { FILTERS, sliderPosition, sliderValue, validValues } from "./filters";
   import { t } from "./i18n/index.svelte";
@@ -63,7 +64,7 @@
     oncancel();
   }}
 >
-  <header id="filter-title">{t(`filter.${filter}`)}</header>
+  <header id="filter-title" {@attach movable("filter")}>{t(`filter.${filter}`)}</header>
   <form onsubmit={submit}>
     <div class="settings">
       {#each params as param, i (param.key)}
