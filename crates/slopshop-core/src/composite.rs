@@ -389,7 +389,7 @@ fn push_layer<'a>(
             original: stack.original(),
             transform,
         });
-        for entry in stack.entries() {
+        for entry in stack.entries().iter().filter(|e| !e.hidden()) {
             match entry {
                 crate::stack::Entry::Paint(paint) => {
                     steps.push(Step::StackPaint { paint, transform });

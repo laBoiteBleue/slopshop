@@ -25,8 +25,9 @@ use super::format::{
 };
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_PAINTED, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
+    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
+    SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -329,7 +330,7 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
-    let known_raster = (1..=NODE_VERSION_GLOWS).contains(&node.version);
+    let known_raster = (1..=NODE_VERSION_HIDDEN).contains(&node.version);
     // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill =
         known_version || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version);
@@ -554,6 +555,12 @@ fn raster_content(
     };
     let mut stack = Vec::with_capacity(entries.len());
     for entry in entries {
+        // Hidden by its eye (version 10, ADR 0034).
+        let hidden = match entry.get("hidden") {
+            None => false,
+            Some(Value::Bool(hidden)) if node.version >= NODE_VERSION_HIDDEN => *hidden,
+            Some(_) => return Err(corrupt("a hidden entry needs node version 10")),
+        };
         if let Some(paint) = entry.get("paint").and_then(Value::as_object) {
             let color = image_at(paint.get("color"), "paint")?;
             let keep = image_at(paint.get("keep"), "paint")?;
@@ -563,7 +570,8 @@ fn raster_content(
                 &keep,
                 space_of(paint.get("space"))?,
             )
-            .map_err(invalid)?;
+            .map_err(invalid)?
+            .with_hidden(hidden);
             stack.push(Entry::Paint(Arc::new(paint)));
         } else if let Some(steps) = entry.get("effect").and_then(Value::as_array) {
             let mut effect = Vec::with_capacity(steps.len());
@@ -592,7 +600,9 @@ fn raster_content(
                 }));
             }
             stack.push(Entry::Effect(Arc::new(
-                EffectEntry::new(effect).map_err(invalid)?,
+                EffectEntry::new(effect)
+                    .map_err(invalid)?
+                    .with_hidden(hidden),
             )));
         } else {
             // An entry this version does not know comes from a newer SlopShop.

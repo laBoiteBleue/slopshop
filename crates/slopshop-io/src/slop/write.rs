@@ -20,8 +20,9 @@ use super::format::{
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
     NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
-    NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
-    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
+    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED,
+    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR,
+    SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -525,30 +526,37 @@ fn build_manifest(
                 let entries: Vec<Value> = stack
                     .entries()
                     .iter()
-                    .map(|entry| match entry {
-                        Entry::Paint(paint) => {
-                            let images = paint.images().ok();
-                            json!({ "paint": {
-                                "color": images.as_ref().and_then(|(c, _)| key(c)),
-                                "keep": images.as_ref().and_then(|(_, k)| key(k)),
-                                "space": paint.space().id(),
-                            }})
+                    .map(|entry| {
+                        let mut value = match entry {
+                            Entry::Paint(paint) => {
+                                let images = paint.images().ok();
+                                json!({ "paint": {
+                                    "color": images.as_ref().and_then(|(c, _)| key(c)),
+                                    "keep": images.as_ref().and_then(|(_, k)| key(k)),
+                                    "space": paint.space().id(),
+                                }})
+                            }
+                            Entry::Effect(effect) => {
+                                let steps: Vec<Value> = effect
+                                    .steps()
+                                    .iter()
+                                    .map(|step| {
+                                        let mut value = adjustment_params(&step.adjustment);
+                                        value["selection"] = json!(
+                                            step.selection.as_ref().and_then(|s| key(s.image()))
+                                        );
+                                        value["transform"] = json!(step.to_document.to_array());
+                                        value["space"] = json!(step.space.id());
+                                        value
+                                    })
+                                    .collect();
+                                json!({ "effect": steps })
+                            }
+                        };
+                        if entry.hidden() {
+                            value["hidden"] = json!(true);
                         }
-                        Entry::Effect(effect) => {
-                            let steps: Vec<Value> = effect
-                                .steps()
-                                .iter()
-                                .map(|step| {
-                                    let mut value = adjustment_params(&step.adjustment);
-                                    value["selection"] =
-                                        json!(step.selection.as_ref().and_then(|s| key(s.image())));
-                                    value["transform"] = json!(step.to_document.to_array());
-                                    value["space"] = json!(step.space.id());
-                                    value
-                                })
-                                .collect();
-                            json!({ "effect": steps })
-                        }
+                        value
                     })
                     .collect();
                 (
@@ -608,7 +616,13 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer.style.as_ref().is_some_and(|s| {
+                version: if matches!(
+                    &layer.content,
+                    LayerContent::Raster { stack: Some(stack), .. }
+                        if stack.entries().iter().any(Entry::hidden)
+                ) {
+                    NODE_VERSION_HIDDEN
+                } else if layer.style.as_ref().is_some_and(|s| {
                     let s = s.settings();
                     s.outer_glow.is_some() || s.inner_shadow.is_some() || s.inner_glow.is_some()
                 }) {

@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 19;
+pub(crate) const SCHEMA_MINOR: u32 = 20;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -55,8 +55,12 @@ pub(crate) const NODE_VERSION_STACK: u32 = 7;
 pub(crate) const NODE_VERSION_STYLED: u32 = 8;
 /// Version of the nodes whose style has an Outer Glow, an Inner Shadow or an Inner Glow (schema
 /// 0.18): written only for those, so that readers of version 8 refuse them instead of dropping
-/// these effects. The newest node version this code reads.
+/// these effects.
 pub(crate) const NODE_VERSION_GLOWS: u32 = 9;
+/// Version of the raster nodes whose stack has a hidden entry (schema 0.20, ADR 0034): `hidden`
+/// on the entry. Written only for those, so that older readers refuse them instead of showing
+/// the entry. The newest node version this code reads.
+pub(crate) const NODE_VERSION_HIDDEN: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

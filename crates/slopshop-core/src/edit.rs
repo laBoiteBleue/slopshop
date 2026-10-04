@@ -768,18 +768,51 @@ impl Edit {
     /// 0029): the neighbours that become alike merge, and what was above it is evaluated
     /// again where it reaches.
     pub fn delete_entry(doc: &Document, id: LayerId, index: usize) -> Result<Edit, EditError> {
-        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
-        let LayerContent::Raster {
-            stack: Some(stack), ..
-        } = &layer.content
-        else {
-            return Err(EditError::NotRaster(id));
-        };
+        let stack = Self::stack_of(doc, id)?;
         Ok(Edit::SetLayerStack {
             id,
             stack: stack.without(index).map_err(EditError::Stack)?,
             shown: None,
         })
+    }
+
+    /// The edit that sets entry `index` of raster layer `id`'s stack (ADR 0034): hidden or
+    /// shown by its eye, and for an effect, its steps' adjustments when given (one per step, of
+    /// its kind; each keeps the selection it was applied with). What is above it is evaluated
+    /// again where the entry reaches.
+    pub fn set_entry(
+        doc: &Document,
+        id: LayerId,
+        index: usize,
+        adjustments: Option<&[crate::adjust::Adjustment]>,
+        hidden: bool,
+    ) -> Result<Edit, EditError> {
+        let stack = Self::stack_of(doc, id)?;
+        if adjustments.is_some_and(|a| a.iter().any(|a| !a.is_valid())) {
+            return Err(EditError::InvalidAdjustment);
+        }
+        let edited = match adjustments {
+            Some(adjustments) => stack.with_steps(index, adjustments),
+            None => Ok(stack.clone()),
+        };
+        Ok(Edit::SetLayerStack {
+            id,
+            stack: edited
+                .and_then(|s| s.with_hidden(index, hidden))
+                .map_err(EditError::Stack)?,
+            shown: None,
+        })
+    }
+
+    /// Raster layer `id`'s stack, when something was applied to it.
+    fn stack_of(doc: &Document, id: LayerId) -> Result<&crate::stack::LayerStack, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        match &layer.content {
+            LayerContent::Raster {
+                stack: Some(stack), ..
+            } => Ok(stack),
+            _ => Err(EditError::NotRaster(id)),
+        }
     }
 
     /// The edit that gives raster layer `id` `stack` with the change from `before` (what it
@@ -3043,6 +3076,73 @@ mod tests {
             Edit::delete_entry(&doc, id, 3),
             Err(EditError::Stack(_))
         ));
+    }
+
+    #[test]
+    fn an_entry_is_edited_again_and_hidden() {
+        use crate::adjust::Adjustment;
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let id = raster_layer(&mut doc, image(size, false, 10));
+        let red = |doc: &Document| shown(doc, id).0.levels()[0].tiles()[0][0];
+        Edit::apply_effect(&doc, &[id], Adjustment::Threshold { level: 0.5 })
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(red(&doc), 0);
+        let before = shown(&doc, id).1.unwrap();
+
+        // Edited: the pixels follow, from the entry up, as a stack evaluated anew would show.
+        let lower = [Adjustment::Threshold { level: 0.01 }];
+        let undo = Edit::set_entry(&doc, id, 0, Some(&lower), false)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(red(&doc), 255);
+        let edited = shown(&doc, id).1.unwrap();
+        assert_eq!(edited.entries().len(), 1);
+        assert_eq!(
+            edited.evaluate().unwrap().levels()[0].tiles()[0],
+            shown(&doc, id).0.levels()[0].tiles()[0]
+        );
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(shown(&doc, id).1, Some(before));
+        assert_eq!(red(&doc), 0);
+
+        // Hidden: kept, not applied; an effect of its kind applied then is an entry of its own.
+        Edit::set_entry(&doc, id, 0, None, true)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(red(&doc), 10);
+        assert!(shown(&doc, id).1.unwrap().entries()[0].hidden());
+        Edit::apply_effect(&doc, &[id], Adjustment::Threshold { level: 0.5 })
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(shown(&doc, id).1.unwrap().entries().len(), 2);
+
+        // Refused: a step of another kind, another count of steps, adjustments for paint.
+        let invert = [Adjustment::Invert];
+        assert_eq!(
+            Edit::set_entry(&doc, id, 0, Some(&invert), false),
+            Err(EditError::Stack(crate::stack::StackError::InvalidEffect))
+        );
+        assert_eq!(
+            Edit::set_entry(&doc, id, 0, Some(&[lower[0], lower[0]]), false),
+            Err(EditError::Stack(crate::stack::StackError::InvalidEffect))
+        );
+        assert_eq!(
+            Edit::set_entry(&doc, id, 2, None, false),
+            Err(EditError::Stack(crate::stack::StackError::IndexOutOfRange(
+                2
+            )))
+        );
+        let invalid = [Adjustment::Threshold { level: f32::NAN }];
+        assert_eq!(
+            Edit::set_entry(&doc, id, 0, Some(&invalid), false),
+            Err(EditError::InvalidAdjustment)
+        );
     }
 
     #[test]
