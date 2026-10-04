@@ -39,7 +39,7 @@ export function flattenRows(
       const base = !clipped && level[index + 1]?.clipped === true;
       const clipping = clipped ? "clipped" : base ? "base" : null;
       out.push({ layer, depth, parent, index, shown: visible, clipping });
-      // A group being baked is shown as the layer it becomes (ADR 0030).
+      // A group being baked is shown as the layer it becomes (ADR 0031).
       if (layer.kind === "group" && !layer.baking && !collapsed.has(layer.id)) {
         visit(layer.children, depth + 1, layer.id, visible);
       }

@@ -1,4 +1,4 @@
-//! Layer > Bake to Pixels (ADR 0030): the commands that turn what stays editable into plain
+//! Layer > Bake to Pixels (ADR 0031): the commands that turn what stays editable into plain
 //! pixels, on purpose. Rasterize keeps each layer (its transform, opacity, blend mode, mask and
 //! clipping) but bakes its content: a layer's stack, a fill's color, a group's layers. Merge
 //! Layers, Merge Down, Merge Visible and Flatten Image replace layers by the one pixel layer

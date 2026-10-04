@@ -174,7 +174,7 @@ Ergonomics (principles, ideas waiting for validation) have their own page:
       creation (Properties panel, double-click on the thumbnail)
 - [x] Layer > Align and Distribute, shared with the Move tool's options bar
 - [x] New Layer from Visible (stamp visible, Alt+Shift+Ctrl+E)
-- [x] Layer > Bake to Pixels ([ADR 0030](adr/0030-bake-to-pixels.md)): Rasterize, Merge
+- [x] Layer > Bake to Pixels ([ADR 0031](adr/0031-bake-to-pixels.md)): Rasterize, Merge
       Layers and Merge Down (Ctrl+E), Merge Visible (Shift+Ctrl+E), Flatten Image; merges
       and New Layer from Visible show at once, their pixels following in the same undo entry
 - [ ] Layer styles (an ADR first)

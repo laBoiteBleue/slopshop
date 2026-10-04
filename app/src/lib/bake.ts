@@ -1,4 +1,4 @@
-// Layer > Bake to Pixels (ADR 0030): when its commands apply. The engine does the baking
+// Layer > Bake to Pixels (ADR 0031): when its commands apply. The engine does the baking
 // (slopshop_core::bake), on a worker; these rules gray the menu entries.
 
 import type { LayerView } from "./engine";

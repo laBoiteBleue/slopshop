@@ -143,7 +143,7 @@ struct OpenDocument {
     floating: Option<move_pixels::Floating>,
     /// A drag of selected pixels under way, shown floating (view state too).
     move_preview: Option<move_pixels::MovePreview>,
-    /// Layers whose pixels are being composited (Layer > Bake to Pixels, ADR 0030): a merge's
+    /// Layers whose pixels are being composited (Layer > Bake to Pixels, ADR 0031): a merge's
     /// group, shown as the layer it becomes until its pixels replace it.
     baking: std::collections::HashSet<LayerId>,
 }

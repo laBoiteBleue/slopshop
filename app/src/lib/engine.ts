@@ -45,7 +45,7 @@ export type LayerView = {
   /** What was applied to a raster layer's pixels (ADR 0029), bottom to top. */
   entries: StackEntryView[];
   /**
-   * Being baked into pixels (ADR 0030): a merge's group shown until its pixels come, listed as
+   * Being baked into pixels (ADR 0031): a merge's group shown until its pixels come, listed as
    * the layer it becomes. Absent: false.
    */
   baking?: boolean;
@@ -1222,7 +1222,7 @@ export const engine = {
   moveSnapTargets: (documentId: number, ids: number[]) =>
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
   /**
-   * Layer > Bake to Pixels and New Layer from Visible (ADR 0030): resolves with what shows at
+   * Layer > Bake to Pixels and New Layer from Visible (ADR 0031): resolves with what shows at
    * once; the pixels follow (`onDocumentUpdated`), in the same undo entry.
    */
   bakeLayers: (documentId: number, request: BakeRequest) =>
@@ -1664,7 +1664,7 @@ export async function onRecentFiles(handler: (paths: string[]) => void): Promise
   return listen<string[]>("recent-files", (e) => handler(e.payload));
 }
 
-/** A document changed by work that ran on its own (baked pixels, ADR 0030). */
+/** A document changed by work that ran on its own (baked pixels, ADR 0031). */
 export async function onDocumentUpdated(
   handler: (view: DocumentView) => void,
 ): Promise<() => void> {

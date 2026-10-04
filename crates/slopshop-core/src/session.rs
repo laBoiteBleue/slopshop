@@ -77,7 +77,7 @@ impl Session {
 
     /// Apply `edit` as the end of the last history entry, made when the document was at
     /// `revision`: one undo entry covers both when nothing happened since (Layer > Bake to
-    /// Pixels: the pixels replacing their preview, ADR 0030); otherwise a new entry, as
+    /// Pixels: the pixels replacing their preview, ADR 0031); otherwise a new entry, as
     /// [`Self::perform`].
     pub fn perform_after(&mut self, edit: Edit, revision: u64) -> Result<(), EditError> {
         if matches!(&edit, Edit::Batch(edits) if edits.is_empty()) {
