@@ -2621,6 +2621,29 @@ mod tests {
                 },
                 1,
             ),
+            (
+                Filter::DustAndScratches {
+                    radius: 3.0,
+                    threshold: 0.0,
+                },
+                1,
+            ),
+            (
+                Filter::DustAndScratches {
+                    radius: 1.0,
+                    threshold: 20.0,
+                },
+                1,
+            ),
+            // The CPU's broad blur is three boxes: a little off the GPU's exact one.
+            (
+                Filter::ClarityTexture {
+                    texture: 60.0,
+                    clarity: -80.0,
+                    scale: 1.0,
+                },
+                3,
+            ),
         ] {
             let stack = LayerStack::new(Arc::clone(&original))
                 .with_filter(

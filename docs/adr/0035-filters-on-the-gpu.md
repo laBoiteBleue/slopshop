@@ -36,6 +36,10 @@ holds a wgpu device; the core must stay free of it (dependency direction).
    layer reduced, softening a few pixels across the line.
    Add Noise (2026-10-04) is a pass of its own (`noise_main`): the same 32-bit hash of the
    document pixel, the seed and the channel as the CPU's `filter::noise`.
+   Dust & Scratches (`median_main`, up to a radius of 8 at the look's level) takes each
+   channel's exact median by bisection on the value; Clarity and Texture run two separable
+   passes, the first one's blur kept in the second half of the rows' buffer (devices may bind
+   no more than four storage buffers).
 5. **Later**: looks kept on the GPU and sampled by the display without a readback, other
    formats in the shader, the whole layer on the GPU, layer styles' blurs on the same passes.
 
