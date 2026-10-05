@@ -2090,6 +2090,9 @@ struct Region {
 /// slider dragged over a filter) is skipped rather than computed for nothing.
 static BACKGROUND: Mutex<()> = Mutex::new(());
 
+/// Quick looks at filtered stacks being computed, likewise one at a time.
+static PREVIEWS: Mutex<()> = Mutex::new(());
+
 /// A stack to evaluate, and where its evaluation starts from.
 type Recipe = (LayerStack, Earlier);
 
@@ -2425,7 +2428,13 @@ impl Pixels {
                 // slider dragged over a filter shows at once.
                 let settle = match pixels.0.stack.as_ref().filter(|s| s.has_shown_filter()) {
                     Some(stack) => {
-                        if let Ok(Some(preview)) = stack.preview(PREVIEW_PIXELS) {
+                        // One at a time, on every core: one superseded meanwhile (a slider
+                        // dragged) is skipped, nobody showing it.
+                        let _one_at_a_time =
+                            PREVIEWS.lock().unwrap_or_else(PoisonError::into_inner);
+                        if Arc::strong_count(&pixels.0) > 1
+                            && let Ok(Some(preview)) = stack.preview(PREVIEW_PIXELS)
+                        {
                             let _ = pixels.0.preview.set(preview);
                         }
                         SETTLE
@@ -3248,7 +3257,8 @@ impl LayerStack {
         };
         let factor = (1u32 << level) as f32;
         let coarse = &input.levels()[level];
-        let mut image = Arc::new(RasterImage::from_level0_tiles(
+        // Filters read level 0 only: a pyramid for the result alone, which the display samples.
+        let mut image = Arc::new(RasterImage::from_level0_tiles_only(
             coarse.size(),
             input.format(),
             coarse.tiles().to_vec(),
@@ -3256,13 +3266,14 @@ impl LayerStack {
         // A coarse pixel is `factor` pixels of the layer: where the selection is read from, and
         // how far the filter reaches.
         let scale = Affine::scale(f64::from(factor), f64::from(factor));
-        for step in &filter.steps {
+        for (n, step) in filter.steps.iter().enumerate() {
             let coarse_step = FilterStep {
                 filter: step.filter.scaled(factor),
                 to_document: scale.then(step.to_document),
                 ..(**step).clone()
             };
-            image = Arc::new(filtered(&coarse_step, &image, true)?);
+            let last = n + 1 == filter.steps.len();
+            image = Arc::new(filtered(&coarse_step, &image, last)?);
         }
         Ok(Some(Preview {
             filter: filter.steps.last().map_or("", |step| step.filter.id()),
@@ -4827,6 +4838,26 @@ mod tests {
     }
 
     #[test]
+    fn a_state_replaced_before_its_quick_look_gets_none_computed() {
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(3.0, None), Some(original))
+            .unwrap();
+        let pixels = Pixels::pending(stack, None);
+        let held = Arc::downgrade(&pixels.0);
+        {
+            // Another quick look being computed meanwhile; then the state is replaced.
+            let _other = PREVIEWS.lock().unwrap();
+            pixels.evaluate_in_background();
+            drop(pixels);
+        }
+        // Its thread waits for the state to last before evaluating it whole, holding it.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let state = Pixels(held.upgrade().expect("held by its thread until then"));
+        assert!(state.0.preview.get().is_none());
+    }
+
+    #[test]
     fn a_look_asked_again_while_it_is_computed_is_computed_once() {
         // The display asks at every frame while a look is computed: the same part, once.
         let original = halves();
@@ -4850,6 +4881,12 @@ mod tests {
         });
         let rect = [10.0, 10.0, 120.0, 90.0];
         assert!(pixels.look_for(rect, 0, Some(&gpu)).1);
+        let start = std::time::Instant::now();
+        while calls.load(std::sync::atomic::Ordering::SeqCst) == 0 && start.elapsed().as_secs() < 10
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // The next frame, while it is computed.
         assert!(pixels.look_for(rect, 0, Some(&gpu)).1);
         go.send(()).unwrap();
         let start = std::time::Instant::now();
