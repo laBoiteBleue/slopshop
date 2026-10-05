@@ -66,6 +66,47 @@ pub fn layer_at(document: &Document, x: i64, y: i64) -> Option<LayerId> {
     hit(document.layers(), Affine::IDENTITY, x, y)
 }
 
+/// Every layer showing at document pixel (`x`, `y`), top to bottom: what a right-click with
+/// the Move tool lists, to choose one among layers on top of each other. As [`layer_at`], but
+/// fill layers count wherever they show (with or without a mask) and adjustment layers wherever
+/// their mask lets them act: the list is where they are chosen from the image.
+pub fn layers_at(document: &Document, x: i64, y: i64) -> Vec<LayerId> {
+    let mut out = Vec::new();
+    collect_at(document.layers(), Affine::IDENTITY, x, y, &mut out);
+    out
+}
+
+fn collect_at(layers: &[Layer], parent: Affine, x: i64, y: i64, out: &mut Vec<LayerId>) {
+    for (i, layer) in layers.iter().enumerate().rev() {
+        if !shown(layer) || (layer.clipped && i > 0 && !base_shows(layers, i, parent, x, y)) {
+            continue;
+        }
+        let transform = layer.transform.then(parent);
+        match &layer.content {
+            LayerContent::Group { children, .. } => {
+                if mask_shows(layer, transform, x, y) {
+                    collect_at(children, transform, x, y, out);
+                }
+            }
+            LayerContent::Adjustment { .. } => {
+                if mask_shows(layer, transform, x, y) {
+                    out.push(layer.id);
+                }
+            }
+            _ if covers(layer, transform, x, y) => out.push(layer.id),
+            _ => {}
+        }
+    }
+}
+
+/// Whether the base of the clipped layer `layers[i]` (the nearest layer below it that is not
+/// clipped, or the first) shows at (`x`, `y`).
+fn base_shows(layers: &[Layer], i: usize, parent: Affine, x: i64, y: i64) -> bool {
+    let base = layers[..i].iter().rposition(|l| !l.clipped).unwrap_or(0);
+    let base = &layers[base];
+    shown(base) && covers(base, base.transform.then(parent), x, y)
+}
+
 fn shown(layer: &Layer) -> bool {
     layer.visible && layer.opacity > 0.0
 }
@@ -79,14 +120,8 @@ fn hit(layers: &[Layer], parent: Affine, x: i64, y: i64) -> Option<LayerId> {
         if !mask_shows(layer, transform, x, y) {
             continue;
         }
-        if layer.clipped && i > 0 {
-            // Its base: the nearest layer below that is not clipped (or the first).
-            let base = layers[..i].iter().rposition(|l| !l.clipped).unwrap_or(0);
-            let base = &layers[base];
-            let base_transform = base.transform.then(parent);
-            if !shown(base) || !covers(base, base_transform, x, y) {
-                continue;
-            }
+        if layer.clipped && i > 0 && !base_shows(layers, i, parent, x, y) {
+            continue;
         }
         match &layer.content {
             LayerContent::Group { children, .. } => {
@@ -460,6 +495,54 @@ mod tests {
         // Inside a group: the layer, not the group, placed by both transforms.
         assert_eq!(layer_at(&doc, 15, 13), Some(inner_id));
         assert_eq!(layer_at(&doc, 12, 13), None);
+    }
+
+    #[test]
+    fn every_layer_showing_there_is_listed_top_to_bottom() {
+        let mut doc = Document::new(Size::new(20, 20));
+        let fill = layer(
+            &mut doc,
+            LayerContent::Fill {
+                color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+            },
+        );
+        let fill = push(&mut doc, fill);
+        let low = layer(&mut doc, square(Rect::new(2, 2, 10, 10)));
+        let low = push(&mut doc, low);
+        let mut clipped = layer(&mut doc, square(Rect::new(0, 0, 20, 20)));
+        clipped.clipped = true;
+        let clipped = push(&mut doc, clipped);
+        let mut adjust = layer(
+            &mut doc,
+            LayerContent::Adjustment {
+                adjustment: crate::adjust::Adjustment::Invert,
+            },
+        );
+        adjust.mask = Some(mask_showing(Rect::new(0, 0, 5, 20)));
+        let adjust = push(&mut doc, adjust);
+        let mut hidden = layer(&mut doc, square(Rect::new(0, 0, 20, 20)));
+        hidden.visible = false;
+        push(&mut doc, hidden);
+        let inner = layer(&mut doc, square(Rect::new(0, 0, 20, 4)));
+        let inner_id = inner.id;
+        let group = layer(
+            &mut doc,
+            LayerContent::Group {
+                children: vec![inner],
+                pass_through: true,
+            },
+        );
+        push(&mut doc, group);
+
+        // The fill (not picked by a click) and the adjustment within its mask are listed; the
+        // clipped layer where its base shows; inside a group, the layer; never a hidden one.
+        assert_eq!(
+            layers_at(&doc, 3, 3),
+            vec![inner_id, adjust, clipped, low, fill]
+        );
+        assert_eq!(layers_at(&doc, 8, 8), vec![clipped, low, fill]);
+        assert_eq!(layers_at(&doc, 15, 15), vec![fill]);
+        assert_eq!(layer_at(&doc, 15, 15), None);
     }
 
     #[test]
