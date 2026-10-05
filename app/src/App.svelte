@@ -179,6 +179,7 @@
   } from "./lib/SelectAndMaskPanel.svelte";
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
+  import BucketTool from "./lib/BucketTool.svelte";
   import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
   import type { LoupeSource } from "./lib/eyedropper";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
@@ -895,6 +896,41 @@
       return null;
     }
     return { documentId: doc.id, layerId: layer.id, mask };
+  }
+
+  /** The Paint Bucket's options: the fill's opacity, then the Magic Wand's region. */
+  let bucketOptions = $state({
+    opacity: 1,
+    tolerance: 32,
+    contiguous: true,
+    antiAlias: true,
+    sampleAll: false,
+  });
+
+  /**
+   * The Paint Bucket (G): the region of a similar color at (`x`, `y`), within the selection,
+   * filled with the foreground color as Edit > Fill does (a gray on a mask). Seconds on a large
+   * document: its progress shows, Esc cancels.
+   */
+  function paintBucket(x: number, y: number) {
+    const doc = active;
+    if (!doc || outsideCanvas(doc, x, y)) return;
+    const target = paintedLayer();
+    if (!target) return;
+    const kind = target.target ?? (target.mask ? "mask" : "layer");
+    const sampleLayer = bucketOptions.sampleAll ? null : (layersPanel?.selectedLayer()?.id ?? null);
+    const { tolerance, contiguous, antiAlias, opacity } = bucketOptions;
+    const color = hexToSrgb(paintColors().foreground);
+    void runAi("bucket.task", (task) =>
+      engine.paintBucket(
+        doc.id,
+        { x, y },
+        { tolerance, contiguous, antiAlias },
+        sampleLayer,
+        { layerId: target.layerId, target: kind, color, opacity },
+        task,
+      ),
+    );
   }
 
   /**
@@ -5024,6 +5060,7 @@
       bind:brush={brushOptions}
       bind:eraser={eraserOptions}
       bind:eyedropper={eyedropperOptions}
+      bind:bucket={bucketOptions}
       bind:crop={cropAspect}
       bind:straighten={straightening}
       canvasSize={active ?? undefined}
@@ -5279,6 +5316,8 @@
                     onsample={(x, y, keys) => colorRange && sampleAt(colorRange, x, y, keys)}
                     loupe={loupeSource}
                   />
+                {:else if tool === "paintBucket"}
+                  <BucketTool {mapping} onpick={paintBucket} />
                 {:else if tool === "wand"}
                   <SelectionDrag {mapping} {...outlineDragProps}>
                     <WandTool {mapping} mode={selectionMode} onpick={magicWand} />

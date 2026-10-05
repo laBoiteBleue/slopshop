@@ -19,7 +19,8 @@ export type ToolId =
   | "eyedropper"
   | "brush"
   | "eraser"
-  | "restoreEraser";
+  | "restoreEraser"
+  | "paintBucket";
 
 export type Tool = {
   id: ToolId;
@@ -69,6 +70,8 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "restoreEraser", icon: "restoreEraser", name: "tools.restoreEraser" },
     ],
   },
+  // The Magic Wand's region, filled as Edit > Fill does (the Gradient joins it later).
+  { key: "G", tools: [{ id: "paintBucket", icon: "bucket", name: "tools.paintBucket" }] },
 ];
 
 export const TOOLS: readonly Tool[] = SLOTS.flatMap((slot) => slot.tools);

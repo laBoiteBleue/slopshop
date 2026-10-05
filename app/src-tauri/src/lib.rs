@@ -2316,6 +2316,7 @@ pub fn run() {
             layer_at,
             layers_at,
             layers_touching,
+            paint::paint_bucket,
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,
@@ -3228,6 +3229,73 @@ mod tests {
             paint::sample_color_at(session.document(), 1.0, 1.0, 1),
             None
         );
+    }
+
+    #[test]
+    fn the_paint_bucket_fills_the_region_of_a_similar_color_within_the_selection() {
+        use slopshop_core::selection::{Combine, WandOptions, magic_wand_from};
+        let state = AppState::new();
+        let session =
+            super::blank_session(Size::new(200, 150), Some([1.0, 1.0, 1.0]), "Background").unwrap();
+        let doc = state.add_document(session, None, Vec::new()).unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let edit: crate::ipc::EditRequest =
+                serde_json::from_str(r#"{"kind":"addEmptyLayer","name":"Layer 1","index":1}"#)
+                    .unwrap();
+            let edit = edit.into_edit(&mut document.session).unwrap();
+            document.session.perform(edit).unwrap();
+            document.session.document().layers()[1].id
+        };
+        // A red dot on the white background.
+        paint::paint(
+            &state,
+            doc.id,
+            dab(layer, paint::PaintTarget::Layer, Some([1.0, 0.0, 0.0])),
+        )
+        .unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let shown = document.session.document().clone();
+        let options = WandOptions {
+            tolerance: 32.0,
+            contiguous: true,
+            anti_alias: false,
+        };
+        let region = magic_wand_from(
+            &shown,
+            None,
+            None,
+            (150, 100),
+            options,
+            Combine::Replace,
+            &|_, _| {},
+            &slopshop_core::job::CancelToken::new(),
+        )
+        .unwrap()
+        .expect("a region");
+        let request = paint::fill_request(
+            layer.get(),
+            paint::PaintTarget::Layer,
+            Some([0.0, 0.0, 1.0]),
+            1.0,
+        );
+        let edit = paint::bucket_edit(&shown, region, &request)
+            .unwrap()
+            .expect("something to fill");
+        document.session.perform(edit).unwrap();
+        let filled = document.session.document();
+        // The white around the dot turned blue; the red dot stayed; the selection is not set.
+        assert_eq!(
+            paint::sample_color_at(filled, 150.0, 100.0, 1),
+            Some([0, 0, 255])
+        );
+        assert_eq!(
+            paint::sample_color_at(filled, 50.5, 50.5, 1),
+            Some([255, 0, 0])
+        );
+        assert!(filled.selection().is_none());
     }
 
     #[test]

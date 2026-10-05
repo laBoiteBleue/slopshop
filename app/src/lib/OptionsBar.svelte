@@ -25,6 +25,13 @@
     brush = $bindable(),
     eraser = $bindable(),
     eyedropper = $bindable({ sample: "all", size: 1 }),
+    bucket = $bindable({
+      opacity: 1,
+      tolerance: 32,
+      contiguous: true,
+      antiAlias: true,
+      sampleAll: false,
+    }),
     crop = $bindable({ mode: "free" }),
     straighten = $bindable(false),
     canvasSize = { width: 1, height: 1 },
@@ -62,6 +69,14 @@
     eraser: PaintOptions;
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
     eyedropper?: { sample: "all" | "layer"; size: number };
+    /** Paint Bucket: the fill's opacity, then the Magic Wand's region (every layer or the active one). */
+    bucket?: {
+      opacity: number;
+      tolerance: number;
+      contiguous: boolean;
+      antiAlias: boolean;
+      sampleAll: boolean;
+    };
     /** Crop: the frame's ratio or size (pixels), if any. */
     crop?: CropAspect;
     /** Crop: a drag draws a line along what should be level, and the image turns. */
@@ -231,6 +246,30 @@
         log
       />
     {/if}
+  {:else if tool === "paintBucket"}
+    <SliderField
+      label={t("options.opacity")}
+      bind:value={bucket.opacity}
+      min={0}
+      max={100}
+      unit="%"
+      factor={100}
+      width={44}
+    />
+    <span class="divider"></span>
+    <SliderField label={t("options.tolerance")} bind:value={bucket.tolerance} min={0} max={255} />
+    <label class="option">
+      <input type="checkbox" bind:checked={bucket.antiAlias} />
+      {t("options.antiAlias")}
+    </label>
+    <label class="option">
+      <input type="checkbox" bind:checked={bucket.contiguous} />
+      {t("options.contiguous")}
+    </label>
+    <label class="option">
+      <input type="checkbox" bind:checked={bucket.sampleAll} />
+      {t("options.sampleAll")}
+    </label>
   {:else if tool === "eyedropper"}
     <label class="option">
       {t("options.sampleSize")}
