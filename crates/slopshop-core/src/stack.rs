@@ -809,6 +809,12 @@ impl<'a> PremulPixels<'a> {
         }
     }
 
+    /// The stored pixels are 8-bit sRGB straight RGBA blended as stored: what a display
+    /// shows without any conversion.
+    pub(crate) fn is_displayed(&self) -> bool {
+        self.as_stored
+    }
+
     pub(crate) fn bytes_per_pixel(&self) -> usize {
         self.codec.bytes_per_pixel
     }
