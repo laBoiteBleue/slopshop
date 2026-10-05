@@ -9,6 +9,56 @@ use crate::document::Document;
 use crate::geom::Rect;
 use crate::raster::{TILE_SIZE, parallel_for_each};
 
+/// The Dodge and Burn tools: the colors taken (the layer as it was) lightened or darkened in a
+/// range of tones, by `exposure` in `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tone {
+    pub burn: bool,
+    pub range: ToneRange,
+    pub exposure: f32,
+}
+
+/// Which tones the Dodge and Burn tools change most (Photoshop's Range).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToneRange {
+    Shadows,
+    Midtones,
+    Highlights,
+}
+
+impl Tone {
+    /// `exposure` in `[0, 1]`.
+    pub fn is_valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.exposure)
+    }
+
+    /// `color` (linear working-space RGB) lightened or darkened: per channel, on its encoded
+    /// value (GIMP's dodge and burn curves): shadows lift or sink the dark end, midtones bend
+    /// the middle (a power), highlights scale the bright end.
+    pub fn apply(&self, color: [f32; 3]) -> [f32; 3] {
+        let e = self.exposure;
+        color.map(|c| {
+            let v = crate::color::srgb_encode(c.clamp(0.0, 1.0));
+            let third = e / 3.0;
+            let out = match (self.burn, self.range) {
+                (false, ToneRange::Highlights) => v * (1.0 + third),
+                (false, ToneRange::Midtones) => v.powf(1.0 / (1.0 + e)),
+                (false, ToneRange::Shadows) => third + v - third * v,
+                (true, ToneRange::Highlights) => v * (1.0 - third),
+                (true, ToneRange::Midtones) => v.powf(1.0 + e),
+                (true, ToneRange::Shadows) => {
+                    if third >= 1.0 {
+                        0.0
+                    } else {
+                        (v - third) / (1.0 - third)
+                    }
+                }
+            };
+            crate::color::srgb_decode(out.clamp(0.0, 1.0))
+        })
+    }
+}
+
 /// A document's composited pixels, read by document pixel.
 pub struct CloneSource {
     document: Document,
@@ -262,6 +312,7 @@ mod tests {
             Paint::Clone {
                 offset: [-150.0, 0.0],
                 gray: false,
+                tone: None,
             },
         )
         .unwrap()
@@ -299,6 +350,7 @@ mod tests {
             Paint::Clone {
                 offset: [80.0, 0.0],
                 gray: false,
+                tone: None,
             },
         )
         .unwrap()
@@ -375,6 +427,7 @@ mod tests {
             Paint::Clone {
                 offset: [-150.0, 0.0],
                 gray: false,
+                tone: None,
             },
         )
         .unwrap()
@@ -395,5 +448,52 @@ mod tests {
         let px = &tile[at..at + bpp];
         // The light gray around it, not the source's dark nor the speck's red.
         assert!(px[..3].iter().all(|&v| v.abs_diff(200) <= 6), "{px:?}");
+    }
+
+    #[test]
+    fn dodge_lightens_and_burn_darkens_their_range_most() {
+        let gray = |v: f32| [crate::color::srgb_decode(v); 3];
+        let encoded = |c: [f32; 3]| crate::color::srgb_encode(c[0]);
+        for range in [
+            ToneRange::Shadows,
+            ToneRange::Midtones,
+            ToneRange::Highlights,
+        ] {
+            let dodge = Tone {
+                burn: false,
+                range,
+                exposure: 0.5,
+            };
+            let burn = Tone {
+                burn: true,
+                ..dodge
+            };
+            for v in [0.2, 0.5, 0.8] {
+                assert!(encoded(dodge.apply(gray(v))) > v, "{range:?} {v}");
+                assert!(encoded(burn.apply(gray(v))) < v, "{range:?} {v}");
+            }
+            // No exposure: no change.
+            let none = Tone {
+                exposure: 0.0,
+                ..dodge
+            };
+            assert!((encoded(none.apply(gray(0.5))) - 0.5).abs() < 1e-5);
+        }
+        // Midtones change the middle more than the ends; white stays white.
+        let mid = Tone {
+            burn: false,
+            range: ToneRange::Midtones,
+            exposure: 0.5,
+        };
+        let lift = |v: f32| encoded(mid.apply(gray(v))) - v;
+        assert!(lift(0.5) > lift(0.95));
+        assert!((encoded(mid.apply(gray(1.0))) - 1.0).abs() < 1e-5);
+        assert!(
+            !Tone {
+                exposure: 1.5,
+                ..mid
+            }
+            .is_valid()
+        );
     }
 }

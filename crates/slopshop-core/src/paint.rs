@@ -122,7 +122,12 @@ pub enum Paint {
     /// The colors of the stroke's [`CloneSource`] ([`Stroke::cloning`]), each pixel the one
     /// `offset` (document pixels) away from its place, at the source's alpha there; with
     /// `gray`, on a coverage, their gray: the Clone Stamp.
-    Clone { offset: [f64; 2], gray: bool },
+    /// With `tone`, the colors taken are lightened or darkened (the Dodge and Burn tools).
+    Clone {
+        offset: [f64; 2],
+        gray: bool,
+        tone: Option<crate::clone::Tone>,
+    },
 }
 
 /// The gray a color paints in a mask or in Quick Mask, in `[0, 1]`: the sRGB encoding of its
@@ -300,8 +305,8 @@ impl Stroke {
                 return Err(PaintError::NotACoverage);
             }
         }
-        if let Paint::Clone { offset, gray } = paint {
-            if !offset.iter().all(|v| v.is_finite()) {
+        if let Paint::Clone { offset, gray, tone } = paint {
+            if !offset.iter().all(|v| v.is_finite()) || tone.is_some_and(|t| !t.is_valid()) {
                 return Err(PaintError::InvalidColor);
             }
             if gray && base.format().layout != ChannelLayout::Gray {
@@ -370,7 +375,7 @@ impl Stroke {
     /// as it was when the stroke started), so that healing on an empty layer above works with
     /// Sample All Layers. Nothing to do for another paint.
     pub fn heal(&mut self) -> Result<(), PaintError> {
-        let (Some(source), Paint::Clone { offset, gray }) = (self.source.clone(), self.paint)
+        let (Some(source), Paint::Clone { offset, gray, .. }) = (self.source.clone(), self.paint)
         else {
             return Ok(());
         };
@@ -449,11 +454,13 @@ impl Stroke {
         self.paint = Paint::Clone {
             offset: [0.0, 0.0],
             gray,
+            tone: None,
         };
         if let Some(OnStack::Top(_, op)) = &mut self.top {
             *op = PaintOp::Clone {
                 offset: [0.0, 0.0],
                 to_document: self.to_document,
+                tone: None,
             };
         }
         let whole = [0, 0, TILE_SIZE as usize, TILE_SIZE as usize];
@@ -535,9 +542,11 @@ impl Stroke {
             Paint::Clone {
                 offset,
                 gray: false,
+                tone,
             } => PaintOp::Clone {
                 offset,
                 to_document,
+                tone,
             },
             Paint::Clone { gray: true, .. } => return Err(PaintError::NotACoverage),
             Paint::Erase => PaintOp::Erase,
@@ -940,7 +949,7 @@ impl Stroke {
                 };
                 (paint, amount)
             }
-            Paint::Clone { offset, gray } => {
+            Paint::Clone { offset, gray, tone } => {
                 let Some(source) = &self.source else {
                     return;
                 };
@@ -954,7 +963,11 @@ impl Stroke {
                 if amount <= 0.0 {
                     return;
                 }
-                let [r, g, b] = [r / a, g / a, b / a];
+                let mut rgb = [r / a, g / a, b / a];
+                if let Some(tone) = tone {
+                    rgb = tone.apply(rgb);
+                }
+                let [r, g, b] = rgb;
                 let paint = if gray {
                     let luma = luma_of_working();
                     let y =
