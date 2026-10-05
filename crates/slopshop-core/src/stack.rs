@@ -2186,6 +2186,10 @@ struct LazyPixels {
     /// Pixels known at once going back below a filter, a state never shown: the next state
     /// stands in with what was shown before them (`meanwhile`), not with them.
     passes_on: bool,
+    /// For those: the filter (`Filter::id`) what they pass on shows. A next state showing
+    /// another filter stands in with these pixels instead (a filter cancelled, then another
+    /// opened, must not flash the cancelled one).
+    passed_filter: Option<&'static str>,
     /// The stack being evaluated, for its quick look: read without waiting for an evaluation
     /// in progress (which holds `pending`).
     stack: Option<LayerStack>,
@@ -2433,6 +2437,7 @@ impl Pixels {
             preview: OnceLock::new(),
             inherited: None,
             passes_on: false,
+            passed_filter: None,
             stack: None,
             region: Mutex::default(),
             inherited_look: None,
@@ -2449,7 +2454,7 @@ impl Pixels {
         let meanwhile = earlier
             .as_ref()
             .filter(|(_, before)| stack.has_shown_filter() || before.has_shown_filter())
-            .and_then(|(pixels, _)| pixels.stand_in().cloned());
+            .and_then(|(pixels, _)| pixels.stand_in_for(&stack).cloned());
         // An earlier quick look stands while the filter and the entries above it are the same
         // (a setting changed); a state without a filter (a preview replaced, going back before
         // applying again) passes it on. Another filter (one cancelled, then another opened) starts
@@ -2487,6 +2492,9 @@ impl Pixels {
                 preview: OnceLock::new(),
                 inherited,
                 passes_on: true,
+                passed_filter: earlier
+                    .as_ref()
+                    .and_then(|(_, before)| before.filter_shown(before.last_filter()?)),
                 stack: None,
                 region: Mutex::default(),
                 inherited_look: inherited_look.clone(),
@@ -2506,6 +2514,7 @@ impl Pixels {
             preview: OnceLock::new(),
             inherited,
             passes_on: false,
+            passed_filter: None,
             region: Mutex::default(),
             inherited_look,
         }))
@@ -2764,6 +2773,18 @@ impl Pixels {
     }
 
     /// What the next state shows while its own pixels are evaluated (see `passes_on`).
+    /// What stands in for these pixels in the next state, `next`: what they pass on, unless it
+    /// shows another filter than `next` does (then these pixels themselves).
+    fn stand_in_for(&self, next: &LayerStack) -> Option<&Arc<RasterImage>> {
+        let shown = next.last_filter().and_then(|i| next.filter_shown(i));
+        match (self.0.passed_filter, shown) {
+            (Some(passed), Some(shown)) if passed != shown => {
+                self.ready_image().or(self.meanwhile())
+            }
+            _ => self.stand_in(),
+        }
+    }
+
     fn stand_in(&self) -> Option<&Arc<RasterImage>> {
         if self.0.passes_on {
             self.meanwhile().or(self.ready_image())
@@ -5825,6 +5846,19 @@ mod tests {
         let again = plain.with_filter(blur(6.0, None), None).unwrap();
         let second = Pixels::pending(again, Some((back.clone(), plain.clone())));
         assert!(Arc::ptr_eq(second.shown().unwrap(), &first_image));
+        // Cancelled, then another filter (the maintainer's report: the cancelled one flashed;
+        // it did once the blur had been evaluated): the layer as it is below, not the blur.
+        let high = plain
+            .with_filter(
+                FilterStep {
+                    filter: Filter::HighPass { radius: 4.0 },
+                    ..blur(1.0, None)
+                },
+                None,
+            )
+            .unwrap();
+        let other = Pixels::pending(high, Some((back.clone(), plain.clone())));
+        assert!(Arc::ptr_eq(other.shown().unwrap(), &original));
         // No filter on either side: nothing kept.
         let painted = plain.with_effect(effect(Adjustment::Invert, None)).unwrap();
         assert!(
