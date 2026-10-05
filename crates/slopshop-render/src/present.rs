@@ -99,6 +99,52 @@ impl Renderer {
         if presenter.stale || presenter.configured != Some(surface_size) {
             self.configure(presenter, surface_size)?;
         }
+        let visible = clip(rect, surface_size);
+        // Composited and submitted first, then a back buffer waited for: the display's refresh
+        // and the work overlap rather than add up.
+        let mut presented = Presented::Frame;
+        let composited = match visible {
+            Some(visible) => {
+                let output = padded_output(visible);
+                let byte_len = self.output_byte_len(output)?;
+                let pixels = self.output_buffer(byte_len);
+                let options = FrameOptions {
+                    progressive: true,
+                    ..FrameOptions::default()
+                };
+                let stats = self.composite(
+                    document,
+                    view,
+                    overlays,
+                    output,
+                    options,
+                    &pixels,
+                    |_, _| {},
+                )?;
+                if stats.incomplete {
+                    presented = Presented::Partial;
+                }
+                Some((visible, output, pixels))
+            }
+            None => None,
+        };
+        let result = self.present_composited(presenter, composited.as_ref(), surface_size, clear);
+        if let Some((_, _, pixels)) = composited {
+            self.keep_output_buffer(pixels);
+        }
+        result.map(|shown| if shown { presented } else { Presented::Skipped })
+    }
+
+    /// Copy what was composited (in `visible`, from the pixels of an `output`-sized frame) to the
+    /// surface's next back buffer, clear the rest to `clear`, and present it. `false` when no
+    /// back buffer came (the window hidden, resized meanwhile).
+    fn present_composited(
+        &self,
+        presenter: &mut Presenter,
+        composited: Option<&(Rect, Size, wgpu::Buffer)>,
+        surface_size: Size,
+        clear: [f64; 4],
+    ) -> Result<bool, RenderError> {
         let frame = match presenter.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -107,10 +153,10 @@ impl Renderer {
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 presenter.stale = true;
-                return Ok(Presented::Skipped);
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(Presented::Skipped);
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 return Err(RenderError::Surface("surface lost".into()));
@@ -124,16 +170,15 @@ impl Renderer {
         let target = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let visible = clip(rect, surface_size);
-        let covers_surface =
-            visible == Some(Rect::new(0, 0, surface_size.width, surface_size.height));
-        let clear_color = wgpu::Color {
-            r: clear[0],
-            g: clear[1],
-            b: clear[2],
-            a: clear[3],
-        };
-        let clear_pass = |encoder: &mut wgpu::CommandEncoder| {
+        let covers_surface = composited.is_some_and(|(visible, _, _)| {
+            *visible == Rect::new(0, 0, surface_size.width, surface_size.height)
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("present"),
+            });
+        if !covers_surface {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("present clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -141,7 +186,12 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear_color),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: clear[0],
+                            g: clear[1],
+                            b: clear[2],
+                            a: clear[3],
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -150,70 +200,38 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-        };
-
-        let mut presented = Presented::Frame;
-        match visible {
-            Some(visible) => {
-                let output = padded_output(visible);
-                let options = FrameOptions {
-                    progressive: true,
-                    ..FrameOptions::default()
-                };
-                let stats = self.composite(
-                    document,
-                    view,
-                    overlays,
-                    output,
-                    options,
-                    |encoder, pixels| {
-                        if !covers_surface {
-                            clear_pass(encoder);
-                        }
-                        // Only the visible columns are copied; padding columns are dropped.
-                        encoder.copy_buffer_to_texture(
-                            wgpu::TexelCopyBufferInfo {
-                                buffer: pixels,
-                                layout: wgpu::TexelCopyBufferLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(output.width * 4),
-                                    rows_per_image: Some(output.height),
-                                },
-                            },
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &frame.texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d {
-                                    x: visible.x,
-                                    y: visible.y,
-                                    z: 0,
-                                },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::Extent3d {
-                                width: visible.width,
-                                height: visible.height,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    },
-                )?;
-                if stats.incomplete {
-                    presented = Presented::Partial;
-                }
-            }
-            None => {
-                let mut encoder =
-                    self.device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("present clear"),
-                        });
-                clear_pass(&mut encoder);
-                self.queue.submit([encoder.finish()]);
-            }
         }
+        if let Some((visible, output, pixels)) = composited {
+            // Only the visible columns are copied; padding columns are dropped.
+            encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer: pixels,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(output.width * 4),
+                        rows_per_image: Some(output.height),
+                    },
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &frame.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: visible.x,
+                        y: visible.y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: visible.width,
+                    height: visible.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
-        Ok(presented)
+        Ok(true)
     }
 
     /// Configure the surface for `size`. A size the device cannot handle (e.g. beyond its

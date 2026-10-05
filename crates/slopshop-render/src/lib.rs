@@ -203,6 +203,9 @@ pub struct Renderer {
     timestamp_period: Option<f32>,
     /// Filters on the GPU (ADR 0035): the looks at filtered layers the display asks for.
     gpu_filter: Arc<filter::GpuFilter>,
+    /// Frames' output buffers, kept for the next frames of the same size (see
+    /// [`Self::output_buffer`]).
+    outputs: Mutex<Vec<wgpu::Buffer>>,
 }
 
 /// What a viewport frame shows over the image: view state, never part of the document or of
@@ -558,6 +561,7 @@ impl Renderer {
             max_output_bytes,
             max_dispatch_pixels,
             caches: Mutex::new(GpuCaches::default()),
+            outputs: Mutex::new(Vec::new()),
             tile_capacity,
             placeholder_tiles,
             ewa_table,
@@ -694,16 +698,19 @@ impl Renderer {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
+            let pixels = self.output_buffer(byte_len);
             let stats = self.composite(
                 document,
                 view,
                 overlays,
                 output,
                 options,
+                &pixels,
                 |encoder, pixels| {
                     encoder.copy_buffer_to_buffer(pixels, 0, &readback, 0, byte_len);
                 },
             )?;
+            self.keep_output_buffer(pixels);
             self.read_buffer_into(&readback, out)?;
             Ok(stats)
         })
@@ -721,7 +728,7 @@ impl Renderer {
         output: Size,
         progressive: bool,
     ) -> Result<FrameStats, RenderError> {
-        self.output_byte_len(output)?;
+        let byte_len = self.output_byte_len(output)?;
         self.capture_errors(|| {
             let queries = self.timestamp_period.map(|_| {
                 self.device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -751,12 +758,14 @@ impl Renderer {
                 progressive,
                 transparent: false,
             };
+            let pixels = self.output_buffer(byte_len);
             let mut stats = self.composite(
                 document,
                 view,
                 ViewOverlays::default(),
                 output,
                 options,
+                &pixels,
                 |encoder, _| {
                     if let Some(queries) = &queries {
                         encoder.resolve_query_set(queries, 0..2, &resolved, 0);
@@ -764,6 +773,7 @@ impl Renderer {
                     }
                 },
             )?;
+            self.keep_output_buffer(pixels);
             // Waits for the frame, timed or not.
             let mut bytes = Vec::new();
             self.read_buffer_into(&readback, &mut bytes)?;
@@ -781,6 +791,39 @@ impl Renderer {
             }
             Ok(stats)
         })
+    }
+
+    /// A buffer for a frame's pixels (`byte_len` bytes): one a frame of the same size left, else
+    /// a new one. Give it back with [`Self::keep_output_buffer`] once the frame is submitted (the
+    /// queue runs a later frame's writes after the earlier frame's reads).
+    fn output_buffer(&self, byte_len: u64) -> wgpu::Buffer {
+        let mut outputs = self
+            .outputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match outputs.iter().position(|b| b.size() == byte_len) {
+            Some(at) => outputs.swap_remove(at),
+            None => self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("composite output"),
+                size: byte_len,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+        }
+    }
+
+    /// Keep a frame's output buffer for the next frames, the few most recent sizes only (a
+    /// viewport, a navigator, the frames over IPC).
+    fn keep_output_buffer(&self, buffer: wgpu::Buffer) {
+        const KEPT: usize = 4;
+        let mut outputs = self
+            .outputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if outputs.len() >= KEPT {
+            outputs.remove(0);
+        }
+        outputs.push(buffer);
     }
 
     /// Run `f`, capturing the GPU errors it causes on this thread (out of memory, validation,
@@ -818,6 +861,7 @@ impl Renderer {
     /// (rows of `output.width` pixels), let `finish` record what to do with it (read back, copy
     /// to a surface…), and submit. Does not wait for the GPU. With `options.timestamps` (2
     /// queries), the passes write their start and end there.
+    #[allow(clippy::too_many_arguments)]
     fn composite(
         &self,
         document: &Document,
@@ -825,6 +869,7 @@ impl Renderer {
         overlays: ViewOverlays,
         output: Size,
         options: cache::FrameOptions<'_>,
+        output_buffer: &wgpu::Buffer,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
     ) -> Result<FrameStats, RenderError> {
         // Rejected before the caches are locked (and reset on error).
@@ -847,6 +892,7 @@ impl Renderer {
                 overlays,
                 output,
                 options,
+                output_buffer,
                 &mut cache_guard,
                 finish,
             )
@@ -868,18 +914,11 @@ impl Renderer {
         overlays: ViewOverlays,
         output: Size,
         options: cache::FrameOptions<'_>,
+        output_buffer: &wgpu::Buffer,
         caches: &mut GpuCaches,
         finish: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer),
     ) -> Result<FrameStats, RenderError> {
         let timestamps = options.timestamps;
-        let byte_len = self.output_byte_len(output)?;
-        // Allocated per frame for now; pooling can come once profiling says it matters.
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("composite output"),
-            size: byte_len,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
         let start = Instant::now();
         // Stacks not evaluated yet are shown by the shader, close to their pixels (exact but for
         // rounding at 100 %, evaluated on coarser levels when zoomed out): their pixels are
@@ -904,7 +943,7 @@ impl Renderer {
                 &looks,
                 view,
                 output,
-                &output_buffer,
+                output_buffer,
                 options,
                 caches,
             );
@@ -917,7 +956,7 @@ impl Renderer {
                     document,
                     view,
                     output,
-                    pixels: &output_buffer,
+                    pixels: output_buffer,
                 };
                 self.finish_frame(encoder, &frame, overlays, &mut caches.tiles, finish);
                 return Ok(stats);
@@ -989,7 +1028,7 @@ impl Renderer {
             document,
             view,
             output,
-            pixels: &output_buffer,
+            pixels: output_buffer,
         };
         self.finish_frame(encoder, &frame, overlays, &mut caches.tiles, finish);
         Ok(stats)
@@ -1732,26 +1771,58 @@ fn adjustment_fields(
         matrix: [vec4(12), vec4(16), [0.0; 4]],
         ..LayerFields::default()
     };
-    // Curves' lookup tables (composite, red, green, blue), after the tile slots.
-    if let Some(curves) = adjustment.curves() {
+    // Its table, after the tile slots.
+    let table = adjustment_table(adjustment);
+    if !table.is_empty() {
         fields.table_offset = tile_table.len() as u32;
-        for curve in &curves {
-            tile_table.extend(curve.lut().iter().map(|v| v.to_bits()));
-        }
-    }
-    // Selective Color's parameters (more than the layer fields hold), the same way.
-    if let Adjustment::SelectiveColor { .. } = adjustment {
-        fields.table_offset = tile_table.len() as u32;
-        tile_table.extend(adjustment.params().iter().map(|v| v.to_bits()));
-    }
-    // Gradient Map's (red, green, blue), the same way.
-    if let Some(gradient) = adjustment.gradient() {
-        fields.table_offset = tile_table.len() as u32;
-        for lut in gradient.luts() {
-            tile_table.extend(lut.iter().map(|v| v.to_bits()));
-        }
+        tile_table.extend_from_slice(&table);
     }
     fields
+}
+
+/// What an adjustment reads from the tile table: Curves' lookup tables (composite, red, green,
+/// blue), Selective Color's parameters (more than the layer fields hold), Gradient Map's lookup
+/// tables (red, green, blue); nothing for the others. Made once per adjustment and kept while it
+/// is used: a frame encodes the adjustment for each tile it composites, and a slider dragged
+/// gives a new one at each frame.
+fn adjustment_table(adjustment: &Adjustment) -> Arc<[u32]> {
+    type Made = Vec<(Adjustment, Arc<[u32]>)>;
+    /// The tables made last, the most recent first.
+    static MADE: std::sync::Mutex<Made> = std::sync::Mutex::new(Vec::new());
+    const KEPT: usize = 16;
+    let tabled = adjustment.curves().is_some()
+        || adjustment.gradient().is_some()
+        || matches!(adjustment, Adjustment::SelectiveColor { .. });
+    if !tabled {
+        return Arc::from([]);
+    }
+    let mut made = MADE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(at) = made.iter().position(|(a, _)| a == adjustment) {
+        let entry = made.remove(at);
+        let table = Arc::clone(&entry.1);
+        made.insert(0, entry);
+        return table;
+    }
+    let mut table = Vec::new();
+    if let Some(curves) = adjustment.curves() {
+        for curve in &curves {
+            table.extend(curve.lut().iter().map(|v| v.to_bits()));
+        }
+    }
+    if let Adjustment::SelectiveColor { .. } = adjustment {
+        table.extend(adjustment.params().iter().map(|v| v.to_bits()));
+    }
+    if let Some(gradient) = adjustment.gradient() {
+        for lut in gradient.luts() {
+            table.extend(lut.iter().map(|v| v.to_bits()));
+        }
+    }
+    let table: Arc<[u32]> = table.into();
+    made.truncate(KEPT - 1);
+    made.insert(0, (*adjustment, Arc::clone(&table)));
+    table
 }
 
 /// Describe an enabled mask's plan in `fields`, its tile slots appended to `tile_table`.
@@ -2329,6 +2400,59 @@ mod tests {
                 None
             }
         }
+    }
+
+    #[test]
+    fn an_adjustment_s_table_is_made_once_and_holds_what_the_shader_reads() {
+        use slopshop_core::curve::Curve;
+        let curve = Curve::new(&[[0, 0], [90, 140], [255, 255]]).unwrap();
+        let curves = Adjustment::Curves {
+            rgb: curve,
+            red: Curve::IDENTITY,
+            green: Curve::IDENTITY,
+            blue: curve,
+        };
+        let table = adjustment_table(&curves);
+        let lut = curve.lut();
+        assert_eq!(table.len(), 4 * lut.len());
+        let bits: Vec<u32> = lut.iter().map(|v| v.to_bits()).collect();
+        assert_eq!(&table[..lut.len()], &bits[..]);
+        assert_eq!(&table[3 * lut.len()..], &bits[..]);
+        // The same adjustment again (the next tile, the next frame): the same table.
+        assert!(Arc::ptr_eq(&table, &adjustment_table(&curves)));
+        // Another one: its own.
+        let other = Adjustment::Curves {
+            rgb: Curve::IDENTITY,
+            red: curve,
+            green: Curve::IDENTITY,
+            blue: Curve::IDENTITY,
+        };
+        let theirs = adjustment_table(&other);
+        assert_eq!(&theirs[lut.len()..2 * lut.len()], &bits[..]);
+        // Adjustments without a table have none.
+        assert!(adjustment_table(&Adjustment::Invert).is_empty());
+    }
+
+    #[test]
+    fn frames_of_a_size_reuse_their_output_buffer() {
+        let Some(r) = renderer() else { return };
+        let first = r.output_buffer(4096);
+        let id = first.clone();
+        r.keep_output_buffer(first);
+        // Another size: a buffer of its own.
+        let other = r.output_buffer(8192);
+        assert_eq!(other.size(), 8192);
+        let again = r.output_buffer(4096);
+        assert!(again == id);
+        r.keep_output_buffer(other);
+        r.keep_output_buffer(again);
+        // A few sizes are kept, the oldest dropped.
+        for size in [1024, 2048, 3072, 5120] {
+            let buffer = r.output_buffer(size);
+            r.keep_output_buffer(buffer);
+        }
+        assert_eq!(r.outputs.lock().unwrap().len(), 4);
+        assert!(r.output_buffer(4096) != id);
     }
 
     fn view(r: &Renderer, document: &Document) -> Result<Frame, RenderError> {
