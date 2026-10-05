@@ -1395,6 +1395,9 @@ export const engine = {
   /** The layer showing a pixel at document pixel (x, y): the Move tool's Auto-Select. */
   layerAt: (documentId: number, x: number, y: number) =>
     invoke<number | null>("layer_at", { documentId, x, y }),
+  /** Every layer showing at document pixel (x, y), top to bottom: the Move tool's right-click. */
+  layersAt: (documentId: number, x: number, y: number) =>
+    invoke<number[]>("layers_at", { documentId, x, y }),
   /**
    * The selection's bounds when document point (x, y) is inside it (as its outline shows),
    * else null: a Move tool drag from there moves the selected pixels.

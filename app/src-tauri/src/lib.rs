@@ -1481,6 +1481,30 @@ async fn layer_at(
     .map_err(|e| e.to_string())
 }
 
+/// Every layer showing at document pixel (`x`, `y`), top to bottom: the Move tool's right-click.
+#[tauri::command]
+async fn layers_at(
+    state: State<'_, AppState>,
+    document_id: u64,
+    x: i64,
+    y: i64,
+) -> Result<Vec<u64>, String> {
+    let document = state
+        .documents()?
+        .get_mut(document_id)?
+        .session
+        .document()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        slopshop_core::pick::layers_at(&document, x, y)
+            .into_iter()
+            .map(LayerId::get)
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// A rectangle in document pixels (right and bottom exclusive).
 #[derive(Debug, Clone, Copy, Serialize)]
 struct BoundsDto {
@@ -2260,6 +2284,7 @@ pub fn run() {
             selection::color_range,
             selection::selection_outline,
             layer_at,
+            layers_at,
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,

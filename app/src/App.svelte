@@ -3532,24 +3532,56 @@
   }
 
   /** The image's right-click menu, where it opened and the document point under it. */
-  let canvasMenu = $state<{ x: number; y: number; at: [number, number] | null } | null>(null);
+  /**
+   * The image's right-click menu, where it opened (`at`: the document point under it); with the
+   * Move tool, `layers`: the layers showing there, top to bottom, once the engine answered.
+   */
+  let canvasMenu = $state<{
+    x: number;
+    y: number;
+    at: [number, number] | null;
+    layers: number[];
+  } | null>(null);
 
   function openCanvasMenu(e: MouseEvent) {
     // Free Transform's box has its own menu.
     if (e.defaultPrevented || !active || transforming) return;
     e.preventDefault();
-    canvasMenu = {
-      x: e.clientX,
-      y: e.clientY,
-      at: viewport?.documentPointAt(e.clientX, e.clientY) ?? null,
-    };
+    const doc = active;
+    const at = viewport?.documentPointAt(e.clientX, e.clientY) ?? null;
+    const menu = { x: e.clientX, y: e.clientY, at, layers: [] as number[] };
+    canvasMenu = menu;
     void refreshClipboard();
+    // As in Photoshop, the Move tool lists the layers under the pointer to choose one among
+    // layers on top of each other (or a fill or adjustment layer, which a click does not take).
+    if (tool === "move" && at) {
+      void engine
+        .layersAt(doc.id, Math.floor(at[0]), Math.floor(at[1]))
+        .then((layers) => {
+          if (canvasMenu?.x === menu.x && canvasMenu.y === menu.y)
+            canvasMenu = { ...canvasMenu, layers };
+        })
+        .catch(() => {});
+    }
   }
 
   /** The image's right-click menu: the most used commands, with their shortcuts. */
   let canvasMenuItems = $derived.by((): MenuItem[] => {
     const at = canvasMenu?.at ?? null;
     const separator = { kind: "separator" as const };
+    const doc = active;
+    const layers: MenuItem[] = (canvasMenu?.layers ?? []).flatMap((id): MenuItem[] => {
+      const found = doc ? findLayer(doc.layers, id) : null;
+      if (!found) return [];
+      return [
+        {
+          kind: "command",
+          label: found.name,
+          checked: id === activeLayer?.id,
+          run: () => layersPanel?.selectOnly(id),
+        },
+      ];
+    });
     const here: MenuItem = {
       kind: "command",
       label: t("menu.edit.pasteHere"),
@@ -3557,6 +3589,7 @@
       disabled: at === null || pasteUnfit(clipboard, "paste"),
     };
     return [
+      ...(layers.length > 0 ? [...layers, separator] : []),
       item("cut"),
       item("copy"),
       item("copyMerged"),
