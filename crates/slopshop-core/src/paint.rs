@@ -1517,4 +1517,80 @@ mod tests {
         let per_frame = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
         println!("{frames} frames of a 400 px soft brush: {per_frame:.2} ms per frame");
     }
+
+    /// Timing of soft strokes on a large opaque layer through its stack, the app's path (run
+    /// with `--ignored --nocapture`): one dab a frame, 400 and 2000 px wide; over an effect
+    /// within a soft selection; on a 16-bit layer.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_soft_stroke_on_a_stack() {
+        let size = Size::new(10_000, 10_000);
+        let time = |label: &str, stack: &LayerStack, diameter: f64| {
+            let shown = stack.evaluate().unwrap();
+            let brush = Brush {
+                diameter: diameter as f32,
+                hardness: 0.0,
+                ..Brush::default()
+            };
+            let mut s = Stroke::on_stack(
+                stack,
+                shown,
+                Affine::IDENTITY,
+                None,
+                BlendSpace::Perceptual,
+                brush,
+                red(),
+            )
+            .unwrap();
+            let frames = 40;
+            // Before timing: what is below the paint, evaluated once a stroke.
+            s.add(&[sample(2000.0, 5000.0)]);
+            s.image().unwrap();
+            let started = std::time::Instant::now();
+            for i in 1..=frames {
+                // A spacing a frame (a quarter of the diameter): one dab each.
+                let x = 2000.0 + diameter / 4.0 * f64::from(i);
+                s.add(&[sample(x, 5000.0)]);
+                s.image().unwrap();
+            }
+            let per_frame = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+            println!("{label}, {diameter} px soft brush: {per_frame:.2} ms per frame");
+        };
+        let opaque = LayerStack::new(filled(size, rgba8(), &[40, 160, 220, 255]));
+        time("8-bit opaque layer", &opaque, 400.0);
+        time("8-bit opaque layer", &opaque, 2000.0);
+        // A feathered disc: its edge tiles are not uniform.
+        let (cx, cy, radius, feather) = (5000.0, 5000.0, 3000.0, 200.0);
+        let mut coverage = Vec::with_capacity(size.pixel_count() as usize * 2);
+        for y in 0..size.height {
+            for x in 0..size.width {
+                let d = (f64::from(x) - cx).hypot(f64::from(y) - cy);
+                let v = ((radius - d) / feather + 0.5).clamp(0.0, 1.0);
+                coverage.extend(((v * 65535.0).round() as u16).to_ne_bytes());
+            }
+        }
+        let selection = crate::selection::Selection::new(Arc::new(
+            RasterImage::from_pixels(size, crate::selection::SELECTION_FORMAT, &coverage).unwrap(),
+        ))
+        .unwrap();
+        let effect = opaque
+            .with_effect(crate::stack::Effect {
+                adjustment: crate::adjust::Adjustment::Invert,
+                selection: Some(selection),
+                to_document: Affine::IDENTITY,
+                space: BlendSpace::Perceptual,
+            })
+            .unwrap();
+        time("over an effect within a selection", &effect, 400.0);
+        let deep = PixelFormat {
+            sample: SampleType::U16,
+            ..rgba8()
+        };
+        let pixel: Vec<u8> = [10_000u16, 40_000, 55_000, 65_535]
+            .iter()
+            .flat_map(|v| v.to_ne_bytes())
+            .collect();
+        let sixteen = LayerStack::new(filled(size, deep, &pixel));
+        time("16-bit opaque layer", &sixteen, 400.0);
+    }
 }
