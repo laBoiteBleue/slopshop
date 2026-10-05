@@ -65,6 +65,9 @@ pub struct CloneRequest {
     pub offset: [f64; 2],
     #[serde(default)]
     pub source_layer: Option<u64>,
+    /// The Healing Brush: on release, what was laid is blended into where it was laid.
+    #[serde(default)]
+    pub heal: bool,
 }
 
 /// What a stroke paints (ADR 0027).
@@ -495,6 +498,9 @@ pub(crate) fn paint(
             })
             .collect();
         active.stroke.add(&samples);
+        if request.end && request.clone.is_some_and(|c| c.heal) {
+            active.stroke.heal().map_err(|e| e.to_string())?;
+        }
         let has_paint = active.stroke.has_paint();
         let painted = painted_so_far(active.target, &mut active.stroke)?;
         let computed = started.elapsed();
@@ -506,6 +512,8 @@ pub(crate) fn paint(
             if has_paint {
                 let label = HistoryLabel::new(if request.restore {
                     "restoreEraser"
+                } else if request.clone.is_some_and(|c| c.heal) {
+                    "healingBrush"
                 } else if request.clone.is_some() {
                     "cloneStamp"
                 } else if request.color.is_none() {

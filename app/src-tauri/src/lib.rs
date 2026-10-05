@@ -3384,6 +3384,7 @@ mod tests {
         clone.clone = Some(paint::CloneRequest {
             offset: [-100.0, 0.0],
             source_layer: None,
+            heal: false,
         });
         paint::paint(&state, doc.id, clone).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3399,6 +3400,25 @@ mod tests {
         );
         let (labels, done) = document.session.history();
         assert_eq!(labels[done - 1].kind, "cloneStamp");
+        drop(documents);
+        // The Healing Brush: the same stroke, blended where it lands (crate::heal tests the
+        // blend); here, from the white below the dot onto white.
+        let mut heal = dab(layer, paint::PaintTarget::Layer, None);
+        heal.stroke = 3;
+        heal.samples = vec![[150.5, 85.5, 1.0]];
+        heal.clone = Some(paint::CloneRequest {
+            offset: [-100.0, 0.0],
+            source_layer: None,
+            heal: true,
+        });
+        paint::paint(&state, doc.id, heal).unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let shown = document.session.document();
+        let [r, g, b] = paint::sample_color_at(shown, 150.5, 85.5, 1).unwrap();
+        assert!(r > 245 && g > 245 && b > 245, "{r} {g} {b}");
+        let (labels, done) = document.session.history();
+        assert_eq!(labels[done - 1].kind, "healingBrush");
     }
 
     #[test]
