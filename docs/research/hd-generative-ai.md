@@ -119,6 +119,63 @@ Independent of the final choice:
 6. **Decision gate**: before the first AI feature ships, an ADR records the chosen pipeline and
    the evidence.
 
+## Spike of 2026-10-05: FLUX.2 [klein] 4B through stable-diffusion.cpp (ADR 0039, step 0)
+
+Setup:
+- An RTX 5070 Ti (16 GB), Windows, stable-diffusion.cpp master-929 (release binaries).
+- A 1024² crop at 1:1 of a 21600 × 10800 Blue Marble map.
+- 4 steps, guidance 1.0, seed 42, the crop given as the reference image.
+- The result is kept within a dilated area and blended in the gradient domain (a harmonic
+  membrane, coarse to fine).
+
+Speed and memory, removing a small island group (the Comoros):
+
+| Runtime, weights | Text encoding | Sampling (4 steps) | Decode | Total | Peak VRAM |
+|---|---|---|---|---|---|
+| Vulkan, Q8 / Q8 | — | 6.5 s | — | 11.1 s | 10.8 GB |
+| Vulkan, Q4_0 / Q4_K_M | 8.1 s | 7.5 s | 1.9 s | 19.2 s | 7.4 GB |
+| CUDA, Q4_0 / Q4_K_M | 0.5 s | 6.0 s | 1.4 s | 9.3 s | 7.5 GB |
+| CUDA, Q8 / Q8 | 0.7 s | 6.3 s | 1.4 s | 9.8 s | 10.6 GB |
+
+- **fp8 brings nothing here.** ggml has no fp8 compute: fp8 weights would be widened on load.
+  Q8 is the same size as fp8, and Q4 looks the same at this scale.
+- **Sampling costs about 1.5 s per step at 1024²**, about the same under Vulkan and CUDA. The
+  reference image doubles the tokens. BFL's "under 0.5 s" is for text-to-image in fp8 or nvfp4
+  under PyTorch.
+- **Vulkan's text encoding was slow on its first run** (8 s), probably while its shaders were
+  compiled. To measure again warm.
+
+How to ask, small area (the Comoros):
+
+- **Instruction alone** ("remove the small group of islands…"): the islands were removed
+  cleanly; colors outside the area moved by 3–4 / 255 on average.
+- **The area circled in red on the reference**: FLUX.2 [klein] removed the circle and kept the
+  islands, and saturated the whole image (11 / 255). Mark guidance does not work for this
+  model.
+- **Masked latent blending** (sd.cpp's `--mask`, strength 1): the islands were removed, but a
+  stray glyph was drawn and the scene understood less well.
+
+**Compositing.** A feathered alpha left a visible darker ellipse, because the model also removed
+the islands' bright shallows. Gradient-domain blending made the seam invisible. Outside the
+area, the result is identical to the bit.
+
+Large area, Madagascar (about half the crop):
+
+- **Instruction alone**: two thirds of the island removed, its east coast kept.
+- **The area blanked to gray, then "fill the gray area"**: filled with near-black water.
+- **Masked latent blending**: a new island and reef invented.
+
+None is acceptable: a large area needs the bench's pipelines (step 2), as ADR 0039 point 5
+plans.
+
+**First conclusions:**
+
+- Remove, for small areas: the instruction alone, at 1:1, then gradient-domain blending (the
+  engine's Poisson solver of the Healing Brush, `heal.rs`).
+- Q4 weights: about 5 GB to download and 7.5 GB of VRAM.
+- CUDA is worth offering on NVIDIA, for its text encoding; the sampling costs the same as
+  under Vulkan.
+
 ## Related open questions
 
 - **Inference runtime** inside a Rust application: ONNX Runtime, candle, burn, or a local
