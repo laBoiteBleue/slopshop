@@ -2547,6 +2547,7 @@ mod tests {
             color: Some([1.0, 0.0, 0.0]),
             samples,
             end,
+            clone: None,
         };
         // While painted: shown in the view, not in the document.
         let live = paint::paint(&state, doc.id, batch(vec![[50.0, 50.0, 1.0]], false)).unwrap();
@@ -2617,6 +2618,7 @@ mod tests {
             color: Some([1.0, 0.0, 0.0]),
             samples,
             end,
+            clone: None,
         };
         let style = |doc: &slopshop_core::Document| doc.layers()[0].style.clone().unwrap();
         paint::paint(&state, doc.id, batch(vec![[50.0, 50.0, 1.0]], false)).unwrap();
@@ -2696,6 +2698,7 @@ mod tests {
             color: Some([1.0, 0.0, 0.0]),
             samples: vec![[100.0, 100.0, 1.0]],
             end: true,
+            clone: None,
         };
         let view = paint::paint(&state, doc.id, request).unwrap().unwrap();
         assert!(view.layers.last().unwrap().painted);
@@ -2757,6 +2760,7 @@ mod tests {
             color,
             samples: vec![[50.5, 50.5, 1.0]],
             end: true,
+            clone: None,
         }
     }
 
@@ -3348,6 +3352,53 @@ mod tests {
             paint::gradient_edit(shown, layer.get(), paint::PaintTarget::Layer, &flat, 1.0)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn the_clone_stamp_paints_what_it_takes_offset_away() {
+        let state = AppState::new();
+        let session =
+            super::blank_session(Size::new(200, 100), Some([1.0, 1.0, 1.0]), "Background").unwrap();
+        let doc = state.add_document(session, None, Vec::new()).unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            let document = documents.get_mut(doc.id).unwrap();
+            let edit: crate::ipc::EditRequest =
+                serde_json::from_str(r#"{"kind":"addEmptyLayer","name":"Layer 1","index":1}"#)
+                    .unwrap();
+            let edit = edit.into_edit(&mut document.session).unwrap();
+            document.session.perform(edit).unwrap();
+            document.session.document().layers()[1].id
+        };
+        // A red dot at (50, 50) on the white background.
+        paint::paint(
+            &state,
+            doc.id,
+            dab(layer, paint::PaintTarget::Layer, Some([1.0, 0.0, 0.0])),
+        )
+        .unwrap();
+        // Cloned 100 pixels to the right, from every layer as shown.
+        let mut clone = dab(layer, paint::PaintTarget::Layer, None);
+        clone.stroke = 2;
+        clone.samples = vec![[150.5, 50.5, 1.0]];
+        clone.clone = Some(paint::CloneRequest {
+            offset: [-100.0, 0.0],
+            source_layer: None,
+        });
+        paint::paint(&state, doc.id, clone).unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let shown = document.session.document();
+        assert_eq!(
+            paint::sample_color_at(shown, 150.5, 50.5, 1),
+            Some([255, 0, 0])
+        );
+        assert_eq!(
+            paint::sample_color_at(shown, 180.5, 50.5, 1),
+            Some([255; 3])
+        );
+        let (labels, done) = document.session.history();
+        assert_eq!(labels[done - 1].kind, "cloneStamp");
     }
 
     #[test]

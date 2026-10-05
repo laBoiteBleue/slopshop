@@ -52,6 +52,19 @@ pub struct PaintRequest {
     pub samples: Vec<[f64; 3]>,
     /// The last batch: the stroke is committed.
     pub end: bool,
+    /// The Clone Stamp: where its colors come from (see [`CloneRequest`]).
+    #[serde(default)]
+    pub clone: Option<CloneRequest>,
+}
+
+/// The Clone Stamp's source: the pixels `offset` (document pixels) away from where it paints,
+/// from every visible layer, or `source_layer` alone, as they are when the stroke starts.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneRequest {
+    pub offset: [f64; 2],
+    #[serde(default)]
+    pub source_layer: Option<u64>,
 }
 
 /// What a stroke paints (ADR 0027).
@@ -341,9 +354,24 @@ fn start(
     gradient: Option<GradientField>,
 ) -> Result<(Stroke, Option<Growth>), String> {
     // In gray, a color paints its luminance and the Eraser hides (ADR 0027).
-    let gray = match gradient {
-        Some(field) => Paint::Gradient { field, gray: true },
-        None => Paint::Gray(request.color.map_or(0.0, gray_of_srgb)),
+    let gray = match (gradient, request.clone) {
+        (Some(field), _) => Paint::Gradient { field, gray: true },
+        (None, Some(clone)) => Paint::Clone {
+            offset: clone.offset,
+            gray: true,
+        },
+        (None, None) => Paint::Gray(request.color.map_or(0.0, gray_of_srgb)),
+    };
+    // The Clone Stamp's source, as the document is now (its pixels shared).
+    let source = match request.clone {
+        Some(clone) => Some(Arc::new(slopshop_core::clone::CloneSource::new(
+            crate::selection::sampled_document(doc, clone.source_layer)?,
+        ))),
+        None => None,
+    };
+    let cloning = |stroke: Stroke| match &source {
+        Some(source) => stroke.cloning(Arc::clone(source)),
+        None => stroke,
     };
     let selection = doc.selection().map(|s| Arc::clone(s.image()));
     let (image, to_document, growth, paint, selection) = match request.target() {
@@ -353,6 +381,10 @@ fn start(
             let paint = match (request.color, gradient) {
                 _ if request.restore => Paint::Restore,
                 (_, Some(field)) => Paint::Gradient { field, gray: false },
+                _ if request.clone.is_some() => Paint::Clone {
+                    offset: request.clone.map_or([0.0; 2], |c| c.offset),
+                    gray: false,
+                },
                 (Some([r, g, b]), None) => {
                     Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0))
                 }
@@ -370,7 +402,7 @@ fn start(
                 paint,
             )
             .map_err(|e| e.to_string())?;
-            return Ok((stroke, Some(growth)));
+            return Ok((cloning(stroke), Some(growth)));
         }
         _ if request.restore => {
             return Err("the Restore Eraser brings back a layer's pixels".to_owned());
@@ -404,7 +436,7 @@ fn start(
         paint,
     )
     .map_err(|e| e.to_string())?;
-    Ok((stroke, growth))
+    Ok((cloning(stroke), growth))
 }
 
 /// Paint a batch of a stroke (see the module documentation). Returns the document once the
@@ -474,6 +506,8 @@ pub(crate) fn paint(
             if has_paint {
                 let label = HistoryLabel::new(if request.restore {
                     "restoreEraser"
+                } else if request.clone.is_some() {
+                    "cloneStamp"
                 } else if request.color.is_none() {
                     "eraser"
                 } else {
@@ -774,6 +808,7 @@ pub(crate) fn fill_request(
         color,
         samples: Vec::new(),
         end: true,
+        clone: None,
     }
 }
 
@@ -1033,6 +1068,7 @@ mod tests {
             color: Some([1.0, 0.0, 0.0]),
             samples: Vec::new(),
             end: true,
+            clone: None,
         }
     }
 
