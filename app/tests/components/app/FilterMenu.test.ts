@@ -17,6 +17,16 @@ async function blurDialog(layers: LayerView[] = [layer(1, "Photo")]) {
 
 const radius = () => screen.getByRole("spinbutton", { name: "Radius" });
 
+/**
+ * What OK applied: the edit replacing the dialog's gesture, or, when the canvas showed it
+ * already, its last live edit kept as the undo entry (the gesture ended).
+ */
+function applied() {
+  const replaced = sent("replace_gesture").at(-1)?.edit;
+  if (replaced) return replaced;
+  return sent("end_gesture").length > 0 ? sent("perform_live").at(-1)?.edit : undefined;
+}
+
 test("the Filter menu: Repeat and its settings grayed until a filter is applied, then Blur", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });
@@ -44,7 +54,7 @@ test("Blur > Motion Blur: an angle and a distance", async () => {
   await user.type(angle, "-30");
   await user.click(screen.getByRole("button", { name: "OK" }));
   await vi.waitFor(() =>
-    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+    expect(applied()).toEqual({
       kind: "applyFilter",
       id: 1,
       filter: "motionBlur",
@@ -65,12 +75,12 @@ test("Noise > Add Noise: Gaussian and monochromatic, a new seed each time it is 
   await user.click(within(dialog).getByRole("checkbox", { name: "Monochromatic" }));
   await user.click(screen.getByRole("button", { name: "OK" }));
   await vi.waitFor(() =>
-    expect(sent("replace_gesture").at(-1)?.edit).toMatchObject({
+    expect(applied()).toMatchObject({
       kind: "applyFilter",
       filter: "addNoise",
     }),
   );
-  const first = sent("replace_gesture").at(-1)?.edit as { values: number[] };
+  const first = applied() as { values: number[] };
   expect(first.values.slice(0, 3)).toEqual([12.5, 1, 1]);
   expect(Number.isInteger(first.values[3])).toBe(true);
   // Repeat: the same settings, another grain.
@@ -95,7 +105,7 @@ test("Noise > Dust & Scratches: a radius and a threshold", async () => {
   await user.type(threshold, "12");
   await user.click(screen.getByRole("button", { name: "OK" }));
   await vi.waitFor(() =>
-    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+    expect(applied()).toEqual({
       kind: "applyFilter",
       id: 1,
       filter: "dustAndScratches",
@@ -113,7 +123,7 @@ test("Sharpen > Unsharp Mask and Other > High Pass apply to the active layer", a
   await screen.findByRole("dialog", { name: "Unsharp Mask" });
   await user.click(screen.getByRole("button", { name: "OK" }));
   await vi.waitFor(() =>
-    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+    expect(applied()).toEqual({
       kind: "applyFilter",
       id: 1,
       filter: "unsharpMask",
@@ -126,7 +136,7 @@ test("Sharpen > Unsharp Mask and Other > High Pass apply to the active layer", a
   await screen.findByRole("dialog", { name: "High Pass" });
   await user.click(screen.getByRole("button", { name: "OK" }));
   await vi.waitFor(() =>
-    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+    expect(applied()).toEqual({
       kind: "applyFilter",
       id: 1,
       filter: "highPass",
@@ -148,11 +158,14 @@ test("Gaussian Blur shows live on the active layer, OK is one undo entry, Ctrl+F
   await user.type(radius(), "6");
   await vi.waitFor(() => expect(sent("perform_live").at(-1)?.edit).toMatchObject({ values: [6] }));
   await user.click(screen.getByRole("button", { name: "OK" }));
-  const applied = { kind: "applyFilter", id: 1, filter: "gaussianBlur", values: [6] };
-  expect(sent("replace_gesture").at(-1)?.edit).toEqual(applied);
+  const blur = { kind: "applyFilter", id: 1, filter: "gaussianBlur", values: [6] };
+  // The canvas shows it already: kept as it is (what was computed of it too), one undo entry.
+  await vi.waitFor(() => expect(sent("end_gesture")).toEqual([{ documentId: 1 }]));
+  expect(sent("replace_gesture")).toHaveLength(0);
+  expect(sent("perform_live").at(-1)?.edit).toEqual(blur);
   // Repeat: the same filter, a new entry.
   await user.keyboard("{Control>}f{/Control}");
-  await vi.waitFor(() => expect(sent("perform").at(-1)?.edit).toEqual(applied));
+  await vi.waitFor(() => expect(sent("perform").at(-1)?.edit).toEqual(blur));
   await user.click(screen.getByRole("menuitem", { name: "Filter" }));
   expect(screen.getByRole("menuitem", { name: /Repeat Gaussian Blur/ })).not.toHaveAttribute(
     "aria-disabled",
@@ -166,6 +179,22 @@ test("Preview off takes the blur off the canvas; Cancel leaves no undo entry", a
   await vi.waitFor(() => expect(sent("cancel_gesture").length).toBeGreaterThan(0));
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(sent("replace_gesture")).toHaveLength(0);
+});
+
+test("OK with Preview off applies the filter, which the canvas did not show", async () => {
+  const user = await blurDialog();
+  await user.click(screen.getByRole("checkbox", { name: "Preview" }));
+  await vi.waitFor(() => expect(sent("cancel_gesture").length).toBeGreaterThan(0));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(sent("replace_gesture").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "gaussianBlur",
+      values: [1],
+    }),
+  );
+  expect(sent("end_gesture")).toHaveLength(0);
 });
 
 test("filters are grayed on a hidden layer", async () => {
@@ -213,5 +242,7 @@ test("a filter entry is edited again with its icon: its radius, live, then one u
   };
   await vi.waitFor(() => expect(sent("perform_live").at(-1)?.edit).toEqual(edit));
   await user.click(screen.getByRole("button", { name: "OK" }));
-  expect(sent("replace_gesture").at(-1)?.edit).toEqual(edit);
+  // Shown already: the gesture is the undo entry.
+  await vi.waitFor(() => expect(sent("end_gesture")).toEqual([{ documentId: 1 }]));
+  expect(sent("replace_gesture")).toHaveLength(0);
 });
