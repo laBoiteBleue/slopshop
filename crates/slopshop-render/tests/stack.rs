@@ -425,6 +425,8 @@ fn a_liquified_layer_shows_the_look_at_what_is_seen() {
         )
         .unwrap();
     let gpu = document(&warped, false);
+    // The first frame starts the layer's evaluation, in the background half a second later.
+    let start = std::time::Instant::now();
     let cpu = document(&warped, true);
     for (scale, output) in [(1.0, Size::new(W, H)), (2.0, Size::new(W / 2, H / 2))] {
         let view = ViewTransform {
@@ -444,6 +446,13 @@ fn a_liquified_layer_shows_the_look_at_what_is_seen() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(done, "scale {scale}: the look never came");
+        // Shown without the whole layer: not evaluated yet when the look came that soon.
+        if start.elapsed() < std::time::Duration::from_millis(400) {
+            assert!(
+                pending(&gpu),
+                "scale {scale}: the whole layer was evaluated"
+            );
+        }
         let a = r.render_view(&gpu, view, output).unwrap();
         let b = r.render_view(&cpu, view, output).unwrap();
         let (worst, mean) = differences(&a, &b);
@@ -455,6 +464,4 @@ fn a_liquified_layer_shows_the_look_at_what_is_seen() {
             "scale {scale}: not warped"
         );
     }
-    // Shown without evaluating the whole layer.
-    assert!(pending(&gpu));
 }
