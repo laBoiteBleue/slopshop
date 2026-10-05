@@ -104,7 +104,8 @@ impl KeyHasher {
 /// The cache: one texture array of tiles, slots reassigned least recently used first.
 #[derive(Debug)]
 pub(crate) struct DisplayCache {
-    texture: wgpu::Texture,
+    /// The whole texture array (it keeps the texture): read by the present pass, written by the
+    /// fills (a tile a layer).
     view: wgpu::TextureView,
     slots: Slots<ContentKey>,
     /// Per slot, the raster tiles its key was made from. A key holds their addresses: while the
@@ -135,22 +136,10 @@ impl DisplayCache {
             ..Default::default()
         });
         Self {
-            texture,
             view,
             slots: Slots::new(capacity),
             pins: vec![Vec::new(); capacity as usize],
         }
-    }
-
-    /// The layer of `slot`, for a fill to write.
-    fn target(&self, slot: u32) -> wgpu::TextureView {
-        self.texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("display cache tile"),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: slot,
-            array_layer_count: Some(1),
-            ..Default::default()
-        })
     }
 }
 
@@ -362,8 +351,40 @@ struct Present<'a> {
 }
 
 /// A fill ready to be dispatched (its buffers live as long as the bind group needs them).
-struct Fill {
-    bind_group: wgpu::BindGroup,
+/// The fills of a frame recorded so far, run in one dispatch (`fill_main`): their layers and tile
+/// tables one after the other, and each tile's view, slot and where its own start.
+#[derive(Default)]
+struct Fills {
+    layers: Vec<u8>,
+    layer_count: u32,
+    table: Vec<u32>,
+    /// One `Fill` of composite.wgsl a tile.
+    headers: Vec<u8>,
+    count: u32,
+}
+
+impl Fills {
+    fn push(&mut self, view: ViewTransform, prepared: PreparedLayers, slot: u32) {
+        for v in [
+            view.origin[0] as f32,
+            view.origin[1] as f32,
+            view.scale as f32,
+        ] {
+            self.headers.extend(v.to_le_bytes());
+        }
+        let table_base = self.table.len() as u32;
+        for v in [prepared.count, self.layer_count, table_base, slot, 0] {
+            self.headers.extend(v.to_le_bytes());
+        }
+        self.layer_count += prepared.count;
+        self.layers.extend(prepared.bytes);
+        self.table.extend(prepared.tile_table);
+        self.count += 1;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 }
 
 impl Renderer {
@@ -405,6 +426,8 @@ impl Renderer {
             .display
             .get_or_insert_with(|| DisplayCache::new(&self.device, capacity));
         display.slots.begin_frame();
+        // What the fills write, the whole texture array (a tile a layer).
+        let target = display.view.clone();
 
         let mut fine = self.level_tiles(&scene, level, display, &mut stats)?;
         let mut to_fill = Vec::new();
@@ -449,7 +472,7 @@ impl Renderer {
 
         // Fill the missing tiles, all of this frame's slots being protected from reassignment.
         let mut encoder = self.encoder();
-        let mut fills = Vec::new();
+        let mut fills = Fills::default();
         let mut timing = options.timestamps;
         if !to_fill.is_empty() {
             for format in GpuTileFormat::ALL {
@@ -470,10 +493,16 @@ impl Renderer {
             if slots.is_none() && !fills.is_empty() {
                 // The raster caches are full of this frame's tiles: run the fills recorded so
                 // far, after which their tiles can be reassigned.
-                self.record_fills(&mut encoder, &fills, timing.take(), false);
+                self.record_fills(
+                    &mut encoder,
+                    document,
+                    std::mem::take(&mut fills),
+                    &target,
+                    &caches.tiles,
+                    timing.take(),
+                );
                 self.queue
                     .submit([std::mem::replace(&mut encoder, self.encoder()).finish()]);
-                fills.clear();
                 for cache in caches.tiles.iter_mut().flatten() {
                     cache.begin_frame();
                 }
@@ -483,7 +512,14 @@ impl Renderer {
             let (Some(slots), Some(slot)) = (slots, display.slots.insert(tile.key)) else {
                 display.slots.remove(&tile.key);
                 if !fills.is_empty() {
-                    self.record_fills(&mut encoder, &fills, timing.take(), false);
+                    self.record_fills(
+                        &mut encoder,
+                        document,
+                        fills,
+                        &target,
+                        &caches.tiles,
+                        timing.take(),
+                    );
                     self.queue.submit([encoder.finish()]);
                 }
                 return None;
@@ -495,19 +531,19 @@ impl Renderer {
             let prepared = encode_layers(&tile.steps, &tile.plans, slots, document.blend_space());
             stats.layers = stats.layers.max(prepared.count);
             stats.tiles_composited += 1;
-            fills.push(self.fill(
-                document,
-                tile.view,
-                prepared,
-                display.target(slot),
-                &caches.tiles,
-            ));
+            fills.push(tile.view, prepared, slot);
             levels_shown[tile.level].table[tile.index] = slot;
         }
         if !fills.is_empty() {
-            self.record_fills(&mut encoder, &fills, timing.take(), false);
+            self.record_fills(
+                &mut encoder,
+                document,
+                fills,
+                &target,
+                &caches.tiles,
+                timing.take(),
+            );
         }
-        drop(fills);
 
         // Present: the view from the cached tiles.
         let display = caches.display.as_ref()?;
@@ -623,24 +659,42 @@ impl Renderer {
             .collect()
     }
 
-    /// The bind group of one fill: `prepared` composited for the tile `view` into `target`.
-    fn fill(
+    /// One dispatch of `fills` into the display cache, writing the frame's first timestamp when
+    /// given.
+    fn record_fills(
         &self,
+        encoder: &mut wgpu::CommandEncoder,
         document: &Document,
-        view: ViewTransform,
-        prepared: PreparedLayers,
-        target: wgpu::TextureView,
+        fills: Fills,
+        display: &wgpu::TextureView,
         tiles: &[Option<TileCache>; 4],
-    ) -> Fill {
+        begin_timestamp: Option<&wgpu::QuerySet>,
+    ) {
         use wgpu::util::DeviceExt;
-        let params = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("fill params"),
-                contents: &params_bytes(document.size(), view, TILE_OUTPUT, prepared.count, false),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let buffers = self.layer_buffers(prepared);
+        let buffer = |label, contents: &[u8], usage| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents,
+                    usage,
+                })
+        };
+        // The views are the fills' own: the frame's only gives the document and the display.
+        let frame = ViewTransform {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+        let params = buffer(
+            "fill params",
+            &params_bytes(document.size(), frame, TILE_OUTPUT, 0, false),
+            wgpu::BufferUsages::UNIFORM,
+        );
+        let buffers = self.layer_buffers(PreparedLayers {
+            count: fills.layer_count,
+            bytes: fills.layers,
+            tile_table: fills.table,
+        });
+        let headers = buffer("fills", &fills.headers, wgpu::BufferUsages::STORAGE);
         let bind_group = self.bind_group(
             &self.fill_bind_group_layout,
             &buffers,
@@ -652,36 +706,26 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 12,
-                    resource: wgpu::BindingResource::TextureView(&target),
+                    resource: wgpu::BindingResource::TextureView(display),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: headers.as_entire_binding(),
                 },
             ],
         );
-        Fill { bind_group }
-    }
-
-    /// One compute pass of `fills`, writing the frame's first timestamp when given (and its last
-    /// with `end_timestamp`).
-    fn record_fills(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        fills: &[Fill],
-        begin_timestamp: Option<&wgpu::QuerySet>,
-        end_timestamp: bool,
-    ) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("display cache fill"),
             timestamp_writes: begin_timestamp.map(|query_set| wgpu::ComputePassTimestampWrites {
                 query_set,
                 beginning_of_pass_write_index: Some(0),
-                end_of_pass_write_index: end_timestamp.then_some(1),
+                end_of_pass_write_index: None,
             }),
         });
         pass.set_pipeline(&self.fill_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
         let groups = TILE_SIZE.div_ceil(WORKGROUP_SIZE);
-        for fill in fills {
-            pass.set_bind_group(0, &fill.bind_group, &[]);
-            pass.dispatch_workgroups(groups, groups, 1);
-        }
+        pass.dispatch_workgroups(groups, groups, fills.count);
     }
 
     /// The present pass of `present` from `display`. With `timestamps`, the pass writes the

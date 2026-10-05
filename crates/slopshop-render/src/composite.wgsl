@@ -139,7 +139,26 @@ struct ExportParams {
 
 // Display cache (ADR 0022). Fill: the cache layer a tile is composited into, premultiplied
 // display-space values (linear sRGB) within the half-float range.
-@group(0) @binding(12) var cache_target: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(12) var cache_target: texture_storage_2d_array<rgba16float, write>;
+
+// The display cache's fills of a frame, one dispatch (`fill_main`): each tile's view (`origin`
+// its document corner, `scale` 2^level) and slot, and where its layers and tile table start in
+// `layers` and `tile_table` (the fills' one after the other).
+struct Fill {
+    origin: vec2<f32>,
+    scale: f32,
+    layer_count: u32,
+    layer_base: u32,
+    table_base: u32,
+    slot: u32,
+    _pad: u32,
+}
+
+@group(0) @binding(16) var<storage, read> fills: array<Fill>;
+
+// Where this invocation's layers and tile table start (a fill's; 0 for the other entry points).
+var<private> layer_base: u32;
+var<private> table_base: u32;
 
 // Present: where the view's tiles of a cached level are (32 bytes).
 struct CacheLevel {
@@ -307,7 +326,7 @@ fn texel_color(layer: Layer, at: vec2<i32>, unbounded: bool, count: ptr<function
         return vec4<f32>(0.0);
     }
     let local = tile - layer.tile_origin;
-    let slot = tile_table[layer.table_offset + local.y * layer.tile_count.x + local.x];
+    let slot = tile_table[table_base + layer.table_offset + local.y * layer.tile_count.x + local.x];
     if slot == NO_TILE {
         return vec4<f32>(0.0);
     }
@@ -867,8 +886,8 @@ const ADJUST_SELECTIVE_COLOR: u32 = 14u;
 fn curve_at(offset: u32, v: f32) -> f32 {
     let t = clamp(v, 0.0, 1.0) * f32(CURVE_LUT - 1u);
     let i = min(u32(t), CURVE_LUT - 2u);
-    let a = bitcast<f32>(tile_table[offset + i]);
-    let b = bitcast<f32>(tile_table[offset + i + 1u]);
+    let a = bitcast<f32>(tile_table[table_base + offset + i]);
+    let b = bitcast<f32>(tile_table[table_base + offset + i + 1u]);
     return a + (b - a) * (t - f32(i));
 }
 
@@ -982,7 +1001,7 @@ fn levels(v: vec3<f32>, ib: vec3<f32>, iw: vec3<f32>, gamma: vec3<f32>, ob: vec3
 
 // Selective Color's parameter `k` (Adjustment::params order), from the tile table.
 fn selective_param(table: u32, k: u32) -> f32 {
-    return bitcast<f32>(tile_table[table + k]);
+    return bitcast<f32>(tile_table[table_base + table + k]);
 }
 
 // Selective Color (slopshop_core::adjust::selective_color): each range's weight, then each
@@ -1227,7 +1246,7 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
     var local = vec4<f32>(0.0);
     var local_inside = 0.0;
     for (var i = 0u; i < layer_count; i++) {
-        let layer = layers[i];
+        let layer = layers[layer_base + i];
         if layer.kind == KIND_GROUP_BEGIN {
             // The engine never nests deeper than MAX_GROUP_DEPTH.
             stack[min(depth, MAX_GROUP_DEPTH - 1u)] = acc;
@@ -1361,16 +1380,21 @@ fn view_pixel(id: vec2<u32>) -> ViewPixel {
 
 // The same for the pixel at `id` (whole numbers, maybe beyond the output).
 fn view_pixel_at(id: vec2<f32>) -> ViewPixel {
-    let corner = params.origin + id * params.scale;
+    return view_pixel_of(id, params.origin, params.scale);
+}
+
+// The same in the view of `origin` and `scale` (see `Params`).
+fn view_pixel_of(id: vec2<f32>, origin: vec2<f32>, scale: f32) -> ViewPixel {
+    let corner = origin + id * scale;
     let doc = vec2<f32>(params.doc_size);
     let lo = max(corner, vec2<f32>(0.0));
-    let hi = min(corner + params.scale, doc);
+    let hi = min(corner + scale, doc);
     let inside = max(hi - lo, vec2<f32>(0.0));
-    let coverage = (inside.x * inside.y) / (params.scale * params.scale);
+    let coverage = (inside.x * inside.y) / (scale * scale);
 
     // Zoomed in, resampled layers show document pixels, like export (ADR 0018).
-    let pixel_center = params.origin + (id + 0.5) * params.scale;
-    let center = select(pixel_center, floor(pixel_center) + 0.5, params.scale <= 1.0);
+    let pixel_center = origin + (id + 0.5) * scale;
+    let center = select(pixel_center, floor(pixel_center) + 0.5, scale <= 1.0);
     return ViewPixel(Footprint(lo, hi, vec2<i32>(0), false, center), coverage);
 }
 
@@ -1425,22 +1449,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     write_display(id.xy, pixel.coverage, to_display(acc));
 }
 
-// Display cache, fill: texel `id` of one tile of a document level, the view `params` being that
-// tile (`origin` its document corner, `scale` 2^level, `out_size` the tile). The same footprint
-// and compositing as `main`; texels beyond the document are transparent.
+// Display cache, fill: texel `id.xy` of the tile of fill `id.z` (`params.out_size` a tile), in
+// its view and from its layers. The same footprint and compositing as `main`; texels beyond the
+// document are transparent.
 @compute @workgroup_size(8, 8)
 fn fill_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.out_size.x || id.y >= params.out_size.y {
         return;
     }
-    let pixel = view_pixel(id.xy);
+    let fill = fills[id.z];
+    layer_base = fill.layer_base;
+    table_base = fill.table_base;
+    let pixel = view_pixel_of(vec2<f32>(id.xy), fill.origin, fill.scale);
     var acc = vec4<f32>(0.0);
     if pixel.coverage > 0.0 {
         var uncounted = 0u;
-        acc = composite(pixel.footprint, params.layer_count, &uncounted);
+        acc = composite(pixel.footprint, fill.layer_count, &uncounted);
     }
     // Half floats, whose range is far beyond what the display shows (it clamps to 0–1).
-    textureStore(cache_target, id.xy, finite(to_display(acc), false));
+    textureStore(cache_target, id.xy, fill.slot, finite(to_display(acc), false));
 }
 
 // Quick Mask and Select and Mask's views (ADR 0024): `layers[0].color` tints what the selection
