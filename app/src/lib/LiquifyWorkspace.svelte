@@ -368,8 +368,8 @@
       {#if pointer && !space && panning === null}
         <span
           class="cursor"
-          style:width="{brush.size * view.zoom}px"
-          style:height="{brush.size * view.zoom}px"
+          style:width="{Math.max(brush.size * view.zoom, 5)}px"
+          style:height="{Math.max(brush.size * view.zoom, 5)}px"
           style:left="{pointer.x}px"
           style:top="{pointer.y}px"
         ></span>

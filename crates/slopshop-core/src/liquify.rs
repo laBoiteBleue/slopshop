@@ -217,7 +217,7 @@ struct Frozen(Vec<u8>);
 
 /// A displacement field and freeze mask over a layer (see the module's documentation). Cloning
 /// shares every tile; a stroke copies the tiles it changes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Field {
     size: Size,
     cell: u32,
@@ -226,6 +226,18 @@ pub struct Field {
     rows: u32,
     displacement: Vec<Option<Arc<Nodes>>>,
     frozen: Vec<Option<Arc<Frozen>>>,
+}
+
+/// What a field is, not its nodes (a stack's `Debug` would print millions).
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Field")
+            .field("size", &self.size)
+            .field("cell", &self.cell)
+            .field("tiles", &self.displacement.iter().flatten().count())
+            .field("frozen_tiles", &self.frozen.iter().flatten().count())
+            .finish()
+    }
 }
 
 impl Field {
