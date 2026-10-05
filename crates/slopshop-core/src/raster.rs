@@ -1182,6 +1182,33 @@ pub(crate) fn pad_tile(tile: &mut [u8], width: usize, height: usize, bpp: usize)
     }
 }
 
+/// Whether the work running on a thread is still wanted (see [`while_wanted`]).
+pub(crate) type Wanted = Arc<dyn Fn() -> bool + Send + Sync>;
+
+thread_local! {
+    static WANTED: std::cell::RefCell<Option<Wanted>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `f`, run so that the work checking [`wanted`] (tile by tile, on every core: see
+/// [`parallel_for_each`]) gives up once `wanted` says it is not wanted any more: a state of a
+/// layer's stack replaced while it was evaluated in the background.
+pub(crate) fn while_wanted<R>(wanted: Wanted, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Wanted>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            WANTED.with(|w| *w.borrow_mut() = previous);
+        }
+    }
+    let _restore = Restore(WANTED.with(|w| w.replace(Some(wanted))));
+    f()
+}
+
+/// Whether the work running on this thread is still wanted: always, outside [`while_wanted`].
+pub(crate) fn wanted() -> bool {
+    WANTED.with(|w| w.borrow().as_ref().is_none_or(|wanted| wanted()))
+}
+
 /// `f` on every item, on every core; its results in order. Each thread takes the next item when
 /// it is done with one: items cost unequally (empty tiles, tiles at an edge, a brush's dabs),
 /// and fixed shares would leave threads idle.
@@ -1196,10 +1223,14 @@ pub(crate) fn parallel_for_each<T: Send, R: Send>(
     let count = items.len();
     let next = std::sync::Mutex::new(items.iter_mut().enumerate());
     let (f, next) = (&f, &next);
+    // Whether the caller's work is still wanted, passed on to the workers.
+    let wanted = WANTED.with(|w| w.borrow().clone());
     let done: Vec<(usize, R)> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads.min(count))
             .map(|_| {
+                let wanted = wanted.clone();
                 scope.spawn(move || {
+                    WANTED.with(|w| *w.borrow_mut() = wanted);
                     let mut done = Vec::new();
                     loop {
                         // A panicking `f` poisons nothing here: the lock is not held by it.
@@ -1611,6 +1642,27 @@ fn downsample(pixels: &[u8], size: Size, source: &Codec, stored: &Codec) -> (Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_not_wanted_any_more_is_told_so_on_every_core() {
+        let mut items: Vec<u32> = (0..64).collect();
+        // Outside a scope: always wanted.
+        assert!(
+            parallel_for_each(&mut items, |_| wanted())
+                .iter()
+                .all(|&w| w)
+        );
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let reader = Arc::clone(&flag);
+        let wanted_now: Wanted = Arc::new(move || reader.load(std::sync::atomic::Ordering::SeqCst));
+        let seen = while_wanted(wanted_now, || {
+            flag.store(false, std::sync::atomic::Ordering::SeqCst);
+            parallel_for_each(&mut items, |_| wanted())
+        });
+        assert!(seen.iter().all(|&w| !w), "every worker told");
+        // And outside again.
+        assert!(wanted());
+    }
     use crate::color::WORKING_SPACE;
 
     fn format(layout: ChannelLayout, sample: SampleType, space: ColorSpace) -> PixelFormat {
