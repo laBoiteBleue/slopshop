@@ -80,7 +80,10 @@ the complications of re-editing them (a blur under paint): an entry is removed, 
    continuing paint over three effects. *GPU (2026-10-03, maintainer's request)*: an edit of a
    stack evaluates nothing: the layer's pixels (`stack::Pixels`) are a cache filled when first
    asked, by what needs them (tools, thumbnails, the clipboard, export) or by a thread of their
-   own the display starts; meanwhile the shader evaluates the stack itself (the original, then
+   own the display starts once the state has lasted (150 ms, 500 ms with a filter: the states
+   of a slider being dragged are dropped unevaluated, a state holding the one before only
+   weakly; 2026-10-05), and the Layers panel asks for a new thumbnail once the pixels have
+   rested (200 ms); meanwhile the shader evaluates the stack itself (the original, then
    each paint `P + k·B` and each effect within its selection, before the layer's mask, opacity
    and mode), and the display cache keeps the composited tiles. At 100 % it shows the CPU's
    pixels but for rounding (the CPU rounds after each entry); zoomed out it evaluates the stack
