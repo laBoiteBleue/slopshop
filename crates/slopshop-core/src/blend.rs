@@ -320,7 +320,9 @@ impl Blender {
         let adjusted = if adjustment.adjustment().is_linear() {
             adjustment.apply(straight)
         } else if adjustment.adjustment().is_perceptual() && self.space != BlendSpace::Perceptual {
-            let perceptual = Blender::new(BlendSpace::Perceptual);
+            // Made once: per pixel, its matrices cost twice the adjustment.
+            static PERCEPTUAL: std::sync::OnceLock<Blender> = std::sync::OnceLock::new();
+            let perceptual = PERCEPTUAL.get_or_init(|| Blender::new(BlendSpace::Perceptual));
             perceptual.decode(adjustment.apply(perceptual.encode(straight)))
         } else {
             self.decode(adjustment.apply(self.encode(straight)))
