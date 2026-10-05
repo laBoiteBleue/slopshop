@@ -31,6 +31,7 @@ pub mod auto;
 pub mod bake;
 pub mod blend;
 mod blue_noise;
+pub mod clone;
 pub mod color;
 pub mod composite;
 pub mod convert;

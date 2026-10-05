@@ -17,6 +17,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::blend::{BlendMode, BlendSpace, Blender};
+use crate::clone::CloneSource;
 use crate::color::{ChannelLayout, IDENTITY, LinearRgba, Mat3, WORKING_SPACE, mat_vec};
 use crate::geom::Size;
 use crate::raster::{
@@ -114,6 +115,10 @@ pub enum Paint {
         field: crate::gradient::GradientField,
         gray: bool,
     },
+    /// The colors of the stroke's [`CloneSource`] ([`Stroke::cloning`]), each pixel the one
+    /// `offset` (document pixels) away from its place, at the source's alpha there; with
+    /// `gray`, on a coverage, their gray: the Clone Stamp.
+    Clone { offset: [f64; 2], gray: bool },
 }
 
 /// The gray a color paints in a mask or in Quick Mask, in `[0, 1]`: the sRGB encoding of its
@@ -256,6 +261,8 @@ pub struct Stroke {
     last: Option<PointerSample>,
     /// Path length still to go before the next dab.
     until_next: f64,
+    /// Where [`Paint::Clone`] takes its colors.
+    source: Option<Arc<CloneSource>>,
 }
 
 impl Stroke {
@@ -283,6 +290,14 @@ impl Stroke {
         }
         if let Paint::Gradient { field, gray } = paint {
             if !field.is_valid() {
+                return Err(PaintError::InvalidColor);
+            }
+            if gray && base.format().layout != ChannelLayout::Gray {
+                return Err(PaintError::NotACoverage);
+            }
+        }
+        if let Paint::Clone { offset, gray } = paint {
+            if !offset.iter().all(|v| v.is_finite()) {
                 return Err(PaintError::InvalidColor);
             }
             if gray && base.format().layout != ChannelLayout::Gray {
@@ -335,7 +350,51 @@ impl Stroke {
             dirty: BTreeMap::new(),
             last: None,
             until_next: 0.0,
+            source: None,
         })
+    }
+
+    /// The stroke taking [`Paint::Clone`]'s colors from `source`.
+    pub fn cloning(mut self, source: Arc<CloneSource>) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    /// Before a frame: the source's tiles the `dirty` tiles of the image reach, `offset` away
+    /// in the document, composited.
+    fn prepare_source(&self, dirty: &[(TileCoord, [usize; 4])]) {
+        let (Some(source), Paint::Clone { offset, .. }) = (&self.source, self.paint) else {
+            return;
+        };
+        let t = f64::from(TILE_SIZE);
+        let mut area: Option<[f64; 4]> = None;
+        for (coord, _) in dirty {
+            let tile = [
+                f64::from(coord.col) * t,
+                f64::from(coord.row) * t,
+                f64::from(coord.col + 1) * t,
+                f64::from(coord.row + 1) * t,
+            ];
+            let [x0, y0, x1, y1] = self.to_document.map_rect(tile);
+            let placed = [
+                x0 + offset[0],
+                y0 + offset[1],
+                x1 + offset[0],
+                y1 + offset[1],
+            ];
+            area = Some(match area {
+                None => placed,
+                Some(a) => [
+                    a[0].min(placed[0]),
+                    a[1].min(placed[1]),
+                    a[2].max(placed[2]),
+                    a[3].max(placed[3]),
+                ],
+            });
+        }
+        if let Some(area) = area {
+            source.prepare(area);
+        }
     }
 
     /// A stroke painting `paint` (a color or the Eraser) on a layer's `stack` (ADR 0029), whose
@@ -354,6 +413,14 @@ impl Stroke {
             Paint::Color(c) => PaintOp::Color(c),
             Paint::Gradient { field, gray: false } => PaintOp::Gradient { field, to_document },
             Paint::Gradient { gray: true, .. } => return Err(PaintError::NotACoverage),
+            Paint::Clone {
+                offset,
+                gray: false,
+            } => PaintOp::Clone {
+                offset,
+                to_document,
+            },
+            Paint::Clone { gray: true, .. } => return Err(PaintError::NotACoverage),
             Paint::Erase => PaintOp::Erase,
             Paint::Restore => PaintOp::Restore,
             Paint::Gray(_) => return Err(PaintError::NotACoverage),
@@ -579,6 +646,7 @@ impl Stroke {
         }
         let dirty: Vec<(TileCoord, [usize; 4])> =
             std::mem::take(&mut self.dirty).into_iter().collect();
+        self.prepare_source(&dirty);
         if self.top.is_some() {
             return self.lay_on_stack(&dirty);
         }
@@ -613,8 +681,9 @@ impl Stroke {
             }
             amount * selected(selection, to_document, coord, x, y)
         };
+        let source = self.source.as_deref();
         let tiles = match top {
-            OnStack::Top(top, op) => top.lay(dirty, *op, amount, &self.current),
+            OnStack::Top(top, op) => top.lay(dirty, *op, amount, &self.current, source),
             OnStack::Restore(restore) => restore.lay(dirty, amount),
         };
         let areas: BTreeMap<TileCoord, [usize; 4]> = dirty.iter().copied().collect();
@@ -752,6 +821,31 @@ impl Stroke {
                 };
                 (paint, amount)
             }
+            Paint::Clone { offset, gray } => {
+                let Some(source) = &self.source else {
+                    return;
+                };
+                let t = f64::from(TILE_SIZE);
+                let (dx, dy) = self.to_document.apply(
+                    f64::from(coord.col) * t + x as f64 + 0.5,
+                    f64::from(coord.row) * t + y as f64 + 0.5,
+                );
+                let [r, g, b, a] = source.at(dx + offset[0], dy + offset[1]);
+                let amount = amount * a.min(1.0);
+                if amount <= 0.0 {
+                    return;
+                }
+                let [r, g, b] = [r / a, g / a, b / a];
+                let paint = if gray {
+                    let luma = luma_of_working();
+                    let y =
+                        luma[0] * f64::from(r) + luma[1] * f64::from(g) + luma[2] * f64::from(b);
+                    Paint::Gray(crate::color::srgb_encode(y as f32).clamp(0.0, 1.0))
+                } else {
+                    Paint::Color(LinearRgba::new(r, g, b, 1.0))
+                };
+                (paint, amount)
+            }
             paint => (paint, amount),
         };
         if let Paint::Gray(value) = paint {
@@ -784,7 +878,9 @@ impl Stroke {
                 }
             }
             // Painted above; a stroke on pixels never restores (refused by `new`).
-            Paint::Gray(_) | Paint::Restore | Paint::Gradient { .. } => return,
+            Paint::Gray(_) | Paint::Restore | Paint::Gradient { .. } | Paint::Clone { .. } => {
+                return;
+            }
         }
         let rgb = [dst[0], dst[1], dst[2]];
         let rgb = if self.base.format().layout.is_gray() {
