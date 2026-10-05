@@ -109,6 +109,8 @@
 
   onMount(() => {
     dialog.showModal();
+    // The keys (Enter, the tools) act on the stage, not on a button the browser focused.
+    stage.focus();
     const observer = new ResizeObserver(() => {
       const rect = stage.getBoundingClientRect();
       box = { width: rect.width || stage.clientWidth, height: rect.height || stage.clientHeight };
@@ -268,7 +270,9 @@
       brush = { ...brush, size: steppedSize(brush.size, e.key === "]" ? 1 : -1) };
       return;
     }
-    if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) {
+    // Enter accepts, as in Photoshop, unless it presses a button other than a tool.
+    const pressed = e.target instanceof Element ? e.target.closest("button:not(.tool)") : null;
+    if (e.key === "Enter" && !pressed) {
       e.preventDefault();
       void ok();
       return;
@@ -344,6 +348,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="stage"
+      tabindex="-1"
       class:panning={space || panning !== null}
       bind:this={stage}
       role="application"
@@ -519,6 +524,7 @@
   /* Transparent pixels show over a checkerboard. */
   .stage {
     position: relative;
+    outline: none;
     min-width: 0;
     min-height: 0;
     overflow: hidden;

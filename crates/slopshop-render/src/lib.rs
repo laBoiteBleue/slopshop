@@ -2694,5 +2694,15 @@ mod tests {
             .unwrap();
         let job = stack.look_job([0.0, 0.0, 100.0, 100.0], 0).unwrap();
         assert!(r.gpu_filter.look(&job).is_none());
+        // A Liquify look is warped on the CPU, even in the format the GPU takes (ADR 0037).
+        let liquified = LayerStack::new(Arc::clone(&original))
+            .with_liquify(
+                Arc::new(slopshop_core::liquify::Field::new(size)),
+                BlendSpace::Perceptual,
+                Some(Arc::clone(&original)),
+            )
+            .unwrap();
+        let job = liquified.look_job([0.0, 0.0, 100.0, 100.0], 0).unwrap();
+        assert!(job.warp.is_some() && r.gpu_filter.look(&job).is_none());
     }
 }
