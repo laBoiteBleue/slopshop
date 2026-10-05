@@ -72,6 +72,38 @@ pub struct CloneRequest {
     /// darkened.
     #[serde(default)]
     pub tone: Option<ToneRequest>,
+    /// The Blur and Sharpen tools: the colors taken (offset 0, the layer as it was) through a
+    /// filter.
+    #[serde(default)]
+    pub filter: Option<FilterRequest>,
+}
+
+/// Blur (`sharpen` false) or Sharpen, by `strength` in `[0, 1]` (Photoshop's Strength).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterRequest {
+    pub sharpen: bool,
+    pub strength: f32,
+}
+
+impl FilterRequest {
+    /// A blur of 0.5 to 5 pixels; a sharpening of up to 2 over a 1-pixel blur.
+    fn filter(self) -> Result<slopshop_core::clone::SourceFilter, String> {
+        if !(0.0..=1.0).contains(&self.strength) {
+            return Err("the strength is between 0 and 1".to_owned());
+        }
+        Ok(if self.sharpen {
+            slopshop_core::clone::SourceFilter {
+                sigma: 1.0,
+                sharpen: Some(2.0 * self.strength),
+            }
+        } else {
+            slopshop_core::clone::SourceFilter {
+                sigma: 0.5 + 4.5 * self.strength,
+                sharpen: None,
+            }
+        })
+    }
 }
 
 /// Dodge (`burn` false) or Burn, on a range of tones, by `exposure` in `[0, 1]`.
@@ -408,9 +440,15 @@ fn start(
     };
     // The Clone Stamp's source, as the document is now (its pixels shared).
     let source = match request.clone {
-        Some(clone) => Some(Arc::new(slopshop_core::clone::CloneSource::new(
-            crate::selection::sampled_document(doc, clone.source_layer)?,
-        ))),
+        Some(clone) => {
+            let source = slopshop_core::clone::CloneSource::new(
+                crate::selection::sampled_document(doc, clone.source_layer)?,
+            );
+            Some(Arc::new(match clone.filter {
+                Some(filter) => source.filtered(filter.filter()?),
+                None => source,
+            }))
+        }
         None => None,
     };
     let cloning = |stroke: Stroke| match &source {
@@ -554,6 +592,8 @@ pub(crate) fn paint(
             if has_paint {
                 let label = HistoryLabel::new(if request.restore {
                     "restoreEraser"
+                } else if let Some(filter) = request.clone.and_then(|c| c.filter) {
+                    if filter.sharpen { "sharpen" } else { "blur" }
                 } else if let Some(tone) = request.clone.and_then(|c| c.tone) {
                     if tone.burn { "burn" } else { "dodge" }
                 } else if request.clone.is_some_and(|c| c.heal) {
@@ -805,6 +845,7 @@ pub(crate) fn patch_edit(
         source_layer,
         heal: true,
         tone: None,
+        filter: None,
     });
     let (mut painting, growth) = start(doc, &request, true, None)?;
     painting.fill();

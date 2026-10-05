@@ -3394,6 +3394,7 @@ mod tests {
             source_layer: None,
             heal: false,
             tone: None,
+            filter: None,
         });
         paint::paint(&state, doc.id, clone).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3420,6 +3421,7 @@ mod tests {
             source_layer: None,
             heal: true,
             tone: None,
+            filter: None,
         });
         paint::paint(&state, doc.id, heal).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3538,6 +3540,7 @@ mod tests {
                     }))
                     .unwrap(),
                 ),
+                filter: None,
             });
             paint::paint(&state, doc.id, request).unwrap();
         };
@@ -3553,6 +3556,55 @@ mod tests {
         let (labels, done) = document.session.history();
         assert_eq!(labels[done - 2].kind, "dodge");
         assert_eq!(labels[done - 1].kind, "burn");
+    }
+
+    #[test]
+    fn the_blur_tool_softens_an_edge_where_it_paints() {
+        let state = AppState::new();
+        // Black on the left half, white on the right.
+        let mut pixels = Vec::new();
+        for _ in 0..100 {
+            for x in 0..200 {
+                pixels.extend_from_slice(if x < 100 { &[0, 0, 0, 255] } else { &[255; 4] });
+            }
+        }
+        let image = RasterImage::from_pixels(Size::new(200, 100), PixelFormat::RGBA8_SRGB, &pixels)
+            .unwrap();
+        let doc = state
+            .add_document(image_session(image, "edge"), None, Vec::new())
+            .unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            documents
+                .get_mut(doc.id)
+                .unwrap()
+                .session
+                .document()
+                .layers()[0]
+                .id
+        };
+        let mut request = dab(layer, paint::PaintTarget::Layer, None);
+        request.samples = vec![[100.0, 50.5, 1.0]];
+        request.clone = Some(paint::CloneRequest {
+            offset: [0.0, 0.0],
+            source_layer: Some(layer.get()),
+            heal: false,
+            tone: None,
+            filter: Some(paint::FilterRequest {
+                sharpen: false,
+                strength: 1.0,
+            }),
+        });
+        paint::paint(&state, doc.id, request).unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let shown = document.session.document();
+        let [r, ..] = paint::sample_color_at(shown, 98.5, 50.5, 1).unwrap();
+        assert!(r > 20 && r < 230, "between black and white: {r}");
+        // Far from the stroke: as it was.
+        assert_eq!(paint::sample_color_at(shown, 98.5, 5.5, 1), Some([0, 0, 0]));
+        let (labels, done) = document.session.history();
+        assert_eq!(labels[done - 1].kind, "blur");
     }
 
     #[test]

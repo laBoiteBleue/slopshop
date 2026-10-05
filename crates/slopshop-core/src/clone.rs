@@ -59,9 +59,32 @@ impl Tone {
     }
 }
 
+/// The Blur and Sharpen tools: the source seen through a Gaussian blur of `sigma` pixels, or,
+/// with `sharpen`, sharpened by that amount (an unsharp mask: the pixels plus the amount times
+/// their difference with the blur).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SourceFilter {
+    pub sigma: f32,
+    pub sharpen: Option<f32>,
+}
+
+impl SourceFilter {
+    /// A blur of 0.1 to 64 pixels, a sharpening of 0 to 10.
+    pub fn is_valid(&self) -> bool {
+        (0.1..=64.0).contains(&self.sigma) && self.sharpen.is_none_or(|a| (0.0..=10.0).contains(&a))
+    }
+
+    /// Pixels a tile needs around it.
+    fn margin(&self) -> u32 {
+        (self.sigma * 3.0).ceil() as u32
+    }
+}
+
 /// A document's composited pixels, read by document pixel.
 pub struct CloneSource {
     document: Document,
+    /// Seen through a filter (the Blur and Sharpen tools).
+    filter: Option<SourceFilter>,
     /// Tiles of the canvas, row-major: premultiplied working-space RGBA, `TILE_SIZE²` pixels
     /// (the valid part; the rest transparent), composited once.
     tiles: Vec<OnceLock<Arc<[f32]>>>,
@@ -87,9 +110,16 @@ impl CloneSource {
         let tiles = (0..columns * rows).map(|_| OnceLock::new()).collect();
         Self {
             document,
+            filter: None,
             tiles,
             columns,
         }
+    }
+
+    /// This source seen through `filter`, before any tile is prepared.
+    pub fn filtered(mut self, filter: SourceFilter) -> Self {
+        self.filter = Some(filter);
+        self
     }
 
     /// Composite the tiles `area` (document pixels, `[x0, y0, x1, y1)`) reaches that are not
@@ -122,6 +152,9 @@ impl CloneSource {
     }
 
     fn composite(&self, col: u32, row: u32) -> Arc<[f32]> {
+        if let Some(filter) = self.filter {
+            return self.composite_filtered(col, row, filter);
+        }
         let size = self.document.size();
         let (x, y) = (col * TILE_SIZE, row * TILE_SIZE);
         let (w, h) = (
@@ -185,6 +218,7 @@ impl CloneSource {
         }
         CloneSource {
             document: self.document.clone(),
+            filter: self.filter,
             tiles: tiles
                 .into_iter()
                 .map(|tile| {
@@ -197,6 +231,56 @@ impl CloneSource {
                 .collect(),
             columns: self.columns,
         }
+    }
+
+    /// Tile (`col`, `row`) through `filter`: composited with the margin the blur reads (within
+    /// the canvas: its edge repeats), blurred, sharpened if asked.
+    fn composite_filtered(&self, col: u32, row: u32, filter: SourceFilter) -> Arc<[f32]> {
+        let size = self.document.size();
+        let m = filter.margin();
+        let (x, y) = (col * TILE_SIZE, row * TILE_SIZE);
+        let (x0, y0) = (x.saturating_sub(m), y.saturating_sub(m));
+        let x1 = (x + TILE_SIZE + m).min(size.width);
+        let y1 = (y + TILE_SIZE + m).min(size.height);
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut region = vec![0f32; w * h * 4];
+        if crate::composite::composite_region_serial(
+            &self.document,
+            Rect::new(x0, y0, w as u32, h as u32),
+            &mut region,
+        )
+        .is_err()
+        {
+            region.fill(0.0);
+        }
+        let blurred = gaussian(&region, w, h, filter.sigma);
+        let t = TILE_SIZE as usize;
+        let mut tile = vec![0f32; t * t * 4];
+        let (ox, oy) = ((x - x0) as usize, (y - y0) as usize);
+        let (vw, vh) = (
+            ((size.width - x).min(TILE_SIZE)) as usize,
+            ((size.height - y).min(TILE_SIZE)) as usize,
+        );
+        for r in 0..vh {
+            for c in 0..vw {
+                let i = ((oy + r) * w + ox + c) * 4;
+                let o = (r * t + c) * 4;
+                for k in 0..4 {
+                    let v = match filter.sharpen {
+                        Some(amount) => region[i + k] + amount * (region[i + k] - blurred[i + k]),
+                        None => blurred[i + k],
+                    };
+                    tile[o + k] = v;
+                }
+                // Within what premultiplied colors can be.
+                let a = tile[o + 3].clamp(0.0, 1.0);
+                tile[o + 3] = a;
+                for k in 0..3 {
+                    tile[o + k] = tile[o + k].max(0.0);
+                }
+            }
+        }
+        Arc::from(tile)
     }
 
     /// The premultiplied working-space color at document point (`x`, `y`) (the pixel it falls
@@ -214,6 +298,43 @@ impl CloneSource {
         let i = (((py % TILE_SIZE) * TILE_SIZE + px % TILE_SIZE) * 4) as usize;
         [tile[i], tile[i + 1], tile[i + 2], tile[i + 3]]
     }
+}
+
+/// `rgba` (`width × height` premultiplied pixels) blurred by a Gaussian of `sigma` pixels, in
+/// two passes, the edge repeated.
+fn gaussian(rgba: &[f32], width: usize, height: usize, sigma: f32) -> Vec<f32> {
+    let radius = (sigma * 3.0).ceil() as isize;
+    let weights: Vec<f32> = (-radius..=radius)
+        .map(|d| (-(d * d) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let total: f32 = weights.iter().sum();
+    let weights: Vec<f32> = weights.iter().map(|w| w / total).collect();
+    let pass = |input: &[f32], horizontal: bool| {
+        let mut out = vec![0f32; input.len()];
+        for y in 0..height {
+            for x in 0..width {
+                let mut sum = [0f32; 4];
+                for (k, w) in weights.iter().enumerate() {
+                    let d = k as isize - radius;
+                    let (sx, sy) = if horizontal {
+                        ((x as isize + d).clamp(0, width as isize - 1) as usize, y)
+                    } else {
+                        (x, (y as isize + d).clamp(0, height as isize - 1) as usize)
+                    };
+                    let i = (sy * width + sx) * 4;
+                    for c in 0..4 {
+                        sum[c] += w * input[i + c];
+                    }
+                }
+                out[(y * width + x) * 4..(y * width + x) * 4 + 4].copy_from_slice(&sum);
+            }
+        }
+        out
+    };
+    if width == 0 || height == 0 {
+        return rgba.to_vec();
+    }
+    pass(&pass(rgba, true), false)
 }
 
 #[cfg(test)]
@@ -492,6 +613,35 @@ mod tests {
             !Tone {
                 exposure: 1.5,
                 ..mid
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
+    fn a_filtered_source_is_blurred_or_sharpened() {
+        let blurred = CloneSource::new(half_red()).filtered(SourceFilter {
+            sigma: 3.0,
+            sharpen: None,
+        });
+        blurred.prepare([0.0, 0.0, 300.0, 20.0]);
+        // Far from the edge: as it was; on it: half covered.
+        assert!(blurred.at(50.5, 10.5)[3] > 0.99);
+        assert!((blurred.at(150.0, 10.5)[3] - 0.5).abs() < 0.1);
+        assert!(blurred.at(146.5, 10.5)[3] < 0.99);
+        // Sharpened: beyond the edge on both sides (an unsharp mask's halo), clamped.
+        let sharp = CloneSource::new(half_red()).filtered(SourceFilter {
+            sigma: 2.0,
+            sharpen: Some(1.0),
+        });
+        sharp.prepare([0.0, 0.0, 300.0, 20.0]);
+        let inside = sharp.at(148.5, 10.5);
+        assert_eq!(inside[3], 1.0, "alpha clamped");
+        assert!(inside[0] > blurred.at(148.5, 10.5)[0]);
+        assert!(
+            !SourceFilter {
+                sigma: 0.0,
+                sharpen: None
             }
             .is_valid()
         );
