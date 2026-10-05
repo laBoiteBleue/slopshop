@@ -6,6 +6,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { GradientFill } from "./gradientFill";
 
 /** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, a filter
  * (ADR 0034) or a Liquify field (ADR 0037). */
@@ -110,7 +111,7 @@ export type LayerView = {
   name: string;
   visible: boolean;
   opacity: number;
-  kind: "fill" | "raster" | "group" | "adjustment";
+  kind: "fill" | "gradientFill" | "raster" | "group" | "adjustment";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
@@ -145,6 +146,8 @@ export type LayerView = {
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
    * curves, and `curveSamples`, each curve's output (0–1) at evenly spaced inputs. */
   adjustment: AdjustmentView | null;
+  /** A gradient fill layer's gradient. Absent: not one. */
+  gradientFill?: GradientFill | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
@@ -426,6 +429,16 @@ export type EditRequest =
   | { kind: "setLayerStyle"; id: number; style: LayerStyle | null }
   /** A fill layer's color, sRGB-encoded RGBA in [0, 1] as `addFillLayer`'s. */
   | { kind: "setFillColor"; id: number; color: [number, number, number, number] }
+  /** A gradient fill layer, placed as `addFillLayer` places a fill layer. */
+  | {
+      kind: "addGradientFill";
+      name: string;
+      gradient: GradientFill;
+      parent?: number | null;
+      index?: number;
+    }
+  /** A gradient fill layer's gradient. */
+  | { kind: "setGradientFill"; id: number; gradient: GradientFill }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
   | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
   /** Layer > Delete Paint: the layers' (and their masks') originals show again. */

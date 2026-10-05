@@ -193,6 +193,7 @@
   import BucketTool from "./lib/BucketTool.svelte";
   import GradientTool from "./lib/GradientTool.svelte";
   import { toolGradient, type ToolGradient } from "./lib/gradient";
+  import { newGradientFill } from "./lib/gradientFill";
   import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
   import type { LoupeSource } from "./lib/eyedropper";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
@@ -1012,6 +1013,16 @@
     reverse: boolean;
     opacity: number;
   }>({ preset: "foregroundToBackground", shape: "linear", reverse: false, opacity: 1 });
+
+  /**
+   * Layer > New Fill Layer > Gradient: the drawing colors' gradient (foreground to background,
+   * Photoshop's default) across the document.
+   */
+  function addGradientFill() {
+    if (!active) return;
+    const { stops } = toolGradient("foregroundToBackground", colors, false);
+    layersPanel?.addGradientFill(newGradientFill(active, stops));
+  }
 
   /**
    * The Gradient tool's line drawn: the gradient laid from `from` to `to` on what painting
@@ -4770,6 +4781,7 @@
               cmd(t("menu.layer.newFill.solidColor"), () =>
                 layersPanel?.addFill(colors.foreground),
               ),
+              cmd(t("menu.layer.newFill.gradient"), addGradientFill),
             ],
           },
           {

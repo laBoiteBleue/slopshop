@@ -32,6 +32,7 @@ test("Rasterize applies to fills, groups and pixel layers carrying paint or effe
   assert.equal(canRasterize([layer(1, { kind: "adjustment" })]), false);
   assert.equal(canRasterize([layer(1), layer(2, { painted: true })]), true);
   assert.equal(canRasterize([layer(1, { kind: "fill" })]), true);
+  assert.equal(canRasterize([layer(1, { kind: "gradientFill" })]), true);
   assert.equal(canRasterize([layer(1, { kind: "group" })]), true);
 });
 
@@ -55,6 +56,7 @@ test("Merge Visible needs two visible layers, or a group or a fill; Flatten more
   assert.equal(canMergeVisible([layer(1), layer(2, { visible: false })]), false);
   assert.equal(canMergeVisible([layer(1), layer(2)]), true);
   assert.equal(canMergeVisible([layer(1, { kind: "group" })]), true);
+  assert.equal(canMergeVisible([layer(1, { kind: "gradientFill" })]), true);
   assert.equal(canFlatten([layer(1)]), false);
   assert.equal(canFlatten([layer(1, { painted: true })]), true);
   assert.equal(canFlatten([layer(1), layer(2)]), true);

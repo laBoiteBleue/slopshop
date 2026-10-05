@@ -332,7 +332,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
         option of the Brush and the Eraser
   - [ ] Patch (a mode of the Healing Brush), Ctrl+Space zooming, Dodge and Burn (O), Blur,
         Sharpen and Smudge: built, merged one by one
-  - [ ] Gradient fill layers (Layer > New Fill Layer > Gradient), the Gradient tool's engine
+  - [x] Gradient fill layers (Layer > New Fill Layer > Gradient), the Gradient tool's engine;
+        style, angle, scale and Reverse in the Properties panel, `.slop` 0.24
   - Moved to the projects below: Remove (J, an AI tool), Distort and Perspective in Free
     Transform (transforms). Later (the audit's choice): Mixer Brush, Color Sampler, Custom
     Shape; Pen, Type and Shapes wait for vector content

@@ -118,7 +118,7 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                     }
                 }
             }
-            LayerContent::Fill { .. } => layers.fill += 1,
+            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => layers.fill += 1,
             LayerContent::Adjustment { .. } => layers.adjustment += 1,
             LayerContent::Group { .. } => layers.group += 1,
         }

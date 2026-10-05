@@ -73,7 +73,12 @@ function layer(changes: Partial<LayerView> = {}): LayerView {
 
 function show(
   layerView: LayerView,
-  props: { size?: number; mask?: boolean; documentId?: number } = {},
+  props: {
+    size?: number;
+    mask?: boolean;
+    documentId?: number;
+    document?: { width: number; height: number };
+  } = {},
 ) {
   const view = render(LayerThumbnail, { documentId: 1, size: 36, layer: layerView, ...props });
   const canvas = () => view.container.querySelector("canvas") as HTMLCanvasElement | null;
@@ -124,6 +129,27 @@ test("a fill or a group shows its color or nothing, and never asks the engine", 
   expect(swatch).toHaveStyle({ background: "rgb(255 0 0 / 1)" });
   show(layer({ kind: "adjustment" }));
   await scrollIntoView();
+  expect(requests).toHaveLength(0);
+});
+
+test("a gradient fill shows its gradient, drawn by CSS", async () => {
+  const gradient = {
+    stops: [
+      [0, 255, 0, 0],
+      [4096, 0, 0, 255],
+    ] as [number, number, number, number][],
+    alpha: [1, 1] as [number, number],
+    shape: "linear" as const,
+    from: [0, 50] as [number, number],
+    to: [100, 50] as [number, number],
+  };
+  const fill = show(layer({ kind: "gradientFill", gradientFill: gradient }), {
+    document: { width: 100, height: 100 },
+  });
+  await scrollIntoView();
+  expect(fill.canvas()).toBeNull();
+  const swatch = fill.container.querySelector(".fill span") as HTMLElement;
+  expect(swatch.style.background).toContain("linear-gradient(90.00deg, rgb(255, 0, 0) 0.00%");
   expect(requests).toHaveLength(0);
 });
 

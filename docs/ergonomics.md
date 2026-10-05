@@ -450,7 +450,10 @@ maintainer's answers to the audit:
 
 - **Decided, to build**:
   - Gradient and Pattern fill layers come with a gradient engine and patterns, not before (no
-    dead entries).
+    dead entries). ✅ Gradient fill layers (Layer > New Fill Layer > Gradient): the drawing
+    colors from the bottom to the top of the document, as in Photoshop; the Properties panel
+    edits the gradient (Gradient Map's editor), its style (linear, radial), angle and scale
+    about its center, and reverses it. Not yet: opacity stops, Pattern fill layers.
   - Layer styles (drop shadow, glows, stroke, overlays) as in Photoshop
     ([ADR 0032](adr/0032-layer-styles.md)): an "fx" mark and the effects listed below the
     layer, each with an eye; Photoshop's Layer Style dialog (double-click on the layer, the fx
@@ -663,8 +666,8 @@ answers:
   - ✅ Crop options: a ratio or a size, and Straighten (a line drawn along the horizon).
   - Edit > Transform gains Distort and Perspective, in Free Transform's box: a projective
     transform per layer, an ADR first. The Crop tool gets no perspective mode.
-  - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill
-    layers come with it (to build), one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
+  - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); ✅ gradient
+    fill layers come with it, one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
     its slot: the Magic Wand's region, filled.
   - Retouching by intention, never by technology: the Clone Stamp (S) first (✅), then Healing
     with its Patch mode (✅), then

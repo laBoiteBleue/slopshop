@@ -3,6 +3,7 @@
 
 import { hexToSrgb, srgbToHex } from "./color";
 import type { BlendModeId, EditRequest, LayerView } from "./engine";
+import type { GradientFill } from "./gradientFill";
 import { childrenOf, insertionPoint, outermost, type LayerTree } from "./layerTree";
 
 /** One edit, or one batch (a single undo entry) for several. */
@@ -114,9 +115,23 @@ export function newFill(
   return { kind: "addFillLayer", name, color: [...hexToSrgb(hex), 1], parent, index };
 }
 
+/**
+ * A new gradient fill layer of `gradient` above `active`, placed as `newFill` places a fill
+ * layer (Layer > New Fill Layer > Gradient).
+ */
+export function newGradientFillLayer(
+  tree: LayerTree,
+  active: number | null,
+  gradient: GradientFill,
+  name: string,
+): EditRequest {
+  const { parent, index } = insertionPoint(tree, active);
+  return { kind: "addGradientFill", name, gradient, parent, index };
+}
+
 /** Whether `layer` has settings the Properties panel shows: an adjustment or a fill layer. */
 export function hasProperties(layer: LayerView | null): layer is LayerView {
-  return layer?.kind === "adjustment" || layer?.kind === "fill";
+  return layer?.kind === "adjustment" || layer?.kind === "fill" || layer?.kind === "gradientFill";
 }
 
 /** A fill layer's color as `#rrggbb`, from its display swatch. */

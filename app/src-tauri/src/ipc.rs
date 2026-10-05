@@ -130,6 +130,8 @@ pub struct LayerView {
     pub swatch: [f32; 4],
     /// An adjustment layer's adjustment (ADR 0020), for the Properties panel.
     pub adjustment: Option<AdjustmentView>,
+    /// A gradient fill layer's gradient, for the Properties panel and its thumbnail.
+    pub gradient_fill: Option<crate::paint::GradientDto>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
     pub children: Vec<LayerView>,
     /// A group whose layers blend through it.
@@ -422,6 +424,7 @@ impl LayerView {
     fn new(layer: &Layer) -> Self {
         let (kind, swatch, content_key, has_alpha) = match &layer.content {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
+            LayerContent::GradientFill { .. } => ("gradientFill", [0.0; 4], 0, false),
             LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
             LayerContent::Adjustment { .. } => ("adjustment", [0.0; 4], 0, false),
             // Never waits for a stack's pixels (ADR 0029): the original's color meanwhile.
@@ -453,6 +456,12 @@ impl LayerView {
             swatch,
             adjustment: match &layer.content {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView::new(adjustment)),
+                _ => None,
+            },
+            gradient_fill: match &layer.content {
+                LayerContent::GradientFill { field } => {
+                    Some(crate::paint::GradientDto::of_field(field))
+                }
                 _ => None,
             },
             children: layer
@@ -639,6 +648,21 @@ pub enum EditRequest {
     SetFillColor {
         id: u64,
         color: [f32; 4],
+    },
+    /// Add a gradient fill layer (Layer > New Fill Layer > Gradient), where `AddFillLayer`
+    /// adds a fill layer.
+    AddGradientFill {
+        name: String,
+        gradient: crate::paint::GradientDto,
+        #[serde(default)]
+        parent: Option<u64>,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// A gradient fill layer's gradient.
+    SetGradientFill {
+        id: u64,
+        gradient: crate::paint::GradientDto,
     },
     RemoveLayer {
         id: u64,
@@ -945,7 +969,9 @@ impl EditRequest {
         };
         let label = |kind, detail: Option<&'static str>| HistoryLabel { kind, detail };
         Some(match self {
-            Self::AddFillLayer { .. } => HistoryLabel::new("newFillLayer"),
+            Self::AddFillLayer { .. } | Self::AddGradientFill { .. } => {
+                HistoryLabel::new("newFillLayer")
+            }
             Self::AddGroup { .. } => HistoryLabel::new("newGroup"),
             Self::AddAdjustmentLayer { adjustment: id, .. } => {
                 label("newAdjustmentLayer", adjustment(id))
@@ -1036,6 +1062,43 @@ impl EditRequest {
                     Some(dto) => Some(Box::new(dto.style()?)),
                     None => None,
                 },
+            },
+            EditRequest::AddGradientFill {
+                name,
+                gradient,
+                parent,
+                index,
+            } => {
+                let field = gradient.field()?;
+                let parent = parent.map(LayerId::from_raw);
+                let index = match index {
+                    Some(index) => index,
+                    None => session
+                        .document()
+                        .children_of(parent)
+                        .ok_or("unknown parent")?
+                        .len(),
+                };
+                Edit::InsertLayer {
+                    parent,
+                    index,
+                    layer: Layer {
+                        style: None,
+                        transform: slopshop_core::Affine::IDENTITY,
+                        clipped: false,
+                        id: session.allocate_layer_id(),
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::GradientFill { field },
+                    },
+                }
+            }
+            EditRequest::SetGradientFill { id, gradient } => Edit::SetGradientFill {
+                id: LayerId::from_raw(id),
+                field: gradient.field()?,
             },
             EditRequest::SetFillColor { id, color } => {
                 let [r, g, b, a] = color;
@@ -1749,7 +1812,7 @@ pub(crate) fn gradient_of_stops(
 }
 
 /// A gradient's stops as the UI gets them, `[location, r, g, b]`.
-fn gradient_stops(gradient: &slopshop_core::gradient::Gradient) -> Vec<[u16; 4]> {
+pub(crate) fn gradient_stops(gradient: &slopshop_core::gradient::Gradient) -> Vec<[u16; 4]> {
     gradient
         .stops()
         .iter()

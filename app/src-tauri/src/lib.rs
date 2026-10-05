@@ -1618,7 +1618,9 @@ async fn add_mask_from_transparency(
             .ok_or("unknown layer")?;
         match &layer.content {
             LayerContent::Raster { image, .. } => image.clone(),
-            LayerContent::Fill { .. } => return Err("a fill layer has no transparency".to_owned()),
+            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => {
+                return Err("a fill layer has no transparency".to_owned());
+            }
             LayerContent::Group { .. } => return Err("a group has no transparency".to_owned()),
             LayerContent::Adjustment { .. } => {
                 return Err("an adjustment layer has no transparency".to_owned());
@@ -1691,7 +1693,7 @@ async fn layer_thumbnail(
             (_, None, true) => return Err("the layer has no mask".to_owned()),
             // A stack's pixels are evaluated below, off the async runtime (ADR 0029).
             (LayerContent::Raster { image, .. }, _, false) => image.clone(),
-            (LayerContent::Fill { .. }, _, false) => {
+            (LayerContent::Fill { .. } | LayerContent::GradientFill { .. }, _, false) => {
                 return Err("fill layers have no thumbnail".to_owned());
             }
             (LayerContent::Group { .. }, _, false) => {
@@ -3325,7 +3327,7 @@ mod tests {
         let document = documents.get_mut(doc.id).unwrap();
         let layer = document.session.document().layers()[0].id;
         // Black, opaque, to black, transparent, across the canvas.
-        let gradient: paint::GradientRequest = serde_json::from_str(
+        let gradient: paint::GradientDto = serde_json::from_str(
             r#"{"stops":[[0,0,0,0],[4096,0,0,0]],"alpha":[1,0],"shape":"linear","from":[0,0],"to":[200,0]}"#,
         )
         .unwrap();
@@ -3350,7 +3352,7 @@ mod tests {
         let [r, g, b] = paint::sample_color_at(shown, 199.0, 50.0, 1).unwrap();
         assert!(r >= 254 && g == 0 && b == 0, "{r} {g} {b}");
         // A point, not a gradient.
-        let flat: paint::GradientRequest = serde_json::from_str(
+        let flat: paint::GradientDto = serde_json::from_str(
             r#"{"stops":[[0,0,0,0],[4096,0,0,0]],"alpha":[1,1],"shape":"radial","from":[5,5],"to":[5,5]}"#,
         )
         .unwrap();
@@ -4330,6 +4332,42 @@ mod tests {
 
         s.undo().unwrap();
         assert_eq!(DocumentView::new(&s, &meta(), Vec::new()).layers.len(), 1);
+    }
+
+    #[test]
+    fn a_gradient_fill_is_added_shown_and_changed() {
+        let mut s = blank_session();
+        let gradient = r#"{"stops":[[0,255,0,0],[4096,0,0,255]],"alpha":[1.0,0.5],"shape":"linear","from":[0.0,10.0],"to":[0.0,0.0]}"#;
+        let json = format!(r#"{{"kind":"addGradientFill","name":"Sky","gradient":{gradient}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert_eq!(layer.kind, "gradientFill");
+        // The view gives back what was sent.
+        let shown = serde_json::to_value(&layer.gradient_fill).unwrap();
+        let sent: serde_json::Value = serde_json::from_str(gradient).unwrap();
+        assert_eq!(shown, sent);
+
+        let json = format!(
+            r#"{{"kind":"setGradientFill","id":{},"gradient":{}}}"#,
+            layer.id,
+            gradient.replace("linear", "radial")
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let shape = serde_json::to_value(&view.layers[1].gradient_fill).unwrap()["shape"].clone();
+        assert_eq!(shape, "radial");
+        s.undo().unwrap();
+
+        // A gradient going nowhere is refused.
+        let flat = gradient.replace(r#""to":[0.0,0.0]"#, r#""to":[0.0,10.0]"#);
+        let json = format!(r#"{{"kind":"addGradientFill","name":"Flat","gradient":{flat}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
     }
 
     #[test]
