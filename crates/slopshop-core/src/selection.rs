@@ -455,53 +455,11 @@ pub fn sample_grid(selection: &RasterImage, area: Rect, width: usize, height: us
     out
 }
 
-/// The smallest rectangle holding every selected pixel (coverage above 0), or `None`.
+/// The smallest rectangle holding every selected pixel (coverage above 0), or `None`. Computed
+/// once per selection, tile by tile in parallel: a brush over an effect applied within a
+/// selection asks at every frame.
 pub fn bounds(selection: &RasterImage) -> Option<Rect> {
-    let size = selection.size();
-    let level = &selection.levels()[0];
-    let grid = level.grid();
-    let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0u32, 0u32);
-    let mut uniform: HashMap<*const u8, Option<u16>> = HashMap::new();
-    for row in 0..grid.rows() {
-        for col in 0..grid.columns() {
-            let Some(tile) = level.tile(TileCoord { col, row }) else {
-                continue;
-            };
-            let constant = *uniform
-                .entry(tile.as_ptr())
-                .or_insert_with(|| uniform_value(tile));
-            let (x0, y0) = (col * TILE_SIZE, row * TILE_SIZE);
-            let w = (size.width - x0).min(TILE_SIZE);
-            let h = (size.height - y0).min(TILE_SIZE);
-            let (tl, tt, tr, tb) = match constant {
-                Some(0) => continue,
-                Some(_) => (0, 0, w, h),
-                None => {
-                    let values = decode(tile);
-                    let (mut l, mut t, mut r, mut b) = (u32::MAX, u32::MAX, 0, 0);
-                    for y in 0..h {
-                        for x in 0..w {
-                            if values[(y * TILE_SIZE + x) as usize] != 0 {
-                                l = l.min(x);
-                                t = t.min(y);
-                                r = r.max(x + 1);
-                                b = b.max(y + 1);
-                            }
-                        }
-                    }
-                    if r == 0 {
-                        continue;
-                    }
-                    (l, t, r, b)
-                }
-            };
-            left = left.min(x0 + tl);
-            top = top.min(y0 + tt);
-            right = right.max(x0 + tr);
-            bottom = bottom.max(y0 + tb);
-        }
-    }
-    (right > left).then(|| Rect::new(left, top, right - left, bottom - top))
+    selection.coverage_bounds()
 }
 
 /// A polyline in document pixels.
