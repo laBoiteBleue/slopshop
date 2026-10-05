@@ -3391,6 +3391,7 @@ mod tests {
             offset: [-100.0, 0.0],
             source_layer: None,
             heal: false,
+            tone: None,
         });
         paint::paint(&state, doc.id, clone).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3416,6 +3417,7 @@ mod tests {
             offset: [-100.0, 0.0],
             source_layer: None,
             heal: true,
+            tone: None,
         });
         paint::paint(&state, doc.id, heal).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3496,6 +3498,59 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn dodge_and_burn_lighten_and_darken_where_they_paint() {
+        let state = AppState::new();
+        let gray = RasterImage::from_pixels(
+            Size::new(200, 100),
+            PixelFormat::RGBA8_SRGB,
+            &[128, 128, 128, 255].repeat(200 * 100),
+        )
+        .unwrap();
+        let doc = state
+            .add_document(image_session(gray, "gray"), None, Vec::new())
+            .unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            documents
+                .get_mut(doc.id)
+                .unwrap()
+                .session
+                .document()
+                .layers()[0]
+                .id
+        };
+        let stroke = |id: u64, x: f64, burn: bool| {
+            let mut request = dab(layer, paint::PaintTarget::Layer, None);
+            request.stroke = id;
+            request.samples = vec![[x, 50.5, 1.0]];
+            request.clone = Some(paint::CloneRequest {
+                offset: [0.0, 0.0],
+                source_layer: Some(layer.get()),
+                heal: false,
+                tone: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "burn": burn, "range": "midtones", "exposure": 0.5
+                    }))
+                    .unwrap(),
+                ),
+            });
+            paint::paint(&state, doc.id, request).unwrap();
+        };
+        stroke(1, 50.5, false);
+        stroke(2, 150.5, true);
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let shown = document.session.document();
+        let at = |x: f64| paint::sample_color_at(shown, x, 50.5, 1).unwrap()[0];
+        assert!(at(50.5) > 140, "dodged: {}", at(50.5));
+        assert!(at(150.5) < 116, "burnt: {}", at(150.5));
+        assert_eq!(at(100.5), 128, "untouched between");
+        let (labels, done) = document.session.history();
+        assert_eq!(labels[done - 2].kind, "dodge");
+        assert_eq!(labels[done - 1].kind, "burn");
     }
 
     #[test]

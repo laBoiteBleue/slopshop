@@ -163,10 +163,11 @@ pub enum PaintOp {
     },
     /// Lay the colors of a [`crate::clone::CloneSource`] (given to [`TopPaint::lay`]), each
     /// pixel the one `offset` away from its place in the document, its alpha scaling the
-    /// amount: the Clone Stamp.
+    /// amount: the Clone Stamp; with `tone`, the colors lightened or darkened (Dodge, Burn).
     Clone {
         offset: [f64; 2],
         to_document: Affine,
+        tone: Option<crate::clone::Tone>,
     },
 }
 
@@ -199,6 +200,7 @@ impl PaintOp {
             PaintOp::Clone {
                 offset,
                 to_document,
+                tone,
             } => {
                 let Some(source) = source else {
                     return (None, 0.0);
@@ -208,7 +210,11 @@ impl PaintOp {
                 if a <= 0.0 {
                     return (None, 0.0);
                 }
-                let c = LinearRgba::new(r / a, g / a, b / a, 1.0);
+                let mut rgb = [r / a, g / a, b / a];
+                if let Some(tone) = tone {
+                    rgb = tone.apply(rgb);
+                }
+                let c = LinearRgba::new(rgb[0], rgb[1], rgb[2], 1.0);
                 (op_color(math, PaintOp::Color(c)), f64::from(a.min(1.0)))
             }
             _ => (color, 1.0),

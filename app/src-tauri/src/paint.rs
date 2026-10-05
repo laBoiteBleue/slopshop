@@ -68,6 +68,42 @@ pub struct CloneRequest {
     /// The Healing Brush: on release, what was laid is blended into where it was laid.
     #[serde(default)]
     pub heal: bool,
+    /// The Dodge and Burn tools: the colors taken (offset 0, the layer as it was) lightened or
+    /// darkened.
+    #[serde(default)]
+    pub tone: Option<ToneRequest>,
+}
+
+/// Dodge (`burn` false) or Burn, on a range of tones, by `exposure` in `[0, 1]`.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToneRequest {
+    pub burn: bool,
+    pub range: ToneRangeRequest,
+    pub exposure: f32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToneRangeRequest {
+    Shadows,
+    Midtones,
+    Highlights,
+}
+
+impl ToneRequest {
+    fn tone(self) -> slopshop_core::clone::Tone {
+        use slopshop_core::clone::ToneRange;
+        slopshop_core::clone::Tone {
+            burn: self.burn,
+            range: match self.range {
+                ToneRangeRequest::Shadows => ToneRange::Shadows,
+                ToneRangeRequest::Midtones => ToneRange::Midtones,
+                ToneRangeRequest::Highlights => ToneRange::Highlights,
+            },
+            exposure: self.exposure,
+        }
+    }
 }
 
 /// What a stroke paints (ADR 0027).
@@ -366,6 +402,7 @@ fn start(
         (None, Some(clone)) => Paint::Clone {
             offset: clone.offset,
             gray: true,
+            tone: clone.tone.map(ToneRequest::tone),
         },
         (None, None) => Paint::Gray(request.color.map_or(0.0, gray_of_srgb)),
     };
@@ -391,6 +428,7 @@ fn start(
                 _ if request.clone.is_some() => Paint::Clone {
                     offset: request.clone.map_or([0.0; 2], |c| c.offset),
                     gray: false,
+                    tone: request.clone.and_then(|c| c.tone).map(ToneRequest::tone),
                 },
                 (Some([r, g, b]), None) => {
                     Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0))
@@ -516,6 +554,8 @@ pub(crate) fn paint(
             if has_paint {
                 let label = HistoryLabel::new(if request.restore {
                     "restoreEraser"
+                } else if let Some(tone) = request.clone.and_then(|c| c.tone) {
+                    if tone.burn { "burn" } else { "dodge" }
                 } else if request.clone.is_some_and(|c| c.heal) {
                     "healingBrush"
                 } else if request.clone.is_some() {
@@ -750,6 +790,7 @@ pub(crate) fn patch_edit(
         offset,
         source_layer,
         heal: true,
+        tone: None,
     });
     let (mut painting, growth) = start(doc, &request, true, None)?;
     painting.fill();
