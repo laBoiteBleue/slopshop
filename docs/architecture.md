@@ -67,6 +67,11 @@ do not depend on each other: export receives its pixel source as a closure (see
   The color-comparing tools (Magic Wand, Grow, Similar, Color Range) take their composited
   pixels from an injected `PixelSource` (the GPU export path in the app, the CPU compositor
   otherwise and as fallback).
+- `liquify` (ADR 0037): Filter > Liquify's displacement field (a sparse tiled grid of one node
+  per 1, 2 or 4 pixels, aligned with the layer's tiles, with a freeze mask), the brush tools
+  that compose exact shifts into it, the warp that evaluates a layer, a crop at a pyramid level
+  or a frame of the workspace through it. A Liquify entry of a layer's stack (`stack`) holds
+  the field and is a materialization point like a filter.
 - `session`: document + linear undo/redo history made of inverse edits. *Gestures* (e.g. a
   slider drag) apply edits live and are recorded as one entry (`Edit::Batch`).
 - `view`: `ViewTransform` mapping output pixels to document pixels, and `Viewport`: fit mode,
@@ -172,6 +177,15 @@ view state `Viewport`); every request names its document, and requests for a clo
 rejected. Frames are returned as
 `tauri::ipc::Response` (an `ArrayBuffer` in JS): a 40-byte header (size, fit flag, document
 revision, zoom, engine render time) followed by the pixels, parsed without copy in `engine.ts`.
+
+Liquify (`src-tauri/src/liquify.rs`, ADR 0037): the workspace's session lives in the document
+(`OpenDocument::liquify`, shared with the commands so that they do not hold the documents'
+lock while they work): `liquify_open` evaluates what the layer shows (or what a Liquify entry
+is applied to) and starts from an empty field or the entry's; `liquify_stroke` takes pieces of
+a stroke (the pointer's samples and the time it stayed still), `liquify_undo` and
+`liquify_restore_all` walk the field's own history, `liquify_frame` returns the layer seen
+through the field as raw 8-bit RGBA, and `liquify_commit` (OK) makes the field one undo entry
+while `liquify_close` leaves the document untouched.
 
 Export (`src-tauri/src/export.rs`, ADR 0008): `export_defaults`, `export_spaces` and
 `export_max_side` give the export dialog the settings and limits of a format; `export_document` snapshots the document (raster pixels

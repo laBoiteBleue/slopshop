@@ -315,10 +315,13 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Sharpen > Clarity and Texture (Lightroom's -100 to 100: pushed from a fine and a broad
       blur, Clarity in the midtones; on the CPU)
 - [x] Dust & Scratches, Clarity and Texture on the GPU (looks)
-- [ ] Liquify
+- [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
+      as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
+      own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
+      and Thaw Mask; Size, Density, Pressure, Rate; Restore All), `.slop` 0.23; on the CPU. Not
+      yet: Face-Aware, saved meshes, mesh display, pen pressure, a GPU warp
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
-- [ ] Liquify as a stack entry (a displacement field, its own workspace)
 
 ## Phase 4 — Very large images
 
@@ -360,8 +363,8 @@ first.
       affine one (rendering, `.slop`, export, painting in the layer's grid): an ADR.
 - [ ] Proposed: **content-aware scaling** as an option of Free Transform's scaling (protecting
       what matters while the rest stretches), not a command of its own.
-- [ ] **Liquify**: brush deformations kept as a displacement field, an entry of the layer's
-      stack, editable and removable ([ADR 0034](adr/0034-editable-operations.md)).
+- [x] **Liquify**: brush deformations kept as a displacement field, an entry of the layer's
+      stack, editable and removable ([ADR 0037](adr/0037-liquify.md)).
 
 ## Phase 5 — Extensibility and distribution
 
