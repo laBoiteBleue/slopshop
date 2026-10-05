@@ -700,6 +700,67 @@ pub(crate) fn gradient_edit(
     fill_edit_with(doc, &request, None, Some(field))
 }
 
+/// The Healing Brush's Patch: the selection healed from the pixels `offset` (document pixels)
+/// away, where it was dragged (every visible layer, or `source_layer` alone): their texture,
+/// the tone around the selection; on `target`, one undo entry "Patch", the selection unchanged.
+#[tauri::command]
+pub async fn patch_selection(
+    app: tauri::AppHandle,
+    document_id: u64,
+    layer_id: u64,
+    target: PaintTarget,
+    offset: [f64; 2],
+    source_layer: Option<u64>,
+) -> Result<DocumentView, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        let edit = patch_edit(
+            document.session.document(),
+            layer_id,
+            target,
+            offset,
+            source_layer,
+        )?;
+        if let Some(edit) = edit {
+            document
+                .session
+                .with_label(Some(HistoryLabel::new("patch")), |s| s.perform(edit))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(document.view())
+    })
+    .await
+}
+
+/// [`patch_selection`]'s edit; `None` without a selection (nothing to heal).
+pub(crate) fn patch_edit(
+    doc: &Document,
+    layer_id: u64,
+    target: PaintTarget,
+    offset: [f64; 2],
+    source_layer: Option<u64>,
+) -> Result<Option<Edit>, String> {
+    if doc.selection().is_none() {
+        return Ok(None);
+    }
+    let mut request = fill_request(layer_id, target, None, 1.0);
+    request.clone = Some(CloneRequest {
+        offset,
+        source_layer,
+        heal: true,
+    });
+    let (mut painting, growth) = start(doc, &request, true, None)?;
+    painting.fill();
+    painting.heal().map_err(|e| e.to_string())?;
+    if !painting.has_paint() {
+        return Ok(None);
+    }
+    let painted = painted_so_far(request.target(), &mut painting)?;
+    Ok(Some(paint_edit(request.target(), painted, growth.as_ref())))
+}
+
 /// The Paint Bucket (G): the pixels of a color similar to the one at (`x`, `y`) (the Magic
 /// Wand's region: `tolerance`, `contiguous`, `anti_alias`; sampled from every visible layer, or
 /// `sample_layer` alone), within the selection if there is one, filled with `color` at
