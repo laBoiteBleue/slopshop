@@ -104,10 +104,13 @@ pub struct RasterImage {
     /// Format of the source pixels.
     format: PixelFormat,
     levels: Vec<RasterLevel>,
-    /// Average of the coarsest level: source linear RGB, straight alpha.
-    average: LinearRgba,
+    /// Average of the coarsest level: source linear RGB, straight alpha; computed once when
+    /// first asked (a painting stroke makes an image per frame, a swatch needs one).
+    average: OnceLock<LinearRgba>,
     /// The bounds of the pixels that are not transparent, computed once when first asked.
     content_bounds: OnceLock<Option<Rect>>,
+    /// The bounds of the pixels whose first channel is above 0, computed once when first asked.
+    coverage_bounds: OnceLock<Option<Rect>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -222,14 +225,13 @@ impl RasterImage {
             current = Some(next);
             current_size = next_size;
         }
-
-        let average = average_of(&levels[levels.len() - 1], &stored);
         Ok(Self {
             id: ImageId::next(),
             format,
             levels,
-            average,
+            average: OnceLock::new(),
             content_bounds: OnceLock::new(),
+            coverage_bounds: OnceLock::new(),
         })
     }
 
@@ -257,13 +259,13 @@ impl RasterImage {
             .enumerate()
             .map(|(level, (size, tiles))| checked_level(level, size, tiles, &stored))
             .collect::<Result<Vec<_>, _>>()?;
-        let average = average_of(&levels[levels.len() - 1], &stored);
         Ok(Self {
             id: ImageId::next(),
             format,
             levels,
-            average,
+            average: OnceLock::new(),
             content_bounds: OnceLock::new(),
+            coverage_bounds: OnceLock::new(),
         })
     }
 
@@ -283,13 +285,13 @@ impl RasterImage {
             let coarser = downsample_level(finer, &stored);
             levels.push(coarser);
         }
-        let average = average_of(&levels[levels.len() - 1], &stored);
         Ok(Self {
             id: ImageId::next(),
             format,
             levels,
-            average,
+            average: OnceLock::new(),
             content_bounds: OnceLock::new(),
+            coverage_bounds: OnceLock::new(),
         })
     }
 
@@ -304,13 +306,13 @@ impl RasterImage {
         check_format(size, format)?;
         let stored = Codec::new(stored_format(format));
         let level = checked_level(0, size, tiles, &stored)?;
-        let average = average_of(&level, &stored);
         Ok(Self {
             id: ImageId::next(),
             format,
             levels: vec![level],
-            average,
+            average: OnceLock::new(),
             content_bounds: OnceLock::new(),
+            coverage_bounds: OnceLock::new(),
         })
     }
 
@@ -496,9 +498,12 @@ impl RasterImage {
     }
 
     /// The smallest rectangle holding every pixel whose first channel is above 0: what a mask
-    /// lets show (ADR 0014); `None` when it hides everything. Scanned each time (rarely asked).
+    /// lets show (ADR 0014), or a selection selects; `None` when it hides everything. Computed
+    /// once, tile by tile in parallel.
     pub fn coverage_bounds(&self) -> Option<Rect> {
-        self.scan_bounds(|(color, _)| color[0] > 0.0)
+        *self
+            .coverage_bounds
+            .get_or_init(|| self.scan_bounds(|(color, _)| color[0] > 0.0))
     }
 
     /// The smallest rectangle holding every pixel for which `keep` holds (on its decoded color
@@ -694,13 +699,13 @@ impl RasterImage {
                 coarser.tiles[(row * columns + col) as usize] = Arc::from(tile);
             }
         }
-        let average = average_of(&levels[levels.len() - 1], &stored);
         Ok(Self {
             id: ImageId::next(),
             format: self.format,
             levels,
-            average,
+            average: OnceLock::new(),
             content_bounds: OnceLock::new(),
+            coverage_bounds: OnceLock::new(),
         })
     }
 
@@ -722,8 +727,9 @@ impl RasterImage {
                 id: ImageId::next(),
                 format,
                 levels: self.levels.iter().map(RasterLevel::shared).collect(),
-                average: self.average,
+                average: self.average.clone(),
                 content_bounds: OnceLock::new(),
+                coverage_bounds: OnceLock::new(),
             }));
         }
         let (from, to) = (
@@ -821,7 +827,11 @@ impl RasterImage {
     /// Average color (linear light, straight alpha) expressed in `target`, computed once from
     /// the coarsest pyramid level. Meant for swatches and placeholders.
     pub fn average_color(&self, target: &ColorSpace) -> LinearRgba {
-        self.average.transform(&self.matrix_to(target))
+        let average = self.average.get_or_init(|| {
+            let coarsest = &self.levels[self.levels.len() - 1];
+            average_of(coarsest, &Codec::new(self.stored_format()))
+        });
+        average.transform(&self.matrix_to(target))
     }
 
     /// RAM used by the tiles of all levels, in bytes.
@@ -951,6 +961,27 @@ pub(crate) fn decode_levels(transfer: TransferFunction, sample: SampleType) -> V
     }
 }
 
+/// [`decode_levels`], made once per transfer and sample type: a 16-bit table is 65,536 values,
+/// and a painting stroke makes codecs at every frame.
+fn shared_levels(transfer: TransferFunction, sample: SampleType) -> Arc<[f32]> {
+    type Made = Vec<(TransferFunction, SampleType, Arc<[f32]>)>;
+    /// The tables made so far, the oldest dropped beyond a few dozen (a document has a few).
+    static MADE: std::sync::Mutex<Made> = std::sync::Mutex::new(Vec::new());
+    const KEPT: usize = 32;
+    let mut made = MADE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, _, levels)) = made.iter().find(|(t, s, _)| *t == transfer && *s == sample) {
+        return Arc::clone(levels);
+    }
+    let levels: Arc<[f32]> = decode_levels(transfer, sample).into();
+    if made.len() >= KEPT {
+        made.remove(0);
+    }
+    made.push((transfer, sample, Arc::clone(&levels)));
+    levels
+}
+
 /// Reads and writes pixels of one format, converting to and from linear premultiplied light.
 #[derive(Debug)]
 pub(crate) struct Codec {
@@ -962,14 +993,14 @@ pub(crate) struct Codec {
     transfer: TransferFunction,
     pub(crate) bytes_per_pixel: usize,
     /// Raw integer sample → linear, for 8/16-bit data.
-    decode_lut: Vec<f32>,
+    decode_lut: Arc<[f32]>,
 }
 
 impl Codec {
     pub(crate) fn new(format: PixelFormat) -> Self {
         let sample = format.sample;
         let transfer = format.color_space.transfer;
-        let decode_lut = decode_levels(transfer, sample);
+        let decode_lut = shared_levels(transfer, sample);
         let channels = format.layout.channels() as usize;
         Self {
             sample,
