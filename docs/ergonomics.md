@@ -641,8 +641,11 @@ answers:
     color, never marching ants) selecting the layers whose visible pixels it touches; Shift
     adds them.
   - Layers and pixels stay two selections: layers by the Move tool, the panel and Select > All
-    Layers; pixels by M, L, W and the Select menu. One explicit bridge, as in Photoshop:
-    Ctrl+click on a layer's thumbnail loads its transparency as the selection.
+    Layers; pixels by M, L, W and the Select menu. ✅ One explicit bridge, as in Photoshop:
+    Ctrl+click on a layer's thumbnail loads its transparency as the selection (its pixels
+    alone: opacity, blending, mask and effects left out; on the mask's thumbnail, the mask),
+    Shift adding, Alt subtracting, both intersecting; one undo entry, the layers selected as
+    they were.
   - ✅ Quick Mask: a round red button at the bottom of the toolbar, as in Photoshop, lit while
     it is on; a click toggles it as Q does.
   - ✅ Eyedropper (I): a click takes the foreground color (Alt: the background), Sample (Current

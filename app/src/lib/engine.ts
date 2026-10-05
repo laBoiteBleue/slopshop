@@ -1534,6 +1534,12 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("paint_gradient", { documentId, layerId, target, gradient, opacity }),
     ),
+  /**
+   * Ctrl+click on a layer's thumbnail (its mask's with `mask`): the selection its pixels make,
+   * combined with the current one by `mode` (one undo entry).
+   */
+  selectLayerPixels: (documentId: number, layerId: number, mask: boolean, mode: SelectionMode) =>
+    serial(() => invoke<DocumentView>("select_layer_pixels", { documentId, layerId, mask, mode })),
   /** The selection's bounds (pixels selected even partly), `null` without one. */
   selectionBounds: (documentId: number) =>
     invoke<Bounds | null>("selection_bounds", { documentId }),
