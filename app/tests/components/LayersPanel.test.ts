@@ -1,6 +1,7 @@
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
+import { tick } from "svelte";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DocumentView, LayerView } from "../../src/lib/engine";
 import LayersPanel from "../../src/lib/LayersPanel.svelte";
@@ -114,6 +115,45 @@ test("a click selects a layer, Ctrl+click adds one, Shift+click a range", async 
   await user.click(row("Sky"));
   await user.keyboard("[/ShiftLeft]");
   expect(selectedNames()).toEqual(["Text", "Group", "Sea", "Sky"]);
+});
+
+test("among several selected layers, the active one is marked", async () => {
+  const { user } = open();
+  const active = () => document.querySelector("li[aria-current='true'] .name")?.textContent;
+  const marked = () =>
+    [...document.querySelectorAll("li.active .name")].map((el) => el.textContent);
+  expect(active()).toBe("Text");
+  // Alone, nothing to tell apart.
+  expect(marked()).toEqual([]);
+  await user.click(row("Sea"));
+  await user.keyboard("[ControlLeft>]");
+  await user.click(row("Background"));
+  await user.keyboard("[/ControlLeft]");
+  expect(active()).toBe("Background");
+  expect(marked()).toEqual(["Background"]);
+});
+
+test("layers picked in the image follow the panel's rules, the groups unfolding", async () => {
+  const { component, user } = open();
+  await user.click(within(row("Group")).getByTitle("Collapse group"));
+  expect(screen.queryByText("Sea")).toBeNull();
+  const pick = async (hit: number, add: boolean) => {
+    const picked = component.pickInImage(hit, add);
+    await tick();
+    return picked;
+  };
+  // A layer alone, inside a folded group.
+  expect(await pick(4, false)).toEqual({ collapse: false, moves: true });
+  expect(selectedNames()).toEqual(["Sea"]);
+  // Shift adds one, active; again takes it out, without moving.
+  expect(await pick(1, true)).toEqual({ collapse: false, moves: true });
+  expect(selectedNames()).toEqual(["Sea", "Background"]);
+  expect(await pick(5, true)).toEqual({ collapse: false, moves: true });
+  expect(await pick(5, true)).toEqual({ collapse: false, moves: false });
+  expect(selectedNames()).toEqual(["Sea", "Background"]);
+  // A press on one of them keeps them all, for a drag.
+  expect(await pick(4, false)).toEqual({ collapse: true, moves: true });
+  expect(selectedNames()).toEqual(["Sea", "Background"]);
 });
 
 test("the eye hides its layer, or the whole selection it is part of, in one edit", async () => {

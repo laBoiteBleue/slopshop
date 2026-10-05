@@ -158,10 +158,27 @@ test("the Move tool's drag starts at a document point and moves by document pixe
     { keys: "[/MouseLeft]", target: area },
   ]);
   await user.keyboard("[/AltLeft]");
-  expect(onmovestart).toHaveBeenCalledWith(20, 35, false, true);
+  expect(onmovestart).toHaveBeenCalledWith(20, 35, { ctrl: false, alt: true, shift: false });
   // 10 CSS pixels at 200%: 5 document pixels; half a document pixel per CSS pixel.
-  expect(onmove).toHaveBeenCalledWith(5, 0, 0.5, false);
+  expect(onmove).toHaveBeenCalledWith(5, 0, 0.5, { free: false, shift: false });
   expect(onmoveend).toHaveBeenCalledOnce();
+});
+
+test("the Move tool's press and drag say whether Shift is held", async () => {
+  const { area, onmovestart, onmove, user } = open();
+  await user.keyboard("[ShiftLeft>]");
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: area, coords: { clientX: 20, clientY: 30 } },
+    { target: area, coords: { clientX: 30, clientY: 30 } },
+    { keys: "[/MouseLeft]", target: area },
+  ]);
+  await user.keyboard("[/ShiftLeft]");
+  expect(onmovestart).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), {
+    ctrl: false,
+    alt: false,
+    shift: true,
+  });
+  expect(onmove).toHaveBeenCalledWith(10, 0, 1, { free: false, shift: true });
 });
 
 test("a double-click with the Move tool asks for Free Transform", async () => {

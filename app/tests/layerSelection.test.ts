@@ -4,6 +4,7 @@ import {
   NO_LAYERS,
   afterLayersChange,
   allSelected,
+  pickedInImage,
   pressed,
   ranged,
   selectionOf,
@@ -94,4 +95,33 @@ test("a press within a selection makes the layer active and keeps the selection"
     selection: selectionOf([2], 2),
     collapse: false,
   });
+});
+
+test("a press on a layer in the image selects it alone, as a press on its row", () => {
+  const picked = pickedInImage(selectionOf([2], 2), 4, false, ORDER);
+  assert.deepEqual(picked, { selection: selectionOf([4], 4), collapse: false, moves: true });
+  // On a layer of a multiple selection: all kept for a drag, that one alone on a click.
+  const several = selectionOf([2, 4, 3], 3);
+  assert.deepEqual(pickedInImage(several, 4, false, ORDER), {
+    selection: { ids: [2, 4, 3], active: 4, anchor: 4 },
+    collapse: true,
+    moves: true,
+  });
+});
+
+test("Shift+press in the image adds the layer, active, or takes it out without moving", () => {
+  const added = pickedInImage(selectionOf([2], 2), 4, true, ORDER);
+  assert.deepEqual(added, { selection: selectionOf([2, 4], 4), collapse: false, moves: true });
+  const removed = pickedInImage(selectionOf([2, 4], 4), 4, true, ORDER);
+  assert.deepEqual(removed, { selection: selectionOf([2], 2), collapse: false, moves: false });
+});
+
+test("a press where no layer shows keeps the selection, and moves it but with Shift", () => {
+  const selection = selectionOf([2, 3], 3);
+  assert.deepEqual(pickedInImage(selection, null, false, ORDER), {
+    selection,
+    collapse: false,
+    moves: true,
+  });
+  assert.equal(pickedInImage(selection, null, true, ORDER).moves, false);
 });

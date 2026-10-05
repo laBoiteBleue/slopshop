@@ -101,12 +101,21 @@
     onframe?: (stats: FrameStats) => void;
     /**
      * The Move tool (ADR 0017): a left drag on the image starts at document point (`x`, `y`)
-     * (`ctrl`: Ctrl or Cmd held), moves by (`dx`, `dy`) document pixels (fractions: the owner
-     * rounds; `docPerCss`: document pixels per CSS pixel, for snapping distances; `free`: Ctrl
-     * held, no snapping), then ends.
+     * with the keys held (`ctrl`: Ctrl or Cmd), moves by (`dx`, `dy`) document pixels
+     * (fractions: the owner rounds; `docPerCss`: document pixels per CSS pixel, for snapping
+     * distances; `free`: Ctrl held, no snapping; `shift`: Shift held), then ends.
      */
-    onmovestart?: (x: number, y: number, ctrl: boolean, alt: boolean) => void;
-    onmove?: (dx: number, dy: number, docPerCss: number, free: boolean) => void;
+    onmovestart?: (
+      x: number,
+      y: number,
+      keys: { ctrl: boolean; alt: boolean; shift: boolean },
+    ) => void;
+    onmove?: (
+      dx: number,
+      dy: number,
+      docPerCss: number,
+      keys: { free: boolean; shift: boolean },
+    ) => void;
     onmoveend?: () => void;
     /** A double-click on the image with the Move tool (Free Transform, as in Photoshop). */
     ondoubleclick?: () => void;
@@ -532,7 +541,7 @@
         container.setPointerCapture(e.pointerId);
         moving = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
         const [x, y] = toDocument(e.clientX, e.clientY);
-        onmovestart?.(x, y, hasShortcutModifier(e), e.altKey);
+        onmovestart?.(x, y, { ctrl: hasShortcutModifier(e), alt: e.altKey, shift: e.shiftKey });
       }
       return;
     }
@@ -548,7 +557,9 @@
       const dx = (e.clientX - moving.x) * scale;
       const dy = (e.clientY - moving.y) * scale;
       moving = { ...moving, x: e.clientX, y: e.clientY };
-      if (dx !== 0 || dy !== 0) onmove?.(dx, dy, scale, hasShortcutModifier(e));
+      if (dx !== 0 || dy !== 0) {
+        onmove?.(dx, dy, scale, { free: hasShortcutModifier(e), shift: e.shiftKey });
+      }
       return;
     }
     if (!panning || e.pointerId !== panning.pointerId) return;

@@ -114,7 +114,13 @@
     rotateEdit,
     sizeEdit,
   } from "./lib/imageEdits";
-  import { landing, nudged, pixelTarget as movedPixels, type PixelTarget } from "./lib/moveTool";
+  import {
+    alongAxis,
+    landing,
+    nudged,
+    pixelTarget as movedPixels,
+    type PixelTarget,
+  } from "./lib/moveTool";
   import { findLayer, visibleRasters, walk } from "./lib/layerTree";
   import {
     editableEntry,
@@ -2116,8 +2122,10 @@
 
   // The Move tool (ADR 0017): a left drag on the image moves the selected layers live, in whole
   // document pixels, one undo entry per drag. As in Photoshop: Auto-Select (the options bar)
-  // takes the layer under the pointer, Ctrl inverting it; the moving layers snap to the canvas
-  // and to the other layers (edges and centers, not with Ctrl), with magenta smart guides.
+  // takes the layer under the pointer, Ctrl inverting it, Shift adding it to the selection or
+  // taking it out (the Layers panel's selection and rules); Shift pressed during the drag keeps
+  // it on one axis; the moving layers snap to the canvas and to the other layers (edges and
+  // centers, not with Ctrl), with magenta smart guides.
   // A drag from inside the selection moves the selected pixels of the active layer (or of its
   // mask when it is the target) with the selection, leaving a hole; Alt copies them.
   let autoSelect = $state(true);
@@ -2212,6 +2220,13 @@
     applied: { x: number; y: number };
     docPerCss: number;
     free: boolean;
+    /** Shift was released since the press (it picked layers): held again, it holds an axis. */
+    shiftFree: boolean;
+    axis: boolean;
+    /** The layer a release without a drag selects alone (a press on a multiple selection). */
+    collapse: number | null;
+    /** The pointer went further than a click. */
+    dragged: boolean;
   };
   type PixelDrag = {
     drag: number;
@@ -2226,7 +2241,14 @@
   /** The Move tool's smart guides. */
   let smartGuides = $state<SmartGuide[]>([]);
 
-  function onMoveStart(x: number, y: number, ctrl: boolean, alt: boolean) {
+  /** How far the pointer goes before a press on the image is a drag, CSS pixels. */
+  const MOVE_CLICK_SLOP = 3;
+
+  function onMoveStart(
+    x: number,
+    y: number,
+    keys: { ctrl: boolean; alt: boolean; shift: boolean },
+  ) {
     const doc = active;
     if (!doc) return;
     const drag: MoveDrag = {
@@ -2238,28 +2260,34 @@
       applied: { x: 0, y: 0 },
       docPerCss: 1,
       free: false,
+      shiftFree: !keys.shift,
+      axis: false,
+      collapse: null,
+      dragged: false,
     };
     moveDrag = drag;
     void (async () => {
-      let ids = layersPanel?.selectedLayers().map((l) => l.id) ?? [];
-      if (autoSelect !== ctrl) {
+      let moves = true;
+      if (autoSelect !== keys.ctrl) {
         const hit = await engine.layerAt(doc.id, Math.floor(x), Math.floor(y)).catch(() => null);
-        if (hit !== null && !ids.includes(hit)) {
-          layersPanel?.selectOnly(hit);
-          ids = [hit];
+        const picked = layersPanel?.pickInImage(hit, keys.shift);
+        if (picked) {
+          moves = picked.moves;
+          if (picked.collapse) drag.collapse = hit;
         }
       }
+      const ids = moves ? (layersPanel?.selectedLayers().map((l) => l.id) ?? []) : [];
       // Quick Mask hides the outline: the layers move.
       const inside =
         doc.selectionKey != null && !doc.quickMask
           ? await engine.selectionBoundsAt(doc.id, x, y).catch(() => null)
           : null;
       if (moveDrag !== drag) return;
-      if (inside) {
+      if (inside && moves) {
         const target = pixelTarget();
         drag.ids = [];
         if (!target) return;
-        drag.pixels = { ...target, drag: nextPixelDrag++, copy: alt, sent: false };
+        drag.pixels = { ...target, drag: nextPixelDrag++, copy: keys.alt, sent: false };
         if (snapping) {
           drag.targets = { ...(await snapTargets(doc, [])), moving: inside };
         }
@@ -2308,12 +2336,20 @@
     return true;
   }
 
-  function onMoveDrag(dx: number, dy: number, docPerCss: number, free: boolean) {
+  function onMoveDrag(
+    dx: number,
+    dy: number,
+    docPerCss: number,
+    keys: { free: boolean; shift: boolean },
+  ) {
     const drag = moveDrag;
     if (!drag) return;
     drag.raw = { x: drag.raw.x + dx, y: drag.raw.y + dy };
     drag.docPerCss = docPerCss;
-    drag.free = free;
+    drag.free = keys.free;
+    drag.shiftFree ||= !keys.shift;
+    drag.axis = drag.shiftFree && keys.shift;
+    drag.dragged ||= Math.hypot(drag.raw.x, drag.raw.y) / docPerCss >= MOVE_CLICK_SLOP;
     flushMove(drag);
   }
 
@@ -2322,7 +2358,7 @@
     if (!drag.pixels && (!drag.ids || drag.ids.length === 0)) return;
     const snaps = snapping && !drag.free;
     const landed = landing(
-      drag.raw,
+      drag.axis ? alongAxis(drag.raw) : drag.raw,
       snaps ? (drag.targets?.moving ?? null) : null,
       withGuides(
         drag.targets?.targets ?? [],
@@ -2428,6 +2464,8 @@
     const drag = moveDrag;
     moveDrag = null;
     smartGuides = [];
+    // A click on a layer of a multiple selection selects it alone (the Layers panel's rule).
+    if (drag && drag.collapse !== null && !drag.dragged) layersPanel?.selectOnly(drag.collapse);
     if (drag?.pixels) {
       // Back where it started, the engine leaves no undo entry.
       if (drag.pixels.sent) {
