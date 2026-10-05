@@ -63,6 +63,34 @@ test("it follows the pointer without asking the engine at each move", async () =
   expect(loupe().style.getPropertyValue("--current")).toBe("#dc7814");
 });
 
+test("outrunning its pixels, it stays on the pointer with the last ones until the next come", async () => {
+  const answers: (() => void)[] = [];
+  const source = {
+    ...sourceOf(),
+    pixels: vi.fn(
+      (cx: number, cy: number, radius: number) =>
+        new Promise<Uint8ClampedArray<ArrayBuffer>>((resolve) =>
+          answers.push(() => void pixelsAround(cx, cy, radius).then(resolve)),
+        ),
+    ),
+  };
+  const props = reactive({ x: 100, y: 60, source });
+  render(Loupe, props);
+  await vi.waitFor(() => expect(answers).toHaveLength(1));
+  answers.shift()?.();
+  await vi.waitFor(() => expect(value()).toHaveTextContent("#c87814"));
+  // Far beyond the tile kept: the loupe is there at once, with the pixels it had.
+  props.x = 600;
+  const there = loupePlacement(600, 60, { width: window.innerWidth, height: window.innerHeight });
+  await vi.waitFor(() => expect(loupe().style.left).toBe(`${there.left}px`));
+  expect(value()).toHaveTextContent("#c87814");
+  // Then the pixels of where it is (asked ahead first, as the pointer moved fast).
+  await vi.waitFor(() => {
+    answers.splice(0).forEach((answer) => answer());
+    expect(value()).toHaveTextContent("#b07814");
+  });
+});
+
 test("a change of the document asks for its pixels again", async () => {
   const props = reactive({ x: 100, y: 60, source: sourceOf(1) });
   render(Loupe, props);

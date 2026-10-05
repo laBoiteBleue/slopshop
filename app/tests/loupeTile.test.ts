@@ -175,10 +175,10 @@ test("moving, the tile is asked ahead of the pointer, the pointer still in it", 
   expect(ahead.y).toBe(200);
   const tile = { ...ahead, pixels: new Uint8ClampedArray() };
   expect(covers(tile, 300, 200, LOUPE_RADIUS)).toBe(true);
-  // Very fast: the lead is cut so that the loupe stays inside.
-  const far = nextTile(300, 200, { velocity: [50, 0], scale: 1 });
-  expect(far.radius).toBe(MAX_TILE_RADIUS);
-  expect(covers({ ...far, pixels: new Uint8ClampedArray() }, 300, 200, LOUPE_RADIUS)).toBe(true);
+  // Zoomed out, the tile is larger: the lead is cut so that the loupe stays inside.
+  const wide = nextTile(300, 200, { velocity: [2, 0], scale: 8 });
+  expect(wide.radius).toBe(MAX_TILE_RADIUS);
+  expect(covers({ ...wide, pixels: new Uint8ClampedArray() }, 300, 200, LOUPE_RADIUS)).toBe(true);
 });
 
 test("a pointer moving fast gets the next tile before it leaves the one kept", async () => {
@@ -209,4 +209,10 @@ test("the pointer's motion: its velocity smoothed, still after a pause, the last
   expect(motion.at([120, 100], 20, 2).velocity).toEqual([0.75, 0]);
   // A pause: still again.
   expect(motion.at([121, 100], 1000, 2).velocity).toEqual([0, 0]);
+});
+
+test("faster than a tile can follow, a small one is asked where the pointer goes", () => {
+  // 20 document pixels per millisecond: a large image far zoomed out.
+  const fast = nextTile(1000, 500, { velocity: [20, -10], scale: 16 });
+  expect(fast).toEqual({ x: 1000 + 20 * LEAD_MS, y: 500 - 10 * LEAD_MS, radius: TILE_RADIUS });
 });

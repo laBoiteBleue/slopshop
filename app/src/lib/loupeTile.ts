@@ -24,7 +24,9 @@ const STILL: Motion = { velocity: [0, 0], scale: 1 };
  * The tile to ask for the loupe at document pixel (`x`, `y`) moving by `motion`: its center, where
  * the pointer will be `LEAD_MS` from now (the loupe still in it), and its radius, as many screen
  * pixels as `TILE_RADIUS` document pixels at 100 % and enough for that lead, within
- * `TILE_RADIUS` and `MAX_TILE_RADIUS`.
+ * `TILE_RADIUS` and `MAX_TILE_RADIUS`. Faster than one tile can follow (far zoomed out on a large
+ * image), a small tile where the pointer goes, quick to come: the loupe shows the last pixels
+ * meanwhile.
  */
 export function nextTile(
   x: number,
@@ -36,6 +38,8 @@ export function nextTile(
     Math.ceil(TILE_RADIUS * motion.scale),
     ...lead.map((d) => Math.abs(d) + LOUPE_RADIUS + TILE_MARGIN),
   );
+  const ahead = Math.max(...lead.map((d) => Math.abs(d) + LOUPE_RADIUS + TILE_MARGIN));
+  if (ahead > MAX_TILE_RADIUS) return { x: x + lead[0], y: y + lead[1], radius: TILE_RADIUS };
   const radius = Math.min(Math.max(TILE_RADIUS, needed), MAX_TILE_RADIUS);
   // The loupe where it is now stays within the tile.
   const room = radius - LOUPE_RADIUS - TILE_MARGIN;

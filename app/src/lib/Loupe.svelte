@@ -3,7 +3,8 @@
   // sampled one framed in the middle, Photoshop's sampling ring around them (the new color over
   // the current one) and the new color's value under it. Hidden off the image. Its pixels are cut
   // from a tile kept around the pointer (see loupeTile): it follows the pointer frame by frame,
-  // always with the pixels of where it is drawn.
+  // with the pixels of where it is drawn; when the pointer outruns the tiles (fast, far zoomed
+  // out), with the last pixels shown until the next ones come, a few milliseconds later.
   import { onDestroy } from "svelte";
   import {
     centerHex,
@@ -37,7 +38,7 @@
   let shown = $state(false);
   /** The sampled pixel's color, null where nothing is shown. */
   let sampled = $state<string | null>(null);
-  /** The pointer the pixels drawn are for: the loupe stays there until the next ones are. */
+  /** Where the loupe is drawn: the pointer, once some pixels are shown. */
   let at = $state({ x: 0, y: 0 });
   let frame = 0;
   let closed = false;
@@ -66,7 +67,11 @@
     const scale = beside ? Math.abs(beside[0] - point[0]) / 8 : null;
     const moving = motion.at(point, performance.now(), scale);
     const pixels = tiles.at(Math.floor(point[0]), Math.floor(point[1]), source.version, moving);
-    if (!pixels) return;
+    if (!pixels) {
+      // The last pixels go along with the pointer until the next ones come.
+      if (shown) at = { x, y };
+      return;
+    }
     sampled = centerHex(pixels);
     // Null in tests (jsdom draws nothing).
     canvas.getContext("2d")?.putImageData(new ImageData(pixels, LOUPE_SIDE, LOUPE_SIDE), 0, 0);
