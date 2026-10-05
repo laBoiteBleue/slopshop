@@ -68,7 +68,7 @@ built. Contributors: propose here first.
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Healing Brush (J), the Clone Stamp (S), the Gradient and the Paint Bucket (G); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Healing Brush (J), the Clone Stamp (S), the Gradient and the Paint Bucket (G), Dodge and Burn (O); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -381,6 +381,12 @@ built. Contributors: propose here first.
   the active layer (which grows to the canvas), grays on its mask or in Quick Mask; one undo
   entry. Not yet: editing a gradient's stops for the tool, the other shapes (Angle, Reflected,
   Diamond), dithering.
+- Dodge and Burn (O, Photoshop's Dodge and Burn tools): strokes lighten or darken what the
+  active layer shows, most in the options bar's Range (Shadows, Midtones, Highlights), by its
+  Exposure (50 % at first), with their own soft brush; Alt held at the press does the other
+  for the stroke. They take the layer as it shows when the stroke starts and keep the result
+  (ADR 0034, point 6); refused on a mask or in Quick Mask. One undo entry per stroke. Not yet:
+  Protect Tones, Sponge (not added: Vibrance through a mask).
 - The Paint Bucket (G): a click fills the pixels of a color similar to the clicked one (the
   Magic Wand's Tolerance, Anti-alias, Contiguous and Sample All Layers, its own settings) with
   the foreground color at the options bar's Opacity, within the selection when there is one, as
@@ -676,7 +682,7 @@ answers:
   mask), Pattern Stamp, the History and Art History Brushes (the Restore Eraser, the stack's
   eyes), the Background and Magic Erasers (Magic Wand or Select Subject, then a mask), Sponge
   (Vibrance through a mask), the Type Mask tools, Note, Count, Slice, Artboard and Frame.
-- **Later**: Mixer Brush, Blur, Sharpen and Smudge, Dodge and Burn, the Color Sampler, Custom
+- **Later**: Mixer Brush, Blur, Sharpen and Smudge, ✅ Dodge and Burn, the Color Sampler, Custom
   Shape; ✅ Ctrl+Space+click zooming in (Alt: out) for a pen without a wheel (a drag sideways
   zooms about where it began, Photoshop's scrubby zoom; Cmd+Space on macOS).
 

@@ -20,6 +20,7 @@
     type FilterId,
     type BrushRequest,
     type PaintRequest,
+    type ToneRange,
     type StrokeRequest,
     type ClipboardContents,
     type CopyRequest,
@@ -89,6 +90,7 @@
   import OptionsBar from "./lib/OptionsBar.svelte";
   import {
     isCloneTool,
+    isToneTool,
     isEraser,
     isPaintTool,
     slotOf,
@@ -839,6 +841,17 @@
     aligned: true,
     sample: "layer" as "all" | "layer",
   });
+  /** Dodge and Burn: a soft brush, the tones they change most and how much (Photoshop's). */
+  let toneOptions = $state({
+    size: 60,
+    hardness: 0,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    range: "midtones" as ToneRange,
+    exposure: 0.5,
+  });
   /** The Healing Brush's options: as the Clone Stamp's, hard by default (Photoshop's). */
   let healOptions = $state({
     mode: "brush" as "brush" | "patch",
@@ -859,6 +872,7 @@
   /** The options of the painting tool in use. */
   function paintOptions() {
     if (isEraser(tool)) return eraserOptions;
+    if (isToneTool(tool)) return toneOptions;
     if (tool === "cloneStamp") return cloneOptions;
     return tool === "healingBrush" ? healOptions : brushOptions;
   }
@@ -871,6 +885,23 @@
     const doc = active;
     if (!doc) return;
     let clone: PaintRequest["clone"];
+    if (isToneTool(tool) && (phase === "start" || phase === "line")) {
+      paintRun = null;
+      // On the layer's pixels only: the source is the layer as it shows.
+      const layer = layersPanel?.selectedLayer() ?? null;
+      if (doc.quickMask || layersPanel?.paintsMask()) {
+        showError(t("paint.toneLayersOnly"));
+        return;
+      }
+      // Alt: the other one for the stroke, as in Photoshop.
+      const burn = (tool === "burn") !== (keys?.altKey ?? false);
+      const { range, exposure } = toneOptions;
+      clone = {
+        offset: [0, 0],
+        sourceLayer: layer?.id ?? null,
+        tone: { burn, range, exposure },
+      };
+    }
     if (isCloneTool(tool) && (phase === "start" || phase === "line")) {
       const options = tool === "healingBrush" ? healOptions : cloneOptions;
       paintRun = null;
@@ -5191,6 +5222,7 @@
       bind:eraser={eraserOptions}
       bind:clone={cloneOptions}
       bind:heal={healOptions}
+      bind:tone={toneOptions}
       bind:eyedropper={eyedropperOptions}
       bind:bucket={bucketOptions}
       bind:gradient={gradientOptions}

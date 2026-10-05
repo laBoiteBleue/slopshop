@@ -1193,6 +1193,9 @@ export type BrushRequest = {
   pencil?: boolean;
 };
 
+/** The tones Dodge and Burn change most. */
+export type ToneRange = "shadows" | "midtones" | "highlights";
+
 /** What a stroke paints (see `paint::PaintTarget`): masks and the selection in gray. */
 /** A raster layer's pixels, its mask, or Quick Mask's image. */
 export type PaintTarget = "layer" | "mask" | "quickMask";
@@ -1244,7 +1247,13 @@ export type PaintRequest = {
    * The Clone Stamp: the pixels `offset` (document pixels) away, from every visible layer, or
    * `sourceLayer` alone, as they are when the stroke starts.
    */
-  clone?: { offset: [number, number]; sourceLayer: number | null; heal?: boolean };
+  clone?: {
+    offset: [number, number];
+    sourceLayer: number | null;
+    heal?: boolean;
+    /** Dodge (`burn` false) or Burn: the colors taken lightened or darkened. */
+    tone?: { burn: boolean; range: ToneRange; exposure: number };
+  };
 };
 
 /** A request of a Move tool drag moving selected pixels (see `move_pixels::MovePixelsRequest`). */

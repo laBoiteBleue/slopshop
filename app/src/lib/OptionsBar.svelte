@@ -1,7 +1,7 @@
 <script lang="ts">
   // The options bar (ADR 0013): the settings of the active tool, under the menu bar. Only what
   // belongs to the tool: view and apply/cancel commands live in the menus and on the keys.
-  import type { SelectionMode } from "./engine";
+  import type { SelectionMode, ToneRange } from "./engine";
   import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
@@ -25,6 +25,16 @@
     quick = $bindable(),
     brush = $bindable(),
     eraser = $bindable(),
+    tone = $bindable({
+      size: 60,
+      hardness: 0,
+      opacity: 1,
+      flow: 1,
+      pressureSize: true,
+      pressureOpacity: false,
+      range: "midtones",
+      exposure: 0.5,
+    }),
     heal = $bindable({
       mode: "brush",
       size: 30,
@@ -97,6 +107,8 @@
     eraser: PaintOptions;
     /** Clone Stamp: its brush, Aligned, and what it samples (Photoshop's Current Layer first). */
     clone?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
+    /** Dodge and Burn: their brush, the range of tones and the exposure. */
+    tone?: PaintOptions & { range: ToneRange; exposure: number };
     /** Healing Brush: as the Clone Stamp's. */
     heal?: PaintOptions & { mode: "brush" | "patch"; aligned: boolean; sample: "all" | "layer" };
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
@@ -149,7 +161,9 @@
           ? clone
           : tool === "healingBrush"
             ? heal
-            : null,
+            : tool === "dodge" || tool === "burn"
+              ? tone
+              : null,
   );
 
   const current = $derived(toolInfo(tool));
@@ -390,6 +404,26 @@
       </select>
     </label>
     <span class="hint">{t("patch.hint")}</span>
+  {:else if tool === "dodge" || tool === "burn"}
+    <BrushPicker bind:size={tone.size} bind:hardness={tone.hardness} />
+    <span class="divider"></span>
+    <label class="option">
+      {t("options.tone.range")}
+      <select bind:value={tone.range}>
+        <option value="shadows">{t("options.tone.shadows")}</option>
+        <option value="midtones">{t("options.tone.midtones")}</option>
+        <option value="highlights">{t("options.tone.highlights")}</option>
+      </select>
+    </label>
+    <SliderField
+      label={t("options.tone.exposure")}
+      bind:value={tone.exposure}
+      min={0}
+      max={100}
+      unit="%"
+      factor={100}
+      width={44}
+    />
   {:else if paint}
     {#if tool === "healingBrush"}
       <label class="option">

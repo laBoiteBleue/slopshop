@@ -23,7 +23,9 @@ export type ToolId =
   | "eraser"
   | "restoreEraser"
   | "paintBucket"
-  | "gradient";
+  | "gradient"
+  | "dodge"
+  | "burn";
 
 export type Tool = {
   id: ToolId;
@@ -85,6 +87,13 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "paintBucket", icon: "bucket", name: "tools.paintBucket" },
     ],
   },
+  {
+    key: "O",
+    tools: [
+      { id: "dodge", icon: "dodge", name: "tools.dodge" },
+      { id: "burn", icon: "burn", name: "tools.burn" },
+    ],
+  },
 ];
 
 export const TOOLS: readonly Tool[] = SLOTS.flatMap((slot) => slot.tools);
@@ -116,8 +125,13 @@ export function slotTool(slot: ToolSlot, shown: ToolId | undefined, next: boolea
 /** The tools that paint (ADR 0027). */
 export function isPaintTool(
   id: ToolId,
-): id is "brush" | "cloneStamp" | "healingBrush" | "eraser" | "restoreEraser" {
-  return id === "brush" || isCloneTool(id) || isEraser(id);
+): id is "brush" | "cloneStamp" | "healingBrush" | "dodge" | "burn" | "eraser" | "restoreEraser" {
+  return id === "brush" || isCloneTool(id) || isToneTool(id) || isEraser(id);
+}
+
+/** Dodge and Burn: they lighten or darken what the layer shows where they paint. */
+export function isToneTool(id: ToolId): id is "dodge" | "burn" {
+  return id === "dodge" || id === "burn";
 }
 
 /** The tools that paint pixels taken elsewhere (Alt+click sets where): they share a source. */
