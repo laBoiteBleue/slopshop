@@ -2312,6 +2312,7 @@ pub fn run() {
             paint::sample_patch,
             selection::color_range_preview,
             selection::color_range,
+            selection::select_layer_pixels,
             selection::selection_outline,
             layer_at,
             layers_at,
