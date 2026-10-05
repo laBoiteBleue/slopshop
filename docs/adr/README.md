@@ -42,5 +42,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0035 | [Filters on the GPU](0035-filters-on-the-gpu.md) | accepted |
 | 0036 | [Panels, the Window menu and the saved layout](0036-panels-and-layout.md) | accepted |
 | 0037 | [Liquify: a displacement field kept as an entry of the layer's stack](0037-liquify.md) | accepted |
+| 0038 | [Projective layer transforms: Distort and Perspective](0038-projective-transforms.md) | proposed |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
