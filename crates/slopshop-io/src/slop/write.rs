@@ -19,10 +19,10 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
-    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK, NODE_VERSION_STYLED,
-    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR,
-    SavedSelectionDto, Schema, Writer,
+    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
+    NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -501,17 +501,36 @@ pub(super) fn adjustment_params(adjustment: &Adjustment) -> Value {
     }
     // Schema 0.14: Gradient Map's stops, `[location, r, g, b]` (not reversed: `values` says).
     if let Adjustment::GradientMap { gradient, .. } = adjustment {
-        let stops: Vec<[u16; 4]> = gradient
-            .stops()
-            .iter()
-            .map(|s| {
-                let [r, g, b] = s.color.map(u16::from);
-                [s.location, r, g, b]
-            })
-            .collect();
-        params["gradient"] = json!(stops);
+        params["gradient"] = json!(gradient_stops(gradient));
     }
     params
+}
+
+/// A gradient's stops as written, `[location, r, g, b]`.
+fn gradient_stops(gradient: &slopshop_core::gradient::Gradient) -> Vec<[u16; 4]> {
+    gradient
+        .stops()
+        .iter()
+        .map(|s| {
+            let [r, g, b] = s.color.map(u16::from);
+            [s.location, r, g, b]
+        })
+        .collect()
+}
+
+/// A gradient fill layer's parameters (schema 0.24).
+fn gradient_fill_params(field: &slopshop_core::gradient::GradientField) -> Value {
+    let shape = match field.shape {
+        slopshop_core::gradient::GradientShape::Linear => "linear",
+        slopshop_core::gradient::GradientShape::Radial => "radial",
+    };
+    json!({
+        "gradient": gradient_stops(&field.gradient),
+        "shape": shape,
+        "from": field.from,
+        "to": field.to,
+        "alpha": field.alpha,
+    })
 }
 
 fn build_manifest(
@@ -613,6 +632,9 @@ fn build_manifest(
                 NODE_FILL,
                 json!({ "color": [color.r, color.g, color.b, color.a] }),
             ),
+            LayerContent::GradientFill { field } => {
+                (NODE_GRADIENT_FILL, gradient_fill_params(field))
+            }
             LayerContent::Group {
                 children,
                 pass_through,

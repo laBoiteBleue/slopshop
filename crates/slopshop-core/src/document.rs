@@ -112,6 +112,12 @@ pub const MAX_GROUP_DEPTH: usize = 16;
 pub enum LayerContent {
     /// A uniform color over the whole canvas, in the document working space.
     Fill { color: LinearRgba },
+    /// A gradient over the whole canvas (Layer > New Fill Layer > Gradient): `field` placed in
+    /// the layer's own space, so that moving the layer moves the gradient, as in Photoshop;
+    /// opaque (its transparency is the mask's).
+    GradientFill {
+        field: crate::gradient::GradientField,
+    },
     /// Source pixels, placed at the document origin. The image is immutable and shared:
     /// cloning the layer (snapshots, undo) never copies pixels. `image` is what the layer shows:
     /// once painted or adjusted, the result of its stack (ADR 0029), which keeps the pixels it
@@ -139,6 +145,7 @@ impl PartialEq for LayerContent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Fill { color: a }, Self::Fill { color: b }) => a == b,
+            (Self::GradientFill { field: a }, Self::GradientFill { field: b }) => a == b,
             // Immutable images: same allocation, same content.
             (Self::Raster { image: a, stack: c }, Self::Raster { image: b, stack: d }) => {
                 match (c, d) {
@@ -841,6 +848,11 @@ fn validate_restored(
         }
         if let LayerContent::Fill { color } = &layer.content
             && !color.is_finite()
+        {
+            return Err(RestoreError::InvalidColor(id));
+        }
+        if let LayerContent::GradientFill { field } = &layer.content
+            && !field.is_valid()
         {
             return Err(RestoreError::InvalidColor(id));
         }

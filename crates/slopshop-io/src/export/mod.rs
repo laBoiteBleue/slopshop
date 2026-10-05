@@ -1046,6 +1046,11 @@ fn is_structurally_gray(document: &Document) -> bool {
             image.format().layout.is_gray()
         }
         LayerContent::Fill { color } => color.r == color.g && color.g == color.b,
+        LayerContent::GradientFill { field } => field
+            .gradient
+            .stops()
+            .iter()
+            .all(|s| s.color[0] == s.color[1] && s.color[1] == s.color[2]),
         // Adjustments keep gray gray (equal channels stay equal).
         LayerContent::Group { .. } | LayerContent::Adjustment { .. } => true,
     });
@@ -1095,6 +1100,7 @@ fn is_structurally_opaque(document: &Document) -> bool {
     }
     match &bottom.content {
         LayerContent::Fill { color } => color.a >= 1.0,
+        LayerContent::GradientFill { field } => field.alpha.iter().all(|a| *a >= 1.0),
         LayerContent::Raster { image, .. } => {
             // Placed by a whole-pixel translation (ADR 0017): it must cover the canvas.
             let Some((x, y)) = transform.integer_translation() else {

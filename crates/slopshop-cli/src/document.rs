@@ -165,6 +165,13 @@ fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
             LayerContent::Fill { color } => {
                 format!("fill ({}, {}, {}, {})", color.r, color.g, color.b, color.a)
             }
+            LayerContent::GradientFill { field } => format!(
+                "gradient fill {:?} {} stops from {:?} to {:?}",
+                field.shape,
+                field.gradient.stops().len(),
+                field.from,
+                field.to
+            ),
             LayerContent::Group {
                 children,
                 pass_through,

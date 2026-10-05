@@ -109,6 +109,12 @@ pub enum Edit {
         id: LayerId,
         color: LinearRgba,
     },
+    /// A gradient fill layer's gradient (Layer > New Fill Layer > Gradient, then the Properties
+    /// panel).
+    SetGradientFill {
+        id: LayerId,
+        field: crate::gradient::GradientField,
+    },
     /// Replace an adjustment layer's adjustment (its kind or its parameters, ADR 0020).
     SetAdjustment {
         id: LayerId,
@@ -540,6 +546,20 @@ impl Edit {
                 Edit::SetFillColor {
                     id,
                     color: previous,
+                }
+            }
+            Edit::SetGradientFill { id, field } => {
+                if !field.is_valid() {
+                    return Err(EditError::InvalidColor);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::GradientFill { field: current } = &mut layer.content else {
+                    return Err(EditError::NotAFill(id));
+                };
+                let previous = std::mem::replace(current, field);
+                Edit::SetGradientFill {
+                    id,
+                    field: previous,
                 }
             }
             Edit::SetAdjustment { id, adjustment } => {
@@ -1498,6 +1518,11 @@ fn validate_new_layer(
         }
         if let LayerContent::Fill { color } = &layer.content
             && !color.is_finite()
+        {
+            return Err(EditError::InvalidColor);
+        }
+        if let LayerContent::GradientFill { field } = &layer.content
+            && !field.is_valid()
         {
             return Err(EditError::InvalidColor);
         }
@@ -2798,6 +2823,82 @@ mod tests {
         assert_eq!(
             Edit::group_layers(&doc, empty, &[]),
             Err(EditError::NoLayers)
+        );
+    }
+
+    #[test]
+    fn a_gradient_fill_changes_its_gradient_and_undoes() {
+        use crate::gradient::{Gradient, GradientField, GradientShape, GradientStop};
+        let stops = |a: [u8; 3], b: [u8; 3]| {
+            Gradient::new(&[
+                GradientStop {
+                    location: 0,
+                    color: a,
+                },
+                GradientStop {
+                    location: 4096,
+                    color: b,
+                },
+            ])
+            .unwrap()
+        };
+        let field = GradientField {
+            gradient: stops([0; 3], [255; 3]),
+            alpha: [1.0, 1.0],
+            shape: GradientShape::Linear,
+            from: [0.0, 0.0],
+            to: [8.0, 0.0],
+        };
+        let mut doc = Document::new(Size::new(8, 8));
+        let mut layer = fill_layer(&mut doc, "gradient");
+        layer.content = LayerContent::GradientFill { field };
+        let id = layer.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let current = |doc: &Document| match doc.layer(id).unwrap().content {
+            LayerContent::GradientFill { field } => field,
+            _ => unreachable!("a gradient fill layer"),
+        };
+        let radial = GradientField {
+            gradient: stops([255, 0, 0], [0, 0, 255]),
+            alpha: [1.0, 0.0],
+            shape: GradientShape::Radial,
+            from: [4.0, 4.0],
+            to: [4.0, 0.0],
+        };
+        let undo = Edit::SetGradientFill { id, field: radial }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(current(&doc), radial);
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(current(&doc), field);
+
+        // From a point to itself: no direction, refused.
+        let flat = GradientField {
+            to: field.from,
+            ..field
+        };
+        assert_eq!(
+            Edit::SetGradientFill { id, field: flat }.apply(&mut doc),
+            Err(EditError::InvalidColor)
+        );
+        let fill = fill_layer(&mut doc, "fill");
+        let other = fill.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: fill,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            Edit::SetGradientFill { id: other, field }.apply(&mut doc),
+            Err(EditError::NotAFill(other))
         );
     }
 

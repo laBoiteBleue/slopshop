@@ -292,6 +292,11 @@ fn opaque_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
     }
     match &layer.content {
         LayerContent::Fill { color } => (color.a >= 1.0).then(|| canvas_area(canvas)),
+        LayerContent::GradientFill { field } => field
+            .alpha
+            .iter()
+            .all(|a| *a >= 1.0)
+            .then(|| canvas_area(canvas)),
         LayerContent::Raster { image, .. } if !image.format().layout.has_alpha() => {
             placed_area(layer, parent, canvas).filter(|area| !is_empty(*area))
         }
@@ -685,6 +690,17 @@ fn source(
                 a,
             ])
         }
+        LayerContent::GradientFill { field } => SourceContent::Gradient {
+            luts: field.gradient.luts(),
+            field: *field,
+            to_content: transform.inverse()?,
+            alpha: if replaces_alpha {
+                None
+            } else {
+                Some(field.alpha)
+            },
+            opacity: f64::from(opacity),
+        },
         LayerContent::Raster { image, .. } => {
             // Evaluated by `composite_region_on` before compositing.
             let image = image.ready_image()?.as_ref();
@@ -789,6 +805,16 @@ fn opaque(premultiplied: [f64; 4], opacity: f64) -> [f64; 4] {
 enum SourceContent<'a> {
     /// Premultiplied working-space color, opacity applied.
     Fill([f64; 4]),
+    /// A gradient fill: each pixel the color at its place in the layer's content space
+    /// (`to_content`), read from the gradient's lookup tables as the GPU does; its opacity going
+    /// from `alpha[0]` to `alpha[1]` (none: opaque, its mask replacing its alpha).
+    Gradient {
+        luts: [Vec<f32>; 3],
+        field: crate::gradient::GradientField,
+        to_content: Affine,
+        alpha: Option<[f32; 2]>,
+        opacity: f64,
+    },
     Raster {
         level: &'a RasterLevel,
         codec: Codec,
@@ -1063,6 +1089,40 @@ fn composite_row(
                     }
                 }
             }
+            SourceContent::Gradient {
+                luts,
+                field,
+                to_content,
+                alpha,
+                opacity,
+            } => {
+                for (i, dst) in acc.iter_mut().enumerate() {
+                    // Fits: the pixel is inside the region.
+                    let x = x0 + i as u32;
+                    let (u, v) = to_content.apply(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    let t = field.position(u, v);
+                    let [r, g, b] = [0, 1, 2].map(|c| crate::curve::lookup(&luts[c], t) as f32);
+                    let color =
+                        crate::color::LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0);
+                    let a = alpha.map_or(1.0, |[a0, a1]| {
+                        f64::from(a0) + (f64::from(a1) - f64::from(a0)) * t
+                    }) * opacity;
+                    let src = masked(
+                        [
+                            f64::from(color.r) * a,
+                            f64::from(color.g) * a,
+                            f64::from(color.b) * a,
+                            a,
+                        ],
+                        x,
+                    );
+                    if source.atop {
+                        blender.blend_atop(mode, &src, dst);
+                    } else {
+                        blender.blend(mode, &src, dst);
+                    }
+                }
+            }
             SourceContent::Raster {
                 level,
                 codec,
@@ -1302,6 +1362,62 @@ mod tests {
         for (a, e) in actual.iter().zip(expected) {
             assert!((a - e).abs() < 1e-6, "{actual:?} != {expected:?}");
         }
+    }
+
+    #[test]
+    fn a_gradient_fill_shows_its_gradient_where_the_layer_places_it() {
+        use crate::gradient::{Gradient, GradientField, GradientShape};
+        let field = GradientField {
+            gradient: Gradient::BLACK_TO_WHITE,
+            alpha: [1.0, 1.0],
+            shape: GradientShape::Linear,
+            from: [0.0, 0.0],
+            to: [100.0, 0.0],
+        };
+        let mut doc = linear_document(Size::new(100, 1));
+        let id = add(&mut doc, LayerContent::GradientFill { field }, 1.0, true);
+        let (out, _) = composite(&doc, doc.size().bounds());
+        // sRGB-encoded 0.005 at the first pixel's center, 0.5 halfway, 0.995 at the last.
+        let at = |out: &[f32], x: usize| out[x * 4];
+        let encoded = |v: f32| crate::color::srgb_decode(v);
+        assert!(
+            (at(&out, 0) - encoded(0.005)).abs() < 1e-3,
+            "{}",
+            at(&out, 0)
+        );
+        assert!(
+            (at(&out, 50) - encoded(0.505)).abs() < 2e-3,
+            "{}",
+            at(&out, 50)
+        );
+        assert!((at(&out, 99) - encoded(0.995)).abs() < 2e-3);
+        assert!(out.as_chunks::<4>().0.iter().all(|p| p[3] == 1.0), "opaque");
+        // Opaque: it hides what is below.
+        let below = [1.0, 0.0, 0.0, 1.0];
+        let mut covered = linear_document(Size::new(100, 1));
+        add(
+            &mut covered,
+            float_raster(Size::new(100, 1), &[below; 100]),
+            1.0,
+            true,
+        );
+        add(
+            &mut covered,
+            LayerContent::GradientFill { field },
+            1.0,
+            true,
+        );
+        assert_close(&composite(&covered, covered.size().bounds()).0, &out);
+        // Moved with its layer: what was at x = 0 is at x = 50.
+        Edit::SetLayerTransform {
+            id,
+            transform: crate::transform::Affine::translation(50.0, 0.0),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let (moved, _) = composite(&doc, doc.size().bounds());
+        assert!((at(&moved, 50) - at(&out, 0)).abs() < 1e-6);
+        assert_eq!(at(&moved, 10), 0.0, "before the start: the first color");
     }
 
     #[test]

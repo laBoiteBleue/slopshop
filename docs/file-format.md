@@ -371,7 +371,18 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     whites, neutrals and blacks, then the method (flag: absolute).
     Parameters out of range make the file invalid; an unknown adjustment comes from a newer
     SlopShop. No `inputs`.
-  - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills and adjustments.
+  - `slopshop.gradientFill` (schema 0.24): a gradient fill layer, with the versions and the
+    parameters of `slopshop.fill` (blend mode, mask, clipping, transform, style) but for its
+    color: `params.gradient`, stops as Gradient Map's; `params.shape`, `linear` or `radial`;
+    `params.from` and `params.to`, two different points `[x, y]` (finite) of the node's content
+    (placed by its transform); `params.alpha`, the opacity `[start, end]` in [0, 1]. Point `p`
+    of the content is at `t` along the gradient: linear, the projection of `p − from` on
+    `to − from` divided by its squared length; radial, `|p − from| / |to − from|`; `t` clamped
+    to [0, 1]. Its color is the gradient's at `t` (sRGB-encoded), its opacity interpolated
+    linearly between the two. It covers the whole canvas, like a fill. Older readers refuse the
+    unknown type.
+  - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills (solid or gradient) and
+    adjustments.
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`
   is `u8`, `u16`, `f16` or `f32`; `alpha` is `straight` or `premultiplied`. `levels` lists the

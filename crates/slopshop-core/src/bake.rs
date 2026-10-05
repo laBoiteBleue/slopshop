@@ -127,7 +127,9 @@ fn grown_mask(mask: &LayerMask, shift: (u32, u32)) -> Result<LayerMask, EditErro
 /// painted mask.
 pub fn can_rasterize(layer: &Layer) -> bool {
     match &layer.content {
-        LayerContent::Fill { .. } | LayerContent::Group { .. } => true,
+        LayerContent::Fill { .. }
+        | LayerContent::GradientFill { .. }
+        | LayerContent::Group { .. } => true,
         LayerContent::Raster { .. } => layer.is_painted(),
         LayerContent::Adjustment { .. } => false,
     }
@@ -161,8 +163,9 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
     for id in doc.outermost(ids) {
         let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
         let content: Vec<Layer> = match &layer.content {
-            // The fill alone, plain: its opacity, mode, mask and clipping stay the layer's.
-            LayerContent::Fill { .. } => vec![Layer {
+            // The fill alone, plain: its opacity, mode, mask and clipping stay the layer's. (A
+            // gradient's place is in the layer's content space, where this is composited.)
+            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => vec![Layer {
                 visible: true,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
@@ -385,7 +388,7 @@ fn shows_fill(layers: &[Layer]) -> bool {
         .iter()
         .filter(|l| l.visible)
         .any(|l| match &l.content {
-            LayerContent::Fill { .. } => true,
+            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => true,
             LayerContent::Group { children, .. } => shows_fill(children),
             _ => false,
         })

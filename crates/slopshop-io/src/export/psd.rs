@@ -320,7 +320,9 @@ impl Writer<'_, '_> {
                 let mask = if layer.mask.is_some() { height } else { 0 };
                 mask + match &layer.content {
                     LayerContent::Group { children, .. } => self.count_rows(children),
-                    LayerContent::Raster { .. } | LayerContent::Fill { .. } => height,
+                    LayerContent::Raster { .. }
+                    | LayerContent::Fill { .. }
+                    | LayerContent::GradientFill { .. } => height,
                     LayerContent::Adjustment { .. } => 0,
                 }
             })
@@ -360,12 +362,16 @@ impl Writer<'_, '_> {
             }
             let bounds = match &layer.content {
                 LayerContent::Raster { .. } => self.content_bounds(layer),
-                LayerContent::Fill { .. } => self.document.size().bounds(),
+                LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => {
+                    self.document.size().bounds()
+                }
                 _ => Rect::new(0, 0, 0, 0),
             };
             let mut record = self.record(layer, layer.name.clone(), bounds);
             match &layer.content {
-                LayerContent::Raster { .. } | LayerContent::Fill { .. } => {
+                LayerContent::Raster { .. }
+                | LayerContent::Fill { .. }
+                | LayerContent::GradientFill { .. } => {
                     let planes = if bounds.is_empty() {
                         None
                     } else {

@@ -1018,7 +1018,7 @@ fn shows_fill(layers: &[Layer]) -> bool {
         .iter()
         .filter(|l| l.visible)
         .any(|l| match &l.content {
-            LayerContent::Fill { .. } => true,
+            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => true,
             LayerContent::Group { children, .. } => shows_fill(children),
             _ => false,
         })

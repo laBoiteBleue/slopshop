@@ -24,7 +24,7 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GROUP, NODE_RASTER,
+    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER,
     NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
     SCHEMA_MAJOR,
@@ -365,6 +365,9 @@ pub(super) fn read_node(
                 color: LinearRgba::new(color[0], color[1], color[2], color[3]),
             }
         }
+        NODE_GRADIENT_FILL if known_fill => LayerContent::GradientFill {
+            field: gradient_fill_of(&node.params)?,
+        },
         NODE_GROUP if node.version >= 3 && known_fill => {
             // Checked before going deeper: the file is untrusted.
             if depth >= MAX_GROUP_DEPTH {
@@ -483,8 +486,42 @@ fn gradient_map_of(
     params: &Map<String, Value>,
     reverse: bool,
 ) -> Result<slopshop_core::adjust::Adjustment, FileError> {
+    let gradient =
+        gradient_of(params).ok_or_else(|| corrupt("gradient map without a valid gradient"))?;
+    Ok(slopshop_core::adjust::Adjustment::GradientMap { gradient, reverse })
+}
+
+/// A gradient fill layer's gradient (schema 0.24).
+fn gradient_fill_of(
+    params: &Map<String, Value>,
+) -> Result<slopshop_core::gradient::GradientField, FileError> {
+    use slopshop_core::gradient::{GradientField, GradientShape};
+    let invalid = || corrupt("gradient fill without a valid gradient");
+    let pair = |key: &str| -> Option<[f64; 2]> {
+        let v = params.get(key)?.as_array().filter(|v| v.len() == 2)?;
+        Some([v[0].as_f64()?, v[1].as_f64()?])
+    };
+    let alpha = pair("alpha").ok_or_else(invalid)?;
+    let field = GradientField {
+        gradient: gradient_of(params).ok_or_else(invalid)?,
+        alpha: alpha.map(|a| a as f32),
+        shape: match params.get("shape").and_then(Value::as_str) {
+            Some("linear") => GradientShape::Linear,
+            Some("radial") => GradientShape::Radial,
+            _ => return Err(invalid()),
+        },
+        from: pair("from").ok_or_else(invalid)?,
+        to: pair("to").ok_or_else(invalid)?,
+    };
+    if !field.is_valid() {
+        return Err(invalid());
+    }
+    Ok(field)
+}
+
+/// The gradient of `params.gradient`'s stops, `[location, r, g, b]`.
+fn gradient_of(params: &Map<String, Value>) -> Option<slopshop_core::gradient::Gradient> {
     use slopshop_core::gradient::{Gradient, GradientStop};
-    let invalid = || corrupt("gradient map without a valid gradient");
     let stops = params
         .get("gradient")
         .and_then(Value::as_array)
@@ -500,10 +537,8 @@ fn gradient_map_of(
                     })
                 })
                 .collect::<Option<Vec<GradientStop>>>()
-        })
-        .ok_or_else(invalid)?;
-    let gradient = Gradient::new(&stops).ok_or_else(invalid)?;
-    Ok(slopshop_core::adjust::Adjustment::GradientMap { gradient, reverse })
+        })?;
+    Gradient::new(&stops)
 }
 
 /// A raster node's content: its image, and its stack (version 7, ADR 0029), or its paint as a
