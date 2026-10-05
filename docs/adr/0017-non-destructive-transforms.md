@@ -1,6 +1,7 @@
 # 0017 — Non-destructive transforms
 
-Status: accepted (2026-09-30).
+Status: accepted (2026-09-30). Point 1 amended by [ADR 0038](0038-projective-transforms.md): the
+layer's transform becomes projective, the affine maps a special case.
 
 ## Context
 

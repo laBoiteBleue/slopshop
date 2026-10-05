@@ -1,7 +1,7 @@
 # 0038 — Projective layer transforms: Distort and Perspective
 
-Status: proposed (2026-10-05; the maintainer chose the direction, option A, after the toolbar
-audit; to review before the work starts, once the display performance work is done).
+Status: accepted (2026-10-05; the maintainer chose the direction, option A, after the toolbar
+audit, and started the work once the display performance work and the toolbar were done).
 Amends [ADR 0017](0017-non-destructive-transforms.md) (point 1) and
 [ADR 0018](0018-resampling.md) (point 4).
 

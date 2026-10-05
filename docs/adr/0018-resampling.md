@@ -1,6 +1,7 @@
 # 0018 — Resampling transformed layers
 
-Status: accepted (2026-09-30).
+Status: accepted (2026-09-30). Point 4 amended by [ADR 0038](0038-projective-transforms.md): a
+projective layer takes its level and ellipse from the Jacobian at each pixel.
 
 ## Context
 
