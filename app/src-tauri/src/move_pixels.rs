@@ -491,6 +491,7 @@ fn lift_edit(
         color: None,
         samples: Vec::new(),
         end: true,
+        clone: None,
     };
     let hole = if cut {
         crate::paint::fill_edit(doc, &erase, None)?
