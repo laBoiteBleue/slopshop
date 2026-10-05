@@ -1786,16 +1786,32 @@ export const engine = {
    * The color picker's eyedropper: the color shown at a document point (every visible layer),
    * whole 8-bit sRGB values; null outside the canvas or where nothing is shown.
    */
-  sampleColor: (documentId: number, x: number, y: number) =>
-    serial(() => invoke<[number, number, number] | null>("sample_color", { documentId, x, y })),
+  sampleColor: (documentId: number, x: number, y: number, size = 1, layerId?: number) =>
+    serial(() =>
+      invoke<[number, number, number] | null>("sample_color", {
+        documentId,
+        x,
+        y,
+        size,
+        layerId: layerId ?? null,
+      }),
+    ),
   /**
    * The eyedropper's loupe: the colors shown around a document point, `2 × radius + 1` pixels a
    * side, the one under it in the middle; RGBA 8-bit sRGB, straight alpha, clear off the canvas.
    * Only reads: not queued behind the edits (an answer from before one is told apart by the
    * revision it was asked at).
    */
-  samplePatch: async (documentId: number, x: number, y: number, radius: number) =>
-    new Uint8ClampedArray(await invoke<ArrayBuffer>("sample_patch", { documentId, x, y, radius })),
+  samplePatch: async (documentId: number, x: number, y: number, radius: number, layerId?: number) =>
+    new Uint8ClampedArray(
+      await invoke<ArrayBuffer>("sample_patch", {
+        documentId,
+        x,
+        y,
+        radius,
+        layerId: layerId ?? null,
+      }),
+    ),
   /** Quick Selection: the stroke so far, shown live, or done (one undo entry). */
   quickSelect: (documentId: number, request: QuickRequest) =>
     serial(() => invoke<DocumentView>("quick_select", { documentId, request })),

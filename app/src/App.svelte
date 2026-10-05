@@ -153,6 +153,7 @@
     type Arrangement,
   } from "./lib/layerEdits";
   import { hexToSrgb, srgbToHex } from "./lib/color";
+  import { grayOf } from "./lib/colorModel";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
@@ -739,6 +740,45 @@
       return loupeSource;
     },
   };
+
+  // The Eyedropper (I), and Alt held with the Brush (Photoshop): a click takes the color shown,
+  // averaged over the Sample Size, from every visible layer or the active one alone; the
+  // foreground color, or with Alt and the tool the background; a gray when a mask is painted.
+  let eyedropperOptions = $state<{ sample: "all" | "layer"; size: number }>({
+    sample: "all",
+    size: 1,
+  });
+  /** Alt held with the Brush: the eyedropper until it is released. */
+  let altHeld = $state(false);
+  const eyedropperShown = $derived(tool === "eyedropper" || (altHeld && tool === "brush"));
+  /** The layer the eyedropper samples alone (Current Layer), if any. */
+  const sampledLayer = $derived(
+    eyedropperOptions.sample === "layer" ? (activeLayer?.id ?? undefined) : undefined,
+  );
+
+  async function sampleToColors(x: number, y: number, background: boolean) {
+    const doc = active;
+    if (!doc || outsideCanvas(doc, x, y)) return;
+    const rgb = await engine
+      .sampleColor(doc.id, x, y, eyedropperOptions.size, sampledLayer)
+      .catch(() => null);
+    if (!rgb) return;
+    const color = rgb.map((v) => v / 255) as [number, number, number];
+    const gray = grayOf(color);
+    const hex = srgbToHex(paintsGray() ? [gray, gray, gray] : color);
+    const pair = paintColors();
+    setPaintColors(background ? { ...pair, background: hex } : { ...pair, foreground: hex });
+  }
+
+  /** The Eyedropper's loupe: the pixels it samples (the active layer alone with Current Layer). */
+  const eyedropperLoupe = $derived<LoupeSource>({
+    point: canvasPointAt,
+    pixels: async (x, y, radius) => {
+      const doc = active;
+      return doc ? engine.samplePatch(doc.id, x, y, radius, sampledLayer) : null;
+    },
+    version: active ? `${active.id}:${active.revision}:${sampledLayer ?? ""}` : null,
+  });
 
   /** The eyedropper's loupe: the pixels shown in the active document. */
   const loupeSource = $derived<LoupeSource>({
@@ -4911,7 +4951,21 @@
   });
 </script>
 
-<svelte:window {onkeydown} onblur={cancelTabDrag} bind:innerWidth={windowWidth} />
+<svelte:window
+  onkeydown={(e) => {
+    // Alt held with the Brush picks colors, not during a stroke.
+    if (e.key === "Alt" && !paintRun) altHeld = true;
+    onkeydown(e);
+  }}
+  onkeyup={(e) => {
+    if (e.key === "Alt") altHeld = false;
+  }}
+  onblur={() => {
+    altHeld = false;
+    cancelTabDrag();
+  }}
+  bind:innerWidth={windowWidth}
+/>
 
 <div class="app" class:no-options-bar={!optionsBarShown}>
   <header class="menubar">
@@ -4933,6 +4987,7 @@
       bind:quick
       bind:brush={brushOptions}
       bind:eraser={eraserOptions}
+      bind:eyedropper={eyedropperOptions}
       transform={transforming ? transformBar : undefined}
       quickMask={active?.quickMask ?? false}
       bind:quickMaskOpacity
@@ -5161,6 +5216,15 @@
                     {mapping}
                     points={refineStroke?.samples.map(([x, y]) => [x, y] as [number, number]) ?? []}
                     size={refineSettings.brush.size}
+                  />
+                {:else if eyedropperShown}
+                  <!-- The Eyedropper, or Alt held with the Brush. -->
+                  <EyedropperOverlay
+                    {mapping}
+                    kind="pick"
+                    onsample={(x, y, keys) =>
+                      void sampleToColors(x, y, tool === "eyedropper" && keys.altKey)}
+                    loupe={eyedropperLoupe}
                   />
                 {:else if colorRange && colorRange.document === active?.id}
                   <!-- Color Range open: a click on the image samples a color. -->

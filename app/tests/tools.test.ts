@@ -26,6 +26,10 @@ test("a letter picks its slot, as typed", () => {
     slotForLetter("m")?.tools.map((tool) => tool.id),
     ["marquee", "ellipse"],
   );
+  assert.deepEqual(
+    slotForLetter("i")?.tools.map((tool) => tool.id),
+    ["eyedropper"],
+  );
   assert.equal(slotForLetter("z"), null);
   assert.equal(slotForLetter(null), null);
 });

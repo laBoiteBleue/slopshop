@@ -622,15 +622,18 @@ fn banded(doc: &Document, stroke: StrokeRequest) -> Result<Option<Document>, Str
     Ok(Some(banded))
 }
 
-/// The color picker's eyedropper: the color shown at document point (`x`, `y`), every visible
-/// layer composited, as whole 8-bit sRGB values. `None` outside the canvas or where nothing is
-/// shown (transparent).
+/// The eyedropper (the tool, the color picker's): the color shown at document point (`x`, `y`),
+/// every visible layer composited (with `layer_id`, that layer alone), as whole 8-bit sRGB
+/// values; with `size`, the average of the `size × size` pixels around it (odd, Photoshop's
+/// Sample Size). `None` outside the canvas or where nothing is shown (transparent).
 #[tauri::command]
 pub async fn sample_color(
     app: tauri::AppHandle,
     document_id: u64,
     x: f64,
     y: f64,
+    size: Option<u32>,
+    layer_id: Option<u64>,
 ) -> Result<Option<[u8; 3]>, String> {
     on_worker(move || {
         let state = app.state::<AppState>();
@@ -641,19 +644,41 @@ pub async fn sample_color(
             .session
             .document()
             .clone();
-        Ok(sample_color_at(&doc, x, y))
+        let doc = crate::selection::sampled_document(&doc, layer_id)?;
+        Ok(sample_color_at(&doc, x, y, size.unwrap_or(1)))
     })
     .await
 }
 
+/// The largest Sample Size (Photoshop's 101 × 101).
+const MAX_SAMPLE_SIZE: u32 = 101;
+
 /// [`sample_color`]'s work.
-pub(crate) fn sample_color_at(doc: &Document, x: f64, y: f64) -> Option<[u8; 3]> {
+pub(crate) fn sample_color_at(doc: &Document, x: f64, y: f64, size: u32) -> Option<[u8; 3]> {
     // Negative or NaN: outside. Too large saturates, then falls outside the canvas.
     if !(x >= 0.0 && y >= 0.0) {
         return None;
     }
-    let [r, g, b, alpha] = *sample_region(doc, x as i64, y as i64, 1, 1).first()?;
-    (alpha > 0.0).then(|| [r, g, b].map(|v| v.round().clamp(0.0, 255.0) as u8))
+    // Odd, centered on the pixel under the point.
+    let size = size.clamp(1, MAX_SAMPLE_SIZE) | 1;
+    let half = i64::from(size / 2);
+    let (cx, cy) = (x as i64, y as i64);
+    average_color(&sample_region(doc, cx - half, cy - half, size, size))
+}
+
+/// The average of `colors` (straight alpha) weighted by their alpha, as a pixel showing them
+/// together would be; `None` when none shows anything.
+fn average_color(colors: &[[f32; 4]]) -> Option<[u8; 3]> {
+    let mut sum = [0f64; 3];
+    let mut weight = 0f64;
+    for [r, g, b, a] in colors {
+        let a = f64::from(*a);
+        for (total, v) in sum.iter_mut().zip([r, g, b]) {
+            *total += f64::from(*v) * a;
+        }
+        weight += a;
+    }
+    (weight > 0.0).then(|| sum.map(|v| (v / weight).round().clamp(0.0, 255.0) as u8))
 }
 
 /// The eyedropper's loupe: the colors shown around document point (`x`, `y`), the pixel under
@@ -666,6 +691,7 @@ pub async fn sample_patch(
     x: f64,
     y: f64,
     radius: u32,
+    layer_id: Option<u64>,
 ) -> Result<Response, String> {
     on_worker(move || {
         let state = app.state::<AppState>();
@@ -676,6 +702,7 @@ pub async fn sample_patch(
             .session
             .document()
             .clone();
+        let doc = crate::selection::sampled_document(&doc, layer_id)?;
         Ok(Response::new(sample_patch_at(&doc, x, y, radius)))
     })
     .await
@@ -710,6 +737,17 @@ mod tests {
     use slopshop_core::{BlendMode, Layer, Session};
 
     const CANVAS: Size = Size::new(64, 48);
+
+    #[test]
+    fn a_sample_averages_what_shows_weighted_by_alpha() {
+        let red = [255.0, 0.0, 0.0, 1.0];
+        let blue = [0.0, 0.0, 255.0, 1.0];
+        let faint = [0.0, 255.0, 0.0, 0.0];
+        assert_eq!(average_color(&[red, blue, faint]), Some([128, 0, 128]));
+        let half_blue = [0.0, 0.0, 255.0, 0.5];
+        assert_eq!(average_color(&[red, half_blue]), Some([170, 0, 85]));
+        assert_eq!(average_color(&[faint]), None);
+    }
 
     /// A document holding one transparent canvas-sized layer (id 1), `selected` as its
     /// selection if given.

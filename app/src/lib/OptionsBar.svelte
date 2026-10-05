@@ -23,6 +23,7 @@
     quick = $bindable(),
     brush = $bindable(),
     eraser = $bindable(),
+    eyedropper = $bindable({ sample: "all", size: 1 }),
     transform,
     quickMask = false,
     quickMaskOpacity = $bindable(50),
@@ -55,6 +56,8 @@
     /** Brush and Eraser (ADR 0027): size in document pixels, the rest as shares in [0, 1]. */
     brush: PaintOptions;
     eraser: PaintOptions;
+    /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
+    eyedropper?: { sample: "all" | "layer"; size: number };
     /** Quick Mask is on (whatever the tool): said, with its overlay's opacity. */
     quickMask?: boolean;
     /** Quick Mask's overlay opacity, percent. */
@@ -76,6 +79,9 @@
   );
 
   const current = $derived(toolInfo(tool));
+
+  /** Photoshop's Sample Sizes: a pixel, or the average of a square around it. */
+  const SAMPLE_SIZES = [1, 3, 5, 11, 31, 51, 101];
 
   const MODES: { mode: SelectionMode; icon: IconName; label: MessageKey }[] = [
     { mode: "replace", icon: "selectionReplace", label: "options.mode.replace" },
@@ -138,6 +144,24 @@
         <Icon name={entry.icon} />
       </button>
     {/each}
+  {:else if tool === "eyedropper"}
+    <label class="option">
+      {t("options.sampleSize")}
+      <select bind:value={eyedropper.size}>
+        {#each SAMPLE_SIZES as size (size)}
+          <option value={size}>
+            {size === 1 ? t("options.sampleSize.point") : t("options.sampleSize.average", { size })}
+          </option>
+        {/each}
+      </select>
+    </label>
+    <label class="option">
+      {t("options.sample")}
+      <select bind:value={eyedropper.sample}>
+        <option value="all">{t("options.sample.all")}</option>
+        <option value="layer">{t("options.sample.layer")}</option>
+      </select>
+    </label>
   {:else if paint}
     <BrushPicker bind:size={paint.size} bind:hardness={paint.hardness} />
     <span class="divider"></span>

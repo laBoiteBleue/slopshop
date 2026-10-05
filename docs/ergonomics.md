@@ -68,7 +68,7 @@ built. Contributors: propose here first.
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M), the lassos (L), the Magic Wand (W) and Crop (C); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C) and the Eyedropper (I); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -344,8 +344,13 @@ built. Contributors: propose here first.
 - Every dialog moves by its title bar, its top edge kept in the window and a part of it always
   left to grab again; it opens again where it was left, for the session (Layer Style comes back
   in place after the color picker).
-- The eyedropper, wherever the image is sampled (the color picker open, Select > Color Range on
-  the image and on its preview): the pointer is a small cross open in its middle, with a + or a
+- The Eyedropper (I): a click on the image takes the color shown as the foreground color, Alt+click
+  as the background (a gray while a mask is painted); its options, Photoshop's: Sample Size
+  (Point Sample, 3 by 3 to 101 by 101 Average, transparent pixels not counting) and Sample (All
+  Layers, as shown, or Current Layer, the active layer alone; the loupe shows what is sampled).
+  Alt held with the Brush is the eyedropper until it is released (not during a stroke).
+- The eyedropper, wherever the image is sampled (the Eyedropper, the color picker open, Select >
+  Color Range on the image and on its preview): the pointer is a small cross open in its middle, with a + or a
   − for Color Range's adding and subtracting eyedroppers (Shift and Alt show theirs while held).
   Over the image a loupe, above right of the pointer, magnifies the 13 × 13 pixels around it,
   the sampled one framed in the middle, inside Photoshop's sampling ring: the new color over the
@@ -606,7 +611,7 @@ answers:
     Ctrl+click on a layer's thumbnail loads its transparency as the selection.
   - ✅ Quick Mask: a round red button at the bottom of the toolbar, as in Photoshop, lit while
     it is on; a click toggles it as Q does.
-  - Eyedropper (I): a click takes the foreground color (Alt: the background), Sample (Current
+  - ✅ Eyedropper (I): a click takes the foreground color (Alt: the background), Sample (Current
     Layer or All Layers) and its size in the options bar, with the eyedropper's pointer and
     loupe; Alt held with the Brush takes the color, the Brush coming back on release.
   - Crop options: a ratio or a size, and Straighten (a line drawn along the horizon).
