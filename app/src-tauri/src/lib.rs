@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use slopshop_core::HistoryLabel;
 use slopshop_core::color::PixelFormat;
 use slopshop_core::view::Viewport;
@@ -1505,8 +1505,38 @@ async fn layers_at(
     .map_err(|e| e.to_string())
 }
 
+/// The visible layers whose pixels' bounds touch `area`, bottom to top: the Move tool's
+/// rectangle.
+#[tauri::command]
+async fn layers_touching(
+    state: State<'_, AppState>,
+    document_id: u64,
+    area: BoundsDto,
+) -> Result<Vec<u64>, String> {
+    let document = state
+        .documents()?
+        .get_mut(document_id)?
+        .session
+        .document()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let area = slopshop_core::pick::Bounds {
+            left: area.left,
+            top: area.top,
+            right: area.right,
+            bottom: area.bottom,
+        };
+        slopshop_core::pick::layers_touching(&document, area)
+            .into_iter()
+            .map(LayerId::get)
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// A rectangle in document pixels (right and bottom exclusive).
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct BoundsDto {
     left: i64,
     top: i64,
@@ -2285,6 +2315,7 @@ pub fn run() {
             selection::selection_outline,
             layer_at,
             layers_at,
+            layers_touching,
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,

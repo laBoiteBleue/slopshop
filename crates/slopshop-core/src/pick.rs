@@ -298,6 +298,17 @@ fn layer_extent(layer: &Layer, transform: Affine) -> Extent {
         .map_or(Extent::default(), Extent::within)
 }
 
+/// The visible layers whose pixels' bounds touch `area` (document pixels), bottom to top: what
+/// a rectangle drawn with the Move tool selects (as in Photoshop, by their boxes; layers, not
+/// groups; fills and adjustment layers have no edges and are left out).
+pub fn layers_touching(document: &Document, area: Bounds) -> Vec<LayerId> {
+    visible_layer_bounds(document)
+        .into_iter()
+        .filter(|(_, b)| b.intersection(area).is_some())
+        .map(|(id, _)| id)
+        .collect()
+}
+
 /// The union of the bounds of `ids` and of everything inside those that are groups: what the
 /// Move tool moves.
 pub fn bounds_of(document: &Document, ids: &[LayerId]) -> Option<Bounds> {
@@ -543,6 +554,32 @@ mod tests {
         assert_eq!(layers_at(&doc, 8, 8), vec![clipped, low, fill]);
         assert_eq!(layers_at(&doc, 15, 15), vec![fill]);
         assert_eq!(layer_at(&doc, 15, 15), None);
+    }
+
+    #[test]
+    fn a_rectangle_touches_the_layers_whose_pixels_it_reaches() {
+        let mut doc = Document::new(Size::new(20, 20));
+        let a = layer(&mut doc, square(Rect::new(0, 0, 4, 4)));
+        let a = push(&mut doc, a);
+        let b = layer(&mut doc, square(Rect::new(10, 10, 4, 4)));
+        let b = push(&mut doc, b);
+        let mut hidden = layer(&mut doc, square(Rect::new(0, 0, 20, 20)));
+        hidden.visible = false;
+        push(&mut doc, hidden);
+        let area = |left, top, right, bottom| Bounds {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        assert_eq!(layers_touching(&doc, area(3, 3, 11, 11)), vec![a, b]);
+        assert_eq!(layers_touching(&doc, area(5, 5, 9, 9)), vec![]);
+        assert_eq!(layers_touching(&doc, area(12, 0, 30, 11)), vec![b]);
+        assert_eq!(
+            layers_touching(&doc, area(4, 0, 10, 20)),
+            vec![],
+            "edges are exclusive"
+        );
     }
 
     #[test]
