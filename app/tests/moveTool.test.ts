@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 import type { LayerView } from "../src/lib/engine";
-import { alongAxis, landing, nudged, pixelTarget } from "../src/lib/moveTool";
+import { alongAxis, dragBox, landing, nudged, pixelTarget } from "../src/lib/moveTool";
 
 const layer = (changes: Partial<LayerView>) =>
   ({ id: 7, kind: "raster", visible: true, ...changes }) as LayerView;
@@ -37,4 +37,13 @@ test("a drag lands on whole pixels, snapped when what moves is known", () => {
 test("Shift keeps a drag on the axis it went furthest along", () => {
   assert.deepEqual(alongAxis({ x: 12, y: -5 }), { x: 12, y: 0 });
   assert.deepEqual(alongAxis({ x: 3, y: -5 }), { x: 0, y: -5 });
+});
+
+test("a rectangle drawn in any direction covers whole pixels", () => {
+  assert.deepEqual(dragBox([10.5, 20.2], { x: -5, y: 3.5 }), {
+    left: 5,
+    top: 20,
+    right: 11,
+    bottom: 24,
+  });
 });

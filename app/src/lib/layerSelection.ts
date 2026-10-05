@@ -116,3 +116,22 @@ export function pickedInImage(
   }
   return { ...pressed(selection, hit), moves: true };
 }
+
+/**
+ * A rectangle drawn with the Move tool touched the layers `ids`: they become the selection, the
+ * topmost active; with Shift (`add`), they join it, the active layer staying (else the topmost).
+ * A click without a drag touches nothing: the layers are deselected, as a click in the empty
+ * part of the Layers panel (not with Shift).
+ */
+export function boxed(
+  selection: LayerSelection,
+  ids: number[],
+  add: boolean,
+  order: number[],
+): LayerSelection {
+  if (!add) return selectionOf(ids, topmostIn(order, ids));
+  const joining = ids.filter((id) => !selection.ids.includes(id));
+  if (joining.length === 0) return selection;
+  const all = [...selection.ids, ...joining];
+  return selectionOf(all, selection.active ?? topmostIn(order, all));
+}

@@ -11,6 +11,10 @@ respond("layer_at", (args) => {
   return x < 100 ? 1 : x < 200 ? 2 : x < 300 ? 3 : null;
 });
 respond("layers_at", (args) => ((args.x as number) < 100 ? [3, 1] : []));
+respond("layers_touching", (args) => {
+  const area = args.area as { left: number; right: number };
+  return [1, 2, 3].filter((id) => area.left < id * 100 && area.right > (id - 1) * 100);
+});
 respond("move_snap_targets", () => ({ moving: null, others: [] }));
 respond("perform_live", (_args, doc) => doc);
 respond("end_gesture", (_args, doc) => doc);
@@ -109,4 +113,32 @@ test("where no layer shows, the right-click menu is the usual one", async () => 
   await screen.findByRole("menuitem", { name: /^Copy Ctrl/ });
   await waitFor(() => expect(sent("layers_at")).toHaveLength(1));
   expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
+});
+
+test("a drag from where no layer shows draws a rectangle selecting the layers it touches", async () => {
+  const area = await openImage();
+  await fireEvent.pointerDown(area, { pointerId: 1, button: 0, clientX: 350, clientY: 10 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await fireEvent.pointerMove(area, { pointerId: 1, clientX: 150, clientY: 40 });
+  // Drawn in the accent color while dragged, not as a selection of pixels.
+  expect(document.querySelector(".layer-box")).not.toBeNull();
+  await fireEvent.pointerUp(area, { pointerId: 1, clientX: 150, clientY: 40 });
+  await waitFor(() => expect(selected()).toEqual(["Bird", "Tree"]));
+  expect(document.querySelector(".layer-box")).toBeNull();
+  expect(sent("layers_touching").at(-1)).toMatchObject({
+    area: { left: 150, top: 10, right: 350, bottom: 40 },
+  });
+  expect(sent("perform_live")).toEqual([]);
+  expect(sent("set_selection")).toEqual([]);
+  // Shift adds the layers touched.
+  await press(area, 350, { shiftKey: true }, -300);
+  await waitFor(() => expect(selected()).toEqual(["Bird", "Tree", "Sky"]));
+});
+
+test("a click where no layer shows deselects the layers, but with Shift", async () => {
+  const area = await openImage();
+  await press(area, 350, { shiftKey: true });
+  expect(selected()).toEqual(["Bird"]);
+  await press(area, 350);
+  await waitFor(() => expect(selected()).toEqual([]));
 });
