@@ -8,7 +8,47 @@
 export function upsert<T extends { id: number; revision: number }>(tabs: T[], view: T) {
   const index = tabs.findIndex((d) => d.id === view.id);
   if (index < 0) tabs.push(view);
-  else if (view.revision >= tabs[index].revision) tabs[index] = view;
+  else if (view.revision >= tabs[index].revision) tabs[index] = shared(tabs[index], view);
+}
+
+/**
+ * `next` with every part equal to `previous`'s being `previous`'s own: a slider dragged sends
+ * the whole document at each step, and what shows a layer that did not change (a row of the
+ * Layers panel, its thumbnail) is then not run again. Neither is changed: the result is a new
+ * object wherever something differs. Arrays of objects with an `id` are matched by id.
+ */
+export function shared<T>(previous: T, next: T): T {
+  if (Object.is(previous, next)) return previous;
+  if (Array.isArray(previous) && Array.isArray(next)) {
+    const byId = new Map<unknown, unknown>();
+    for (const item of previous) {
+      if (isRecord(item) && "id" in item) byId.set(item.id, item);
+    }
+    let same = previous.length === next.length;
+    const items = next.map((item, i) => {
+      const before = isRecord(item) && "id" in item ? byId.get(item.id) : previous[i];
+      const kept = before === undefined ? item : shared(before, item);
+      same &&= kept === previous[i];
+      return kept;
+    });
+    return (same ? previous : items) as T;
+  }
+  if (isRecord(previous) && isRecord(next) && !Array.isArray(previous) && !Array.isArray(next)) {
+    const keys = Object.keys(next);
+    let same = keys.length === Object.keys(previous).length;
+    const out: Record<string, unknown> = {};
+    for (const key of keys) {
+      const kept = key in previous ? shared(previous[key], next[key]) : next[key];
+      same &&= key in previous && kept === previous[key];
+      out[key] = kept;
+    }
+    return (same ? previous : out) as T;
+  }
+  return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 /** The tab `step` places after `active` (before when negative), going round; null if none. */
