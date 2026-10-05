@@ -97,6 +97,58 @@ impl CloneSource {
         Arc::from(tile)
     }
 
+    /// This source with the `width × height` pixels from document pixel (`left`, `top`)
+    /// replaced by `colors` (premultiplied, row-major; those off the canvas dropped): the
+    /// Healing Brush's blended colors. The tiles it reaches must be prepared.
+    pub fn patched(
+        &self,
+        left: i64,
+        top: i64,
+        width: usize,
+        height: usize,
+        colors: &[[f32; 4]],
+    ) -> CloneSource {
+        let size = self.document.size();
+        let t = TILE_SIZE as usize;
+        let mut tiles: Vec<Option<Vec<f32>>> = self
+            .tiles
+            .iter()
+            .map(|cell| cell.get().map(|tile| tile.to_vec()))
+            .collect();
+        for (row, line) in colors.chunks_exact(width.max(1)).enumerate().take(height) {
+            let y = top + row as i64;
+            if y < 0 || y >= i64::from(size.height) {
+                continue;
+            }
+            for (col, color) in line.iter().enumerate() {
+                let x = left + col as i64;
+                if x < 0 || x >= i64::from(size.width) {
+                    continue;
+                }
+                let (x, y) = (x as usize, y as usize);
+                let index = (y / t) * self.columns as usize + x / t;
+                if let Some(tile) = &mut tiles[index] {
+                    let i = ((y % t) * t + x % t) * 4;
+                    tile[i..i + 4].copy_from_slice(color);
+                }
+            }
+        }
+        CloneSource {
+            document: self.document.clone(),
+            tiles: tiles
+                .into_iter()
+                .map(|tile| {
+                    let cell = OnceLock::new();
+                    if let Some(tile) = tile {
+                        let _ = cell.set(Arc::from(tile));
+                    }
+                    cell
+                })
+                .collect(),
+            columns: self.columns,
+        }
+    }
+
     /// The premultiplied working-space color at document point (`x`, `y`) (the pixel it falls
     /// in): transparent off the canvas, or in a tile not prepared.
     pub fn at(&self, x: f64, y: f64) -> [f32; 4] {
@@ -263,5 +315,85 @@ mod tests {
         let bpp = untouched.stored_format().bytes_per_pixel() as usize;
         let at = (10 * TILE_SIZE as usize + 200) * bpp;
         assert_eq!(tile[at + bpp - 1], 0);
+    }
+
+    #[test]
+    fn healing_takes_the_tone_around_where_it_paints() {
+        use crate::blend::BlendSpace;
+        use crate::paint::{Brush, Paint, PointerSample, Stroke};
+        use crate::stack::LayerStack;
+        use crate::transform::Affine;
+        // Dark on the left, light on the right with a red speck at (220, 10).
+        let mut pixels = Vec::new();
+        for y in 0..20 {
+            for x in 0..300 {
+                let speck = (218..223).contains(&x) && (8..13).contains(&y);
+                pixels.extend_from_slice(match (x < 150, speck) {
+                    (_, true) => &[255, 0, 0, 255],
+                    (true, false) => &[50, 50, 50, 255],
+                    (false, false) => &[200, 200, 200, 255],
+                });
+            }
+        }
+        let image = Arc::new(
+            RasterImage::from_pixels(Size::new(300, 20), PixelFormat::RGBA8_SRGB, &pixels).unwrap(),
+        );
+        let mut doc = Document::new(Size::new(300, 20));
+        let layer = Layer {
+            style: None,
+            id: doc.allocate_layer_id(),
+            name: "l".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: crate::blend::BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: Affine::IDENTITY,
+            content: LayerContent::raster(Arc::clone(&image)),
+        };
+        crate::edit::Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let source = Arc::new(CloneSource::new(doc));
+        let brush = Brush {
+            diameter: 12.0,
+            hardness: 1.0,
+            ..Brush::default()
+        };
+        let mut s = Stroke::on_stack(
+            &LayerStack::new(Arc::clone(&image)),
+            Arc::clone(&image),
+            Affine::IDENTITY,
+            None,
+            BlendSpace::Perceptual,
+            brush,
+            // From the dark half.
+            Paint::Clone {
+                offset: [-150.0, 0.0],
+                gray: false,
+            },
+        )
+        .unwrap()
+        .cloning(source);
+        s.add(&[PointerSample {
+            x: 220.5,
+            y: 10.5,
+            pressure: 1.0,
+        }]);
+        s.image().unwrap();
+        s.heal().unwrap();
+        let (_, healed) = s.finish_stack().unwrap().unwrap();
+        let tile = healed.levels()[0]
+            .tile(crate::tile::TileCoord { col: 0, row: 0 })
+            .unwrap();
+        let bpp = healed.stored_format().bytes_per_pixel() as usize;
+        let at = (10 * TILE_SIZE as usize + 220) * bpp;
+        let px = &tile[at..at + bpp];
+        // The light gray around it, not the source's dark nor the speck's red.
+        assert!(px[..3].iter().all(|&v| v.abs_diff(200) <= 6), "{px:?}");
     }
 }

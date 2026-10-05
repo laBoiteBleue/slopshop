@@ -360,6 +360,116 @@ impl Stroke {
         self
     }
 
+    /// The Healing Brush, once its stroke is drawn: what this Clone Stamp stroke laid is laid
+    /// again, its colors blended into where they were laid (the source's texture, the tone
+    /// there, [`crate::heal`]). The destination is read from the same source (where it paints,
+    /// as it was when the stroke started), so that healing on an empty layer above works with
+    /// Sample All Layers. Nothing to do for another paint.
+    pub fn heal(&mut self) -> Result<(), PaintError> {
+        let (Some(source), Paint::Clone { offset, gray }) = (self.source.clone(), self.paint)
+        else {
+            return Ok(());
+        };
+        if self.coverage.is_empty() {
+            return Ok(());
+        }
+        // The document pixels the stroke reaches, and one more around them for the edge.
+        let t = f64::from(TILE_SIZE);
+        let mut area = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for coord in self.coverage.keys() {
+            let tile = [
+                f64::from(coord.col) * t,
+                f64::from(coord.row) * t,
+                f64::from(coord.col + 1) * t,
+                f64::from(coord.row + 1) * t,
+            ];
+            let [x0, y0, x1, y1] = self.to_document.map_rect(tile);
+            area = [
+                area[0].min(x0),
+                area[1].min(y0),
+                area[2].max(x1),
+                area[3].max(y1),
+            ];
+        }
+        let size = self.base.size();
+        let doc_size =
+            (self
+                .to_document
+                .map_rect([0.0, 0.0, f64::from(size.width), f64::from(size.height)]))
+            .map(|v| v.round());
+        let left = (area[0].max(doc_size[0]) - 1.0).floor() as i64;
+        let top = (area[1].max(doc_size[1]) - 1.0).floor() as i64;
+        let right = (area[2].min(doc_size[2]) + 1.0).ceil() as i64;
+        let bottom = (area[3].min(doc_size[3]) + 1.0).ceil() as i64;
+        if right <= left || bottom <= top {
+            return Ok(());
+        }
+        let (width, height) = ((right - left) as usize, (bottom - top) as usize);
+        let bounds = [left as f64, top as f64, right as f64, bottom as f64];
+        source.prepare(bounds);
+        source.prepare([
+            bounds[0] + offset[0],
+            bounds[1] + offset[1],
+            bounds[2] + offset[0],
+            bounds[3] + offset[1],
+        ]);
+        // Which of them the stroke covers, and the colors there and at the source.
+        let mut inside = vec![false; width * height];
+        let mut taken = vec![[0f32; 4]; width * height];
+        let mut there = vec![[0f32; 4]; width * height];
+        for row in 0..height {
+            for col in 0..width {
+                let i = row * width + col;
+                let (x, y) = (
+                    (left + col as i64) as f64 + 0.5,
+                    (top + row as i64) as f64 + 0.5,
+                );
+                inside[i] = self.coverage_at_document(x, y) > 0.0;
+                taken[i] = source.at(x + offset[0], y + offset[1]);
+                there[i] = source.at(x, y);
+            }
+        }
+        let healed = crate::heal::healed(width, height, &inside, &taken, &there);
+        // Laid again from where it started, every tile it reaches, from the healed colors.
+        self.source = Some(Arc::new(source.patched(left, top, width, height, &healed)));
+        self.paint = Paint::Clone {
+            offset: [0.0, 0.0],
+            gray,
+        };
+        if let Some(OnStack::Top(_, op)) = &mut self.top {
+            *op = PaintOp::Clone {
+                offset: [0.0, 0.0],
+                to_document: self.to_document,
+            };
+        }
+        let whole = [0, 0, TILE_SIZE as usize, TILE_SIZE as usize];
+        self.dirty = self.coverage.keys().map(|&coord| (coord, whole)).collect();
+        self.current = Arc::clone(&self.base);
+        Ok(())
+    }
+
+    /// The stroke's coverage at document point (`x`, `y`) (the image pixel it falls in), before
+    /// the selection.
+    fn coverage_at_document(&self, x: f64, y: f64) -> f32 {
+        let (u, v) = self.to_image.apply(x, y);
+        if !(u >= 0.0 && v >= 0.0) {
+            return 0.0;
+        }
+        let (u, v) = (u as u32, v as u32);
+        let coord = TileCoord {
+            col: u / TILE_SIZE,
+            row: v / TILE_SIZE,
+        };
+        self.coverage.get(&coord).map_or(0.0, |c| {
+            c.0[((v % TILE_SIZE) * TILE_SIZE + u % TILE_SIZE) as usize]
+        })
+    }
+
     /// Before a frame: the source's tiles the `dirty` tiles of the image reach, `offset` away
     /// in the document, composited.
     fn prepare_source(&self, dirty: &[(TileCoord, [usize; 4])]) {

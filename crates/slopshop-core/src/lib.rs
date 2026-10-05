@@ -42,6 +42,7 @@ pub mod edit;
 pub mod filter;
 pub mod geom;
 pub mod gradient;
+pub mod heal;
 pub mod histogram;
 pub mod job;
 pub mod liquify;
