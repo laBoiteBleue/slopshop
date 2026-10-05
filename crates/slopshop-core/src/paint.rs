@@ -433,7 +433,12 @@ impl Stroke {
                     (left + col as i64) as f64 + 0.5,
                     (top + row as i64) as f64 + 0.5,
                 );
-                inside[i] = self.coverage_at_document(x, y) > 0.0;
+                // Where it painted, within the selection (Patch: the selection itself).
+                let selected = match &self.selection {
+                    Some((image, codec)) => MaskReader { image, codec }.at(x.floor(), y.floor()),
+                    None => 1.0,
+                };
+                inside[i] = self.coverage_at_document(x, y) > 0.0 && selected > 0.0;
                 taken[i] = source.at(x + offset[0], y + offset[1]);
                 there[i] = source.at(x, y);
             }

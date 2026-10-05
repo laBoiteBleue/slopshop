@@ -2319,6 +2319,7 @@ pub fn run() {
             layers_touching,
             paint::paint_bucket,
             paint::paint_gradient,
+            paint::patch_selection,
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,
@@ -3424,6 +3425,77 @@ mod tests {
         assert!(r > 245 && g > 245 && b > 245, "{r} {g} {b}");
         let (labels, done) = document.session.history();
         assert_eq!(labels[done - 1].kind, "healingBrush");
+    }
+
+    #[test]
+    fn a_patch_heals_the_selection_from_where_it_was_dragged() {
+        use slopshop_core::selection::{Combine, EdgeOptions, Shape, select_shape};
+        let state = AppState::new();
+        // Red, with a black spot at (90..110, 40..60).
+        let mut pixels = Vec::new();
+        for y in 0..100 {
+            for x in 0..200 {
+                let spot = (90..110).contains(&x) && (40..60).contains(&y);
+                pixels.extend_from_slice(if spot {
+                    &[0, 0, 0, 255]
+                } else {
+                    &[255, 0, 0, 255]
+                });
+            }
+        }
+        let image = RasterImage::from_pixels(Size::new(200, 100), PixelFormat::RGBA8_SRGB, &pixels)
+            .unwrap();
+        let doc = state
+            .add_document(image_session(image, "spot"), None, Vec::new())
+            .unwrap();
+        let spot = select_shape(
+            Size::new(200, 100),
+            None,
+            &Shape::Rectangle {
+                left: 88.0,
+                top: 38.0,
+                right: 112.0,
+                bottom: 62.0,
+            },
+            EdgeOptions::default(),
+            Combine::Replace,
+        )
+        .unwrap();
+        selection::set_selection(&state, doc.id, spot, HistoryLabel::new("marquee")).unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let layer = document.session.document().layers()[0].id;
+        // Dragged 60 to the left, onto red.
+        let edit = paint::patch_edit(
+            document.session.document(),
+            layer.get(),
+            paint::PaintTarget::Layer,
+            [-60.0, 0.0],
+            None,
+        )
+        .unwrap()
+        .expect("a patch");
+        document.session.perform(edit).unwrap();
+        let shown = document.session.document();
+        let [r, g, b] = paint::sample_color_at(shown, 100.5, 50.5, 1).unwrap();
+        assert!(r > 245 && g < 10 && b < 10, "{r} {g} {b}");
+        assert!(shown.selection().is_some(), "the selection stays");
+        // Without a selection: nothing to patch.
+        let mut bare = shown.clone();
+        Edit::SetSelection { selection: None }
+            .apply(&mut bare)
+            .unwrap();
+        assert!(
+            paint::patch_edit(
+                &bare,
+                layer.get(),
+                paint::PaintTarget::Layer,
+                [-60.0, 0.0],
+                None
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]
