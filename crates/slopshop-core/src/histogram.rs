@@ -128,7 +128,6 @@ mod tests {
     use crate::geom::Size;
     use crate::raster::RasterImage;
     use crate::selection::Selection;
-    use crate::transform::Affine;
 
     /// A document of one opaque 8-bit layer, its left half black and its right half the sRGB
     /// gray `right`.
@@ -151,7 +150,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::new(image)),
         };
         Edit::InsertLayer {
@@ -238,7 +237,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::Adjustment { adjustment: curves },
         };
         Edit::InsertLayer {

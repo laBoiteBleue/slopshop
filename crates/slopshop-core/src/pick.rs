@@ -3,7 +3,7 @@
 
 use crate::document::{Document, Layer, LayerContent, LayerId};
 use crate::raster::RasterImage;
-use crate::transform::Affine;
+use crate::transform::Projective;
 
 /// A rectangle in document pixels, `[left, right) × [top, bottom)`; it may extend past the
 /// canvas.
@@ -17,7 +17,7 @@ pub struct Bounds {
 
 impl Bounds {
     /// The box around `rect` (in a layer's pixels) placed by `transform`, in whole pixels.
-    fn placed(rect: crate::geom::Rect, transform: Affine) -> Bounds {
+    fn placed(rect: crate::geom::Rect, transform: Projective) -> Bounds {
         let [x0, y0, x1, y1] = transform.map_rect([
             f64::from(rect.x),
             f64::from(rect.y),
@@ -63,7 +63,7 @@ const PICK_COVERAGE: f32 = 0.05;
 /// mask: without one it covers the whole canvas and would put every layer below it out of
 /// reach (it is chosen in the Layers panel).
 pub fn layer_at(document: &Document, x: i64, y: i64) -> Option<LayerId> {
-    hit(document.layers(), Affine::IDENTITY, x, y)
+    hit(document.layers(), Projective::IDENTITY, x, y)
 }
 
 /// Every layer showing at document pixel (`x`, `y`), top to bottom: what a right-click with
@@ -72,11 +72,11 @@ pub fn layer_at(document: &Document, x: i64, y: i64) -> Option<LayerId> {
 /// their mask lets them act: the list is where they are chosen from the image.
 pub fn layers_at(document: &Document, x: i64, y: i64) -> Vec<LayerId> {
     let mut out = Vec::new();
-    collect_at(document.layers(), Affine::IDENTITY, x, y, &mut out);
+    collect_at(document.layers(), Projective::IDENTITY, x, y, &mut out);
     out
 }
 
-fn collect_at(layers: &[Layer], parent: Affine, x: i64, y: i64, out: &mut Vec<LayerId>) {
+fn collect_at(layers: &[Layer], parent: Projective, x: i64, y: i64, out: &mut Vec<LayerId>) {
     for (i, layer) in layers.iter().enumerate().rev() {
         if !shown(layer) || (layer.clipped && i > 0 && !base_shows(layers, i, parent, x, y)) {
             continue;
@@ -101,7 +101,7 @@ fn collect_at(layers: &[Layer], parent: Affine, x: i64, y: i64, out: &mut Vec<La
 
 /// Whether the base of the clipped layer `layers[i]` (the nearest layer below it that is not
 /// clipped, or the first) shows at (`x`, `y`).
-fn base_shows(layers: &[Layer], i: usize, parent: Affine, x: i64, y: i64) -> bool {
+fn base_shows(layers: &[Layer], i: usize, parent: Projective, x: i64, y: i64) -> bool {
     let base = layers[..i].iter().rposition(|l| !l.clipped).unwrap_or(0);
     let base = &layers[base];
     shown(base) && covers(base, base.transform.then(parent), x, y)
@@ -111,7 +111,7 @@ fn shown(layer: &Layer) -> bool {
     layer.visible && layer.opacity > 0.0
 }
 
-fn hit(layers: &[Layer], parent: Affine, x: i64, y: i64) -> Option<LayerId> {
+fn hit(layers: &[Layer], parent: Projective, x: i64, y: i64) -> Option<LayerId> {
     for (i, layer) in layers.iter().enumerate().rev() {
         if !shown(layer) {
             continue;
@@ -139,7 +139,7 @@ fn hit(layers: &[Layer], parent: Affine, x: i64, y: i64) -> Option<LayerId> {
 }
 
 /// Whether a layer (placed by `transform`) shows a pixel at (`x`, `y`), its mask included.
-fn covers(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
+fn covers(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
     if !mask_shows(layer, transform, x, y) {
         return false;
     }
@@ -165,7 +165,7 @@ fn covers(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
 }
 
 /// Whether the layer's enabled mask, if any, lets (`x`, `y`) show.
-fn mask_shows(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
+fn mask_shows(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
     match layer.mask.as_ref().filter(|m| m.enabled) {
         None => true,
         Some(mask) => sample_alpha_gray(&mask.image, transform, x, y) >= PICK_COVERAGE,
@@ -173,7 +173,7 @@ fn mask_shows(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
 }
 
 /// The image's pixel under the center of document pixel (`x`, `y`), in its own coordinates.
-fn local(image: &RasterImage, transform: Affine, x: i64, y: i64) -> Option<(u32, u32)> {
+fn local(image: &RasterImage, transform: Projective, x: i64, y: i64) -> Option<(u32, u32)> {
     let (u, v) = transform.inverse()?.apply(x as f64 + 0.5, y as f64 + 0.5);
     let (lx, ly) = (u.floor(), v.floor());
     let size = image.size();
@@ -181,16 +181,16 @@ fn local(image: &RasterImage, transform: Affine, x: i64, y: i64) -> Option<(u32,
         .then_some((lx as u32, ly as u32))
 }
 
-fn inside(image: &RasterImage, transform: Affine, x: i64, y: i64) -> bool {
+fn inside(image: &RasterImage, transform: Projective, x: i64, y: i64) -> bool {
     local(image, transform, x, y).is_some()
 }
 
-fn sample_alpha(image: &RasterImage, transform: Affine, x: i64, y: i64) -> f32 {
+fn sample_alpha(image: &RasterImage, transform: Projective, x: i64, y: i64) -> f32 {
     local(image, transform, x, y).map_or(0.0, |(lx, ly)| image.alpha_at(lx, ly))
 }
 
 /// A mask's coverage: its gray value (masks have no alpha, `alpha_at` reads 1 for them).
-fn sample_alpha_gray(mask: &RasterImage, transform: Affine, x: i64, y: i64) -> f32 {
+fn sample_alpha_gray(mask: &RasterImage, transform: Projective, x: i64, y: i64) -> f32 {
     local(mask, transform, x, y).map_or(0.0, |(lx, ly)| mask.gray_at(lx, ly))
 }
 
@@ -199,11 +199,11 @@ fn sample_alpha_gray(mask: &RasterImage, transform: Affine, x: i64, y: i64) -> f
 /// bounds (Photoshop snaps to layer content); fully transparent layers are left out.
 pub fn visible_layer_bounds(document: &Document) -> Vec<(LayerId, Bounds)> {
     let mut out = Vec::new();
-    collect_bounds(document.layers(), Affine::IDENTITY, &mut out);
+    collect_bounds(document.layers(), Projective::IDENTITY, &mut out);
     out
 }
 
-fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Bounds)>) {
+fn collect_bounds(layers: &[Layer], parent: Projective, out: &mut Vec<(LayerId, Bounds)>) {
     for layer in layers.iter().filter(|l| shown(l)) {
         let transform = layer.transform.then(parent);
         match &layer.content {
@@ -225,7 +225,7 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
 /// pixels. Fill layers count only within a mask (they have no edges); adjustment layers have
 /// no pixels. What Image > Reveal All brings onto the canvas. `None`: no such pixel.
 pub fn content_extent(document: &Document) -> Option<Bounds> {
-    layers_extent(document.layers(), Affine::IDENTITY).within
+    layers_extent(document.layers(), Projective::IDENTITY).within
 }
 
 /// Where layers have pixels.
@@ -256,14 +256,14 @@ impl Extent {
     }
 }
 
-fn layers_extent(layers: &[Layer], parent: Affine) -> Extent {
+fn layers_extent(layers: &[Layer], parent: Projective) -> Extent {
     layers
         .iter()
         .map(|layer| layer_extent(layer, layer.transform.then(parent)))
         .fold(Extent::default(), Extent::union)
 }
 
-fn layer_extent(layer: &Layer, transform: Affine) -> Extent {
+fn layer_extent(layer: &Layer, transform: Projective) -> Extent {
     let mask = layer.mask.as_ref().filter(|m| m.enabled);
     let own = match &layer.content {
         LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => Extent {
@@ -340,6 +340,8 @@ pub fn bounds_of(document: &Document, ids: &[LayerId]) -> Option<Bounds> {
 mod tests {
     use std::sync::Arc;
 
+    use crate::transform::Affine;
+
     use super::*;
     use crate::blend::BlendMode;
     use crate::color::{AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType};
@@ -357,7 +359,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content,
         }
     }
@@ -424,7 +426,7 @@ mod tests {
         assert_eq!(layer_at(&doc, 15, 15), None);
         Edit::SetLayerTransform {
             id: low,
-            transform: Affine::translation(6.0, 6.0),
+            transform: Affine::translation(6.0, 6.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -506,7 +508,7 @@ mod tests {
                 pass_through: true,
             },
         );
-        group.transform = Affine::translation(2.0, 0.0);
+        group.transform = Affine::translation(2.0, 0.0).into();
         push(&mut doc, group);
         // Inside a group: the layer, not the group, placed by both transforms.
         assert_eq!(layer_at(&doc, 15, 13), Some(inner_id));
@@ -596,7 +598,7 @@ mod tests {
         let b = push(&mut doc, b);
         Edit::SetLayerTransform {
             id: b,
-            transform: Affine::translation(-4.0, 1.0),
+            transform: Affine::translation(-4.0, 1.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -651,9 +653,10 @@ mod tests {
         };
         Edit::SetLayerTransform {
             id: a,
-            transform: turn
-                .then(Affine::scale(2.0, 2.0))
-                .then(Affine::translation(10.0, 0.0)),
+            transform: Projective::from(
+                turn.then(Affine::scale(2.0, 2.0))
+                    .then(Affine::translation(10.0, 0.0)),
+            ),
         }
         .apply(&mut doc)
         .unwrap();
@@ -704,7 +707,7 @@ mod tests {
         assert_eq!(content_extent(&doc), None);
         // Moved partly off the canvas, and hidden: it counts.
         let mut moved = layer(&mut doc, square(Rect::new(2, 2, 10, 10)));
-        moved.transform = Affine::translation(-7.0, 15.0);
+        moved.transform = Affine::translation(-7.0, 15.0).into();
         moved.visible = false;
         push(&mut doc, moved);
         let extent = |left, top, right, bottom| {
@@ -718,7 +721,7 @@ mod tests {
         assert_eq!(content_extent(&doc), extent(-5, 17, 5, 27));
         // A mask hides part of a layer: only what it shows counts.
         let mut masked = layer(&mut doc, square(Rect::new(0, 0, 20, 20)));
-        masked.transform = Affine::translation(10.0, -10.0);
+        masked.transform = Affine::translation(10.0, -10.0).into();
         masked.mask = Some(mask_showing(Rect::new(5, 5, 5, 5)));
         let masked = push(&mut doc, masked);
         assert_eq!(content_extent(&doc), extent(-5, -5, 20, 27));
@@ -745,7 +748,7 @@ mod tests {
             },
         );
         group.mask = Some(mask_showing(Rect::new(0, 0, 1, 1)));
-        group.transform = Affine::translation(-40.0, 0.0);
+        group.transform = Affine::translation(-40.0, 0.0).into();
         push(&mut doc, group);
         assert_eq!(content_extent(&doc), extent(-40, -10, 30, 27));
     }

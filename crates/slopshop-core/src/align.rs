@@ -243,7 +243,7 @@ mod tests {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         clipped: false,
-                        transform: Affine::IDENTITY,
+                        transform: crate::transform::Projective::IDENTITY,
                         content: LayerContent::raster(Arc::new(image)),
                     },
                 }

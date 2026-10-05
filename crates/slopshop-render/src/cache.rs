@@ -1218,7 +1218,7 @@ mod tests {
     fn new_layer(document: &mut Document, content: LayerContent) -> Layer {
         Layer {
             style: None,
-            transform: Affine::IDENTITY,
+            transform: Affine::IDENTITY.into(),
             clipped: false,
             id: document.allocate_layer_id(),
             name: "layer".into(),
@@ -1322,7 +1322,7 @@ mod tests {
         let image = pattern(Size::new(200, 200), 0);
         let base = |shape: fn(&mut Layer)| {
             one_raster(Arc::clone(&image), |layer| {
-                layer.transform = Affine::translation(10.0, 10.0);
+                layer.transform = Affine::translation(10.0, 10.0).into();
                 shape(layer);
             })
         };
@@ -1331,8 +1331,12 @@ mod tests {
         let shapes: [fn(&mut Layer); 5] = [
             |l| l.opacity = 0.5,
             |l| l.blend_mode = BlendMode::Multiply,
-            |l| l.transform = Affine::translation(11.0, 10.0),
-            |l| l.transform = Affine::scale(1.1, 1.1).then(Affine::translation(10.0, 10.0)),
+            |l| l.transform = Affine::translation(11.0, 10.0).into(),
+            |l| {
+                l.transform = Affine::scale(1.1, 1.1)
+                    .then(Affine::translation(10.0, 10.0))
+                    .into()
+            },
             |l| {
                 l.mask = Some(LayerMask {
                     original: None,
@@ -1357,7 +1361,7 @@ mod tests {
         // a changed raster tile read it too.
         let image = pattern(SIZE, 0);
         let edited = with_tile(&image, 1, 0, 7);
-        let shift = |l: &mut Layer| l.transform = Affine::translation(0.5, 0.5);
+        let shift = |l: &mut Layer| l.transform = Affine::translation(0.5, 0.5).into();
         let a = one_raster(image, shift);
         let b = one_raster(edited, shift);
         let moved = changed(&keys(&a, 0), &keys(&b, 0));
@@ -1367,7 +1371,7 @@ mod tests {
         assert!(moved.contains(&0) && moved.contains(&2), "{moved:?}");
         assert!(!moved.contains(&3) && !moved.contains(&7), "{moved:?}");
         // Whole-pixel offsets read no more than the tile placed over them.
-        let straight = |l: &mut Layer| l.transform = Affine::translation(256.0, 0.0);
+        let straight = |l: &mut Layer| l.transform = Affine::translation(256.0, 0.0).into();
         let image = pattern(SIZE, 0);
         let edited = with_tile(&image, 0, 0, 7);
         let a = one_raster(image, straight);

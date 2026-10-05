@@ -27,7 +27,7 @@ use crate::paint::{MaskReader, PaintError};
 use crate::raster::{Codec, RasterImage, TILE_SIZE, pad_tile, parallel_for_each};
 use crate::selection::{SELECTION_FORMAT, Selection};
 use crate::tile::TileCoord;
-use crate::transform::Affine;
+use crate::transform::{Affine, Projective};
 
 const T: usize = TILE_SIZE as usize;
 
@@ -678,12 +678,12 @@ pub fn show_floating(
     id: LayerId,
     lifted: &Lifted,
     offset: (i64, i64),
-    transform: Affine,
+    transform: Projective,
     mask: Option<LayerMask>,
 ) -> Result<(), EditError> {
     let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?.clone();
     let (parent, index) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
-    let part = |id: LayerId, image: &Arc<RasterImage>, transform: Affine| Layer {
+    let part = |id: LayerId, image: &Arc<RasterImage>, transform: Projective| Layer {
         style: None,
         id,
         name: String::new(),
@@ -698,10 +698,10 @@ pub fn show_floating(
     let mut children = vec![part(
         doc.allocate_layer_id(),
         &lifted.hole,
-        Affine::IDENTITY,
+        Projective::IDENTITY,
     )];
     if let Some((pixels, (x, y))) = &lifted.pixels {
-        let moved = Affine::translation((x + offset.0) as f64, (y + offset.1) as f64);
+        let moved = Projective::translation((x + offset.0) as f64, (y + offset.1) as f64);
         children.push(part(doc.allocate_layer_id(), pixels, moved));
     }
     let group = Layer {
@@ -1086,7 +1086,7 @@ mod tests {
             content: LayerContent::Fill { color },
             mask: None,
             clipped,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
         };
         let mut pixels = Vec::new();
         for y in 0..canvas.height {
@@ -1125,7 +1125,7 @@ mod tests {
                 original: None,
             }),
             clipped: false,
-            transform: placed,
+            transform: placed.into(),
         };
         let below = fill(&mut doc, LinearRgba::new(0.2, 0.5, 0.8, 1.0), false);
         let clipped = fill(&mut doc, LinearRgba::new(0.9, 0.1, 0.1, 0.3), true);
@@ -1166,7 +1166,7 @@ mod tests {
         };
         let mut moving = PixelMove::new(
             image.get(),
-            layer.transform,
+            layer.transform.as_affine().unwrap(),
             &selection,
             doc.blend_space(),
             mode,

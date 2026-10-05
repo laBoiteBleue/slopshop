@@ -463,7 +463,7 @@ fn read_layer_info<R: Read + Seek>(
         }
         let layer = Layer {
             style: (style != LayerStyle::default()).then(|| Style::new(style)),
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Projective::IDENTITY,
             clipped: record.clipping,
             id,
             name: record.name.clone(),

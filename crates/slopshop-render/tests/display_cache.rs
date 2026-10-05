@@ -60,7 +60,7 @@ fn gray_mask(size: Size, value: impl Fn(u32, u32) -> u8) -> Arc<RasterImage> {
 fn layer(s: &mut Session, content: LayerContent) -> Layer {
     Layer {
         style: None,
-        transform: Affine::IDENTITY,
+        transform: Affine::IDENTITY.into(),
         clipped: false,
         id: s.allocate_layer_id(),
         name: "layer".into(),
@@ -114,7 +114,7 @@ fn varied_document() -> Session {
             [200, (x * 3) as u8, (y * 5) as u8, (x + y) as u8]
         }),
     );
-    multiply.transform = Affine::translation(37.0, 51.0);
+    multiply.transform = Affine::translation(37.0, 51.0).into();
     multiply.blend_mode = BlendMode::Multiply;
     multiply.opacity = 0.8;
     push(&mut s, multiply);
@@ -122,7 +122,9 @@ fn varied_document() -> Session {
         &mut s,
         image(Size::new(200, 150), |x, y| [(x ^ y) as u8, 90, 160, 230]),
     );
-    scaled.transform = Affine::scale(1.3, 1.3).then(Affine::translation(400.5, 260.25));
+    scaled.transform = Affine::scale(1.3, 1.3)
+        .then(Affine::translation(400.5, 260.25))
+        .into();
     push(&mut s, scaled);
     let mut fill = layer(
         &mut s,
@@ -137,13 +139,13 @@ fn varied_document() -> Session {
         enabled: true,
         replaces_alpha: false,
     });
-    fill.transform = Affine::translation(300.0, 100.0);
+    fill.transform = Affine::translation(300.0, 100.0).into();
     push(&mut s, fill);
     let mut slice = raster(
         &mut s,
         image(Size::new(120, 120), |x, y| [x as u8, y as u8, 128, 255]),
     );
-    slice.transform = Affine::translation(500.0, 40.0);
+    slice.transform = Affine::translation(500.0, 40.0).into();
     let window = layer(
         &mut s,
         LayerContent::Adjustment {
@@ -218,10 +220,10 @@ fn edits_recomposite_only_the_tiles_they_reach_and_undo_reuses_them() {
     );
     push(&mut s, bg);
     let mut small = raster(&mut s, image(Size::new(50, 50), |_, _| [255, 0, 0, 255]));
-    small.transform = Affine::translation(10.0, 10.0);
+    small.transform = Affine::translation(10.0, 10.0).into();
     let small = push(&mut s, small);
     let mut slice = raster(&mut s, image(Size::new(40, 40), |_, _| [0, 255, 0, 255]));
-    slice.transform = Affine::translation(100.0, 100.0);
+    slice.transform = Affine::translation(100.0, 100.0).into();
     let window = layer(
         &mut s,
         LayerContent::Adjustment {
@@ -319,7 +321,9 @@ fn progressive_frames_composite_a_budget_of_tiles_and_fill_in_from_a_coarser_lev
             &mut s,
             image(Size::new(300, 160), |_, _| [200, 120, 40, 20]),
         );
-        veil.transform = Affine::scale(4.0, 4.0).then(Affine::translation(-100.5, -100.25));
+        veil.transform = Affine::scale(4.0, 4.0)
+            .then(Affine::translation(-100.5, -100.25))
+            .into();
         push(&mut s, veil);
     }
     let view = ViewTransform {
@@ -369,7 +373,7 @@ fn a_styled_layer_shows_at_once_and_its_effects_once_drawn() {
         &mut s,
         image(Size::new(100, 100), |_, _| [200, 60, 30, 255]),
     );
-    square.transform = Affine::translation(150.0, 90.0);
+    square.transform = Affine::translation(150.0, 90.0).into();
     let id = push(&mut s, square);
     s.perform(Edit::SetLayerStyle {
         id,
@@ -515,8 +519,10 @@ fn bench_adjustment_drag() {
                     [(x % 7 * 30) as u8, (y % 5 * 40) as u8, n as u8, 200]
                 });
                 let mut layer = raster(&mut s, small);
-                layer.transform =
-                    Affine::translation(f64::from(n % 6 * 900), f64::from(n / 6 * 900));
+                layer.transform = slopshop_core::Projective::from(Affine::translation(
+                    f64::from(n % 6 * 900),
+                    f64::from(n / 6 * 900),
+                ));
                 push(&mut s, layer);
             }
             let top = layer(

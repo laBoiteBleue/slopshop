@@ -22,7 +22,8 @@ use serde::Deserialize;
 use slopshop_core::move_pixels::{Lifted, MoveMode, Moved, PixelMove, show_floating};
 use slopshop_core::selection::{Selection, translated};
 use slopshop_core::{
-    Affine, BlendSpace, Document, Edit, LayerContent, LayerId, LayerMask, RasterImage, Size,
+    Affine, BlendSpace, Document, Edit, LayerContent, LayerId, LayerMask, Projective, RasterImage,
+    Size,
 };
 use tauri::Manager;
 
@@ -119,11 +120,13 @@ fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> 
         Target::QuickMask => return Err("Quick Mask's pixels do not move".to_owned()),
     };
     let layer = doc.layer(id).ok_or("the moved layer is gone")?;
-    let transform = lifted.as_ref().map_or(layer.transform, |g| g.transform);
+    let transform = lifted
+        .as_ref()
+        .map_or(layer.transform, |g| g.transform.into());
     let mode = if copy { MoveMode::Copy } else { MoveMode::Cut };
     let moving = PixelMove::new(
         image,
-        transform.then(doc.parent_transform(id)),
+        crate::paint::affine_placement(transform.then(doc.parent_transform(id)))?,
         selection,
         doc.blend_space(),
         mode,
@@ -198,7 +201,7 @@ impl MovePreview {
             self.id,
             &self.pixels,
             self.offset,
-            self.transform,
+            self.transform.into(),
             mask,
         );
     }
@@ -438,7 +441,7 @@ fn lift_edit(
     let parent = doc.parent_transform(id);
     let moving = PixelMove::new(
         image.get(),
-        layer.transform.then(parent),
+        crate::paint::affine_placement(layer.transform.then(parent))?,
         selection,
         doc.blend_space(),
         MoveMode::Copy,
@@ -471,7 +474,7 @@ fn lift_edit(
         content: LayerContent::raster(extracted.image),
         mask: None,
         clipped,
-        transform: extracted.to_document.then(to_parent),
+        transform: Projective::from(extracted.to_document).then(to_parent),
     };
     // The hole: the selected pixels erased, as Cut does.
     let erase = crate::paint::PaintRequest {
@@ -539,7 +542,7 @@ mod tests {
             content: LayerContent::raster(Arc::new(image)),
             mask: None,
             clipped: false,
-            transform: Affine::translation(4.0, 2.0),
+            transform: Affine::translation(4.0, 2.0).into(),
         };
         let document = Document::restore(
             CANVAS,
@@ -592,7 +595,7 @@ mod tests {
             (floating.opacity, floating.blend_mode),
             (0.5, BlendMode::Multiply)
         );
-        assert_eq!(floating.transform, Affine::translation(4.0, 2.0));
+        assert_eq!(floating.transform, Affine::translation(4.0, 2.0).into());
         let pixels = image_of(doc, id);
         assert_eq!(pixels.alpha_at(6, 8), 1.0);
         assert_eq!(pixels.alpha_at(5, 8), 0.0);
@@ -625,7 +628,7 @@ mod tests {
             assert_eq!(copy.name, "Layer 2");
             assert_eq!((copy.opacity, copy.blend_mode), (1.0, BlendMode::Normal));
             // The selected pixels, where they were.
-            assert_eq!(copy.transform, Affine::translation(4.0, 2.0));
+            assert_eq!(copy.transform, Affine::translation(4.0, 2.0).into());
             let pixels = image_of(doc, id);
             assert_eq!(pixels.alpha_at(6, 8), 1.0);
             assert_eq!(pixels.alpha_at(5, 8), 0.0);
@@ -654,8 +657,11 @@ mod tests {
         assert_eq!(doc.layers().len(), 2);
         let copy = &doc.layers()[1];
         assert_eq!(copy.name, "photo copy");
-        assert_eq!(copy.transform, Affine::translation(14.0, 2.0));
-        assert_eq!(doc.layers()[0].transform, Affine::translation(4.0, 2.0));
+        assert_eq!(copy.transform, Affine::translation(14.0, 2.0).into());
+        assert_eq!(
+            doc.layers()[0].transform,
+            Affine::translation(4.0, 2.0).into()
+        );
         session.undo().unwrap();
         assert_eq!(session.document().layers().len(), 1);
     }

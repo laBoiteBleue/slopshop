@@ -4111,7 +4111,7 @@ mod tests {
                 },
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
             },
         }
         .apply(&mut doc)
@@ -5186,7 +5186,7 @@ mod tests {
                 replaces_alpha: false,
             }),
             clipped: false,
-            transform: Affine::translation(10.0, 0.0),
+            transform: Affine::translation(10.0, 0.0).into(),
             content: LayerContent::raster(Arc::new(image)),
         };
         let id = layer.id;

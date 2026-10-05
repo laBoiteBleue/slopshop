@@ -34,7 +34,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "fill".into(),
@@ -229,7 +229,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
         index: 0,
         layer: Layer {
             style: None,
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Affine::IDENTITY.into(),
             clipped: false,
             id,
             name: "image".into(),
@@ -359,7 +359,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "image".into(),
@@ -787,7 +787,7 @@ fn a_moved_raster_is_displayed_moved() {
     let id = s.document().layers()[0].id;
     s.perform(Edit::SetLayerTransform {
         id,
-        transform: slopshop_core::Affine::translation(40.0, -30.0),
+        transform: slopshop_core::Affine::translation(40.0, -30.0).into(),
     })
     .unwrap();
     let frame = r.render_view(s.document(), identity(), size).unwrap();
@@ -804,8 +804,10 @@ fn zoomed_in_a_transformed_raster_shows_its_document_pixels() {
     let id = s.document().layers()[0].id;
     s.perform(Edit::SetLayerTransform {
         id,
-        transform: slopshop_core::Affine::rotation(0.4)
-            .then(slopshop_core::Affine::translation(60.0, -30.0)),
+        transform: slopshop_core::Projective::from(
+            slopshop_core::Affine::rotation(0.4)
+                .then(slopshop_core::Affine::translation(60.0, -30.0)),
+        ),
     })
     .unwrap();
     let full = r.render_view(s.document(), identity(), size).unwrap();
@@ -837,9 +839,11 @@ fn zoomed_out_a_reduced_raster_keeps_its_color() {
     let id = s.document().layers()[0].id;
     s.perform(Edit::SetLayerTransform {
         id,
-        transform: slopshop_core::Affine::scale(0.5, 0.5)
-            .then(slopshop_core::Affine::rotation(0.3))
-            .then(slopshop_core::Affine::translation(100.0, 100.0)),
+        transform: slopshop_core::Projective::from(
+            slopshop_core::Affine::scale(0.5, 0.5)
+                .then(slopshop_core::Affine::rotation(0.3))
+                .then(slopshop_core::Affine::translation(100.0, 100.0)),
+        ),
     })
     .unwrap();
     // Zoomed out 3×: the image's center, (200, 200), is at document (166, 225).

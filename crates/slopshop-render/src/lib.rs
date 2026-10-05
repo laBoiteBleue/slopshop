@@ -36,7 +36,8 @@ use slopshop_core::stack::{LookFilter, Looks};
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::{
-    Affine, BlendMode, BlendSpace, Document, Layer, LayerContent, RasterImage, Rect, Size,
+    Affine, BlendMode, BlendSpace, Document, Layer, LayerContent, Projective, RasterImage, Rect,
+    Size,
 };
 
 use crate::tiles::{GpuTileFormat, TileCache, TileKey, gpu_texels};
@@ -1112,7 +1113,7 @@ impl Renderer {
         let placed_by = pass.ants.map_or(Affine::IDENTITY, |ants| ants.transform);
         let plan = pass.selection.and_then(|selection| {
             visible_document_rect(doc_size, frame.view, frame.output).and_then(|visible| {
-                RasterPlan::new(selection, visible, placed_by, frame.view.scale)
+                RasterPlan::new(selection, visible, placed_by.into(), frame.view.scale)
             })
         });
         let mut prepared = PreparedLayers {
@@ -1440,10 +1441,12 @@ fn gather_looks(
             continue;
         };
         // Pixels of the layer per screen pixel (the view's scale is document pixels per screen
-        // pixel): the level the display samples it at.
-        let scale = (to_document.a * to_document.d - to_document.b * to_document.c)
-            .abs()
-            .sqrt();
+        // pixel): the level the display samples it at; a projective layer's, where the view's
+        // middle is.
+        let [vx0, vy0, vx1, vy1] = visible;
+        let (cx, cy) = to_layer.apply((vx0 + vx1) / 2.0, (vy0 + vy1) / 2.0);
+        let [a, b, c, d] = to_document.jacobian(cx, cy);
+        let scale = (a * d - b * c).abs().sqrt();
         let per_screen = view.scale / scale;
         let level = if per_screen > 1.0 {
             per_screen.log2().floor() as usize
@@ -1461,7 +1464,7 @@ fn gather_looks(
 
 /// The rasters a step samples, with their transforms to the document: a raster layer's image,
 /// then its (or a group's) enabled mask.
-fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
+fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective)>; 2] {
     match step {
         Step::Layer {
             layer,
@@ -1513,7 +1516,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Affine)>; 2] {
         Step::StackEffect { effect, transform } => [
             None,
             effect.selection.as_ref().and_then(|selection| {
-                let placed = effect.to_document.inverse()?.then(*transform);
+                let placed = Projective::from(effect.to_document.inverse()?).then(*transform);
                 Some((selection.image().as_ref(), placed))
             }),
         ],
@@ -1752,20 +1755,22 @@ fn encode_layers(
 }
 
 /// Describe a gradient fill in `fields`: `color`, its ends (`from`, `to`) in the layer's
-/// content space; `resample_u` and `resample_v`, the map from document points there; `transfer`,
+/// content space; `resample_u`, `resample_v` and `resample_q`, the rows of the map from document
+/// points there (projective: divided by the third, ADR 0038); `transfer`,
 /// its opacity at each end and its shape; `matrix`, from linear sRGB to the working space; its
 /// lookup tables (as Gradient Map's, `adjustment_table`) appended to `tile_table`.
 fn set_gradient_fields(
     fields: &mut LayerFields,
     field: &slopshop_core::gradient::GradientField,
-    to_content: Affine,
+    to_content: Projective,
     alpha: [f32; 2],
     tile_table: &mut Vec<u32>,
 ) {
     fields.kind = KIND_GRADIENT;
-    let [a, b, c, d, e, f] = to_content.to_array().map(|v| v as f32);
+    let [a, b, c, d, e, f, g, h, i] = to_content.to_array().map(|v| v as f32);
     fields.resample[0] = [a, c, e, 0.0];
     fields.resample[1] = [b, d, f, 0.0];
+    fields.resample[2] = [g, h, i, 0.0];
     fields.color = [field.from[0], field.from[1], field.to[0], field.to[1]].map(|v| v as f32);
     let shape = match field.shape {
         slopshop_core::gradient::GradientShape::Linear => 0.0,
@@ -2028,8 +2033,14 @@ impl<'a> RasterPlan<'a> {
     /// Sampling `image`, placed by `transform`, over the document `area` for output pixels of
     /// `scale` document pixels: at the finest level whose pixels are not smaller than output
     /// pixels (for a whole-pixel offset), or the resampling's level. `None` for a transform
-    /// that is not invertible (edits refuse them).
-    fn new(image: &'a RasterImage, area: [f64; 4], transform: Affine, scale: f64) -> Option<Self> {
+    /// that is not invertible (edits refuse them), and for now for a projective one (ADR 0038:
+    /// its resampling comes next; edits refuse them meanwhile).
+    fn new(
+        image: &'a RasterImage,
+        area: [f64; 4],
+        transform: Projective,
+        scale: f64,
+    ) -> Option<Self> {
         let coarsest = image.levels().len() - 1;
         let (place, level) = match transform.integer_translation() {
             Some((x, y)) => {
@@ -2042,7 +2053,7 @@ impl<'a> RasterPlan<'a> {
                 (Place::Offset([clamp(x), clamp(y)]), level)
             }
             None => {
-                let r = Resampling::new(transform, scale, image.levels().len())?;
+                let r = Resampling::new(transform.as_affine()?, scale, image.levels().len())?;
                 (Place::Resampled(r), r.level)
             }
         };
@@ -2056,7 +2067,11 @@ impl<'a> RasterPlan<'a> {
     }
 
     /// Level 0 (or the resampling's level), whatever the tile budget (export).
-    fn full_resolution(image: &'a RasterImage, area: [f64; 4], transform: Affine) -> Option<Self> {
+    fn full_resolution(
+        image: &'a RasterImage,
+        area: [f64; 4],
+        transform: Projective,
+    ) -> Option<Self> {
         Self::new(image, area, transform, 1.0)
     }
 
@@ -2594,7 +2609,7 @@ mod tests {
                 .expect("16 × 16 RGBA8 pixels");
         let layer = Layer {
             style: None,
-            transform: Affine::IDENTITY,
+            transform: Affine::IDENTITY.into(),
             clipped: false,
             id: document.allocate_layer_id(),
             name: "image".into(),
@@ -2645,7 +2660,7 @@ mod tests {
             .expect("16 × 16 RGBA8 pixels");
         let layer = Layer {
             style: None,
-            transform: Affine::translation(8.0, 8.0),
+            transform: Affine::translation(8.0, 8.0).into(),
             clipped: false,
             id: document.allocate_layer_id(),
             name: "image".into(),
@@ -2685,7 +2700,7 @@ mod tests {
             .expect("600 × 300 RGBA8 pixels");
         let layer = Layer {
             style: None,
-            transform: Affine::IDENTITY,
+            transform: Affine::IDENTITY.into(),
             clipped: false,
             id: document.allocate_layer_id(),
             name: "image".into(),

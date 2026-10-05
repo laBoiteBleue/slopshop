@@ -133,7 +133,7 @@ fn document(stack: &LayerStack, ready: bool) -> Document {
         index: 0,
         layer: Layer {
             style: None,
-            transform: Affine::IDENTITY,
+            transform: Affine::IDENTITY.into(),
             clipped: false,
             id,
             name: "stacked".into(),

@@ -186,7 +186,7 @@ fn raster_layer(name: String, image: Arc<RasterImage>, transform: Affine) -> Lay
         content: LayerContent::raster(image),
         mask: None,
         clipped: false,
-        transform,
+        transform: transform.into(),
     }
 }
 
@@ -205,7 +205,8 @@ fn selected_pixels(
         _ => return Err("only a raster layer's pixels or a mask are copied".to_owned()),
     };
     // A mask's grays are copied as a gray layer, given an alpha channel like any layer's.
-    let to_document = layer.transform.then(document.parent_transform(layer_id));
+    let to_document =
+        crate::paint::affine_placement(layer.transform.then(document.parent_transform(layer_id)))?;
     let moving = PixelMove::new(
         image,
         to_document,
@@ -547,7 +548,7 @@ fn place(
         .layers
         .into_iter()
         .map(|mut layer| {
-            layer.transform = layer.transform.then(shift);
+            layer.transform = layer.transform.then(shift.into());
             layer
         })
         .collect();
@@ -688,7 +689,7 @@ fn new_document(
         .layers
         .into_iter()
         .map(|mut layer| {
-            layer.transform = layer.transform.then(shift);
+            layer.transform = layer.transform.then(shift.into());
             layer
         })
         .collect();
@@ -768,7 +769,13 @@ mod tests {
     fn top_transform(state: &AppState, id: u64) -> Affine {
         let mut documents = state.documents().unwrap();
         let document = documents.get_mut(id).unwrap().session.document();
-        document.layers().last().unwrap().transform
+        document
+            .layers()
+            .last()
+            .unwrap()
+            .transform
+            .as_affine()
+            .unwrap()
     }
 
     #[test]
@@ -817,7 +824,10 @@ mod tests {
             session(vec![group]).document(),
             CopyRequest::Layers { ids: vec![2] },
         );
-        assert_eq!(copied.layers[0].transform, Affine::translation(31.0, 42.0));
+        assert_eq!(
+            copied.layers[0].transform,
+            Affine::translation(31.0, 42.0).into()
+        );
         assert_eq!(copied.bounds, Some([31.0, 42.0, 41.0, 52.0]));
     }
 
@@ -833,7 +843,7 @@ mod tests {
         let copied = copy(source.document(), pixels());
         // The layer's tile, placed where the layer is; only the selected pixels are opaque.
         let layer = &copied.layers[0];
-        assert_eq!(layer.transform, Affine::translation(20.0, 10.0));
+        assert_eq!(layer.transform, Affine::translation(20.0, 10.0).into());
         let LayerContent::Raster { image, .. } = &layer.content else {
             panic!("a raster layer");
         };
@@ -865,7 +875,7 @@ mod tests {
         let copied = copy(source.document(), merged());
         let layer = &copied.layers[0];
         assert_eq!(layer.name, "Merged");
-        assert_eq!(layer.transform, Affine::translation(10.0, 20.0));
+        assert_eq!(layer.transform, Affine::translation(10.0, 20.0).into());
         let LayerContent::Raster { image, .. } = &layer.content else {
             panic!("a raster layer");
         };
@@ -915,7 +925,7 @@ mod tests {
         assert!(group.mask.is_some());
         // Centered on the selection, since it did not meet it.
         let child = &group.children().unwrap()[0];
-        assert_eq!(child.transform, Affine::translation(50.0, 40.0));
+        assert_eq!(child.transform, Affine::translation(50.0, 40.0).into());
         // One undo entry, which brings the selection back.
         target.session.undo().unwrap();
         assert!(target.session.document().selection().is_some());

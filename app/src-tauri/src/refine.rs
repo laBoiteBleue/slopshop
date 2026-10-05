@@ -283,7 +283,7 @@ pub(crate) fn output(
         let layer = doc.layer(id).ok_or("unknown layer")?;
         (
             crate::selection::mask_size(doc, layer)?,
-            layer.transform.then(doc.parent_transform(id)),
+            crate::paint::affine_placement(layer.transform.then(doc.parent_transform(id)))?,
         )
     };
     let refined = selection::refine_edges(canvas, &base, settings).map_err(|e| e.to_string())?;

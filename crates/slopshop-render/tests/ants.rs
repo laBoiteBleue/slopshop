@@ -43,7 +43,7 @@ fn document(size: Size) -> Session {
             index: 0,
             layer: Layer {
                 style: None,
-                transform: Affine::IDENTITY,
+                transform: Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "fill".into(),

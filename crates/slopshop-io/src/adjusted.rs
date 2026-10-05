@@ -48,7 +48,7 @@ pub(crate) fn grouped(
         content,
         mask: None,
         clipped: false,
-        transform: slopshop_core::Affine::IDENTITY,
+        transform: slopshop_core::Projective::IDENTITY,
     };
     let mut warnings = Vec::new();
     let mut children = Vec::with_capacity(images.len() + 2);

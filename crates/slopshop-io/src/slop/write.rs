@@ -658,10 +658,12 @@ fn build_manifest(
             params.insert("clipped".to_owned(), Value::from(true));
         }
         if !layer.transform.is_identity() {
-            params.insert(
-                "transform".to_owned(),
-                Value::from(layer.transform.to_array().to_vec()),
-            );
+            // Six numbers for an affine map, as since schema 0.6.
+            let numbers = match layer.transform.as_affine() {
+                Some(t) => t.to_array().to_vec(),
+                None => layer.transform.to_array().to_vec(),
+            };
+            params.insert("transform".to_owned(), Value::from(numbers));
         }
         if let Some(mask) = &layer.mask {
             let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();

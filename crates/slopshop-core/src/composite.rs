@@ -31,7 +31,7 @@ use crate::geom::{Rect, Size};
 use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterImage, RasterLevel, TILE_SIZE};
 use crate::resample::{Resampling, TABLE_SIZE, weight_table};
 use crate::tile::TileCoord;
-use crate::transform::Affine;
+use crate::transform::Projective;
 
 /// Lossy events of a composite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -82,7 +82,7 @@ pub enum Step<'a> {
         atop: bool,
         /// From the layer's content (and mask) to the document: its transform composed with its
         /// groups' (ADR 0017).
-        transform: Affine,
+        transform: Projective,
         /// Display only: a raster layer whose pixels are what the stack steps before it made
         /// (its stack not evaluated yet, ADR 0029), not its image.
         stack: bool,
@@ -93,7 +93,7 @@ pub enum Step<'a> {
         layer: &'a Layer,
         adjustment: Adjustment,
         opacity: f32,
-        transform: Affine,
+        transform: Projective,
     },
     /// Push the accumulator. An isolated group starts over from transparency; a pass-through
     /// one keeps compositing onto what is below it.
@@ -104,7 +104,7 @@ pub enum Step<'a> {
     End {
         mask: Option<&'a LayerMask>,
         /// From the mask to the document: the group's composed transform.
-        mask_transform: Affine,
+        mask_transform: Projective,
         mode: BlendMode,
         opacity: f32,
         isolated: bool,
@@ -116,18 +116,18 @@ pub enum Step<'a> {
     /// blends the result as the layer's pixels.
     StackOriginal {
         original: &'a RasterImage,
-        transform: Affine,
+        transform: Projective,
     },
     /// Display only: paint of a stack, over what the steps since `StackOriginal` made.
     StackPaint {
         paint: &'a crate::stack::PaintEntry,
-        transform: Affine,
+        transform: Projective,
     },
     /// Display only: an effect of a stack, on what the steps since `StackOriginal` made; its
     /// selection is read through `transform` then the effect's own placement.
     StackEffect {
         effect: &'a crate::stack::Effect,
-        transform: Affine,
+        transform: Projective,
     },
 }
 
@@ -140,7 +140,7 @@ pub fn steps(document: &Document) -> Vec<Step<'_>> {
     let mut steps = Vec::new();
     push_steps(
         document.layers(),
-        Affine::IDENTITY,
+        Projective::IDENTITY,
         Plan {
             canvas: document.size(),
             display: None,
@@ -183,7 +183,7 @@ pub fn display_plan_with<'a>(
     let pending = Cell::new(false);
     push_steps(
         document.layers(),
-        Affine::IDENTITY,
+        Projective::IDENTITY,
         Plan {
             canvas: document.size(),
             display: Some(&pending),
@@ -254,7 +254,7 @@ fn contains(outer: Area, inner: Area) -> bool {
 
 /// The canvas area of a raster `layer` placed at whole pixels (its siblings mapped to the
 /// document by `parent`); `None` for other layers and transforms.
-fn placed_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
+fn placed_area(layer: &Layer, parent: Projective, canvas: Size) -> Option<Area> {
     let LayerContent::Raster { image, .. } = &layer.content else {
         return None;
     };
@@ -273,7 +273,7 @@ fn placed_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
 
 /// The canvas area outside which `layer` (with the clipped layers above it, which only draw atop
 /// it) changes nothing: its image placed at whole pixels, or the whole canvas.
-fn reach(layer: &Layer, parent: Affine, canvas: Size) -> Area {
+fn reach(layer: &Layer, parent: Projective, canvas: Size) -> Area {
     placed_area(layer, parent, canvas).unwrap_or(canvas_area(canvas))
 }
 
@@ -281,7 +281,7 @@ fn reach(layer: &Layer, parent: Affine, canvas: Size) -> Area {
 /// everything below it: shown, not clipped, normal at full opacity, no enabled mask, and opaque
 /// there (a fill of an opaque color over the whole canvas, or an image without alpha placed at
 /// whole pixels). Clipped layers above it keep it opaque: they only draw atop.
-fn opaque_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
+fn opaque_area(layer: &Layer, parent: Projective, canvas: Size) -> Option<Area> {
     if !shown(layer)
         || layer.clipped
         || layer.blend_mode != BlendMode::Normal
@@ -307,7 +307,7 @@ fn opaque_area(layer: &Layer, parent: Affine, canvas: Size) -> Option<Area> {
 /// For each of sibling `layers`, whether an opaque layer above it hides all it can change (a
 /// stack of image slices composites its top one only). Only the bases of clipping groups
 /// matter: their clipped layers go with them.
-fn hidden_layers(layers: &[Layer], parent: Affine, canvas: Size) -> Vec<bool> {
+fn hidden_layers(layers: &[Layer], parent: Projective, canvas: Size) -> Vec<bool> {
     let mut hidden = vec![false; layers.len()];
     // Opaque areas of the layers above, none inside another.
     let mut opaque: Vec<Area> = Vec::new();
@@ -329,7 +329,7 @@ fn hidden_layers(layers: &[Layer], parent: Affine, canvas: Size) -> Vec<bool> {
 /// clipped layers above it (ADR 0016), except the ones hidden by an opaque layer above them.
 fn push_steps<'a>(
     layers: &'a [Layer],
-    parent: Affine,
+    parent: Projective,
     plan: Plan<'_, 'a>,
     steps: &mut Vec<Step<'a>>,
 ) {
@@ -367,7 +367,7 @@ fn push_steps<'a>(
         }
         steps.push(Step::End {
             mask: None,
-            mask_transform: Affine::IDENTITY,
+            mask_transform: Projective::IDENTITY,
             mode: group_mode(base),
             opacity: base.opacity,
             isolated: true,
@@ -389,7 +389,7 @@ fn group_mode(layer: &Layer) -> BlendMode {
 fn push_layer<'a>(
     layer: &'a Layer,
     role: Role,
-    parent: Affine,
+    parent: Projective,
     plan: Plan<'_, 'a>,
     steps: &mut Vec<Step<'a>>,
 ) {
@@ -449,7 +449,7 @@ fn push_layer<'a>(
         let (original, placed, entries) = match look {
             Some(look) => (
                 look.image.as_ref(),
-                look.placement().then(transform),
+                Projective::from(look.placement()).then(transform),
                 &look.above[..],
             ),
             None => (stack.original().as_ref(), transform, stack.entries()),
@@ -556,7 +556,7 @@ fn push_style_tail<'a>(
     steps.extend(drawn.over.iter().map(|effect| effect_step(effect, true)));
     steps.push(Step::End {
         mask: None,
-        mask_transform: Affine::IDENTITY,
+        mask_transform: Projective::IDENTITY,
         mode: BlendMode::Normal,
         opacity: 1.0,
         isolated: true,
@@ -565,7 +565,7 @@ fn push_style_tail<'a>(
     steps.extend(drawn.above.iter().map(|effect| effect_step(effect, false)));
     steps.push(Step::End {
         mask: None,
-        mask_transform: Affine::IDENTITY,
+        mask_transform: Projective::IDENTITY,
         mode,
         opacity,
         isolated: true,
@@ -608,7 +608,7 @@ enum Op<'a> {
 }
 
 /// A mask image, read as coverage, placed by `transform`.
-fn mask_source(mask: &LayerMask, transform: Affine) -> Option<MaskSource<'_>> {
+fn mask_source(mask: &LayerMask, transform: Projective) -> Option<MaskSource<'_>> {
     let (level, placement) = placement(&mask.image, transform)?;
     Some(MaskSource {
         level,
@@ -627,13 +627,14 @@ enum Placement {
 }
 
 /// How `image`, placed by `transform`, is sampled: the level read and the placement. `None`
-/// for a transform that is not invertible (edits refuse them).
-fn placement(image: &RasterImage, transform: Affine) -> Option<(&RasterLevel, Placement)> {
+/// for a transform that is not invertible (edits refuse them), and for now for a projective one
+/// (ADR 0038: its resampling comes next; edits refuse them meanwhile).
+fn placement(image: &RasterImage, transform: Projective) -> Option<(&RasterLevel, Placement)> {
     let levels = image.levels();
     match transform.integer_translation() {
         Some((x, y)) => Some((levels.first()?, Placement::Offset(x, y))),
         None => {
-            let r = Resampling::new(transform, 1.0, levels.len())?;
+            let r = Resampling::new(transform.as_affine()?, 1.0, levels.len())?;
             Some((levels.get(r.level)?, Placement::Resampled(Box::new(r))))
         }
     }
@@ -672,7 +673,7 @@ fn source(
     mode: BlendMode,
     opacity: f32,
     atop: bool,
-    transform: Affine,
+    transform: Projective,
 ) -> Option<Source<'_>> {
     let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
     let content = match &layer.content {
@@ -811,7 +812,7 @@ enum SourceContent<'a> {
     Gradient {
         luts: [Vec<f32>; 3],
         field: crate::gradient::GradientField,
-        to_content: Affine,
+        to_content: Projective,
         alpha: Option<[f32; 2]>,
         opacity: f64,
     },
@@ -1266,6 +1267,8 @@ fn saturate(v: f64, report: &mut CompositeReport) -> f32 {
 mod tests {
     use std::sync::Arc;
 
+    use crate::transform::Affine;
+
     use super::*;
     use crate::adjust::Adjustment;
     use crate::blend::BlendSpace;
@@ -1305,7 +1308,7 @@ mod tests {
             index,
             layer: Layer {
                 style: None,
-                transform: crate::transform::Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
                 clipped: false,
                 id,
                 name: format!("layer {}", id.get()),
@@ -1411,7 +1414,7 @@ mod tests {
         // Moved with its layer: what was at x = 0 is at x = 50.
         Edit::SetLayerTransform {
             id,
-            transform: crate::transform::Affine::translation(50.0, 0.0),
+            transform: crate::transform::Affine::translation(50.0, 0.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1931,7 +1934,7 @@ mod tests {
         let id = doc.allocate_layer_id();
         Layer {
             style: None,
-            transform: crate::transform::Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             clipped: false,
             id,
             name: format!("layer {}", id.get()),
@@ -2152,7 +2155,7 @@ mod tests {
         };
         let content = raster(Size::new(2, 1), format, &[value, value / 2]);
         let mut layer = new_layer(doc, content, BlendMode::Normal, 1.0);
-        layer.transform = crate::transform::Affine::translation(x, y);
+        layer.transform = crate::transform::Affine::translation(x, y).into();
         layer
     }
 
@@ -2188,7 +2191,7 @@ mod tests {
             push(&mut doc, below);
             let mut top = small_slice(&mut doc, 30, 1.0, 0.0);
             match change {
-                0 => top.transform = crate::transform::Affine::translation(2.0, 0.0),
+                0 => top.transform = crate::transform::Affine::translation(2.0, 0.0).into(),
                 _ => top.opacity = 0.5,
             }
             push(&mut doc, top);
@@ -2222,7 +2225,7 @@ mod tests {
             push(&mut doc, below);
             let mut top = new_layer(&mut doc, slice(30), BlendMode::Normal, 1.0);
             match change {
-                0 => top.transform = crate::transform::Affine::translation(1.0, 0.0),
+                0 => top.transform = crate::transform::Affine::translation(1.0, 0.0).into(),
                 1 => top.opacity = 0.5,
                 _ => top.blend_mode = BlendMode::Screen,
             }
@@ -2414,7 +2417,7 @@ mod tests {
                 opaque_base(&mut moved);
                 let mut layer = new_layer(&mut moved, small, BlendMode::Screen, 0.9);
                 layer.mask = Some(mask.clone());
-                layer.transform = Affine::translation(dx as f64, dy as f64);
+                layer.transform = Affine::translation(dx as f64, dy as f64).into();
                 push(&mut moved, layer);
 
                 // ... is the same image and mask placed there on a document-sized raster.
@@ -2479,14 +2482,14 @@ mod tests {
         let mut doc = document(BlendSpace::Linear);
         let inner = new_layer(&mut doc, varied(0.3), BlendMode::Normal, 1.0);
         let mut g = group(&mut doc, vec![inner.clone()], false);
-        g.transform = Affine::translation(2.0, 1.0);
+        g.transform = Affine::translation(2.0, 1.0).into();
         push(&mut doc, g);
         let mut flat = document(BlendSpace::Linear);
         while flat.next_layer_id() <= doc.next_layer_id() {
             flat.allocate_layer_id();
         }
         let mut moved = inner;
-        moved.transform = Affine::translation(2.0, 1.0);
+        moved.transform = Affine::translation(2.0, 1.0).into();
         push(&mut flat, moved);
         assert_close(&all(&doc), &all(&flat));
     }
@@ -2519,7 +2522,7 @@ mod tests {
             BlendMode::Normal,
             1.0,
         );
-        layer.transform = turn;
+        layer.transform = turn.into();
         push(&mut turned, layer);
         // Document pixel (x, y) shows image pixel (y, 1 − x): a 2 × 3 image, not resampled.
         let rotated: Vec<[f32; 4]> = (0..3)
@@ -2548,7 +2551,9 @@ mod tests {
             1.0,
         );
         // 12 × 12 pixels from (2.5, 1).
-        layer.transform = Affine::scale(3.0, 3.0).then(Affine::translation(2.5, 1.0));
+        layer.transform = Affine::scale(3.0, 3.0)
+            .then(Affine::translation(2.5, 1.0))
+            .into();
         push(&mut doc, layer);
         let out = all(&doc);
         let at = |x: usize, y: usize| &out[(y * 24 + x) * 4..][..4];

@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use slopshop_core::composite::{Step, steps};
 use slopshop_core::raster::{ImageId, TILE_SIZE};
 use slopshop_core::resample::Resampling;
-use slopshop_core::{Affine, BlendSpace, Document, RasterImage, Rect};
+use slopshop_core::{BlendSpace, Document, Projective, RasterImage, Rect};
 
 use crate::tiles::{GpuTileFormat, TileCache, TileKey};
 use crate::{
@@ -529,7 +529,7 @@ fn raster_images(layers: &[Step<'_>], region: Rect, format: GpuTileFormat) -> Ha
 
 /// Whether a raster placed by `transform` has pixels read within `area` (for a resampled one,
 /// within the filter's reach).
-fn covers(image: &RasterImage, transform: Affine, area: Rect) -> bool {
+fn covers(image: &RasterImage, transform: Projective, area: Rect) -> bool {
     let size = image.size();
     if let Some((x, y)) = transform.integer_translation() {
         return x < area.right() as i64
@@ -537,7 +537,11 @@ fn covers(image: &RasterImage, transform: Affine, area: Rect) -> bool {
             && x + i64::from(size.width) > i64::from(area.x)
             && y + i64::from(size.height) > i64::from(area.y);
     }
-    let Some(r) = Resampling::new(transform, 1.0, image.levels().len()) else {
+    // Projective: not drawn yet (ADR 0038, its resampling comes next).
+    let Some(r) = transform
+        .as_affine()
+        .and_then(|t| Resampling::new(t, 1.0, image.levels().len()))
+    else {
         return false;
     };
     let [x0, y0, x1, y1] = r.source_area(document_area(area));

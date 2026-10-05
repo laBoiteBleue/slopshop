@@ -21,7 +21,7 @@ use crate::geom::Size;
 use crate::raster::RasterImage;
 use crate::stack::Pixels;
 use crate::style::Style;
-use crate::transform::Affine;
+use crate::transform::{Affine, Projective};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edit {
@@ -83,11 +83,11 @@ pub enum Edit {
         parent: Option<LayerId>,
         index: usize,
     },
-    /// Place a layer (a group with everything inside it) in its parent's space (ADR 0017).
-    /// Whole-pixel translations only, until resampled transforms are supported.
+    /// Place a layer (a group with everything inside it) in its parent's space (ADR 0017,
+    /// 0038).
     SetLayerTransform {
         id: LayerId,
-        transform: Affine,
+        transform: Projective,
     },
     /// Give a raster layer `stack` (ADR 0029): its original (grown, for a layer painted beyond
     /// its bounds) and what is applied to it. The layer shows the stack's result: `shown` when
@@ -832,7 +832,12 @@ impl Edit {
             let effect = crate::stack::Effect {
                 adjustment,
                 selection: doc.selection().cloned(),
-                to_document: layer.transform.then(doc.parent_transform(id)),
+                // Affine until stacks' placements are projective (ADR 0038).
+                to_document: layer
+                    .transform
+                    .then(doc.parent_transform(id))
+                    .as_affine()
+                    .ok_or(EditError::InvalidTransform)?,
                 space: doc.blend_space(),
             };
             edits.push(Edit::SetLayerStack {
@@ -869,7 +874,12 @@ impl Edit {
         let step = crate::stack::FilterStep {
             filter,
             selection: doc.selection().cloned(),
-            to_document: layer.transform.then(doc.parent_transform(id)),
+            // Affine until stacks' placements are projective (ADR 0038).
+            to_document: layer
+                .transform
+                .then(doc.parent_transform(id))
+                .as_affine()
+                .ok_or(EditError::InvalidTransform)?,
             space: doc.blend_space(),
         };
         Ok(Edit::SetLayerStack {
@@ -1028,7 +1038,7 @@ impl Edit {
                 .filter_map(|id| doc.layer(id).map(|l| (id, l.transform)))
                 .map(|(id, transform)| Edit::SetLayerTransform {
                     id,
-                    transform: transform.then(by),
+                    transform: transform.then(by.into()),
                 })
                 .collect(),
         ))
@@ -1052,7 +1062,12 @@ impl Edit {
             // Into the document, `by`, and back into the parent's space.
             let parent = doc.parent_transform(id);
             let back = parent.inverse().ok_or(EditError::InvalidTransform)?;
-            let transform = layer.transform.then(parent).then(by).then(back).snapped();
+            let transform = layer
+                .transform
+                .then(parent)
+                .then(by.into())
+                .then(back)
+                .snapped();
             validate_transform(transform)?;
             edits.push(Edit::SetLayerTransform { id, transform });
         }
@@ -1101,7 +1116,7 @@ impl Edit {
             });
         }
         for layer in doc.layers() {
-            let transform = layer.transform.then(by).snapped();
+            let transform = layer.transform.then(by.into()).snapped();
             validate_transform(transform)?;
             edits.push(Edit::SetLayerTransform {
                 id: layer.id,
@@ -1567,12 +1582,12 @@ fn swap_paint(
     }
 }
 
-/// Transforms layers may have: finite and invertible (ADR 0018).
-pub(crate) fn validate_transform(transform: Affine) -> Result<(), EditError> {
-    if transform.is_valid_layer_transform() {
-        Ok(())
-    } else {
-        Err(EditError::InvalidTransform)
+/// Transforms layers may have: finite and invertible (ADR 0018); affine until layers are
+/// resampled through projective ones (ADR 0038).
+pub(crate) fn validate_transform(transform: Projective) -> Result<(), EditError> {
+    match transform.as_affine() {
+        Some(t) if t.is_valid_layer_transform() => Ok(()),
+        _ => Err(EditError::InvalidTransform),
     }
 }
 
@@ -1593,7 +1608,7 @@ mod tests {
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
             style: None,
-            transform: crate::transform::Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             clipped: false,
             id: doc.allocate_layer_id(),
             name: name.to_owned(),
@@ -1686,7 +1701,7 @@ mod tests {
         let ids = stack(&mut doc, &["a", "b"]);
         Edit::SetLayerTransform {
             id: ids[1],
-            transform: Affine::translation(2.0, 3.0),
+            transform: Affine::translation(2.0, 3.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1697,11 +1712,11 @@ mod tests {
         assert_eq!(doc.size(), Size::new(16, 3));
         assert_eq!(
             doc.layer(ids[0]).unwrap().transform,
-            Affine::scale(2.0, 0.5)
+            Affine::scale(2.0, 0.5).into()
         );
         assert_eq!(
             doc.layer(ids[1]).unwrap().transform.to_array(),
-            [2.0, 0.0, 0.0, 0.5, 4.0, 1.5]
+            [2.0, 0.0, 0.0, 0.5, 4.0, 1.5, 0.0, 0.0, 1.0]
         );
         undo.apply(&mut doc).unwrap();
         assert_eq!(doc.size(), Size::new(8, 6));
@@ -1730,7 +1745,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::Adjustment {
                 adjustment: Adjustment::DEFAULTS[0],
             },
@@ -1863,7 +1878,7 @@ mod tests {
         // Moved past the top-left corner: the canvas grows there, the layers follow.
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(-3.0, -2.0),
+            transform: Affine::translation(-3.0, -2.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1880,7 +1895,7 @@ mod tests {
         // Half a pixel past the bottom-right corner: whole pixels, the layer not resampled.
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(9.5, 9.5),
+            transform: Affine::translation(9.5, 9.5).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1892,12 +1907,12 @@ mod tests {
         assert_eq!(doc.size(), Size::new(14, 14));
         assert_eq!(
             doc.layer(id).unwrap().transform,
-            Affine::translation(9.5, 9.5)
+            Affine::translation(9.5, 9.5).into()
         );
         // Too far: refused.
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(500.0, 0.0),
+            transform: Affine::translation(500.0, 0.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1953,20 +1968,20 @@ mod tests {
             .apply(&mut doc)
             .unwrap();
         assert_eq!(doc.size(), Size::new(11, 6));
-        assert_eq!(transform(&doc), Affine::translation(1.0, 0.0));
+        assert_eq!(transform(&doc), Affine::translation(1.0, 0.0).into());
         undo.apply(&mut doc).unwrap();
         // Anchored bottom-right, smaller: the image moves up and left, nothing is cut.
         Edit::canvas_size(&doc, Size::new(5, 4), (1.0, 1.0))
             .unwrap()
             .apply(&mut doc)
             .unwrap();
-        assert_eq!(transform(&doc), Affine::translation(-3.0, -2.0));
+        assert_eq!(transform(&doc), Affine::translation(-3.0, -2.0).into());
         let undo = Edit::crop(&doc, [1, 1, 3, 2])
             .unwrap()
             .apply(&mut doc)
             .unwrap();
         assert_eq!(doc.size(), Size::new(3, 2));
-        assert_eq!(transform(&doc), Affine::translation(-4.0, -3.0));
+        assert_eq!(transform(&doc), Affine::translation(-4.0, -3.0).into());
         undo.apply(&mut doc).unwrap();
         assert_eq!(
             Edit::crop(&doc, [0, 0, 0, 3]).and_then(|e| e.apply(&mut doc)),
@@ -3132,14 +3147,16 @@ mod tests {
             &mut doc,
             Edit::SetLayerTransform {
                 id: ids[0],
-                transform: Affine::translation(-3.0, 5.0),
+                transform: Affine::translation(-3.0, 5.0).into(),
             },
         );
         assert_round_trip(
             &mut doc,
             Edit::SetLayerTransform {
                 id: ids[1],
-                transform: Affine::rotation(0.3).then(Affine::translation(0.5, 2.25)),
+                transform: Affine::rotation(0.3)
+                    .then(Affine::translation(0.5, 2.25))
+                    .into(),
             },
         );
         for transform in [
@@ -3153,12 +3170,26 @@ mod tests {
             assert_eq!(
                 Edit::SetLayerTransform {
                     id: ids[0],
-                    transform
+                    transform: transform.into()
                 }
                 .apply(&mut doc),
                 Err(EditError::InvalidTransform)
             );
         }
+        // In perspective: refused until layers are resampled through it (ADR 0038).
+        let keystone = crate::transform::Projective::from_rect_to_quad(
+            [0.0, 0.0, 8.0, 8.0],
+            [(2.0, 0.0), (6.0, 0.0), (8.0, 8.0), (0.0, 8.0)],
+        )
+        .unwrap();
+        assert_eq!(
+            Edit::SetLayerTransform {
+                id: ids[0],
+                transform: keystone
+            }
+            .apply(&mut doc),
+            Err(EditError::InvalidTransform)
+        );
     }
 
     #[test]
@@ -3178,11 +3209,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             doc.layer(g_id).unwrap().transform,
-            Affine::translation(4.0, -2.0)
+            Affine::translation(4.0, -2.0).into()
         );
         assert_eq!(
             doc.layer(ids[0]).unwrap().transform,
-            Affine::translation(4.0, -2.0)
+            Affine::translation(4.0, -2.0).into()
         );
         assert!(doc.layer(ids[1]).unwrap().transform.is_identity());
         Edit::translate_layers(&doc, &[ids[0]], 1, 1)
@@ -3191,7 +3222,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             doc.layer(ids[0]).unwrap().transform,
-            Affine::translation(5.0, -1.0)
+            Affine::translation(5.0, -1.0).into()
         );
         let undo_second = Edit::translate_layers(&doc, &[ids[0]], -1, -1)
             .unwrap()
@@ -3200,12 +3231,15 @@ mod tests {
         undo_second.apply(&mut doc).unwrap();
         assert_eq!(
             doc.layer(ids[0]).unwrap().transform,
-            Affine::translation(5.0, -1.0)
+            Affine::translation(5.0, -1.0).into()
         );
         // Undoing the first move puts every layer back where it was.
         undo.apply(&mut doc).unwrap();
         assert!(doc.layer(g_id).unwrap().transform.is_identity());
-        assert_eq!(doc.layer(ids[0]).unwrap().transform, Affine::IDENTITY);
+        assert_eq!(
+            doc.layer(ids[0]).unwrap().transform,
+            crate::transform::Projective::IDENTITY
+        );
     }
 
     #[test]
@@ -3221,7 +3255,7 @@ mod tests {
         // The group is scaled 2×: its layer's own transform is in the group's space.
         Edit::SetLayerTransform {
             id: g_id,
-            transform: Affine::scale(2.0, 2.0),
+            transform: Affine::scale(2.0, 2.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -3233,11 +3267,11 @@ mod tests {
         // 6 document pixels are 3 of the group's.
         assert_eq!(
             doc.layer(ids[1]).unwrap().transform,
-            Affine::translation(3.0, 0.0)
+            Affine::translation(3.0, 0.0).into()
         );
         assert_eq!(
             doc.layer(ids[0]).unwrap().transform,
-            Affine::translation(6.0, 0.0)
+            Affine::translation(6.0, 0.0).into()
         );
         // Four quarter turns by floating-point steps come back to exactly where they were.
         for _ in 0..4 {
@@ -3252,7 +3286,7 @@ mod tests {
         }
         assert_eq!(
             doc.layer(ids[0]).unwrap().transform,
-            Affine::translation(6.0, 0.0)
+            Affine::translation(6.0, 0.0).into()
         );
         assert_eq!(
             Edit::transform_layers(&doc, &[ids[0]], Affine::scale(0.0, 1.0))

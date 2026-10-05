@@ -2,7 +2,7 @@
 //! sent to the UI as a JPEG, which the system's print dialog prints from a hidden page. The
 //! pixels cross the IPC once, compressed: printing needs them in the webview.
 
-use slopshop_core::{Affine, BlendMode, Document, Edit, Layer, LayerContent, LinearRgba, Size};
+use slopshop_core::{BlendMode, Document, Edit, Layer, LayerContent, LinearRgba, Size};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Manager};
 
@@ -26,7 +26,7 @@ fn on_paper(doc: &Document) -> Result<Document, String> {
     let mut doc = doc.clone();
     let paper = Layer {
         style: None,
-        transform: Affine::IDENTITY,
+        transform: slopshop_core::Projective::IDENTITY,
         clipped: false,
         id: doc.allocate_layer_id(),
         name: "Paper".to_owned(),

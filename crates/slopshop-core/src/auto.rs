@@ -306,7 +306,6 @@ mod tests {
     use crate::edit::Edit;
     use crate::geom::Size;
     use crate::raster::RasterImage;
-    use crate::transform::Affine;
 
     /// A linear-blending document of one 8-bit layer whose pixel `i` is `pixel(i)` (sRGB values
     /// 0–255, opaque).
@@ -329,7 +328,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::new(image)),
         };
         Edit::InsertLayer {

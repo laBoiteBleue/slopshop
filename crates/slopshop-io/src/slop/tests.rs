@@ -65,7 +65,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
     let index = doc.layers().len();
     let layer = Layer {
         style: None,
-        transform: slopshop_core::Affine::IDENTITY,
+        transform: slopshop_core::Affine::IDENTITY.into(),
         clipped: false,
         id,
         name: name.to_owned(),
@@ -852,7 +852,7 @@ fn golden_document_v0_9() -> Document {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Affine::IDENTITY.into(),
             content: LayerContent::Adjustment {
                 adjustment: slopshop_core::adjust::Adjustment::Curves {
                     rgb: Curve::new(&[[0, 10], [100, 140], [255, 240]]).unwrap(),
@@ -886,7 +886,7 @@ fn golden_document_v0_8() -> Document {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Affine::IDENTITY.into(),
             content: LayerContent::Adjustment {
                 adjustment: slopshop_core::adjust::Adjustment::ChannelMixer {
                     red: [80.0, 30.0, -10.0, 0.0],
@@ -920,7 +920,7 @@ fn golden_document_v0_7() -> Document {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Affine::IDENTITY.into(),
             content: LayerContent::Adjustment {
                 adjustment: slopshop_core::adjust::Adjustment::HueSaturation {
                     hue: 30.0,
@@ -944,7 +944,7 @@ fn golden_document_v0_6() -> Document {
     for (id, x, y) in [(gradient, -7.0, 3.0), (folder, 5.0, 0.0)] {
         Edit::SetLayerTransform {
             id,
-            transform: slopshop_core::Affine::translation(x, y),
+            transform: slopshop_core::Affine::translation(x, y).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -981,7 +981,7 @@ fn golden_document_v0_4() -> Document {
     let inner = doc.allocate_layer_id();
     let group = |id, name: &str, pass_through, mode, opacity, mask| Layer {
         style: None,
-        transform: slopshop_core::Affine::IDENTITY,
+        transform: slopshop_core::Affine::IDENTITY.into(),
         clipped: false,
         id,
         name: name.to_owned(),
@@ -1409,7 +1409,7 @@ fn damaged_layer_trees_are_refused() {
     let rotated = read(&moved("[0.8,0.6,-0.6,0.8,2.5,-1.25]"), "[1]").unwrap();
     assert_eq!(
         rotated[0].transform.to_array(),
-        [0.8, 0.6, -0.6, 0.8, 2.5, -1.25]
+        [0.8, 0.6, -0.6, 0.8, 2.5, -1.25, 0.0, 0.0, 1.0]
     );
     assert_eq!(read(&moved("[1,0,2,0,0,0]"), "[1]"), Err("corrupt"));
     assert_eq!(read(&moved("[1,0,0,1,0]"), "[1]"), Err("corrupt"));

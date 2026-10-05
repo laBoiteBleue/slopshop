@@ -39,7 +39,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "layer".into(),
@@ -456,8 +456,11 @@ fn gpu_gradient_fills_match_the_cpu_reference_compositor() {
             to: [170.0, 120.0],
         };
         let id = push_layer(&mut s, LayerContent::GradientFill { field }, 0.8);
-        s.perform(Edit::SetLayerTransform { id, transform })
-            .unwrap();
+        s.perform(Edit::SetLayerTransform {
+            id,
+            transform: transform.into(),
+        })
+        .unwrap();
         let what = format!("{shape:?} {alpha:?}");
         assert_matches_cpu(&r, s.document(), size.bounds(), &what);
         assert_matches_cpu(&r, s.document(), Rect::new(37, 51, 90, 70), &what);
@@ -844,7 +847,7 @@ fn push_into(
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "layer".into(),
@@ -1040,7 +1043,7 @@ fn translate(session: &mut Session, id: LayerId, x: f64, y: f64) {
     session
         .perform(Edit::SetLayerTransform {
             id,
-            transform: slopshop_core::Affine::translation(x, y),
+            transform: slopshop_core::Affine::translation(x, y).into(),
         })
         .unwrap();
 }
@@ -1113,7 +1116,10 @@ fn gpu_moved_layers_match_the_cpu_reference_compositor() {
 /// Give layer `id` a transform.
 fn transform(session: &mut Session, id: LayerId, transform: Affine) {
     session
-        .perform(Edit::SetLayerTransform { id, transform })
+        .perform(Edit::SetLayerTransform {
+            id,
+            transform: transform.into(),
+        })
         .unwrap();
 }
 
