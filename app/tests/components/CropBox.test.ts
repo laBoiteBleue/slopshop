@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import CropBox from "../../src/lib/CropBox.svelte";
+import type { CropAspect } from "../../src/lib/crop";
 import type { Bounds } from "../../src/lib/engine";
 import type { ViewMapping } from "../../src/lib/Viewport.svelte";
 
@@ -18,14 +19,17 @@ const CANVAS: Bounds = { left: 0, top: 0, right: 200, bottom: 100 };
 
 type Point = [number, number];
 
-function open(options: { targets?: Bounds[]; hand?: boolean; smartGuides?: boolean } = {}) {
+function open(
+  options: { targets?: Bounds[]; hand?: boolean; smartGuides?: boolean; aspect?: CropAspect } = {},
+) {
   const onapply = vi.fn();
   const oncancel = vi.fn();
-  const { container } = render(CropBox, {
+  const { container, rerender } = render(CropBox, {
     mapping: { ...MAPPING, hand: options.hand ?? false },
     canvas: CANVAS,
     targets: options.targets ?? [],
     smartGuides: options.smartGuides ?? true,
+    aspect: options.aspect ?? { mode: "free" },
     onapply,
     oncancel,
   });
@@ -34,6 +38,7 @@ function open(options: { targets?: Bounds[]; hand?: boolean; smartGuides?: boole
     onapply,
     oncancel,
     container,
+    rerender,
     svg,
     frame: container.querySelector(".frame") as Element,
     handles: [...container.querySelectorAll(".handle")],
@@ -168,4 +173,32 @@ test("with the smart guides hidden (View > Hide Extras), an edge still snaps, un
   await release(user, svg, [97, 50]);
   await user.keyboard("{Enter}");
   expect(onapply.mock.lastCall?.[0].right).toBe(100);
+});
+
+test("a ratio fits the frame to it, centered, and every handle keeps it", async () => {
+  const { onapply, svg, handles, user, rerender } = open({
+    aspect: { mode: "ratio", width: 1, height: 1 },
+  });
+  await user.keyboard("{Enter}");
+  expect(onapply).toHaveBeenLastCalledWith({ left: 50, top: 0, right: 150, bottom: 100 });
+  // A side: the other side follows, centered.
+  await drag(user, handles[RIGHT], svg, [150, 50], [130, 50]);
+  await user.keyboard("{Enter}");
+  expect(onapply).toHaveBeenLastCalledWith({ left: 50, top: 10, right: 130, bottom: 90 });
+  // Another ratio chosen: fitted again in the frame.
+  await rerender({ aspect: { mode: "ratio", width: 2, height: 1 } });
+  await user.keyboard("{Enter}");
+  expect(onapply).toHaveBeenLastCalledWith({ left: 50, top: 30, right: 130, bottom: 70 });
+});
+
+test("a size fixes the frame: no handles, a press outside puts it there to move it", async () => {
+  const { onapply, svg, container, user } = open({
+    aspect: { mode: "size", width: 60, height: 40 },
+  });
+  expect(container.querySelectorAll(".handle")).toHaveLength(0);
+  await user.keyboard("{Enter}");
+  expect(onapply).toHaveBeenLastCalledWith({ left: 70, top: 30, right: 130, bottom: 70 });
+  await drag(user, svg, svg, [40, 30], [50, 40]);
+  await user.keyboard("{Enter}");
+  expect(onapply).toHaveBeenLastCalledWith({ left: 20, top: 20, right: 80, bottom: 60 });
 });

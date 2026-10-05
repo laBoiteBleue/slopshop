@@ -12,6 +12,7 @@
   import BrushPicker from "./BrushPicker.svelte";
   import type { Snippet } from "svelte";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./align";
+  import { CROP_RATIOS, type CropAspect } from "./crop";
 
   let {
     tool,
@@ -24,6 +25,8 @@
     brush = $bindable(),
     eraser = $bindable(),
     eyedropper = $bindable({ sample: "all", size: 1 }),
+    crop = $bindable({ mode: "free" }),
+    canvasSize = { width: 1, height: 1 },
     transform,
     quickMask = false,
     quickMaskOpacity = $bindable(50),
@@ -58,6 +61,10 @@
     eraser: PaintOptions;
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
     eyedropper?: { sample: "all" | "layer"; size: number };
+    /** Crop: the frame's ratio or size (pixels), if any. */
+    crop?: CropAspect;
+    /** The document's size: Crop's Original Ratio, and the size it starts from. */
+    canvasSize?: { width: number; height: number };
     /** Quick Mask is on (whatever the tool): said, with its overlay's opacity. */
     quickMask?: boolean;
     /** Quick Mask's overlay opacity, percent. */
@@ -79,6 +86,26 @@
   );
 
   const current = $derived(toolInfo(tool));
+
+  /** Crop's choice: free, a preset ratio (`w:h`), the canvas's, a ratio typed, or a size. */
+  function cropPreset(aspect: CropAspect): string {
+    if (aspect.mode !== "ratio") return aspect.mode;
+    const preset = CROP_RATIOS.find(([w, h]) => w === aspect.width && h === aspect.height);
+    if (preset) return `${preset[0]}:${preset[1]}`;
+    const original = canvasSize.width / canvasSize.height;
+    return Math.abs(aspect.width / aspect.height - original) < 1e-9 ? "original" : "ratio";
+  }
+
+  function chooseCropPreset(value: string) {
+    if (value === "free") crop = { mode: "free" };
+    else if (value === "size") crop = { mode: "size", ...canvasSize };
+    else if (value === "original") crop = { mode: "ratio", ...canvasSize };
+    else if (value === "ratio") crop = { mode: "ratio", width: 1, height: 1 };
+    else {
+      const [width, height] = value.split(":").map(Number);
+      crop = { mode: "ratio", width, height };
+    }
+  }
 
   /** Photoshop's Sample Sizes: a pixel, or the average of a square around it. */
   const SAMPLE_SIZES = [1, 3, 5, 11, 31, 51, 101];
@@ -144,6 +171,52 @@
         <Icon name={entry.icon} />
       </button>
     {/each}
+  {:else if tool === "crop"}
+    <select
+      aria-label={t("options.crop.preset")}
+      value={cropPreset(crop)}
+      onchange={(e) => chooseCropPreset(e.currentTarget.value)}
+    >
+      <option value="free">{t("options.crop.free")}</option>
+      <option value="original">{t("options.crop.original")}</option>
+      {#each CROP_RATIOS as [w, h] (`${w}:${h}`)}
+        <option value="{w}:{h}">{w} : {h}</option>
+      {/each}
+      <option value="ratio">{t("options.crop.ratio")}</option>
+      <option value="size">{t("options.crop.size")}</option>
+    </select>
+    {#if crop.mode !== "free"}
+      {@const size = crop.mode === "size"}
+      <SliderField
+        label={t("options.crop.width")}
+        bind:value={crop.width}
+        min={size ? 1 : 0.01}
+        max={size ? 300000 : 1000}
+        step={size ? 1 : 0.01}
+        unit={size ? "px" : undefined}
+        log
+      />
+      <button
+        class="icon-btn"
+        onmousedown={keepFocus}
+        title={t("options.crop.swap")}
+        aria-label={t("options.crop.swap")}
+        onclick={() => {
+          if (crop.mode !== "free") crop = { ...crop, width: crop.height, height: crop.width };
+        }}
+      >
+        <Icon name="swap" />
+      </button>
+      <SliderField
+        label={t("options.crop.height")}
+        bind:value={crop.height}
+        min={size ? 1 : 0.01}
+        max={size ? 300000 : 1000}
+        step={size ? 1 : 0.01}
+        unit={size ? "px" : undefined}
+        log
+      />
+    {/if}
   {:else if tool === "eyedropper"}
     <label class="option">
       {t("options.sampleSize")}
