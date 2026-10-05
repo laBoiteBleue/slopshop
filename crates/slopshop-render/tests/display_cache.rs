@@ -484,3 +484,79 @@ fn a_stroke_s_frames_recomposite_only_the_tiles_over_the_raster_tiles_they_chang
     let stats = frame(&r, &again);
     assert_eq!((stats.tiles_composited, stats.tiles_reused), (0, 8));
 }
+
+/// Timing of an adjustment's slider dragged over a document of `rasters` small layers above a
+/// large one, at 4K and 100 % (run with `--ignored --nocapture`): the CPU time to prepare each
+/// frame, the GPU's, and how much of the view each frame composites.
+#[test]
+#[ignore = "benchmark"]
+fn bench_adjustment_drag() {
+    let Some(r) = renderer(true) else { return };
+    let curves = |tick: u8| Adjustment::Curves {
+        rgb: slopshop_core::curve::Curve::new(&[[0, 0], [64, 70 + tick], [192, 200], [255, 255]])
+            .unwrap(),
+        red: slopshop_core::curve::Curve::IDENTITY,
+        green: slopshop_core::curve::Curve::new(&[[0, 10], [255, 240]]).unwrap(),
+        blue: slopshop_core::curve::Curve::IDENTITY,
+    };
+    let levels = |tick: u8| levels(0.6 + f32::from(tick) / 100.0);
+    for (name, adjustment) in [
+        ("Levels", &levels as &dyn Fn(u8) -> Adjustment),
+        ("Curves", &curves),
+    ] {
+        for rasters in [1, 24] {
+            let size = Size::new(6000, 4000);
+            let mut s = Session::new(Document::new(size));
+            let bg = image(size, |x, y| [(x % 251) as u8, (y % 241) as u8, 90, 255]);
+            let bg = raster(&mut s, bg);
+            push(&mut s, bg);
+            for n in 1..rasters {
+                let small = image(Size::new(600, 400), |x, y| {
+                    [(x % 7 * 30) as u8, (y % 5 * 40) as u8, n as u8, 200]
+                });
+                let mut layer = raster(&mut s, small);
+                layer.transform =
+                    Affine::translation(f64::from(n % 6 * 900), f64::from(n / 6 * 900));
+                push(&mut s, layer);
+            }
+            let top = layer(
+                &mut s,
+                LayerContent::Adjustment {
+                    adjustment: adjustment(0),
+                },
+            );
+            let id = push(&mut s, top);
+            let view = ViewTransform {
+                origin: [1000.0, 900.0],
+                scale: 1.0,
+            };
+            let output = Size::new(3840, 2160);
+            r.profile_view(s.document(), view, output, true).unwrap();
+            let (mut prepare, mut gpu, mut composited, mut incomplete) =
+                (Vec::new(), Vec::new(), 0, 0);
+            let ticks = 20u8;
+            for tick in 1..=ticks {
+                s.perform_in_gesture(Edit::SetAdjustment {
+                    id,
+                    adjustment: adjustment(tick),
+                })
+                .unwrap();
+                let stats = r.profile_view(s.document(), view, output, true).unwrap();
+                prepare.push(stats.prepare.as_secs_f64() * 1000.0);
+                gpu.push(stats.gpu.map_or(0.0, |d| d.as_secs_f64() * 1000.0));
+                composited += stats.tiles_composited;
+                incomplete += u32::from(stats.incomplete);
+            }
+            let median = |v: &mut Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                v[v.len() / 2]
+            };
+            println!(
+                "{name}, {rasters} rasters, 4K: prepare {:.2} ms, GPU {:.2} ms (medians), {} tiles a frame, {incomplete}/{ticks} incomplete",
+                median(&mut prepare),
+                median(&mut gpu),
+                composited / u32::from(ticks),
+            );
+        }
+    }
+}
