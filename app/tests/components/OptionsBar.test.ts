@@ -102,6 +102,22 @@ test("Crop's ratio or size: presets, the canvas's ratio, a size, swapped", async
   expect(straighten).toHaveAttribute("aria-pressed", "true");
 });
 
+test("the Gradient's preset, shape, Reverse and opacity", async () => {
+  const gradient = {
+    preset: "foregroundToBackground",
+    shape: "linear",
+    reverse: false,
+    opacity: 1,
+  };
+  const { user } = open("gradient", { gradient });
+  await user.selectOptions(screen.getByRole("combobox", { name: "Gradient" }), "Black, White");
+  const radial = screen.getByRole("button", { name: "Radial Gradient" });
+  expect(radial).toHaveAttribute("aria-pressed", "false");
+  await user.click(radial);
+  await user.click(check("Reverse"));
+  expect(gradient).toEqual({ preset: "blackToWhite", shape: "radial", reverse: true, opacity: 1 });
+});
+
 test("the Paint Bucket's opacity and region settings", async () => {
   const bucket = { opacity: 1, tolerance: 32, contiguous: true, antiAlias: true, sampleAll: false };
   const { user } = open("paintBucket", { bucket });

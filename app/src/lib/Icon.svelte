@@ -68,6 +68,10 @@
     brush:
       "M20 3.5L11 12.5 M11 12.5l1.5 1.5 M9.5 13.5c-2 0-3.5 1.5-3.5 3.5 0 1.5-1 2.5-2.5 2.5 1.5 1 6.5 1.5 7.5-2.5Z",
     eraser: "M15.5 4l5 5L11 18.5H6.5L3.5 15.5Z M10.5 9l5 5 M11 18.5h9",
+    gradient: "M4 5h16v14H4Z M8 5v14 M12 5v14 M16 5v14",
+    gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
+    gradientRadial:
+      "M4 4h16v16H4Z M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M12 12m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0",
     bucket:
       "M3.5 11L11 3.5l7.5 7.5L11 18.5Z M3.5 11h15 M20 14.5s1.5 2 1.5 3a1.5 1.5 0 0 1-3 0c0-1 1.5-3 1.5-3Z",
     // The eraser with a turning arrow: what was painted comes back off.

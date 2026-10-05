@@ -1509,6 +1509,26 @@ export const engine = {
         task,
       }),
     ),
+  /**
+   * The Gradient tool: `gradient` laid on `target` at `opacity`, within the selection, as paint
+   * (one undo entry).
+   */
+  paintGradient: (
+    documentId: number,
+    layerId: number,
+    target: PaintTarget,
+    gradient: {
+      stops: [number, number, number, number][];
+      alpha: [number, number];
+      shape: "linear" | "radial";
+      from: [number, number];
+      to: [number, number];
+    },
+    opacity: number,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("paint_gradient", { documentId, layerId, target, gradient, opacity }),
+    ),
   /** The selection's bounds (pixels selected even partly), `null` without one. */
   selectionBounds: (documentId: number) =>
     invoke<Bounds | null>("selection_bounds", { documentId }),

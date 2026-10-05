@@ -8,10 +8,10 @@ respond("paint_bucket", (_args, doc) => ({ ...doc, revision: doc.revision + 1 })
 
 const surface = () => document.querySelector(".bucket") as HTMLElement;
 
-test("G picks the Paint Bucket: a click fills the active layer's region with the foreground", async () => {
+test("Shift+G picks the Paint Bucket after the Gradient: a click fills the active layer's region with the foreground", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), layer(2, "Paint")]));
   await screen.findByText("cat.jpg");
-  await user.keyboard("g");
+  await user.keyboard("{Shift>}g{/Shift}");
   expect(screen.getByRole("button", { name: "Paint Bucket Tool" })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -38,7 +38,7 @@ test("G picks the Paint Bucket: a click fills the active layer's region with the
 test("Sample All Layers samples the image as shown; outside the canvas, nothing", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
   await screen.findByText("cat.jpg");
-  await user.keyboard("g");
+  await user.keyboard("{Shift>}g{/Shift}");
   await user.click(screen.getByRole("checkbox", { name: "Sample All Layers" }));
   await fireEvent.pointerDown(surface(), { button: 0, clientX: 500, clientY: 20 });
   await fireEvent.pointerDown(surface(), { button: 0, clientX: 10, clientY: 10 });
@@ -49,7 +49,7 @@ test("Sample All Layers samples the image as shown; outside the canvas, nothing"
 test("in Quick Mask, the bucket fills the mask", async () => {
   const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), quickMask: true });
   await screen.findByText("cat.jpg");
-  await user.keyboard("g");
+  await user.keyboard("{Shift>}g{/Shift}");
   await fireEvent.pointerDown(surface(), { button: 0, clientX: 10, clientY: 10 });
   await waitFor(() => expect(sent("paint_bucket")).toHaveLength(1));
   expect(sent("paint_bucket")[0]).toMatchObject({ target: "quickMask", layerId: 0 });
