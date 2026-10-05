@@ -173,12 +173,35 @@ test("an answer that comes late for old pixels does not replace the new thumbnai
     size: 36,
     layer: { ...content, contentKey: content.contentKey + 1 },
   });
+  // One request at a time: the new pixels are asked once the old ones have come.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(late).toHaveLength(1);
+  late[0](image(2, 2));
   await waitFor(() => expect(late).toHaveLength(2));
+  expect(canvas()?.width).not.toBe(2);
   late[1](image(6, 3));
   await waitFor(() => expect(canvas()?.width).toBe(6));
-  late[0](image(2, 2));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(canvas()?.width).toBe(6);
+});
+
+test("pixels changing at each step of a drag are fetched once they rest, the last only", async () => {
+  const content = layer();
+  const { rerender, canvas } = show(content);
+  await scrollIntoView();
+  await waitFor(() => expect(canvas()?.width).toBe(4));
+  // A slider dragged over the layer's stack: new pixels at each step.
+  for (let step = 1; step <= 5; step++) {
+    await rerender({
+      documentId: 1,
+      size: 36,
+      layer: { ...content, contentKey: content.contentKey + step },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(requests).toHaveLength(1);
+  answer = () => image(6, 3);
+  await waitFor(() => expect(canvas()?.width).toBe(6));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(requests).toHaveLength(2);
 });
 
 test("the mask shows the layer's mask, a thumbnail of its own", async () => {
