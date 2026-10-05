@@ -3395,6 +3395,7 @@ mod tests {
             heal: false,
             tone: None,
             filter: None,
+            smudge: None,
         });
         paint::paint(&state, doc.id, clone).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3422,6 +3423,7 @@ mod tests {
             heal: true,
             tone: None,
             filter: None,
+            smudge: None,
         });
         paint::paint(&state, doc.id, heal).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3541,6 +3543,7 @@ mod tests {
                     .unwrap(),
                 ),
                 filter: None,
+                smudge: None,
             });
             paint::paint(&state, doc.id, request).unwrap();
         };
@@ -3594,6 +3597,7 @@ mod tests {
                 sharpen: false,
                 strength: 1.0,
             }),
+            smudge: None,
         });
         paint::paint(&state, doc.id, request).unwrap();
         let mut documents = state.documents().unwrap();
@@ -3605,6 +3609,59 @@ mod tests {
         assert_eq!(paint::sample_color_at(shown, 98.5, 5.5, 1), Some([0, 0, 0]));
         let (labels, done) = document.session.history();
         assert_eq!(labels[done - 1].kind, "blur");
+    }
+
+    #[test]
+    fn the_smudge_tool_pushes_pixels_along_the_stroke() {
+        let state = AppState::new();
+        // Black on the left half, white on the right.
+        let mut pixels = Vec::new();
+        for _ in 0..100 {
+            for x in 0..200 {
+                pixels.extend_from_slice(if x < 100 { &[0, 0, 0, 255] } else { &[255; 4] });
+            }
+        }
+        let image = RasterImage::from_pixels(Size::new(200, 100), PixelFormat::RGBA8_SRGB, &pixels)
+            .unwrap();
+        let doc = state
+            .add_document(image_session(image, "edge"), None, Vec::new())
+            .unwrap();
+        let layer = {
+            let mut documents = state.documents().unwrap();
+            documents
+                .get_mut(doc.id)
+                .unwrap()
+                .session
+                .document()
+                .layers()[0]
+                .id
+        };
+        // From the black into the white, in two batches.
+        let batch = |samples: Vec<[f64; 3]>, end: bool| {
+            let mut request = dab(layer, paint::PaintTarget::Layer, None);
+            request.brush.size = 30.0;
+            request.samples = samples;
+            request.end = end;
+            request.clone = Some(paint::CloneRequest {
+                offset: [0.0, 0.0],
+                source_layer: None,
+                heal: false,
+                tone: None,
+                filter: None,
+                smudge: Some(1.0),
+            });
+            paint::paint(&state, doc.id, request).unwrap()
+        };
+        assert!(batch(vec![[85.0, 50.0, 1.0], [100.0, 50.0, 1.0]], false).is_none());
+        assert!(batch(vec![[115.0, 50.0, 1.0], [125.0, 50.0, 1.0]], true).is_some());
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let shown = document.session.document();
+        let [r, ..] = paint::sample_color_at(shown, 108.5, 50.5, 1).unwrap();
+        assert!(r < 200, "black pushed into the white: {r}");
+        assert_eq!(paint::sample_color_at(shown, 108.5, 5.5, 1), Some([255; 3]));
+        let (labels, done) = document.session.history();
+        assert_eq!(labels[done - 1].kind, "smudge");
     }
 
     #[test]

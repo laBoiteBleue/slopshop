@@ -76,6 +76,10 @@ pub struct CloneRequest {
     /// filter.
     #[serde(default)]
     pub filter: Option<FilterRequest>,
+    /// The Smudge tool, by this strength in `[0, 1]`: the pixels pushed along the stroke
+    /// (Liquify's Forward Warp, ADR 0037), baked on release.
+    #[serde(default)]
+    pub smudge: Option<f32>,
 }
 
 /// Blur (`sharpen` false) or Sharpen, by `strength` in `[0, 1]` (Photoshop's Strength).
@@ -232,6 +236,21 @@ pub(crate) enum Painted {
 #[derive(Default)]
 pub struct PaintState {
     stroke: Mutex<Option<ActiveStroke>>,
+    smudge: Mutex<Option<ActiveSmudge>>,
+}
+
+/// The Smudge tool's stroke under way: the layer as it showed when it started, its stack, and
+/// the displacement its dabs left so far (Liquify's Forward Warp).
+struct ActiveSmudge {
+    id: u64,
+    document_id: u64,
+    layer: LayerId,
+    /// Document → the layer's pixels.
+    to_image: Affine,
+    shown: Arc<RasterImage>,
+    stack: LayerStack,
+    field: slopshop_core::liquify::Field,
+    stroke: slopshop_core::liquify::Stroke,
 }
 
 /// What a document shows of a stroke under way: its target as painted so far.
@@ -539,6 +558,9 @@ pub(crate) fn paint(
     document_id: u64,
     request: PaintRequest,
 ) -> Result<Option<DocumentView>, String> {
+    if let Some(strength) = request.clone.and_then(|c| c.smudge) {
+        return smudge(state, document_id, request, strength);
+    }
     {
         let started = std::time::Instant::now();
         // The stroke is taken out while it computes: frames keep rendering meanwhile.
@@ -630,6 +652,103 @@ pub(crate) fn paint(
         }
         Ok(view)
     }
+}
+
+/// The Smudge tool's batch of samples: the layer's pixels pushed along the stroke so far,
+/// shown; on the last batch, baked into the layer's paint (ADR 0034, point 6), one undo entry.
+fn smudge(
+    state: &AppState,
+    document_id: u64,
+    request: PaintRequest,
+    strength: f32,
+) -> Result<Option<DocumentView>, String> {
+    use slopshop_core::liquify;
+    if !(0.0..=1.0).contains(&strength) {
+        return Err("the strength is between 0 and 1".to_owned());
+    }
+    let previous = state
+        .paint
+        .smudge
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take()
+        .filter(|s| s.id == request.stroke && s.document_id == document_id);
+    let mut active = match previous {
+        Some(active) => active,
+        None => {
+            let doc = {
+                let mut documents = state.documents()?;
+                documents.get_mut(document_id)?.session.document().clone()
+            };
+            let Target::Layer(id) = request.target() else {
+                return Err("Smudge pushes a layer's pixels, not a mask".to_owned());
+            };
+            let (shown, growth) = grow(&doc, id, false)?;
+            let to_document = growth.transform.then(doc.parent_transform(id));
+            let to_image = to_document.inverse().ok_or("the layer cannot be shown")?;
+            let brush = liquify::Brush {
+                size: request
+                    .brush
+                    .size
+                    .clamp(liquify::MIN_BRUSH_SIZE, liquify::MAX_BRUSH_SIZE),
+                density: 100.0 * request.brush.hardness.clamp(0.0, 1.0),
+                pressure: (100.0 * strength).max(1.0),
+                rate: 0.0,
+            };
+            ActiveSmudge {
+                id: request.stroke,
+                document_id,
+                layer: id,
+                to_image,
+                field: liquify::Field::new(shown.size()),
+                shown,
+                stack: growth.stack,
+                stroke: liquify::Stroke::new(liquify::Tool::ForwardWarp, brush),
+            }
+        }
+    };
+    for &[x, y, _] in &request.samples {
+        let (u, v) = active.to_image.apply(x, y);
+        active.stroke.move_to(&mut active.field, [u, v]);
+    }
+    if request.end {
+        active.stroke.finish(&mut active.field);
+    }
+    let (blend_space, done) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document();
+        (doc.blend_space(), request.end)
+    };
+    let after = Arc::new(
+        liquify::warp_layer(&active.shown, &active.field, blend_space)
+            .map_err(|e| e.to_string())?,
+    );
+    let stack = active
+        .stack
+        .with_painted(&active.shown, &after, blend_space)
+        .map_err(|e| e.to_string())?;
+    let painted = Painted::Stack(stack, Some(Arc::clone(&after)));
+    let target = Target::Layer(active.layer);
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    if done {
+        document.set_paint_preview(None);
+        if !active.field.is_identity() {
+            let edit = paint_edit(target, painted, None);
+            document
+                .session
+                .with_label(Some(HistoryLabel::new("smudge")), |s| s.perform(edit))
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(Some(document.view()));
+    }
+    document.set_paint_preview(Some(PaintPreview {
+        target,
+        painted,
+        growth: None,
+    }));
+    *state.paint.smudge.lock().map_err(|e| e.to_string())? = Some(active);
+    Ok(None)
 }
 
 /// Where Edit > Stroke draws, relative to the selection's outline.
@@ -846,6 +965,7 @@ pub(crate) fn patch_edit(
         heal: true,
         tone: None,
         filter: None,
+        smudge: None,
     });
     let (mut painting, growth) = start(doc, &request, true, None)?;
     painting.fill();
