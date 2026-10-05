@@ -189,7 +189,7 @@ API, or in Rust over its C API.
 The selection models stay on ONNX Runtime with DirectML, as they are.
 
 **Gated by a measured spike** (point 5, step 0): FLUX.2 [klein] 4B must take a few seconds per
-1 MP edit on the maintainer's RTX 4090 Laptop under Vulkan. Otherwise the alternatives are
+1 MP edit on the maintainer's RTX 5070 Ti (16 GB) under Vulkan. Otherwise the alternatives are
 opened again.
 
 ### 5. Native definition: an experiment bench before large regions
