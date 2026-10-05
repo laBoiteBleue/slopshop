@@ -3608,13 +3608,34 @@ impl LayerStack {
         } else {
             let kept: BTreeSet<usize> = new.iter().map(|a| a.address()).collect();
             let was: BTreeSet<usize> = old.iter().map(|a| a.address()).collect();
-            let mut reached = Footprint::Tiles(BTreeSet::new());
-            for atom in old.iter().filter(|a| !kept.contains(&a.address())) {
-                reached = union(reached, atom.footprint(size));
-            }
-            for atom in new.iter().filter(|a| !was.contains(&a.address())) {
-                reached = union(reached, atom.footprint(size));
-            }
+            let removed: Vec<Atom<'_>> = old
+                .iter()
+                .copied()
+                .filter(|a| !kept.contains(&a.address()))
+                .collect();
+            let added: Vec<Atom<'_>> = new
+                .iter()
+                .copied()
+                .filter(|a| !was.contains(&a.address()))
+                .collect();
+            let reached = match (&removed[..], &added[..]) {
+                // A paint for another of the same layer (undo or redo of a stroke continuing
+                // it): only the tiles where they differ.
+                ([Atom::Paint(then)], [Atom::Paint(now)])
+                    if then.size == now.size
+                        && then.format == now.format
+                        && then.space == now.space =>
+                {
+                    Footprint::Tiles(changed_tiles(then, now))
+                }
+                _ => {
+                    let mut reached = Footprint::Tiles(BTreeSet::new());
+                    for atom in removed.iter().chain(&added) {
+                        reached = union(reached, atom.footprint(size));
+                    }
+                    reached
+                }
+            };
             evaluator.tiles(coords_of(&reached, size))
         };
         if replaced.is_empty() {
@@ -4057,6 +4078,22 @@ impl RestorePaint {
     }
 }
 
+/// The tiles where two paints of a layer differ: those of one only, and those whose pixels are
+/// not the same (tiles a stroke did not touch share them).
+fn changed_tiles(a: &PaintEntry, b: &PaintEntry) -> BTreeSet<TileCoord> {
+    let same = |x: &PaintTile, y: &PaintTile| {
+        Arc::ptr_eq(&x.color, &y.color) && Arc::ptr_eq(&x.keep, &y.keep)
+    };
+    let mut changed: BTreeSet<TileCoord> = a
+        .tiles
+        .iter()
+        .filter(|(coord, tile)| b.tiles.get(coord).is_none_or(|other| !same(tile, other)))
+        .map(|(coord, _)| *coord)
+        .collect();
+    changed.extend(b.tiles.keys().filter(|coord| !a.tiles.contains_key(coord)));
+    changed
+}
+
 fn union(a: Footprint, b: Footprint) -> Footprint {
     match (a, b) {
         (Footprint::Tiles(mut a), Footprint::Tiles(b)) => {
@@ -4223,6 +4260,32 @@ mod tests {
         assert_eq!(pixel(&shown, 10, 10), [255, 255, 255, 255]);
         assert_eq!(pixel(&shown, 150, 10), pixel(&original, 150, 10));
         assert!(Arc::ptr_eq(tile_of(&shown, 1, 1), tile_of(&original, 1, 1)));
+    }
+
+    #[test]
+    fn undoing_a_stroke_evaluates_only_the_tiles_it_changed() {
+        let original = gradient(true);
+        let plain = LayerStack::new(Arc::clone(&original));
+        let first = painted(&empty(&original), gray(0.3), |x, y| {
+            if x < 40 && y < 40 { 1.0 } else { 0.0 }
+        });
+        // A stroke continuing it, in another tile.
+        let second = painted(&first, gray(0.8), |x, y| {
+            if x > 270 && y > 230 { 1.0 } else { 0.0 }
+        });
+        let before = plain.with_top_paint(first).unwrap();
+        let after = plain.with_top_paint(second).unwrap();
+        let shown = after.evaluate().unwrap();
+        // Undo: back to the paint before the stroke.
+        let undone = before.reevaluate(&after, &shown).unwrap();
+        assert_eq!(difference(&undone, &before.evaluate().unwrap()), 0);
+        // The first stroke's tile, the same in both paints, is not evaluated again.
+        assert!(Arc::ptr_eq(tile_of(&undone, 0, 0), tile_of(&shown, 0, 0)));
+        assert!(!Arc::ptr_eq(tile_of(&undone, 1, 1), tile_of(&shown, 1, 1)));
+        // Redo likewise.
+        let redone = after.reevaluate(&before, &undone).unwrap();
+        assert_eq!(difference(&redone, &shown), 0);
+        assert!(Arc::ptr_eq(tile_of(&redone, 0, 0), tile_of(&undone, 0, 0)));
     }
 
     #[test]
