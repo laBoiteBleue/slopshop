@@ -495,9 +495,10 @@ maintainer's answers:
     it as the selection, the entry's dialog replaces it by the current one. A new adjustment,
     fill or filter layer made with a selection gets a layer mask from it (Photoshop).
   - Editing an old entry changes the render of what was done above it: paint follows by
-    construction, and the tools that took pixels from below (moved pixels; Clone Stamp,
-    Healing, Smudge, Mixer when they come) replay their gesture on the new result. Better than
-    Photoshop forcing a rasterize.
+    construction. Better than Photoshop forcing a rasterize. The tools that took pixels from
+    below (moved pixels; Clone Stamp, Healing, Remove, Smudge, Mixer when they come) keep what
+    they took (revised 2026-10-05, rather than replaying their gesture): an edit below may give
+    an unexpected render where they went, accepted.
   - Filter menu, no dead entries: Repeat Last Filter (Ctrl+F: a new entry, same settings, on
     the active layer; Alt+Ctrl+F reopens its dialog), Blur > Gaussian Blur first, then Blur,
     Sharpen, Noise, Distort, Pixelate, Stylize as each works.
@@ -561,6 +562,69 @@ working interface (panels) belongs to Window.
   engine is not ready: see [ADR 0007](adr/0007-color-management.md)).
 - Ctrl+H is the application's Hide on macOS (Cmd+H): to check on a Mac.
 
+### Toolbar (audit of 2026-10-05)
+
+Photoshop's toolbar is a mental compatibility spec, not a template: its tools, keys, groups and
+gestures where users look for them, without the tools that exist for historical reasons. One
+function has one implementation, reachable from the familiar places. A tool still appears only
+with the feature that makes it work ([ADR 0013](adr/0013-familiar-layout.md)). The maintainer's
+answers:
+
+- **Target order**, slots appearing as their tools are built: V Move; M Marquee (Rectangle,
+  Ellipse); L Lasso (Freehand, Polygonal); W Selection (Object, Quick, Magic Wand); C Crop;
+  I Eyedropper; J Retouch (Remove, Healing, Patch a mode of Healing); B Brush; S Clone Stamp;
+  E Eraser (Eraser, Restore Eraser); G Gradient (Gradient, Paint Bucket); Blur (Blur, Sharpen,
+  Smudge); O Dodge and Burn; P Pen; T Type; U Shape (Rectangle, Ellipse, Polygon, Line); then
+  the colors (X, D) and Quick Mask.
+- **Decided, to build**:
+  - Layers chosen in the image with the Move tool, in the Layers panel's own selection (one
+    state, not undoable, as in the panel): a click on a layer's pixels selects it alone;
+    Shift+click adds or removes it (Ctrl keeps inverting Auto-Select, as in Photoshop; Shift
+    held again during the drag constrains to an axis, as the marquees' keys do); the layer
+    clicked last is the active one; a press on a layer of a multi-selection keeps them all for
+    a drag, and a release without dragging selects it alone (the panel's rule). Auto-Select
+    stays, on by default. Free Transform and Align then act on the layers chosen this way.
+  - The Layers panel shows the active layer apart from the other selected ones.
+  - What a click takes: the topmost layer whose pixels show there (from 5 % coverage, within
+    its mask, a clipped layer where its base shows, its stack's result; inside a group, the
+    layer itself). Neither a fill layer without a mask (it covers the whole canvas: everything
+    below would be out of reach), nor a layer style's pixels (a shadow), nor an adjustment
+    layer: they are chosen in the panel or with the right-click.
+  - Right-click with the Move tool: the layers under the pointer at the top of the image's
+    menu, a click selecting one.
+  - A drag from where no layer shows, with the Move tool, draws a rectangle (the accent color,
+    never marching ants) selecting the layers whose visible pixels it touches; Shift adds them.
+  - Layers and pixels stay two selections: layers by the Move tool, the panel and Select > All
+    Layers; pixels by M, L, W and the Select menu. One explicit bridge, as in Photoshop:
+    Ctrl+click on a layer's thumbnail loads its transparency as the selection.
+  - Quick Mask: a round red button at the bottom of the toolbar, as in Photoshop, lit while it
+    is on; a click toggles it as Q does.
+  - Eyedropper (I): a click takes the foreground color (Alt: the background), Sample (Current
+    Layer or All Layers) and its size in the options bar, with the eyedropper's pointer and
+    loupe; Alt held with the Brush takes the color, the Brush coming back on release.
+  - Crop options: a ratio or a size, and Straighten (a line drawn along the horizon).
+  - Edit > Transform gains Distort and Perspective, in Free Transform's box: a projective
+    transform per layer, an ADR first. The Crop tool gets no perspective mode.
+  - Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill
+    layers come with it, one gradient engine (the Gradient Map's editor). The Paint Bucket in
+    its slot: the Magic Wand's region, filled.
+  - Retouching by intention, never by technology: the Clone Stamp (S) first, then Healing, then
+    Remove (J), which works without a downloaded model. They keep the pixels they took
+    ([ADR 0034](adr/0034-editable-operations.md), point 6 amended).
+  - Pen (P): one tool designed to be simple, not Photoshop's family of anchor tools; with the
+    vector ADR, as Type and Shapes.
+  - The options bar holds how the next gesture acts; Properties what the selected object is,
+    edited afterwards. A tool has variants only when the gesture differs: the Pencil is an
+    option of the Brush, vertical text a property of text, a triangle a polygon of 3 sides.
+- **Decided, not added**: Hand, Zoom and Rotate View tools (again), a Screen Mode button (F11
+  and Tab do it), Single Row and Single Column Marquees, the Magnetic Lasso (Quick Selection
+  follows edges), Content-Aware Move, Red Eye, Color Replacement (Hue/Saturation through a
+  mask), Pattern Stamp, the History and Art History Brushes (the Restore Eraser, the stack's
+  eyes), the Background and Magic Erasers (Magic Wand or Select Subject, then a mask), Sponge
+  (Vibrance through a mask), the Type Mask tools, Note, Count, Slice, Artboard and Frame.
+- **Later**: Mixer Brush, Blur, Sharpen and Smudge, Dodge and Burn, the Color Sampler, Custom
+  Shape; Ctrl+Space+click zooming in (Alt: out) for a pen without a wheel.
+
 ### Tabs and documents
 
 - [ ] Middle-click closes a tab.
@@ -576,8 +640,6 @@ working interface (panels) belongs to Window.
       marks), and the distance to the nearest layer while Alt-dragging.
 - [ ] An option to make Auto-Select pick the top group rather than the layer (Photoshop's
       "Group / Layer" choice).
-- [ ] Right-click on the canvas lists the layers under the pointer to select one (Photoshop
-      with the Move tool).
 - [ ] Number keys set the opacity of the selected layers (1 = 10 %, 0 = 100 %), as in
       Photoshop.
 
@@ -593,6 +655,5 @@ working interface (panels) belongs to Window.
 
 - [ ] The active tool and its options remembered across sessions, as in Photoshop.
 - [ ] Spring-loaded tools: holding a tool's key uses it until the key is released.
-- [ ] Brush size and hardness with [ and ], Alt+right-drag to resize on the canvas.
-- [ ] An Eyedropper tool (I) and Alt+click with the Brush to take the foreground color, with
-  the eyedropper's pointer and loupe (Photoshop; only the color picker samples the image now).
+- [ ] Alt+right-drag resizes the brush on the canvas ([ and ] already do, Shift for the
+      hardness).

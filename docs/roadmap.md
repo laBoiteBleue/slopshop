@@ -300,8 +300,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Editable operations ([ADR 0034](adr/0034-editable-operations.md)): entries of a stack
       edited again (an icon reopens their dialog), an eye per entry,
       `.slop` 0.20
-- [ ] An applied adjustment's selection loaded as the selection or replaced; moved pixels
-      replayed when an entry below them changes
+- [ ] An applied adjustment's selection loaded as the selection or replaced (moved pixels
+      stay baked: no replay, ADR 0034 amended on 2026-10-05)
 - [x] Filter menu: Gaussian Blur as a stack entry (its result cached, the entries above start
       from it; computed on the CPU, the display showing the layer's previous pixels meanwhile),
       Repeat (Ctrl+F) and Last Filter Settings (Alt+Ctrl+F), `.slop` 0.21
@@ -322,6 +322,12 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       yet: Face-Aware, saved meshes, mesh display, pen pressure, a GPU warp
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
+- [ ] Toolbar audit of 2026-10-05 ([ergonomics](ergonomics.md#toolbar-audit-of-2026-10-05)), in
+      this order: layers chosen in the image with the Move tool (click, Shift+click, right-click
+      list, rectangle) and the active layer shown in the panel; Quick Mask's toolbar button;
+      the Eyedropper (I, Alt with the Brush); Crop options; Gradient and Paint Bucket (G) with
+      gradient fill layers; Clone Stamp (S), Healing and Remove (J); Distort and Perspective in
+      Free Transform (below, an ADR first)
 
 ## Phase 4 — Very large images
 
