@@ -1203,16 +1203,25 @@ impl PaintPixels {
 
     /// A tile from its padded buffers.
     fn tile(&self, color: Vec<u8>, keep: Vec<u8>) -> PaintTile {
-        let limit = 1.0 - half_step(self.keep);
-        let lowers_alpha = (0..TILE_PIXELS).any(|i| {
-            let alpha = f64::from(self.codec.alpha(&color[i * self.bpp..(i + 1) * self.bpp]));
-            alpha + read_keep(self.keep, &keep, i) < limit
-        });
+        let lowers_alpha = (0..TILE_PIXELS).any(|i| self.lowers_alpha(&color, &keep, i));
+        self.tile_lowering(color, keep, lowers_alpha)
+    }
+
+    /// A tile from its padded buffers, whether it lowers alpha known: its flag is never below
+    /// what its pixels say, so a tile changed in some pixels lowers alpha when it did before or
+    /// when one of them does (what a stroke's frames and Fill know without reading the others).
+    fn tile_lowering(&self, color: Vec<u8>, keep: Vec<u8>, lowers_alpha: bool) -> PaintTile {
         PaintTile {
             color: Arc::from(color),
             keep: Arc::from(keep),
             lowers_alpha,
         }
+    }
+
+    /// Whether pixel `i` lowers the alpha of an opaque pixel: `P`'s alpha + `k` below 1.
+    fn lowers_alpha(&self, color: &[u8], keep: &[u8], i: usize) -> bool {
+        let alpha = f64::from(self.codec.alpha(&color[i * self.bpp..(i + 1) * self.bpp]));
+        alpha + read_keep(self.keep, keep, i) < 1.0 - half_step(self.keep)
     }
 }
 
@@ -1501,6 +1510,8 @@ impl PaintEntry {
         // Erased once, a tile keeps asking for an alpha channel, so that the layer's format
         // does not depend on how small the erasing was.
         let mut erased = self.tiles.get(&coord).is_some_and(|t| t.lowers_alpha);
+        // Only the pixels written can lower alpha where the tile did not.
+        let mut lowers = erased;
         for y in 0..height {
             for x in 0..width {
                 let a = f64::from(amount(x, y));
@@ -1513,13 +1524,12 @@ impl PaintEntry {
                 let (p, k) = math.read(&color, &keep, i);
                 let (p, k) = lay(op, paint, a, p, k);
                 math.write(p, k, &mut color, &mut keep, i);
+                lowers = lowers || math.lowers_alpha(&color, &keep, i);
             }
         }
         pad_tile(&mut color, width, height, math.bpp);
         pad_tile(&mut keep, width, height, math.keep.bytes() as usize);
-        let mut tile = math.tile(color, keep);
-        tile.lowers_alpha |= erased;
-        tile
+        math.tile_lowering(color, keep, lowers || erased)
     }
 
     /// This paint with `tiles` replaced (tiles made by [`Self::painted_tile`] of a paint of the
@@ -3794,6 +3804,8 @@ impl TopPaint {
             let below = &below[*index];
             let width = valid_area(size, coord).0;
             let rows = pr.len() / (t * bpp);
+            // Erased, or some pixel written lowers alpha: the others are the start's or the last
+            // frame's, whose tiles say so already (see `PaintPixels::tile_lowering`).
             let mut erased = false;
             for r in 0..rows {
                 let y = *first + r;
@@ -3807,7 +3819,7 @@ impl TopPaint {
                         let (pv, kv) = math.read(pr, kr, local);
                         let (pv, kv) = lay(op, color, a.min(1.0), pv, kv);
                         math.write(pv, kv, pr, kr, local);
-                        erased |= op == PaintOp::Erase;
+                        erased = erased || op == PaintOp::Erase || math.lowers_alpha(pr, kr, local);
                     }
                     evaluator.paint_pixel(
                         &math,
@@ -3832,9 +3844,8 @@ impl TopPaint {
             pad_tile(&mut p, width, height, bpp);
             pad_tile(&mut k, width, height, kb);
             pad_tile(&mut px, width, height, sb);
-            let mut tile = math.tile(p, k);
-            tile.lowers_alpha |= erased;
-            self.painted.insert(*coord, tile);
+            self.painted
+                .insert(*coord, math.tile_lowering(p, k, erased));
             shown_tiles.push((*coord, Arc::from(px)));
         }
         shown_tiles
@@ -4192,6 +4203,37 @@ mod tests {
         assert_eq!(pixel(&shown, 10, 10), [255, 255, 255, 255]);
         assert_eq!(pixel(&shown, 150, 10), pixel(&original, 150, 10));
         assert!(Arc::ptr_eq(tile_of(&shown, 1, 1), tile_of(&original, 1, 1)));
+    }
+
+    #[test]
+    fn a_stroke_knows_its_tiles_lower_alpha_as_their_pixels_say() {
+        // A stroke's frames tell from the pixels they write whether a tile lowers alpha: the
+        // same as reading every pixel of it, for the Eraser, the Brush over it, and again.
+        let original = gradient(true);
+        let brush = PaintOp::Color(LinearRgba::new(1.0, 0.2, 0.1, 1.0));
+        let mut stack = LayerStack::new(Arc::clone(&original));
+        for op in [PaintOp::Erase, brush, PaintOp::Erase] {
+            let shown = stack.evaluate().unwrap();
+            let mut top =
+                TopPaint::new(&stack, &shown, BlendSpace::Perceptual, op == PaintOp::Erase);
+            let mut current = Arc::clone(&shown);
+            // Two frames over parts of two tiles, the second over the first.
+            for area in [[10, 20, 120, 90], [60, 40, 256, 200]] {
+                let dirty: Vec<(TileCoord, [usize; 4])> = [(0, 0), (1, 0)]
+                    .map(|(col, row)| (TileCoord { col, row }, area))
+                    .to_vec();
+                let amount = |_, x: usize, y: usize| ((x + y) % 7) as f32 / 6.0;
+                let replaced = top.lay(&dirty, op, amount, &current);
+                current = Arc::new(current.with_tiles(replaced).unwrap());
+            }
+            stack = top.stack().unwrap();
+            let paint = stack.top_paint().unwrap();
+            let math = paint.math();
+            for (coord, tile) in paint.tiles() {
+                let read = math.tile(tile.color.to_vec(), tile.keep.to_vec());
+                assert_eq!(tile.lowers_alpha, read.lowers_alpha, "{op:?} {coord:?}");
+            }
+        }
     }
 
     #[test]
