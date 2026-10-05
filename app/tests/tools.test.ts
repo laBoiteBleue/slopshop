@@ -44,6 +44,9 @@ test("a letter picks its slot, as typed", () => {
     ["dodge", "burn"],
   );
   assert.equal(slotForLetter("z"), null);
+  // The Blur group has no key: no letter picks it.
+  assert.ok(SLOTS.some((slot) => slot.key === "" && slot.tools[0].id === "blur"));
+  assert.equal(slotForLetter(""), null);
   assert.equal(slotForLetter(null), null);
 });
 

@@ -91,6 +91,7 @@
   import {
     isCloneTool,
     isToneTool,
+    isFocusTool,
     isEraser,
     isPaintTool,
     slotOf,
@@ -842,6 +843,16 @@
     aligned: true,
     sample: "layer" as "all" | "layer",
   });
+  /** Blur and Sharpen: a soft brush and their strength (Photoshop's 50 %). */
+  let focusOptions = $state({
+    size: 30,
+    hardness: 0,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    strength: 0.5,
+  });
   /** Dodge and Burn: a soft brush, the tones they change most and how much (Photoshop's). */
   let toneOptions = $state({
     size: 60,
@@ -874,6 +885,7 @@
   function paintOptions() {
     if (isEraser(tool)) return eraserOptions;
     if (isToneTool(tool)) return toneOptions;
+    if (isFocusTool(tool)) return focusOptions;
     if (tool === "cloneStamp") return cloneOptions;
     return tool === "healingBrush" ? healOptions : brushOptions;
   }
@@ -886,6 +898,19 @@
     const doc = active;
     if (!doc) return;
     let clone: PaintRequest["clone"];
+    if (isFocusTool(tool) && (phase === "start" || phase === "line")) {
+      paintRun = null;
+      // On the layer's pixels only: the source is the layer as it shows.
+      if (doc.quickMask || layersPanel?.paintsMask()) {
+        showError(t("paint.focusLayersOnly"));
+        return;
+      }
+      clone = {
+        offset: [0, 0],
+        sourceLayer: layersPanel?.selectedLayer()?.id ?? null,
+        filter: { sharpen: tool === "sharpen", strength: focusOptions.strength },
+      };
+    }
     if (isToneTool(tool) && (phase === "start" || phase === "line")) {
       paintRun = null;
       // On the layer's pixels only: the source is the layer as it shows.
@@ -5235,6 +5260,7 @@
       bind:clone={cloneOptions}
       bind:heal={healOptions}
       bind:tone={toneOptions}
+      bind:focus={focusOptions}
       bind:eyedropper={eyedropperOptions}
       bind:bucket={bucketOptions}
       bind:gradient={gradientOptions}

@@ -59,3 +59,19 @@ test("Dodge and Burn refuse a mask", async () => {
   expect(await screen.findByText(/not a mask/)).toBeInTheDocument();
   expect(sent("paint_stroke")).toEqual([]);
 });
+
+test("Blur and Sharpen paint the layer through a filter, by their strength", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("button", { name: "Blur Tool" }));
+  const canvas = () => document.querySelector("svg.paint") as SVGSVGElement;
+  await fireEvent.pointerDown(canvas(), { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerUp(canvas(), { pointerId: 1, clientX: 10, clientY: 10 });
+  await waitFor(() => expect(sent("paint_stroke").length).toBeGreaterThan(0));
+  expect(sent("paint_stroke")[0]).toMatchObject({
+    request: {
+      clone: { offset: [0, 0], sourceLayer: 1, filter: { sharpen: false, strength: 0.5 } },
+    },
+  });
+  expect(screen.getByText("Strength:")).toBeInTheDocument();
+});

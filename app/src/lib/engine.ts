@@ -1266,6 +1266,8 @@ export type PaintRequest = {
     heal?: boolean;
     /** Dodge (`burn` false) or Burn: the colors taken lightened or darkened. */
     tone?: { burn: boolean; range: ToneRange; exposure: number };
+    /** Blur (`sharpen` false) or Sharpen, by `strength` in [0, 1]. */
+    filter?: { sharpen: boolean; strength: number };
   };
 };
 

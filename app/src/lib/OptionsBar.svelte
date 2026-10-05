@@ -25,6 +25,15 @@
     quick = $bindable(),
     brush = $bindable(),
     eraser = $bindable(),
+    focus = $bindable({
+      size: 30,
+      hardness: 0,
+      opacity: 1,
+      flow: 1,
+      pressureSize: true,
+      pressureOpacity: false,
+      strength: 0.5,
+    }),
     tone = $bindable({
       size: 60,
       hardness: 0,
@@ -107,6 +116,8 @@
     eraser: PaintOptions;
     /** Clone Stamp: its brush, Aligned, and what it samples (Photoshop's Current Layer first). */
     clone?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
+    /** Blur and Sharpen: their brush and strength. */
+    focus?: PaintOptions & { strength: number };
     /** Dodge and Burn: their brush, the range of tones and the exposure. */
     tone?: PaintOptions & { range: ToneRange; exposure: number };
     /** Healing Brush: as the Clone Stamp's. */
@@ -163,7 +174,9 @@
             ? heal
             : tool === "dodge" || tool === "burn"
               ? tone
-              : null,
+              : tool === "blur" || tool === "sharpen"
+                ? focus
+                : null,
   );
 
   const current = $derived(toolInfo(tool));
@@ -404,6 +417,18 @@
       </select>
     </label>
     <span class="hint">{t("patch.hint")}</span>
+  {:else if tool === "blur" || tool === "sharpen"}
+    <BrushPicker bind:size={focus.size} bind:hardness={focus.hardness} />
+    <span class="divider"></span>
+    <SliderField
+      label={t("options.focus.strength")}
+      bind:value={focus.strength}
+      min={0}
+      max={100}
+      unit="%"
+      factor={100}
+      width={44}
+    />
   {:else if tool === "dodge" || tool === "burn"}
     <BrushPicker bind:size={tone.size} bind:hardness={tone.hardness} />
     <span class="divider"></span>
