@@ -42,11 +42,13 @@ Whole-pixel translations (most layers) have their own exact fast paths everywher
    current per-layer constants, unchanged), projective (per pixel). Nothing changes for
    documents without a projective layer, in speed or in bits.
 3. **Resampling a projective layer**: the inverse maps each output pixel center to the source
-   (with the divide); the EWA ellipse and the pyramid level come from the Jacobian at that pixel
-   (ImageMagick's perspective distort, the reference ADR 0018 already follows), bounded so that
-   a pixel near the horizon line never reads more than a fixed number of texels. The CPU stays
-   the reference; the GPU computes the same (the uniform gains the third row and a flag), tested
-   pixel for pixel against it as ADR 0018 does.
+   (with the divide); the EWA ellipse comes from the Jacobian at that pixel (ImageMagick's
+   perspective distort, the reference ADR 0018 already follows), bounded so that a pixel near
+   the horizon line never reads more than a fixed number of texels (`MAX_EXTENT`). One pyramid
+   level is read for the whole layer, the finest any of its corners needs (as built: the GPU
+   plans the tiles of one level per layer; where the layer recedes most, the capped ellipse
+   reads that level). The CPU stays the reference; the GPU computes the same (the uniform gains
+   the third row and a flag), tested pixel for pixel against it as ADR 0018 does.
 4. **Bounds**: forward mapping of a layer's box stays `map_rect`'s four corners (exact for a
    convex quad); inverse mapping of a document area is clipped to where the layer lies before
    it is mapped, so it stays bounded.
