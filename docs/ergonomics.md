@@ -68,7 +68,7 @@ built. Contributors: propose here first.
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I) and the Paint Bucket (G); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Gradient and the Paint Bucket (G); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -357,6 +357,13 @@ built. Contributors: propose here first.
   (Point Sample, 3 by 3 to 101 by 101 Average, transparent pixels not counting) and Sample (All
   Layers, as shown, or Current Layer, the active layer alone; the loupe shows what is sampled).
   Alt held with the Brush is the eyedropper until it is released (not during a stroke).
+- The Gradient (G, the Paint Bucket in its group): a drag draws the gradient's line (Shift: by
+  steps of 45°, Esc drops it); on release the gradient is laid along it, Linear or Radial,
+  Photoshop's first presets (Foreground to Background, Foreground to Transparent, Black, White;
+  Reverse) at the options bar's Opacity, within the selection, as Edit > Fill paints: paint of
+  the active layer (which grows to the canvas), grays on its mask or in Quick Mask; one undo
+  entry. Not yet: editing a gradient's stops for the tool, the other shapes (Angle, Reflected,
+  Diamond), dithering.
 - The Paint Bucket (G): a click fills the pixels of a color similar to the clicked one (the
   Magic Wand's Tolerance, Anti-alias, Contiguous and Sample All Layers, its own settings) with
   the foreground color at the options bar's Opacity, within the selection when there is one, as
@@ -630,8 +637,8 @@ answers:
   - ✅ Crop options: a ratio or a size, and Straighten (a line drawn along the horizon).
   - Edit > Transform gains Distort and Perspective, in Free Transform's box: a projective
     transform per layer, an ADR first. The Crop tool gets no perspective mode.
-  - Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill
-    layers come with it, one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
+  - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill
+    layers come with it (to build), one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
     its slot: the Magic Wand's region, filled.
   - Retouching by intention, never by technology: the Clone Stamp (S) first, then Healing, then
     Remove (J), which works without a downloaded model. They keep the pixels they took

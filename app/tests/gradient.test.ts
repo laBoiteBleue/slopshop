@@ -8,6 +8,8 @@ import {
   moveStop,
   recolorStop,
   removeStop,
+  snapped45,
+  toolGradient,
   type Stop,
 } from "../src/lib/gradient";
 
@@ -48,4 +50,34 @@ test("a stop moves between its neighbours; two stops stay", () => {
   assert.deepEqual(removeStop(three, 1), [three[0], three[2]]);
   assert.equal(removeStop(RED_TO_BLUE, 0), null);
   assert.deepEqual(recolorStop(three, 1, [1, 2, 3])[1], [2000, 1, 2, 3]);
+});
+
+test("the Gradient tool's presets come from the drawing colors, reversed on demand", () => {
+  const colors = { foreground: "#ff0000", background: "#0000ff" };
+  assert.deepEqual(toolGradient("foregroundToBackground", colors, false), {
+    stops: [
+      [0, 255, 0, 0],
+      [4096, 0, 0, 255],
+    ],
+    alpha: [1, 1],
+  });
+  assert.deepEqual(toolGradient("foregroundToTransparent", colors, true), {
+    stops: [
+      [0, 255, 0, 0],
+      [4096, 255, 0, 0],
+    ],
+    alpha: [0, 1],
+  });
+  assert.deepEqual(toolGradient("blackToWhite", colors, true).stops, [
+    [0, 255, 255, 255],
+    [4096, 0, 0, 0],
+  ]);
+});
+
+test("Shift keeps the gradient's line at a multiple of 45°", () => {
+  assert.deepEqual(snapped45([0, 0], [10, 3], false), [10, 3]);
+  const [x, y] = snapped45([0, 0], [10, 3], true);
+  assert.ok(Math.abs(y) < 1e-9 && Math.abs(x - Math.hypot(10, 3)) < 1e-9);
+  const [dx, dy] = snapped45([0, 0], [10, 9], true);
+  assert.ok(Math.abs(dx - dy) < 1e-9);
 });

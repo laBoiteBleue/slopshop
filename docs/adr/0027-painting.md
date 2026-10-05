@@ -117,6 +117,10 @@ UI (the same stroke gives the same pixels in tests, in the CLI and in the app, o
 
 ## Consequences
 
+- *Gradient tool (2026-10-05)*: a paint may lay a color that varies across the canvas
+  (`Paint::Gradient`, `PaintOp::Gradient`): each pixel takes the gradient's color at its place
+  in the document and its opacity scales the amount, on a layer's stack as on a coverage (its
+  grays). It is laid as Edit > Fill is, the same delta `P + k·B`: nothing new is stored.
 - Stroke cost is CPU time in proportion to the area of the dabs (measured and tracked in a
   benchmark); a frame recomputes and uploads only the tiles that changed.
 - History memory grows with the tiles changed by strokes; limits and a history panel are

@@ -180,6 +180,8 @@
   import LassoTool from "./lib/LassoTool.svelte";
   import WandTool from "./lib/WandTool.svelte";
   import BucketTool from "./lib/BucketTool.svelte";
+  import GradientTool from "./lib/GradientTool.svelte";
+  import { toolGradient, type ToolGradient } from "./lib/gradient";
   import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
   import type { LoupeSource } from "./lib/eyedropper";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
@@ -896,6 +898,36 @@
       return null;
     }
     return { documentId: doc.id, layerId: layer.id, mask };
+  }
+
+  /** The Gradient tool's options: which gradient, its shape, reversed, its opacity. */
+  let gradientOptions = $state<{
+    preset: ToolGradient;
+    shape: "linear" | "radial";
+    reverse: boolean;
+    opacity: number;
+  }>({ preset: "foregroundToBackground", shape: "linear", reverse: false, opacity: 1 });
+
+  /**
+   * The Gradient tool's line drawn: the gradient laid from `from` to `to` on what painting
+   * reaches (the active layer, its mask, Quick Mask: grays there), within the selection; one
+   * undo entry.
+   */
+  function layGradient(from: [number, number], to: [number, number]) {
+    const target = paintedLayer();
+    if (!target) return;
+    const kind = target.target ?? (target.mask ? "mask" : "layer");
+    const { preset, shape, reverse, opacity } = gradientOptions;
+    const { stops, alpha } = toolGradient(preset, paintColors(), reverse);
+    void sync(
+      engine.paintGradient(
+        target.documentId,
+        target.layerId,
+        kind,
+        { stops, alpha, shape, from, to },
+        opacity,
+      ),
+    );
   }
 
   /** The Paint Bucket's options: the fill's opacity, then the Magic Wand's region. */
@@ -5061,6 +5093,7 @@
       bind:eraser={eraserOptions}
       bind:eyedropper={eyedropperOptions}
       bind:bucket={bucketOptions}
+      bind:gradient={gradientOptions}
       bind:crop={cropAspect}
       bind:straighten={straightening}
       canvasSize={active ?? undefined}
@@ -5316,6 +5349,8 @@
                     onsample={(x, y, keys) => colorRange && sampleAt(colorRange, x, y, keys)}
                     loupe={loupeSource}
                   />
+                {:else if tool === "gradient"}
+                  <GradientTool {mapping} ongradient={layGradient} />
                 {:else if tool === "paintBucket"}
                   <BucketTool {mapping} onpick={paintBucket} />
                 {:else if tool === "wand"}

@@ -13,6 +13,7 @@
   import type { Snippet } from "svelte";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./align";
   import { CROP_RATIOS, type CropAspect } from "./crop";
+  import type { ToolGradient } from "./gradient";
 
   let {
     tool,
@@ -25,6 +26,12 @@
     brush = $bindable(),
     eraser = $bindable(),
     eyedropper = $bindable({ sample: "all", size: 1 }),
+    gradient = $bindable({
+      preset: "foregroundToBackground",
+      shape: "linear",
+      reverse: false,
+      opacity: 1,
+    }),
     bucket = $bindable({
       opacity: 1,
       tolerance: 32,
@@ -69,6 +76,13 @@
     eraser: PaintOptions;
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
     eyedropper?: { sample: "all" | "layer"; size: number };
+    /** Gradient: which gradient, its shape, reversed or not, and its opacity. */
+    gradient?: {
+      preset: ToolGradient;
+      shape: "linear" | "radial";
+      reverse: boolean;
+      opacity: number;
+    };
     /** Paint Bucket: the fill's opacity, then the Magic Wand's region (every layer or the active one). */
     bucket?: {
       opacity: number;
@@ -246,6 +260,43 @@
         log
       />
     {/if}
+  {:else if tool === "gradient"}
+    <select aria-label={t("options.gradient.preset")} bind:value={gradient.preset}>
+      <option value="foregroundToBackground">
+        {t("options.gradient.foregroundToBackground")}
+      </option>
+      <option value="foregroundToTransparent">
+        {t("options.gradient.foregroundToTransparent")}
+      </option>
+      <option value="blackToWhite">{t("options.gradient.blackToWhite")}</option>
+    </select>
+    {#each [{ shape: "linear", icon: "gradientLinear" }, { shape: "radial", icon: "gradientRadial" }] as const as entry (entry.shape)}
+      <button
+        class="icon-btn"
+        class:on={gradient.shape === entry.shape}
+        aria-pressed={gradient.shape === entry.shape}
+        onmousedown={keepFocus}
+        title={t(`options.gradient.${entry.shape}`)}
+        aria-label={t(`options.gradient.${entry.shape}`)}
+        onclick={() => (gradient.shape = entry.shape)}
+      >
+        <Icon name={entry.icon} />
+      </button>
+    {/each}
+    <span class="divider"></span>
+    <SliderField
+      label={t("options.opacity")}
+      bind:value={gradient.opacity}
+      min={0}
+      max={100}
+      unit="%"
+      factor={100}
+      width={44}
+    />
+    <label class="option">
+      <input type="checkbox" bind:checked={gradient.reverse} />
+      {t("options.gradient.reverse")}
+    </label>
   {:else if tool === "paintBucket"}
     <SliderField
       label={t("options.opacity")}

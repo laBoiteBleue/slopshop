@@ -79,3 +79,60 @@ export function recolorStop(
 ): Stop[] {
   return stops.map((s, i) => (i === index ? [s[0], r, g, b] : s));
 }
+
+/** The Gradient tool's gradients, Photoshop's first presets, from the drawing colors. */
+export type ToolGradient = "foregroundToBackground" | "foregroundToTransparent" | "blackToWhite";
+
+/** `#rrggbb` → `[r, g, b]` 0–255. */
+function rgbOf(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/**
+ * The stops and the opacity at each end of the Gradient tool's `preset`, from the foreground
+ * and background colors (`#rrggbb`), the other way round with `reverse`.
+ */
+export function toolGradient(
+  preset: ToolGradient,
+  colors: { foreground: string; background: string },
+  reverse: boolean,
+): { stops: Stop[]; alpha: [number, number] } {
+  type Rgb = [number, number, number];
+  const [start, end]: [Rgb, Rgb] =
+    preset === "blackToWhite"
+      ? [
+          [0, 0, 0],
+          [255, 255, 255],
+        ]
+      : [
+          rgbOf(colors.foreground),
+          rgbOf(preset === "foregroundToTransparent" ? colors.foreground : colors.background),
+        ];
+  let alpha: [number, number] = preset === "foregroundToTransparent" ? [1, 0] : [1, 1];
+  let [a, b] = [start, end];
+  if (reverse) {
+    [a, b] = [b, a];
+    alpha = [alpha[1], alpha[0]];
+  }
+  return {
+    stops: [
+      [0, ...a],
+      [LOCATIONS, ...b],
+    ],
+    alpha,
+  };
+}
+
+/** `to` from `from`, at a multiple of 45° when `snap` (Shift), the length kept. */
+export function snapped45(
+  from: [number, number],
+  to: [number, number],
+  snap: boolean,
+): [number, number] {
+  if (!snap) return to;
+  const [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+  const length = Math.hypot(dx, dy);
+  const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+  return [from[0] + Math.cos(angle) * length, from[1] + Math.sin(angle) * length];
+}
