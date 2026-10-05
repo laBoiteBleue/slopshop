@@ -426,7 +426,7 @@ mod tests {
         let mut s = Stroke::on_stack(
             &stack,
             Arc::clone(&shown),
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             brush,
@@ -464,7 +464,7 @@ mod tests {
         let mut empty = Stroke::on_stack(
             &LayerStack::new(Arc::clone(&shown)),
             Arc::clone(&shown),
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             brush,
@@ -540,7 +540,7 @@ mod tests {
         let mut s = Stroke::on_stack(
             &LayerStack::new(Arc::clone(&image)),
             Arc::clone(&image),
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             brush,

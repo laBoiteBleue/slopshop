@@ -345,9 +345,10 @@ SlopShop is opened to contributors and promoted (the preparation is ready on the
 `chore/open-to-contributions`):
 
 - [ ] **Transforms**: ✅ Distort and Perspective in Free Transform, the layer's transform made
-      projective (ADR 0038: CPU and GPU, `.slop` 0.25, Edit > Transform's entries); still to
-      do: painting, moving selected pixels and masks from a selection on a layer in
-      perspective; then the advanced transforms below as the maintainer chooses
+      projective (ADR 0038: CPU and GPU, `.slop` 0.25, Edit > Transform's entries; painting,
+      fills and masks through the map); still to do: moving or copying the selected pixels
+      of a layer in perspective, Smudge on it; then the advanced transforms below as the
+      maintainer chooses
 - [ ] **AI** (the large one): Remove (J) and generative fill, on the AI track below (its ADR
       before the first feature, local models first)
 - [ ] 🔶 **Cloud monetization**: what is offered, accounts, billing (to define; an ADR)

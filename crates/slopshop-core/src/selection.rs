@@ -1026,7 +1026,7 @@ pub fn uniform_mask(size: Size, shown: bool) -> Result<RasterImage, SelectionErr
 pub fn layer_mask(
     selection: &RasterImage,
     size: Size,
-    layer_to_document: Affine,
+    layer_to_document: crate::transform::Projective,
     hide: bool,
 ) -> Result<RasterImage, SelectionError> {
     if !layer_to_document.is_finite() || layer_to_document.inverse().is_none() {
@@ -3914,25 +3914,25 @@ mod tests {
         let selection = select(canvas, &rect(100.0, 50.0, 200.0, 150.0));
         // A layer moved 40 pixels right: its pixel (60, 50) is document pixel (100, 50).
         let moved = Affine::translation(40.0, 0.0);
-        let reveal = layer_mask(&selection, Size::new(300, 200), moved, false).unwrap();
+        let reveal = layer_mask(&selection, Size::new(300, 200), moved.into(), false).unwrap();
         assert_eq!(reveal.size(), Size::new(300, 200));
         assert_eq!(reveal.gray_at(60, 50), 1.0);
         assert_eq!(reveal.gray_at(59, 50), 0.0);
         assert_eq!(reveal.gray_at(159, 149), 1.0);
         assert_eq!(reveal.gray_at(160, 149), 0.0);
-        let hide = layer_mask(&selection, Size::new(300, 200), moved, true).unwrap();
+        let hide = layer_mask(&selection, Size::new(300, 200), moved.into(), true).unwrap();
         assert_eq!(hide.gray_at(60, 50), 0.0);
         assert_eq!(hide.gray_at(10, 10), 1.0);
         // A layer scaled twice: its pixel (60, 40) lands on document (120.5, 80.5) or so.
         let scaled = Affine::scale(2.0, 2.0);
-        let resampled = layer_mask(&selection, Size::new(300, 150), scaled, false).unwrap();
+        let resampled = layer_mask(&selection, Size::new(300, 150), scaled.into(), false).unwrap();
         assert_eq!(resampled.gray_at(60, 40), 1.0);
         assert_eq!(resampled.gray_at(20, 20), 0.0);
         // Hiding everything is still a mask.
         let none = layer_mask(
             &selection,
             Size::new(10, 10),
-            Affine::translation(500.0, 0.0),
+            Affine::translation(500.0, 0.0).into(),
             false,
         )
         .unwrap();

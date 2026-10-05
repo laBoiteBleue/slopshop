@@ -12,7 +12,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke};
 use slopshop_core::selection::{self, EdgeSettings, Selection};
-use slopshop_core::{Affine, Edit, LayerId, LayerMask, RasterImage};
+use slopshop_core::{Edit, LayerId, LayerMask, Projective, RasterImage};
 use slopshop_render::SelectionView;
 use tauri::{AppHandle, Manager, State};
 
@@ -204,8 +204,15 @@ pub(crate) fn brush(
         ..Brush::default()
     };
     let paint = Paint::Gray(if erase { 0.0 } else { 1.0 });
-    let mut stroke = Stroke::new(region, Affine::IDENTITY, None, blend_space, brush, paint)
-        .map_err(|e| e.to_string())?;
+    let mut stroke = Stroke::new(
+        region,
+        Projective::IDENTITY,
+        None,
+        blend_space,
+        brush,
+        paint,
+    )
+    .map_err(|e| e.to_string())?;
     let samples: Vec<PointerSample> = samples
         .iter()
         .map(|&[x, y, pressure]| PointerSample {
@@ -283,7 +290,7 @@ pub(crate) fn output(
         let layer = doc.layer(id).ok_or("unknown layer")?;
         (
             crate::selection::mask_size(doc, layer)?,
-            crate::paint::affine_placement(layer.transform.then(doc.parent_transform(id)))?,
+            layer.transform.then(doc.parent_transform(id)),
         )
     };
     let refined = selection::refine_edges(canvas, &base, settings).map_err(|e| e.to_string())?;
