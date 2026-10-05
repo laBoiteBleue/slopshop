@@ -84,7 +84,9 @@ built. Contributors: propose here first.
   layer clicked last active); a press on a layer of a multiple selection keeps them all moving,
   and a click without a drag selects it alone; Ctrl held inverts Auto-Select. Shift pressed
   during the drag holds one axis. Among several selected layers, the panel marks the active
-  one with an accent along its row. Snap:
+  one with an accent along its row. A right-click lists the layers showing under the pointer
+  at the top of the image's menu (fill and adjustment layers too, which a click does not take),
+  the active one checked; choosing one selects it. Snap:
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
   turns it off. A drag from inside the selection moves the selected pixels instead (Photoshop):
@@ -589,7 +591,7 @@ answers:
     base shows, its stack's result; inside a group, the layer itself); neither a fill layer
     without a mask, nor a layer style's pixels (a shadow), nor an adjustment layer: they are
     chosen in the panel or with the right-click.
-  - Right-click with the Move tool: the layers under the pointer at the top of the image's
+  - ✅ Right-click with the Move tool: the layers under the pointer at the top of the image's
     menu, a click selecting one.
   - A drag from where no layer shows, with the Move tool, draws a rectangle (the accent color,
     never marching ants) selecting the layers whose visible pixels it touches; Shift adds them.
