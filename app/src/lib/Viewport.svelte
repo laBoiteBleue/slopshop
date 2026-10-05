@@ -529,12 +529,32 @@
 
   // Hand tool: drag with the middle button, or hold Space and drag.
   let spaceHeld = $state(false);
+  /**
+   * Ctrl+Space (Cmd on macOS) held: the Zoom tool for a moment, as in Photoshop, for a pen
+   * without a wheel; with Alt, zooming out. A click steps the zoom about the point, a drag
+   * sideways zooms about where it began.
+   */
+  let zoomHeld = $state<"in" | "out" | null>(null);
+  let zooming: {
+    pointerId: number;
+    x: number;
+    anchor: { x: number; y: number };
+    moved: number;
+  } | null = null;
+  /** A drag of this many CSS pixels doubles the zoom. */
+  const ZOOM_DRAG_PER_DOUBLING = 100;
   let panning = $state<{ pointerId: number; x: number; y: number } | null>(null);
 
   // Move tool: a left drag (without Space) moves the selected layers.
   let moving = $state<{ pointerId: number; x: number; y: number } | null>(null);
 
   function onPointerDown(e: PointerEvent) {
+    if (e.button === 0 && zoomHeld) {
+      e.preventDefault();
+      container.setPointerCapture(e.pointerId);
+      zooming = { pointerId: e.pointerId, x: e.clientX, anchor: devicePoint(e), moved: 0 };
+      return;
+    }
     const hand = e.button === 1 || (e.button === 0 && spaceHeld);
     if (!hand) {
       if (e.button === 0 && onmove) {
@@ -551,6 +571,16 @@
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (zooming && e.pointerId === zooming.pointerId) {
+      const dx = e.clientX - zooming.x;
+      zooming.x = e.clientX;
+      zooming.moved += Math.abs(dx);
+      if (dx !== 0) {
+        const factor = 2 ** (dx / ZOOM_DRAG_PER_DOUBLING);
+        void changeView({ kind: "zoomBy", factor, ...zooming.anchor });
+      }
+      return;
+    }
     if (moving && e.pointerId === moving.pointerId) {
       // Output pixels are device pixels; a document pixel is `zoom` of them.
       const scale = window.devicePixelRatio / (target?.zoom ?? 1);
@@ -606,7 +636,7 @@
         return documentAt(view, dpr, clientX - rect.left, clientY - rect.top);
       },
       docPerCss: dpr / view.zoom,
-      hand: spaceHeld,
+      hand: spaceHeld || zoomHeld !== null,
     };
   });
 
@@ -683,6 +713,14 @@
   }
 
   function endPan(e: PointerEvent) {
+    if (zooming && e.pointerId === zooming.pointerId) {
+      // A click, not a drag: one step in or out, about the point.
+      if (zooming.moved < 3 && zoomHeld) {
+        const { x, y } = zooming.anchor;
+        void changeView({ kind: "step", zoomIn: zoomHeld === "in", x, y });
+      }
+      zooming = null;
+    }
     if (panning && e.pointerId === panning.pointerId) panning = null;
     if (moving && e.pointerId === moving.pointerId) {
       moving = null;
@@ -700,11 +738,23 @@
       spaceHeld = true;
       return;
     }
+    if (e.key === " " && hasShortcutModifier(e)) {
+      e.preventDefault();
+      zoomHeld = e.altKey ? "out" : "in";
+      return;
+    }
+    // Alt pressed or released while zooming: the other way.
+    if (e.key === "Alt" && zoomHeld) zoomHeld = "out";
     // Ctrl+0, Ctrl+1, Ctrl++ and Ctrl+-: commands of the app (`SHORTCUTS` in commands.ts).
   }
 
   function onWindowKeyup(e: KeyboardEvent) {
-    if (e.key === " ") spaceHeld = false;
+    if (e.key === " ") {
+      spaceHeld = false;
+      zoomHeld = null;
+    }
+    if (e.key === "Control" || e.key === "Meta") zoomHeld = null;
+    if (e.key === "Alt" && zoomHeld) zoomHeld = "in";
   }
 </script>
 
@@ -713,6 +763,8 @@
   onkeyup={onWindowKeyup}
   onblur={() => {
     spaceHeld = false;
+    zoomHeld = null;
+    zooming = null;
     panning = null;
     if (moving) {
       moving = null;
@@ -757,6 +809,8 @@
     class="viewport"
     class:native={presentsNatively}
     class:hand={spaceHeld}
+    class:zoom-in={zoomHeld === "in"}
+    class:zoom-out={zoomHeld === "out"}
     class:panning={panning !== null}
     bind:this={container}
     role="presentation"
@@ -902,6 +956,14 @@
 
   .viewport.hand {
     cursor: grab;
+  }
+
+  .viewport.zoom-in {
+    cursor: zoom-in;
+  }
+
+  .viewport.zoom-out {
+    cursor: zoom-out;
   }
 
   .viewport.panning {

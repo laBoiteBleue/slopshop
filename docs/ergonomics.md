@@ -677,7 +677,8 @@ answers:
   eyes), the Background and Magic Erasers (Magic Wand or Select Subject, then a mask), Sponge
   (Vibrance through a mask), the Type Mask tools, Note, Count, Slice, Artboard and Frame.
 - **Later**: Mixer Brush, Blur, Sharpen and Smudge, Dodge and Burn, the Color Sampler, Custom
-  Shape; Ctrl+Space+click zooming in (Alt: out) for a pen without a wheel.
+  Shape; ✅ Ctrl+Space+click zooming in (Alt: out) for a pen without a wheel (a drag sideways
+  zooms about where it began, Photoshop's scrubby zoom; Cmd+Space on macOS).
 
 ### Tabs and documents
 
