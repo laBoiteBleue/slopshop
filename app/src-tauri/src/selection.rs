@@ -1107,6 +1107,49 @@ pub async fn load_selection(
     )
 }
 
+/// Ctrl+click on a layer's thumbnail (its mask's with `mask`): the selection its pixels make
+/// (or its mask), combined with the current one by `mode` (Shift adds, Alt subtracts, both
+/// intersect, as in Photoshop); one undo entry, "Load Selection".
+#[tauri::command]
+pub async fn select_layer_pixels(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_id: u64,
+    mask: bool,
+    mode: String,
+) -> Result<DocumentView, String> {
+    let how = combine(&mode)?;
+    let doc = {
+        let mut documents = state.documents()?;
+        documents.get_mut(document_id)?.session.document().clone()
+    };
+    let image = on_worker(move || {
+        let id = slopshop_core::LayerId::from_raw(layer_id);
+        let current = doc.selection().map(|s| Arc::clone(s.image()));
+        // `None`: nothing to change (no pixels there, and not replacing, which deselects).
+        Ok(match selection::from_layer(&doc, id, mask) {
+            None if how == Combine::Replace => Some(None),
+            None => None,
+            Some(pixels) if how == Combine::Replace => Some(Some(pixels)),
+            Some(pixels) => Some(
+                selection::combined(doc.size(), current.as_deref(), &pixels, how)
+                    .map_err(|e| e.to_string())?,
+            ),
+        })
+    })
+    .await?;
+    let Some(image) = image else {
+        let mut documents = state.documents()?;
+        return Ok(documents.get_mut(document_id)?.view());
+    };
+    set_selection(
+        &state,
+        document_id,
+        image,
+        HistoryLabel::new("loadSelection"),
+    )
+}
+
 /// A saved selection renamed (Selections panel), one undo entry.
 #[tauri::command]
 pub async fn rename_saved_selection(

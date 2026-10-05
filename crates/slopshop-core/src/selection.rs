@@ -193,6 +193,77 @@ pub fn combined(
     finish(canvas, current, Mask::from_image(canvas, other)?, how)
 }
 
+/// The selection a layer's pixels make (Photoshop's Ctrl+click on its thumbnail): how opaque
+/// the layer alone is at each pixel of the canvas, placed by its transform and its groups', its
+/// opacity, blending, clipping, mask and effects left out; with `mask`, its mask's grays
+/// instead (enabled or not). `None`: nothing selected, no such layer, or no mask to read.
+pub fn from_layer(
+    document: &crate::document::Document,
+    id: crate::document::LayerId,
+    mask: bool,
+) -> Option<RasterImage> {
+    use crate::document::{Document, LayerContent};
+    let mut layer = document.layer(id)?.clone();
+    layer.transform = layer.transform.then(document.parent_transform(id));
+    layer.clipped = false;
+    layer.opacity = 1.0;
+    layer.blend_mode = crate::blend::BlendMode::Normal;
+    layer.style = None;
+    if mask {
+        let mut m = layer.mask.take()?;
+        m.enabled = true;
+        m.replaces_alpha = false;
+        layer.mask = Some(m);
+        layer.content = LayerContent::Fill {
+            color: crate::color::LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+        };
+    } else {
+        if matches!(layer.content, LayerContent::Adjustment { .. }) {
+            return None;
+        }
+        layer.mask = None;
+    }
+    let size = document.size();
+    let alone = Document::restore(
+        size,
+        document.working_space(),
+        document.blend_space(),
+        vec![layer],
+        document.next_layer_id(),
+    )
+    .ok()?;
+    let t = TILE_SIZE;
+    let mut tiles: Vec<(Rect, Vec<u16>)> = (0..size.height.div_ceil(t))
+        .flat_map(|row| (0..size.width.div_ceil(t)).map(move |col| (col, row)))
+        .map(|(col, row)| {
+            let (x, y) = (col * t, row * t);
+            let rect = Rect::new(x, y, (size.width - x).min(t), (size.height - y).min(t));
+            (rect, Vec::new())
+        })
+        .collect();
+    crate::raster::parallel_for_each(&mut tiles, |(rect, out)| {
+        let mut rgba = vec![0f32; rect.size().pixel_count() as usize * 4];
+        if crate::composite::composite_region_serial(&alone, *rect, &mut rgba).is_ok() {
+            *out = rgba
+                .chunks_exact(4)
+                .map(|p| (p[3].clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16)
+                .collect();
+        }
+    });
+    if tiles.iter().all(|(_, out)| out.iter().all(|&v| v == 0)) {
+        return None;
+    }
+    let mut coverage = vec![0u16; size.pixel_count() as usize];
+    for (rect, out) in &tiles {
+        for (row, line) in out.chunks_exact(rect.width.max(1) as usize).enumerate() {
+            let start = (rect.y as usize + row) * size.width as usize + rect.x as usize;
+            coverage[start..start + line.len()].copy_from_slice(line);
+        }
+    }
+    let bytes: Vec<u8> = coverage.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).ok()
+}
+
 /// Everything `current` leaves out (Select > Inverse); `None` selects everything.
 pub fn invert(
     canvas: Size,
@@ -5072,5 +5143,74 @@ mod tests {
         assert!(translated(canvas, &image, -50, 0).unwrap().is_none());
         let back = translated(canvas, &image, 0, 0).unwrap().unwrap();
         assert_eq!(bounds(&back), bounds(&image));
+    }
+
+    #[test]
+    fn a_layers_pixels_or_its_mask_make_a_selection() {
+        use crate::document::{Document, Layer, LayerContent, LayerMask};
+        use crate::edit::Edit;
+        // A 40 × 20 layer opaque on its left half, half transparent beyond, moved 10 to the right.
+        let mut pixels = Vec::new();
+        for _ in 0..20 {
+            for x in 0..40 {
+                pixels.extend_from_slice(&[9, 9, 9, if x < 20 { 255 } else { 128 }]);
+            }
+        }
+        let image =
+            RasterImage::from_pixels(Size::new(40, 20), PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        // Its mask shows its top half only.
+        let mask_pixels: Vec<u8> = (0..40 * 20)
+            .map(|i| if i / 40 < 10 { 255 } else { 0 })
+            .collect();
+        let mask = RasterImage::from_pixels(Size::new(40, 20), gray, &mask_pixels).unwrap();
+        let mut doc = Document::new(Size::new(60, 20));
+        let layer = Layer {
+            style: None,
+            id: doc.allocate_layer_id(),
+            name: "l".into(),
+            visible: true,
+            opacity: 0.3,
+            blend_mode: crate::blend::BlendMode::Multiply,
+            mask: Some(LayerMask {
+                original: None,
+                image: Arc::new(mask),
+                enabled: true,
+                replaces_alpha: false,
+            }),
+            clipped: false,
+            transform: Affine::translation(10.0, 0.0),
+            content: LayerContent::raster(Arc::new(image)),
+        };
+        let id = layer.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let at = |image: &RasterImage, x: u32, y: u32| image.gray_at(x, y);
+        // The pixels: opacity, blending and mask left out.
+        let pixels = from_layer(&doc, id, false).unwrap();
+        assert_eq!(at(&pixels, 5, 5), 0.0, "left of the layer");
+        assert_eq!(
+            at(&pixels, 15, 15),
+            1.0,
+            "opaque, below the mask's edge too"
+        );
+        assert!((at(&pixels, 40, 5) - 128.0 / 255.0).abs() < 0.01);
+        // Its mask: the top half of where the layer is.
+        let masked = from_layer(&doc, id, true).unwrap();
+        assert_eq!(at(&masked, 15, 5), 1.0);
+        assert_eq!(at(&masked, 15, 15), 0.0);
+        assert_eq!(at(&masked, 5, 5), 0.0);
+        // No such layer.
+        assert!(from_layer(&doc, crate::document::LayerId::from_raw(999), false).is_none());
     }
 }
