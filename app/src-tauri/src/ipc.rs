@@ -1748,7 +1748,10 @@ impl FilterSettings {
     fn filter(&self) -> Result<slopshop_core::filter::Filter, String> {
         slopshop_core::filter::Filter::from_params(&self.filter, &self.values)
             .filter(slopshop_core::filter::Filter::is_valid)
-            .ok_or(format!("unknown filter {} or values out of range", self.filter))
+            .ok_or(format!(
+                "unknown filter {} or values out of range",
+                self.filter
+            ))
     }
 }
 
