@@ -279,6 +279,8 @@ fn a_filtered_layer_shows_the_look_at_what_is_seen() {
         .unwrap();
     let gpu = document(&blurred, false);
     let cpu = document(&blurred, true);
+    // The first frame starts the layer's evaluation, in the background half a second later.
+    let start = std::time::Instant::now();
     for (scale, output, most) in [
         (1.0, Size::new(W, H), 3.0),
         (2.0, Size::new(W / 2, H / 2), 3.0),
@@ -302,6 +304,13 @@ fn a_filtered_layer_shows_the_look_at_what_is_seen() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(done, "scale {scale}: the look never came");
+        // Shown without the whole layer: not evaluated yet when the look came that soon.
+        if start.elapsed() < std::time::Duration::from_millis(400) {
+            assert!(
+                pending(&gpu),
+                "scale {scale}: the whole layer was evaluated"
+            );
+        }
         let a = r.render_view(&gpu, view, output).unwrap();
         let b = r.render_view(&cpu, view, output).unwrap();
         let (worst, mean) = differences(&a, &b);
@@ -310,8 +319,6 @@ fn a_filtered_layer_shows_the_look_at_what_is_seen() {
         let sharp = r.render_view(&unblurred, view, output).unwrap();
         assert!(differences(&a, &sharp).0 > 50, "scale {scale}: not blurred");
     }
-    // Shown without evaluating the whole layer.
-    assert!(pending(&gpu));
 }
 
 #[test]
