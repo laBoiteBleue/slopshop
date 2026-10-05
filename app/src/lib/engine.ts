@@ -1542,6 +1542,26 @@ export const engine = {
    */
   selectLayerPixels: (documentId: number, layerId: number, mask: boolean, mode: SelectionMode) =>
     serial(() => invoke<DocumentView>("select_layer_pixels", { documentId, layerId, mask, mode })),
+  /**
+   * The Healing Brush's Patch: the selection healed from the pixels `offset` away (every layer,
+   * or `sourceLayer` alone), on `target` (one undo entry).
+   */
+  patchSelection: (
+    documentId: number,
+    layerId: number,
+    target: PaintTarget,
+    offset: [number, number],
+    sourceLayer: number | null,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("patch_selection", {
+        documentId,
+        layerId,
+        target,
+        offset,
+        sourceLayer,
+      }),
+    ),
   /** The selection's bounds (pixels selected even partly), `null` without one. */
   selectionBounds: (documentId: number) =>
     invoke<Bounds | null>("selection_bounds", { documentId }),
