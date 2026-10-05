@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ADJUSTMENT_PARAMS, type AdjustmentId, type LayerView } from "../../src/lib/engine";
 import PropertiesPanel from "../../src/lib/PropertiesPanel.svelte";
+import type { GradientFill } from "../../src/lib/gradientFill";
 
 const padded = (values: number[]) => [
   ...values,
@@ -200,4 +201,70 @@ test("a fill layer shows its color; a click on it asks for another", async () =>
   expect(swatch).toHaveStyle({ background: "#0080ff" });
   await userEvent.setup().click(swatch);
   expect(onfillcolor).toHaveBeenCalledWith(fill);
+});
+
+test("a gradient fill shows its gradient; Reverse, its style, angle and scale send the edits", async () => {
+  const gradient: GradientFill = {
+    stops: [
+      [0, 0, 0, 0],
+      [4096, 255, 255, 255],
+    ],
+    alpha: [1, 1],
+    shape: "linear",
+    from: [200, 300],
+    to: [200, 0],
+  };
+  const layer: LayerView = {
+    ...adjustmentLayer("levels", []),
+    kind: "gradientFill",
+    adjustment: null,
+    gradientFill: gradient,
+  };
+  const onedit = vi.fn();
+  render(PropertiesPanel, {
+    documentId: 1,
+    layer,
+    size: { width: 400, height: 300 },
+    onedit,
+    onlive: vi.fn(),
+    ongestureend: vi.fn(),
+  });
+  const user = userEvent.setup();
+  expect(screen.getByText("Gradient")).toBeInTheDocument();
+  expect(number("Angle")).toHaveValue(90);
+  expect(number("Scale")).toHaveValue(100);
+  /** The gradient sent by the last edit. */
+  const last = () => (onedit.mock.lastCall?.[1] as { gradient: GradientFill }).gradient;
+
+  await user.click(screen.getByRole("button", { name: "Reverse" }));
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setGradientFill",
+    id: 7,
+    gradient: {
+      ...gradient,
+      stops: [
+        [0, 255, 255, 255],
+        [4096, 0, 0, 0],
+      ],
+    },
+  });
+
+  await typeInto(user, "Angle", "0");
+  expect(last().from[0]).toBeCloseTo(0);
+  expect(last().to[0]).toBeCloseTo(400);
+  expect(last().to[1]).toBeCloseTo(150);
+
+  await typeInto(user, "Scale", "50");
+  expect(last().from[1]).toBeCloseTo(225);
+  expect(last().to[1]).toBeCloseTo(75);
+
+  await user.selectOptions(screen.getByRole("combobox", { name: "Style" }), "radial");
+  expect(last().shape).toBe("radial");
+  expect(last().from).toEqual([200, 150]);
+
+  // Nothing typed: nothing sent.
+  const calls = onedit.mock.calls.length;
+  await user.clear(number("Angle"));
+  await user.tab();
+  expect(onedit).toHaveBeenCalledTimes(calls);
 });

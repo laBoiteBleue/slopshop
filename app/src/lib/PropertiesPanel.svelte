@@ -2,15 +2,25 @@
   // The Properties panel (Photoshop's), in the dock below Layers: the parameters of the selected adjustment layer
   // (ADR 0020), as sliders with a number field each, checkboxes and color swatches. Dragging
   // applies live, one undo entry per drag; Reset puts the neutral values back. For a fill
-  // layer, its color: a swatch that opens the color picker.
+  // layer, its color: a swatch that opens the color picker. For a gradient fill layer, its
+  // gradient, style, angle and scale (`gradientFill.ts`), and Reverse.
   import type { EditRequest, LayerView } from "./engine";
   import { fillHex } from "./layerEdits";
   import AdjustmentFields from "./AdjustmentFields.svelte";
+  import GradientEditor from "./GradientEditor.svelte";
+  import {
+    fillPlacement,
+    placed,
+    reversed,
+    type GradientFill,
+    type GradientShape,
+  } from "./gradientFill";
   import { t } from "./i18n/index.svelte";
 
   let {
     documentId,
     layer,
+    size = { width: 1, height: 1 },
     onedit,
     onlive,
     ongestureend,
@@ -19,6 +29,8 @@
     documentId: number;
     /** An adjustment or a fill layer. */
     layer: LayerView;
+    /** The document's size, where a gradient fill's angle and scale are measured. */
+    size?: { width: number; height: number };
     /** The fill layer's swatch was clicked: the app lets its color be chosen. */
     onfillcolor?: (layer: LayerView) => void;
     onedit: (documentId: number, edit: EditRequest) => void;
@@ -56,6 +68,36 @@
     const edit = request(values, gradient);
     if (edit) onedit(documentId, edit);
   }
+
+  const fill = $derived(layer.gradientFill ?? null);
+  const placement = $derived(fill ? fillPlacement(size, fill) : null);
+
+  const fillRequest = (gradient: GradientFill): EditRequest => ({
+    kind: "setGradientFill",
+    id: layer.id,
+    gradient,
+  });
+
+  /** A number typed in a field, or null (the field shows the layer's again). */
+  function typed(e: Event): number | null {
+    const input = e.currentTarget as HTMLInputElement;
+    const value = input.valueAsNumber;
+    if (Number.isFinite(value)) return value;
+    input.value = input.defaultValue;
+    return null;
+  }
+
+  function setAngle(e: Event) {
+    const angle = typed(e);
+    if (fill && angle !== null) onedit(documentId, fillRequest(placed(size, fill, { angle })));
+  }
+
+  function setScale(e: Event) {
+    const percent = typed(e);
+    if (!fill || percent === null) return;
+    const scale = Math.min(Math.max(percent, 1), 1000) / 100;
+    onedit(documentId, fillRequest(placed(size, fill, { scale })));
+  }
 </script>
 
 {#if layer.kind === "fill"}
@@ -72,6 +114,63 @@
         onclick={() => onfillcolor?.(layer)}
       ></button>
     </label>
+  </section>
+{:else if layer.kind === "gradientFill" && fill && placement}
+  <section class="panel" aria-label={t("properties.title")}>
+    <div class="title">
+      <span>{t("menu.layer.newFill.gradient")}</span>
+      <button
+        type="button"
+        class="btn small"
+        onclick={() => onedit(documentId, fillRequest(reversed(fill)))}
+      >
+        {t("options.gradient.reverse")}
+      </button>
+    </div>
+    <GradientEditor
+      stops={fill.stops}
+      onlive={(stops) => onlive(documentId, fillRequest({ ...fill, stops }))}
+      onend={() => ongestureend(documentId)}
+      onapply={(stops) => onedit(documentId, fillRequest({ ...fill, stops }))}
+    />
+    <div class="row">
+      <label for="gradient-fill-shape">{t("properties.gradientShape")}</label>
+      <select
+        id="gradient-fill-shape"
+        value={fill.shape}
+        onchange={(e) => {
+          const shape = e.currentTarget.value as GradientShape;
+          onedit(documentId, fillRequest(placed(size, fill, { shape })));
+        }}
+      >
+        <option value="linear">{t("options.gradient.linear")}</option>
+        <option value="radial">{t("options.gradient.radial")}</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="gradient-fill-angle">{t("properties.gradientAngle")}</label>
+      <input
+        id="gradient-fill-angle"
+        type="number"
+        step="1"
+        value={Math.round(placement.angle)}
+        onchange={setAngle}
+      />
+      <span class="unit">°</span>
+    </div>
+    <div class="row">
+      <label for="gradient-fill-scale">{t("properties.gradientScale")}</label>
+      <input
+        id="gradient-fill-scale"
+        type="number"
+        min="1"
+        max="1000"
+        step="1"
+        value={Math.round(placement.scale * 100)}
+        onchange={setScale}
+      />
+      <span class="unit">%</span>
+    </div>
   </section>
 {:else if adjustment}
   <section class="panel" aria-label={t("properties.title")}>
@@ -127,6 +226,25 @@
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+  }
+
+  .row > label {
+    width: 64px;
+  }
+
+  .row input {
+    width: 64px;
+  }
+
+  .unit {
+    color: var(--text-muted);
   }
 
   .swatch {

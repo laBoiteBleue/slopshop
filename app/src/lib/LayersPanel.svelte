@@ -37,6 +37,7 @@
     removal,
     typedOpacity,
     newFill,
+    newGradientFillLayer,
     ungrouping,
     visibilityToggle,
     type Arrangement,
@@ -68,6 +69,7 @@
   import { canDistribute } from "./align";
   import { mergeKind } from "./bake";
   import { editableEntry } from "./stackEntries";
+  import type { GradientFill } from "./gradientFill";
   import { LayersUi } from "./layersUi.svelte";
 
   let {
@@ -256,6 +258,20 @@
     const name = t("layers.defaultFillName", { n });
     const before = new Set(allLayers.map((l) => l.id));
     void edit(newFill(tree, selected?.id ?? null, color, name)).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
+  }
+
+  /**
+   * A gradient fill layer of `gradient` above the active layer, selected (Layer > New Fill
+   * Layer > Gradient): no dialog, its settings stay editable in the Properties panel.
+   */
+  export function addGradientFill(gradient: GradientFill) {
+    const n = allLayers.filter((l) => l.kind === "gradientFill").length + 1;
+    const name = t("layers.defaultGradientFillName", { n });
+    const before = new Set(allLayers.map((l) => l.id));
+    void edit(newGradientFillLayer(tree, selected?.id ?? null, gradient, name)).then(() => {
       const added = allLayers.find((l) => !before.has(l.id));
       if (added) select([added.id], added.id);
     });
@@ -1033,7 +1049,7 @@
               onfillcolor?.(layer);
             }}
           >
-            <LayerThumbnail {documentId} {layer} size={36} />
+            <LayerThumbnail {documentId} {layer} size={36} document={doc} />
           </span>
         {/if}
         {#if layer.mask}

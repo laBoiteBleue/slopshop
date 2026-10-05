@@ -194,3 +194,28 @@ test("Layer > Layer Style is open to groups, not to adjustment layers", async ()
   await user.click(row("Curves"));
   expect((await styleItem()).classList.contains("disabled")).toBe(true);
 });
+
+test("Layer > New Fill Layer > Gradient adds the drawing colors' gradient across the document", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+  await user.hover(screen.getByText("New Fill Layer", { selector: ".label" }));
+  await user.click(screen.getByText("Gradient", { selector: ".dropdown.nested .label" }));
+  await vi.waitFor(() => expect(sent("perform")).toHaveLength(1));
+  const { edit } = sent("perform")[0] as {
+    edit: { kind: string; name: string; gradient: Record<string, unknown> };
+  };
+  expect(edit.kind).toBe("addGradientFill");
+  expect(edit.name).toBe("Gradient Fill 1");
+  // Black to white, from the bottom of the 400 × 300 document to its top.
+  expect(edit.gradient).toEqual({
+    stops: [
+      [0, 0, 0, 0],
+      [4096, 255, 255, 255],
+    ],
+    alpha: [1, 1],
+    shape: "linear",
+    from: [expect.closeTo(200, 6), expect.closeTo(300, 6)],
+    to: [expect.closeTo(200, 6), expect.closeTo(0, 6)],
+  });
+});

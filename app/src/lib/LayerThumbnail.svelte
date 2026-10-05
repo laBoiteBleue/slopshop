@@ -30,6 +30,7 @@
 
 <script lang="ts">
   import { engine, type LayerView } from "./engine";
+  import { cssFill } from "./gradientFill";
   import { onceSettled } from "./settle";
 
   let {
@@ -37,6 +38,7 @@
     layer,
     size,
     mask = false,
+    document = { width: 1, height: 1 },
   }: {
     documentId: number;
     layer: LayerView;
@@ -44,9 +46,11 @@
     size: number;
     /** The layer's mask instead of the layer. */
     mask?: boolean;
+    /** The document's size: where a gradient fill is drawn. */
+    document?: { width: number; height: number };
   } = $props();
 
-  /** What is shown: a raster (the layer's, or its mask), or a fill's color. */
+  /** What is shown: a raster (the layer's, or its mask), or a fill's color or gradient. */
   let key = $derived(mask ? (layer.mask?.contentKey ?? null) : layer.contentKey);
   /** Being baked (ADR 0031): what it will show, rendered small before its pixels come. */
   let baking = $derived(!mask && layer.baking === true);
@@ -170,7 +174,13 @@
       style:height="{fitted.height}px"
     ></canvas>
   {:else}
-    <span class="checker fill"><span style:background={swatch(layer.swatch)}></span></span>
+    <span class="checker fill">
+      <span
+        style:background={layer.gradientFill
+          ? cssFill(document, layer.gradientFill)
+          : swatch(layer.swatch)}
+      ></span>
+    </span>
   {/if}
 </span>
 

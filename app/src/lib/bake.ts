@@ -4,9 +4,12 @@
 import type { LayerView } from "./engine";
 import { childrenOf, outermost, type LayerTree } from "./layerTree";
 
+/** A solid color or gradient fill layer. */
+const isFill = (l: LayerView) => l.kind === "fill" || l.kind === "gradientFill";
+
 /** Rasterize applies to a fill, a group, or a pixel layer carrying paint or effects. */
 export function canRasterize(layers: LayerView[]): boolean {
-  return layers.some((l) => l.kind === "fill" || l.kind === "group" || l.painted);
+  return layers.some((l) => isFill(l) || l.kind === "group" || l.painted);
 }
 
 /**
@@ -28,7 +31,7 @@ export function mergeKind(tree: LayerTree, layers: LayerView[]): "layers" | "dow
 /** Merge Visible applies with two visible layers at the top level, or one group or fill. */
 export function canMergeVisible(layers: LayerView[]): boolean {
   const visible = layers.filter((l) => l.visible);
-  return visible.length > 1 || visible.some((l) => l.kind === "group" || l.kind === "fill");
+  return visible.length > 1 || visible.some((l) => l.kind === "group" || isFill(l));
 }
 
 /** Flatten Image applies unless the document is a single plain pixel layer already. */

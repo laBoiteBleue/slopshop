@@ -14,6 +14,7 @@
   <PropertiesPanel
     documentId={app.doc.id}
     {layer}
+    size={app.doc}
     onfillcolor={app.pickFillColor}
     onedit={app.edit}
     onlive={app.live}

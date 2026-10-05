@@ -15,7 +15,7 @@
 use slopshop_core::HistoryLabel;
 use std::sync::{Arc, Mutex};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use slopshop_core::gradient::{GradientField, GradientShape};
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
 use slopshop_core::selection::{Selection, sample_region};
@@ -650,33 +650,47 @@ pub async fn fill(
     .await
 }
 
-/// A gradient as the Gradient tool sends it: its stops (`[location, r, g, b]`, sRGB 8-bit), the
-/// opacity at its start and at its end, its shape, from `from` to `to` (document pixels).
-#[derive(Debug, Clone, Deserialize)]
+/// A gradient as the Gradient tool sends it, and as a gradient fill layer has it: its stops
+/// (`[location, r, g, b]`, sRGB 8-bit), the opacity at its start and at its end, its shape, from
+/// `from` to `to` (document pixels; a gradient fill's content space).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GradientRequest {
+pub struct GradientDto {
     stops: Vec<[u16; 4]>,
     alpha: [f32; 2],
-    shape: GradientShapeRequest,
+    shape: GradientShapeDto,
     from: [f64; 2],
     to: [f64; 2],
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-enum GradientShapeRequest {
+enum GradientShapeDto {
     Linear,
     Radial,
 }
 
-impl GradientRequest {
+impl GradientDto {
+    pub(crate) fn of_field(field: &GradientField) -> Self {
+        Self {
+            stops: crate::ipc::gradient_stops(&field.gradient),
+            alpha: field.alpha,
+            shape: match field.shape {
+                GradientShape::Linear => GradientShapeDto::Linear,
+                GradientShape::Radial => GradientShapeDto::Radial,
+            },
+            from: field.from,
+            to: field.to,
+        }
+    }
+
     pub(crate) fn field(&self) -> Result<GradientField, String> {
         let field = GradientField {
             gradient: crate::ipc::gradient_of_stops(&self.stops)?,
             alpha: self.alpha,
             shape: match self.shape {
-                GradientShapeRequest::Linear => GradientShape::Linear,
-                GradientShapeRequest::Radial => GradientShape::Radial,
+                GradientShapeDto::Linear => GradientShape::Linear,
+                GradientShapeDto::Radial => GradientShape::Radial,
             },
             from: self.from,
             to: self.to,
@@ -698,7 +712,7 @@ pub async fn paint_gradient(
     document_id: u64,
     layer_id: u64,
     target: PaintTarget,
-    gradient: GradientRequest,
+    gradient: GradientDto,
     opacity: f32,
 ) -> Result<DocumentView, String> {
     on_worker(move || {
@@ -731,7 +745,7 @@ pub(crate) fn gradient_edit(
     doc: &Document,
     layer_id: u64,
     target: PaintTarget,
-    gradient: &GradientRequest,
+    gradient: &GradientDto,
     opacity: f32,
 ) -> Result<Option<Edit>, String> {
     let field = gradient.field()?;
