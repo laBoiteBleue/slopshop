@@ -322,12 +322,42 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       yet: Face-Aware, saved meshes, mesh display, pen pressure, a GPU warp
 - [ ] Filter layers, after a multi-pass compositor (an ADR); new adjustment, fill and filter
       layers masked by the selection
-- [ ] Toolbar audit of 2026-10-05 ([ergonomics](ergonomics.md#toolbar-audit-of-2026-10-05)), in
-      this order: layers chosen in the image with the Move tool (click, Shift+click, right-click
-      list, rectangle) and the active layer shown in the panel; Quick Mask's toolbar button;
-      the Eyedropper (I, Alt with the Brush); Crop options; Gradient and Paint Bucket (G) with
-      gradient fill layers; Clone Stamp (S), Healing and Remove (J); Distort and Perspective in
-      Free Transform (below, an ADR first)
+- [ ] Toolbar audit of 2026-10-05 ([ergonomics](ergonomics.md#toolbar-audit-of-2026-10-05)):
+  - [x] Layers chosen in the image with the Move tool (click, Shift+click, right-click list,
+        rectangle), the active layer shown in the panel; Ctrl+click on a thumbnail loads it as
+        the selection
+  - [x] Quick Mask's toolbar button; the Eyedropper (I, Alt with the Brush); Crop's ratio,
+        size and Straighten
+  - [x] Paint Bucket and Gradient (G); Clone Stamp (S); Healing Brush (J); the Pencil as an
+        option of the Brush and the Eraser
+  - [ ] Patch (a mode of the Healing Brush), Ctrl+Space zooming, Dodge and Burn (O), Blur,
+        Sharpen and Smudge: built, merged one by one
+  - [ ] Gradient fill layers (Layer > New Fill Layer > Gradient), the Gradient tool's engine
+  - Moved to the projects below: Remove (J, an AI tool), Distort and Perspective in Free
+    Transform (transforms). Later (the audit's choice): Mixer Brush, Color Sampler, Custom
+    Shape; Pen, Type and Shapes wait for vector content
+
+## Before opening to contributors *(the maintainer's order, 2026-10-05)*
+
+Once the toolbar is done (and tested by the maintainer), three projects, in this order, before
+SlopShop is opened to contributors and promoted (the preparation is ready on the branch
+`chore/open-to-contributions`):
+
+- [ ] **Transforms**: Distort and Perspective in Free Transform, the layer's transform made
+      projective (ADR 0038, proposed in a pull request: to review first);
+      then the advanced transforms below as the maintainer chooses
+- [ ] **AI** (the large one): Remove (J) and generative fill, on the AI track below (its ADR
+      before the first feature, local models first)
+- [ ] 🔶 **Cloud monetization**: what is offered, accounts, billing (to define; an ADR)
+
+Raised on 2026-10-05, to schedule:
+
+- [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR; an editor without
+      the Type tool surprises users and contributors alike
+- [ ] 🔶 The layer stack or a DAG (Phase 2), to settle before AI nodes; history memory limits
+- [ ] Very large images (Phase 4)
+- [ ] Distribution (Phase 5): a first release, installers, auto-update, user documentation
+- [ ] macOS and Linux tested by hand (CI builds and tests them; nobody has used the app there)
 
 ## Phase 4 — Very large images
 
@@ -366,7 +396,8 @@ first.
       perspective of Free Transform below.
 - [ ] **Free Transform: distort and perspective** (corner handles moved freely, Ctrl and
       Alt+Shift+Ctrl as in Photoshop): needs a projective transform per layer instead of the
-      affine one (rendering, `.slop`, export, painting in the layer's grid): an ADR.
+      affine one (rendering, `.slop`, export, painting in the layer's grid). Taken by the
+      maintainer (2026-10-05): ADR 0038, proposed.
 - [ ] Proposed: **content-aware scaling** as an option of Free Transform's scaling (protecting
       what matters while the rest stretches), not a command of its own.
 - [x] **Liquify**: brush deformations kept as a displacement field, an entry of the layer's
