@@ -1314,8 +1314,7 @@ pub async fn add_layer_masks(
             if layer.mask.is_some() {
                 continue;
             }
-            let to_document =
-                crate::paint::affine_placement(layer.transform.then(doc.parent_transform(id)))?;
+            let to_document = layer.transform.then(doc.parent_transform(id));
             targets.push((id, mask_size(doc, layer)?, to_document));
         }
         let selection = doc.selection().map(|s| Arc::clone(s.image()));

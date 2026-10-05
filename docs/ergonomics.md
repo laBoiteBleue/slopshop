@@ -679,8 +679,9 @@ answers:
     Photoshop); the menu entries, and the box's right-click menu, make that a corner's plain
     drag. Once a corner is free the box is a quad: sides move with their two corners, inside
     moves it, outside turns it; the options bar's numbers are grayed. Pixel layers only; a
-    corner that would fold the box stays put. Not yet: painting, moving selected pixels and
-    masks from a selection on a layer in perspective. The Crop tool gets no perspective mode.
+    corner that would fold the box stays put. A layer in perspective is painted, filled,
+    cloned and masked through its map (it does not grow to the canvas); not yet: moving or
+    copying its selected pixels, Smudge. The Crop tool gets no perspective mode.
   - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); ✅ gradient
     fill layers come with it, one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
     its slot: the Magic Wand's region, filled.

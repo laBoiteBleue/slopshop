@@ -220,7 +220,7 @@ struct ActiveStroke {
 /// module documentation): its transform, its stack and its mask, if any.
 #[derive(Debug, Clone)]
 pub struct Growth {
-    pub(crate) transform: Affine,
+    pub(crate) transform: Projective,
     pub(crate) stack: LayerStack,
     pub(crate) mask: Option<LayerMask>,
 }
@@ -301,7 +301,7 @@ pub(crate) fn paint_edit(target: Target, painted: Painted, growth: Option<&Growt
     if let Some(growth) = growth {
         edits.push(Edit::SetLayerTransform {
             id: layer,
-            transform: growth.transform.into(),
+            transform: growth.transform,
         });
         if let Some(mask) = &growth.mask {
             edits.push(Edit::SetLayerMask {
@@ -313,13 +313,13 @@ pub(crate) fn paint_edit(target: Target, painted: Painted, growth: Option<&Growt
     Edit::Batch(edits)
 }
 
-/// A layer's placement as the pixel tools (painting, moving pixels, masks from a selection) work
-/// with it: an affine map, until they follow projective layers (ADR 0038; edits refuse those
-/// meanwhile).
+/// A layer's placement for what works in its pixels with a constant scale (moving or copying
+/// selected pixels, Smudge): an affine map; refused for a layer in perspective (ADR 0038), which
+/// is painted, filled and masked through its map but not yet moved or smudged.
 pub(crate) fn affine_placement(transform: Projective) -> Result<Affine, String> {
-    transform
-        .as_affine()
-        .ok_or_else(|| "a layer in perspective is not edited by pixel tools yet".to_owned())
+    transform.as_affine().ok_or_else(|| {
+        "selected pixels of a layer in perspective are not moved, copied or smudged yet".to_owned()
+    })
 }
 
 /// What `stroke` painted on `target` so far: a layer's stack and what it shows, or an image.
@@ -353,8 +353,8 @@ pub(crate) fn grow(
         .content
         .stack()
         .ok_or("only raster layers can be painted")?;
-    let parent = affine_placement(doc.parent_transform(id))?;
-    let transform = affine_placement(layer.transform)?;
+    let parent = doc.parent_transform(id);
+    let transform = layer.transform;
     let growth = grow
         .then(|| canvas_growth(image.size(), transform.then(parent), doc.size()))
         .flatten();
@@ -444,9 +444,9 @@ pub(crate) fn grown_mask(
 
 /// A layer's transform once its pixels grew by `offset` whole tiles before them: they start
 /// that much earlier, so the layer looks the same.
-pub(crate) fn grown_transform(transform: Affine, (left, top): (u32, u32)) -> Affine {
+pub(crate) fn grown_transform(transform: Projective, (left, top): (u32, u32)) -> Projective {
     let tile = f64::from(slopshop_core::raster::TILE_SIZE);
-    Affine::translation(-f64::from(left) * tile, -f64::from(top) * tile).then(transform)
+    Projective::translation(-f64::from(left) * tile, -f64::from(top) * tile).then(transform)
 }
 
 /// A stroke on the request's target in `doc`, a layer grown to the canvas if it needs to
@@ -504,9 +504,7 @@ fn start(
                 (None, None) => Paint::Erase,
             };
             // Into the parent, then into the document.
-            let to_document = growth
-                .transform
-                .then(affine_placement(doc.parent_transform(id))?);
+            let to_document = growth.transform.then(doc.parent_transform(id));
             let stroke = Stroke::on_stack(
                 &growth.stack,
                 image,
@@ -527,7 +525,7 @@ fn start(
         Target::Mask(id) => {
             let layer = doc.layer(id).ok_or("the painted layer is gone")?;
             let mask = layer.mask.as_ref().ok_or("the layer has no mask")?;
-            let to_document = affine_placement(layer.transform.then(doc.parent_transform(id)))?;
+            let to_document = layer.transform.then(doc.parent_transform(id));
             (Arc::clone(&mask.image), to_document, None, gray, selection)
         }
         // Quick Mask's image, within the selection made meanwhile (as Photoshop's channel).
@@ -535,7 +533,7 @@ fn start(
             let mask = doc.quick_mask().ok_or("Quick Mask is off")?;
             (
                 Arc::clone(mask.image()),
-                Affine::IDENTITY,
+                Projective::IDENTITY,
                 None,
                 gray,
                 selection,
@@ -697,9 +695,8 @@ fn smudge(
                 return Err("Smudge pushes a layer's pixels, not a mask".to_owned());
             };
             let (shown, growth) = grow(&doc, id, false)?;
-            let to_document = growth
-                .transform
-                .then(affine_placement(doc.parent_transform(id))?);
+            // Smudge's field lies in the layer's pixels, its brush sized there: affine only.
+            let to_document = affine_placement(growth.transform.then(doc.parent_transform(id)))?;
             let to_image = to_document.inverse().ok_or("the layer cannot be shown")?;
             let brush = liquify::Brush {
                 size: request
@@ -1403,6 +1400,31 @@ mod tests {
         let everywhere = filled(&document(None), &request(0.5), None);
         assert!((everywhere.alpha_at(0, 0) - 0.5).abs() < 0.01);
         assert!((everywhere.alpha_at(63, 47) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_layer_in_perspective_is_filled_through_its_map() {
+        // The layer's top edge shown at half its width: Edit > Fill paints its pixels under
+        // the selection where they show.
+        let mut doc = document(Some([28.0, 30.0, 36.0, 40.0]));
+        let keystone = Projective::from_rect_to_quad(
+            [0.0, 0.0, 64.0, 48.0],
+            [(16.0, 0.0), (48.0, 0.0), (64.0, 48.0), (0.0, 48.0)],
+        )
+        .unwrap();
+        Edit::SetLayerTransform {
+            id: LayerId::from_raw(1),
+            transform: keystone,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let image = filled(&doc, &request(1.0), None);
+        let back = keystone.inverse().unwrap();
+        let (u, v) = back.apply(32.0, 35.0);
+        assert_eq!(image.alpha_at(u as u32, v as u32), 1.0);
+        // Outside the selection as shown: untouched.
+        let (u, v) = back.apply(32.0, 10.0);
+        assert_eq!(image.alpha_at(u as u32, v as u32), 0.0);
     }
 
     #[test]

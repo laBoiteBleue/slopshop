@@ -159,14 +159,14 @@ pub enum PaintOp {
     /// pixels placed by `to_document`), its opacity scaling the amount: the Gradient tool.
     Gradient {
         field: crate::gradient::GradientField,
-        to_document: Affine,
+        to_document: Projective,
     },
     /// Lay the colors of a [`crate::clone::CloneSource`] (given to [`TopPaint::lay`]), each
     /// pixel the one `offset` away from its place in the document, its alpha scaling the
     /// amount: the Clone Stamp; with `tone`, the colors lightened or darkened (Dodge, Burn).
     Clone {
         offset: [f64; 2],
-        to_document: Affine,
+        to_document: Projective,
         tone: Option<crate::clone::Tone>,
     },
 }
@@ -183,7 +183,7 @@ impl PaintOp {
         x: usize,
         y: usize,
     ) -> (Option<[f64; 4]>, f64) {
-        let place = |to_document: &Affine| {
+        let place = |to_document: &Projective| {
             let t = f64::from(TILE_SIZE);
             to_document.apply(
                 f64::from(coord.col) * t + x as f64 + 0.5,

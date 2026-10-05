@@ -25,7 +25,7 @@ use crate::raster::{
 };
 use crate::stack::{LayerStack, PaintOp, RestorePaint, TopPaint};
 use crate::tile::TileCoord;
-use crate::transform::Affine;
+use crate::transform::Projective;
 
 /// Pixels per tile.
 const TILE_PIXELS: usize = (TILE_SIZE * TILE_SIZE) as usize;
@@ -218,8 +218,16 @@ const MAX_GROWN_PIXELS: u64 = 1 << 31;
 /// How an image of `size`, placed in the document by `to_document`, must grow so that strokes
 /// reach the whole `canvas` (ADR 0027): whole tiles (columns, rows) added before it, and its new
 /// size. `None` when it covers the canvas already, or when it would grow beyond
-/// [`MAX_GROWN_PIXELS`] (a layer shown much smaller than its pixels).
-pub fn canvas_growth(size: Size, to_document: Affine, canvas: Size) -> Option<((u32, u32), Size)> {
+/// [`MAX_GROWN_PIXELS`] (a layer shown much smaller than its pixels); and for a layer in
+/// perspective (ADR 0038), whose pixels toward the horizon line would stretch without end.
+pub fn canvas_growth(
+    size: Size,
+    to_document: Projective,
+    canvas: Size,
+) -> Option<((u32, u32), Size)> {
+    if !to_document.is_affine() {
+        return None;
+    }
     let to_image = to_document.inverse()?;
     let [x0, y0, x1, y1] =
         to_image.map_rect([0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)]);
@@ -248,9 +256,10 @@ pub struct Stroke {
     /// The last frame.
     current: Arc<RasterImage>,
     /// Image pixels → document, and back.
-    to_document: Affine,
-    to_image: Affine,
-    /// Size of an image pixel in document pixels (its anti-aliasing width).
+    to_document: Projective,
+    to_image: Projective,
+    /// Size of an image pixel in document pixels (its anti-aliasing width) for an affine
+    /// placement; in perspective it varies, see [`Self::pixel_at`].
     pixel: f64,
     /// The selection, and the codec of its pixels.
     selection: Option<(Arc<RasterImage>, Codec)>,
@@ -280,7 +289,7 @@ impl Stroke {
     /// mask at the document origin), blending in `blend_space` (ADR 0012).
     pub fn new(
         base: Arc<RasterImage>,
-        to_document: Affine,
+        to_document: Projective,
         selection: Option<Arc<RasterImage>>,
         blend_space: BlendSpace,
         brush: Brush,
@@ -349,7 +358,9 @@ impl Stroke {
             base,
             to_document,
             to_image,
-            pixel: to_document.determinant().abs().sqrt(),
+            pixel: to_document
+                .as_affine()
+                .map_or(1.0, |t| t.determinant().abs().sqrt()),
             selection,
             blender: Blender::new(blend_space),
             to_working,
@@ -471,6 +482,22 @@ impl Stroke {
 
     /// The stroke's coverage at document point (`x`, `y`) (the image pixel it falls in), before
     /// the selection.
+    /// Size of an image pixel in document pixels where document point (`x`, `y`) is: the
+    /// anti-aliasing width of a dab there (ADR 0038: it varies in perspective).
+    fn pixel_at(&self, x: f64, y: f64) -> f64 {
+        if self.to_document.is_affine() {
+            return self.pixel;
+        }
+        let (u, v) = self.to_image.apply(x, y);
+        let [a, b, c, d] = self.to_document.jacobian(u, v);
+        let size = (a * d - b * c).abs().sqrt();
+        if size.is_finite() && size > 0.0 {
+            size
+        } else {
+            1.0
+        }
+    }
+
     fn coverage_at_document(&self, x: f64, y: f64) -> f32 {
         let (u, v) = self.to_image.apply(x, y);
         if !(u >= 0.0 && v >= 0.0) {
@@ -529,7 +556,7 @@ impl Stroke {
     pub fn on_stack(
         stack: &LayerStack,
         shown: Arc<RasterImage>,
-        to_document: Affine,
+        to_document: Projective,
         selection: Option<Arc<RasterImage>>,
         blend_space: BlendSpace,
         brush: Brush,
@@ -642,22 +669,21 @@ impl Stroke {
     fn stamp(&mut self, dabs: &[Dab]) {
         let size = self.base.size();
         let mut reached: BTreeMap<TileCoord, Vec<usize>> = BTreeMap::new();
-        // Each dab's box in the image's pixels.
+        // Each dab's box in the image's pixels, and its anti-aliasing width.
         let mut boxes = vec![[0.0; 4]; dabs.len()];
+        let mut pixels = vec![self.pixel; dabs.len()];
         for (index, dab) in dabs.iter().enumerate() {
-            // The dab's box in the document, then in the image (the box of its corners).
-            let reach = dab.radius + self.pixel;
-            let corners = [
-                (-reach, -reach),
-                (reach, -reach),
-                (-reach, reach),
-                (reach, reach),
-            ]
-            .map(|(dx, dy)| self.to_image.apply(dab.x + dx, dab.y + dy));
-            let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-            for (x, y) in corners {
-                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
-            }
+            // The dab's box in the document, then in the image (the box of its corners; the
+            // whole image where it reaches a perspective's horizon line).
+            let pixel = self.pixel_at(dab.x, dab.y);
+            pixels[index] = pixel;
+            let reach = dab.radius + pixel;
+            let [x0, y0, x1, y1] = self.to_image.map_rect([
+                dab.x - reach,
+                dab.y - reach,
+                dab.x + reach,
+                dab.y + reach,
+            ]);
             if x1 < 0.0 || y1 < 0.0 || x0 >= f64::from(size.width) || y0 >= f64::from(size.height) {
                 continue;
             }
@@ -689,7 +715,7 @@ impl Stroke {
                 (coord, coverage, indices)
             })
             .collect();
-        let (brush, to_document, pixel) = (self.brush, self.to_document, self.pixel);
+        let (brush, to_document) = (self.brush, self.to_document);
         let changed = parallel_for_each(&mut work, |(coord, coverage, indices)| {
             let mut changed: Option<[usize; 4]> = None;
             for &index in indices.iter() {
@@ -701,7 +727,7 @@ impl Stroke {
                     boxes[index],
                     &brush,
                     to_document,
-                    pixel,
+                    pixels[index],
                 );
                 changed = union(changed, area);
             }
@@ -1052,7 +1078,7 @@ impl OnStack {
 /// (`x`, `y`) of tile `coord` of an image placed by `to_document`.
 fn selected(
     selection: &Option<(Arc<RasterImage>, Codec)>,
-    to_document: Affine,
+    to_document: Projective,
     coord: TileCoord,
     x: usize,
     y: usize,
@@ -1075,7 +1101,7 @@ fn stamp_tile(
     dab: &Dab,
     [bx0, by0, bx1, by1]: [f64; 4],
     brush: &Brush,
-    to_document: Affine,
+    to_document: Projective,
     pixel: f64,
 ) -> Option<[usize; 4]> {
     let t = TILE_SIZE as usize;
@@ -1192,6 +1218,7 @@ impl MaskReader<'_> {
 mod tests {
     use super::*;
     use crate::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType};
+    use crate::transform::Affine;
 
     fn rgba8() -> PixelFormat {
         PixelFormat::RGBA8_SRGB
@@ -1239,7 +1266,7 @@ mod tests {
     fn stroke(base: Arc<RasterImage>, brush: Brush, paint: Paint) -> Stroke {
         Stroke::new(
             base,
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             brush,
@@ -1268,7 +1295,7 @@ mod tests {
         let mut s = Stroke::on_stack(
             stack,
             shown,
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             soft_brush(),
@@ -1510,7 +1537,7 @@ mod tests {
         };
         let mut s = Stroke::new(
             transparent(size),
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             Some(selection),
             BlendSpace::Perceptual,
             brush,
@@ -1534,7 +1561,7 @@ mod tests {
         let base = transparent(Size::new(64, 64));
         let mut s = Stroke::new(
             base,
-            to_document,
+            to_document.into(),
             None,
             BlendSpace::Perceptual,
             brush,
@@ -1548,6 +1575,54 @@ mod tests {
         assert_eq!(pixel(&image, 35, 32)[3], 255);
         assert_eq!(pixel(&image, 38, 32)[3], 0);
         assert_eq!(pixel(&image, 32, 38)[3], 0);
+    }
+
+    #[test]
+    fn layers_in_perspective_get_round_dabs_on_the_canvas() {
+        // A 64 × 64 layer whose top edge is shown four times narrower than its bottom one.
+        let to_document = crate::transform::Projective::from_rect_to_quad(
+            [0.0, 0.0, 64.0, 64.0],
+            [(24.0, 0.0), (40.0, 0.0), (64.0, 64.0), (0.0, 64.0)],
+        )
+        .unwrap();
+        let brush = Brush {
+            diameter: 6.0,
+            ..Brush::default()
+        };
+        let stroke_at = |x: f64, y: f64| {
+            let mut s = Stroke::new(
+                transparent(Size::new(64, 64)),
+                to_document,
+                None,
+                BlendSpace::Perceptual,
+                brush,
+                red(),
+            )
+            .unwrap();
+            s.add(&[sample(x, y)]);
+            s.finish().unwrap().unwrap()
+        };
+        // Near the bottom (shown about full size), and near the top (shown much smaller): each
+        // dab paints the layer's pixel under its center, and reaches farther in the layer where
+        // the layer is shown smaller.
+        let painted = |image: &RasterImage| {
+            (0..64u32)
+                .flat_map(|y| (0..64u32).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(image, x, y)[3] > 0)
+                .count()
+        };
+        for (x, y) in [(32.0, 60.0), (32.0, 4.0)] {
+            let image = stroke_at(x, y);
+            let (u, v) = to_document.inverse().unwrap().apply(x, y);
+            assert_eq!(
+                pixel(&image, u as u32, v as u32)[3],
+                255,
+                "under ({x}, {y})"
+            );
+        }
+        let near = painted(&stroke_at(32.0, 60.0));
+        let far = painted(&stroke_at(32.0, 4.0));
+        assert!(far > 2 * near, "near {near}, far {far}");
     }
 
     #[test]
@@ -1650,7 +1725,7 @@ mod tests {
         let mut s = Stroke::on_stack(
             &plain,
             Arc::clone(&base),
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             full,
@@ -1666,7 +1741,7 @@ mod tests {
         // Placed in the document: the colors follow the document, not the layer's pixels.
         let moved = Stroke::new(
             Arc::clone(&base),
-            Affine::translation(150.0, 0.0),
+            Affine::translation(150.0, 0.0).into(),
             None,
             BlendSpace::Perceptual,
             full,
@@ -1695,7 +1770,7 @@ mod tests {
         // Its grays on pixels, its colors on a coverage: refused.
         let refused = Stroke::new(
             filled(size, rgba8(), &[0, 0, 0, 255]),
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             None,
             BlendSpace::Perceptual,
             full,
@@ -1750,7 +1825,7 @@ mod tests {
         let refused = |base: Arc<RasterImage>, paint| {
             Stroke::new(
                 base,
-                Affine::IDENTITY,
+                Affine::IDENTITY.into(),
                 None,
                 BlendSpace::Perceptual,
                 Brush::default(),
@@ -1790,7 +1865,15 @@ mod tests {
     fn invalid_brushes_and_transforms_are_refused() {
         let base = transparent(Size::new(8, 8));
         let new = |brush: Brush, t: Affine| {
-            Stroke::new(Arc::clone(&base), t, None, BlendSpace::Linear, brush, red()).err()
+            Stroke::new(
+                Arc::clone(&base),
+                t.into(),
+                None,
+                BlendSpace::Linear,
+                brush,
+                red(),
+            )
+            .err()
         };
         let bad = Brush {
             diameter: 0.5,
@@ -1865,7 +1948,7 @@ mod tests {
         let base = filled(size, rgba8(), &[10, 20, 30, 255]);
         let mut s = Stroke::new(
             base,
-            Affine::IDENTITY,
+            Affine::IDENTITY.into(),
             Some(selection),
             BlendSpace::Perceptual,
             Brush::default(),
@@ -1884,11 +1967,11 @@ mod tests {
         let canvas = Size::new(1000, 800);
         // A 300 × 200 layer placed at (400, 300): grows left and up by whole tiles.
         let at = Affine::translation(400.0, 300.0);
-        let ((left, top), size) = canvas_growth(Size::new(300, 200), at, canvas).unwrap();
+        let ((left, top), size) = canvas_growth(Size::new(300, 200), at.into(), canvas).unwrap();
         assert_eq!((left, top), (2, 2));
         assert_eq!(size, Size::new(512 + 600, 512 + 500));
         // Covering the canvas already: no growth.
-        assert!(canvas_growth(canvas, Affine::IDENTITY, canvas).is_none());
+        assert!(canvas_growth(canvas, Affine::IDENTITY.into(), canvas).is_none());
 
         let image = filled(Size::new(300, 200), rgba8(), &[10, 20, 30, 255]);
         let grown = image.grown((left, top), size).unwrap().unwrap();
@@ -1951,7 +2034,7 @@ mod tests {
             let mut s = Stroke::on_stack(
                 stack,
                 shown,
-                Affine::IDENTITY,
+                Affine::IDENTITY.into(),
                 None,
                 BlendSpace::Perceptual,
                 brush,

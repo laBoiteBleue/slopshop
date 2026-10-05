@@ -22,8 +22,7 @@ use serde::Deserialize;
 use slopshop_core::move_pixels::{Lifted, MoveMode, Moved, PixelMove, show_floating};
 use slopshop_core::selection::{Selection, translated};
 use slopshop_core::{
-    Affine, BlendSpace, Document, Edit, LayerContent, LayerId, LayerMask, Projective, RasterImage,
-    Size,
+    BlendSpace, Document, Edit, LayerContent, LayerId, LayerMask, Projective, RasterImage, Size,
 };
 use tauri::Manager;
 
@@ -120,9 +119,7 @@ fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> 
         Target::QuickMask => return Err("Quick Mask's pixels do not move".to_owned()),
     };
     let layer = doc.layer(id).ok_or("the moved layer is gone")?;
-    let transform = lifted
-        .as_ref()
-        .map_or(layer.transform, |g| g.transform.into());
+    let transform = lifted.as_ref().map_or(layer.transform, |g| g.transform);
     let mode = if copy { MoveMode::Copy } else { MoveMode::Cut };
     let moving = PixelMove::new(
         image,
@@ -187,7 +184,7 @@ pub struct MovePreview {
     /// The move, whole pixels of the layer's image.
     offset: (i64, i64),
     /// The layer's transform and mask as the float found it.
-    transform: Affine,
+    transform: Projective,
     mask: Option<LayerMask>,
 }
 
@@ -201,7 +198,7 @@ impl MovePreview {
             self.id,
             &self.pixels,
             self.offset,
-            self.transform.into(),
+            self.transform,
             mask,
         );
     }
