@@ -540,24 +540,7 @@ pub async fn fill(
         if !(0.0..=1.0).contains(&opacity) {
             return Err("the opacity is between 0 and 1".to_owned());
         }
-        let request = PaintRequest {
-            restore: false,
-            stroke: 0,
-            target,
-            layer_id,
-            brush: BrushRequest {
-                size: 1.0,
-                hardness: 1.0,
-                spacing: 1.0,
-                flow: 1.0,
-                opacity,
-                pressure_size: false,
-                pressure_opacity: false,
-            },
-            color,
-            samples: Vec::new(),
-            end: true,
-        };
+        let request = fill_request(layer_id, target, color, opacity);
         let label = HistoryLabel::new(match (&stroke, request.color) {
             (Some(_), _) => "stroke",
             (None, Some(_)) => "fill",
@@ -572,6 +555,129 @@ pub async fn fill(
         Ok(document.view())
     })
     .await
+}
+
+/// The Paint Bucket (G): the pixels of a color similar to the one at (`x`, `y`) (the Magic
+/// Wand's region: `tolerance`, `contiguous`, `anti_alias`; sampled from every visible layer, or
+/// `sample_layer` alone), within the selection if there is one, filled with `color` at
+/// `opacity` on `target` as Edit > Fill does: one undo entry, the selection unchanged. Seconds
+/// on a large document: the UI's `task` (its progress, cancellable).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn paint_bucket(
+    app: tauri::AppHandle,
+    document_id: u64,
+    x: u32,
+    y: u32,
+    tolerance: f32,
+    contiguous: bool,
+    anti_alias: bool,
+    sample_layer: Option<u64>,
+    layer_id: u64,
+    target: PaintTarget,
+    color: [f32; 3],
+    opacity: f32,
+    task: u64,
+) -> Result<DocumentView, crate::ai::AiFailure> {
+    use crate::selection::{failure, internal};
+    use slopshop_core::selection::{self, Combine, WandOptions};
+    if !(0.0..=1.0).contains(&opacity) {
+        return Err(internal("the opacity is between 0 and 1"));
+    }
+    let options = WandOptions {
+        tolerance,
+        contiguous,
+        anti_alias,
+    };
+    crate::selection::sampled_then(
+        &app,
+        document_id,
+        sample_layer,
+        task,
+        "paintBucket",
+        move |sampling| {
+            // Within the selection, as any painting.
+            let combine = if sampling.current.is_some() {
+                Combine::Intersect
+            } else {
+                Combine::Replace
+            };
+            selection::magic_wand_from(
+                sampling.source,
+                sampling.pixels,
+                sampling.current,
+                (x, y),
+                options,
+                combine,
+                sampling.progress,
+                sampling.cancel,
+            )
+            .map_err(failure)
+        },
+        move |state, region| {
+            let mut documents = state.documents().map_err(internal)?;
+            let document = documents.get_mut(document_id).map_err(internal)?;
+            let Some(region) = region else {
+                return Ok(document.view());
+            };
+            let request = fill_request(layer_id, target, Some(color), opacity);
+            let edit =
+                bucket_edit(document.session.document(), region, &request).map_err(internal)?;
+            if let Some(edit) = edit {
+                document
+                    .session
+                    .with_label(Some(HistoryLabel::new("paintBucket")), |s| s.perform(edit))
+                    .map_err(internal)?;
+            }
+            Ok(document.view())
+        },
+    )
+    .await
+}
+
+/// The Paint Bucket's edit: `request` filled within `region` (a coverage the canvas's size)
+/// of `doc`, whose own selection stays. `None`: nothing to paint.
+pub(crate) fn bucket_edit(
+    doc: &Document,
+    region: RasterImage,
+    request: &PaintRequest,
+) -> Result<Option<Edit>, String> {
+    // The region as the selection the fill reads, on a copy.
+    let mut scratch = doc.clone();
+    Edit::SetSelection {
+        selection: Selection::new(Arc::new(region)),
+    }
+    .apply(&mut scratch)
+    .map_err(|e| e.to_string())?;
+    fill_edit(&scratch, request, None)
+}
+
+/// What Edit > Fill and the Paint Bucket paint: `color` (none: erase) at `opacity` everywhere
+/// the coverage they read reaches.
+pub(crate) fn fill_request(
+    layer_id: u64,
+    target: PaintTarget,
+    color: Option<[f32; 3]>,
+    opacity: f32,
+) -> PaintRequest {
+    PaintRequest {
+        restore: false,
+        stroke: 0,
+        target,
+        layer_id,
+        brush: BrushRequest {
+            size: 1.0,
+            hardness: 1.0,
+            spacing: 1.0,
+            flow: 1.0,
+            opacity,
+            pressure_size: false,
+            pressure_opacity: false,
+        },
+        color,
+        samples: Vec::new(),
+        end: true,
+    }
 }
 
 /// The edit `fill` performs: `request`'s target painted within the selection of `doc` (or

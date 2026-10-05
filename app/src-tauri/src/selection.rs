@@ -282,23 +282,23 @@ pub async fn grow_selection(
 }
 
 /// What a selection tool that samples colors works from ([`sampling_task`]).
-struct Sampling<'a> {
+pub(crate) struct Sampling<'a> {
     /// The composited document, or one holding only the layer to sample.
-    source: &'a Document,
+    pub(crate) source: &'a Document,
     /// Where its composited pixels come from (the GPU), else the CPU compositor.
-    pixels: Option<&'a PixelSource<'a>>,
-    current: Option<&'a RasterImage>,
-    progress: &'a (dyn Fn(usize, usize) + Sync),
-    cancel: &'a slopshop_core::job::CancelToken,
+    pub(crate) pixels: Option<&'a PixelSource<'a>>,
+    pub(crate) current: Option<&'a RasterImage>,
+    pub(crate) progress: &'a (dyn Fn(usize, usize) + Sync),
+    pub(crate) cancel: &'a slopshop_core::job::CancelToken,
 }
 
 /// The internal failure `e`, as the UI's task reports it.
-fn internal(e: impl ToString) -> AiFailure {
+pub(crate) fn internal(e: impl ToString) -> AiFailure {
     AiFailure::new("internal", e.to_string())
 }
 
 /// A selection's failure as the UI's task reports it: a cancellation is `cancelled`.
-fn failure(e: selection::SelectionError) -> AiFailure {
+pub(crate) fn failure(e: selection::SelectionError) -> AiFailure {
     match e {
         selection::SelectionError::Cancelled => AiFailure::new("cancelled", ""),
         other => internal(other),
@@ -316,6 +316,31 @@ async fn sampling_task(
     stage: &'static str,
     label: HistoryLabel,
     select: impl FnOnce(Sampling<'_>) -> Result<Option<RasterImage>, AiFailure> + Send + 'static,
+) -> Result<DocumentView, AiFailure> {
+    sampled_then(
+        app,
+        document_id,
+        layer_id,
+        task,
+        stage,
+        select,
+        move |state, image| set_selection(state, document_id, image, label).map_err(internal),
+    )
+    .await
+}
+
+/// [`sampling_task`]'s work, the coverage `select` gives handed to `then` (the Paint Bucket
+/// fills it instead of selecting it).
+pub(crate) async fn sampled_then(
+    app: &tauri::AppHandle,
+    document_id: u64,
+    layer_id: Option<u64>,
+    task: u64,
+    stage: &'static str,
+    select: impl FnOnce(Sampling<'_>) -> Result<Option<RasterImage>, AiFailure> + Send + 'static,
+    then: impl FnOnce(&AppState, Option<RasterImage>) -> Result<DocumentView, AiFailure>
+    + Send
+    + 'static,
 ) -> Result<DocumentView, AiFailure> {
     use tauri::Manager;
     let app = app.clone();
@@ -342,7 +367,7 @@ async fn sampling_task(
             progress: &report,
             cancel: task.cancel_token(),
         })?;
-        set_selection(&state, document_id, image, label).map_err(internal)
+        then(&state, image)
     })
     .await
     .map_err(internal)?

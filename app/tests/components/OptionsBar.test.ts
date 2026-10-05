@@ -102,6 +102,23 @@ test("Crop's ratio or size: presets, the canvas's ratio, a size, swapped", async
   expect(straighten).toHaveAttribute("aria-pressed", "true");
 });
 
+test("the Paint Bucket's opacity and region settings", async () => {
+  const bucket = { opacity: 1, tolerance: 32, contiguous: true, antiAlias: true, sampleAll: false };
+  const { user } = open("paintBucket", { bucket });
+  await user.click(check("Contiguous"));
+  await user.click(check("Anti-alias"));
+  await user.click(check("Sample All Layers"));
+  expect(bucket).toEqual({
+    opacity: 1,
+    tolerance: 32,
+    contiguous: false,
+    antiAlias: false,
+    sampleAll: true,
+  });
+  expect(screen.getByText("Opacity:")).toBeInTheDocument();
+  expect(screen.getByText("Tolerance:")).toBeInTheDocument();
+});
+
 test("the Brush and the Eraser keep their own settings", async () => {
   const { props, user } = open("eraser");
   await user.click(check("Pressure: size"));

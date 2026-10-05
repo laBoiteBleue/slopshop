@@ -1481,6 +1481,34 @@ export const engine = {
     serial(() =>
       invoke<DocumentView>("magic_wand", { documentId, ...at, ...options, layerId, mode, task }),
     ),
+  /**
+   * The Paint Bucket: the Magic Wand's region at `at` (sampled from every layer, or
+   * `sampleLayer` alone), within the selection, filled with `color` (sRGB-encoded) at `opacity`
+   * on `target`: one undo entry.
+   */
+  paintBucket: (
+    documentId: number,
+    at: { x: number; y: number },
+    options: { tolerance: number; contiguous: boolean; antiAlias: boolean },
+    sampleLayer: number | null,
+    fill: {
+      layerId: number;
+      target: PaintTarget;
+      color: [number, number, number];
+      opacity: number;
+    },
+    task: number,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("paint_bucket", {
+        documentId,
+        ...at,
+        ...options,
+        sampleLayer,
+        ...fill,
+        task,
+      }),
+    ),
   /** The selection's bounds (pixels selected even partly), `null` without one. */
   selectionBounds: (documentId: number) =>
     invoke<Bounds | null>("selection_bounds", { documentId }),
