@@ -78,8 +78,13 @@ built. Contributors: propose here first.
 - Move tool: drag moves the selected
   layers, arrows nudge by 1 pixel, Shift+arrows by 10; one undo entry per drag. The pointer stays
   the normal arrow over the image (no move cross). Auto-Select (options bar, on by default):
-  the drag takes the layer whose pixels are under the pointer (inside a group, the layer itself;
-  a layer already selected keeps the whole selection moving); Ctrl held inverts it. Snap:
+  the press takes the layer whose pixels are under the pointer (inside a group, the layer
+  itself; not a fill layer without a mask, which covers the whole canvas) in the Layers panel's
+  selection, by its rules: alone, or with Shift added to the selection or taken out of it (the
+  layer clicked last active); a press on a layer of a multiple selection keeps them all moving,
+  and a click without a drag selects it alone; Ctrl held inverts Auto-Select. Shift pressed
+  during the drag holds one axis. Among several selected layers, the panel marks the active
+  one with an accent along its row. Snap:
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
   turns it off. A drag from inside the selection moves the selected pixels instead (Photoshop):
@@ -577,19 +582,13 @@ answers:
   Smudge); O Dodge and Burn; P Pen; T Type; U Shape (Rectangle, Ellipse, Polygon, Line); then
   the colors (X, D) and Quick Mask.
 - **Decided, to build**:
-  - Layers chosen in the image with the Move tool, in the Layers panel's own selection (one
-    state, not undoable, as in the panel): a click on a layer's pixels selects it alone;
-    Shift+click adds or removes it (Ctrl keeps inverting Auto-Select, as in Photoshop; Shift
-    held again during the drag constrains to an axis, as the marquees' keys do); the layer
-    clicked last is the active one; a press on a layer of a multi-selection keeps them all for
-    a drag, and a release without dragging selects it alone (the panel's rule). Auto-Select
-    stays, on by default. Free Transform and Align then act on the layers chosen this way.
-  - The Layers panel shows the active layer apart from the other selected ones.
-  - What a click takes: the topmost layer whose pixels show there (from 5 % coverage, within
-    its mask, a clipped layer where its base shows, its stack's result; inside a group, the
-    layer itself). Neither a fill layer without a mask (it covers the whole canvas: everything
-    below would be out of reach), nor a layer style's pixels (a shadow), nor an adjustment
-    layer: they are chosen in the panel or with the right-click.
+  - ✅ Layers chosen in the image with the Move tool, in the Layers panel's own selection (one
+    state, not undoable, as in the panel): click, Shift+click, the active layer marked in the
+    panel, Shift during the drag for one axis (see Done). What a click takes: the topmost layer
+    whose pixels show there (from 5 % coverage, within its mask, a clipped layer where its
+    base shows, its stack's result; inside a group, the layer itself); neither a fill layer
+    without a mask, nor a layer style's pixels (a shadow), nor an adjustment layer: they are
+    chosen in the panel or with the right-click.
   - Right-click with the Move tool: the layers under the pointer at the top of the image's
     menu, a click selecting one.
   - A drag from where no layer shows, with the Move tool, draws a rectangle (the accent color,
