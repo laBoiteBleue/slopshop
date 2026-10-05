@@ -841,6 +841,7 @@
   });
   /** The Healing Brush's options: as the Clone Stamp's, hard by default (Photoshop's). */
   let healOptions = $state({
+    mode: "brush" as "brush" | "patch",
     size: 30,
     hardness: 1,
     opacity: 1,
@@ -2678,6 +2679,29 @@
   }
 
   /** A click inside the selection with an outline tool: the tool's own click. */
+  /**
+   * The Healing Brush's Patch: the selection dragged by (`dx`, `dy`) is healed from where it
+   * went (its texture, the tone around the selection); the outline comes back.
+   */
+  function patchMove(dx: number, dy: number) {
+    const id = outlineDrag;
+    outlineDrag = null;
+    const done = () => {
+      if (outlineShift?.drag === id) outlineShift = null;
+    };
+    const target = dx === 0 && dy === 0 ? null : paintedLayer();
+    if (!target) {
+      done();
+      return;
+    }
+    const kind = target.target ?? (target.mask ? "mask" : "layer");
+    const sourceLayer =
+      healOptions.sample === "layer" ? (layersPanel?.selectedLayer()?.id ?? null) : null;
+    void sync(
+      engine.patchSelection(target.documentId, target.layerId, kind, [dx, dy], sourceLayer),
+    ).finally(done);
+  }
+
   function outlineClick(x: number, y: number) {
     if (tool === "wand") magicWand(Math.floor(x), Math.floor(y), null);
     else selectionCommand(engine.deselect);
@@ -5441,6 +5465,23 @@
                     onhover={objectHover}
                     onselect={objectSelect}
                   />
+                {:else if tool === "healingBrush" && healOptions.mode === "patch"}
+                  <!-- Patch: a freehand outline around what to heal, then dragged onto the source. -->
+                  <SelectionDrag
+                    {mapping}
+                    {...outlineDragProps}
+                    enabled={active?.selectionKey != null && !active.quickMask}
+                    onmove={patchMove}
+                    onclick={() => {}}
+                  >
+                    <LassoTool
+                      {mapping}
+                      polygonal={false}
+                      mode="replace"
+                      onselect={selectShape}
+                      ondeselect={() => selectionCommand(engine.deselect)}
+                    />
+                  </SelectionDrag>
                 {:else if isPaintTool(tool)}
                   <PaintTool {mapping} size={paintOptions().size} onstroke={paintStroke} />
                   {#if isCloneTool(tool) && cloneFrom && cloneFrom.document === active?.id}

@@ -26,6 +26,7 @@
     brush = $bindable(),
     eraser = $bindable(),
     heal = $bindable({
+      mode: "brush",
       size: 30,
       hardness: 1,
       opacity: 1,
@@ -97,7 +98,7 @@
     /** Clone Stamp: its brush, Aligned, and what it samples (Photoshop's Current Layer first). */
     clone?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
     /** Healing Brush: as the Clone Stamp's. */
-    heal?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
+    heal?: PaintOptions & { mode: "brush" | "patch"; aligned: boolean; sample: "all" | "layer" };
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
     eyedropper?: { sample: "all" | "layer"; size: number };
     /** Gradient: which gradient, its shape, reversed or not, and its opacity. */
@@ -373,7 +374,33 @@
         <option value="layer">{t("options.sample.layer")}</option>
       </select>
     </label>
+  {:else if tool === "healingBrush" && heal.mode === "patch"}
+    <label class="option">
+      {t("options.heal.mode")}
+      <select bind:value={heal.mode}>
+        <option value="brush">{t("options.heal.brush")}</option>
+        <option value="patch">{t("options.heal.patch")}</option>
+      </select>
+    </label>
+    <label class="option">
+      {t("options.sample")}
+      <select bind:value={heal.sample}>
+        <option value="layer">{t("options.sample.layer")}</option>
+        <option value="all">{t("options.sample.all")}</option>
+      </select>
+    </label>
+    <span class="hint">{t("patch.hint")}</span>
   {:else if paint}
+    {#if tool === "healingBrush"}
+      <label class="option">
+        {t("options.heal.mode")}
+        <select bind:value={heal.mode}>
+          <option value="brush">{t("options.heal.brush")}</option>
+          <option value="patch">{t("options.heal.patch")}</option>
+        </select>
+      </label>
+      <span class="divider"></span>
+    {/if}
     <BrushPicker bind:size={paint.size} bind:hardness={paint.hardness} />
     <span class="divider"></span>
     <SliderField
@@ -523,6 +550,13 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+
+  .hint {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .option input[type="checkbox"] {

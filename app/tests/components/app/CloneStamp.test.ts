@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
 import { expect, test } from "vitest";
-import { documentView, layer, open, sent } from "./harness";
+import { documentView, layer, open, respond, sent } from "./harness";
 
 // The Clone Stamp (S): Alt+click sets where it takes its pixels, a stroke paints them.
 
@@ -85,5 +85,38 @@ test("the Healing Brush (J) shares the source and asks the engine to blend", asy
   await waitFor(() => expect(sent("paint_stroke").length).toBeGreaterThan(0));
   expect(sent("paint_stroke")[0]).toMatchObject({
     request: { clone: { offset: [-100, -10], sourceLayer: 2, heal: true } },
+  });
+});
+
+test("the Healing Brush's Patch: the selection dragged onto the source is healed from it", async () => {
+  respond("selection_bounds_at", (args) =>
+    (args.x as number) < 100 ? { left: 0, top: 0, right: 100, bottom: 100 } : null,
+  );
+  respond("patch_selection", (_args, doc) => ({ ...doc, revision: doc.revision + 1 }));
+  const user = open({
+    ...documentView(1, "cat.jpg", [layer(1, "Cat"), layer(2, "Retouch")]),
+    selectionKey: 1,
+  });
+  await screen.findByText("cat.jpg");
+  await user.keyboard("j");
+  await user.selectOptions(screen.getByRole("combobox", { name: "Mode:" }), "Patch");
+  // Patch shows its hint, not a brush.
+  expect(screen.getByText(/Draw around what to heal/)).toBeInTheDocument();
+  expect(screen.queryByText("Flow:")).not.toBeInTheDocument();
+  const lasso = document.querySelector(".selection-drag svg") as SVGSVGElement;
+  await user.pointer({ target: lasso, coords: { clientX: 20, clientY: 20 } });
+  await waitFor(() => expect(document.querySelector(".selection-drag")).toHaveClass("over"));
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: lasso, coords: { clientX: 20, clientY: 20 } },
+    { target: lasso, coords: { clientX: 60, clientY: 30 } },
+    { keys: "[/MouseLeft]", target: lasso, coords: { clientX: 60, clientY: 30 } },
+  ]);
+  await waitFor(() => expect(sent("patch_selection")).toHaveLength(1));
+  expect(sent("patch_selection")[0]).toEqual({
+    documentId: 1,
+    layerId: 2,
+    target: "layer",
+    offset: [40, 10],
+    sourceLayer: 2,
   });
 });

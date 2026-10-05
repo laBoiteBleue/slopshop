@@ -369,8 +369,11 @@ built. Contributors: propose here first.
 - The Healing Brush (J): as the Clone Stamp (the same Alt+click source, Aligned, Sample, its own
   brush, hard by default), but on release the stroke is blended into where it lands: it keeps
   the source's texture and takes the tone around the stroke (Photoshop's Healing Brush, a
-  Poisson blend). The painting shows the source as it is meanwhile. One undo entry. Not yet:
-  Patch (a mode of it, from a selection), a pattern as source.
+  Poisson blend). The painting shows the source as it is meanwhile. One undo entry. Its Patch
+  mode (options bar: Mode, Photoshop's Patch tool): draw around what to heal (a freehand
+  outline, the Lasso's), then drag the selection onto where to take the texture: the selection
+  is healed from there on release, the outline coming back; one undo entry. Not yet: a pattern
+  as source, Patch's Destination mode.
 - The Gradient (G, the Paint Bucket in its group): a drag draws the gradient's line (Shift: by
   steps of 45°, Esc drops it); on release the gradient is laid along it, Linear or Radial,
   Photoshop's first presets (Foreground to Background, Foreground to Transparent, Black, White;
@@ -657,7 +660,8 @@ answers:
   - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill
     layers come with it (to build), one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
     its slot: the Magic Wand's region, filled.
-  - Retouching by intention, never by technology: the Clone Stamp (S) first (✅), then Healing (✅), then
+  - Retouching by intention, never by technology: the Clone Stamp (S) first (✅), then Healing
+    with its Patch mode (✅), then
     Remove (J), which works without a downloaded model. They keep the pixels they took
     ([ADR 0034](adr/0034-editable-operations.md), point 6 amended).
   - Pen (P): one tool designed to be simple, not Photoshop's family of anchor tools; with the
