@@ -1,6 +1,7 @@
 # 0034 — Editable operations: the stack's entries, filters and filter layers
 
-Status: accepted (2026-10-04, the maintainer's answers to the Filter menu audit).
+Status: accepted (2026-10-04, the maintainer's answers to the Filter menu audit); point 6
+amended on 2026-10-05 (the toolbar audit): tools that read pixels stay baked, no replay.
 Revises [ADR 0029](0029-layer-stack.md), points 3 to 5.
 
 ## Context
@@ -46,15 +47,16 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
    be loaded as the selection (Ctrl+click on the entry) and replaced by the current one (the
    entry's dialog). A new adjustment, fill or filter layer made while there is a selection gets
    a layer mask from it, as in Photoshop (not a new empty pixel layer).
-6. **Tools that read what is below replay their gesture.** Paint (Brush, Eraser, Fill,
-   Stroke, Delete, the Restore Eraser) is a delta and follows an edit below it by construction.
-   Tools that take pixels from below (moved pixels today; Clone Stamp, Healing, Smudge, Mixer
-   later) keep their result baked as in ADR 0029 and also record their gesture (moved pixels:
-   the selection, the offset, copy or not; strokes: the path, pressure, settings, source); when
-   an entry below them in the same stack changes, the gesture is computed again on the new
-   result. A tool that sampled other layers (Sample All Layers) stays baked: other layers
-   changing do not replay it. Accepted: editing an old entry changes the render of what was
-   painted above it.
+6. **Tools that read what is below stay baked** (amended 2026-10-05; the first version
+   replayed their gesture). Paint (Brush, Eraser, Fill, Stroke, Delete, the Restore Eraser) is
+   a delta and follows an edit below it by construction. Tools that take pixels from below
+   (moved pixels today; Clone Stamp, Healing, Remove, Smudge, Mixer later) keep the values they
+   took baked into the paint, as in ADR 0029, and record no gesture: editing an entry below
+   them changes what is around their result, not the result itself. Accepted by the maintainer:
+   such an edit may give an unexpected render where those tools went (the alternative, replaying
+   every gesture, makes evaluation grow with the history, needs strokes bit-exact across
+   versions, as ADR 0037 declined for Liquify, and cannot replay a tool reading its own
+   output such as Smudge). The same whether the tool sampled its own layer or all of them.
 7. **Operations, one model, two evaluations.** Adjustments and filters are one kind of value
    (kind, parameters, validation, `.slop` encoding, dialog, Properties fields, Repeat), each
    describing its reach: pointwise, a neighbourhood of a radius, or the whole image (and
@@ -82,7 +84,7 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
 10. **Liquify** is a stack entry holding a displacement field, edited again in its own
     workspace; later, with no menu entry before it works. Not a filter layer.
 11. **`.slop`**: effect steps gain the filter kinds and their parameters, entries an `enabled`
-    flag, replayable entries their gesture; filter layers a node type, `slopshop.filter`. A
+    flag; filter layers a node type, `slopshop.filter`. A
     new schema; files with stacks of earlier schemas read unchanged.
 
 ## Alternatives
@@ -91,8 +93,12 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
   an adjustment cannot be changed without deleting what was applied since.
 - **Smart Objects and Smart Filters**: editable, but no paint between filters, and a conversion
   forced before filtering.
-- **Baking the tools that read pixels, marked stale when something below changes**: cheaper,
-  but the maintainer prefers the result to follow (replay).
+- **Replaying the gesture of the tools that read pixels** (this ADR's first version): their
+  result follows an edit below, but evaluation grows with the history, strokes must stay
+  bit-exact across versions and a tool reading its own output (Smudge) cannot be replayed;
+  declined on 2026-10-05 for baking (point 6).
+- **Baking them, marked stale when something below changes**: a warning nobody can act on but
+  by painting again; not added.
 - **Linking the entries one Image > Adjustments made on several layers**: one edit for all, but
   the stack is a layer's own; declined.
 - **One "Effect Layer" concept for the user**: fewer menus, but "Adjustment Layer" is what
@@ -102,7 +108,7 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
 
 ## Consequences
 
-- Editing below a long stack costs evaluation time (replays included), not frame time; a
+- Editing below a long stack costs evaluation time, not frame time; a
   spatial entry costs memory for its cached result.
 - 8-bit layers are rounded after each entry: stacks edited at will make converting a layer to
   a deeper format more pressing.
@@ -119,5 +125,5 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
   is the top entry. A change below a filter computes it again over what is shown. The Restore
   Eraser reaches the paint above the topmost shown filter only. Filters on the GPU come next.
 - Order of work: entries editable and their eye (adjustments, the
-  engine and the app); moved pixels replayed; Gaussian Blur in the stack with Repeat and the
+  engine and the app); Gaussian Blur in the stack with Repeat and the
   Filter menu; the multi-pass compositor's ADR, then filter layers; the other filters; Liquify.
