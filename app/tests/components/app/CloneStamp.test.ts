@@ -71,3 +71,19 @@ test("not aligned, each stroke starts from the source; All Layers samples the im
     request: { clone: { offset: [-40, 0], sourceLayer: null } },
   });
 });
+
+test("the Healing Brush (J) shares the source and asks the engine to blend", async () => {
+  const user = await openImage();
+  await stroke(20, 30, true);
+  await user.keyboard("j");
+  expect(screen.getByRole("button", { name: "Healing Brush Tool" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(document.querySelector(".clone-source")).not.toBeNull();
+  await stroke(120, 40);
+  await waitFor(() => expect(sent("paint_stroke").length).toBeGreaterThan(0));
+  expect(sent("paint_stroke")[0]).toMatchObject({
+    request: { clone: { offset: [-100, -10], sourceLayer: 2, heal: true } },
+  });
+});

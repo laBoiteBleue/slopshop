@@ -87,7 +87,15 @@
     type ColorPair,
   } from "./lib/quickMask";
   import OptionsBar from "./lib/OptionsBar.svelte";
-  import { isEraser, isPaintTool, slotOf, slotTool, type ToolId, type ToolSlot } from "./lib/tools";
+  import {
+    isCloneTool,
+    isEraser,
+    isPaintTool,
+    slotOf,
+    slotTool,
+    type ToolId,
+    type ToolSlot,
+  } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
@@ -829,13 +837,27 @@
     aligned: true,
     sample: "layer" as "all" | "layer",
   });
+  /** The Healing Brush's options: as the Clone Stamp's, hard by default (Photoshop's). */
+  let healOptions = $state({
+    size: 30,
+    hardness: 1,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    aligned: true,
+    sample: "layer" as "all" | "layer",
+  });
+  /** Where the Clone Stamp and the Healing Brush take their pixels (shared, as one gesture). */
   let cloneFrom = $state<{ document: number; x: number; y: number } | null>(null);
   /** Aligned: the distance the first stroke since the source was set took. */
   let cloneOffset: [number, number] | null = null;
 
   /** The options of the painting tool in use. */
   function paintOptions() {
-    return isEraser(tool) ? eraserOptions : tool === "cloneStamp" ? cloneOptions : brushOptions;
+    if (isEraser(tool)) return eraserOptions;
+    if (tool === "cloneStamp") return cloneOptions;
+    return tool === "healingBrush" ? healOptions : brushOptions;
   }
 
   function paintStroke(
@@ -846,7 +868,8 @@
     const doc = active;
     if (!doc) return;
     let clone: PaintRequest["clone"];
-    if (tool === "cloneStamp" && (phase === "start" || phase === "line")) {
+    if (isCloneTool(tool) && (phase === "start" || phase === "line")) {
+      const options = tool === "healingBrush" ? healOptions : cloneOptions;
       paintRun = null;
       const [x, y] = samples[0];
       if (keys?.altKey) {
@@ -855,15 +878,15 @@
         return;
       }
       if (cloneFrom?.document !== doc.id) {
-        showError(t("clone.noSource"));
+        showError(t(tool === "healingBrush" ? "heal.noSource" : "clone.noSource"));
         return;
       }
       const offset: [number, number] =
-        cloneOptions.aligned && cloneOffset ? cloneOffset : [cloneFrom.x - x, cloneFrom.y - y];
-      if (cloneOptions.aligned) cloneOffset = offset;
+        options.aligned && cloneOffset ? cloneOffset : [cloneFrom.x - x, cloneFrom.y - y];
+      if (options.aligned) cloneOffset = offset;
       const sourceLayer =
-        cloneOptions.sample === "layer" ? (layersPanel?.selectedLayer()?.id ?? null) : null;
-      clone = { offset, sourceLayer };
+        options.sample === "layer" ? (layersPanel?.selectedLayer()?.id ?? null) : null;
+      clone = { offset, sourceLayer, heal: tool === "healingBrush" };
     }
     if (phase === "start" || phase === "line") {
       commitTransform();
@@ -5141,6 +5164,7 @@
       bind:brush={brushOptions}
       bind:eraser={eraserOptions}
       bind:clone={cloneOptions}
+      bind:heal={healOptions}
       bind:eyedropper={eyedropperOptions}
       bind:bucket={bucketOptions}
       bind:gradient={gradientOptions}
@@ -5417,7 +5441,7 @@
                   />
                 {:else if isPaintTool(tool)}
                   <PaintTool {mapping} size={paintOptions().size} onstroke={paintStroke} />
-                  {#if tool === "cloneStamp" && cloneFrom && cloneFrom.document === active?.id}
+                  {#if isCloneTool(tool) && cloneFrom && cloneFrom.document === active?.id}
                     {@const [sx, sy] = mapping.toViewport(cloneFrom.x, cloneFrom.y)}
                     <!-- Where the Clone Stamp takes its pixels. -->
                     <svg class="clone-source" aria-hidden="true">

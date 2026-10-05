@@ -19,6 +19,7 @@ export type ToolId =
   | "eyedropper"
   | "brush"
   | "cloneStamp"
+  | "healingBrush"
   | "eraser"
   | "restoreEraser"
   | "paintBucket"
@@ -63,6 +64,8 @@ export const SLOTS: readonly ToolSlot[] = [
   },
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
   { key: "I", tools: [{ id: "eyedropper", icon: "eyedropper", name: "tools.eyedropper" }] },
+  // Retouching by intention: Healing (Remove, an AI tool, joins it later).
+  { key: "J", tools: [{ id: "healingBrush", icon: "healing", name: "tools.healingBrush" }] },
   { key: "B", tools: [{ id: "brush", icon: "brush", name: "tools.brush" }] },
   // Paints pixels taken elsewhere (Alt+click sets where).
   { key: "S", tools: [{ id: "cloneStamp", icon: "stamp", name: "tools.cloneStamp" }] },
@@ -111,8 +114,15 @@ export function slotTool(slot: ToolSlot, shown: ToolId | undefined, next: boolea
 }
 
 /** The tools that paint (ADR 0027). */
-export function isPaintTool(id: ToolId): id is "brush" | "cloneStamp" | "eraser" | "restoreEraser" {
-  return id === "brush" || id === "cloneStamp" || isEraser(id);
+export function isPaintTool(
+  id: ToolId,
+): id is "brush" | "cloneStamp" | "healingBrush" | "eraser" | "restoreEraser" {
+  return id === "brush" || isCloneTool(id) || isEraser(id);
+}
+
+/** The tools that paint pixels taken elsewhere (Alt+click sets where): they share a source. */
+export function isCloneTool(id: ToolId): id is "cloneStamp" | "healingBrush" {
+  return id === "cloneStamp" || id === "healingBrush";
 }
 
 /** The erasers: they share their options, and paint no color. */

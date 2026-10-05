@@ -69,6 +69,7 @@
       "M20 3.5L11 12.5 M11 12.5l1.5 1.5 M9.5 13.5c-2 0-3.5 1.5-3.5 3.5 0 1.5-1 2.5-2.5 2.5 1.5 1 6.5 1.5 7.5-2.5Z",
     eraser: "M15.5 4l5 5L11 18.5H6.5L3.5 15.5Z M10.5 9l5 5 M11 18.5h9",
     gradient: "M4 5h16v14H4Z M8 5v14 M12 5v14 M16 5v14",
+    healing: "M5 15l10-10a3 3 0 0 1 4 4L9 19a3 3 0 0 1-4-4Z M9 9l6 6 M11 11h0.01 M13 13h0.01",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:

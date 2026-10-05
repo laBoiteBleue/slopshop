@@ -68,7 +68,7 @@ built. Contributors: propose here first.
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Clone Stamp (S), the Gradient and the Paint Bucket (G); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Healing Brush (J), the Clone Stamp (S), the Gradient and the Paint Bucket (G); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -366,6 +366,11 @@ built. Contributors: propose here first.
   stroke; what it took stays as it was ([ADR 0034](adr/0034-editable-operations.md), point 6).
   Without a source, a stroke says how to set one. Not yet: Current & Below, a source in another
   document, the source shown under the brush.
+- The Healing Brush (J): as the Clone Stamp (the same Alt+click source, Aligned, Sample, its own
+  brush, hard by default), but on release the stroke is blended into where it lands: it keeps
+  the source's texture and takes the tone around the stroke (Photoshop's Healing Brush, a
+  Poisson blend). The painting shows the source as it is meanwhile. One undo entry. Not yet:
+  Patch (a mode of it, from a selection), a pattern as source.
 - The Gradient (G, the Paint Bucket in its group): a drag draws the gradient's line (Shift: by
   steps of 45°, Esc drops it); on release the gradient is laid along it, Linear or Radial,
   Photoshop's first presets (Foreground to Background, Foreground to Transparent, Black, White;
@@ -649,7 +654,7 @@ answers:
   - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill
     layers come with it (to build), one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
     its slot: the Magic Wand's region, filled.
-  - Retouching by intention, never by technology: the Clone Stamp (S) first (✅), then Healing, then
+  - Retouching by intention, never by technology: the Clone Stamp (S) first (✅), then Healing (✅), then
     Remove (J), which works without a downloaded model. They keep the pixels they took
     ([ADR 0034](adr/0034-editable-operations.md), point 6 amended).
   - Pen (P): one tool designed to be simple, not Photoshop's family of anchor tools; with the

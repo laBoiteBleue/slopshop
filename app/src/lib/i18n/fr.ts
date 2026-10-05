@@ -333,6 +333,7 @@ const fr: Messages = {
   "tools.eyedropper": "Outil Pipette",
   "tools.brush": "Outil Pinceau",
   "tools.cloneStamp": "Outil Tampon de duplication",
+  "tools.healingBrush": "Outil Correcteur",
   "tools.eraser": "Outil Gomme",
   "tools.restoreEraser": "Outil Gomme de restauration",
   "tools.paintBucket": "Outil Pot de peinture",
@@ -396,6 +397,7 @@ const fr: Messages = {
   "paint.needRaster":
     "Sélectionnez un calque de pixels ou un masque de fusion pour peindre (Calque > Nouveau calque).",
   "clone.noSource": "Alt+clic là où le Tampon de duplication prend ses pixels, puis peignez",
+  "heal.noSource": "Alt+clic là où l'outil Correcteur prend sa texture, puis peignez",
   "fillChoice.title": "Remplir",
   "fillChoice.contents": "Contenu :",
   "fillChoice.foreground": "Couleur de premier plan",
@@ -914,6 +916,7 @@ const fr: Messages = {
   "history.paintBucket": "Pot de peinture",
   "history.gradient": "Dégradé",
   "history.cloneStamp": "Tampon de duplication",
+  "history.healingBrush": "Correcteur",
   "history.quickSelection": "Sélection rapide",
   "history.objectSelection": "Sélection d’objet",
   "history.selectSubject": "Sélectionner le sujet",
