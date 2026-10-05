@@ -1,13 +1,13 @@
 //! Filters on the GPU (ADR 0035): the looks at filtered layers (`stack::LookJob`) the display
 //! asks for, computed by compute passes (filter.wgsl) on a thread of their own and read back as
 //! the look's image: Gaussian Blur, and Unsharp Mask and High Pass made from it. Only the common
-//! case for now: 8-bit RGBA sRGB layers in a perceptual document, steps without a selection, a
+//! case for now: 8-bit RGB or RGBA sRGB layers in a perceptual document, steps without a selection, a
 //! reach of at most [`MAX_REACH`] pixels; the CPU computes the others (`LookJob::run`).
 
 use std::sync::mpsc;
 
 use slopshop_core::blend::BlendSpace;
-use slopshop_core::color::PixelFormat;
+use slopshop_core::color::{ChannelLayout, PixelFormat};
 use slopshop_core::filter::{CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, line_offsets};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
@@ -101,7 +101,15 @@ impl GpuFilter {
         if job.warp.is_some() {
             return None;
         }
-        if job.format != PixelFormat::RGBA8_SRGB {
+        // RGB is stored as RGBA with an opaque alpha, which every filter keeps opaque: the same
+        // pixels for the shader (most layers opened from a JPEG are RGB).
+        let stored = PixelFormat {
+            layout: ChannelLayout::Rgba,
+            ..job.format
+        };
+        if !matches!(job.format.layout, ChannelLayout::Rgb | ChannelLayout::Rgba)
+            || stored != PixelFormat::RGBA8_SRGB
+        {
             return None;
         }
         let kernels: Vec<Pass> = job

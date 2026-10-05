@@ -20,10 +20,11 @@ holds a wgpu device; the core must stay free of it (dependency direction).
    (wgpu's device and queue are shared), and the result comes back as the look's image.
 2. **What the GPU takes, and what stays on the CPU.** The GPU takes the common case first:
    8-bit RGBA sRGB layers in a perceptual document (their stored values are the blend values,
-   decoded and encoded in the shader), steps without a selection, a reach of at most 1024
-   pixels at the look's level. Anything else (other formats, a selection, a huge reach) is
-   computed by the CPU as before, and so is the whole layer for export, tools and the
-   clipboard: the CPU stays the reference.
+   decoded and encoded in the shader), and 8-bit RGB ones (a JPEG's: stored as RGBA with an
+   opaque alpha, which every filter keeps opaque; 2026-10-05), steps without a selection, a
+   reach of at most 1024 pixels at the look's level. Anything else (other formats, a
+   selection, a huge reach) is computed by the CPU as before, and so is the whole layer for
+   export, tools and the clipboard: the CPU stays the reference.
 3. **Exactness.** Up to a radius of 8 both use the exact kernel and agree but for rounding;
    beyond, the CPU's three boxes approximate the Gaussian the GPU computes exactly: within a
    few levels of 8 bits. Tested against each other (skipped without an adapter, as the other

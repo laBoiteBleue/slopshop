@@ -2518,6 +2518,15 @@ impl Pixels {
                                 .lock()
                                 .unwrap_or_else(PoisonError::into_inner);
                             match region.asked.take() {
+                                // Asked again while it was computed: shown already.
+                                Some((rect, level))
+                                    if region
+                                        .look
+                                        .as_ref()
+                                        .is_some_and(|l| l.covers(rect, level)) =>
+                                {
+                                    continue;
+                                }
                                 Some(asked) => asked,
                                 None => {
                                     region.computing = false;
@@ -4815,6 +4824,41 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(pixels.ready_image().is_some());
+    }
+
+    #[test]
+    fn a_look_asked_again_while_it_is_computed_is_computed_once() {
+        // The display asks at every frame while a look is computed: the same part, once.
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(3.0, None), Some(original))
+            .unwrap();
+        let pixels = Pixels::pending(stack, None);
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        // Held until the display has asked again; then the CPU computes it.
+        let gpu: LookFilter = Arc::new(move |_| {
+            if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                let _ = wait
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(10));
+            }
+            None
+        });
+        let rect = [10.0, 10.0, 120.0, 90.0];
+        assert!(pixels.look_for(rect, 0, Some(&gpu)).1);
+        assert!(pixels.look_for(rect, 0, Some(&gpu)).1);
+        go.send(()).unwrap();
+        let start = std::time::Instant::now();
+        while pixels.0.region.lock().unwrap().computing && start.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let (look, again) = pixels.look_for(rect, 0, Some(&gpu));
+        assert!(look.is_some() && !again);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
