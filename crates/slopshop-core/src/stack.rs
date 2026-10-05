@@ -161,6 +161,13 @@ pub enum PaintOp {
         field: crate::gradient::GradientField,
         to_document: Affine,
     },
+    /// Lay the colors of a [`crate::clone::CloneSource`] (given to [`TopPaint::lay`]), each
+    /// pixel the one `offset` away from its place in the document, its alpha scaling the
+    /// amount: the Clone Stamp.
+    Clone {
+        offset: [f64; 2],
+        to_document: Affine,
+    },
 }
 
 impl PaintOp {
@@ -170,21 +177,42 @@ impl PaintOp {
         &self,
         math: &PaintPixels,
         color: Option<[f64; 4]>,
+        source: Option<&crate::clone::CloneSource>,
         coord: TileCoord,
         x: usize,
         y: usize,
     ) -> (Option<[f64; 4]>, f64) {
-        let PaintOp::Gradient { field, to_document } = self else {
-            return (color, 1.0);
+        let place = |to_document: &Affine| {
+            let t = f64::from(TILE_SIZE);
+            to_document.apply(
+                f64::from(coord.col) * t + x as f64 + 0.5,
+                f64::from(coord.row) * t + y as f64 + 0.5,
+            )
         };
-        let t = f64::from(TILE_SIZE);
-        let (dx, dy) = to_document.apply(
-            f64::from(coord.col) * t + x as f64 + 0.5,
-            f64::from(coord.row) * t + y as f64 + 0.5,
-        );
-        let ([r, g, b], alpha) = field.at(dx, dy);
-        let c = LinearRgba::from_srgb_encoded_to_working(r as f32, g as f32, b as f32, 1.0);
-        (op_color(math, PaintOp::Color(c)), alpha)
+        match self {
+            PaintOp::Gradient { field, to_document } => {
+                let (dx, dy) = place(to_document);
+                let ([r, g, b], alpha) = field.at(dx, dy);
+                let c = LinearRgba::from_srgb_encoded_to_working(r as f32, g as f32, b as f32, 1.0);
+                (op_color(math, PaintOp::Color(c)), alpha)
+            }
+            PaintOp::Clone {
+                offset,
+                to_document,
+            } => {
+                let Some(source) = source else {
+                    return (None, 0.0);
+                };
+                let (dx, dy) = place(to_document);
+                let [r, g, b, a] = source.at(dx + offset[0], dy + offset[1]);
+                if a <= 0.0 {
+                    return (None, 0.0);
+                }
+                let c = LinearRgba::new(r / a, g / a, b / a, 1.0);
+                (op_color(math, PaintOp::Color(c)), f64::from(a.min(1.0)))
+            }
+            _ => (color, 1.0),
+        }
     }
 }
 
@@ -1549,7 +1577,7 @@ impl PaintEntry {
                 if a.is_nan() || a <= 0.0 {
                     continue;
                 }
-                let (paint, share) = op.at(&math, paint, coord, x, y);
+                let (paint, share) = op.at(&math, paint, None, coord, x, y);
                 let a = (a * share).min(1.0);
                 if a <= 0.0 {
                     continue;
@@ -1690,14 +1718,16 @@ fn op_color(math: &PaintPixels, op: PaintOp) -> Option<[f64; 4]> {
             f64::from(c.b),
             1.0,
         ])),
-        PaintOp::Erase | PaintOp::Restore | PaintOp::Gradient { .. } => None,
+        PaintOp::Erase | PaintOp::Restore | PaintOp::Gradient { .. } | PaintOp::Clone { .. } => {
+            None
+        }
     }
 }
 
 /// `P` and `k` once `op` (its color from [`op_color`]) is laid at `a` in `(0, 1]` over them.
 fn lay(op: PaintOp, color: Option<[f64; 4]>, a: f64, p: [f64; 4], k: f64) -> ([f64; 4], f64) {
     match (op, color) {
-        (PaintOp::Color(_) | PaintOp::Gradient { .. }, Some(c)) => (
+        (PaintOp::Color(_) | PaintOp::Gradient { .. } | PaintOp::Clone { .. }, Some(c)) => (
             std::array::from_fn(|n| a * c[n] + (1.0 - a) * p[n]),
             (1.0 - a) * k,
         ),
@@ -3784,12 +3814,15 @@ impl TopPaint {
     /// shows, from those of `shown` (what it showed so far, of [`Self::format`]), on every core
     /// (bands of rows). Amounts only grow during a stroke, so a pixel not reached yet keeps its
     /// start.
+    /// With [`PaintOp::Clone`], `source` holds the colors laid (its tiles prepared).
+    #[allow(clippy::too_many_arguments)]
     pub fn lay(
         &mut self,
         dirty: &[(TileCoord, [usize; 4])],
         op: PaintOp,
         amount: impl Fn(TileCoord, usize, usize) -> f32 + Sync,
         shown: &RasterImage,
+        source: Option<&crate::clone::CloneSource>,
     ) -> Vec<(TileCoord, Arc<[u8]>)> {
         let atoms = atoms(&self.flat.entries);
         let evaluator = Evaluator::new(&self.flat, &atoms, self.format);
@@ -3893,7 +3926,7 @@ impl TopPaint {
                     let mut a = f64::from(amount(coord, x, y));
                     let mut color = color;
                     if a > 0.0 {
-                        let (c, share) = op.at(&math, color, coord, x, y);
+                        let (c, share) = op.at(&math, color, source, coord, x, y);
                         (color, a) = (c, a * share);
                     }
                     if a > 0.0 {
@@ -4346,7 +4379,7 @@ mod tests {
                     .map(|(col, row)| (TileCoord { col, row }, area))
                     .to_vec();
                 let amount = |_, x: usize, y: usize| ((x + y) % 7) as f32 / 6.0;
-                let replaced = top.lay(&dirty, op, amount, &current);
+                let replaced = top.lay(&dirty, op, amount, &current, None);
                 current = Arc::new(current.with_tiles(replaced).unwrap());
             }
             stack = top.stack().unwrap();
@@ -4894,7 +4927,7 @@ mod tests {
                         0.25 + more
                     }
                 };
-                let tiles = top.lay(&dirty, op, amount, &shown);
+                let tiles = top.lay(&dirty, op, amount, &shown, None);
                 shown = Arc::new(shown.with_tiles(tiles).unwrap());
             }
             let result = top.stack().unwrap();
@@ -5395,6 +5428,7 @@ mod tests {
             gray(0.5),
             |_, x, _| if x > 140 { 0.4 } else { 0.0 },
             &shown,
+            None,
         );
         shown = Arc::new(shown.with_tiles(tiles).unwrap());
         let result = top.stack().unwrap();
