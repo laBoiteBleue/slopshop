@@ -1206,6 +1206,29 @@ struct Footprint {
     center: vec2<f32>,
 }
 
+// A gradient fill layer's premultiplied working-space color at document point `p`, its opacity
+// not applied (GradientField in core; see `set_gradient_fields` in lib.rs).
+fn gradient_color(layer: Layer, p: vec2<f32>) -> vec4<f32> {
+    let q = vec3<f32>(p, 1.0);
+    let content = vec2<f32>(dot(layer.resample_u.xyz, q), dot(layer.resample_v.xyz, q));
+    let start = layer.color.xy;
+    let span = layer.color.zw - start;
+    let length2 = dot(span, span);
+    var t = dot(content - start, span) / length2;
+    if layer.transfer.z != 0.0 {
+        t = length(content - start) / sqrt(length2);
+    }
+    // NaN (no span) is 0, as in core.
+    t = select(0.0, clamp(t, 0.0, 1.0), t == t);
+    let n = CURVE_LUT;
+    let table = layer.table_offset;
+    let encoded = vec3<f32>(curve_at(table, t), curve_at(table + n, t), curve_at(table + 2u * n, t));
+    let linear = decode_transfer(encoded, vec4<f32>(f32(TF_SRGB), 0.0, 0.0, 0.0), vec4<f32>(0.0));
+    let rgb = vec3<f32>(dot(layer.m0.xyz, linear), dot(layer.m1.xyz, linear), dot(layer.m2.xyz, linear));
+    let a = mix(layer.transfer.x, layer.transfer.y, t);
+    return vec4<f32>(rgb * a, a);
+}
+
 // Premultiplied working-space color of the first `layer_count` layers ("over", bottom to top).
 // Groups (ADR 0015) push the accumulator and pop it back, combined with what they made.
 // Export adds the non-finite values it replaces to `count`.
@@ -1334,6 +1357,9 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             continue;
         }
         var src = sampled;
+        if layer.kind == KIND_GRADIENT {
+            src = gradient_color(layer, footprint.center) * layer.opacity;
+        }
         if layer.kind == KIND_RASTER {
             // Its pixels are what its stack steps made (ADR 0029).
             if (layer.flags & FLAG_STACK_END) != 0u {

@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 23;
+pub(crate) const SCHEMA_MINOR: u32 = 24;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -24,6 +24,11 @@ pub(crate) const PYRAMID_ALGORITHM: &str = "slopshop.pyramid.box-linear-premul@1
 
 pub(crate) const NODE_RASTER: &str = "slopshop.raster";
 pub(crate) const NODE_FILL: &str = "slopshop.fill";
+/// A gradient fill layer (schema 0.24): `params.gradient` (stops `[location, r, g, b]`, as
+/// Gradient Map's), `params.shape` (`linear`, `radial`), `params.from` and `params.to` (the
+/// layer's content space), `params.alpha` (the opacity at each end). Written at the versions of
+/// fills; older readers refuse the unknown type rather than misread it.
+pub(crate) const NODE_GRADIENT_FILL: &str = "slopshop.gradientFill";
 /// A layer group (schema 0.4, ADR 0015): its `inputs` are its children, bottom to top.
 pub(crate) const NODE_GROUP: &str = "slopshop.group";
 /// An adjustment layer (schema 0.7, ADR 0020): `params.adjustment` (its identifier) and

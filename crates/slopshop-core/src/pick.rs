@@ -129,7 +129,8 @@ fn hit(layers: &[Layer], parent: Affine, x: i64, y: i64) -> Option<LayerId> {
                     return Some(id);
                 }
             }
-            LayerContent::Fill { .. } if !layer.mask.as_ref().is_some_and(|m| m.enabled) => {}
+            LayerContent::Fill { .. } | LayerContent::GradientFill { .. }
+                if !layer.mask.as_ref().is_some_and(|m| m.enabled) => {}
             _ if covers(layer, transform, x, y) => return Some(layer.id),
             _ => {}
         }
@@ -144,6 +145,8 @@ fn covers(layer: &Layer, transform: Affine, x: i64, y: i64) -> bool {
     }
     match &layer.content {
         LayerContent::Fill { color } => color.a >= PICK_COVERAGE,
+        // Opaque everywhere.
+        LayerContent::GradientFill { .. } => true,
         LayerContent::Raster { image, .. } => {
             let image = image.get();
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).
@@ -210,7 +213,9 @@ fn collect_bounds(layers: &[Layer], parent: Affine, out: &mut Vec<(LayerId, Boun
                     out.push((layer.id, Bounds::placed(rect, transform)));
                 }
             }
-            LayerContent::Fill { .. } | LayerContent::Adjustment { .. } => {}
+            LayerContent::Fill { .. }
+            | LayerContent::GradientFill { .. }
+            | LayerContent::Adjustment { .. } => {}
         }
     }
 }
@@ -261,7 +266,7 @@ fn layers_extent(layers: &[Layer], parent: Affine) -> Extent {
 fn layer_extent(layer: &Layer, transform: Affine) -> Extent {
     let mask = layer.mask.as_ref().filter(|m| m.enabled);
     let own = match &layer.content {
-        LayerContent::Fill { .. } => Extent {
+        LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => Extent {
             within: None,
             everywhere: true,
         },

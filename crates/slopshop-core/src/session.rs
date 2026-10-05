@@ -58,6 +58,7 @@ impl HistoryLabel {
             Edit::SetLayerStack { .. } => "pixels",
             Edit::SetMaskPaint { .. } => "maskPixels",
             Edit::SetFillColor { .. } => "fillColor",
+            Edit::SetGradientFill { .. } => "gradientFill",
             Edit::SetAdjustment { adjustment, .. } => {
                 return Self::with("adjustmentSettings", adjustment.id());
             }

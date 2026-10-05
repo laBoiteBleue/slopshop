@@ -415,6 +415,56 @@ fn fill_layers_composite_with_opacity() {
 }
 
 #[test]
+fn gpu_gradient_fills_match_the_cpu_reference_compositor() {
+    use slopshop_core::gradient::{Gradient, GradientField, GradientShape, GradientStop};
+    let Some(r) = renderer() else { return };
+    let size = Size::new(200, 160);
+    let gradient = Gradient::new(&[
+        GradientStop {
+            location: 0,
+            color: [20, 40, 200],
+        },
+        GradientStop {
+            location: 1800,
+            color: [250, 200, 10],
+        },
+        GradientStop {
+            location: 4096,
+            color: [0, 120, 60],
+        },
+    ])
+    .unwrap();
+    for (shape, alpha, transform) in [
+        (GradientShape::Linear, [1.0, 1.0], Affine::IDENTITY),
+        (GradientShape::Linear, [1.0, 0.0], Affine::rotation(0.4)),
+        (
+            GradientShape::Radial,
+            [0.3, 1.0],
+            Affine::rotation(-0.7).then(Affine::translation(60.0, -15.0)),
+        ),
+    ] {
+        let mut s = Session::new(Document::new(size));
+        let base = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![(x * 255 / 199) as u8, (y * 255 / 159) as u8, 128, 255]
+        });
+        push_layer(&mut s, raster(&base), 1.0);
+        let field = GradientField {
+            gradient,
+            alpha,
+            shape,
+            from: [30.0, 20.0],
+            to: [170.0, 120.0],
+        };
+        let id = push_layer(&mut s, LayerContent::GradientFill { field }, 0.8);
+        s.perform(Edit::SetLayerTransform { id, transform })
+            .unwrap();
+        let what = format!("{shape:?} {alpha:?}");
+        assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        assert_matches_cpu(&r, s.document(), Rect::new(37, 51, 90, 70), &what);
+    }
+}
+
+#[test]
 fn a_raster_smaller_than_the_document_is_transparent_outside() {
     let Some(r) = renderer() else { return };
     let img = image(Size::new(300, 200), PixelFormat::RGBA8_SRGB, pattern);

@@ -1553,6 +1553,57 @@ fn gradient_maps_keep_their_stops_and_reverse() {
 }
 
 #[test]
+fn gradient_fills_keep_their_gradient_and_place() {
+    use slopshop_core::gradient::{Gradient, GradientField, GradientShape, GradientStop};
+    let gradient = Gradient::new(&[
+        GradientStop {
+            location: 0,
+            color: [10, 20, 30],
+        },
+        GradientStop {
+            location: 3000,
+            color: [255, 250, 245],
+        },
+    ])
+    .unwrap();
+    let path = temp_path("gradient-fill.slop");
+    let mut doc = Document::new(Size::new(4, 4));
+    let fields = [
+        GradientField {
+            gradient,
+            alpha: [1.0, 0.25],
+            shape: GradientShape::Radial,
+            from: [1.5, 2.0],
+            to: [-3.25, 7.0],
+        },
+        GradientField {
+            gradient: gradient.reversed(),
+            alpha: [1.0, 1.0],
+            shape: GradientShape::Linear,
+            from: [0.0, 4.0],
+            to: [0.0, 0.0],
+        },
+    ];
+    for field in fields {
+        push(
+            &mut doc,
+            "gradient",
+            LayerContent::GradientFill { field },
+            1.0,
+        );
+    }
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    for (layer, field) in loaded.layers().iter().zip(fields) {
+        match &layer.content {
+            LayerContent::GradientFill { field: back } => assert_eq!(*back, field),
+            _ => panic!("not a gradient fill layer"),
+        }
+    }
+    fs::remove_file(&path).ok();
+}
+
+#[test]
 fn selective_color_keeps_its_ranges_and_method() {
     use slopshop_core::adjust::{Adjustment, SELECTIVE_RANGES};
     let mut ranges = [[0i16; 4]; SELECTIVE_RANGES];

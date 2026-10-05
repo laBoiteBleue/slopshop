@@ -308,6 +308,8 @@ const KIND_STACK_PAINT: u32 = 6;
 const KIND_STACK_EFFECT: u32 = 7;
 /// The selection pass shows the mask in gray (Select and Mask's Mask view).
 const KIND_SHOW_MASK: u32 = 8;
+/// A gradient fill layer (`gradient_fill_fields`).
+const KIND_GRADIENT: u32 = 9;
 
 /// What the selection pass draws (Quick Mask, Select and Mask's views).
 struct SelectionPass<'a> {
@@ -1698,6 +1700,28 @@ fn encode_layers(
                 let a = alpha * opacity;
                 fields.color = [color.r * a, color.g * a, color.b * a, a];
             }
+            LayerContent::GradientFill { field } => {
+                let Step::Layer { transform, .. } = step else {
+                    continue;
+                };
+                // A layer placed where nothing can be seen (its transform not invertible).
+                let Some(to_content) = transform.inverse() else {
+                    continue;
+                };
+                let alpha = if replaces_alpha {
+                    [1.0; 2]
+                } else {
+                    field.alpha
+                };
+                set_gradient_fields(
+                    &mut fields,
+                    field,
+                    to_content,
+                    alpha,
+                    &mut prepared.tile_table,
+                );
+                fields.opacity = opacity;
+            }
             LayerContent::Raster { .. } => {
                 // Not visible in this view or region: nothing to sample.
                 let Some(plan) = plan else { continue };
@@ -1725,6 +1749,35 @@ fn encode_layers(
         prepared.count += 1;
     }
     prepared
+}
+
+/// Describe a gradient fill in `fields`: `color`, its ends (`from`, `to`) in the layer's
+/// content space; `resample_u` and `resample_v`, the map from document points there; `transfer`,
+/// its opacity at each end and its shape; `matrix`, from linear sRGB to the working space; its
+/// lookup tables (as Gradient Map's, `adjustment_table`) appended to `tile_table`.
+fn set_gradient_fields(
+    fields: &mut LayerFields,
+    field: &slopshop_core::gradient::GradientField,
+    to_content: Affine,
+    alpha: [f32; 2],
+    tile_table: &mut Vec<u32>,
+) {
+    fields.kind = KIND_GRADIENT;
+    let [a, b, c, d, e, f] = to_content.to_array().map(|v| v as f32);
+    fields.resample[0] = [a, c, e, 0.0];
+    fields.resample[1] = [b, d, f, 0.0];
+    fields.color = [field.from[0], field.from[1], field.to[0], field.to[1]].map(|v| v as f32);
+    let shape = match field.shape {
+        slopshop_core::gradient::GradientShape::Linear => 0.0,
+        slopshop_core::gradient::GradientShape::Radial => 1.0,
+    };
+    fields.transfer = [alpha[0], alpha[1], shape, 0.0];
+    fields.matrix = matrix_rows(&ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE));
+    fields.table_offset = tile_table.len() as u32;
+    tile_table.extend_from_slice(&adjustment_table(&Adjustment::GradientMap {
+        gradient: field.gradient,
+        reverse: false,
+    }));
 }
 
 /// Describe a raster's plan in `fields` (where it is, how its texels decode), its tile slots
@@ -2203,6 +2256,7 @@ fn shader_source() -> String {
     constants += &format!("const KIND_STACK_PAINT: u32 = {KIND_STACK_PAINT}u;\n");
     constants += &format!("const KIND_STACK_EFFECT: u32 = {KIND_STACK_EFFECT}u;\n");
     constants += &format!("const KIND_SHOW_MASK: u32 = {KIND_SHOW_MASK}u;\n");
+    constants += &format!("const KIND_GRADIENT: u32 = {KIND_GRADIENT}u;\n");
     constants += &format!("const FLAG_STACK_END: u32 = {FLAG_STACK_END}u;\n");
     constants += &format!(
         "const CURVE_LUT: u32 = {}u;\n",
