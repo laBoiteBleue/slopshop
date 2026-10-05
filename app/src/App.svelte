@@ -4959,6 +4959,8 @@
         onselect={selectTool}
         bind:colors={paintColors, setPaintColors}
         onpickcolor={(which) => (colorPicker = which)}
+        quickMask={active ? active.quickMask : null}
+        onquickmask={toggleQuickMask}
       />
     </div>
     <section class="workspace">

@@ -3,7 +3,8 @@
   // order. A slot holding variants (Rectangular and Elliptical Marquee) shows the one used last,
   // with a corner mark; a right-click or a long press lists them all, as in Photoshop. Below
   // them, the foreground and background colors (ADR 0027): a click on one opens the color picker, the arrow
-  // swaps them (X), the small squares bring back black and white (D).
+  // swaps them (X), the small squares bring back black and white (D). At the bottom, Quick Mask's
+  // button, as in Photoshop: a red circle while it is on, a click toggling it as Q does.
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import { SLOTS, toolInfo, type ToolId, type ToolSlot } from "./tools";
@@ -15,6 +16,8 @@
     onselect,
     colors = $bindable(),
     onpickcolor,
+    quickMask = null,
+    onquickmask,
   }: {
     tool: ToolId;
     /** The variant each slot shows, by slot key. */
@@ -24,6 +27,9 @@
     colors: { foreground: string; background: string };
     /** A click on a color: the color picker opens for it. */
     onpickcolor: (which: "foreground" | "background") => void;
+    /** Whether the document shown is in Quick Mask; null without a document (grayed). */
+    quickMask?: boolean | null;
+    onquickmask?: () => void;
   } = $props();
 
   /** A press held this long opens the variants. */
@@ -145,6 +151,19 @@
       <span class="mini-swatch front"></span>
     </button>
   </div>
+
+  <button
+    class="tool quick-mask"
+    class:on={quickMask === true}
+    aria-pressed={quickMask === true}
+    disabled={quickMask === null}
+    title={t(quickMask ? "tools.standardMode" : "tools.quickMask")}
+    aria-label={t("tools.quickMask")}
+    onmousedown={keepFocus}
+    onclick={() => onquickmask?.()}
+  >
+    <span class="mask-icon"><span class="mask-circle"></span></span>
+  </button>
 </nav>
 
 {#if open}
@@ -291,6 +310,40 @@
     right: 1px;
     bottom: 1px;
     background: #ffffff;
+  }
+
+  .quick-mask {
+    margin-top: 8px;
+  }
+
+  .quick-mask:disabled {
+    opacity: 0.4;
+  }
+
+  /* Photoshop's icon: a circle in a frame, the circle red and filled while Quick Mask is on. */
+  .mask-icon {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 14px;
+    border: 1.5px solid currentColor;
+    border-radius: 2px;
+  }
+
+  .mask-circle {
+    width: 8px;
+    height: 8px;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+  }
+
+  .quick-mask.on {
+    /* The red of the options bar's "Quick Mask" label, lighter to read as a thin line. */
+    color: #e74c3c;
+  }
+
+  .quick-mask.on .mask-circle {
+    background: currentColor;
   }
 
   .variants {

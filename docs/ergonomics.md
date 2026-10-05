@@ -273,7 +273,9 @@ built. Contributors: propose here first.
   and leaving are undo entries. While a mask is painted (Quick Mask, or a layer's mask), the
   swatches are a pair of grays of their own (black and white at first, D, X swapping them) and
   the color picker offers grays only (its eyedropper takes a color's gray); the drawing colors
-  come back afterwards. The options bar says "Quick Mask" whatever the tool, with the overlay's
+  come back afterwards. The toolbar's last button (a circle in a frame, Photoshop's) turns red
+  while Quick Mask is on, a click entering or leaving it as Q does. The options bar says "Quick
+  Mask" whatever the tool, with the overlay's
   opacity (an app preference, half by default); the tab's title ends with "(Quick Mask)". Select menu: All (Ctrl+A), Deselect (Ctrl+D), Reselect (Shift+Ctrl+D: the selection a change last removed or replaced, not only a
   deselected one, the maintainer's choice of 2026-10-04; twice, the two swap; undo and a
   gesture's steps do not count),
@@ -602,8 +604,8 @@ answers:
   - Layers and pixels stay two selections: layers by the Move tool, the panel and Select > All
     Layers; pixels by M, L, W and the Select menu. One explicit bridge, as in Photoshop:
     Ctrl+click on a layer's thumbnail loads its transparency as the selection.
-  - Quick Mask: a round red button at the bottom of the toolbar, as in Photoshop, lit while it
-    is on; a click toggles it as Q does.
+  - ✅ Quick Mask: a round red button at the bottom of the toolbar, as in Photoshop, lit while
+    it is on; a click toggles it as Q does.
   - Eyedropper (I): a click takes the foreground color (Alt: the background), Sample (Current
     Layer or All Layers) and its size in the options bar, with the eyedropper's pointer and
     loupe; Alt held with the Brush takes the color, the Brush coming back on release.

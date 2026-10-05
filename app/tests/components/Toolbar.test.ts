@@ -72,3 +72,21 @@ test("the color squares open the picker, swap and reset the colors", async () =>
   expect(foreground).toHaveStyle({ background: "#000000" });
   expect(background).toHaveStyle({ background: "#ffffff" });
 });
+
+test("Quick Mask's button shows whether it is on, and toggles it", async () => {
+  const user = userEvent.setup();
+  const onquickmask = vi.fn();
+  const colors = { foreground: "#000000", background: "#ffffff" };
+  const props = { tool: "brush" as ToolId, choices: {}, onselect: vi.fn(), onpickcolor: vi.fn() };
+  const { rerender } = render(Toolbar, { ...props, colors, quickMask: false, onquickmask });
+  const button = tool("Edit in Quick Mask Mode (Q)");
+  expect(button).toHaveAttribute("aria-pressed", "false");
+  await user.click(button);
+  expect(onquickmask).toHaveBeenCalledOnce();
+  await rerender({ quickMask: true });
+  expect(button).toHaveAttribute("aria-pressed", "true");
+  expect(button).toHaveAttribute("title", "Edit in Standard Mode (Q): leave Quick Mask");
+  // Without a document: grayed.
+  await rerender({ quickMask: null });
+  expect(button).toBeDisabled();
+});
