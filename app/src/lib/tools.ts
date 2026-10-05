@@ -18,6 +18,7 @@ export type ToolId =
   | "crop"
   | "eyedropper"
   | "brush"
+  | "cloneStamp"
   | "eraser"
   | "restoreEraser"
   | "paintBucket"
@@ -63,6 +64,8 @@ export const SLOTS: readonly ToolSlot[] = [
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
   { key: "I", tools: [{ id: "eyedropper", icon: "eyedropper", name: "tools.eyedropper" }] },
   { key: "B", tools: [{ id: "brush", icon: "brush", name: "tools.brush" }] },
+  // Paints pixels taken elsewhere (Alt+click sets where).
+  { key: "S", tools: [{ id: "cloneStamp", icon: "stamp", name: "tools.cloneStamp" }] },
   {
     key: "E",
     tools: [
@@ -108,8 +111,8 @@ export function slotTool(slot: ToolSlot, shown: ToolId | undefined, next: boolea
 }
 
 /** The tools that paint (ADR 0027). */
-export function isPaintTool(id: ToolId): id is "brush" | "eraser" | "restoreEraser" {
-  return id === "brush" || isEraser(id);
+export function isPaintTool(id: ToolId): id is "brush" | "cloneStamp" | "eraser" | "restoreEraser" {
+  return id === "brush" || id === "cloneStamp" || isEraser(id);
 }
 
 /** The erasers: they share their options, and paint no color. */

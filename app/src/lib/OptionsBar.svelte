@@ -25,6 +25,16 @@
     quick = $bindable(),
     brush = $bindable(),
     eraser = $bindable(),
+    clone = $bindable({
+      size: 30,
+      hardness: 0.5,
+      opacity: 1,
+      flow: 1,
+      pressureSize: true,
+      pressureOpacity: false,
+      aligned: true,
+      sample: "layer",
+    }),
     eyedropper = $bindable({ sample: "all", size: 1 }),
     gradient = $bindable({
       preset: "foregroundToBackground",
@@ -74,6 +84,8 @@
     /** Brush and Eraser (ADR 0027): size in document pixels, the rest as shares in [0, 1]. */
     brush: PaintOptions;
     eraser: PaintOptions;
+    /** Clone Stamp: its brush, Aligned, and what it samples (Photoshop's Current Layer first). */
+    clone?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
     eyedropper?: { sample: "all" | "layer"; size: number };
     /** Gradient: which gradient, its shape, reversed or not, and its opacity. */
@@ -114,7 +126,13 @@
 
   /** The painting tool's options, edited in place. */
   const paint = $derived(
-    tool === "eraser" || tool === "restoreEraser" ? eraser : tool === "brush" ? brush : null,
+    tool === "eraser" || tool === "restoreEraser"
+      ? eraser
+      : tool === "brush"
+        ? brush
+        : tool === "cloneStamp"
+          ? clone
+          : null,
   );
 
   const current = $derived(toolInfo(tool));
@@ -369,6 +387,20 @@
       <input type="checkbox" bind:checked={paint.pressureOpacity} />
       {t("options.pressureOpacity")}
     </label>
+    {#if tool === "cloneStamp"}
+      <span class="divider"></span>
+      <label class="option" title={t("options.clone.aligned.hint")}>
+        <input type="checkbox" bind:checked={clone.aligned} />
+        {t("options.clone.aligned")}
+      </label>
+      <label class="option">
+        {t("options.sample")}
+        <select bind:value={clone.sample}>
+          <option value="layer">{t("options.sample.layer")}</option>
+          <option value="all">{t("options.sample.all")}</option>
+        </select>
+      </label>
+    {/if}
   {:else if isSelectionTool(tool)}
     <!-- Quick Selection has no intersection, as in Photoshop. -->
     {#each MODES.filter((m) => tool !== "quickSelection" || m.mode !== "intersect") as entry (entry.mode)}

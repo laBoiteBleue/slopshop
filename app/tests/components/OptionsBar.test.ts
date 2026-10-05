@@ -135,6 +135,24 @@ test("the Paint Bucket's opacity and region settings", async () => {
   expect(screen.getByText("Tolerance:")).toBeInTheDocument();
 });
 
+test("the Clone Stamp has a brush, Aligned and what it samples", async () => {
+  const clone = {
+    size: 30,
+    hardness: 0.5,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    aligned: true,
+    sample: "layer",
+  };
+  const { user } = open("cloneStamp", { clone });
+  expect(screen.getByText("Opacity:")).toBeInTheDocument();
+  await user.click(check("Aligned"));
+  await user.selectOptions(screen.getByRole("combobox", { name: "Sample:" }), "All Layers");
+  expect(clone).toMatchObject({ aligned: false, sample: "all" });
+});
+
 test("the Brush and the Eraser keep their own settings", async () => {
   const { props, user } = open("eraser");
   await user.click(check("Pressure: size"));
