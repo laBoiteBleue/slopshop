@@ -139,8 +139,13 @@ pub struct LayerView {
     /// Clipped to the layer below it (ADR 0016).
     pub clipped: bool,
     /// From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`, a point
-    /// `(x, y)` going to `(a·x + c·y + e, b·x + d·y + f)`.
+    /// `(x, y)` going to `(a·x + c·y + e, b·x + d·y + f)`; the identity for a layer in
+    /// perspective, whose map is in `perspective`.
     pub transform: [f64; 6],
+    /// A layer in perspective (ADR 0038): its projective map `[a, b, c, d, e, f, g, h, i]`, a
+    /// point going to `((a·x + c·y + e) / w, (b·x + d·y + f) / w)`, `w = g·x + h·y + i`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<[f64; 9]>,
     /// Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it.
     pub painted: bool,
     /// What was applied to a raster layer's pixels (ADR 0029), bottom to top.
@@ -475,9 +480,10 @@ impl LayerView {
                 }
             ),
             clipped: layer.clipped,
-            // Six numbers until the UI places layers in perspective (ADR 0038; edits refuse
-            // them meanwhile).
+            // The affine part's six numbers; a layer in perspective has its nine in
+            // `perspective` (ADR 0038).
             transform: layer.transform.as_affine().unwrap_or_default().to_array(),
+            perspective: (!layer.transform.is_affine()).then(|| layer.transform.to_array()),
             painted: layer.is_painted(),
             entries: match &layer.content {
                 LayerContent::Raster {
@@ -831,7 +837,8 @@ pub enum EditRequest {
     DuplicateTransformLayers {
         ids: Vec<u64>,
         name_format: String,
-        matrix: [f64; 6],
+        /// Six numbers (affine) or nine (projective, ADR 0038), as `TransformLayers`'.
+        matrix: Vec<f64>,
     },
     SetGroupPassThrough {
         id: u64,
@@ -852,7 +859,9 @@ pub enum EditRequest {
     /// of their transforms (Free Transform, ADR 0018); a group transforms whole.
     TransformLayers {
         ids: Vec<u64>,
-        matrix: [f64; 6],
+        /// A map of the document's space: six numbers `[a, b, c, d, e, f]` (affine), or nine
+        /// `[a, b, c, d, e, f, g, h, i]` (projective: Distort and Perspective, ADR 0038).
+        matrix: Vec<f64>,
     },
     /// Image > Image Size: the whole image resampled to `width` × `height` (ADR 0018).
     ResizeImage {
@@ -1411,12 +1420,8 @@ impl EditRequest {
                     .clone()
                     .apply(&mut plan)
                     .map_err(|e| e.to_string())?;
-                let transform = Edit::transform_layers(
-                    &plan,
-                    &copies,
-                    slopshop_core::Affine::from_array(matrix),
-                )
-                .map_err(|e| e.to_string())?;
+                let transform = Edit::transform_layers(&plan, &copies, matrix_of(&matrix)?)
+                    .map_err(|e| e.to_string())?;
                 Edit::Batch(vec![duplicate, transform])
             }
             EditRequest::TranslateLayers { ids, dx, dy } => {
@@ -1426,12 +1431,8 @@ impl EditRequest {
             }
             EditRequest::TransformLayers { ids, matrix } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
-                Edit::transform_layers(
-                    session.document(),
-                    &ids,
-                    slopshop_core::Affine::from_array(matrix),
-                )
-                .map_err(|e| e.to_string())?
+                Edit::transform_layers(session.document(), &ids, matrix_of(&matrix)?)
+                    .map_err(|e| e.to_string())?
             }
             EditRequest::ResizeImage {
                 width,
@@ -1792,6 +1793,17 @@ fn with_gradient(adjustment: Adjustment, stops: Option<&[[u16; 4]]>) -> Result<A
     let stops = stops.ok_or("a gradient map needs its stops")?;
     let gradient = gradient_of_stops(stops)?;
     Ok(Adjustment::GradientMap { gradient, reverse })
+}
+
+/// A map of the document's space as the UI sends it: six numbers (affine) or nine (projective).
+fn matrix_of(numbers: &[f64]) -> Result<slopshop_core::Projective, String> {
+    if let Ok(array) = <[f64; 6]>::try_from(numbers) {
+        return Ok(slopshop_core::Affine::from_array(array).into());
+    }
+    <[f64; 9]>::try_from(numbers)
+        .ok()
+        .and_then(slopshop_core::Projective::from_array)
+        .ok_or_else(|| format!("a transform has six or nine numbers, not {numbers:?}"))
 }
 
 /// The gradient of the stops `[location, r, g, b]` the UI sends (Gradient Map, the Gradient

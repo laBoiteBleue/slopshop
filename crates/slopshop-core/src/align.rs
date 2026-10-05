@@ -90,7 +90,7 @@ fn moves(
     for (id, dx, dy) in shifts {
         if dx != 0 || dy != 0 {
             let by = Affine::translation(dx as f64, dy as f64);
-            edits.push(Edit::transform_layers(doc, &[id], by)?);
+            edits.push(Edit::transform_layers(doc, &[id], by.into())?);
         }
     }
     Ok(Edit::Batch(edits))

@@ -649,7 +649,7 @@ mod tests {
         let request = EditRequest::DuplicateTransformLayers {
             ids: vec![1],
             name_format: "{name} copy".into(),
-            matrix: [1.0, 0.0, 0.0, 1.0, 10.0, 0.0],
+            matrix: vec![1.0, 0.0, 0.0, 1.0, 10.0, 0.0],
         };
         let edit = request.into_edit(&mut session).unwrap();
         session.perform(edit).unwrap();

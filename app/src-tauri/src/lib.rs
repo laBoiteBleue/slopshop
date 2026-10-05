@@ -4447,6 +4447,39 @@ mod tests {
     }
 
     #[test]
+    fn layers_are_put_in_perspective_by_a_matrix_of_nine_numbers() {
+        // A transparent pixel layer: fills are not put in perspective.
+        let mut s = super::blank_session(Size::new(40, 40), None, "Layer").unwrap();
+        let id = s.document().layers()[0].id.get();
+        // Its top edge narrowed to the middle half.
+        let keystone = slopshop_core::Projective::from_rect_to_quad(
+            [0.0, 0.0, 40.0, 40.0],
+            [(10.0, 0.0), (30.0, 0.0), (40.0, 40.0), (0.0, 40.0)],
+        )
+        .unwrap();
+        let json = format!(
+            r#"{{"kind":"transformLayers","ids":[{id}],"matrix":{:?}}}"#,
+            keystone.to_array()
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let perspective = view.layers[0].perspective.expect("in perspective");
+        for (got, want) in perspective.iter().zip(keystone.to_array()) {
+            assert!((got - want).abs() < 1e-9, "{perspective:?}");
+        }
+        // Six numbers stay an affine map; other lengths are refused.
+        let json = format!(r#"{{"kind":"transformLayers","ids":[{id}],"matrix":[1,0,0,1,2,0]}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let json = format!(r#"{{"kind":"transformLayers","ids":[{id}],"matrix":[1,0,0,1]}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
     fn a_gradient_fill_is_added_shown_and_changed() {
         let mut s = blank_session();
         let gradient = r#"{"stops":[[0,255,0,0],[4096,0,0,255]],"alpha":[1.0,0.5],"shape":"linear","from":[0.0,10.0],"to":[0.0,0.0]}"#;

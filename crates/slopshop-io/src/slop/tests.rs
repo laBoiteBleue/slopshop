@@ -766,7 +766,7 @@ fn golden_document() -> Document {
         .with_effect(Effect {
             adjustment: slopshop_core::adjust::Adjustment::Invert,
             selection: Selection::new(Arc::new(selection)),
-            to_document: slopshop_core::Affine::IDENTITY,
+            to_document: slopshop_core::Affine::IDENTITY.into(),
             space: doc.blend_space(),
         })
         .unwrap();
@@ -1413,6 +1413,11 @@ fn damaged_layer_trees_are_refused() {
     );
     assert_eq!(read(&moved("[1,0,2,0,0,0]"), "[1]"), Err("corrupt"));
     assert_eq!(read(&moved("[1,0,0,1,0]"), "[1]"), Err("corrupt"));
+    // Nine numbers (a perspective, ADR 0038) need node version 11.
+    assert_eq!(
+        read(&moved("[1,0,0,1,0,0,0.001,0,1]"), "[1]"),
+        Err("corrupt")
+    );
 
     // Adjustment layers (ADR 0020): a known adjustment with five values; others are refused.
     let adjustment = |params: &str| {
@@ -1763,6 +1768,55 @@ fn hidden_entries_round_trip() {
 }
 
 #[test]
+fn layers_in_perspective_round_trip_at_node_version_11() {
+    let mut doc = golden_document();
+    let (id, size) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster {
+                image,
+                stack: Some(_),
+            } => Some((l.id, image.size())),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    let (w, h) = (f64::from(size.width), f64::from(size.height));
+    let keystone = slopshop_core::Projective::from_rect_to_quad(
+        [0.0, 0.0, w, h],
+        [(w * 0.25, 0.0), (w * 0.75, 0.0), (w, h), (0.0, h)],
+    )
+    .unwrap();
+    Edit::SetLayerTransform {
+        id,
+        transform: keystone,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    // Applied in perspective: the effect keeps that placement.
+    Edit::apply_effect(&doc, &[id], slopshop_core::adjust::Adjustment::Invert)
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+    let path = temp_path("perspective.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let layer = loaded.layer(id).unwrap();
+    assert_eq!(layer.transform, keystone);
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &layer.content
+    else {
+        panic!("a layer with a stack");
+    };
+    let Some(Entry::Effect(effect)) = read.entries().last() else {
+        panic!("an effect entry");
+    };
+    assert!(!effect.steps()[0].to_document.is_affine());
+    fs::remove_file(&path).ok();
+}
+
+#[test]
 fn filter_entries_round_trip() {
     let mut doc = golden_document();
     let id = doc
@@ -1925,7 +1979,7 @@ fn entries_applied_several_times_in_older_files_are_read_as_an_entry_each() {
         Arc::new(Effect {
             adjustment: Adjustment::Posterize { levels },
             selection: None,
-            to_document: slopshop_core::Affine::IDENTITY,
+            to_document: slopshop_core::Affine::IDENTITY.into(),
             space: doc.blend_space(),
         })
     };

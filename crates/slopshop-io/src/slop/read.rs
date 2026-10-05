@@ -26,8 +26,8 @@ use super::format::{
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER,
     NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
-    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
-    SCHEMA_MAJOR,
+    NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -332,7 +332,7 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
-    let known_raster = (1..=NODE_VERSION_HIDDEN).contains(&node.version);
+    let known_raster = (1..=NODE_VERSION_PERSPECTIVE).contains(&node.version);
     // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill =
         known_version || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version);
@@ -404,7 +404,7 @@ pub(super) fn read_node(
             .get("clipped")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-    let transform = node_transform(node)?.into();
+    let transform = node_transform(node)?;
     let style = match node.params.get("style") {
         None | Some(Value::Null) => None,
         Some(value) if node.version >= NODE_VERSION_STYLED => Some(
@@ -432,21 +432,41 @@ pub(super) fn read_node(
 }
 
 /// A node's transform (version 5; the identity before): finite and invertible (ADR 0018).
-fn node_transform(node: &NodeDto) -> Result<slopshop_core::Affine, FileError> {
+fn node_transform(node: &NodeDto) -> Result<slopshop_core::Projective, FileError> {
     let values = match node.params.get("transform") {
-        None | Some(Value::Null) => return Ok(slopshop_core::Affine::IDENTITY),
+        None | Some(Value::Null) => return Ok(slopshop_core::Projective::IDENTITY),
         Some(Value::Array(values)) if node.version >= NODE_VERSION_TRANSFORMED => values,
         Some(_) => return Err(corrupt("invalid transform")),
     };
-    let numbers: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
-    let array: [f64; 6] = numbers
-        .try_into()
-        .map_err(|_| corrupt("a transform has six numbers"))?;
-    let transform = slopshop_core::Affine::from_array(array);
-    if !transform.is_valid_layer_transform() {
+    let transform = transform_of(node, values, "a transform")?;
+    // A projective one is checked against the layer's pixels when the document is restored.
+    if transform
+        .as_affine()
+        .is_some_and(|t| !t.is_valid_layer_transform())
+    {
         return Err(corrupt("invalid transform"));
     }
     Ok(transform)
+}
+
+/// A transform of `node` (its own, or a stack step's): six numbers (an affine map), or nine
+/// from node version 11 (a projective one, ADR 0038).
+fn transform_of(
+    node: &NodeDto,
+    values: &[Value],
+    what: &str,
+) -> Result<slopshop_core::Projective, FileError> {
+    let numbers: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
+    if let Ok(array) = <[f64; 6]>::try_from(numbers.as_slice()) {
+        return Ok(slopshop_core::Affine::from_array(array).into());
+    }
+    match <[f64; 9]>::try_from(numbers.as_slice()) {
+        Ok(array) if node.version >= NODE_VERSION_PERSPECTIVE => {
+            slopshop_core::Projective::from_array(array)
+                .ok_or_else(|| corrupt(&format!("{what} is not a projective map")))
+        }
+        _ => Err(corrupt(&format!("{what} has six numbers"))),
+    }
 }
 
 /// An adjustment from its parameters (an adjustment node's, or an effect's): `adjustment`, its
@@ -571,15 +591,12 @@ fn raster_content(
                     .ok_or_else(|| corrupt(&format!("a {what}'s selection is not gray")))?,
             ),
         };
-        let numbers: Vec<f64> = params
+        let values = params
             .get("transform")
             .and_then(Value::as_array)
-            .map(|v| v.iter().filter_map(Value::as_f64).collect())
-            .unwrap_or_default();
-        let to_document: [f64; 6] = numbers
-            .try_into()
-            .map_err(|_| corrupt(&format!("a {what}'s transform has six numbers")))?;
-        Ok::<_, FileError>((selection, slopshop_core::Affine::from_array(to_document)))
+            .map_or(&[][..], Vec::as_slice);
+        let to_document = transform_of(node, values, &format!("a {what}'s transform"))?;
+        Ok::<_, FileError>((selection, to_document))
     };
     let space_of = |value: Option<&Value>| {
         let id = value
@@ -643,18 +660,15 @@ fn raster_content(
                             .ok_or_else(|| corrupt("an effect's selection is not gray"))?,
                     ),
                 };
-                let numbers: Vec<f64> = params
+                let values = params
                     .get("transform")
                     .and_then(Value::as_array)
-                    .map(|v| v.iter().filter_map(Value::as_f64).collect())
-                    .unwrap_or_default();
-                let to_document: [f64; 6] = numbers
-                    .try_into()
-                    .map_err(|_| corrupt("an effect's transform has six numbers"))?;
+                    .map_or(&[][..], Vec::as_slice);
+                let to_document = transform_of(node, values, "an effect's transform")?;
                 effect.push(Arc::new(Effect {
                     adjustment: adjustment_of(params)?,
                     selection,
-                    to_document: slopshop_core::Affine::from_array(to_document),
+                    to_document,
                     space: space_of(params.get("space"))?,
                 }));
             }
