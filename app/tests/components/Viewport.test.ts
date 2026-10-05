@@ -164,6 +164,40 @@ test("the Move tool's drag starts at a document point and moves by document pixe
   expect(onmoveend).toHaveBeenCalledOnce();
 });
 
+test("Ctrl+Space zooms in about a click, Alt with it out, a drag sideways zooms", async () => {
+  const { area, onmovestart, user } = open();
+  await user.keyboard("[ControlLeft>][Space>]");
+  expect(area).toHaveClass("zoom-in");
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: area, coords: { clientX: 50, clientY: 40 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 50, clientY: 40 } },
+  ]);
+  expect(views).toContainEqual({ kind: "step", zoomIn: true, x: 50, y: 40 });
+  // A drag of 100 CSS pixels to the right doubles the zoom, about where it began.
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: area, coords: { clientX: 20, clientY: 30 } },
+    { target: area, coords: { clientX: 120, clientY: 30 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 120, clientY: 30 } },
+  ]);
+  expect(views).toContainEqual({ kind: "zoomBy", factor: 2, x: 20, y: 30 });
+  await user.keyboard("[AltLeft>]");
+  expect(area).toHaveClass("zoom-out");
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: area, coords: { clientX: 60, clientY: 10 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 60, clientY: 10 } },
+  ]);
+  expect(views).toContainEqual({ kind: "step", zoomIn: false, x: 60, y: 10 });
+  await user.keyboard("[/AltLeft][/Space][/ControlLeft]");
+  expect(area).not.toHaveClass("zoom-in");
+  // Released: the tool's press again.
+  expect(onmovestart).not.toHaveBeenCalled();
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: area, coords: { clientX: 10, clientY: 10 } },
+    { keys: "[/MouseLeft]", target: area, coords: { clientX: 10, clientY: 10 } },
+  ]);
+  expect(onmovestart).toHaveBeenCalledOnce();
+});
+
 test("the Move tool's press and drag say whether Shift is held", async () => {
   const { area, onmovestart, onmove, user } = open();
   await user.keyboard("[ShiftLeft>]");
