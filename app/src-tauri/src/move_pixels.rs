@@ -487,6 +487,7 @@ fn lift_edit(
             opacity: 1.0,
             pressure_size: false,
             pressure_opacity: false,
+            pencil: false,
         },
         color: None,
         samples: Vec::new(),

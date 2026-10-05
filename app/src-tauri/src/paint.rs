@@ -114,6 +114,9 @@ pub struct BrushRequest {
     pub opacity: f32,
     pub pressure_size: bool,
     pub pressure_opacity: bool,
+    /// Photoshop's Pencil: hard pixels, no anti-aliasing.
+    #[serde(default)]
+    pub pencil: bool,
 }
 
 impl BrushRequest {
@@ -126,6 +129,7 @@ impl BrushRequest {
             opacity: self.opacity,
             pressure_size: self.pressure_size,
             pressure_opacity: self.pressure_opacity,
+            pencil: self.pencil,
         }
     }
 }
@@ -812,6 +816,7 @@ pub(crate) fn fill_request(
             opacity,
             pressure_size: false,
             pressure_opacity: false,
+            pencil: false,
         },
         color,
         samples: Vec::new(),
@@ -1072,6 +1077,7 @@ mod tests {
                 opacity,
                 pressure_size: false,
                 pressure_opacity: false,
+                pencil: false,
             },
             color: Some([1.0, 0.0, 0.0]),
             samples: Vec::new(),

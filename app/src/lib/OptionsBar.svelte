@@ -134,6 +134,8 @@
     flow: number;
     pressureSize: boolean;
     pressureOpacity: boolean;
+    /** Brush and Eraser: Photoshop's Pencil (hard pixels). */
+    pencil?: boolean;
   };
 
   /** The painting tool's options, edited in place. */
@@ -401,6 +403,12 @@
       <input type="checkbox" bind:checked={paint.pressureOpacity} />
       {t("options.pressureOpacity")}
     </label>
+    {#if tool === "brush" || tool === "eraser"}
+      <label class="option" title={t("options.pencil.hint")}>
+        <input type="checkbox" bind:checked={paint.pencil} />
+        {t("options.pencil")}
+      </label>
+    {/if}
     {#if tool === "cloneStamp" || tool === "healingBrush"}
       {@const source = tool === "cloneStamp" ? clone : heal}
       <span class="divider"></span>

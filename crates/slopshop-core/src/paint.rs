@@ -50,6 +50,9 @@ pub struct Brush {
     pub pressure_size: bool,
     /// The pen's pressure scales the opacity.
     pub pressure_opacity: bool,
+    /// Photoshop's Pencil: the pixels whose centers the tip covers, fully, without
+    /// anti-aliasing nor softness (hardness is ignored); a diameter of 1 paints one pixel.
+    pub pencil: bool,
 }
 
 impl Default for Brush {
@@ -62,6 +65,7 @@ impl Default for Brush {
             opacity: 1.0,
             pressure_size: true,
             pressure_opacity: false,
+            pencil: false,
         }
     }
 }
@@ -1072,16 +1076,27 @@ fn stamp_tile(
     let inner = f64::from(brush.hardness) * radius;
     let flow = f64::from(brush.flow);
     let reach2 = (radius + pixel).powi(2);
+    // The Pencil: centered on the pixel the dab falls in, at least that pixel.
+    let (center, pencil_reach2) = if brush.pencil {
+        let snap = |v: f64| v.floor() + 0.5;
+        ((snap(dab.x), snap(dab.y)), radius.max(0.5).powi(2))
+    } else {
+        ((dab.x, dab.y), reach2)
+    };
     let mut changed: Option<[usize; 4]> = None;
     for y in ys {
         for x in xs.clone() {
             let (dx, dy) = to_document.apply(x0 + x as f64 + 0.5, y0 + y as f64 + 0.5);
-            let d2 = (dx - dab.x).powi(2) + (dy - dab.y).powi(2);
-            if d2 >= reach2 {
+            let d2 = (dx - center.0).powi(2) + (dy - center.1).powi(2);
+            if brush.pencil && d2 > pencil_reach2 || !brush.pencil && d2 >= reach2 {
                 continue;
             }
             // Towards the opacity by the tip × the flow, never past it (alpha darken).
-            let tip = profile(d2.sqrt(), radius, inner, pixel) * flow;
+            let tip = if brush.pencil {
+                flow
+            } else {
+                profile(d2.sqrt(), radius, inner, pixel) * flow
+            };
             let cap = f64::from(dab.opacity);
             let i = y * t + x;
             let c = f64::from(coverage.0[i]);
@@ -1533,6 +1548,42 @@ mod tests {
         // sRGB green's luminance (0.7152) encoded: 220.
         let v = pixel(&image, 16, 16)[0];
         assert!((219..=221).contains(&v), "{v}");
+    }
+
+    #[test]
+    fn the_pencil_paints_whole_pixels_without_anti_aliasing() {
+        let size = Size::new(40, 40);
+        let one = Brush {
+            diameter: 1.0,
+            pencil: true,
+            ..Brush::default()
+        };
+        let mut s = stroke(transparent(size), one, black());
+        s.add(&[sample(10.3, 10.7)]);
+        let image = s.finish().unwrap().unwrap();
+        assert_eq!(pixel(&image, 10, 10)[3], 255);
+        for (x, y) in [(9, 10), (11, 10), (10, 9), (10, 11)] {
+            assert_eq!(pixel(&image, x, y)[3], 0, "({x}, {y})");
+        }
+        // Larger and soft: still only whole pixels, the softness ignored.
+        let wide = Brush {
+            diameter: 7.0,
+            hardness: 0.0,
+            pencil: true,
+            ..Brush::default()
+        };
+        let mut s = stroke(transparent(size), wide, black());
+        s.add(&[sample(20.5, 20.5), sample(30.2, 24.9)]);
+        let image = s.finish().unwrap().unwrap();
+        let mut painted = 0;
+        for y in 0..40 {
+            for x in 0..40 {
+                let a = pixel(&image, x, y)[3];
+                assert!(a == 0 || a == 255, "({x}, {y}): {a}");
+                painted += usize::from(a == 255);
+            }
+        }
+        assert!(painted > 50, "{painted}");
     }
 
     /// Black to white from x = 0 to x = 300, opaque to transparent with `fade`.

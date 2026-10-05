@@ -1189,6 +1189,8 @@ export type BrushRequest = {
   opacity: number;
   pressureSize: boolean;
   pressureOpacity: boolean;
+  /** Photoshop's Pencil: hard pixels, without anti-aliasing. */
+  pencil?: boolean;
 };
 
 /** What a stroke paints (see `paint::PaintTarget`): masks and the selection in gray. */

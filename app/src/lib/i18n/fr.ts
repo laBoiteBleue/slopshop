@@ -351,6 +351,8 @@ const fr: Messages = {
   "tools.variants": "{name} ({key}) — clic droit ou appui long pour les autres outils",
   "options.label": "Options de l'outil",
   "options.autoSelect": "Sélection automatique",
+  "options.pencil": "Crayon",
+  "options.pencil.hint": "Pixels nets, sans lissage (le Crayon de Photoshop)",
   "options.clone.aligned": "Aligné",
   "options.clone.aligned.hint": "La source suit les traits, à la distance fixée par le premier",
   "options.gradient.preset": "Dégradé",
