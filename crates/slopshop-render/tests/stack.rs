@@ -387,3 +387,67 @@ fn a_filter_setting_changed_live_never_shows_the_layer_unfiltered() {
         "another filter showed the cancelled one"
     );
 }
+
+#[test]
+fn a_liquified_layer_shows_the_look_at_what_is_seen() {
+    use slopshop_core::liquify::{Brush, Field, Stroke, Tool};
+    let Some(r) = renderer() else { return };
+    // A sharp edge, pushed sideways by a stroke: the look is warped on the CPU, whatever the GPU
+    // does for filters (ADR 0037).
+    let original = image(PixelFormat::RGBA8_SRGB, |x, y| {
+        let v = if x < W / 2 { 0 } else { 255 };
+        vec![v, (y % 256) as u8, 60, 255]
+    });
+    let mut field = Field::new(Size::new(W, H));
+    let brush = Brush {
+        size: 160.0,
+        density: 100.0,
+        pressure: 100.0,
+        rate: 100.0,
+    };
+    let mut stroke = Stroke::new(Tool::ForwardWarp, brush);
+    stroke.move_to(&mut field, [200.0, 150.0]);
+    stroke.move_to(&mut field, [380.0, 150.0]);
+    stroke.finish(&mut field);
+    let plain = document(&LayerStack::new(Arc::clone(&original)), true);
+    let warped = LayerStack::new(Arc::clone(&original))
+        .with_liquify(
+            Arc::new(field),
+            BlendSpace::Perceptual,
+            Some(Arc::clone(&original)),
+        )
+        .unwrap();
+    let gpu = document(&warped, false);
+    let cpu = document(&warped, true);
+    for (scale, output) in [(1.0, Size::new(W, H)), (2.0, Size::new(W / 2, H / 2))] {
+        let view = ViewTransform {
+            origin: [0.0, 0.0],
+            scale,
+        };
+        let mut done = false;
+        for _ in 0..500 {
+            if !r
+                .profile_view(&gpu, view, output, false)
+                .unwrap()
+                .incomplete
+            {
+                done = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(done, "scale {scale}: the look never came");
+        let a = r.render_view(&gpu, view, output).unwrap();
+        let b = r.render_view(&cpu, view, output).unwrap();
+        let (worst, mean) = differences(&a, &b);
+        assert!(mean <= 3.0, "scale {scale}: {mean} (worst {worst})");
+        // And warped indeed.
+        let unwarped = r.render_view(&plain, view, output).unwrap();
+        assert!(
+            differences(&a, &unwarped).0 > 50,
+            "scale {scale}: not warped"
+        );
+    }
+    // Shown without evaluating the whole layer.
+    assert!(pending(&gpu));
+}

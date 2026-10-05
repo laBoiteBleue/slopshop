@@ -428,3 +428,14 @@ test("typing in a field is not a shortcut", async () => {
     "true",
   );
 });
+
+test("Enter accepts even after a tool was clicked, but a focused action button keeps its Enter", async () => {
+  const { user, onok, oncancel } = await workspace();
+  await user.click(screen.getByRole("button", { name: "Pucker" }));
+  await user.keyboard("{Enter}");
+  await vi.waitFor(() => expect(onok).toHaveBeenCalledTimes(1));
+  screen.getByRole("button", { name: "Cancel" }).focus();
+  await user.keyboard("{Enter}");
+  expect(oncancel).toHaveBeenCalledTimes(1);
+  expect(onok).toHaveBeenCalledTimes(1);
+});

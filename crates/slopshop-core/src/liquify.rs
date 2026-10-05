@@ -44,6 +44,11 @@ const MAX_PINCH: f64 = 0.9;
 
 /// A dab covering at least this many nodes is computed on every core.
 const PARALLEL_NODES: usize = 65_536;
+/// The largest amount a dab takes (a second held still at the highest rate is 2).
+const MAX_AMOUNT: f64 = 10.0;
+/// The most dabs one movement of the pointer lays: a jump across a huge layer drops the first
+/// part of its path rather than spending minutes on it.
+const MAX_DABS_PER_MOVE: f64 = 100_000.0;
 
 /// A brush's settings, Photoshop's: its size, its density (how the edge feathers, 0 to 100), its
 /// pressure (how strongly dragging distorts, 1 to 100) and its rate (how fast the tools that act
@@ -467,6 +472,16 @@ impl Field {
             return;
         }
         let radius = f64::from(brush.size) / 2.0;
+        // A dab moves the pixels by at most the brush's size, and does what it does a few times
+        // over at most: whatever the pointer or the clock said.
+        let length = motion[0].hypot(motion[1]);
+        let motion = if length > f64::from(brush.size) {
+            let scale = f64::from(brush.size) / length;
+            [motion[0] * scale, motion[1] * scale]
+        } else {
+            motion
+        };
+        let amount = amount.clamp(0.0, MAX_AMOUNT);
         let cell = f64::from(self.cell);
         let (nw, nh) = self.nodes();
         // The nodes within the brush's square.
@@ -514,7 +529,14 @@ impl Field {
             _ => 0.0,
         };
         let pad = (reading / cell).ceil() as i64 + 2;
-        let patch = Patch::of(self, i0 - pad, j0 - pad, i1 + pad, j1 + pad);
+        // Only what is on the grid: beyond it the edge repeats, which reading clamps to.
+        let patch = Patch::of(
+            self,
+            (i0 - pad).max(0),
+            (j0 - pad).max(0),
+            (i1 + pad).min(i64::from(nw) - 1),
+            (j1 + pad).min(i64::from(nh) - 1),
+        );
         let (width, height) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);
         let mut changed = vec![[0.0f32; 2]; width * height];
         {
@@ -949,6 +971,12 @@ impl Stroke {
         };
         let spacing = self.spacing();
         let mut at = self.dabbed.unwrap_or(from);
+        let (dx, dy) = (to[0] - at[0], to[1] - at[1]);
+        let distance = dx.hypot(dy);
+        if distance > MAX_DABS_PER_MOVE * spacing {
+            let skip = (distance - MAX_DABS_PER_MOVE * spacing) / distance;
+            at = [at[0] + dx * skip, at[1] + dy * skip];
+        }
         loop {
             let (dx, dy) = (to[0] - at[0], to[1] - at[1]);
             let distance = dx.hypot(dy);
@@ -1232,6 +1260,9 @@ pub fn frame(
         return Err(FieldError::SizeMismatch);
     }
     let (width, height) = (view.width as usize, view.height as usize);
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
     let level = ((-view.zoom.log2()).floor().max(0.0) as usize).min(input.levels().len() - 1);
     let factor = f64::from(1u32 << level);
     let source = Source::new(input, space, level, [0.0, 0.0], factor, input.size());
@@ -2241,5 +2272,295 @@ mod tests {
             d.size().width,
             f.size().height
         );
+    }
+
+    /// A PNG of `rgba` (8-bit, `width` × `height`), stored without compression.
+    fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut c = 0xFFFF_FFFFu32;
+            for &b in bytes {
+                c ^= u32::from(b);
+                for _ in 0..8 {
+                    c = if c & 1 == 1 {
+                        0xEDB8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend((data.len() as u32).to_be_bytes());
+            let mut body = kind.to_vec();
+            body.extend(data);
+            out.extend(&body);
+            out.extend(crc(&body).to_be_bytes());
+        }
+        let mut raw = Vec::new();
+        for row in rgba.chunks(width as usize * 4) {
+            raw.push(0);
+            raw.extend(row);
+        }
+        let mut z = vec![0x78, 0x01];
+        let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+        for (n, block) in blocks.iter().enumerate() {
+            z.push(u8::from(n + 1 == blocks.len()));
+            z.extend((block.len() as u16).to_le_bytes());
+            z.extend((!(block.len() as u16)).to_le_bytes());
+            z.extend(*block);
+        }
+        let (mut a, mut b) = (1u32, 0u32);
+        for &v in &raw {
+            a = (a + u32::from(v)) % 65521;
+            b = (b + a) % 65521;
+        }
+        z.extend(((b << 16) | a).to_be_bytes());
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut header = Vec::new();
+        header.extend(width.to_be_bytes());
+        header.extend(height.to_be_bytes());
+        header.extend([8, 6, 0, 0, 0]);
+        chunk(&mut out, b"IHDR", &header);
+        chunk(&mut out, b"IDAT", &z);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    /// A contact sheet of each tool's effect on a test picture, written to `SLOPSHOP_GALLERY`
+    /// (a PNG path) to look at: `cargo test -p slopshop-core liquify_gallery -- --ignored`.
+    #[test]
+    #[ignore = "writes a picture to look at"]
+    fn liquify_gallery() {
+        let Ok(path) = std::env::var("SLOPSHOP_GALLERY") else {
+            return;
+        };
+        let size = Size::new(360, 270);
+        let mut pixels = Vec::new();
+        for y in 0..size.height {
+            for x in 0..size.width {
+                let grid = x % 30 < 2 || y % 30 < 2;
+                let (dx, dy) = (f64::from(x) - 180.0, f64::from(y) - 135.0);
+                let disc = dx.hypot(dy) < 70.0;
+                let ring = (dx.hypot(dy) - 100.0).abs() < 3.0;
+                let px = if grid {
+                    [40, 40, 40, 255]
+                } else if ring {
+                    [220, 30, 30, 255]
+                } else if disc {
+                    [240, 200, 60, 255]
+                } else {
+                    [
+                        (x * 255 / size.width) as u8,
+                        120,
+                        (y * 255 / size.height) as u8,
+                        255,
+                    ]
+                };
+                pixels.extend(px);
+            }
+        }
+        let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let b = |size| Brush {
+            size,
+            density: 50.0,
+            pressure: 100.0,
+            rate: 80.0,
+        };
+        let mut results: Vec<Field> = Vec::new();
+        let mut run = |setup: &dyn Fn(&mut Field)| {
+            let mut field = Field::new(size);
+            setup(&mut field);
+            results.push(field);
+        };
+        run(&|_| {});
+        run(&|f| {
+            drag(
+                f,
+                Tool::ForwardWarp,
+                b(120.0),
+                [100.0, 135.0],
+                [220.0, 135.0],
+            )
+        });
+        run(&|f| {
+            let mut s = Stroke::new(Tool::TwirlClockwise, b(200.0));
+            s.move_to(f, [180.0, 135.0]);
+            for _ in 0..20 {
+                s.hold(f, 0.033);
+            }
+        });
+        run(&|f| {
+            let mut s = Stroke::new(Tool::Pucker, b(200.0));
+            s.move_to(f, [180.0, 135.0]);
+            for _ in 0..20 {
+                s.hold(f, 0.033);
+            }
+        });
+        run(&|f| {
+            let mut s = Stroke::new(Tool::Bloat, b(200.0));
+            s.move_to(f, [180.0, 135.0]);
+            for _ in 0..20 {
+                s.hold(f, 0.033);
+            }
+        });
+        run(&|f| drag(f, Tool::PushLeft, b(120.0), [180.0, 200.0], [180.0, 70.0]));
+        run(&|f| {
+            drag(f, Tool::Freeze, b(100.0), [180.0, 135.0], [180.0, 135.0]);
+            drag(
+                f,
+                Tool::ForwardWarp,
+                b(220.0),
+                [60.0, 135.0],
+                [300.0, 135.0],
+            );
+        });
+        run(&|f| {
+            drag(
+                f,
+                Tool::ForwardWarp,
+                b(120.0),
+                [100.0, 135.0],
+                [260.0, 135.0],
+            );
+            let mut s = Stroke::new(Tool::Reconstruct, b(260.0));
+            s.move_to(f, [180.0, 135.0]);
+            for _ in 0..10 {
+                s.hold(f, 0.033);
+            }
+        });
+        let columns = 4usize;
+        let (w, h) = (size.width as usize, size.height as usize);
+        let rows = results.len().div_ceil(columns);
+        let mut sheet = vec![30u8; columns * w * rows * h * 4];
+        for (n, field) in results.iter().enumerate() {
+            let view = View {
+                origin: [0.0, 0.0],
+                zoom: 1.0,
+                width: size.width,
+                height: size.height,
+            };
+            let rgba = frame(&image, BlendSpace::Perceptual, field, view, true).unwrap();
+            let (cx, cy) = ((n % columns) * w, (n / columns) * h);
+            for y in 0..h {
+                let to = ((cy + y) * columns * w + cx) * 4;
+                sheet[to..to + w * 4].copy_from_slice(&rgba[y * w * 4..(y + 1) * w * 4]);
+            }
+        }
+        std::fs::write(path, png((columns * w) as u32, (rows * h) as u32, &sheet)).unwrap();
+    }
+
+    #[test]
+    fn extreme_input_is_bounded_not_a_hang_or_a_huge_allocation() {
+        // A pointer sample 10^9 pixels away: the stroke drops the first part of the path.
+        let mut field = Field::new(Size::new(500, 500));
+        let started = std::time::Instant::now();
+        let mut stroke = Stroke::new(Tool::ForwardWarp, brush(1.0));
+        stroke.move_to(&mut field, [0.0, 0.0]);
+        stroke.move_to(&mut field, [1e9, 0.0]);
+        stroke.finish(&mut field);
+        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        // A brush far larger than the layer reads only the grid.
+        let huge = Brush {
+            size: MAX_BRUSH_SIZE,
+            ..brush(100.0)
+        };
+        let mut pucker = Stroke::new(Tool::Pucker, huge);
+        pucker.move_to(&mut field, [250.0, 250.0]);
+        pucker.hold(&mut field, 1e9);
+        field.stamp(Tool::ForwardWarp, &huge, [10.0, 10.0], [1e12, 1e12], 1e12);
+        assert!(field.memory_bytes() < 64 * 1024 * 1024);
+        assert!(field.reach().is_finite());
+    }
+
+    #[test]
+    fn a_frame_of_no_pixels_is_empty() {
+        let image = gradient(Size::new(16, 16));
+        let field = Field::new(image.size());
+        let view = View {
+            origin: [0.0, 0.0],
+            zoom: 1.0,
+            width: 0,
+            height: 10,
+        };
+        assert!(
+            frame(&image, BlendSpace::Perceptual, &field, view, true)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn every_pixel_format_and_blend_space_shows_the_same_picture_through_no_field() {
+        let size = Size::new(40, 30);
+        let field = Field::new(size);
+        let reference = {
+            let image = gradient(size);
+            let view = View {
+                origin: [0.0, 0.0],
+                zoom: 1.0,
+                width: 40,
+                height: 30,
+            };
+            (image, view)
+        };
+        let (image, view) = reference;
+        let expected = frame(&image, BlendSpace::Perceptual, &field, view, false).unwrap();
+        // The same picture in linear light: converted for display, the same within a level.
+        let linear = frame(&image, BlendSpace::Linear, &field, view, false).unwrap();
+        for (a, b) in expected.iter().zip(&linear) {
+            assert!(a.abs_diff(*b) <= 1, "{a} vs {b}");
+        }
+        // The same picture in 16 bits.
+        let mut samples = Vec::new();
+        for y in 0..size.height {
+            for x in 0..size.width {
+                let [r, g, b, a] = pixel(&image, x, y);
+                for v in [r, g, b, a] {
+                    samples.extend((u16::from(v) * 257).to_ne_bytes());
+                }
+            }
+        }
+        let format16 = PixelFormat {
+            sample: SampleType::U16,
+            ..PixelFormat::RGBA8_SRGB
+        };
+        let sixteen = RasterImage::from_pixels(size, format16, &samples).unwrap();
+        let shown = frame(&sixteen, BlendSpace::Perceptual, &field, view, false).unwrap();
+        for (a, b) in expected.iter().zip(&shown) {
+            assert!(a.abs_diff(*b) <= 1, "{a} vs {b}");
+        }
+        // And warped, the formats agree with each other where the field moves things.
+        let mut moved = Field::new(size);
+        drag(
+            &mut moved,
+            Tool::ForwardWarp,
+            brush(30.0),
+            [10.0, 15.0],
+            [30.0, 15.0],
+        );
+        let a = frame(&image, BlendSpace::Perceptual, &moved, view, false).unwrap();
+        let b = frame(&sixteen, BlendSpace::Perceptual, &moved, view, false).unwrap();
+        assert!(a.iter().zip(&b).all(|(a, b)| a.abs_diff(*b) <= 1));
+    }
+
+    #[test]
+    fn a_gray_layer_warps_and_keeps_its_format() {
+        let size = Size::new(8, 1);
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            ..PixelFormat::RGBA8_SRGB
+        };
+        let pixels: Vec<u8> = (0..8).map(|x| if x % 2 == 0 { 0 } else { 200 }).collect();
+        let image = RasterImage::from_pixels(size, format, &pixels).unwrap();
+        let mut field = Field::with_cell(size, 1).unwrap();
+        for i in 0..8 {
+            field.set_node(i, 0, [0.5, 0.0]);
+        }
+        let warped = warp_layer(&image, &field, BlendSpace::Perceptual).unwrap();
+        assert_eq!(warped.format(), format);
+        let tile = &warped.levels()[0].tiles()[0];
+        // Between 0 and 200 (in sRGB values): the mean's gray, within a level.
+        assert!((i32::from(tile[3]) - 100).abs() <= 1, "{}", tile[3]);
     }
 }
