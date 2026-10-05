@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   SLOTS,
   TOOLS,
+  isCloneTool,
   isEraser,
   isPaintTool,
   isSelectionTool,
@@ -34,6 +35,10 @@ test("a letter picks its slot, as typed", () => {
     slotForLetter("s")?.tools.map((tool) => tool.id),
     ["cloneStamp"],
   );
+  assert.deepEqual(
+    slotForLetter("j")?.tools.map((tool) => tool.id),
+    ["healingBrush"],
+  );
   assert.equal(slotForLetter("z"), null);
   assert.equal(slotForLetter(null), null);
 });
@@ -41,6 +46,7 @@ test("a letter picks its slot, as typed", () => {
 test("tool kinds", () => {
   assert.ok(isPaintTool("brush") && isPaintTool("eraser") && isPaintTool("restoreEraser"));
   assert.ok(isPaintTool("cloneStamp") && !isEraser("cloneStamp"));
+  assert.ok(isCloneTool("cloneStamp") && isCloneTool("healingBrush") && !isCloneTool("brush"));
   assert.ok(isEraser("restoreEraser") && !isEraser("brush"));
   assert.ok(isSelectionTool("wand") && isSelectionTool("polygonalLasso"));
   assert.ok(!isSelectionTool("move") && !isSelectionTool("crop") && !isPaintTool("move"));

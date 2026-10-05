@@ -25,6 +25,16 @@
     quick = $bindable(),
     brush = $bindable(),
     eraser = $bindable(),
+    heal = $bindable({
+      size: 30,
+      hardness: 1,
+      opacity: 1,
+      flow: 1,
+      pressureSize: true,
+      pressureOpacity: false,
+      aligned: true,
+      sample: "layer",
+    }),
     clone = $bindable({
       size: 30,
       hardness: 0.5,
@@ -86,6 +96,8 @@
     eraser: PaintOptions;
     /** Clone Stamp: its brush, Aligned, and what it samples (Photoshop's Current Layer first). */
     clone?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
+    /** Healing Brush: as the Clone Stamp's. */
+    heal?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
     /** Eyedropper: every visible layer or the active one alone, and the side of the average. */
     eyedropper?: { sample: "all" | "layer"; size: number };
     /** Gradient: which gradient, its shape, reversed or not, and its opacity. */
@@ -132,7 +144,9 @@
         ? brush
         : tool === "cloneStamp"
           ? clone
-          : null,
+          : tool === "healingBrush"
+            ? heal
+            : null,
   );
 
   const current = $derived(toolInfo(tool));
@@ -387,15 +401,16 @@
       <input type="checkbox" bind:checked={paint.pressureOpacity} />
       {t("options.pressureOpacity")}
     </label>
-    {#if tool === "cloneStamp"}
+    {#if tool === "cloneStamp" || tool === "healingBrush"}
+      {@const source = tool === "cloneStamp" ? clone : heal}
       <span class="divider"></span>
       <label class="option" title={t("options.clone.aligned.hint")}>
-        <input type="checkbox" bind:checked={clone.aligned} />
+        <input type="checkbox" bind:checked={source.aligned} />
         {t("options.clone.aligned")}
       </label>
       <label class="option">
         {t("options.sample")}
-        <select bind:value={clone.sample}>
+        <select bind:value={source.sample}>
           <option value="layer">{t("options.sample.layer")}</option>
           <option value="all">{t("options.sample.all")}</option>
         </select>

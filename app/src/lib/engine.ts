@@ -1242,7 +1242,7 @@ export type PaintRequest = {
    * The Clone Stamp: the pixels `offset` (document pixels) away, from every visible layer, or
    * `sourceLayer` alone, as they are when the stroke starts.
    */
-  clone?: { offset: [number, number]; sourceLayer: number | null };
+  clone?: { offset: [number, number]; sourceLayer: number | null; heal?: boolean };
 };
 
 /** A request of a Move tool drag moving selected pixels (see `move_pixels::MovePixelsRequest`). */
