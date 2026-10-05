@@ -92,10 +92,17 @@
       class:group={slot.tools.length > 1}
       aria-pressed={slot.tools.some((entry) => entry.id === tool)}
       aria-haspopup={slot.tools.length > 1 ? "menu" : undefined}
-      title={t(slot.tools.length > 1 ? "tools.variants" : "tools.tooltip", {
-        name: t(info.name),
-        key: slot.key,
-      })}
+      title={t(
+        slot.key === ""
+          ? "tools.variantsNoKey"
+          : slot.tools.length > 1
+            ? "tools.variants"
+            : "tools.tooltip",
+        {
+          name: t(info.name),
+          key: slot.key,
+        },
+      )}
       aria-label={t(info.name)}
       onmousedown={keepFocus}
       onpointerdown={(e) => onPointerDown(e, slot)}

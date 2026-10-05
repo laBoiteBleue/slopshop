@@ -68,7 +68,7 @@ built. Contributors: propose here first.
   follows. The trash, or right-click > Delete, deletes an entry; what was applied above it
   follows, and neighbours that become alike join.
 - Tools: a toolbar on the left in Photoshop's order, one key each: Move (V, the tool at
-  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Healing Brush (J), the Clone Stamp (S), the Gradient and the Paint Bucket (G), Dodge and Burn (O); the active one is highlighted, its name and key in
+  startup), the marquees (M), the lassos (L), the Magic Wand (W), Crop (C), the Eyedropper (I), the Healing Brush (J), the Clone Stamp (S), the Gradient and the Paint Bucket (G), Blur and Sharpen (no key, as in Photoshop), Dodge and Burn (O); the active one is highlighted, its name and key in
   the tooltip. Variants share one slot, as in Photoshop: the slot shows the one used last, with
   a corner mark; a right-click or a long press lists them, Shift+key cycles them. An
   options bar under the menu bar shows the active tool's icon and its own settings only. No
@@ -381,6 +381,11 @@ built. Contributors: propose here first.
   the active layer (which grows to the canvas), grays on its mask or in Quick Mask; one undo
   entry. Not yet: editing a gradient's stops for the tool, the other shapes (Angle, Reflected,
   Diamond), dithering.
+- Blur and Sharpen (their group has no key, as in Photoshop; the tooltip says so): strokes
+  soften what the active layer shows (a Gaussian blur of 0.5 to 5 pixels by the options bar's
+  Strength) or sharpen it (an unsharp mask), with their own soft brush. They take the layer as
+  it shows when the stroke starts and keep the result; refused on a mask. One undo entry per
+  stroke. Not yet: Sample All Layers, going over a place again within one stroke blurring more.
 - Dodge and Burn (O, Photoshop's Dodge and Burn tools): strokes lighten or darken what the
   active layer shows, most in the options bar's Range (Shadows, Midtones, Highlights), by its
   Exposure (50 % at first), with their own soft brush; Alt held at the press does the other
@@ -685,7 +690,7 @@ answers:
   mask), Pattern Stamp, the History and Art History Brushes (the Restore Eraser, the stack's
   eyes), the Background and Magic Erasers (Magic Wand or Select Subject, then a mask), Sponge
   (Vibrance through a mask), the Type Mask tools, Note, Count, Slice, Artboard and Frame.
-- **Later**: Mixer Brush, Blur, Sharpen and Smudge, ✅ Dodge and Burn, the Color Sampler, Custom
+- **Later**: Mixer Brush, ✅ Blur and Sharpen, Smudge, ✅ Dodge and Burn, the Color Sampler, Custom
   Shape; ✅ Ctrl+Space+click zooming in (Alt: out) for a pen without a wheel (a drag sideways
   zooms about where it began, Photoshop's scrubby zoom; Cmd+Space on macOS).
 

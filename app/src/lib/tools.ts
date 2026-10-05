@@ -25,7 +25,9 @@ export type ToolId =
   | "paintBucket"
   | "gradient"
   | "dodge"
-  | "burn";
+  | "burn"
+  | "blur"
+  | "sharpen";
 
 export type Tool = {
   id: ToolId;
@@ -35,7 +37,7 @@ export type Tool = {
 
 /** One button of the toolbar: a tool, or a group of variants sharing a key. */
 export type ToolSlot = {
-  /** The key that picks the slot: a letter (as typed: AZERTY's M is M). */
+  /** The key that picks the slot: a letter (as typed: AZERTY's M is M); none if empty. */
   key: string;
   tools: Tool[];
 };
@@ -87,6 +89,14 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "paintBucket", icon: "bucket", name: "tools.paintBucket" },
     ],
   },
+  // No key, as in Photoshop.
+  {
+    key: "",
+    tools: [
+      { id: "blur", icon: "blur", name: "tools.blur" },
+      { id: "sharpen", icon: "sharpen", name: "tools.sharpen" },
+    ],
+  },
   {
     key: "O",
     tools: [
@@ -108,6 +118,7 @@ export function slotOf(id: ToolId): ToolSlot {
 
 /** The slot a letter picks (see `shortcutLetter`), if any. */
 export function slotForLetter(letter: string | null): ToolSlot | null {
+  if (!letter) return null;
   return SLOTS.find((slot) => slot.key.toLowerCase() === letter) ?? null;
 }
 
@@ -125,8 +136,22 @@ export function slotTool(slot: ToolSlot, shown: ToolId | undefined, next: boolea
 /** The tools that paint (ADR 0027). */
 export function isPaintTool(
   id: ToolId,
-): id is "brush" | "cloneStamp" | "healingBrush" | "dodge" | "burn" | "eraser" | "restoreEraser" {
-  return id === "brush" || isCloneTool(id) || isToneTool(id) || isEraser(id);
+): id is
+  | "brush"
+  | "cloneStamp"
+  | "healingBrush"
+  | "dodge"
+  | "burn"
+  | "blur"
+  | "sharpen"
+  | "eraser"
+  | "restoreEraser" {
+  return id === "brush" || isCloneTool(id) || isToneTool(id) || isFocusTool(id) || isEraser(id);
+}
+
+/** Blur and Sharpen: they soften or sharpen what the layer shows where they paint. */
+export function isFocusTool(id: ToolId): id is "blur" | "sharpen" {
+  return id === "blur" || id === "sharpen";
 }
 
 /** Dodge and Burn: they lighten or darken what the layer shows where they paint. */

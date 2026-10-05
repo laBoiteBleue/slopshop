@@ -90,3 +90,11 @@ test("Quick Mask's button shows whether it is on, and toggles it", async () => {
   await rerender({ quickMask: null });
   expect(button).toBeDisabled();
 });
+
+test("a slot without a key says so in its tooltip", () => {
+  open();
+  expect(tool("Blur Tool")).toHaveAttribute(
+    "title",
+    "Blur Tool — right-click or hold for the other tools",
+  );
+});
