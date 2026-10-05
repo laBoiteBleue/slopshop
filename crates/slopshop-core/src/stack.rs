@@ -385,6 +385,8 @@ pub struct FilterEntry {
     steps: Vec<Arc<FilterStep>>,
     hidden: bool,
     cache: Mutex<Option<FilterCache>>,
+    /// Held while its result is computed (the cache is not: what reads it never waits).
+    computing: Mutex<()>,
 }
 
 /// What is below a filter entry (its stack), the result of that stack, and the entry's own
@@ -407,6 +409,7 @@ impl FilterEntry {
         Ok(Self {
             steps,
             hidden: false,
+            computing: Mutex::new(()),
             cache: Mutex::new(None),
         })
     }
@@ -443,6 +446,7 @@ impl FilterEntry {
         let one = FilterEntry {
             steps: vec![Arc::new(below.combined(top)?)],
             hidden: self.hidden,
+            computing: Mutex::new(()),
             cache: Mutex::new(None),
         };
         Some(match self.known_input() {
@@ -455,6 +459,7 @@ impl FilterEntry {
     /// shows, when a filter is applied on top of it).
     fn knowing(self, below: LayerStack, input: Arc<RasterImage>) -> Self {
         Self {
+            computing: Mutex::new(()),
             cache: Mutex::new(Some(FilterCache {
                 below,
                 input,
@@ -485,26 +490,37 @@ impl FilterEntry {
     /// The result of the entry over `below` (the stack of the entries below it): from its
     /// cache, or computed now (and `below` evaluated first when it was not known).
     fn output(&self, below: &LayerStack) -> Result<Arc<RasterImage>, StackError> {
-        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-        let known = cache.as_ref().filter(|c| c.below == *below);
-        if let Some(output) = known.and_then(|c| c.output.as_ref()) {
-            return Ok(Arc::clone(output));
+        // One computation at a time, the cache free meanwhile (a new state of the layer reads
+        // what it knows, the display its input): another may have computed it while this waited.
+        let _computing = self
+            .computing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let known = known_cache(&self.cache, below);
+        if let Some(output) = known.as_ref().and_then(|c| c.output.clone()) {
+            return Ok(output);
         }
         let input = match known {
-            Some(c) => Arc::clone(&c.input),
+            Some(c) => c.input,
             None => below.evaluate()?,
         };
         let mut image = Arc::clone(&input);
         for step in &self.steps {
             image = Arc::new(filtered(step, &image, true)?);
         }
-        *cache = Some(FilterCache {
+        *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(FilterCache {
             below: below.clone(),
             input,
             output: Some(Arc::clone(&image)),
         });
         Ok(image)
     }
+}
+
+/// What `cache` knows of the result of `below`, if it is about that stack.
+fn known_cache(cache: &Mutex<Option<FilterCache>>, below: &LayerStack) -> Option<FilterCache> {
+    let cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    cache.as_ref().filter(|c| c.below == *below).cloned()
 }
 
 /// A Liquify entry (ADR 0037): a displacement field warping the result of what is below it, the
@@ -521,6 +537,8 @@ pub struct LiquifyEntry {
     reach: f64,
     hidden: bool,
     cache: Mutex<Option<FilterCache>>,
+    /// Held while its result is computed (the cache is not: what reads it never waits).
+    computing: Mutex<()>,
     /// The field and its freeze as whole images, made once when asked (files store them so).
     images: OnceLock<(Arc<RasterImage>, Arc<RasterImage>)>,
 }
@@ -532,6 +550,7 @@ impl LiquifyEntry {
             field,
             space,
             hidden: false,
+            computing: Mutex::new(()),
             cache: Mutex::new(None),
             images: OnceLock::new(),
         }
@@ -592,6 +611,7 @@ impl LiquifyEntry {
     /// This entry knowing what it is applied to (see [`FilterEntry::knowing`]).
     fn knowing(self, below: LayerStack, input: Arc<RasterImage>) -> Self {
         Self {
+            computing: Mutex::new(()),
             cache: Mutex::new(Some(FilterCache {
                 below,
                 input,
@@ -611,17 +631,24 @@ impl LiquifyEntry {
 
     /// The result of the entry over `below`: from its cache, or computed now.
     fn output(&self, below: &LayerStack) -> Result<Arc<RasterImage>, StackError> {
-        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-        let known = cache.as_ref().filter(|c| c.below == *below);
-        if let Some(output) = known.and_then(|c| c.output.as_ref()) {
-            return Ok(Arc::clone(output));
+        // As a filter's (see `FilterEntry::output`).
+        let _computing = self
+            .computing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let known = known_cache(&self.cache, below);
+        if let Some(output) = known.as_ref().and_then(|c| c.output.clone()) {
+            return Ok(output);
         }
         let input = match known {
-            Some(c) => Arc::clone(&c.input),
+            Some(c) => c.input,
             None => below.evaluate()?,
         };
         let image = Arc::new(crate::liquify::warp_layer(&input, &self.field, self.space)?);
-        *cache = Some(FilterCache {
+        if !crate::raster::wanted() {
+            return Err(StackError::Cancelled);
+        }
+        *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(FilterCache {
             below: below.clone(),
             input,
             output: Some(Arc::clone(&image)),
@@ -648,6 +675,8 @@ pub enum StackError {
     /// No entry at this index.
     IndexOutOfRange(usize),
     Raster(RasterError),
+    /// Given up: not wanted any more (see `raster::while_wanted`).
+    Cancelled,
 }
 
 impl fmt::Display for StackError {
@@ -661,6 +690,7 @@ impl fmt::Display for StackError {
             StackError::Field(e) => write!(f, "{e}"),
             StackError::IndexOutOfRange(index) => write!(f, "no entry at index {index}"),
             StackError::Raster(e) => write!(f, "{e}"),
+            StackError::Cancelled => write!(f, "given up: not wanted any more"),
         }
     }
 }
@@ -982,6 +1012,9 @@ fn filtered(
         .iter()
         .map(|plan| (plan.factor > 1).then(|| Reduced::new(&pixels, size, plan)))
         .collect();
+    if !crate::raster::wanted() {
+        return Err(StackError::Cancelled);
+    }
 
     let selection = step.selection.as_ref().map(|s| {
         let image = s.image().as_ref();
@@ -990,7 +1023,7 @@ fn filtered(
     let mut tiles: Vec<(TileCoord, Option<Arc<[u8]>>)> =
         grid_coords(size).map(|coord| (coord, None)).collect();
     parallel_for_each(&mut tiles, |(coord, out)| {
-        let Some(tile) = level.tile(*coord) else {
+        let Some(tile) = level.tile(*coord).filter(|_| crate::raster::wanted()) else {
             return;
         };
         let (w, h) = valid_area(size, *coord);
@@ -1059,6 +1092,10 @@ fn filtered(
         pad_tile(&mut bytes, w, h, bpp);
         *out = Some(Arc::from(bytes));
     });
+    // Given up meanwhile: tiles are missing.
+    if !crate::raster::wanted() {
+        return Err(StackError::Cancelled);
+    }
     let tiles = tiles
         .into_iter()
         .map(|(coord, tile)| match tile {
@@ -2069,15 +2106,22 @@ impl<'a> Evaluator<'a> {
     }
 
     /// The tiles `coords` of the result, evaluated from scratch, on every core.
-    fn tiles(&self, coords: Vec<TileCoord>) -> Vec<(TileCoord, Arc<[u8]>)> {
+    fn tiles(&self, coords: Vec<TileCoord>) -> Result<Vec<PlacedTile>, StackError> {
         let mut work: Vec<(TileCoord, Option<Arc<[u8]>>)> =
             coords.into_iter().map(|c| (c, None)).collect();
         parallel_for_each(&mut work, |(coord, out)| {
-            *out = Some(self.tile(*coord, 0, None));
+            if crate::raster::wanted() {
+                *out = Some(self.tile(*coord, 0, None));
+            }
         });
-        work.into_iter()
+        // Given up meanwhile: tiles are missing.
+        if !crate::raster::wanted() {
+            return Err(StackError::Cancelled);
+        }
+        Ok(work
+            .into_iter()
             .filter_map(|(coord, tile)| tile.map(|t| (coord, t)))
-            .collect()
+            .collect())
     }
 }
 
@@ -2137,6 +2181,9 @@ static BACKGROUND: Mutex<()> = Mutex::new(());
 /// Quick looks at filtered stacks being computed, likewise one at a time.
 static PREVIEWS: Mutex<()> = Mutex::new(());
 
+/// A tile of an image and where it goes.
+type PlacedTile = (TileCoord, Arc<[u8]>);
+
 /// A stack to evaluate, and where its evaluation starts from.
 type Recipe = (LayerStack, Earlier);
 
@@ -2144,7 +2191,7 @@ type Recipe = (LayerStack, Earlier);
 /// evaluated then): the state before it, held weakly so that a state replaced at once (a slider
 /// dragged) is dropped rather than kept, and evaluated, for the next one; and the last state
 /// evaluated before it, with its pixels, for when the state before was never evaluated.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Earlier {
     state: Option<(std::sync::Weak<LazyPixels>, LayerStack)>,
     evaluated: Option<(Arc<RasterImage>, LayerStack)>,
@@ -2456,6 +2503,34 @@ impl Pixels {
         Arc::clone(self.0.ready.get_or_init(|| image))
     }
 
+    /// [`Self::get`], given up as soon as `wanted` says they are not wanted any more (checked
+    /// tile by tile): `None` then, the pixels still pending, for whoever needs them later.
+    fn get_while(&self, wanted: crate::raster::Wanted) -> Option<Arc<RasterImage>> {
+        if let Some(image) = self.0.ready.get() {
+            return Some(Arc::clone(image));
+        }
+        let mut pending = self
+            .0
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(image) = self.0.ready.get() {
+            return Some(Arc::clone(image));
+        }
+        // Invariant: pending until ready, and ready is checked under the lock.
+        let (stack, earlier) = pending.take()?;
+        let result = crate::raster::while_wanted(wanted, || try_evaluated(&stack, earlier.clone()));
+        let image = match result {
+            Err(StackError::Cancelled) => {
+                *pending = Some((stack, earlier));
+                return None;
+            }
+            // As `evaluated`: the original rather than nothing.
+            other => other.unwrap_or_else(|_| Arc::clone(stack.original())),
+        };
+        Some(Arc::clone(self.0.ready.get_or_init(|| image)))
+    }
+
     /// Start evaluating the pixels on a thread of their own, once, unless they are evaluated:
     /// what shows the stack meanwhile (the renderer) gets the exact pixels soon, and what
     /// needs them later does not wait.
@@ -2494,9 +2569,12 @@ impl Pixels {
                     return;
                 }
                 let _one_at_a_time = BACKGROUND.lock().unwrap_or_else(PoisonError::into_inner);
-                // Only this thread holds them any more: nobody needs them.
+                // Only this thread holds them any more: nobody needs them; and given up as
+                // soon as that is so (the next state replaced this one meanwhile).
+                let held = Arc::downgrade(&pixels.0);
+                let wanted: crate::raster::Wanted = Arc::new(move || held.strong_count() > 1);
                 if Arc::strong_count(&pixels.0) > 1 {
-                    pixels.get();
+                    pixels.get_while(wanted);
                 }
             });
         // Without a thread, whoever needs the pixels evaluates them.
@@ -2594,9 +2672,13 @@ impl Pixels {
                         let Some(job) = stack.look_job(asked.0, asked.1) else {
                             continue;
                         };
+                        let held = Arc::downgrade(&pixels.0);
+                        let wanted: crate::raster::Wanted =
+                            Arc::new(move || held.strong_count() > 1);
                         let look = match gpu.as_ref().and_then(|gpu| gpu(&job)) {
                             Some(image) => Ok(job.finished(Arc::new(image))),
-                            None => job.run(),
+                            // Given up when nobody shows these pixels any more.
+                            None => crate::raster::while_wanted(wanted, || job.run()),
                         };
                         if let Ok(look) = look {
                             pixels
@@ -2681,13 +2763,18 @@ impl Pixels {
 
 /// `stack`'s result, from an earlier state when one is evaluated (else from the original).
 fn evaluated(stack: &LayerStack, earlier: Earlier) -> Arc<RasterImage> {
-    let result = match earlier.start() {
-        Some((shown, before)) => stack.reevaluate(&before, &shown),
-        None => stack.evaluate(),
-    };
+    let result = try_evaluated(stack, earlier);
     // Invariant: a stack's tiles are of its own making (lengths and places checked when made),
     // so evaluating it cannot fail; were it to, the original is shown rather than nothing.
     result.unwrap_or_else(|_| Arc::clone(stack.original()))
+}
+
+/// [`evaluated`], or why not (given up: see `raster::while_wanted`).
+fn try_evaluated(stack: &LayerStack, earlier: Earlier) -> Result<Arc<RasterImage>, StackError> {
+    match earlier.start() {
+        Some((shown, before)) => stack.reevaluate(&before, &shown),
+        None => stack.evaluate(),
+    }
 }
 
 impl PartialEq for LayerStack {
@@ -2867,6 +2954,7 @@ impl LayerStack {
                 })),
                 Entry::Filter(filter) => Entry::Filter(Arc::new(FilterEntry {
                     hidden: filter.hidden,
+                    computing: Mutex::new(()),
                     cache: Mutex::new(None),
                     steps: filter
                         .steps
@@ -2884,6 +2972,7 @@ impl LayerStack {
                     space: liquify.space,
                     reach: liquify.reach,
                     hidden: liquify.hidden,
+                    computing: Mutex::new(()),
                     cache: Mutex::new(None),
                     images: OnceLock::new(),
                 })),
@@ -3100,6 +3189,7 @@ impl LayerStack {
                     space: liquify.space,
                     reach: liquify.reach,
                     hidden,
+                    computing: Mutex::new(()),
                     cache: Mutex::new(
                         liquify
                             .cache
@@ -3114,6 +3204,7 @@ impl LayerStack {
             Entry::Filter(filter) => Entry::Filter(Arc::new(FilterEntry {
                 steps: filter.steps.clone(),
                 hidden,
+                computing: Mutex::new(()),
                 cache: Mutex::new(
                     filter
                         .cache
@@ -3607,7 +3698,7 @@ impl LayerStack {
         let evaluator = Evaluator::new(self, &atoms, format);
         let size = self.original.size();
         let tiles = evaluator
-            .tiles(grid_coords(size).collect())
+            .tiles(grid_coords(size).collect())?
             .into_iter()
             .map(|(_, tile)| tile)
             .collect();
@@ -3712,7 +3803,7 @@ impl LayerStack {
                     reached
                 }
             };
-            evaluator.tiles(coords_of(&reached, size))
+            evaluator.tiles(coords_of(&reached, size))?
         };
         if replaced.is_empty() {
             return Ok(Arc::clone(shown));
@@ -5076,6 +5167,30 @@ mod tests {
         let (look, again) = pixels.look_for(rect, 0, Some(&gpu));
         assert!(look.is_some() && !again);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_evaluation_not_wanted_any_more_is_given_up_and_left_pending() {
+        let original = halves();
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(3.0, None), Some(Arc::clone(&original)))
+            .unwrap()
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap();
+        let pixels = Pixels::pending(stack.clone(), None);
+        // Wanted for the first few tiles only: replaced while it was evaluated.
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let wanted: crate::raster::Wanted =
+            Arc::new(move || counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2);
+        assert!(pixels.get_while(wanted).is_none());
+        assert!(pixels.ready_image().is_none(), "still pending");
+        // Whoever needs them later gets them whole, and the filter's result was not kept half.
+        assert_eq!(difference(&pixels.get(), &stack.evaluate().unwrap()), 0);
+        // Wanted throughout: evaluated.
+        let again = Pixels::pending(stack.clone(), None);
+        let image = again.get_while(Arc::new(|| true)).unwrap();
+        assert!(Arc::ptr_eq(&image, again.ready_image().unwrap()));
     }
 
     #[test]
