@@ -155,6 +155,37 @@ pub enum PaintOp {
     Erase,
     /// Bring back what is below the paint: the Restore Eraser.
     Restore,
+    /// Lay a gradient's colors, each pixel the one at its place in the document (the layer's
+    /// pixels placed by `to_document`), its opacity scaling the amount: the Gradient tool.
+    Gradient {
+        field: crate::gradient::GradientField,
+        to_document: Affine,
+    },
+}
+
+impl PaintOp {
+    /// What `self` lays at pixel (`x`, `y`) of tile `coord` of a layer: the color (`color`,
+    /// from [`op_color`], unless it varies across the layer) and the share of the amount.
+    fn at(
+        &self,
+        math: &PaintPixels,
+        color: Option<[f64; 4]>,
+        coord: TileCoord,
+        x: usize,
+        y: usize,
+    ) -> (Option<[f64; 4]>, f64) {
+        let PaintOp::Gradient { field, to_document } = self else {
+            return (color, 1.0);
+        };
+        let t = f64::from(TILE_SIZE);
+        let (dx, dy) = to_document.apply(
+            f64::from(coord.col) * t + x as f64 + 0.5,
+            f64::from(coord.row) * t + y as f64 + 0.5,
+        );
+        let ([r, g, b], alpha) = field.at(dx, dy);
+        let c = LinearRgba::from_srgb_encoded_to_working(r as f32, g as f32, b as f32, 1.0);
+        (op_color(math, PaintOp::Color(c)), alpha)
+    }
 }
 
 /// An applied adjustment (Image > Adjustments).
@@ -1518,7 +1549,11 @@ impl PaintEntry {
                 if a.is_nan() || a <= 0.0 {
                     continue;
                 }
-                let a = a.min(1.0);
+                let (paint, share) = op.at(&math, paint, coord, x, y);
+                let a = (a * share).min(1.0);
+                if a <= 0.0 {
+                    continue;
+                }
                 erased |= op == PaintOp::Erase;
                 let i = y * TILE_SIZE as usize + x;
                 let (p, k) = math.read(&color, &keep, i);
@@ -1655,14 +1690,14 @@ fn op_color(math: &PaintPixels, op: PaintOp) -> Option<[f64; 4]> {
             f64::from(c.b),
             1.0,
         ])),
-        PaintOp::Erase | PaintOp::Restore => None,
+        PaintOp::Erase | PaintOp::Restore | PaintOp::Gradient { .. } => None,
     }
 }
 
 /// `P` and `k` once `op` (its color from [`op_color`]) is laid at `a` in `(0, 1]` over them.
 fn lay(op: PaintOp, color: Option<[f64; 4]>, a: f64, p: [f64; 4], k: f64) -> ([f64; 4], f64) {
     match (op, color) {
-        (PaintOp::Color(_), Some(c)) => (
+        (PaintOp::Color(_) | PaintOp::Gradient { .. }, Some(c)) => (
             std::array::from_fn(|n| a * c[n] + (1.0 - a) * p[n]),
             (1.0 - a) * k,
         ),
@@ -3855,7 +3890,12 @@ impl TopPaint {
                     // From the start: an amount never re-applies over what the last frame laid.
                     pr[local * bpp..(local + 1) * bpp].copy_from_slice(&p0[i * bpp..(i + 1) * bpp]);
                     kr[local * kb..(local + 1) * kb].copy_from_slice(&k0[i * kb..(i + 1) * kb]);
-                    let a = f64::from(amount(coord, x, y));
+                    let mut a = f64::from(amount(coord, x, y));
+                    let mut color = color;
+                    if a > 0.0 {
+                        let (c, share) = op.at(&math, color, coord, x, y);
+                        (color, a) = (c, a * share);
+                    }
                     if a > 0.0 {
                         let (pv, kv) = math.read(pr, kr, local);
                         let (pv, kv) = lay(op, color, a.min(1.0), pv, kv);

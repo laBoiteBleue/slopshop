@@ -2317,6 +2317,7 @@ pub fn run() {
             layers_at,
             layers_touching,
             paint::paint_bucket,
+            paint::paint_gradient,
             move_snap_targets,
             clipboard::paste,
             clipboard::copy,
@@ -3296,6 +3297,57 @@ mod tests {
             Some([255, 0, 0])
         );
         assert!(filled.selection().is_none());
+    }
+
+    #[test]
+    fn the_gradient_tool_lays_its_colors_as_paint() {
+        let state = AppState::new();
+        let red = RasterImage::from_pixels(
+            Size::new(200, 100),
+            PixelFormat::RGBA8_SRGB,
+            &[255, 0, 0, 255].repeat(200 * 100),
+        )
+        .unwrap();
+        let doc = state
+            .add_document(image_session(red, "red"), None, Vec::new())
+            .unwrap();
+        let mut documents = state.documents().unwrap();
+        let document = documents.get_mut(doc.id).unwrap();
+        let layer = document.session.document().layers()[0].id;
+        // Black, opaque, to black, transparent, across the canvas.
+        let gradient: paint::GradientRequest = serde_json::from_str(
+            r#"{"stops":[[0,0,0,0],[4096,0,0,0]],"alpha":[1,0],"shape":"linear","from":[0,0],"to":[200,0]}"#,
+        )
+        .unwrap();
+        let edit = paint::gradient_edit(
+            document.session.document(),
+            layer.get(),
+            paint::PaintTarget::Layer,
+            &gradient,
+            1.0,
+        )
+        .unwrap()
+        .expect("something painted");
+        document.session.perform(edit).unwrap();
+        let shown = document.session.document();
+        assert_eq!(paint::sample_color_at(shown, 0.0, 50.0, 1), Some([1, 0, 0]));
+        let [r, g, b] = paint::sample_color_at(shown, 100.0, 50.0, 1).unwrap();
+        assert!(
+            (r, g, b) != (255, 0, 0) && r > 100 && g == 0 && b == 0,
+            "{r} {g} {b}"
+        );
+        // The last pixel's center: 199.5 / 200 of the way, nearly transparent.
+        let [r, g, b] = paint::sample_color_at(shown, 199.0, 50.0, 1).unwrap();
+        assert!(r >= 254 && g == 0 && b == 0, "{r} {g} {b}");
+        // A point, not a gradient.
+        let flat: paint::GradientRequest = serde_json::from_str(
+            r#"{"stops":[[0,0,0,0],[4096,0,0,0]],"alpha":[1,1],"shape":"radial","from":[5,5],"to":[5,5]}"#,
+        )
+        .unwrap();
+        assert!(
+            paint::gradient_edit(shown, layer.get(), paint::PaintTarget::Layer, &flat, 1.0)
+                .is_err()
+        );
     }
 
     #[test]
