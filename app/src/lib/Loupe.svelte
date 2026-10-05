@@ -17,7 +17,7 @@
     loupePlacement,
     type LoupeSource,
   } from "./eyedropper";
-  import { loupeTiles } from "./loupeTile";
+  import { loupeTiles, pointerMotion } from "./loupeTile";
 
   let {
     x,
@@ -41,6 +41,8 @@
   let at = $state({ x: 0, y: 0 });
   let frame = 0;
   let closed = false;
+  /** How the pointer moves over the document (see `pointerMotion`). */
+  const motion = pointerMotion();
 
   const tiles = loupeTiles(
     (px, py, radius) => source.pixels(px, py, radius),
@@ -59,7 +61,11 @@
       shown = false;
       return;
     }
-    const pixels = tiles.at(Math.floor(point[0]), Math.floor(point[1]), source.version);
+    // The zoom: document pixels per screen pixel, where the pointer is.
+    const beside = source.point(x + 8, y) ?? source.point(x - 8, y);
+    const scale = beside ? Math.abs(beside[0] - point[0]) / 8 : null;
+    const moving = motion.at(point, performance.now(), scale);
+    const pixels = tiles.at(Math.floor(point[0]), Math.floor(point[1]), source.version, moving);
     if (!pixels) return;
     sampled = centerHex(pixels);
     // Null in tests (jsdom draws nothing).
