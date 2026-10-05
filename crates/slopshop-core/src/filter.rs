@@ -730,23 +730,37 @@ fn median_rows(
     }
     let r = radius as i64;
     let side = 2 * radius + 1;
-    let mut window = vec![0.0f32; side * side];
+    // The window's values, channel by channel, gathered once a pixel.
+    let mut windows = vec![[0.0f32; 4]; side * side];
+    let mut channel = vec![0.0f32; side * side];
     for (n, row) in out.chunks_mut(width).enumerate() {
         let y = (first + n) as i64;
+        let rows_inside = y >= r && y + r < height as i64;
         for (x, px) in row.iter_mut().enumerate() {
-            for c in 0..4 {
+            if rows_inside && x as i64 >= r && x as i64 + r < width as i64 {
+                // Inside: the window's rows as they are.
+                for (k, line) in windows.chunks_exact_mut(side).enumerate() {
+                    let start = (y - r + k as i64) as usize * width + x - radius;
+                    line.copy_from_slice(&src[start..start + side]);
+                }
+            } else {
                 let mut k = 0;
                 for dy in -r..=r {
                     let sy = (y + dy).clamp(0, height as i64 - 1) as usize;
                     for dx in -r..=r {
                         let sx = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
-                        window[k] = src[sy * width + sx][c];
+                        windows[k] = src[sy * width + sx];
                         k += 1;
                     }
                 }
-                let middle = window.len() / 2;
-                let (_, median, _) = window.select_nth_unstable_by(middle, f32::total_cmp);
-                px[c] = *median;
+            }
+            for (c, out) in px.iter_mut().enumerate() {
+                for (value, sample) in channel.iter_mut().zip(&windows) {
+                    *value = sample[c];
+                }
+                let middle = channel.len() / 2;
+                let (_, median, _) = channel.select_nth_unstable_by(middle, f32::total_cmp);
+                *out = *median;
             }
         }
     }
@@ -806,24 +820,71 @@ impl Line {
         let weight = 1.0 / self.offsets.len() as f64;
         let (last_x, last_y) = ((width - 1) as f64, (height - 1) as f64);
         let at = |x: usize, y: usize| src[y * width + x].map(f64::from);
+        // Each sample's whole-pixel offset and bilinear weights, the same at every pixel: where
+        // every sample and its neighbors fall inside, no clamping or rounding per pixel.
+        let taps: Vec<Tap> = self.offsets.iter().map(|&o| Tap::new(o)).collect();
+        let span = |pick: fn(&Tap) -> i64| {
+            let low = taps.iter().map(pick).min().unwrap_or(0);
+            let high = taps.iter().map(pick).max().unwrap_or(0);
+            (low, high + 1)
+        };
+        let ((lx, hx), (ly, hy)) = (span(|t| t.dx), span(|t| t.dy));
+        let inside = |x: i64, y: i64| {
+            x + lx >= 0 && x + hx < width as i64 && y + ly >= 0 && y + hy < height as i64
+        };
         for (n, row) in out.chunks_mut(width).enumerate() {
             let y = (first + n) as f64;
             for (x, px) in row.iter_mut().enumerate() {
                 let mut sum = [0.0f64; 4];
-                for [dx, dy] in &self.offsets {
-                    let sx = (x as f64 + dx).clamp(0.0, last_x);
-                    let sy = (y + dy).clamp(0.0, last_y);
-                    let (x0, y0) = (sx.floor() as usize, sy.floor() as usize);
-                    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
-                    let (a, b) = (sx - x0 as f64, sy - y0 as f64);
-                    let (p00, p10, p01, p11) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
-                    for c in 0..4 {
-                        sum[c] += (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b)
-                            + (p01[c] * (1.0 - a) + p11[c] * a) * b;
+                if inside(x as i64, y as i64) {
+                    for tap in &taps {
+                        let x0 = (x as i64 + tap.dx) as usize;
+                        let i = (y as i64 + tap.dy) as usize * width + x0;
+                        let (p00, p10) = (&src[i], &src[i + 1]);
+                        let (p01, p11) = (&src[i + width], &src[i + width + 1]);
+                        for c in 0..4 {
+                            sum[c] += f64::from(p00[c]) * tap.w[0]
+                                + f64::from(p10[c]) * tap.w[1]
+                                + f64::from(p01[c]) * tap.w[2]
+                                + f64::from(p11[c]) * tap.w[3];
+                        }
+                    }
+                } else {
+                    for [dx, dy] in &self.offsets {
+                        let sx = (x as f64 + dx).clamp(0.0, last_x);
+                        let sy = (y + dy).clamp(0.0, last_y);
+                        let (x0, y0) = (sx.floor() as usize, sy.floor() as usize);
+                        let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+                        let (a, b) = (sx - x0 as f64, sy - y0 as f64);
+                        let (p00, p10, p01, p11) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+                        for c in 0..4 {
+                            sum[c] += (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b)
+                                + (p01[c] * (1.0 - a) + p11[c] * a) * b;
+                        }
                     }
                 }
                 *px = sum.map(|v| (v * weight) as f32);
             }
+        }
+    }
+}
+
+/// One sample of a line away from the edges: the pixel above and left of it, from the pixel
+/// blurred, and the weights of that pixel, the next one right, the one below and below right.
+struct Tap {
+    dx: i64,
+    dy: i64,
+    w: [f64; 4],
+}
+
+impl Tap {
+    fn new([dx, dy]: [f64; 2]) -> Self {
+        let (fx, fy) = (dx.floor(), dy.floor());
+        let (a, b) = (dx - fx, dy - fy);
+        Self {
+            dx: fx as i64,
+            dy: fy as i64,
+            w: [(1.0 - a) * (1.0 - b), a * (1.0 - b), (1.0 - a) * b, a * b],
         }
     }
 }
@@ -1399,6 +1460,105 @@ mod tests {
                     assert!((v - [0.25, 0.5, 0.75, 1.0][c]).abs() < 1e-5);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_line_and_the_median_inside_are_those_clamped_at_every_sample() {
+        // Away from the edges, samples are read without clamping: the same values as reading
+        // every sample clamped (the line but for the order of its sums).
+        let (w, h) = (61usize, 47usize);
+        let src: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let v = ((i * 2654435761) % 997) as f32 / 997.0;
+                [v, 1.0 - v, (v * 7.0).fract(), 0.5 + v / 2.0]
+            })
+            .collect();
+        let clamped = |sx: f64, sy: f64| {
+            let (sx, sy) = (sx.clamp(0.0, (w - 1) as f64), sy.clamp(0.0, (h - 1) as f64));
+            let (x0, y0) = (sx.floor() as usize, sy.floor() as usize);
+            let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+            let (a, b) = (sx - x0 as f64, sy - y0 as f64);
+            let at = |x: usize, y: usize| src[y * w + x].map(f64::from);
+            let (p00, p10, p01, p11) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+            std::array::from_fn::<f64, 4, _>(|c| {
+                (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b)
+                    + (p01[c] * (1.0 - a) + p11[c] * a) * b
+            })
+        };
+        for (angle, length) in [(30.0, 9.0), (0.0, 12.0), (-90.0, 5.5), (137.0, 20.0)] {
+            let line = Line::new(angle, length);
+            let mut out = vec![[0.0f32; 4]; w * h];
+            line.rows(&src, w, h, 0, &mut out);
+            for y in 0..h {
+                for x in 0..w {
+                    let mut sum = [0.0f64; 4];
+                    for [dx, dy] in &line.offsets {
+                        let v = clamped(x as f64 + dx, y as f64 + dy);
+                        for c in 0..4 {
+                            sum[c] += v[c];
+                        }
+                    }
+                    let expected = sum.map(|v| (v / line.offsets.len() as f64) as f32);
+                    for c in 0..4 {
+                        let d = (out[y * w + x][c] - expected[c]).abs();
+                        assert!(d <= 1e-6, "{angle} {length} ({x}, {y}): {d}");
+                    }
+                }
+            }
+        }
+        for radius in [1usize, 3] {
+            let mut out = vec![[0.0f32; 4]; w * h];
+            median_rows(&src, w, h, radius, 0, &mut out);
+            let r = radius as i64;
+            for y in 0..h as i64 {
+                for x in 0..w as i64 {
+                    for c in 0..4 {
+                        let mut window: Vec<f32> = (-r..=r)
+                            .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+                            .map(|(dx, dy)| {
+                                let sx = (x + dx).clamp(0, w as i64 - 1) as usize;
+                                let sy = (y + dy).clamp(0, h as i64 - 1) as usize;
+                                src[sy * w + sx][c]
+                            })
+                            .collect();
+                        window.sort_by(f32::total_cmp);
+                        let expected = window[window.len() / 2];
+                        assert_eq!(out[(y as usize) * w + x as usize][c], expected);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Timing of Motion Blur's line and Dust & Scratches' median on a 1500 x 1000 region, one
+    /// thread (run with `--ignored --nocapture`).
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_line_and_median() {
+        let (w, h) = (1500usize, 1000usize);
+        let src: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let v = ((i * 2654435761) % 1000) as f32 / 1000.0;
+                [v, 1.0 - v, v * 0.5, 1.0]
+            })
+            .collect();
+        let mut out = vec![[0.0f32; 4]; w * h];
+        for (angle, length) in [(30.0, 50.0), (0.0, 50.0)] {
+            let line = Line::new(angle, length);
+            let start = std::time::Instant::now();
+            line.rows(&src, w, h, 0, &mut out);
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "motion blur {length} px at {angle}: {ms:.1} ms ({:?})",
+                out[w * h / 2]
+            );
+        }
+        for radius in [2, 4] {
+            let start = std::time::Instant::now();
+            median_rows(&src, w, h, radius, 0, &mut out);
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            println!("median radius {radius}: {ms:.1} ms ({:?})", out[w * h / 2]);
         }
     }
 }
