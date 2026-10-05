@@ -7,6 +7,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { GradientFill } from "./gradientFill";
+import type { Homography } from "./homography";
 
 /** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, a filter
  * (ADR 0034) or a Liquify field (ADR 0037). */
@@ -523,13 +524,20 @@ export type EditRequest =
   /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */
   | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
   /** Copies as `duplicateLayers`, then `matrix` applied to them (Duplicate and Transform Again). */
-  | { kind: "duplicateTransformLayers"; ids: number[]; nameFormat: string; matrix: Matrix }
+  | {
+      kind: "duplicateTransformLayers";
+      ids: number[];
+      nameFormat: string;
+      /** Six numbers, or nine for a perspective (ADR 0038). */
+      matrix: Matrix | Homography;
+    }
   | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
   | { kind: "setLayerClipped"; id: number; clipped: boolean }
   /** Move layers by whole document pixels (a group moves whole). */
   | { kind: "translateLayers"; ids: number[]; dx: number; dy: number }
   /** Apply `matrix` ([a, b, c, d, e, f], in document pixels) to layers (Free Transform). */
-  | { kind: "transformLayers"; ids: number[]; matrix: Matrix }
+  /** A map of the document's space: six numbers, or nine for a perspective (ADR 0038). */
+  | { kind: "transformLayers"; ids: number[]; matrix: Matrix | Homography }
   /** Image > Image Size: the whole image resampled to this size. */
   | { kind: "resizeImage"; width: number; height: number; resolution?: number }
   /** Image > Canvas Size: `anchor` [x, y] in [0, 1] keeps the image there (0.5: centered). */

@@ -13,6 +13,7 @@
     matrix,
     pivot,
     canvas,
+    disabled = false,
     onchange,
   }: {
     /** The transform so far (a map of the document's space). */
@@ -21,6 +22,8 @@
     pivot: [number, number];
     /** The document's size: X and Y slide over it and as much around it. */
     canvas: { width: number; height: number };
+    /** In perspective (ADR 0038): the numbers of an affine map no longer describe it. */
+    disabled?: boolean;
     onchange: (matrix: Matrix) => void;
   } = $props();
 
@@ -93,33 +96,43 @@
   }
 </script>
 
-{#each FIELDS as field (field.key)}
-  <SliderField
-    label={field.label}
-    bind:value={() => values[field.key], (v) => set(field.key, v)}
-    min={field.min}
-    max={field.max}
-    step={field.step}
-    unit={field.unit}
-    factor={field.factor}
-    width={56}
-  />
-  {#if field.key === "width"}
-    <button
-      type="button"
-      class="icon-btn"
-      class:on={linked}
-      title={t("transform.field.link")}
-      aria-pressed={linked}
-      onmousedown={keepFocus}
-      onclick={() => (linked = !linked)}
-    >
-      <Icon name={linked ? "link" : "linkBroken"} size={14} />
-    </button>
-  {/if}
-{/each}
+<span class="fields" class:disabled inert={disabled}>
+  {#each FIELDS as field (field.key)}
+    <SliderField
+      label={field.label}
+      bind:value={() => values[field.key], (v) => set(field.key, v)}
+      min={field.min}
+      max={field.max}
+      step={field.step}
+      unit={field.unit}
+      factor={field.factor}
+      width={56}
+    />
+    {#if field.key === "width"}
+      <button
+        type="button"
+        class="icon-btn"
+        class:on={linked}
+        title={t("transform.field.link")}
+        aria-pressed={linked}
+        onmousedown={keepFocus}
+        onclick={() => (linked = !linked)}
+      >
+        <Icon name={linked ? "link" : "linkBroken"} size={14} />
+      </button>
+    {/if}
+  {/each}
+</span>
 
 <style>
+  .fields {
+    display: contents;
+  }
+
+  .fields.disabled > :global(*) {
+    opacity: 0.45;
+  }
+
   .icon-btn.on {
     background: var(--selected);
     color: var(--text);

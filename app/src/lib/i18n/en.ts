@@ -115,6 +115,8 @@ const en = {
   "menu.edit.transform.rotateCcw": "Rotate 90° Counter Clockwise",
   "menu.edit.transform.flipHorizontal": "Flip Horizontal",
   "menu.edit.transform.flipVertical": "Flip Vertical",
+  "menu.edit.transform.distort": "Distort",
+  "menu.edit.transform.perspective": "Perspective",
   "transform.readout.move": "X {dx} · Y {dy}",
   "transform.readout.skew": "Skew {angle}°",
   "transform.apply": "Apply",
