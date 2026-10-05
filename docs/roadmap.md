@@ -344,11 +344,10 @@ Once the toolbar is done (and tested by the maintainer), three projects, in this
 SlopShop is opened to contributors and promoted (the preparation is ready on the branch
 `chore/open-to-contributions`):
 
-- [ ] **Transforms**: ✅ Distort and Perspective in Free Transform, the layer's transform made
+- [x] **Transforms**: Distort and Perspective in Free Transform, the layer's transform made
       projective (ADR 0038: CPU and GPU, `.slop` 0.25, Edit > Transform's entries; painting,
-      fills and masks through the map); still to do: moving or copying the selected pixels
-      of a layer in perspective, Smudge on it; then the advanced transforms below as the
-      maintainer chooses
+      fills and masks through the map). The rest is left to contributors (maintainer,
+      2026-10-05): see "Open to contributors: advanced transforms" below
 - [ ] **AI** (the large one): Remove (J) and generative fill, on the AI track below (its ADR
       before the first feature, local models first)
 - [ ] 🔶 **Cloud monetization**: what is offered, accounts, billing (to define; an ADR)
@@ -397,10 +396,17 @@ first.
 - [ ] **Perspective Warp**: quadrilateral planes drawn on the image, connected, then moved
       together; planes and their positions kept, editable again. Distinct from the simple
       perspective of Free Transform below.
-- [ ] **Free Transform: distort and perspective** (corner handles moved freely, Ctrl and
-      Alt+Shift+Ctrl as in Photoshop): needs a projective transform per layer instead of the
-      affine one (rendering, `.slop`, export, painting in the layer's grid). Taken by the
-      maintainer (2026-10-05): ADR 0038, proposed.
+- [x] **Free Transform: distort and perspective** (corner handles moved freely, Ctrl and
+      Alt+Shift+Ctrl as in Photoshop): a projective transform per pixel layer
+      ([ADR 0038](adr/0038-projective-transforms.md)).
+- [ ] **Groups in perspective**: Distort and Perspective on a group, each layer inside through
+      the group's map (pixel layers refused past the horizon line; solid fills stay whole;
+      gradient fills stop at the horizon; adjustment layers' masks follow). Only pixel layers
+      are put in perspective today (`validate_transform` in `edit.rs`).
+- [ ] **Selected pixels of a layer in perspective**: moving, copying and cutting them (the Move
+      tool on a selection, Copy, Cut), and Smudge on such a layer. Refused with a message today
+      (`affine_placement` in `app/src-tauri/src/paint.rs`): `PixelMove` and Smudge's field
+      assume a constant scale in the layer's pixels.
 - [ ] Proposed: **content-aware scaling** as an option of Free Transform's scaling (protecting
       what matters while the rest stretches), not a command of its own.
 - [x] **Liquify**: brush deformations kept as a displacement field, an entry of the layer's
