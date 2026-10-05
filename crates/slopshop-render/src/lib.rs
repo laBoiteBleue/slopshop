@@ -2575,6 +2575,24 @@ mod tests {
             RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &bytes)
                 .unwrap(),
         );
+        // The same pixels opaque, as an RGB layer (a JPEG's) stores them: RGBA, alpha opaque.
+        let rgb_bytes: Vec<u8> = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        let rgb = Arc::new(
+            RasterImage::from_pixels(
+                size,
+                slopshop_core::color::PixelFormat {
+                    layout: slopshop_core::color::ChannelLayout::Rgb,
+                    ..slopshop_core::color::PixelFormat::RGBA8_SRGB
+                },
+                &rgb_bytes,
+            )
+            .unwrap(),
+        );
         let blur = |radius| Filter::GaussianBlur { radius };
         let sharpen = Filter::UnsharpMask {
             amount: 150.0,
@@ -2583,7 +2601,7 @@ mod tests {
         };
         // The CPU's three boxes beyond a radius of 8 are a little off the exact Gaussian; Unsharp
         // Mask amplifies its blur's rounding.
-        for (filter, most) in [
+        let filters = [
             (blur(1.5), 1),
             (blur(6.0), 1),
             (blur(20.0), 4),
@@ -2644,8 +2662,12 @@ mod tests {
                 },
                 3,
             ),
-        ] {
-            let stack = LayerStack::new(Arc::clone(&original))
+        ];
+        for (image, (filter, most)) in [&original, &rgb]
+            .into_iter()
+            .flat_map(|image| filters.iter().map(move |f| (image, *f)))
+        {
+            let stack = LayerStack::new(Arc::clone(image))
                 .with_filter(
                     FilterStep {
                         filter,
@@ -2653,7 +2675,7 @@ mod tests {
                         to_document: Affine::IDENTITY,
                         space: BlendSpace::Perceptual,
                     },
-                    Some(Arc::clone(&original)),
+                    Some(Arc::clone(image)),
                 )
                 .unwrap();
             let job = stack.look_job([200.0, 60.0, 400.0, 250.0], 0).unwrap();
@@ -2667,7 +2689,16 @@ mod tests {
                 .flat_map(|(s, t)| s.iter().zip(t.iter()).map(|(x, y)| x.abs_diff(*y)))
                 .max()
                 .unwrap_or(0);
-            assert!(worst <= most, "{filter:?}: {worst}");
+            let format = image.format().layout;
+            assert!(worst <= most, "{format:?} {filter:?}: {worst}");
+            // RGB stays opaque, as its tiles must.
+            if format == slopshop_core::color::ChannelLayout::Rgb {
+                assert!(
+                    a.iter()
+                        .all(|t| t.as_chunks::<4>().0.iter().all(|p| p[3] == 255)),
+                    "{filter:?}"
+                );
+            }
         }
         // Not taken: a selection, or another format (the CPU computes those).
         let gray = Arc::new(
