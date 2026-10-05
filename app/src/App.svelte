@@ -905,11 +905,15 @@
         showError(t("paint.focusLayersOnly"));
         return;
       }
-      clone = {
-        offset: [0, 0],
-        sourceLayer: layersPanel?.selectedLayer()?.id ?? null,
-        filter: { sharpen: tool === "sharpen", strength: focusOptions.strength },
-      };
+      const sourceLayer = layersPanel?.selectedLayer()?.id ?? null;
+      clone =
+        tool === "smudge"
+          ? { offset: [0, 0], sourceLayer, smudge: focusOptions.strength }
+          : {
+              offset: [0, 0],
+              sourceLayer,
+              filter: { sharpen: tool === "sharpen", strength: focusOptions.strength },
+            };
     }
     if (isToneTool(tool) && (phase === "start" || phase === "line")) {
       paintRun = null;

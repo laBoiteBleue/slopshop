@@ -75,3 +75,21 @@ test("Blur and Sharpen paint the layer through a filter, by their strength", asy
   });
   expect(screen.getByText("Strength:")).toBeInTheDocument();
 });
+
+test("Smudge, the third of the Blur group, pushes the layer's pixels by its strength", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.pointer({
+    keys: "[MouseRight]",
+    target: screen.getByRole("button", { name: "Blur Tool" }),
+  });
+  await user.click(screen.getByRole("menuitemradio", { name: /Smudge Tool/ }));
+  const canvas = () => document.querySelector("svg.paint") as SVGSVGElement;
+  await fireEvent.pointerDown(canvas(), { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerMove(canvas(), { pointerId: 1, clientX: 40, clientY: 10 });
+  await fireEvent.pointerUp(canvas(), { pointerId: 1, clientX: 40, clientY: 10 });
+  await waitFor(() => expect(sent("paint_stroke").length).toBeGreaterThan(0));
+  expect(sent("paint_stroke")[0]).toMatchObject({
+    request: { clone: { offset: [0, 0], smudge: 0.5 } },
+  });
+});

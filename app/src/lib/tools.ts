@@ -27,7 +27,8 @@ export type ToolId =
   | "dodge"
   | "burn"
   | "blur"
-  | "sharpen";
+  | "sharpen"
+  | "smudge";
 
 export type Tool = {
   id: ToolId;
@@ -95,6 +96,7 @@ export const SLOTS: readonly ToolSlot[] = [
     tools: [
       { id: "blur", icon: "blur", name: "tools.blur" },
       { id: "sharpen", icon: "sharpen", name: "tools.sharpen" },
+      { id: "smudge", icon: "smudge", name: "tools.smudge" },
     ],
   },
   {
@@ -144,14 +146,15 @@ export function isPaintTool(
   | "burn"
   | "blur"
   | "sharpen"
+  | "smudge"
   | "eraser"
   | "restoreEraser" {
   return id === "brush" || isCloneTool(id) || isToneTool(id) || isFocusTool(id) || isEraser(id);
 }
 
-/** Blur and Sharpen: they soften or sharpen what the layer shows where they paint. */
-export function isFocusTool(id: ToolId): id is "blur" | "sharpen" {
-  return id === "blur" || id === "sharpen";
+/** Blur, Sharpen and Smudge: they soften, sharpen or smear what the layer shows. */
+export function isFocusTool(id: ToolId): id is "blur" | "sharpen" | "smudge" {
+  return id === "blur" || id === "sharpen" || id === "smudge";
 }
 
 /** Dodge and Burn: they lighten or darken what the layer shows where they paint. */
