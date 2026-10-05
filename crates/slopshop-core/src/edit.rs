@@ -832,12 +832,7 @@ impl Edit {
             let effect = crate::stack::Effect {
                 adjustment,
                 selection: doc.selection().cloned(),
-                // Affine until stacks' placements are projective (ADR 0038).
-                to_document: layer
-                    .transform
-                    .then(doc.parent_transform(id))
-                    .as_affine()
-                    .ok_or(EditError::InvalidTransform)?,
+                to_document: layer.transform.then(doc.parent_transform(id)),
                 space: doc.blend_space(),
             };
             edits.push(Edit::SetLayerStack {
@@ -874,12 +869,7 @@ impl Edit {
         let step = crate::stack::FilterStep {
             filter,
             selection: doc.selection().cloned(),
-            // Affine until stacks' placements are projective (ADR 0038).
-            to_document: layer
-                .transform
-                .then(doc.parent_transform(id))
-                .as_affine()
-                .ok_or(EditError::InvalidTransform)?,
+            to_document: layer.transform.then(doc.parent_transform(id)),
             space: doc.blend_space(),
         };
         Ok(Edit::SetLayerStack {
@@ -1044,13 +1034,14 @@ impl Edit {
         ))
     }
 
-    /// The edit that applies `by`, a map of the document's space, to `ids` on top of their
-    /// transforms (Free Transform); a layer inside another of `ids` goes with it. Results are
-    /// [snapped](Affine::snapped), so that a quarter turn built by steps stays exact.
+    /// The edit that applies `by`, a map of the document's space (projective for Distort and
+    /// Perspective, ADR 0038), to `ids` on top of their transforms (Free Transform); a layer
+    /// inside another of `ids` goes with it. Results are [snapped](Affine::snapped), so that a
+    /// quarter turn built by steps stays exact.
     pub fn transform_layers(
         doc: &Document,
         ids: &[LayerId],
-        by: Affine,
+        by: Projective,
     ) -> Result<Edit, EditError> {
         let moving = outermost_in_order(doc, ids)?;
         if moving.is_empty() {
@@ -1062,12 +1053,7 @@ impl Edit {
             // Into the document, `by`, and back into the parent's space.
             let parent = doc.parent_transform(id);
             let back = parent.inverse().ok_or(EditError::InvalidTransform)?;
-            let transform = layer
-                .transform
-                .then(parent)
-                .then(by.into())
-                .then(back)
-                .snapped();
+            let transform = layer.transform.then(parent).then(by).then(back).snapped();
             validate_transform(layer, transform)?;
             edits.push(Edit::SetLayerTransform { id, transform });
         }
@@ -3318,7 +3304,7 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         let by = Affine::translation(6.0, 0.0);
-        let undo = Edit::transform_layers(&doc, &[ids[1], ids[0]], by)
+        let undo = Edit::transform_layers(&doc, &[ids[1], ids[0]], by.into())
             .unwrap()
             .apply(&mut doc)
             .unwrap();
@@ -3336,7 +3322,7 @@ mod tests {
             Edit::transform_layers(
                 &doc,
                 &[ids[0]],
-                Affine::rotation(std::f64::consts::FRAC_PI_2),
+                Affine::rotation(std::f64::consts::FRAC_PI_2).into(),
             )
             .unwrap()
             .apply(&mut doc)
@@ -3347,7 +3333,7 @@ mod tests {
             Affine::translation(6.0, 0.0).into()
         );
         assert_eq!(
-            Edit::transform_layers(&doc, &[ids[0]], Affine::scale(0.0, 1.0))
+            Edit::transform_layers(&doc, &[ids[0]], Affine::scale(0.0, 1.0).into())
                 .and_then(|e| e.apply(&mut doc)),
             Err(EditError::InvalidTransform)
         );
@@ -3447,7 +3433,7 @@ mod tests {
             .with_effect(Effect {
                 adjustment: crate::adjust::Adjustment::Invert,
                 selection: None,
-                to_document: Affine::IDENTITY,
+                to_document: Affine::IDENTITY.into(),
                 space: BlendSpace::Perceptual,
             })
             .unwrap();
@@ -3493,7 +3479,7 @@ mod tests {
         let invert = Effect {
             adjustment: crate::adjust::Adjustment::Invert,
             selection: None,
-            to_document: Affine::IDENTITY,
+            to_document: Affine::IDENTITY.into(),
             space: BlendSpace::Perceptual,
         };
         let painted = painted_stack(&original, 1.0);

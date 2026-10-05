@@ -98,7 +98,7 @@ fn stack() -> LayerStack {
     let invert = Effect {
         adjustment: Adjustment::Invert,
         selection: Selection::new(selection),
-        to_document: Affine::IDENTITY,
+        to_document: Affine::IDENTITY.into(),
         space: BlendSpace::Perceptual,
     };
     let brighter = Effect {
@@ -107,7 +107,7 @@ fn stack() -> LayerStack {
             contrast: 20.0,
         },
         selection: None,
-        to_document: Affine::IDENTITY,
+        to_document: Affine::IDENTITY.into(),
         space: BlendSpace::Perceptual,
     };
     let erased = painted(&empty, &[(2, 1)], PaintOp::Erase, |x, _| {
@@ -271,7 +271,7 @@ fn a_filtered_layer_shows_the_look_at_what_is_seen() {
             FilterStep {
                 filter: Filter::GaussianBlur { radius: 6.0 },
                 selection: None,
-                to_document: Affine::IDENTITY,
+                to_document: Affine::IDENTITY.into(),
                 space: BlendSpace::Perceptual,
             },
             Some(Arc::clone(&original)),

@@ -20,9 +20,9 @@ use super::format::{
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
     NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
-    NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
+    NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE,
+    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
+    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -506,6 +506,28 @@ pub(super) fn adjustment_params(adjustment: &Adjustment) -> Value {
     params
 }
 
+/// A transform as written: six numbers for an affine map (schema 0.6), nine for a projective one
+/// (schema 0.25, ADR 0038).
+fn numbers(transform: slopshop_core::Projective) -> Vec<f64> {
+    match transform.as_affine() {
+        Some(t) => t.to_array().to_vec(),
+        None => transform.to_array().to_vec(),
+    }
+}
+
+/// Whether `layer` or a step of its stack is placed by a projective map (node version 11).
+fn in_perspective(layer: &slopshop_core::Layer) -> bool {
+    let projective = |t: slopshop_core::Projective| !t.is_affine();
+    projective(layer.transform)
+        || layer.content.stack().is_some_and(|stack| {
+            stack.entries().iter().any(|entry| match entry {
+                Entry::Effect(effect) => effect.steps().iter().any(|s| projective(s.to_document)),
+                Entry::Filter(filter) => filter.steps().iter().any(|s| projective(s.to_document)),
+                _ => false,
+            })
+        })
+}
+
 /// A gradient's stops as written, `[location, r, g, b]`.
 fn gradient_stops(gradient: &slopshop_core::gradient::Gradient) -> Vec<[u16; 4]> {
     gradient
@@ -575,7 +597,7 @@ fn build_manifest(
                                         value["selection"] = json!(
                                             step.selection.as_ref().and_then(|s| key(s.image()))
                                         );
-                                        value["transform"] = json!(step.to_document.to_array());
+                                        value["transform"] = json!(numbers(step.to_document));
                                         value["space"] = json!(step.space.id());
                                         value
                                     })
@@ -605,7 +627,7 @@ fn build_manifest(
                                                 .selection
                                                 .as_ref()
                                                 .and_then(|s| key(s.image())),
-                                            "transform": step.to_document.to_array(),
+                                            "transform": numbers(step.to_document),
                                             "space": step.space.id(),
                                         })
                                     })
@@ -658,12 +680,10 @@ fn build_manifest(
             params.insert("clipped".to_owned(), Value::from(true));
         }
         if !layer.transform.is_identity() {
-            // Six numbers for an affine map, as since schema 0.6.
-            let numbers = match layer.transform.as_affine() {
-                Some(t) => t.to_array().to_vec(),
-                None => layer.transform.to_array().to_vec(),
-            };
-            params.insert("transform".to_owned(), Value::from(numbers));
+            params.insert(
+                "transform".to_owned(),
+                Value::from(numbers(layer.transform)),
+            );
         }
         if let Some(mask) = &layer.mask {
             let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
@@ -681,7 +701,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if matches!(
+                version: if in_perspective(layer) {
+                    NODE_VERSION_PERSPECTIVE
+                } else if matches!(
                     &layer.content,
                     LayerContent::Raster { stack: Some(stack), .. }
                         if stack.entries().iter().any(Entry::hidden)

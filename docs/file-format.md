@@ -315,6 +315,15 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     entry is kept but skipped when the result is evaluated. Only those nodes are written at v10,
     so that older readers refuse them rather than show the entry; `hidden` on a node of an
     earlier version is refused.
+  - v11 (schema 0.25, [ADR 0038](adr/0038-projective-transforms.md)) is a raster node placed in
+    perspective: its `params.transform`, or a stack step's `transform`, has nine numbers
+    `[a, b, c, d, e, f, g, h, i]`, the projective map sending `(x, y)` to
+    `((a·x + c·y + e) / w, (b·x + d·y + f) / w)` with `w = g·x + h·y + i` (`i` ≠ 0; the same map
+    whatever the scale of the nine). Every pixel of the node's image and mask is on the side of
+    the horizon line where `w > 0`; the image is resampled through the map (each sample's
+    ellipse from the map's Jacobian there). Affine maps are still written with six numbers.
+    Only those nodes are written at v11, so that older readers refuse them rather than misplace
+    them; nine numbers on a node of an earlier version are refused.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier

@@ -36,7 +36,7 @@ use crate::raster::{
 };
 use crate::selection::Selection;
 use crate::tile::TileCoord;
-use crate::transform::Affine;
+use crate::transform::{Affine, Projective};
 
 /// Pixels per tile.
 const TILE_PIXELS: usize = (TILE_SIZE * TILE_SIZE) as usize;
@@ -229,8 +229,9 @@ pub struct Effect {
     /// Where it applies (a coverage at the document origin); everywhere when `None`.
     pub selection: Option<Selection>,
     /// The layer's pixels → document when it was applied: where the selection is read, so that
-    /// the effect stays where it was applied when the layer moves.
-    pub to_document: Affine,
+    /// the effect stays where it was applied when the layer moves (projective for a layer in
+    /// perspective, ADR 0038).
+    pub to_document: Projective,
     pub space: BlendSpace,
 }
 
@@ -375,7 +376,7 @@ pub struct FilterStep {
     /// reads around it as well.
     pub selection: Option<Selection>,
     /// The layer's pixels → document when it was applied (see [`Effect::to_document`]).
-    pub to_document: Affine,
+    pub to_document: Projective,
     pub space: BlendSpace,
 }
 
@@ -3018,7 +3019,7 @@ impl LayerStack {
                         .iter()
                         .map(|step| {
                             Arc::new(FilterStep {
-                                to_document: shift.then(step.to_document),
+                                to_document: Projective::from(shift).then(step.to_document),
                                 ..(**step).clone()
                             })
                         })
@@ -3040,7 +3041,7 @@ impl LayerStack {
                         .iter()
                         .map(|step| {
                             Arc::new(Effect {
-                                to_document: shift.then(step.to_document),
+                                to_document: Projective::from(shift).then(step.to_document),
                                 ..(**step).clone()
                             })
                         })
@@ -3458,7 +3459,7 @@ impl LayerStack {
         for (n, step) in run.iter().enumerate() {
             let coarse_step = FilterStep {
                 filter: step.filter.scaled(factor),
-                to_document: scale.then(step.to_document),
+                to_document: Projective::from(scale).then(step.to_document),
                 ..(*step).clone()
             };
             let last = n + 1 == run.len();
@@ -3587,7 +3588,7 @@ impl LayerStack {
             .iter()
             .map(|step| FilterStep {
                 filter: step.filter.scaled(factor),
-                to_document: placed.then(step.to_document),
+                to_document: Projective::from(placed).then(step.to_document),
                 ..(*step).clone()
             })
             .collect();
@@ -4457,7 +4458,7 @@ mod tests {
         Effect {
             adjustment,
             selection,
-            to_document: Affine::IDENTITY,
+            to_document: Affine::IDENTITY.into(),
             space: BlendSpace::Perceptual,
         }
     }
@@ -4960,7 +4961,7 @@ mod tests {
         // layer's pixels were then.
         let moved = LayerStack::new(Arc::clone(&original))
             .with_effect(Effect {
-                to_document: Affine::translation(50.0, 0.0),
+                to_document: Affine::translation(50.0, 0.0).into(),
                 ..effect(Adjustment::Invert, Some(selection(|x, _| x < 100)))
             })
             .unwrap()
@@ -5100,7 +5101,7 @@ mod tests {
         FilterStep {
             filter: Filter::GaussianBlur { radius },
             selection,
-            to_document: Affine::IDENTITY,
+            to_document: Affine::IDENTITY.into(),
             space: BlendSpace::Perceptual,
         }
     }

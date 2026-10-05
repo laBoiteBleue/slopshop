@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 24;
+pub(crate) const SCHEMA_MINOR: u32 = 25;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -64,8 +64,13 @@ pub(crate) const NODE_VERSION_STYLED: u32 = 8;
 pub(crate) const NODE_VERSION_GLOWS: u32 = 9;
 /// Version of the raster nodes whose stack has a hidden entry (schema 0.20, ADR 0034): `hidden`
 /// on the entry. Written only for those, so that older readers refuse them instead of showing
-/// the entry. The newest node version this code reads.
+/// the entry.
 pub(crate) const NODE_VERSION_HIDDEN: u32 = 10;
+/// Version of the raster nodes placed in perspective (schema 0.25, ADR 0038): their
+/// `transform`, or a stack step's, has nine numbers (a projective map). Written only for those,
+/// so that older readers refuse them instead of misplacing them. The newest node version this
+/// code reads.
+pub(crate) const NODE_VERSION_PERSPECTIVE: u32 = 11;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

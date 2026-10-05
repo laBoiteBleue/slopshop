@@ -425,7 +425,8 @@ impl Pass {
                 monochromatic,
                 seed,
             } => {
-                let map = step.to_document;
+                // In perspective: the CPU places the noise (ADR 0038).
+                let map = step.to_document.as_affine()?;
                 return Some(vec![Self {
                     kind: Kind::Noise,
                     weights: [map.a, map.b, map.c, map.d, map.e, map.f]

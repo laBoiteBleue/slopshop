@@ -1324,7 +1324,7 @@ mod tests {
             .with_effect(crate::stack::Effect {
                 adjustment: crate::adjust::Adjustment::Invert,
                 selection: None,
-                to_document: Affine::IDENTITY,
+                to_document: Affine::IDENTITY.into(),
                 space: BlendSpace::Perceptual,
             })
             .unwrap();
@@ -1993,7 +1993,7 @@ mod tests {
             .with_effect(crate::stack::Effect {
                 adjustment: crate::adjust::Adjustment::Invert,
                 selection: Some(selection),
-                to_document: Affine::IDENTITY,
+                to_document: Affine::IDENTITY.into(),
                 space: BlendSpace::Perceptual,
             })
             .unwrap();

@@ -1518,7 +1518,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective)>; 
         Step::StackEffect { effect, transform } => [
             None,
             effect.selection.as_ref().and_then(|selection| {
-                let placed = Projective::from(effect.to_document.inverse()?).then(*transform);
+                let placed = effect.to_document.inverse()?.then(*transform);
                 Some((selection.image().as_ref(), placed))
             }),
         ],
@@ -2899,7 +2899,7 @@ mod tests {
                     FilterStep {
                         filter,
                         selection: None,
-                        to_document: Affine::IDENTITY,
+                        to_document: Affine::IDENTITY.into(),
                         space: BlendSpace::Perceptual,
                     },
                     Some(Arc::clone(image)),
@@ -2944,7 +2944,7 @@ mod tests {
                 FilterStep {
                     filter: Filter::GaussianBlur { radius: 2.0 },
                     selection: None,
-                    to_document: Affine::IDENTITY,
+                    to_document: Affine::IDENTITY.into(),
                     space: BlendSpace::Perceptual,
                 },
                 Some(gray),
@@ -3001,7 +3001,7 @@ mod tests {
                     FilterStep {
                         filter,
                         selection: None,
-                        to_document: Affine::IDENTITY,
+                        to_document: Affine::IDENTITY.into(),
                         space: BlendSpace::Perceptual,
                     },
                     Some(Arc::clone(&original)),

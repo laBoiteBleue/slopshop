@@ -130,6 +130,8 @@ export type LayerView = {
   clipped: boolean;
   /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
   transform: [number, number, number, number, number, number];
+  /** A layer in perspective (ADR 0038): its projective map, nine numbers. Absent: none. */
+  perspective?: number[] | null;
   /** Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it. */
   painted: boolean;
   /** What was applied to a raster layer's pixels (ADR 0029), bottom to top. */
