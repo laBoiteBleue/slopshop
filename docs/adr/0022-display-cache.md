@@ -76,7 +76,9 @@ usable headless; `unsafe` and new dependencies need a decision.
 4. **A frame becomes two passes**:
    - *fill*: render the visible tiles of the chosen level that are missing (the existing
      compositing code, with one output texel per level texel and the box footprint of the
-     level), within a per-frame budget;
+     level), within a per-frame budget; all of a frame's fills in one dispatch, their layers
+     and tile tables in shared buffers (2026-10-05: one bind group and three buffers a tile
+     cost about 40 µs of CPU each, 5 ms a frame at 4K);
    - *present*: for each output pixel, filter the cached tiles of that level (the same box
      footprint as `sample_raster`, at most 2 × 2 texels when zoomed out, the texel itself at
      100 % and when zoomed in), then apply the display transform, the checkerboard and the

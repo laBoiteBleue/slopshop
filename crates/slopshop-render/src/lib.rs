@@ -465,10 +465,11 @@ impl Renderer {
                         ty: wgpu::BindingType::StorageTexture {
                             access: wgpu::StorageTextureAccess::WriteOnly,
                             format: cache::CACHE_FORMAT,
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
                         },
                         count: None,
                     },
+                    storage(16, true),
                 ],
             ]
             .concat(),
