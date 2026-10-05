@@ -845,7 +845,47 @@ fn composite_region_on(
         return Ok(CompositeReport::default());
     }
 
-    let ops: Vec<Op> = steps(document)
+    let ops = ops(document);
+    let blender = Blender::new(document.blend_space());
+
+    let width = region.width as usize;
+    let row_len = width * 4;
+    let rows_per_chunk = (region.height as usize).div_ceil(threads.max(1)).max(1);
+    let chunks: Vec<&mut [f32]> = out.chunks_mut(rows_per_chunk * row_len).collect();
+    let mut reports = vec![CompositeReport::default(); chunks.len()];
+    let (ops, blender) = (&ops, &blender);
+    let run = move |chunk_index: usize, chunk: &mut [f32], report: &mut CompositeReport| {
+        let mut acc = vec![[0.0f64; 4]; width];
+        // One accumulator per open group, reused from row to row.
+        let mut stack = Vec::new();
+        for (i, row) in chunk.chunks_exact_mut(row_len).enumerate() {
+            // Fits: the row is inside the region, whose bottom fits the document.
+            let y = region.y + (chunk_index * rows_per_chunk + i) as u32;
+            composite_row(ops, blender, region.x, y, &mut acc, &mut stack, report);
+            for (value, &v) in row.iter_mut().zip(acc.iter().flatten()) {
+                *value = saturate(v, report);
+            }
+        }
+    };
+    if chunks.len() == 1 {
+        for (chunk, report) in chunks.into_iter().zip(&mut reports) {
+            run(0, chunk, report);
+        }
+    } else {
+        std::thread::scope(|scope| {
+            for (chunk_index, (chunk, report)) in chunks.into_iter().zip(&mut reports).enumerate() {
+                scope.spawn(move || run(chunk_index, chunk, report));
+            }
+        });
+    }
+    Ok(CompositeReport {
+        non_finite: reports.iter().map(|r| r.non_finite).sum(),
+    })
+}
+
+/// What the CPU compositor does for `document`, step by step (its layers' pixels evaluated).
+fn ops(document: &Document) -> Vec<Op<'_>> {
+    steps(document)
         .into_iter()
         .filter_map(|step| match step {
             Step::Layer {
@@ -884,42 +924,40 @@ fn composite_region_on(
             // Only the display's steps hold stacks: here every layer's pixels are evaluated.
             Step::StackOriginal { .. } | Step::StackPaint { .. } | Step::StackEffect { .. } => None,
         })
-        .collect();
-    let blender = Blender::new(document.blend_space());
+        .collect()
+}
 
-    let width = region.width as usize;
-    let row_len = width * 4;
-    let rows_per_chunk = (region.height as usize).div_ceil(threads.max(1)).max(1);
-    let chunks: Vec<&mut [f32]> = out.chunks_mut(rows_per_chunk * row_len).collect();
-    let mut reports = vec![CompositeReport::default(); chunks.len()];
-    let (ops, blender) = (&ops, &blender);
-    let run = move |chunk_index: usize, chunk: &mut [f32], report: &mut CompositeReport| {
-        let mut acc = vec![[0.0f64; 4]; width];
-        // One accumulator per open group, reused from row to row.
-        let mut stack = Vec::new();
-        for (i, row) in chunk.chunks_exact_mut(row_len).enumerate() {
-            // Fits: the row is inside the region, whose bottom fits the document.
-            let y = region.y + (chunk_index * rows_per_chunk + i) as u32;
-            composite_row(ops, blender, region.x, y, &mut acc, &mut stack, report);
-            for (value, &v) in row.iter_mut().zip(acc.iter().flatten()) {
-                *value = saturate(v, report);
-            }
+/// The CPU compositor prepared once for `document`, pixel by pixel: what samples the image here
+/// and there (the Histogram panel) composites only the pixels it counts, the same values as
+/// [`composite_region`]'s.
+pub(crate) struct PixelCompositor<'a> {
+    ops: Vec<Op<'a>>,
+    blender: Blender,
+    size: crate::geom::Size,
+}
+
+impl<'a> PixelCompositor<'a> {
+    pub(crate) fn new(document: &'a Document) -> Self {
+        // The pixels of the layers' stacks (ADR 0029), which the steps read as they are.
+        document.evaluate_pixels();
+        Self {
+            ops: ops(document),
+            blender: Blender::new(document.blend_space()),
+            size: document.size(),
         }
-    };
-    if chunks.len() == 1 {
-        for (chunk, report) in chunks.into_iter().zip(&mut reports) {
-            run(0, chunk, report);
-        }
-    } else {
-        std::thread::scope(|scope| {
-            for (chunk_index, (chunk, report)) in chunks.into_iter().zip(&mut reports).enumerate() {
-                scope.spawn(move || run(chunk_index, chunk, report));
-            }
-        });
     }
-    Ok(CompositeReport {
-        non_finite: reports.iter().map(|r| r.non_finite).sum(),
-    })
+
+    /// Pixel (`x`, `y`) of the canvas, premultiplied RGBA in the working space; transparent
+    /// beyond it. `stack` holds what open groups push (kept from pixel to pixel).
+    pub(crate) fn pixel(&self, x: u32, y: u32, stack: &mut Vec<Vec<[f64; 4]>>) -> [f32; 4] {
+        if x >= self.size.width || y >= self.size.height {
+            return [0.0; 4];
+        }
+        let mut acc = [[0.0f64; 4]; 1];
+        let mut report = CompositeReport::default();
+        composite_row(&self.ops, &self.blender, x, y, &mut acc, stack, &mut report);
+        acc[0].map(|v| saturate(v, &mut report))
+    }
 }
 
 /// Composite the pixels `x0..x0 + acc.len()` of row `y` into `acc`, with `stack` holding what
@@ -1842,6 +1880,33 @@ mod tests {
 
     fn all(doc: &Document) -> Vec<f32> {
         composite(doc, doc.size().bounds()).0
+    }
+
+    #[test]
+    fn pixels_composited_one_by_one_are_the_region_s() {
+        // What the Histogram panel samples: the same values as compositing the whole region.
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            let mut doc = document(space);
+            opaque_base(&mut doc);
+            let a = new_layer(&mut doc, varied(0.1), BlendMode::Multiply, 0.7);
+            let b = new_layer(&mut doc, varied(0.6), BlendMode::Dissolve, 0.5);
+            let g = group(&mut doc, vec![a, b], false);
+            push(&mut doc, g);
+            let invert = LayerContent::Adjustment {
+                adjustment: crate::adjust::Adjustment::Invert,
+            };
+            let adjusted = new_layer(&mut doc, invert, BlendMode::Normal, 0.6);
+            push(&mut doc, adjusted);
+            let full = all(&doc);
+            let compositor = PixelCompositor::new(&doc);
+            let mut stack = Vec::new();
+            for (i, expected) in full.as_chunks::<4>().0.iter().enumerate() {
+                let (x, y) = ((i % 4) as u32, (i / 4) as u32);
+                assert_eq!(&compositor.pixel(x, y, &mut stack), expected, "({x}, {y})");
+            }
+            // Beyond the canvas: transparent.
+            assert_eq!(compositor.pixel(4, 0, &mut stack), [0.0; 4]);
+        }
     }
 
     #[test]

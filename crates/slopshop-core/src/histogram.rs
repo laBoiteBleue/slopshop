@@ -5,8 +5,8 @@
 //! Large images are sampled on a regular grid of rows and columns, up to [`MAX_SAMPLES`]
 //! pixels: a histogram drawn in a panel needs no more.
 
+use crate::composite::PixelCompositor;
 use crate::document::Document;
-use crate::geom::Rect;
 use crate::paint::MaskReader;
 use crate::raster::{Codec, parallel_for_each};
 use crate::selection::WandSampler;
@@ -68,8 +68,10 @@ pub fn histogram(document: &Document) -> Histogram {
     };
     let pixels = region.size().pixel_count();
     let step = (pixels.div_ceil(MAX_SAMPLES) as f64).sqrt().ceil().max(1.0) as u32;
-    // The CPU compositor: rows one pixel high would cost a GPU round trip each.
+    // The CPU compositor, for the pixels counted only: rows one pixel high would cost a GPU
+    // round trip each.
     let sampler = WandSampler::new(document, None);
+    let compositor = PixelCompositor::new(document);
     let mask = selection.map(|s| (s.image().as_ref(), Codec::new(s.image().stored_format())));
     let rows: Vec<u32> = (region.y..region.y + region.height)
         .step_by(step as usize)
@@ -80,9 +82,15 @@ pub fn histogram(document: &Document) -> Histogram {
         .collect();
     parallel_for_each(&mut per_row, |(y, counts)| {
         let y = *y;
-        let colors = sampler.region(Rect::new(region.x, y, region.width, 1));
-        for x in (0..region.width).step_by(step as usize) {
-            let [r, g, b, alpha] = colors[x as usize];
+        let columns: Vec<u32> = (0..region.width).step_by(step as usize).collect();
+        let mut stack = Vec::new();
+        let rgba: Vec<f32> = columns
+            .iter()
+            .flat_map(|&x| compositor.pixel(region.x + x, y, &mut stack))
+            .collect();
+        let mut colors = vec![[0f32; 4]; columns.len()];
+        sampler.convert(&rgba, &mut colors);
+        for (&x, &[r, g, b, alpha]) in columns.iter().zip(&colors) {
             if alpha <= 0.0 {
                 continue;
             }
@@ -206,5 +214,46 @@ mod tests {
     fn transparent_pixels_and_an_empty_document_count_nothing() {
         let h = histogram(&Document::new(Size::new(4, 4)));
         assert_eq!(h.luminosity.iter().sum::<f64>(), 0.0);
+    }
+
+    /// Timing of the histogram of a 12 MP image under a Curves layer (run with `--ignored
+    /// --nocapture`).
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_histogram() {
+        let mut doc = half_and_half(Size::new(4000, 3000), 200);
+        let curve = crate::curve::Curve::new(&[[0, 0], [90, 140], [255, 255]]).unwrap();
+        let curves = crate::adjust::Adjustment::Curves {
+            rgb: curve,
+            red: crate::curve::Curve::IDENTITY,
+            green: curve,
+            blue: crate::curve::Curve::IDENTITY,
+        };
+        let layer = Layer {
+            style: None,
+            id: doc.allocate_layer_id(),
+            name: "curves".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: Affine::IDENTITY,
+            content: LayerContent::Adjustment { adjustment: curves },
+        };
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        histogram(&doc);
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            histogram(&doc);
+        }
+        let each = start.elapsed().as_secs_f64() * 100.0;
+        println!("histogram of 12 MP under Curves: {each:.2} ms");
     }
 }

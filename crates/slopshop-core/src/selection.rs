@@ -1742,7 +1742,7 @@ impl<'a> WandSampler<'a> {
     }
 
     /// Premultiplied working-space pixels `rgba` as displayed colors in `out`.
-    fn convert(&self, rgba: &[f32], out: &mut [[f32; 4]]) {
+    pub(crate) fn convert(&self, rgba: &[f32], out: &mut [[f32; 4]]) {
         for (color, p) in out.iter_mut().zip(rgba.as_chunks::<4>().0) {
             let a = p[3].clamp(0.0, 1.0);
             if a > 0.0 {
