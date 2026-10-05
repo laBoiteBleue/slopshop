@@ -19,7 +19,7 @@ use crate::edit::{Edit, EditError};
 use crate::geom::{Rect, Size};
 use crate::pick::{self, Bounds};
 use crate::raster::{RasterImage, TILE_SIZE};
-use crate::transform::Affine;
+use crate::transform::Projective;
 
 /// A composite to make, and the layer whose content it replaces.
 #[derive(Debug, Clone)]
@@ -93,9 +93,9 @@ fn replace(doc: &Document, layer: Layer) -> Result<Edit, EditError> {
 
 /// A content space moved `shift` whole tiles toward negative coordinates: what was at the
 /// origin is now at `shift` tiles.
-fn shifted(transform: Affine, (cols, rows): (u32, u32)) -> Affine {
+fn shifted(transform: Projective, (cols, rows): (u32, u32)) -> Projective {
     let t = f64::from(TILE_SIZE);
-    Affine::translation(-f64::from(cols) * t, -f64::from(rows) * t).then(transform)
+    Projective::translation(-f64::from(cols) * t, -f64::from(rows) * t).then(transform)
 }
 
 /// `mask` in a content space shifted by `shift` tiles (its tiles shared), its paint baked.
@@ -171,7 +171,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: Projective::IDENTITY,
                 // Its effects stay the layer's (ADR 0032), drawn from the pixels it becomes.
                 style: None,
                 ..layer.clone()
@@ -201,7 +201,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
         let (ox, oy) = (i64::from(shift.0) * t, i64::from(shift.1) * t);
         // The image covers the new content space from its origin to the content's far edge.
         let size = size_of(region.right + ox, region.bottom + oy)?;
-        let moved = Affine::translation(ox as f64, oy as f64);
+        let moved = Projective::translation(ox as f64, oy as f64);
         let scratch = scratch(doc, size, content, moved)?;
         // Within the canvas by construction (the shift makes the region's start non-negative).
         let region = Rect::new(
@@ -291,7 +291,7 @@ pub fn merge_preview(
             .then(doc.parent_transform(p))
             .inverse()
             .ok_or(EditError::InvalidTransform)?,
-        None => Affine::IDENTITY,
+        None => Projective::IDENTITY,
     };
     let group = Layer {
         style: None,
@@ -302,7 +302,7 @@ pub fn merge_preview(
         blend_mode: BlendMode::Normal,
         mask: None,
         clipped: false,
-        transform: Affine::IDENTITY,
+        transform: Projective::IDENTITY,
         content: LayerContent::Group {
             children: Vec::new(),
             pass_through: false,
@@ -340,7 +340,7 @@ fn base(doc: &Document, id: LayerId) -> Option<LayerId> {
 
 /// The canvas in a space whose map to the document's is the inverse of `to_space`'s: the box
 /// around it, in whole pixels.
-fn canvas_bounds(doc: &Document, to_space: Affine) -> Bounds {
+fn canvas_bounds(doc: &Document, to_space: Projective) -> Bounds {
     let size = doc.size();
     let [x0, y0, x1, y1] =
         to_space.map_rect([0.0, 0.0, f64::from(size.width), f64::from(size.height)]);
@@ -405,7 +405,7 @@ fn scratch(
     doc: &Document,
     size: Size,
     layers: Vec<Layer>,
-    moved: Affine,
+    moved: Projective,
 ) -> Result<Document, EditError> {
     let layers = layers
         .into_iter()
@@ -429,6 +429,7 @@ mod tests {
     use super::*;
     use crate::color::{AlphaMode, ChannelLayout, ColorSpace, LinearRgba, PixelFormat, SampleType};
     use crate::geom::Rect;
+    use crate::transform::Affine;
 
     const RGBA8: PixelFormat = PixelFormat {
         layout: ChannelLayout::Rgba,
@@ -447,7 +448,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content,
         }
     }
@@ -530,7 +531,7 @@ mod tests {
         let a = push(&mut doc, a);
         let mut b = plain(&mut doc, "b", boxed(Rect::new(0, 0, 10, 10)));
         // Moved off the canvas on the left: kept.
-        b.transform = Affine::translation(-5.0, 50.0);
+        b.transform = Affine::translation(-5.0, 50.0).into();
         let b = push(&mut doc, b);
         let top = plain(&mut doc, "top", boxed(Rect::new(90, 90, 10, 10)));
         push(&mut doc, top);
@@ -576,7 +577,7 @@ mod tests {
         let a = push(&mut doc, a);
         let mut b = plain(&mut doc, "b", boxed(Rect::new(0, 0, 10, 10)));
         // Partly before the origin: the scratch canvas starts a tile earlier.
-        b.transform = Affine::translation(-5.0, 60.0);
+        b.transform = Affine::translation(-5.0, 60.0).into();
         let b = push(&mut doc, b);
         let group = doc.allocate_layer_id();
         merge_preview(&doc, Merge::Layers(vec![a, b]), group)
@@ -601,7 +602,7 @@ mod tests {
                 pass_through: false,
             },
         );
-        group.transform = Affine::translation(30.0, 0.0);
+        group.transform = Affine::translation(30.0, 0.0).into();
         push(&mut doc, group);
         let outside = plain(&mut doc, "outside", boxed(Rect::new(0, 50, 10, 10)));
         let outside = push(&mut doc, outside);
@@ -705,7 +706,7 @@ mod tests {
     fn rasterizing_a_moved_fill_keeps_the_canvas_covered_and_its_mask_in_place() {
         let mut doc = Document::new(Size::new(100, 100));
         let mut layer = plain(&mut doc, "fill", fill());
-        layer.transform = Affine::translation(10.0, 0.0);
+        layer.transform = Affine::translation(10.0, 0.0).into();
         layer.opacity = 0.5;
         let gray = PixelFormat {
             layout: ChannelLayout::Gray,
@@ -738,7 +739,7 @@ mod tests {
         // One tile before the origin: the canvas's left edge is still covered.
         assert_eq!(
             layer.transform,
-            Affine::translation(10.0 - f64::from(TILE_SIZE), 0.0)
+            Affine::translation(10.0 - f64::from(TILE_SIZE), 0.0).into()
         );
         assert_eq!(shown(&doc, 10, 50).as_deref(), Some("fill"));
         assert_eq!(shown(&doc, 49, 50).as_deref(), Some("fill"));
@@ -765,14 +766,14 @@ mod tests {
             },
         );
         group.opacity = 0.75;
-        group.transform = Affine::translation(5.0, 5.0);
+        group.transform = Affine::translation(5.0, 5.0).into();
         let id = push(&mut doc, group);
         let plans = rasterize_plans(&doc, &[id]).unwrap();
         let undo = bake(&mut doc, plans.into_iter().next().unwrap());
         let layer = doc.layer(id).unwrap();
         assert!(matches!(layer.content, LayerContent::Raster { .. }));
         assert_eq!(layer.opacity, 0.75);
-        assert_eq!(layer.transform, Affine::translation(5.0, 5.0));
+        assert_eq!(layer.transform, Affine::translation(5.0, 5.0).into());
         assert_eq!(shown(&doc, 25, 25).as_deref(), Some("group"));
         assert_eq!(shown(&doc, 34, 34).as_deref(), Some("group"));
         assert_eq!(shown(&doc, 24, 24), None);

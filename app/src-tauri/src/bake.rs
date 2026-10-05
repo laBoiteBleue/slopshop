@@ -93,7 +93,7 @@ fn start(session: &mut Session, request: BakeRequest, baked: Vec<Edit>) -> Resul
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Projective::IDENTITY,
                 content: LayerContent::Group {
                     children,
                     pass_through: false,
@@ -388,7 +388,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(Arc::new(image)),
             };
             let index = s.document().layers().len();

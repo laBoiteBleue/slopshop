@@ -188,7 +188,6 @@ mod tests {
     use crate::edit::Edit;
     use crate::geom::Size;
     use crate::raster::RasterImage;
-    use crate::transform::Affine;
 
     fn push(doc: &mut Document, content: LayerContent) {
         let layer = Layer {
@@ -200,7 +199,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content,
         };
         let index = doc.layers().len();
@@ -253,7 +252,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
                 content: LayerContent::Fill {
                     color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
                 },

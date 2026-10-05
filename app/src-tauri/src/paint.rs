@@ -21,7 +21,8 @@ use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, g
 use slopshop_core::selection::{Selection, sample_region};
 use slopshop_core::stack::LayerStack;
 use slopshop_core::{
-    Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, RasterImage, Size,
+    Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, Projective, RasterImage,
+    Size,
 };
 use tauri::Manager;
 use tauri::ipc::Response;
@@ -300,7 +301,7 @@ pub(crate) fn paint_edit(target: Target, painted: Painted, growth: Option<&Growt
     if let Some(growth) = growth {
         edits.push(Edit::SetLayerTransform {
             id: layer,
-            transform: growth.transform,
+            transform: growth.transform.into(),
         });
         if let Some(mask) = &growth.mask {
             edits.push(Edit::SetLayerMask {
@@ -310,6 +311,15 @@ pub(crate) fn paint_edit(target: Target, painted: Painted, growth: Option<&Growt
         }
     }
     Edit::Batch(edits)
+}
+
+/// A layer's placement as the pixel tools (painting, moving pixels, masks from a selection) work
+/// with it: an affine map, until they follow projective layers (ADR 0038; edits refuse those
+/// meanwhile).
+pub(crate) fn affine_placement(transform: Projective) -> Result<Affine, String> {
+    transform
+        .as_affine()
+        .ok_or_else(|| "a layer in perspective is not edited by pixel tools yet".to_owned())
 }
 
 /// What `stroke` painted on `target` so far: a layer's stack and what it shows, or an image.
@@ -343,16 +353,17 @@ pub(crate) fn grow(
         .content
         .stack()
         .ok_or("only raster layers can be painted")?;
-    let parent = doc.parent_transform(id);
+    let parent = affine_placement(doc.parent_transform(id))?;
+    let transform = affine_placement(layer.transform)?;
     let growth = grow
-        .then(|| canvas_growth(image.size(), layer.transform.then(parent), doc.size()))
+        .then(|| canvas_growth(image.size(), transform.then(parent), doc.size()))
         .flatten();
     let image = image.get();
     let Some((offset, size)) = growth else {
         return Ok((
             image,
             Growth {
-                transform: layer.transform,
+                transform,
                 stack,
                 mask: layer.mask.clone(),
             },
@@ -361,7 +372,7 @@ pub(crate) fn grow(
     grown(
         &image,
         &Growth {
-            transform: layer.transform,
+            transform,
             stack,
             mask: layer.mask.clone(),
         },
@@ -493,7 +504,9 @@ fn start(
                 (None, None) => Paint::Erase,
             };
             // Into the parent, then into the document.
-            let to_document = growth.transform.then(doc.parent_transform(id));
+            let to_document = growth
+                .transform
+                .then(affine_placement(doc.parent_transform(id))?);
             let stroke = Stroke::on_stack(
                 &growth.stack,
                 image,
@@ -514,7 +527,7 @@ fn start(
         Target::Mask(id) => {
             let layer = doc.layer(id).ok_or("the painted layer is gone")?;
             let mask = layer.mask.as_ref().ok_or("the layer has no mask")?;
-            let to_document = layer.transform.then(doc.parent_transform(id));
+            let to_document = affine_placement(layer.transform.then(doc.parent_transform(id)))?;
             (Arc::clone(&mask.image), to_document, None, gray, selection)
         }
         // Quick Mask's image, within the selection made meanwhile (as Photoshop's channel).
@@ -684,7 +697,9 @@ fn smudge(
                 return Err("Smudge pushes a layer's pixels, not a mask".to_owned());
             };
             let (shown, growth) = grow(&doc, id, false)?;
-            let to_document = growth.transform.then(doc.parent_transform(id));
+            let to_document = growth
+                .transform
+                .then(affine_placement(doc.parent_transform(id))?);
             let to_image = to_document.inverse().ok_or("the layer cannot be shown")?;
             let brush = liquify::Brush {
                 size: request
@@ -1306,7 +1321,7 @@ mod tests {
             content: LayerContent::raster(Arc::new(image)),
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: Affine::IDENTITY.into(),
         };
         let mut session = Session::new(
             Document::restore(

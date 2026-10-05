@@ -1209,8 +1209,10 @@ struct Footprint {
 // A gradient fill layer's premultiplied working-space color at document point `p`, its opacity
 // not applied (GradientField in core; see `set_gradient_fields` in lib.rs).
 fn gradient_color(layer: Layer, p: vec2<f32>) -> vec4<f32> {
+    // Projective (ADR 0038): divided by the third row, 1 for an affine map.
     let q = vec3<f32>(p, 1.0);
-    let content = vec2<f32>(dot(layer.resample_u.xyz, q), dot(layer.resample_v.xyz, q));
+    let content = vec2<f32>(dot(layer.resample_u.xyz, q), dot(layer.resample_v.xyz, q))
+        / dot(layer.resample_q.xyz, q);
     let start = layer.color.xy;
     let span = layer.color.zw - start;
     let length2 = dot(span, span);

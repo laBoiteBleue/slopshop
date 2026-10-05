@@ -219,7 +219,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                 index,
                 layer: Layer {
                     style: None,
-                    transform: slopshop_core::Affine::IDENTITY,
+                    transform: slopshop_core::Projective::IDENTITY,
                     clipped: false,
                     id,
                     name: name.into(),

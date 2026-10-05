@@ -598,7 +598,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
         index: 0,
         layer: Layer {
             style: None,
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Projective::IDENTITY,
             clipped: false,
             id,
             name: name.to_owned(),
@@ -1031,7 +1031,7 @@ fn insert_image(
                 index: session.document().layers().len(),
                 layer: Layer {
                     style: None,
-                    transform: slopshop_core::Affine::IDENTITY,
+                    transform: slopshop_core::Projective::IDENTITY,
                     clipped: false,
                     id: layer_id,
                     name: layer_name.to_owned(),
@@ -2466,7 +2466,7 @@ mod tests {
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "masked".to_owned(),
@@ -2674,7 +2674,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::translation(1000.0, 1000.0),
+                transform: slopshop_core::Affine::translation(1000.0, 1000.0).into(),
                 content: LayerContent::raster(Arc::clone(&small)),
             };
             document
@@ -2736,7 +2736,7 @@ mod tests {
         let layer = document.session.document().layer(id).unwrap();
         assert_eq!(
             layer.transform,
-            slopshop_core::Affine::translation(1000.0, 1000.0)
+            slopshop_core::Affine::translation(1000.0, 1000.0).into()
         );
         assert!(
             matches!(&layer.content, LayerContent::Raster { image, stack: None }
@@ -2794,7 +2794,7 @@ mod tests {
                     index,
                     layer: Layer {
                         style: None,
-                        transform: slopshop_core::Affine::IDENTITY,
+                        transform: slopshop_core::Affine::IDENTITY.into(),
                         clipped: false,
                         id,
                         name: "painted".to_owned(),
@@ -2876,7 +2876,7 @@ mod tests {
                     index,
                     layer: Layer {
                         style: None,
-                        transform: slopshop_core::Affine::IDENTITY,
+                        transform: slopshop_core::Affine::IDENTITY.into(),
                         clipped: false,
                         id,
                         name: "masked".to_owned(),
@@ -3738,7 +3738,7 @@ mod tests {
                 index: 1,
                 layer: Layer {
                     style: None,
-                    transform: slopshop_core::Affine::IDENTITY,
+                    transform: slopshop_core::Affine::IDENTITY.into(),
                     clipped: false,
                     id: second,
                     name: "second".into(),
@@ -3802,7 +3802,7 @@ mod tests {
         let id = document.session.allocate_layer_id();
         let layer = Layer {
             style: None,
-            transform: slopshop_core::Affine::IDENTITY,
+            transform: slopshop_core::Affine::IDENTITY.into(),
             clipped: false,
             id,
             name: "fill".to_owned(),
@@ -4364,7 +4364,10 @@ mod tests {
         }
         // Only the last step applies: a quarter turn, exact.
         let transform = s.document().layer(id).unwrap().transform;
-        assert_eq!(transform.to_array(), [0.0, 1.0, -1.0, 0.0, 10.0, 0.0]);
+        assert_eq!(
+            transform.to_array(),
+            [0.0, 1.0, -1.0, 0.0, 10.0, 0.0, 0.0, 0.0, 1.0]
+        );
         s.end_gesture();
         assert!(s.undo().unwrap());
         assert!(s.document().layer(id).unwrap().transform.is_identity());
@@ -4575,7 +4578,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(image),
             };
             document
@@ -4649,7 +4652,7 @@ mod tests {
                 panic!("the layer floats as a group");
             };
             assert_eq!(children.len(), 2);
-            assert_eq!(children[1].transform.e, 10.0);
+            assert_eq!(children[1].transform.to_array()[4], 10.0);
         }
         // The end moves them: the pixels and the selection, a hole left, the view as it was.
         let view = move_pixels::move_pixels(&state, doc.id, &request(1, 20, true))
@@ -4735,7 +4738,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(image),
             };
             let insert = Edit::InsertLayer {
@@ -4768,7 +4771,7 @@ mod tests {
                 panic!("a raster layer");
             };
             let original = stack.as_ref().unwrap().original().size();
-            (image.get(), original, layer.transform.e)
+            (image.get(), original, layer.transform.to_array()[4])
         };
         let pixel = |image: &RasterImage, x: u32, y: u32| -> Vec<u8> {
             let coord = TileCoord {
@@ -4817,7 +4820,7 @@ mod tests {
             panic!("a raster layer");
         };
         assert_eq!((image.size(), stack.is_none()), (size, true));
-        assert_eq!(layer.transform, slopshop_core::Affine::IDENTITY);
+        assert_eq!(layer.transform, slopshop_core::Affine::IDENTITY.into());
     }
 
     /// A 120 × 100 gradient on one layer, in a new document: its tab and its layer's id.

@@ -317,7 +317,7 @@ impl Session {
                     index: base,
                     layer: Layer {
                         style: None,
-                        transform: crate::transform::Affine::IDENTITY,
+                        transform: crate::transform::Projective::IDENTITY,
                         clipped: false,
                         id,
                         name,
@@ -574,7 +574,7 @@ mod tests {
                 index,
                 layer: Layer {
                     style: None,
-                    transform: crate::transform::Affine::IDENTITY,
+                    transform: crate::transform::Projective::IDENTITY,
                     clipped: false,
                     id,
                     name: name.into(),
@@ -860,7 +860,7 @@ mod tests {
                 index: 1,
                 layer: Layer {
                     style: None,
-                    transform: crate::transform::Affine::IDENTITY,
+                    transform: crate::transform::Projective::IDENTITY,
                     clipped: false,
                     id,
                     name: "photo".into(),
@@ -975,7 +975,7 @@ mod tests {
                 index: 1,
                 layer: Layer {
                     style: None,
-                    transform: crate::transform::Affine::IDENTITY,
+                    transform: crate::transform::Projective::IDENTITY,
                     clipped: false,
                     id: group,
                     name: "group".into(),

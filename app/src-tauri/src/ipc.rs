@@ -475,7 +475,9 @@ impl LayerView {
                 }
             ),
             clipped: layer.clipped,
-            transform: layer.transform.to_array(),
+            // Six numbers until the UI places layers in perspective (ADR 0038; edits refuse
+            // them meanwhile).
+            transform: layer.transform.as_affine().unwrap_or_default().to_array(),
             painted: layer.is_painted(),
             entries: match &layer.content {
                 LayerContent::Raster {
@@ -1042,7 +1044,7 @@ impl EditRequest {
                     index,
                     layer: Layer {
                         style: None,
-                        transform: slopshop_core::Affine::IDENTITY,
+                        transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
                         name,
@@ -1084,7 +1086,7 @@ impl EditRequest {
                     index,
                     layer: Layer {
                         style: None,
-                        transform: slopshop_core::Affine::IDENTITY,
+                        transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
                         name,
@@ -1130,7 +1132,7 @@ impl EditRequest {
                     index,
                     layer: Layer {
                         style: None,
-                        transform: slopshop_core::Affine::IDENTITY,
+                        transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
                         name,
@@ -1199,7 +1201,7 @@ impl EditRequest {
                         index: index + 1,
                         layer: Layer {
                             style: None,
-                            transform: slopshop_core::Affine::IDENTITY,
+                            transform: slopshop_core::Projective::IDENTITY,
                             clipped: true,
                             id: session.allocate_layer_id(),
                             name: adjustment.id().to_owned(),
@@ -1304,7 +1306,7 @@ impl EditRequest {
                     index,
                     layer: Layer {
                         style: None,
-                        transform: slopshop_core::Affine::IDENTITY,
+                        transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
                         id: session.allocate_layer_id(),
                         name,
@@ -1550,7 +1552,7 @@ impl EditRequest {
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
         style: None,
-        transform: slopshop_core::Affine::IDENTITY,
+        transform: slopshop_core::Projective::IDENTITY,
         clipped: false,
         id: session.allocate_layer_id(),
         name,
@@ -3095,7 +3097,7 @@ mod tests {
                 content: LayerContent::raster(std::sync::Arc::new(image)),
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 style: None,
             },
         }
@@ -3159,7 +3161,7 @@ mod tests {
                 content: LayerContent::raster(std::sync::Arc::new(image)),
                 mask: None,
                 clipped: false,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 style: None,
             },
         }

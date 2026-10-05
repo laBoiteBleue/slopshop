@@ -27,7 +27,7 @@ use crate::geom::{Rect, Size};
 use crate::pick;
 use crate::raster::{RasterImage, parallel_for_each};
 use crate::selection::{self, MAX_FEATHER, MAX_MODIFY, Modify, SELECTION_FORMAT, StrokeLocation};
-use crate::transform::Affine;
+use crate::transform::{Affine, Projective};
 
 /// The farthest a Drop Shadow is offset, in pixels (Photoshop's).
 pub const MAX_DISTANCE: f64 = 30_000.0;
@@ -146,7 +146,7 @@ impl Style {
 
     /// What the effects draw for `layer` (a pixel or fill layer, or a group) placed by
     /// `to_document` on a `canvas`: computed now if they are not (on every core), then kept.
-    pub(crate) fn drawn(&self, layer: &Layer, to_document: Affine, canvas: Size) -> &Drawn {
+    pub(crate) fn drawn(&self, layer: &Layer, to_document: Projective, canvas: Size) -> &Drawn {
         let effects = &self.effects;
         effects.ready.get_or_init(|| {
             let drawn = Arc::new(
@@ -166,7 +166,7 @@ impl Style {
     pub(crate) fn drawn_for_display(
         &self,
         layer: &Layer,
-        to_document: Affine,
+        to_document: Projective,
         canvas: Size,
     ) -> Result<&Drawn, Option<&Drawn>> {
         let effects = &self.effects;
@@ -241,7 +241,13 @@ impl Effects {
 
     /// Compute them on a thread of their own, once, when their lineage computes nothing else:
     /// the newest asked for (a stroke under way gives a new style per change) starts next.
-    fn start(self: Arc<Self>, settings: Arc<LayerStyle>, layer: Layer, at: Affine, canvas: Size) {
+    fn start(
+        self: Arc<Self>,
+        settings: Arc<LayerStyle>,
+        layer: Layer,
+        at: Projective,
+        canvas: Size,
+    ) {
         if self.started.load(Ordering::Acquire) || self.lineage.busy.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -322,7 +328,7 @@ struct Shaped {
 }
 
 /// A gray coverage image placed in the document.
-type Placed = (Arc<RasterImage>, Affine);
+type Placed = (Arc<RasterImage>, Projective);
 
 /// The effects drawn from a mask, each with its place in [`Shaped::masks`].
 #[derive(Debug, Clone, Copy)]
@@ -417,14 +423,14 @@ impl MaskKey {
                     shape =
                         Arc::new(selection::modify(size, &shape, Modify::Feather(sigma)).ok()??);
                 }
-                Some((shape, Affine::translation(x + dx, y + dy)))
+                Some((shape, Projective::translation(x + dx, y + dy)))
             }
             MaskKey::Band {
                 size: width,
                 position,
             } => {
                 let band = selection::stroke_band(size, shape, width, position).ok()??;
-                Some((Arc::new(band), Affine::translation(x, y)))
+                Some((Arc::new(band), Projective::translation(x, y)))
             }
         }
     }
@@ -433,7 +439,7 @@ impl MaskKey {
 impl Shaped {
     /// What it holds made for `to_document` on `canvas`: kept, moved along when the layer moved
     /// by whole pixels, else forgotten.
-    fn align(&mut self, to_document: Affine, canvas: Size) {
+    fn align(&mut self, to_document: Projective, canvas: Size) {
         let Some(coverage) = &mut self.coverage else {
             return;
         };
@@ -446,7 +452,7 @@ impl Shaped {
         };
         for (_, placed) in self.masks.iter_mut().flatten() {
             if let Some((_, at)) = placed {
-                *at = at.then(Affine::translation(dx, dy));
+                *at = at.then(Projective::translation(dx, dy));
             }
         }
     }
@@ -463,7 +469,7 @@ impl Shaped {
 /// A layer's coverage, as its effects are drawn from it.
 #[derive(Debug)]
 struct Coverage {
-    to_document: Affine,
+    to_document: Projective,
     canvas: Size,
     /// How far the grown canvas extends beyond the canvas on every side, and how far beyond the
     /// shape the coverage goes: the reach of the effects it serves.
@@ -479,8 +485,9 @@ struct Coverage {
 impl Coverage {
     /// Move it to `to_document` if the layer only moved by whole pixels and its shape stays on
     /// the grown canvas: the move.
-    fn shift_to(&mut self, to_document: Affine, canvas: Size) -> Option<(f64, f64)> {
-        let (old, new) = (self.to_document, to_document);
+    fn shift_to(&mut self, to_document: Projective, canvas: Size) -> Option<(f64, f64)> {
+        // A projective layer's coverage is drawn again: it is not the same one moved.
+        let (old, new) = (self.to_document.as_affine()?, to_document.as_affine()?);
         let linear = |t: Affine| [t.a, t.b, t.c, t.d];
         if canvas != self.canvas || !self.whole || linear(old) != linear(new) {
             return None;
@@ -610,7 +617,7 @@ pub struct Drawn {
     /// Above the content: Stroke.
     pub above: Vec<Layer>,
     /// Where the layer was placed in the document when they were drawn.
-    at: Affine,
+    at: Projective,
 }
 
 impl Default for Drawn {
@@ -619,7 +626,7 @@ impl Default for Drawn {
             below: Vec::new(),
             over: Vec::new(),
             above: Vec::new(),
-            at: Affine::IDENTITY,
+            at: Projective::IDENTITY,
         }
     }
 }
@@ -628,7 +635,7 @@ impl Drawn {
     /// The same effects following their layer placed by `to_document` instead: moved, turned
     /// and scaled with it, as they show while they are drawn again for that place (a free
     /// transform dragged changes it at each step). The same when it did not move.
-    fn following(self: &Arc<Self>, to_document: Affine) -> Arc<Self> {
+    fn following(self: &Arc<Self>, to_document: Projective) -> Arc<Self> {
         if self.at == to_document {
             return Arc::clone(self);
         }
@@ -659,7 +666,7 @@ pub(crate) static NO_EFFECTS: Drawn = Drawn {
     below: Vec::new(),
     over: Vec::new(),
     above: Vec::new(),
-    at: Affine::IDENTITY,
+    at: Projective::IDENTITY,
 };
 
 fn opacity_ok(opacity: f32) -> bool {
@@ -781,7 +788,13 @@ impl LayerStyle {
     /// Photoshop's order, bottom to top: Drop Shadow, Outer Glow, the content, Color Overlay,
     /// Inner Glow, Inner Shadow, Stroke. The masks `shape` does not know yet are computed (on
     /// every core) from the layer's coverage, itself computed once for them all.
-    fn draw(&self, shape: &ShapeCache, layer: &Layer, to_document: Affine, canvas: Size) -> Drawn {
+    fn draw(
+        &self,
+        shape: &ShapeCache,
+        layer: &Layer,
+        to_document: Projective,
+        canvas: Size,
+    ) -> Drawn {
         let masked = self.masked();
         let mut shaped = shape.lock();
         shaped.align(to_document, canvas);
@@ -814,7 +827,12 @@ impl LayerStyle {
 
     /// [`Self::draw`] without computing anything: `None` unless every mask is known (and the
     /// cache is not in use).
-    fn draw_known(&self, shape: &ShapeCache, to_document: Affine, canvas: Size) -> Option<Drawn> {
+    fn draw_known(
+        &self,
+        shape: &ShapeCache,
+        to_document: Projective,
+        canvas: Size,
+    ) -> Option<Drawn> {
         let mut shaped = shape.0.try_lock().ok()?;
         shaped.align(to_document, canvas);
         let mut drawn = self.assemble(&self.masked(), &shaped)?;
@@ -832,7 +850,7 @@ impl LayerStyle {
                 },
                 overlay.mode,
                 overlay.opacity,
-                Affine::IDENTITY,
+                Projective::IDENTITY,
             ));
         }
         for m in masked {
@@ -874,7 +892,12 @@ const ROOM: f64 = 32.0;
 
 /// A layer drawing an effect: `content` blended with `mode` and `opacity`, placed by
 /// `transform` in the document.
-fn effect_layer(content: LayerContent, mode: BlendMode, opacity: f32, transform: Affine) -> Layer {
+fn effect_layer(
+    content: LayerContent,
+    mode: BlendMode,
+    opacity: f32,
+    transform: Projective,
+) -> Layer {
     Layer {
         id: LayerId::from_raw(0),
         name: String::new(),
@@ -892,7 +915,7 @@ fn effect_layer(content: LayerContent, mode: BlendMode, opacity: f32, transform:
 /// `layer`'s coverage placed by `to_document`, where it shows grown by `margin` pixels on every
 /// side, on the canvas grown by `margin` (so that a shape just off the canvas still casts what
 /// reaches it).
-fn coverage(layer: &Layer, to_document: Affine, canvas: Size, margin: u32) -> Coverage {
+fn coverage(layer: &Layer, to_document: Projective, canvas: Size, margin: u32) -> Coverage {
     let (shape, whole) = match shape_of(layer, to_document, canvas, margin) {
         Some((area, image, whole)) => (Some((area, image)), whole),
         None => (None, false),
@@ -911,7 +934,7 @@ fn coverage(layer: &Layer, to_document: Affine, canvas: Size, margin: u32) -> Co
 /// grown canvas). `None` when nothing shows.
 fn shape_of(
     layer: &Layer,
-    to_document: Affine,
+    to_document: Projective,
     canvas: Size,
     margin: u32,
 ) -> Option<(Rect, Arc<RasterImage>, bool)> {
@@ -924,7 +947,7 @@ fn shape_of(
         opacity: 1.0,
         blend_mode: BlendMode::Normal,
         clipped: false,
-        transform: to_document.then(Affine::translation(m, m)),
+        transform: to_document.then(Projective::translation(m, m)),
         style: None,
         ..layer.clone()
     };
@@ -1031,7 +1054,7 @@ fn colored(
     color: LinearRgba,
     mode: BlendMode,
     opacity: f32,
-    at: Affine,
+    at: Projective,
 ) -> Layer {
     let mut layer = effect_layer(LayerContent::Fill { color }, mode, opacity, at);
     layer.mask = Some(LayerMask {
@@ -1075,7 +1098,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 content: LayerContent::raster(Arc::new(image)),
             },
@@ -1132,7 +1155,7 @@ mod tests {
                 content: LayerContent::raster(Arc::new(image)),
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
                 style: None,
             },
         }
@@ -1236,7 +1259,7 @@ mod tests {
         // Moved: drawn again where it is.
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(10.0, 0.0),
+            transform: Affine::translation(10.0, 0.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1245,7 +1268,7 @@ mod tests {
         assert_eq!(at(&doc, 28, 25)[3], 1.0);
         Edit::SetLayerTransform {
             id,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
         }
         .apply(&mut doc)
         .unwrap();
@@ -1344,7 +1367,7 @@ mod tests {
                 },
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
                 style: None,
             },
             &[id],
@@ -1365,7 +1388,7 @@ mod tests {
         // The layer inside moves: the group's stroke goes with it.
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(10.0, 0.0),
+            transform: Affine::translation(10.0, 0.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1436,7 +1459,7 @@ mod tests {
         let before = masks(&doc);
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(10.0, -3.0),
+            transform: Affine::translation(10.0, -3.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1445,7 +1468,7 @@ mod tests {
         let (mut fresh, fresh_id) = document();
         Edit::SetLayerTransform {
             id: fresh_id,
-            transform: Affine::translation(10.0, -3.0),
+            transform: Affine::translation(10.0, -3.0).into(),
         }
         .apply(&mut fresh)
         .unwrap();
@@ -1455,7 +1478,7 @@ mod tests {
         }
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(10.5, -3.0),
+            transform: Affine::translation(10.5, -3.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1475,10 +1498,10 @@ mod tests {
         // meanwhile those drawn last move with the layer rather than stay behind.
         let now = Affine::scale(1.25, 1.25).then(Affine::translation(10.5, -3.25));
         let later = style.moved();
-        let Err(Some(meanwhile)) = later.drawn_for_display(&layer, now, canvas) else {
+        let Err(Some(meanwhile)) = later.drawn_for_display(&layer, now.into(), canvas) else {
             panic!("drawn again in the background, the last effects shown meanwhile");
         };
-        let moved = layer.transform.inverse().unwrap().then(now);
+        let moved = layer.transform.inverse().unwrap().then(now.into());
         assert_eq!(meanwhile.below[0].transform, shadow.then(moved));
         assert_eq!(meanwhile.above[0].transform, stroke.then(moved));
         assert!(Arc::ptr_eq(
@@ -1495,7 +1518,7 @@ mod tests {
         // Far enough that the shape leaves the canvas and its margin: cut, so drawn again.
         Edit::SetLayerTransform {
             id,
-            transform: Affine::translation(60.0, 0.0),
+            transform: Affine::translation(60.0, 0.0).into(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -1546,7 +1569,7 @@ mod tests {
                 },
                 mask: None,
                 clipped: false,
-                transform: Affine::IDENTITY,
+                transform: crate::transform::Projective::IDENTITY,
                 style: None,
             },
             &[id],

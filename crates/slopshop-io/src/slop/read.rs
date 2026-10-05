@@ -404,7 +404,7 @@ pub(super) fn read_node(
             .get("clipped")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-    let transform = node_transform(node)?;
+    let transform = node_transform(node)?.into();
     let style = match node.params.get("style") {
         None | Some(Value::Null) => None,
         Some(value) if node.version >= NODE_VERSION_STYLED => Some(

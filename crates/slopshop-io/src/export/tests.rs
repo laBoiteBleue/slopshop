@@ -22,7 +22,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
     let index = doc.layers().len();
     let layer = Layer {
         style: None,
-        transform: slopshop_core::Affine::IDENTITY,
+        transform: slopshop_core::Affine::IDENTITY.into(),
         clipped: false,
         id,
         name: "layer".into(),
@@ -1241,7 +1241,7 @@ fn layered_document() -> Document {
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: name.into(),
@@ -1285,7 +1285,7 @@ fn layered_document() -> Document {
         &mut doc,
         Edit::SetLayerTransform {
             id: moved,
-            transform: slopshop_core::Affine::translation(10.0, 7.0),
+            transform: slopshop_core::Affine::translation(10.0, 7.0).into(),
         },
     );
     set(
@@ -1608,7 +1608,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
             index,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: adjustment.id().into(),
@@ -1681,7 +1681,7 @@ fn layered_psd_reports_what_is_outside_the_canvas_and_refuses_psb_sizes() {
     let moved = doc.layers()[1].id;
     Edit::SetLayerTransform {
         id: moved,
-        transform: slopshop_core::Affine::translation(-5.0, 40.0),
+        transform: slopshop_core::Affine::translation(-5.0, 40.0).into(),
     }
     .apply(&mut doc)
     .unwrap();

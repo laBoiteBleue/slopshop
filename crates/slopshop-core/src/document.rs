@@ -237,7 +237,7 @@ pub struct Layer {
     /// a clipping mask (ADR 0016).
     pub clipped: bool,
     /// From the layer's content (and mask) to its parent's space (ADR 0017).
-    pub transform: crate::transform::Affine,
+    pub transform: crate::transform::Projective,
     /// Effects drawn from its shape, and its Fill Opacity (ADR 0032).
     pub style: Option<crate::style::Style>,
 }
@@ -696,8 +696,8 @@ impl Document {
     /// Number of groups around a layer: 0 at the top level.
     /// The map from the space of layer `id`'s parent to the document: the transforms of its
     /// groups, composed (ADR 0017); the identity at the top level or for an unknown layer.
-    pub fn parent_transform(&self, id: LayerId) -> crate::transform::Affine {
-        let mut transform = crate::transform::Affine::IDENTITY;
+    pub fn parent_transform(&self, id: LayerId) -> crate::transform::Projective {
+        let mut transform = crate::transform::Projective::IDENTITY;
         let mut parent = self.locate(id).and_then(|(parent, _)| parent);
         while let Some(group) = parent {
             if let Some(layer) = self.layer(group) {
@@ -963,7 +963,7 @@ mod tests {
     fn fill(id: u64, opacity: f32) -> Layer {
         Layer {
             style: None,
-            transform: crate::transform::Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             clipped: false,
             id: LayerId(id),
             name: format!("fill {id}"),

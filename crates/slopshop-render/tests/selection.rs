@@ -74,7 +74,7 @@ fn push_layer(
             index,
             layer: Layer {
                 style: None,
-                transform,
+                transform: transform.into(),
                 clipped: false,
                 id,
                 name: "layer".into(),

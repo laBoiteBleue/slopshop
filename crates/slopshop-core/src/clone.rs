@@ -369,7 +369,7 @@ mod tests {
             blend_mode: crate::blend::BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: crate::transform::Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::new(image)),
         };
         crate::edit::Edit::InsertLayer {
@@ -521,7 +521,7 @@ mod tests {
             blend_mode: crate::blend::BlendMode::Normal,
             mask: None,
             clipped: false,
-            transform: Affine::IDENTITY,
+            transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::clone(&image)),
         };
         crate::edit::Edit::InsertLayer {

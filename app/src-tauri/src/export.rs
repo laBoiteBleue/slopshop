@@ -493,7 +493,7 @@ mod tests {
             index: 0,
             layer: Layer {
                 style: None,
-                transform: slopshop_core::Affine::IDENTITY,
+                transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
                 id,
                 name: "image".to_owned(),
