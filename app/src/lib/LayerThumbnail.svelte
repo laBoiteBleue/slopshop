@@ -11,6 +11,11 @@
   const shown = new Map<string, ImageData>();
   /** Enough for a stack of hundreds of slices (a thumbnail is a few tens of kilobytes). */
   const CACHE_LIMIT = 1024;
+  /**
+   * How long new pixels stay before they replace a thumbnail shown: a slider dragged over the
+   * layer's stack gives new pixels at each step, each a whole layer for the engine to evaluate.
+   */
+  const SETTLE_MS = 200;
 
   function remember(map: Map<string, ImageData>, key: string, image: ImageData) {
     map.delete(key);
@@ -25,6 +30,7 @@
 
 <script lang="ts">
   import { engine, type LayerView } from "./engine";
+  import { onceSettled } from "./settle";
 
   let {
     documentId,
@@ -86,31 +92,60 @@
     if (last) draw(last);
   });
 
+  type Request = {
+    documentId: number;
+    layerId: number;
+    maxSide: number;
+    mask: boolean;
+    cacheKey: string | null;
+  };
+  /** The thumbnail to show now: an answer for another one is kept, not drawn. */
+  let wanted: Request | null = null;
+  const wants = (request: Request) =>
+    wanted === request || (request.cacheKey !== null && wanted?.cacheKey === request.cacheKey);
+
+  const thumbnails = onceSettled(SETTLE_MS, async (request: Request) => {
+    try {
+      const image = await engine.layerThumbnail(
+        request.documentId,
+        request.layerId,
+        request.maxSide,
+        request.mask,
+      );
+      if (request.cacheKey !== null) remember(cache, request.cacheKey, image);
+      if (wants(request)) draw(image);
+    } catch {
+      // The layer or its document went away meanwhile: nothing to show.
+    }
+  });
+
   $effect(() => {
-    if (!isImage || key === null || !canvas || !seen) return;
+    if (!isImage || key === null || !canvas || !seen) {
+      wanted = null;
+      thumbnails.drop();
+      return;
+    }
     // Device pixels, so that the thumbnail stays sharp on high-density screens.
     const maxSide = Math.round(size * window.devicePixelRatio);
     // Masks are shown raw, layers as light: never the same thumbnail for one image.
     // Not kept while baking: the same layer bakes other content another time.
     const cacheKey = baking ? null : `${mask ? "mask" : "layer"}:${key}:${maxSide}`;
+    const request = { documentId, layerId: layer.id, maxSide, mask, cacheKey };
+    wanted = request;
     const known = cacheKey === null ? undefined : cache.get(cacheKey);
     if (known) {
+      thumbnails.drop();
       draw(known);
       return;
     }
-    let cancelled = false;
-    engine
-      .layerThumbnail(documentId, layer.id, maxSide, mask)
-      .then((image) => {
-        if (cacheKey !== null) remember(cache, cacheKey, image);
-        if (!cancelled) draw(image);
-      })
-      .catch(() => {
-        // The layer or its document went away meanwhile: nothing to show.
-      });
-    return () => {
-      cancelled = true;
-    };
+    // The first thumbnail at once, and a baking preview (rendered small by the GPU); new pixels
+    // replace the one shown once they have rested.
+    thumbnails.push(request, baking || !shown.has(slot));
+  });
+
+  $effect(() => () => {
+    wanted = null;
+    thumbnails.drop();
   });
 
   function swatch(color: [number, number, number, number]): string {
