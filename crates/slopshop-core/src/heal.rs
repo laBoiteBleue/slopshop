@@ -193,7 +193,7 @@ mod tests {
             })
             .collect();
         let texture = |i: usize| {
-            if (i % w + i / w) % 2 == 0 {
+            if (i % w + i / w).is_multiple_of(2) {
                 0.05
             } else {
                 -0.05
