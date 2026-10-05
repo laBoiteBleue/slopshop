@@ -1197,12 +1197,7 @@ impl Renderer {
             // The receiver only disappears if we already returned; nothing to report then.
             let _ = tx.send(result);
         });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| RenderError::Readback(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| RenderError::Readback(e.to_string()))?
-            .map_err(|e| RenderError::Readback(e.to_string()))?;
+        wait_mapped(&self.device, &rx).map_err(RenderError::Readback)?;
         {
             let mapped = slice
                 .get_mapped_range()
@@ -1211,6 +1206,25 @@ impl Renderer {
         }
         buffer.unmap();
         Ok(())
+    }
+}
+
+/// Wait until the mapping that `rx` is told the result of is done, polling the device a moment
+/// at a time: a blocking poll would hold the device's lock until the GPU is done with all its
+/// work, and a native present waits for that lock meanwhile (wgpu-core's snatch lock).
+pub(crate) fn wait_mapped(
+    device: &wgpu::Device,
+    rx: &mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+) -> Result<(), String> {
+    loop {
+        device
+            .poll(wgpu::PollType::Poll)
+            .map_err(|e| e.to_string())?;
+        match rx.try_recv() {
+            Ok(mapped) => return mapped.map_err(|e| e.to_string()),
+            Err(mpsc::TryRecvError::Empty) => std::thread::sleep(Duration::from_micros(200)),
+            Err(mpsc::TryRecvError::Disconnected) => return Err("the mapping went away".into()),
+        }
     }
 }
 
@@ -2859,5 +2873,75 @@ mod tests {
             .unwrap();
         let job = liquified.look_job([0.0, 0.0, 100.0, 100.0], 0).unwrap();
         assert!(job.warp.is_some() && r.gpu_filter.look(&job).is_none());
+    }
+
+    /// Timing of the looks at a filtered layer a 1080p view asks for, on the GPU and on the CPU
+    /// (run with `--ignored --nocapture`): a slider dragged asks for one per setting.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_gpu_looks() {
+        use slopshop_core::BlendSpace;
+        use slopshop_core::filter::Filter;
+        use slopshop_core::stack::{FilterStep, LayerStack};
+        let Some(r) = renderer() else { return };
+        let size = Size::new(6000, 4000);
+        let mut bytes = Vec::with_capacity(size.pixel_count() as usize * 4);
+        for y in 0..size.height {
+            for x in 0..size.width {
+                bytes.extend([(x % 251) as u8, (y % 241) as u8, ((x ^ y) % 256) as u8, 255]);
+            }
+        }
+        let original = Arc::new(
+            RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &bytes)
+                .unwrap(),
+        );
+        for filter in [
+            Filter::GaussianBlur { radius: 4.0 },
+            Filter::UnsharpMask {
+                amount: 120.0,
+                radius: 3.0,
+                threshold: 0.0,
+            },
+            Filter::DustAndScratches {
+                radius: 2.0,
+                threshold: 0.0,
+            },
+        ] {
+            let stack = LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter,
+                        selection: None,
+                        to_document: Affine::IDENTITY,
+                        space: BlendSpace::Perceptual,
+                    },
+                    Some(Arc::clone(&original)),
+                )
+                .unwrap();
+            let job = stack.look_job([2000.0, 1500.0, 3920.0, 2580.0], 0).unwrap();
+            let time = |f: &dyn Fn()| {
+                let mut runs: Vec<f64> = (0..15)
+                    .map(|_| {
+                        let start = Instant::now();
+                        f();
+                        start.elapsed().as_secs_f64() * 1000.0
+                    })
+                    .collect();
+                runs.sort_by(f64::total_cmp);
+                runs[runs.len() / 2]
+            };
+            let gpu = time(&|| {
+                r.gpu_filter.look(&job).expect("taken by the GPU");
+            });
+            let cpu = time(&|| {
+                job.run().unwrap();
+            });
+            println!(
+                "{} look of {}x{}: GPU {gpu:.1} ms, CPU {cpu:.1} ms (medians)",
+                filter.id(),
+                job.size.width,
+                job.size.height
+            );
+        }
     }
 }

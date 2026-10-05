@@ -420,7 +420,7 @@ impl Renderer {
         }
         encoder.copy_buffer_to_buffer(&buffers.output, 0, &buffers.readback, 0, bytes);
         encoder.copy_buffer_to_buffer(&buffers.counter, 0, &buffers.readback, bytes, COUNTER_BYTES);
-        let submission = self.queue.submit([encoder.finish()]);
+        self.queue.submit([encoder.finish()]);
 
         let (tx, rx) = mpsc::channel();
         buffers.readback.slice(..bytes + COUNTER_BYTES).map_async(
@@ -430,15 +430,7 @@ impl Renderer {
                 let _ = tx.send(result);
             },
         );
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            })
-            .map_err(|e| RenderError::Readback(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| RenderError::Readback(e.to_string()))?
-            .map_err(|e| RenderError::Readback(e.to_string()))
+        crate::wait_mapped(&self.device, &rx).map_err(RenderError::Readback)
     }
 
     /// Copy a mapped chunk from `buffers.readback` to its place in `out` (rows of
