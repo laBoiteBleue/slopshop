@@ -1,11 +1,13 @@
 <script lang="ts">
   // The Crop tool (C, as in Photoshop): a frame on the image with eight handles, the outside
   // shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
-  // a corner keeps the proportions), outside to draw a new one. Edges snap to the canvas and the
+  // a corner keeps the proportions; a ratio from the options bar is kept by every handle; a size
+  // fixes the frame, which then only moves), outside to draw a new one. Edges snap to the canvas and the
   // other layers, and to their sizes. Enter, a double-click inside or a click outside (without
   // dragging) applies; Esc cancels. The frame stays on whole document pixels: cropping never
   // resamples, and nothing is deleted (ADR 0017).
   import { untrack } from "svelte";
+  import { aspectRatio, centered, fitRatio, keepRatio, type CropAspect } from "./crop";
   import type { Bounds } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
@@ -18,6 +20,7 @@
     canvas,
     targets = [],
     smartGuides = true,
+    aspect = { mode: "free" },
     onapply,
     oncancel,
   }: {
@@ -28,6 +31,8 @@
     targets?: SnapTarget[];
     /** The snaps' smart guides are drawn (View > Hide Extras hides them; the snap stays). */
     smartGuides?: boolean;
+    /** The options bar's ratio or size, if any. */
+    aspect?: CropAspect;
     /** Crop to `frame` (whole document pixels). */
     onapply: (frame: Bounds) => void;
     oncancel: () => void;
@@ -52,6 +57,20 @@
     moved: boolean;
   };
   let drag = $state<Drag | null>(null);
+
+  // A ratio chosen fits the frame to it, a size makes the frame that size, both centered on the
+  // frame as it is (and so when the tool opens).
+  $effect(() => {
+    // Read here, so that a value typed in the options bar fits the frame again.
+    const ratio = aspectRatio(aspect);
+    const size = aspect.mode === "size" ? [aspect.width, aspect.height] : null;
+    untrack(() => {
+      if (size && ratio) frame = centered(frame, Math.round(size[0]), Math.round(size[1]));
+      else if (ratio) frame = fitRatio(frame, ratio);
+    });
+  });
+  /** A size is set: the frame keeps it, it only moves. */
+  const fixed = $derived(aspect.mode === "size" && aspectRatio(aspect) !== null);
 
   // Handles clockwise from the top-left corner (even: corners), and the edges each one moves.
   const MOVES_LEFT = [0, 6, 7];
@@ -93,6 +112,13 @@
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as Element).closest("svg")?.setPointerCapture(e.pointerId);
+    if (fixed && kind === "draw") {
+      // A fixed size: the frame jumps under the pointer, then follows it.
+      const [px, py] = mapping.toDocument(e.clientX, e.clientY);
+      const [width, height] = [frame.right - frame.left, frame.bottom - frame.top];
+      frame = centered({ left: px, top: py, right: px, bottom: py }, width, height);
+      kind = "move";
+    }
     drag = {
       pointerId: e.pointerId,
       kind,
@@ -152,19 +178,14 @@
         if (moves(MOVES_TOP)) b.top = py + offset(start.top, from[1]);
         if (moves(MOVES_BOTTOM)) b.bottom = py + offset(start.bottom, from[1]);
       }
-      // Shift on a corner (or drawing): the proportions of the frame when the drag began.
+      // The options bar's ratio, by every handle; else Shift on a corner (or drawing): the
+      // proportions of the frame when the drag began.
       const corner = drawing || drag.handle % 2 === 0;
-      if (e.shiftKey && corner) {
-        const ratio = (start.right - start.left) / (start.bottom - start.top);
-        const [xEdge, yEdge] = drawing
-          ? (["right", "bottom"] as const)
-          : ([moves(MOVES_LEFT) ? "left" : "right", moves(MOVES_TOP) ? "top" : "bottom"] as const);
-        const [ax, ay] = [xEdge === "left" ? b.right : b.left, yEdge === "top" ? b.bottom : b.top];
-        const width = Math.abs(b[xEdge] - ax);
-        const height = Math.abs(b[yEdge] - ay);
-        const size = Math.max(width, height * ratio);
-        b[xEdge] = ax + Math.sign(b[xEdge] - ax || 1) * size;
-        b[yEdge] = ay + Math.sign(b[yEdge] - ay || 1) * (size / ratio);
+      const ratio =
+        aspectRatio(aspect) ??
+        (e.shiftKey && corner ? (start.right - start.left) / (start.bottom - start.top) : null);
+      if (ratio) {
+        b = keepRatio(b, start, drawing ? null : drag.handle, ratio);
       } else if (snaps) {
         const snapEdge = (edge: keyof Bounds, anchor: number, axis: "x" | "y") => {
           const snapped = snapHandle(b[edge], anchor, 1, axis, targets, threshold);
@@ -260,7 +281,7 @@
     <line class="third" x1={x0 + (x1 - x0) * f} y1={y0} x2={x0 + (x1 - x0) * f} y2={y1} />
     <line class="third" x1={x0} y1={y0 + (y1 - y0) * f} x2={x1} y2={y0 + (y1 - y0) * f} />
   {/each}
-  {#each screen as [x, y], i (i)}
+  {#each fixed ? [] : screen as [x, y], i (i)}
     <rect
       class="handle"
       x={x - 4}

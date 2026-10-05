@@ -154,6 +154,7 @@
   } from "./lib/layerEdits";
   import { hexToSrgb, srgbToHex } from "./lib/color";
   import { grayOf } from "./lib/colorModel";
+  import type { CropAspect } from "./lib/crop";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
@@ -2955,6 +2956,8 @@
   // new canvas, and Esc starts it over. What the frame snaps to is fetched when it opens.
   type Cropping = { document: number; width: number; height: number; targets: Bounds[] };
   let cropping = $state<Cropping | null>(null);
+  /** The options bar's ratio or size for the Crop tool's frame, for the session. */
+  let cropAspect = $state<CropAspect>({ mode: "free" });
   /** Bumped by each frame requested: only the latest one opens. */
   let cropRequest = 0;
   /** A crop being applied: the next frame waits for the new canvas. */
@@ -4988,6 +4991,8 @@
       bind:brush={brushOptions}
       bind:eraser={eraserOptions}
       bind:eyedropper={eyedropperOptions}
+      bind:crop={cropAspect}
+      canvasSize={active ?? undefined}
       transform={transforming ? transformBar : undefined}
       quickMask={active?.quickMask ?? false}
       bind:quickMaskOpacity
@@ -5190,6 +5195,7 @@
                     canvas={canvasBounds(active)}
                     targets={snapping ? withGuides(cropping.targets, active) : []}
                     smartGuides={!extrasHidden}
+                    aspect={cropAspect}
                     onapply={applyCrop}
                     oncancel={() => (cropping = null)}
                   />

@@ -80,6 +80,23 @@ test("the Eyedropper's Sample Size and Sample change its settings", async () => 
   expect(eyedropper).toEqual({ sample: "layer", size: 5 });
 });
 
+test("Crop's ratio or size: presets, the canvas's ratio, a size, swapped", async () => {
+  const { user } = open("crop", { canvasSize: { width: 400, height: 300 } });
+  const preset = screen.getByRole("combobox", { name: "Ratio or size" });
+  expect(preset).toHaveValue("free");
+  expect(screen.queryByText("W:")).not.toBeInTheDocument();
+  await user.selectOptions(preset, "16 : 9");
+  expect(preset).toHaveValue("16:9");
+  await user.selectOptions(preset, "Original Ratio");
+  expect(preset).toHaveValue("original");
+  await user.selectOptions(preset, "Size (px)");
+  // W, then H.
+  const fields = () => screen.getAllByRole("spinbutton").map((f) => (f as HTMLInputElement).value);
+  expect(fields()).toEqual(["400", "300"]);
+  await user.click(screen.getByRole("button", { name: "Swap the width and the height" }));
+  expect(fields()).toEqual(["300", "400"]);
+});
+
 test("the Brush and the Eraser keep their own settings", async () => {
   const { props, user } = open("eraser");
   await user.click(check("Pressure: size"));
