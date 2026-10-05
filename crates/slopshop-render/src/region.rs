@@ -537,11 +537,7 @@ fn covers(image: &RasterImage, transform: Projective, area: Rect) -> bool {
             && x + i64::from(size.width) > i64::from(area.x)
             && y + i64::from(size.height) > i64::from(area.y);
     }
-    // Projective: not drawn yet (ADR 0038, its resampling comes next).
-    let Some(r) = transform
-        .as_affine()
-        .and_then(|t| Resampling::new(t, 1.0, image.levels().len()))
-    else {
+    let Some(r) = Resampling::placed(transform, 1.0, image.levels().len(), image.size()) else {
         return false;
     };
     let [x0, y0, x1, y1] = r.source_area(document_area(area));

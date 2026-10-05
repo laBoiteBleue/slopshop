@@ -345,6 +345,8 @@ const BLEND_SHIFT: u32 = 8;
 /// Filters of resampled rasters (`resample_q.w` in composite.wgsl; 0: a whole-pixel offset).
 const RESAMPLE_NEAREST: u32 = 1;
 const RESAMPLE_EWA: u32 = 2;
+/// EWA in perspective (ADR 0038): the ellipse computed at each sample from the map's Jacobian.
+const RESAMPLE_PERSPECTIVE: u32 = 3;
 
 const WORKGROUP_SIZE: u32 = 8;
 const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
@@ -1921,11 +1923,21 @@ fn set_mask_fields(
 
 /// The `resample_*` fields of composite.wgsl for a plan: zeros for a whole-pixel offset; else
 /// the map from document points to the planned level's texels (and the texel box's half-size)
-/// in the first two rows, the ellipse's quadratic form and the filter in the third.
+/// in the first two rows, the ellipse's quadratic form and the filter in the third. In
+/// perspective (ADR 0038), the three rows of the projective map, the output scale in the
+/// first's `w` (the shader computes each sample's ellipse).
 fn resample_fields(plan: &RasterPlan<'_>) -> [[f32; 4]; 3] {
     let Some(r) = plan.resampling() else {
         return [[0.0; 4]; 3];
     };
+    if let Some(p) = r.perspective() {
+        let [a, b, c, d, e, f, g, h, i] = p.to_texel.to_array().map(|v| v as f32);
+        return [
+            [a, c, e, r.scale() as f32],
+            [b, d, f, 0.0],
+            [g, h, i, RESAMPLE_PERSPECTIVE as f32],
+        ];
+    }
     let t = r.to_texel;
     let (filter, q, extent) = match r.filter {
         Filter::Nearest => (RESAMPLE_NEAREST, [0.0; 3], [0.5, 0.5]),
@@ -2035,8 +2047,7 @@ impl<'a> RasterPlan<'a> {
     /// Sampling `image`, placed by `transform`, over the document `area` for output pixels of
     /// `scale` document pixels: at the finest level whose pixels are not smaller than output
     /// pixels (for a whole-pixel offset), or the resampling's level. `None` for a transform
-    /// that is not invertible (edits refuse them), and for now for a projective one (ADR 0038:
-    /// its resampling comes next; edits refuse them meanwhile).
+    /// that is not invertible (edits refuse them).
     fn new(
         image: &'a RasterImage,
         area: [f64; 4],
@@ -2055,7 +2066,7 @@ impl<'a> RasterPlan<'a> {
                 (Place::Offset([clamp(x), clamp(y)]), level)
             }
             None => {
-                let r = Resampling::new(transform.as_affine()?, scale, image.levels().len())?;
+                let r = Resampling::placed(transform, scale, image.levels().len(), image.size())?;
                 (Place::Resampled(r), r.level)
             }
         };
@@ -2284,6 +2295,12 @@ fn shader_source() -> String {
     constants += &format!("const MAX_GROUP_DEPTH: u32 = {MAX_GROUP_DEPTH}u;\n");
     constants += &format!("const RESAMPLE_NEAREST: u32 = {RESAMPLE_NEAREST}u;\n");
     constants += &format!("const RESAMPLE_EWA: u32 = {RESAMPLE_EWA}u;\n");
+    constants += &format!("const RESAMPLE_PERSPECTIVE: u32 = {RESAMPLE_PERSPECTIVE}u;\n");
+    constants += &format!(
+        "const EWA_MAX_EXTENT: f32 = {:?};\n",
+        resample::MAX_EXTENT as f32
+    );
+    constants += &format!("const EWA_RADIUS: f32 = {:?};\n", resample::RADIUS as f32);
     constants += &format!(
         "const EWA_RADIUS2: f32 = {:?};\n",
         (resample::RADIUS * resample::RADIUS) as f32

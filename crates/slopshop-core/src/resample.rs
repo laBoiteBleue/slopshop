@@ -190,6 +190,31 @@ impl Resampling {
         self.perspective.as_ref()
     }
 
+    /// Document pixels per output pixel (at least 1): what each sample's ellipse is made for.
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    /// The document area where samples read any texel of the level read (`width` × `height`
+    /// texels): the whole plane for a layer in perspective whose filter's reach crosses the
+    /// horizon line. `None` when the map is not invertible.
+    pub fn document_reach(&self, width: u32, height: u32) -> Option<[f64; 4]> {
+        let (w, h) = (f64::from(width), f64::from(height));
+        if let Some(p) = &self.perspective {
+            let m = MAX_EXTENT;
+            return Some(p.to_texel.inverse()?.map_rect([-m, -m, w + m, h + m]));
+        }
+        let [eu, ev] = match self.filter {
+            Filter::Nearest => [0.5, 0.5],
+            Filter::Ewa { extent, .. } => extent,
+        };
+        Some(
+            self.to_texel
+                .inverse()?
+                .map_rect([-eu, -ev, w + eu, h + ev]),
+        )
+    }
+
     fn build_perspective(inverse: Projective, scale: f64, level: usize, size: Size) -> Self {
         let factor = f64::from(1u32 << level.min(31));
         let to_texel = inverse.then(Affine::scale(1.0 / factor, 1.0 / factor).into());

@@ -423,8 +423,31 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
     var count = 0u;
     var result = Resampled(vec4<f32>(0.0), 0.0, 0u);
     let point = vec3<f32>(p, 1.0);
-    let uv = vec2<f32>(dot(layer.resample_u.xyz, point), dot(layer.resample_v.xyz, point));
-    let extent = vec2<f32>(layer.resample_u.w, layer.resample_v.w);
+    var uv = vec2<f32>(dot(layer.resample_u.xyz, point), dot(layer.resample_v.xyz, point));
+    var extent = vec2<f32>(layer.resample_u.w, layer.resample_v.w);
+    var q = layer.resample_q.xyz;
+    if u32(layer.resample_q.w) == RESAMPLE_PERSPECTIVE {
+        // In perspective (ADR 0038): divided by the third row; nothing beyond the horizon line.
+        let w = dot(layer.resample_q.xyz, point);
+        if w <= 0.0 {
+            return result;
+        }
+        let num = uv;
+        uv = num / w;
+        // The Jacobian of the map here, then the ellipse of an output pixel (resample.rs's `ewa`).
+        let g = layer.resample_q.x;
+        let h = layer.resample_q.y;
+        let w2 = w * w;
+        let jac = vec4<f32>(
+            (layer.resample_u.x * w - num.x * g) / w2,
+            (layer.resample_v.x * w - num.y * g) / w2,
+            (layer.resample_u.y * w - num.x * h) / w2,
+            (layer.resample_v.y * w - num.y * h) / w2,
+        );
+        let ellipse = ewa_ellipse(jac * layer.resample_u.w);
+        q = ellipse.q;
+        extent = ellipse.extent;
+    }
     let size = vec2<f32>(layer.level_size);
     let reaches = all(uv + extent > vec2<f32>(0.0)) && all(uv - extent < size);
     if reaches && u32(layer.resample_q.w) == RESAMPLE_NEAREST {
@@ -433,7 +456,6 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
         result.color = texel_color(layer, at, unbounded, &count);
         result.inside = select(0.0, 1.0, inside);
     } else if reaches {
-        let q = layer.resample_q.xyz;
         let first = vec2<i32>(ceil(uv - 0.5 - extent));
         let last = vec2<i32>(floor(uv - 0.5 + extent));
         var sum = vec4<f32>(0.0);
@@ -470,6 +492,41 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
     }
     result.count = count;
     return result;
+}
+
+struct Ellipse {
+    q: vec3<f32>,
+    extent: vec2<f32>,
+}
+
+// The EWA ellipse of an output pixel whose steps map to texel steps by `j` (`[∂u/∂x, ∂v/∂x,
+// ∂u/∂y, ∂v/∂y]`, the output scale applied): its quadratic form and its box's half-size, never
+// smaller than one texel per axis nor larger than EWA_MAX_EXTENT (resample.rs's `ewa`).
+fn ewa_ellipse(j: vec4<f32>) -> Ellipse {
+    let p = j.x * j.x + j.z * j.z;
+    let r = j.x * j.y + j.z * j.w;
+    let t = j.y * j.y + j.w * j.w;
+    let mean = (p + t) / 2.0;
+    let delta = sqrt(((p - t) / 2.0) * ((p - t) / 2.0) + r * r);
+    var l1 = mean + delta;
+    var l2 = max(mean - delta, 0.0);
+    // Of the two candidate eigenvectors, the longer is the better conditioned.
+    let v1 = vec2<f32>(r, l1 - p);
+    let v2 = vec2<f32>(l1 - t, r);
+    var v = select(v2, v1, length(v1) >= length(v2));
+    let len = length(v);
+    v = select(vec2<f32>(1.0, 0.0), v / len, len > 0.0);
+    let cap = (EWA_MAX_EXTENT / EWA_RADIUS) * (EWA_MAX_EXTENT / EWA_RADIUS);
+    l1 = clamp(l1, 1.0, cap);
+    l2 = clamp(l2, 1.0, cap);
+    let x = v.x;
+    let y = v.y;
+    let m0 = l1 * x * x + l2 * y * y;
+    let m2 = l1 * y * y + l2 * x * x;
+    let i1 = 1.0 / l1;
+    let i2 = 1.0 / l2;
+    let q = vec3<f32>(i1 * x * x + i2 * y * y, 2.0 * (i1 - i2) * x * y, i1 * y * y + i2 * x * x);
+    return Ellipse(q, vec2<f32>(EWA_RADIUS * sqrt(m0), EWA_RADIUS * sqrt(m2)));
 }
 
 // Share of the output pixel that falls inside a raster layer's image (at its offset): 0 or 1

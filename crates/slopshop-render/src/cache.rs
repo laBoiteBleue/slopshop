@@ -161,17 +161,7 @@ fn plan_reach(plan: &RasterPlan<'_>) -> Option<Area> {
         }
         Some(r) => {
             let level = plan.image.levels()[plan.level].size();
-            let [eu, ev] = match r.filter {
-                slopshop_core::resample::Filter::Nearest => [0.5, 0.5],
-                slopshop_core::resample::Filter::Ewa { extent, .. } => extent,
-            };
-            let texels = [
-                -eu,
-                -ev,
-                f64::from(level.width) + eu,
-                f64::from(level.height) + ev,
-            ];
-            Some(r.to_texel.inverse()?.map_rect(texels))
+            r.document_reach(level.width, level.height)
         }
     }
 }
