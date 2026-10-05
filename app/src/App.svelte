@@ -19,6 +19,7 @@
     type AdjustmentSettings,
     type FilterId,
     type BrushRequest,
+    type PaintRequest,
     type StrokeRequest,
     type ClipboardContents,
     type CopyRequest,
@@ -802,6 +803,8 @@
     brush: BrushRequest;
     color: [number, number, number] | null;
     restore: boolean;
+    /** The Clone Stamp's source. */
+    clone?: PaintRequest["clone"];
     sending: boolean;
     waiting: [number, number, number][];
     ended: boolean;
@@ -812,12 +815,56 @@
   const lastPaintPoint = new Map<number, [number, number, number]>();
 
   /** A stroke's samples from the Brush or Eraser tool (see `PaintTool`). */
+  // The Clone Stamp (S): Alt+click sets where it takes its pixels (`cloneFrom`); a stroke then
+  // paints the pixels that far from it, as they are when it starts (every layer, or the active
+  // one alone). Aligned keeps the first stroke's distance for the next ones; else each stroke
+  // starts from the source again.
+  let cloneOptions = $state({
+    size: 30,
+    hardness: 0.5,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    aligned: true,
+    sample: "layer" as "all" | "layer",
+  });
+  let cloneFrom = $state<{ document: number; x: number; y: number } | null>(null);
+  /** Aligned: the distance the first stroke since the source was set took. */
+  let cloneOffset: [number, number] | null = null;
+
+  /** The options of the painting tool in use. */
+  function paintOptions() {
+    return isEraser(tool) ? eraserOptions : tool === "cloneStamp" ? cloneOptions : brushOptions;
+  }
+
   function paintStroke(
     samples: [number, number, number][],
     phase: "start" | "line" | "move" | "end",
+    keys?: { altKey: boolean },
   ) {
     const doc = active;
     if (!doc) return;
+    let clone: PaintRequest["clone"];
+    if (tool === "cloneStamp" && (phase === "start" || phase === "line")) {
+      paintRun = null;
+      const [x, y] = samples[0];
+      if (keys?.altKey) {
+        cloneFrom = { document: doc.id, x, y };
+        cloneOffset = null;
+        return;
+      }
+      if (cloneFrom?.document !== doc.id) {
+        showError(t("clone.noSource"));
+        return;
+      }
+      const offset: [number, number] =
+        cloneOptions.aligned && cloneOffset ? cloneOffset : [cloneFrom.x - x, cloneFrom.y - y];
+      if (cloneOptions.aligned) cloneOffset = offset;
+      const sourceLayer =
+        cloneOptions.sample === "layer" ? (layersPanel?.selectedLayer()?.id ?? null) : null;
+      clone = { offset, sourceLayer };
+    }
     if (phase === "start" || phase === "line") {
       commitTransform();
       const layer = layersPanel?.selectedLayer() ?? null;
@@ -844,7 +891,7 @@
         showError(t("paint.restoreLayersOnly"));
         return;
       }
-      const options = isEraser(tool) ? eraserOptions : brushOptions;
+      const options = paintOptions();
       paintRun = {
         id: nextPaintStroke++,
         documentId: doc.id,
@@ -858,6 +905,7 @@
             ? null
             : hexToSrgb(paintColors()[isEraser(tool) ? "background" : "foreground"]),
         restore: tool === "restoreEraser",
+        clone,
         sending: false,
         waiting: [],
         ended: false,
@@ -1640,6 +1688,7 @@
         brush: run.brush,
         color: run.color,
         restore: run.restore,
+        clone: run.clone,
         samples,
         end,
       })
@@ -4939,12 +4988,12 @@
       case "toolSlot":
         return selectSlot(action.slot, action.next);
       case "paintSize": {
-        const options = action.eraser ? eraserOptions : brushOptions;
+        const options = paintOptions();
         options.size = stepBrush(options.size, action.larger);
         return;
       }
       case "paintHardness": {
-        const options = action.eraser ? eraserOptions : brushOptions;
+        const options = paintOptions();
         const hardness = options.hardness + (action.larger ? 0.25 : -0.25);
         options.hardness = Math.min(Math.max(hardness, 0), 1);
         return;
@@ -5091,6 +5140,7 @@
       bind:quick
       bind:brush={brushOptions}
       bind:eraser={eraserOptions}
+      bind:clone={cloneOptions}
       bind:eyedropper={eyedropperOptions}
       bind:bucket={bucketOptions}
       bind:gradient={gradientOptions}
@@ -5366,11 +5416,15 @@
                     onselect={objectSelect}
                   />
                 {:else if isPaintTool(tool)}
-                  <PaintTool
-                    {mapping}
-                    size={(isEraser(tool) ? eraserOptions : brushOptions).size}
-                    onstroke={paintStroke}
-                  />
+                  <PaintTool {mapping} size={paintOptions().size} onstroke={paintStroke} />
+                  {#if tool === "cloneStamp" && cloneFrom && cloneFrom.document === active?.id}
+                    {@const [sx, sy] = mapping.toViewport(cloneFrom.x, cloneFrom.y)}
+                    <!-- Where the Clone Stamp takes its pixels. -->
+                    <svg class="clone-source" aria-hidden="true">
+                      <path class="halo" d="M{sx - 7} {sy}h14M{sx} {sy - 7}v14" />
+                      <path class="cross" d="M{sx - 7} {sy}h14M{sx} {sy - 7}v14" />
+                    </svg>
+                  {/if}
                 {:else if tool === "quickSelection"}
                   <QuickSelectionTool
                     {mapping}
@@ -5878,6 +5932,25 @@
 {/if}
 
 <style>
+  /* The Clone Stamp's source, white over black. */
+  .clone-source {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .clone-source .halo {
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 3;
+  }
+
+  .clone-source .cross {
+    stroke: #fff;
+    stroke-width: 1;
+  }
+
   /* The Move tool's rectangle selecting layers: the accent color, never marching ants (those
      are a selection of pixels). */
   .layer-box {

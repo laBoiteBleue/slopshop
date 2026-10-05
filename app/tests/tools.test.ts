@@ -30,12 +30,17 @@ test("a letter picks its slot, as typed", () => {
     slotForLetter("i")?.tools.map((tool) => tool.id),
     ["eyedropper"],
   );
+  assert.deepEqual(
+    slotForLetter("s")?.tools.map((tool) => tool.id),
+    ["cloneStamp"],
+  );
   assert.equal(slotForLetter("z"), null);
   assert.equal(slotForLetter(null), null);
 });
 
 test("tool kinds", () => {
   assert.ok(isPaintTool("brush") && isPaintTool("eraser") && isPaintTool("restoreEraser"));
+  assert.ok(isPaintTool("cloneStamp") && !isEraser("cloneStamp"));
   assert.ok(isEraser("restoreEraser") && !isEraser("brush"));
   assert.ok(isSelectionTool("wand") && isSelectionTool("polygonalLasso"));
   assert.ok(!isSelectionTool("move") && !isSelectionTool("crop") && !isPaintTool("move"));
