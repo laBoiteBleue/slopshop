@@ -168,6 +168,24 @@ test("the Brush and the Eraser can paint as Photoshop's Pencil; the Clone Stamp 
   expect(brush.pencil).toBe(true);
 });
 
+test("Dodge and Burn: their brush, the range and the exposure", async () => {
+  const tone = {
+    size: 60,
+    hardness: 0,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    range: "midtones",
+    exposure: 0.5,
+  };
+  const { user } = open("burn", { tone });
+  expect(screen.getByText("Exposure:")).toBeInTheDocument();
+  expect(screen.queryByText("Flow:")).not.toBeInTheDocument();
+  await user.selectOptions(screen.getByRole("combobox", { name: "Range:" }), "Highlights");
+  expect(tone.range).toBe("highlights");
+});
+
 test("the Clone Stamp has no Pencil", () => {
   open("cloneStamp");
   expect(screen.queryByRole("checkbox", { name: "Pencil" })).not.toBeInTheDocument();

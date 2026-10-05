@@ -70,6 +70,8 @@
     eraser: "M15.5 4l5 5L11 18.5H6.5L3.5 15.5Z M10.5 9l5 5 M11 18.5h9",
     gradient: "M4 5h16v14H4Z M8 5v14 M12 5v14 M16 5v14",
     healing: "M5 15l10-10a3 3 0 0 1 4 4L9 19a3 3 0 0 1-4-4Z M9 9l6 6 M11 11h0.01 M13 13h0.01",
+    dodge: "M14 4a5 5 0 1 0 0 10a5 5 0 1 0 0-10Z M10.5 12.5L4 20",
+    burn: "M8 21v-7l-3-3a2 2 0 0 1 3-3l2 2V5a2 2 0 0 1 4 0v5l1-1a2 2 0 0 1 3 1v6l-3 5Z",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:
