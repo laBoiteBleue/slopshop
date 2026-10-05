@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { documentView, layer, open, respond, row, sent } from "./harness";
 
 // The Move tool on the image: layers picked under the pointer, in the Layers panel's selection.
@@ -10,6 +10,7 @@ respond("layer_at", (args) => {
   const x = args.x as number;
   return x < 100 ? 1 : x < 200 ? 2 : x < 300 ? 3 : null;
 });
+respond("layers_at", (args) => ((args.x as number) < 100 ? [3, 1] : []));
 respond("move_snap_targets", () => ({ moving: null, others: [] }));
 respond("perform_live", (_args, doc) => doc);
 respond("end_gesture", (_args, doc) => doc);
@@ -79,4 +80,33 @@ test("Shift pressed during a drag keeps it on one axis", async () => {
   expect(sent("perform_live").at(-1)).toMatchObject({
     edit: { kind: "translateLayers", ids: [2], dx: 40, dy: 0 },
   });
+});
+
+test("a right-click lists the layers under the pointer, a click on one selects it", async () => {
+  const area = await openImage();
+  // The viewport where the image is: the right-click's point is in it.
+  vi.spyOn(area, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 300));
+  await fireEvent.contextMenu(area, { clientX: 50, clientY: 10 });
+  const sky = await screen.findByRole("menuitemradio", { name: /Sky/ });
+  expect(
+    screen.getAllByRole("menuitemradio").map((item) => item.querySelector(".label")?.textContent),
+  ).toEqual(["Bird", "Sky"]);
+  // The active layer is checked.
+  expect(screen.getByRole("menuitemradio", { name: /Bird/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(screen.getByRole("menuitem", { name: /^Copy Ctrl/ })).toBeInTheDocument();
+  await fireEvent.pointerUp(sky, { button: 0 });
+  await waitFor(() => expect(selected()).toEqual(["Sky"]));
+  expect(sent("layers_at").at(-1)).toMatchObject({ x: 50, y: 10 });
+});
+
+test("where no layer shows, the right-click menu is the usual one", async () => {
+  const area = await openImage();
+  vi.spyOn(area, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 300));
+  await fireEvent.contextMenu(area, { clientX: 350, clientY: 10 });
+  await screen.findByRole("menuitem", { name: /^Copy Ctrl/ });
+  await waitFor(() => expect(sent("layers_at")).toHaveLength(1));
+  expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
 });
