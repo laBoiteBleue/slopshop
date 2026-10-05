@@ -351,6 +351,8 @@ const en = {
   "options.crop.width": "W:",
   "options.crop.height": "H:",
   "options.crop.swap": "Swap the width and the height",
+  "options.crop.straighten": "Straighten",
+  "options.crop.straightenHint": "Straighten: draw a line along what should be level or upright",
   "options.sample": "Sample:",
   "options.sample.all": "All Layers",
   "options.sample.layer": "Current Layer",

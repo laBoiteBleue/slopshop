@@ -2,12 +2,21 @@
   // The Crop tool (C, as in Photoshop): a frame on the image with eight handles, the outside
   // shaded and the rule of thirds inside. Drag inside to move it, a handle to resize it (Shift on
   // a corner keeps the proportions; a ratio from the options bar is kept by every handle; a size
-  // fixes the frame, which then only moves), outside to draw a new one. Edges snap to the canvas and the
+  // fixes the frame, which then only moves), outside to draw a new one. With Straighten (the
+  // options bar), a drag draws a line along what should be level or upright, and the image
+  // turns. Edges snap to the canvas and the
   // other layers, and to their sizes. Enter, a double-click inside or a click outside (without
   // dragging) applies; Esc cancels. The frame stays on whole document pixels: cropping never
   // resamples, and nothing is deleted (ADR 0017).
   import { untrack } from "svelte";
-  import { aspectRatio, centered, fitRatio, keepRatio, type CropAspect } from "./crop";
+  import {
+    aspectRatio,
+    centered,
+    fitRatio,
+    keepRatio,
+    straightenTurn,
+    type CropAspect,
+  } from "./crop";
   import type { Bounds } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier } from "./platform";
@@ -21,6 +30,9 @@
     targets = [],
     smartGuides = true,
     aspect = { mode: "free" },
+    start,
+    straighten = false,
+    onstraighten,
     onapply,
     oncancel,
   }: {
@@ -33,6 +45,11 @@
     smartGuides?: boolean;
     /** The options bar's ratio or size, if any. */
     aspect?: CropAspect;
+    /** The frame to start with (after Straighten), else the canvas. */
+    start?: Bounds;
+    /** Straighten is on: a drag draws a line; `onstraighten` turns the image (degrees, clockwise). */
+    straighten?: boolean;
+    onstraighten?: (degrees: number) => void;
     /** Crop to `frame` (whole document pixels). */
     onapply: (frame: Bounds) => void;
     oncancel: () => void;
@@ -42,13 +59,15 @@
   const CLICK_SLOP = 3;
 
   // Starts on the canvas as it is when the tool opens.
-  let frame = $state<Bounds>(untrack(() => ({ ...canvas })));
+  let frame = $state<Bounds>(untrack(() => ({ ...(start ?? canvas) })));
+  /** Straighten's line while it is drawn, document pixels. */
+  let line = $state<{ from: [number, number]; to: [number, number] } | null>(null);
   let guides = $state<SmartGuide[]>([]);
   let readout = $state<{ text: string; x: number; y: number } | null>(null);
 
   type Drag = {
     pointerId: number;
-    kind: "move" | "resize" | "draw";
+    kind: "move" | "resize" | "draw" | "line";
     handle: number;
     /** The frame and the document point when the drag began. */
     start: Bounds;
@@ -112,7 +131,11 @@
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as Element).closest("svg")?.setPointerCapture(e.pointerId);
-    if (fixed && kind === "draw") {
+    if (straighten) {
+      const at = mapping.toDocument(e.clientX, e.clientY);
+      line = { from: at, to: at };
+      kind = "line";
+    } else if (fixed && kind === "draw") {
       // A fixed size: the frame jumps under the pointer, then follows it.
       const [px, py] = mapping.toDocument(e.clientX, e.clientY);
       const [width, height] = [frame.right - frame.left, frame.bottom - frame.top];
@@ -144,6 +167,10 @@
       drag.moved = true;
     }
     const [px, py] = mapping.toDocument(e.clientX, e.clientY);
+    if (drag.kind === "line") {
+      if (line) line = { ...line, to: [px, py] };
+      return;
+    }
     const { start, from } = drag;
     const snaps = targets.length > 0 && !hasShortcutModifier(e);
     const threshold = SNAP_CSS_PX * mapping.docPerCss;
@@ -223,7 +250,14 @@
     if (!drag || e.pointerId !== drag.pointerId) return;
     // A click outside the frame, as in Photoshop: apply.
     const apply = drag.kind === "draw" && !drag.moved;
+    const drawn = drag.kind === "line" ? line : null;
+    line = null;
     drag = null;
+    if (drawn) {
+      const turn = straightenTurn(drawn.from, drawn.to);
+      if (turn !== null) onstraighten?.(turn);
+      return;
+    }
     readout = null;
     guides = [];
     if (apply) onapply(frame);
@@ -255,7 +289,11 @@
 <svg
   class="crop"
   role="presentation"
-  style:cursor={drag?.kind === "resize" ? CURSORS[drag.handle] : "default"}
+  style:cursor={straighten
+    ? "crosshair"
+    : drag?.kind === "resize"
+      ? CURSORS[drag.handle]
+      : "default"}
   onpointerdown={(e) => begin(e, "draw")}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
@@ -293,6 +331,11 @@
       onpointerdown={(e) => begin(e, "resize", i)}
     />
   {/each}
+  {#if line}
+    {@const [lx0, ly0] = mapping.toViewport(...line.from)}
+    {@const [lx1, ly1] = mapping.toViewport(...line.to)}
+    <line class="level" x1={lx0} y1={ly0} x2={lx1} y2={ly1} />
+  {/if}
   {#if smartGuides}<SmartGuides {guides} {mapping} />{/if}
 </svg>
 {#if readout}
@@ -321,6 +364,13 @@
   .third {
     stroke: rgba(255, 255, 255, 0.45);
     stroke-width: 1;
+    pointer-events: none;
+  }
+
+  .level {
+    stroke: #fff;
+    stroke-width: 1.5;
+    stroke-dasharray: 6 3;
     pointer-events: none;
   }
 

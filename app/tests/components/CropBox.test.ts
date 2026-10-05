@@ -202,3 +202,38 @@ test("a size fixes the frame: no handles, a press outside puts it there to move 
   await user.keyboard("{Enter}");
   expect(onapply).toHaveBeenLastCalledWith({ left: 20, top: 20, right: 80, bottom: 60 });
 });
+
+test("with Straighten, a drag draws a line and the image turns to level it", async () => {
+  const onstraighten = vi.fn();
+  const onapply = vi.fn();
+  const { container } = render(CropBox, {
+    mapping: MAPPING,
+    canvas: CANVAS,
+    straighten: true,
+    onstraighten,
+    onapply,
+    oncancel: vi.fn(),
+  });
+  const svg = container.querySelector("svg") as SVGSVGElement;
+  const user = userEvent.setup();
+  await press(user, svg, svg, [10, 10], [110, 20]);
+  expect(container.querySelector("line.level")).not.toBeNull();
+  await release(user, svg, [110, 20]);
+  expect(container.querySelector("line.level")).toBeNull();
+  expect(onstraighten).toHaveBeenCalledOnce();
+  expect(onstraighten.mock.calls[0][0]).toBeCloseTo((-Math.atan2(10, 100) * 180) / Math.PI);
+  expect(onapply).not.toHaveBeenCalled();
+});
+
+test("the frame can start inside the canvas", async () => {
+  const onapply = vi.fn();
+  render(CropBox, {
+    mapping: MAPPING,
+    canvas: CANVAS,
+    start: { left: 10, top: 5, right: 190, bottom: 95 },
+    onapply,
+    oncancel: vi.fn(),
+  });
+  await userEvent.setup().keyboard("{Enter}");
+  expect(onapply).toHaveBeenCalledWith({ left: 10, top: 5, right: 190, bottom: 95 });
+});

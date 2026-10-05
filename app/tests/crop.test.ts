@@ -1,6 +1,13 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { aspectRatio, centered, fitRatio, keepRatio } from "../src/lib/crop";
+import {
+  aspectRatio,
+  centered,
+  fitRatio,
+  insetAfterTurn,
+  keepRatio,
+  straightenTurn,
+} from "../src/lib/crop";
 
 const box = (left: number, top: number, right: number, bottom: number) => ({
   left,
@@ -36,4 +43,29 @@ test("a side keeps the ratio, the other side centered on the frame as it was", (
   const start = box(0, 0, 200, 100);
   assert.deepEqual(keepRatio(box(0, 0, 300, 100), start, 3, 2), box(0, -25, 300, 125));
   assert.deepEqual(keepRatio(box(0, -50, 200, 100), start, 1, 2), box(-50, -50, 250, 100));
+});
+
+test("Straighten levels the line drawn, or makes it upright when nearer to vertical", () => {
+  // Down 10 to the right over 100: turned back counter-clockwise.
+  const level = straightenTurn([0, 0], [100, 10])!;
+  assert.ok(Math.abs(level + (Math.atan2(10, 100) * 180) / Math.PI) < 1e-9);
+  // Drawn right to left: the same line.
+  assert.ok(Math.abs(straightenTurn([100, 10], [0, 0])! - level) < 1e-9);
+  // Nearly vertical, leaning right going down: turned clockwise to upright.
+  const upright = straightenTurn([0, 0], [10, 100])!;
+  assert.ok(Math.abs(upright - (Math.atan2(10, 100) * 180) / Math.PI) < 1e-9);
+  assert.equal(straightenTurn([0, 0], [100, 0]), null);
+  assert.equal(straightenTurn([0, 0], [1, 1]), null);
+});
+
+test("after a turn, the frame is the largest of the canvas's proportions inside the image", () => {
+  // No turn: the canvas itself.
+  assert.deepEqual(insetAfterTurn(400, 300, 0, { width: 400, height: 300 }), box(0, 0, 400, 300));
+  // A quarter turn of a square: the square.
+  assert.deepEqual(insetAfterTurn(100, 100, 90, { width: 100, height: 100 }), box(0, 0, 100, 100));
+  // 45° of a square: a square of side 100 / √2, centered in the grown canvas of 142.
+  assert.deepEqual(
+    insetAfterTurn(100, 100, 45, { width: 142, height: 142 }),
+    box(36, 36, 106, 106),
+  );
 });
