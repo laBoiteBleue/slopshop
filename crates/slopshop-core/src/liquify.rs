@@ -635,6 +635,7 @@ impl Field {
         }
     }
 
+    #[cfg(test)]
     fn set_node(&mut self, i: i64, j: i64, value: [f32; 2]) {
         let t = self.tile_nodes();
         let (i, j) = (i as usize, j as usize);

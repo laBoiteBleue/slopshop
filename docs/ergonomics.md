@@ -505,7 +505,18 @@ maintainer's answers:
     level beside New Adjustment Layer. Two concepts for the user (Adjustment Layer, Filter
     Layer), one in the engine. A filter layer changes what is below it as an adjustment layer
     does; its opacity is the effect's strength; the canvas edge is repeated.
-  - Liquify (Fluidité): a stack entry, edited again in its own workspace; later.
+  - Liquify (Fluidité, Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a stack entry, edited
+    again in its own workspace (the Layers panel's edit icon on the entry). A large modal window
+    as Photoshop's: the layer previewed live, tools on the left (W Forward Warp, R Reconstruct,
+    E Smooth, C Twirl Clockwise, S Pucker, B Bloat, O Push Left, F Freeze Mask, D Thaw Mask; Alt
+    turns the twirl, bloats a pucker, thaws a freeze), the brush on the right (Size, Density,
+    Pressure, Rate; [ and ] change the size), Restore All, OK and Cancel. No Hand and no Zoom
+    tool: the wheel zooms about the pointer, the middle button (or Space) pans, as in the rest
+    of the app. The frozen area is tinted red (Show Freeze Mask turns it off); Ctrl+Z and
+    Shift+Ctrl+Z undo and redo strokes inside the workspace. It acts on the whole layer, the
+    selection ignored (Photoshop's too); a field with nothing left displaced removes the entry.
+    To validate: the feel of the tools' strengths (Pressure and Rate scale constants), the
+    cursor outline, Alt on Push Left, Thaw All / Freeze All.
 - **Decided, not added**: Convert for Smart Filters, Filter Gallery (the stack does it), Camera
   Raw Filter (its tools as native operations), Neural Filters and any category named after a
   technology, render generators as filters (fill layers instead), linking the entries one
