@@ -1151,6 +1151,52 @@ fn assert_matches_cpu(r: &Renderer, doc: &Document, region: Rect, what: &str) {
 }
 
 #[test]
+fn gpu_layers_in_perspective_match_the_cpu_reference_compositor() {
+    use slopshop_core::Projective;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 260);
+    let photo = image(Size::new(256, 192), PixelFormat::RGBA8_SRGB, pattern);
+    for (quad, masked) in [
+        // A gentle keystone, enlarged.
+        (
+            [(40.0, 30.0), (260.0, 20.0), (290.0, 240.0), (10.0, 250.0)],
+            false,
+        ),
+        // A strong one, the far edge reduced eight times, masked by its own alpha.
+        (
+            [(140.0, 10.0), (170.0, 10.0), (295.0, 250.0), (5.0, 250.0)],
+            true,
+        ),
+        // Turned and pinched: a quad no rectangle maps to affinely.
+        (
+            [(200.0, 15.0), (285.0, 120.0), (110.0, 245.0), (20.0, 60.0)],
+            false,
+        ),
+    ] {
+        let mut s = Session::new(Document::new(size));
+        let bg = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![(x % 256) as u8, (y % 256) as u8, 60, 255]
+        });
+        push_into(&mut s, None, raster(&bg), BlendMode::Normal, 1.0);
+        let id = push_into(&mut s, None, raster(&photo), BlendMode::Normal, 0.9);
+        if masked {
+            let mask = slopshop_core::LayerMask::from_transparency(&photo).unwrap();
+            s.perform(Edit::SetLayerMask {
+                id,
+                mask: Some(mask),
+            })
+            .unwrap();
+        }
+        let to = Projective::from_rect_to_quad([0.0, 0.0, 256.0, 192.0], quad).unwrap();
+        s.perform(Edit::SetLayerTransform { id, transform: to })
+            .unwrap();
+        let what = format!("{quad:?}");
+        assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        assert_matches_cpu(&r, s.document(), Rect::new(61, 47, 130, 90), &what);
+    }
+}
+
+#[test]
 fn gpu_resampled_layers_match_the_cpu_reference_compositor() {
     let Some(r) = renderer() else { return };
     let size = Size::new(300, 280);
