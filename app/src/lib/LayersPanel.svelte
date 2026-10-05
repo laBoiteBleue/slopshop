@@ -44,6 +44,7 @@
   import {
     afterLayersChange,
     allSelected,
+    pickedInImage,
     pressed,
     ranged,
     selectionOf,
@@ -483,6 +484,32 @@
     select([id], id);
   }
 
+  /**
+   * A press on the image with the Move tool picked layer `hit` (null: none there), Shift held
+   * (`add`): the selection follows the panel's rules (`pickedInImage`), the groups around the
+   * active layer unfold. `collapse`: a release without a drag selects `hit` alone; `moves`:
+   * whether a drag moves the selection.
+   */
+  export function pickInImage(
+    hit: number | null,
+    add: boolean,
+  ): { collapse: boolean; moves: boolean } {
+    const picked = pickedInImage(
+      current(),
+      hit,
+      add,
+      allLayers.map((l) => l.id),
+    );
+    const active = picked.selection.active;
+    if (active !== null && active !== activeId) {
+      const next = new Set(collapsed);
+      for (const at of ancestors(tree, active)) next.delete(at);
+      if (next.size !== collapsed.size) ui.collapsed = next;
+    }
+    if (picked.selection !== current()) apply(picked.selection);
+    return { collapse: picked.collapse, moves: picked.moves };
+  }
+
   // Rename: double-click on the name, or F2 on the selected layer.
   let renaming = $state<number | null>(null);
 
@@ -907,6 +934,8 @@
       <li
         data-row={row}
         class:selected={selectedSet.has(layer.id)}
+        class:active={selectedIds.length > 1 && layer.id === activeId}
+        aria-current={layer.id === activeId ? "true" : undefined}
         class:hidden-layer={!shown}
         class:drop-into={drag?.active && drag.into === layer.id}
         class:drop-before={drag?.active && drag.into === null && drag.slot === row}
@@ -1316,6 +1345,12 @@
 
   li.selected {
     background: var(--selected);
+  }
+
+  /* Among several selected layers, the active one (rename, painting, the options): an accent
+     along its edge. */
+  li.active {
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   li.hidden-layer .thumb,

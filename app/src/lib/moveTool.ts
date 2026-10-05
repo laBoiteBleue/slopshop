@@ -54,3 +54,8 @@ export function landing(
   }
   return { x: Math.round(x), y: Math.round(y), guides };
 }
+
+/** A drag constrained to one axis (Shift): along the one it went furthest. */
+export function alongAxis(raw: { x: number; y: number }): { x: number; y: number } {
+  return Math.abs(raw.x) >= Math.abs(raw.y) ? { x: raw.x, y: 0 } : { x: 0, y: raw.y };
+}

@@ -95,3 +95,24 @@ export function pressed(
   }
   return { selection: selectionOf([id], id), collapse: false };
 }
+
+/**
+ * A press on the image with the Move tool picking layer `hit` (null: no layer shows there), the
+ * Layers panel's selection and rules: alone, as a press on its row (`pressed`); with Shift
+ * (`add`), it joins the selection or leaves it, as Ctrl+click on a row (Ctrl stays Photoshop's
+ * Auto-Select switch on the image). `moves`: whether a drag that follows moves the selection
+ * (not after taking a layer out of it).
+ */
+export function pickedInImage(
+  selection: LayerSelection,
+  hit: number | null,
+  add: boolean,
+  order: number[],
+): { selection: LayerSelection; collapse: boolean; moves: boolean } {
+  if (hit === null) return { selection, collapse: false, moves: !add };
+  if (add) {
+    const next = toggled(selection, hit, order);
+    return { selection: next, collapse: false, moves: next.ids.includes(hit) };
+  }
+  return { ...pressed(selection, hit), moves: true };
+}
