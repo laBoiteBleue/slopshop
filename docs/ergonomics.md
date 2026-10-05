@@ -86,7 +86,10 @@ built. Contributors: propose here first.
   during the drag holds one axis. Among several selected layers, the panel marks the active
   one with an accent along its row. A right-click lists the layers showing under the pointer
   at the top of the image's menu (fill and adjustment layers too, which a click does not take),
-  the active one checked; choosing one selects it. Snap:
+  the active one checked; choosing one selects it. A drag from where no layer shows draws a
+  rectangle in the accent color (never marching ants: it selects layers, not pixels) selecting
+  the layers whose visible pixels' box it touches, Shift adding them; a click there deselects
+  the layers (not with Shift), as a click in the empty part of the panel. Snap:
   the edges and centers of what moves stick to those of the canvas and of the other visible
   layers within 6 screen pixels, with magenta smart guides; Ctrl held moves freely; View > Snap
   turns it off. A drag from inside the selection moves the selected pixels instead (Photoshop):
@@ -593,8 +596,9 @@ answers:
     chosen in the panel or with the right-click.
   - ✅ Right-click with the Move tool: the layers under the pointer at the top of the image's
     menu, a click selecting one.
-  - A drag from where no layer shows, with the Move tool, draws a rectangle (the accent color,
-    never marching ants) selecting the layers whose visible pixels it touches; Shift adds them.
+  - ✅ A drag from where no layer shows, with the Move tool, draws a rectangle (the accent
+    color, never marching ants) selecting the layers whose visible pixels it touches; Shift
+    adds them.
   - Layers and pixels stay two selections: layers by the Move tool, the panel and Select > All
     Layers; pixels by M, L, W and the Select menu. One explicit bridge, as in Photoshop:
     Ctrl+click on a layer's thumbnail loads its transparency as the selection.

@@ -116,6 +116,7 @@
   } from "./lib/imageEdits";
   import {
     alongAxis,
+    dragBox,
     landing,
     nudged,
     pixelTarget as movedPixels,
@@ -2227,6 +2228,13 @@
     collapse: number | null;
     /** The pointer went further than a click. */
     dragged: boolean;
+    /**
+     * A press where no layer shows (Auto-Select): a rectangle from `from` (document pixels)
+     * selecting the layers it touches, Shift adding them.
+     */
+    box: { from: [number, number]; add: boolean } | null;
+    /** The release came (before the engine answered what the press is). */
+    ended: boolean;
   };
   type PixelDrag = {
     drag: number;
@@ -2264,16 +2272,24 @@
       axis: false,
       collapse: null,
       dragged: false,
+      box: null,
+      ended: false,
     };
     moveDrag = drag;
     void (async () => {
       let moves = true;
+      let empty = false;
       if (autoSelect !== keys.ctrl) {
         const hit = await engine.layerAt(doc.id, Math.floor(x), Math.floor(y)).catch(() => null);
-        const picked = layersPanel?.pickInImage(hit, keys.shift);
-        if (picked) {
-          moves = picked.moves;
-          if (picked.collapse) drag.collapse = hit;
+        if (hit === null) {
+          empty = true;
+          moves = !keys.shift;
+        } else {
+          const picked = layersPanel?.pickInImage(hit, keys.shift);
+          if (picked) {
+            moves = picked.moves;
+            if (picked.collapse) drag.collapse = hit;
+          }
         }
       }
       const ids = moves ? (layersPanel?.selectedLayers().map((l) => l.id) ?? []) : [];
@@ -2282,6 +2298,14 @@
         doc.selectionKey != null && !doc.quickMask
           ? await engine.selectionBoundsAt(doc.id, x, y).catch(() => null)
           : null;
+      if (empty && !inside) {
+        // Where no layer shows: a rectangle selecting layers, not pixels.
+        drag.box = { from: [x, y], add: keys.shift };
+        drag.ids = [];
+        if (drag.ended) void finishBox(drag);
+        else showBox(drag);
+        return;
+      }
       if (moveDrag !== drag) return;
       if (inside && moves) {
         const target = pixelTarget();
@@ -2350,7 +2374,30 @@
     drag.shiftFree ||= !keys.shift;
     drag.axis = drag.shiftFree && keys.shift;
     drag.dragged ||= Math.hypot(drag.raw.x, drag.raw.y) / docPerCss >= MOVE_CLICK_SLOP;
-    flushMove(drag);
+    if (drag.box) showBox(drag);
+    else flushMove(drag);
+  }
+
+  /** The Move tool's rectangle selecting layers, while it is drawn (document pixels). */
+  let layerBox = $state<(Bounds & { document: number }) | null>(null);
+
+  function showBox(drag: MoveDrag) {
+    if (!drag.box || !drag.dragged) return;
+    layerBox = { document: drag.document, ...dragBox(drag.box.from, drag.raw) };
+  }
+
+  /** The rectangle released: the layers it touches are selected (a click: none). */
+  async function finishBox(drag: MoveDrag) {
+    layerBox = null;
+    const box = drag.box;
+    if (!box) return;
+    if (!drag.dragged) {
+      layersPanel?.boxInImage([], box.add);
+      return;
+    }
+    const area = dragBox(box.from, drag.raw);
+    const ids = await engine.layersTouching(drag.document, area).catch(() => null);
+    if (ids && active?.id === drag.document) layersPanel?.boxInImage(ids, box.add);
   }
 
   /** Send the whole pixels the drag has moved since it began, snapped (replacing the last). */
@@ -2464,6 +2511,11 @@
     const drag = moveDrag;
     moveDrag = null;
     smartGuides = [];
+    if (drag) drag.ended = true;
+    if (drag?.box) {
+      void finishBox(drag);
+      return;
+    }
     // A click on a layer of a multiple selection selects it alone (the Layers panel's rule).
     if (drag && drag.collapse !== null && !drag.dragged) layersPanel?.selectOnly(drag.collapse);
     if (drag?.pixels) {
@@ -5038,6 +5090,17 @@
               onguides={setGuides}
             >
               {#snippet overlay(mapping)}
+                {#if layerBox && layerBox.document === active?.id}
+                  {@const [left, top] = mapping.toViewport(layerBox.left, layerBox.top)}
+                  {@const [right, bottom] = mapping.toViewport(layerBox.right, layerBox.bottom)}
+                  <div
+                    class="layer-box"
+                    style:left="{left}px"
+                    style:top="{top}px"
+                    style:width="{right - left}px"
+                    style:height="{bottom - top}px"
+                  ></div>
+                {/if}
                 {#if active?.selectionKey != null && !nativeCanvas}
                   <SelectionOutline
                     hidden={antsHidden}
@@ -5618,6 +5681,15 @@
 {/if}
 
 <style>
+  /* The Move tool's rectangle selecting layers: the accent color, never marching ants (those
+     are a selection of pixels). */
+  .layer-box {
+    position: absolute;
+    border: 1px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    pointer-events: none;
+  }
+
   /* Export progress and outcome, above the status bar. Opaque: it floats over the canvas. */
   .export-card {
     position: fixed;

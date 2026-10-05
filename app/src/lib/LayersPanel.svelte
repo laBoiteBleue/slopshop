@@ -44,6 +44,7 @@
   import {
     afterLayersChange,
     allSelected,
+    boxed,
     pickedInImage,
     pressed,
     ranged,
@@ -508,6 +509,17 @@
     }
     if (picked.selection !== current()) apply(picked.selection);
     return { collapse: picked.collapse, moves: picked.moves };
+  }
+
+  /** A rectangle drawn with the Move tool touched `ids` (Shift: `add`); see `boxed`. */
+  export function boxInImage(ids: number[], add: boolean) {
+    const next = boxed(
+      current(),
+      ids,
+      add,
+      allLayers.map((l) => l.id),
+    );
+    if (next !== current()) apply(next);
   }
 
   // Rename: double-click on the name, or F2 on the selected layer.

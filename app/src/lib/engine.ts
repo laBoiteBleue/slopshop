@@ -1398,6 +1398,9 @@ export const engine = {
   /** Every layer showing at document pixel (x, y), top to bottom: the Move tool's right-click. */
   layersAt: (documentId: number, x: number, y: number) =>
     invoke<number[]>("layers_at", { documentId, x, y }),
+  /** The visible layers whose pixels' bounds touch `area`, bottom to top: the Move tool's box. */
+  layersTouching: (documentId: number, area: Bounds) =>
+    invoke<number[]>("layers_touching", { documentId, area }),
   /**
    * The selection's bounds when document point (x, y) is inside it (as its outline shows),
    * else null: a Move tool drag from there moves the selected pixels.

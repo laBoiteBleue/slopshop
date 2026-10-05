@@ -59,3 +59,10 @@ export function landing(
 export function alongAxis(raw: { x: number; y: number }): { x: number; y: number } {
   return Math.abs(raw.x) >= Math.abs(raw.y) ? { x: raw.x, y: 0 } : { x: 0, y: raw.y };
 }
+
+/** The rectangle a drag from `from` by `raw` (document pixels) draws, in whole pixels. */
+export function dragBox(from: [number, number], raw: { x: number; y: number }): Bounds {
+  const [x0, x1] = [from[0], from[0] + raw.x].sort((a, b) => a - b);
+  const [y0, y1] = [from[1], from[1] + raw.y].sort((a, b) => a - b);
+  return { left: Math.floor(x0), top: Math.floor(y0), right: Math.ceil(x1), bottom: Math.ceil(y1) };
+}

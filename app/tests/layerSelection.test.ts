@@ -4,6 +4,7 @@ import {
   NO_LAYERS,
   afterLayersChange,
   allSelected,
+  boxed,
   pickedInImage,
   pressed,
   ranged,
@@ -124,4 +125,14 @@ test("a press where no layer shows keeps the selection, and moves it but with Sh
     moves: true,
   });
   assert.equal(pickedInImage(selection, null, true, ORDER).moves, false);
+});
+
+test("a rectangle selects the layers it touches, the topmost active; Shift adds them", () => {
+  const selection = selectionOf([1], 1);
+  assert.deepEqual(boxed(selection, [2, 4], false, ORDER), selectionOf([2, 4], 4));
+  assert.deepEqual(boxed(selection, [4, 1], true, ORDER), selectionOf([1, 4], 1));
+  assert.equal(boxed(selection, [1], true, ORDER), selection);
+  // Touching nothing (a click): the layers are deselected, but with Shift.
+  assert.deepEqual(boxed(selection, [], false, ORDER), selectionOf([], null));
+  assert.equal(boxed(selection, [], true, ORDER), selection);
 });
