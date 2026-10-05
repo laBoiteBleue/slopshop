@@ -188,9 +188,15 @@ impl Style {
             to_document,
             canvas,
         );
+        // What was drawn last, following the layer where it is now.
         Err(effects
             .meanwhile
-            .get_or_init(|| effects.lineage.latest())
+            .get_or_init(|| {
+                effects
+                    .lineage
+                    .latest()
+                    .map(|drawn| drawn.following(to_document))
+            })
             .as_deref())
     }
 
@@ -595,7 +601,7 @@ impl Default for Stroke {
 
 /// What a style's effects draw, as plain layers in the document's space, in the order they are
 /// composited around the layer's content.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Drawn {
     /// Below the content: Drop Shadow.
     pub below: Vec<Layer>,
@@ -603,6 +609,49 @@ pub struct Drawn {
     pub over: Vec<Layer>,
     /// Above the content: Stroke.
     pub above: Vec<Layer>,
+    /// Where the layer was placed in the document when they were drawn.
+    at: Affine,
+}
+
+impl Default for Drawn {
+    fn default() -> Self {
+        Self {
+            below: Vec::new(),
+            over: Vec::new(),
+            above: Vec::new(),
+            at: Affine::IDENTITY,
+        }
+    }
+}
+
+impl Drawn {
+    /// The same effects following their layer placed by `to_document` instead: moved, turned
+    /// and scaled with it, as they show while they are drawn again for that place (a free
+    /// transform dragged changes it at each step). The same when it did not move.
+    fn following(self: &Arc<Self>, to_document: Affine) -> Arc<Self> {
+        if self.at == to_document {
+            return Arc::clone(self);
+        }
+        let Some(back) = self.at.inverse() else {
+            return Arc::clone(self);
+        };
+        let moved = back.then(to_document);
+        let follow = |layers: &[Layer]| -> Vec<Layer> {
+            layers
+                .iter()
+                .map(|layer| Layer {
+                    transform: layer.transform.then(moved),
+                    ..layer.clone()
+                })
+                .collect()
+        };
+        Arc::new(Self {
+            below: follow(&self.below),
+            over: follow(&self.over),
+            above: follow(&self.above),
+            at: to_document,
+        })
+    }
 }
 
 /// What a style draws while its effects are computed for the first time: nothing.
@@ -610,6 +659,7 @@ pub(crate) static NO_EFFECTS: Drawn = Drawn {
     below: Vec::new(),
     over: Vec::new(),
     above: Vec::new(),
+    at: Affine::IDENTITY,
 };
 
 fn opacity_ok(opacity: f32) -> bool {
@@ -757,7 +807,9 @@ impl LayerStyle {
                 }
             }
         }
-        self.assemble(&masked, &shaped).unwrap_or_default()
+        let mut drawn = self.assemble(&masked, &shaped).unwrap_or_default();
+        drawn.at = to_document;
+        drawn
     }
 
     /// [`Self::draw`] without computing anything: `None` unless every mask is known (and the
@@ -765,7 +817,9 @@ impl LayerStyle {
     fn draw_known(&self, shape: &ShapeCache, to_document: Affine, canvas: Size) -> Option<Drawn> {
         let mut shaped = shape.0.try_lock().ok()?;
         shaped.align(to_document, canvas);
-        self.assemble(&self.masked(), &shaped)
+        let mut drawn = self.assemble(&self.masked(), &shaped)?;
+        drawn.at = to_document;
+        Some(drawn)
     }
 
     /// The effects as layers, from the masks `shaped` knows: `None` when one is missing.
@@ -1406,6 +1460,31 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         assert!(!same(&masks(&doc), &before));
+    }
+
+    #[test]
+    fn effects_drawn_again_for_a_transformed_layer_follow_it_meanwhile() {
+        let (doc, id) = document();
+        let (mut doc, canvas) = (doc, Size::new(64, 64));
+        styled(&mut doc, id, shadow_and_stroke());
+        let layer = doc.layer(id).unwrap().clone();
+        let style = layer.style.clone().unwrap();
+        let first = style.drawn(&layer, layer.transform, canvas);
+        let (shadow, stroke) = (first.below[0].transform, first.above[0].transform);
+        // A free transform dragged: scaled and moved by a fraction, its effects drawn again;
+        // meanwhile those drawn last move with the layer rather than stay behind.
+        let now = Affine::scale(1.25, 1.25).then(Affine::translation(10.5, -3.25));
+        let later = style.moved();
+        let Err(Some(meanwhile)) = later.drawn_for_display(&layer, now, canvas) else {
+            panic!("drawn again in the background, the last effects shown meanwhile");
+        };
+        let moved = layer.transform.inverse().unwrap().then(now);
+        assert_eq!(meanwhile.below[0].transform, shadow.then(moved));
+        assert_eq!(meanwhile.above[0].transform, stroke.then(moved));
+        assert!(Arc::ptr_eq(
+            &meanwhile.below[0].mask.as_ref().unwrap().image,
+            &first.below[0].mask.as_ref().unwrap().image
+        ));
     }
 
     #[test]
