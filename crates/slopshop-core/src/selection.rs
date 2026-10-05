@@ -245,7 +245,9 @@ pub fn from_layer(
         let mut rgba = vec![0f32; rect.size().pixel_count() as usize * 4];
         if crate::composite::composite_region_serial(&alone, *rect, &mut rgba).is_ok() {
             *out = rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| (p[3].clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16)
                 .collect();
         }
