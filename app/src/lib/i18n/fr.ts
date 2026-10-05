@@ -340,6 +340,7 @@ const fr: Messages = {
   "tools.dodge": "Outil Densité -",
   "tools.blur": "Outil Goutte d'eau",
   "tools.sharpen": "Outil Netteté",
+  "tools.smudge": "Outil Doigt",
   "tools.burn": "Outil Densité +",
   "tools.gradient": "Outil Dégradé",
   "tools.foreground": "Définir la couleur de premier plan",
@@ -413,7 +414,8 @@ const fr: Messages = {
   "paint.needRaster":
     "Sélectionnez un calque de pixels ou un masque de fusion pour peindre (Calque > Nouveau calque).",
   "paint.toneLayersOnly": "Densité - et + changent les pixels d'un calque, pas un masque",
-  "paint.focusLayersOnly": "Goutte d'eau et Netteté changent les pixels d'un calque, pas un masque",
+  "paint.focusLayersOnly":
+    "Goutte d'eau, Netteté et Doigt changent les pixels d'un calque, pas un masque",
   "clone.noSource": "Alt+clic là où le Tampon de duplication prend ses pixels, puis peignez",
   "heal.noSource": "Alt+clic là où l'outil Correcteur prend sa texture, puis peignez",
   "patch.hint": "Entourez ce qu'il faut corriger, puis faites-le glisser là où prendre la texture",
@@ -938,6 +940,7 @@ const fr: Messages = {
   "history.dodge": "Densité -",
   "history.blur": "Goutte d'eau",
   "history.sharpen": "Netteté",
+  "history.smudge": "Doigt",
   "history.burn": "Densité +",
   "history.gradient": "Dégradé",
   "history.cloneStamp": "Tampon de duplication",

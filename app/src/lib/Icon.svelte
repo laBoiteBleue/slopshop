@@ -74,6 +74,7 @@
     burn: "M8 21v-7l-3-3a2 2 0 0 1 3-3l2 2V5a2 2 0 0 1 4 0v5l1-1a2 2 0 0 1 3 1v6l-3 5Z",
     blur: "M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11Z",
     sharpen: "M12 3l5 16H7Z",
+    smudge: "M9 21V11a2 2 0 0 1 4 0v-6a2 2 0 0 1 4 0v12l-3 4Z M5 13l3-2",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:

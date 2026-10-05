@@ -1268,6 +1268,8 @@ export type PaintRequest = {
     tone?: { burn: boolean; range: ToneRange; exposure: number };
     /** Blur (`sharpen` false) or Sharpen, by `strength` in [0, 1]. */
     filter?: { sharpen: boolean; strength: number };
+    /** Smudge, by this strength in [0, 1]: the pixels pushed along the stroke. */
+    smudge?: number;
   };
 };
 

@@ -174,7 +174,7 @@
             ? heal
             : tool === "dodge" || tool === "burn"
               ? tone
-              : tool === "blur" || tool === "sharpen"
+              : tool === "blur" || tool === "sharpen" || tool === "smudge"
                 ? focus
                 : null,
   );
@@ -417,7 +417,7 @@
       </select>
     </label>
     <span class="hint">{t("patch.hint")}</span>
-  {:else if tool === "blur" || tool === "sharpen"}
+  {:else if tool === "blur" || tool === "sharpen" || tool === "smudge"}
     <BrushPicker bind:size={focus.size} bind:hardness={focus.hardness} />
     <span class="divider"></span>
     <SliderField
