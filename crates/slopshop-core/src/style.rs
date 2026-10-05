@@ -914,27 +914,48 @@ fn shape_of(
         (right - left) as u32,
         (bottom - top) as u32,
     );
-    let mut pixels = vec![0.0f32; area.size().pixel_count() as usize * 4];
-    composite_region(&scratch, area, &mut pixels).ok()?;
-    let mut gray = vec![0u8; pixels.len() / 4 * 2];
-    // Rows on every core.
-    let row = area.width as usize;
-    let mut rows: Vec<(&[f32], &mut [u8])> = pixels
-        .chunks(row * 4)
-        .zip(gray.chunks_mut(row * 2))
-        .collect();
-    parallel_for_each(&mut rows, |(src, dst)| {
-        for (px, out) in src
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(dst.as_chunks_mut::<2>().0)
-        {
-            *out = ((px[3].clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes();
-        }
-    });
-    let image = RasterImage::from_pixels(area.size(), SELECTION_FORMAT, &gray).ok()?;
+    let image = alpha_of(&scratch, area)?;
     Some((area, Arc::new(image), whole))
+}
+
+/// The alpha of `area` of `document` composited, as a coverage image ([`SELECTION_FORMAT`]): a
+/// row of tiles at a time, so that what is composited (16 bytes a pixel) never holds more than
+/// one (a layer's whole area would be gigabytes on a large canvas).
+fn alpha_of(document: &Document, area: Rect) -> Option<RasterImage> {
+    let t = crate::raster::TILE_SIZE as usize;
+    let (width, height) = (area.width as usize, area.height as usize);
+    let columns = width.div_ceil(t);
+    let mut tiles: Vec<Arc<[u8]>> = Vec::with_capacity(columns * height.div_ceil(t));
+    let mut pixels = Vec::new();
+    for top in (0..height).step_by(t) {
+        let rows = t.min(height - top);
+        // Fits: within the area, whose sides are `u32`.
+        let band = Rect::new(area.x, area.y + top as u32, area.width, rows as u32);
+        pixels.clear();
+        pixels.resize(width * rows * 4, 0.0f32);
+        composite_region(document, band, &mut pixels).ok()?;
+        let mut band_tiles: Vec<(usize, Option<Arc<[u8]>>)> =
+            (0..columns).map(|col| (col, None)).collect();
+        let pixels = &pixels;
+        parallel_for_each(&mut band_tiles, |(col, out)| {
+            let x0 = *col * t;
+            let w = t.min(width - x0);
+            let mut tile = vec![0u8; t * t * 2];
+            // Edge tiles padded by repeating their last row and column, as images are.
+            for ty in 0..t {
+                let y = ty.min(rows - 1);
+                for tx in 0..t {
+                    let x = x0 + tx.min(w - 1);
+                    let alpha = pixels[(y * width + x) * 4 + 3];
+                    let v = (alpha.clamp(0.0, 1.0) * 65535.0).round() as u16;
+                    tile[(ty * t + tx) * 2..][..2].copy_from_slice(&v.to_ne_bytes());
+                }
+            }
+            *out = Some(Arc::from(tile));
+        });
+        tiles.extend(band_tiles.into_iter().filter_map(|(_, tile)| tile));
+    }
+    RasterImage::from_level0_tiles(area.size(), SELECTION_FORMAT, tiles).ok()
 }
 
 /// Some of `layers` is a fill seen through visible groups: it covers the whole canvas.
@@ -978,6 +999,54 @@ mod tests {
     use super::*;
     use crate::color::{AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType};
     use crate::edit::{Edit, EditError};
+
+    #[test]
+    fn a_shape_made_a_row_of_tiles_at_a_time_is_the_whole_area_s() {
+        // Taller and wider than a tile, off the canvas' origin: bands and padded edge tiles.
+        let size = Size::new(300, 600);
+        let mut doc = Document::new(size);
+        let pixels: Vec<u8> = (0..size.pixel_count() as usize)
+            .flat_map(|i| [9, 99, 199, ((i * 7 + i / 300 * 13) % 256) as u8])
+            .collect();
+        let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "alpha".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                clipped: false,
+                transform: Affine::IDENTITY,
+                style: None,
+                content: LayerContent::raster(Arc::new(image)),
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let area = Rect::new(5, 3, 290, 590);
+        let banded = alpha_of(&doc, area).unwrap();
+        // The whole area composited at once, as before.
+        let mut whole = vec![0.0f32; area.size().pixel_count() as usize * 4];
+        composite_region(&doc, area, &mut whole).unwrap();
+        let gray: Vec<u8> = whole
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|px| ((px[3].clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes())
+            .collect();
+        let expected = RasterImage::from_pixels(area.size(), SELECTION_FORMAT, &gray).unwrap();
+        assert_eq!(banded.levels().len(), expected.levels().len());
+        for (a, b) in banded.levels().iter().zip(expected.levels()) {
+            for (s, t) in a.tiles().iter().zip(b.tiles()) {
+                assert_eq!(**s, **t);
+            }
+        }
+    }
 
     /// A 64 × 64 document with an opaque white box at (20, 20)–(30, 30), and its id.
     fn document() -> (Document, LayerId) {
