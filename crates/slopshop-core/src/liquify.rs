@@ -42,6 +42,9 @@ const PINCH: f64 = 0.5;
 /// invertible.
 const MAX_PINCH: f64 = 0.9;
 
+/// A dab covering at least this many nodes is computed on every core.
+const PARALLEL_NODES: usize = 65_536;
+
 /// A brush's settings, Photoshop's: its size, its density (how the edge feathers, 0 to 100), its
 /// pressure (how strongly dragging distorts, 1 to 100) and its rate (how fast the tools that act
 /// while the pointer is held still do, 0 to 100).
@@ -513,16 +516,17 @@ impl Field {
         let pad = (reading / cell).ceil() as i64 + 2;
         let patch = Patch::of(self, i0 - pad, j0 - pad, i1 + pad, j1 + pad);
         let (width, height) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);
-        let mut changed: Vec<[f32; 2]> = Vec::with_capacity(width * height);
-        for j in j0..=j1 {
-            for i in i0..=i1 {
+        let mut changed = vec![[0.0f32; 2]; width * height];
+        {
+            let field = &*self;
+            // What node (`i`, `j`) becomes.
+            let compute = |i: i64, j: i64| -> [f32; 2] {
                 let old = patch.read(i, j);
                 let w = weight(i, j);
                 if w <= 0.0 {
-                    changed.push(old);
-                    continue;
+                    return old;
                 }
-                let free = 1.0 - f64::from(self.frozen_node(i, j)) / 255.0;
+                let free = 1.0 - f64::from(field.frozen_node(i, j)) / 255.0;
                 let k = w * free;
                 let p = at(i, j);
                 let (rx, ry) = (p[0] - center[0], p[1] - center[1]);
@@ -550,7 +554,7 @@ impl Field {
                     }
                     Tool::Reconstruct | Tool::Smooth | Tool::Freeze | Tool::Thaw => [0.0; 2],
                 };
-                let new = match tool {
+                match tool {
                     Tool::Reconstruct => {
                         let keep = 1.0 - (amount * k).clamp(0.0, 1.0);
                         [
@@ -583,17 +587,52 @@ impl Field {
                         let there = patch.sample(u, v);
                         [(shift[0] + there[0]) as f32, (shift[1] + there[1]) as f32]
                     }
+                }
+            };
+            let mut rows: Vec<(i64, &mut [[f32; 2]])> = changed
+                .chunks_mut(width)
+                .enumerate()
+                .map(|(n, row)| (j0 + n as i64, row))
+                .collect();
+            let fill = |(j, row): &mut (i64, &mut [[f32; 2]])| {
+                for (n, out) in row.iter_mut().enumerate() {
+                    *out = compute(i0 + n as i64, *j);
+                }
+            };
+            // A large brush on every core; a small one is quicker alone.
+            if width * height >= PARALLEL_NODES {
+                parallel_for_each(&mut rows, fill);
+            } else {
+                rows.iter_mut().for_each(fill);
+            }
+        }
+        // Written a tile at a time: a tile only the dab's zeros would reach is not made.
+        let t = self.tile_nodes() as i64;
+        for tj in j0 / t..=j1 / t {
+            for ti in i0 / t..=i1 / t {
+                let (x0, x1) = (i0.max(ti * t), i1.min(ti * t + t - 1));
+                let (y0, y1) = (j0.max(tj * t), j1.min(tj * t + t - 1));
+                let span = |j: i64| {
+                    let start = (j - j0) as usize * width + (x0 - i0) as usize;
+                    start..start + (x1 - x0 + 1) as usize
                 };
-                changed.push(new);
+                let slot = self.slot(ti as usize, tj as usize);
+                let tile = &mut self.displacement[slot];
+                if tile.is_none()
+                    && !(y0..=y1).any(|j| changed[span(j)].iter().any(|d| *d != [0.0; 2]))
+                {
+                    continue;
+                }
+                let nodes = Arc::make_mut(
+                    tile.get_or_insert_with(|| Arc::new(Nodes(vec![[0.0; 2]; (t * t) as usize]))),
+                );
+                for j in y0..=y1 {
+                    let to = ((j - tj * t) * t + (x0 - ti * t)) as usize;
+                    let from = &changed[span(j)];
+                    nodes.0[to..to + from.len()].copy_from_slice(from);
+                }
             }
         }
-        for j in j0..=j1 {
-            for i in i0..=i1 {
-                let new = changed[(j - j0) as usize * width + (i - i0) as usize];
-                self.set_node(i, j, new);
-            }
-        }
-        debug_assert_eq!(changed.len(), width * height);
     }
 
     fn set_node(&mut self, i: i64, j: i64, value: [f32; 2]) {
@@ -797,10 +836,30 @@ struct Patch {
 impl Patch {
     fn of(field: &Field, i0: i64, j0: i64, i1: i64, j1: i64) -> Self {
         let (width, height) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);
-        let mut data = Vec::with_capacity(width * height);
-        for j in j0..=j1 {
-            for i in i0..=i1 {
-                data.push(field.node(i, j));
+        let (nw, nh) = field.nodes();
+        let t = field.tile_nodes() as i64;
+        let mut data = vec![[0.0f32; 2]; width * height];
+        for (n, row) in data.chunks_mut(width).enumerate() {
+            let j = (j0 + n as i64).clamp(0, i64::from(nh) - 1);
+            // The columns on the grid, a run of one tile at a time (an absent tile is zeros).
+            let (lo, hi) = (i0.max(0), i1.min(i64::from(nw) - 1));
+            let mut i = lo;
+            while i <= hi {
+                let run = (t - i % t).min(hi - i + 1);
+                let at = (i - i0) as usize;
+                if let Some(tile) =
+                    &field.displacement[field.slot((i / t) as usize, (j / t) as usize)]
+                {
+                    let from = ((j % t) * t + i % t) as usize;
+                    row[at..at + run as usize].copy_from_slice(&tile.0[from..from + run as usize]);
+                }
+                i += run;
+            }
+            // Beyond the grid the edge repeats.
+            if lo <= hi {
+                let (first, last) = (row[(lo - i0) as usize], row[(hi - i0) as usize]);
+                row[..(lo - i0) as usize].fill(first);
+                row[(hi - i0) as usize + 1..].fill(last);
             }
         }
         Self {
@@ -1196,26 +1255,41 @@ pub fn frame(
         .enumerate()
         .map(|(n, band)| (n * BAND, band))
         .collect();
+    // 8-bit sRGB pixels blended as stored are the display's own: no conversion to make.
+    let as_displayed = source.pixels.is_displayed();
     parallel_for_each(&mut bands, |(first, band)| {
         let mut row = vec![0.0f32; width * 4];
         let mut report = ConversionReport::default();
         for (n, out) in band.chunks_exact_mut(width * 4).enumerate() {
             let y = *first + n;
-            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let p = placement.at(x, y);
-                let linear = if source.inside(p) {
-                    let values = match source.through(field, p) {
-                        Sampled::Raw(raw) => source.pixels.read(raw),
-                        Sampled::Values(values) => values,
+            if as_displayed {
+                for (x, px) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let p = placement.at(x, y);
+                    if !source.inside(p) {
+                        continue;
+                    }
+                    match source.through(field, p) {
+                        Sampled::Raw(raw) => px.copy_from_slice(raw),
+                        Sampled::Values(values) => source.pixels.write(values, &mut px[..]),
+                    }
+                }
+            } else {
+                for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let p = placement.at(x, y);
+                    let linear = if source.inside(p) {
+                        let values = match source.through(field, p) {
+                            Sampled::Raw(raw) => source.pixels.read(raw),
+                            Sampled::Values(values) => values,
+                        };
+                        source.pixels.to_linear(values)
+                    } else {
+                        [0.0; 4]
                     };
-                    source.pixels.to_linear(values)
-                } else {
-                    [0.0; 4]
-                };
-                *px = linear;
+                    *px = linear;
+                }
+                // Invariant: a row of the right length, so conversion cannot fail.
+                let _ = converter.convert_row(&row, 0, y as u32, out, &mut report);
             }
-            // Invariant: a row of the right length, so conversion cannot fail.
-            let _ = converter.convert_row(&row, 0, y as u32, out, &mut report);
             if overlay {
                 for (x, px) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                     let p = placement.at(x, y);
@@ -2051,5 +2125,120 @@ mod tests {
                 &rgba[at..at + 4]
             );
         }
+    }
+
+    /// A layer of `size` made of a few distinct tiles repeated (cheap in memory, whatever the size).
+    fn big_layer(size: Size) -> RasterImage {
+        let t = TILE_SIZE as usize;
+        let patterns: Vec<Arc<[u8]>> = (0..16u32)
+            .map(|k| {
+                let mut tile = Vec::with_capacity(t * t * 4);
+                for y in 0..t {
+                    for x in 0..t {
+                        tile.extend([
+                            ((x as u32 * 3 + k * 17) % 256) as u8,
+                            ((y as u32 * 5 + k * 31) % 256) as u8,
+                            ((x + y) as u32 % 256) as u8,
+                            255,
+                        ]);
+                    }
+                }
+                Arc::from(tile)
+            })
+            .collect();
+        let (columns, rows) = (
+            size.width.div_ceil(TILE_SIZE),
+            size.height.div_ceil(TILE_SIZE),
+        );
+        let tiles = (0..columns * rows)
+            .map(|i| Arc::clone(&patterns[(i % 16) as usize]))
+            .collect();
+        RasterImage::from_level0_tiles(size, PixelFormat::RGBA8_SRGB, tiles).unwrap()
+    }
+
+    /// Timings on this machine: `cargo test --release -p slopshop-core liquify_timings -- --ignored
+    /// --nocapture` (SLOPSHOP_LIQUIFY_SIZE=WxH for another layer; default 6000x4000).
+    #[test]
+    #[ignore = "a measurement, not a test"]
+    fn liquify_timings() {
+        use std::time::Instant;
+        let size = std::env::var("SLOPSHOP_LIQUIFY_SIZE")
+            .ok()
+            .and_then(|s| {
+                let (w, h) = s.split_once('x')?;
+                Some(Size::new(w.parse().ok()?, h.parse().ok()?))
+            })
+            .unwrap_or(Size::new(6000, 4000));
+        let t = Instant::now();
+        let image = big_layer(size);
+        println!(
+            "layer {}x{}: built with its pyramid in {:?}",
+            size.width,
+            size.height,
+            t.elapsed()
+        );
+        let mut field = Field::new(size);
+        println!("cell {} px", field.cell());
+        for brush_size in [50.0, 300.0, 1000.0, 3000.0] {
+            let b = brush(brush_size);
+            let t = Instant::now();
+            let mut stroke = Stroke::new(Tool::ForwardWarp, b);
+            let mut dabs = 0;
+            stroke.move_to(&mut field, [1000.0, 1000.0]);
+            for i in 1..=20 {
+                stroke.move_to(
+                    &mut field,
+                    [1000.0 + f64::from(i) * f64::from(brush_size) * 0.1, 1000.0],
+                );
+                dabs += 1;
+            }
+            println!(
+                "forward warp, brush {brush_size}: {dabs} moves in {:?} ({:?} each)",
+                t.elapsed(),
+                t.elapsed() / dabs
+            );
+        }
+        println!(
+            "field memory {} MB, reach {:.0} px",
+            field.memory_bytes() / 1_000_000,
+            field.reach()
+        );
+        let t = Instant::now();
+        let mut held = Stroke::new(Tool::Pucker, brush(500.0));
+        held.move_to(&mut field, [1500.0, 1500.0]);
+        for _ in 0..10 {
+            held.hold(&mut field, 0.033);
+        }
+        println!("pucker held, brush 500: 10 ticks in {:?}", t.elapsed());
+        for (w, h, zoom) in [
+            (1920u32, 1080u32, 1.0),
+            (1920, 1080, 0.25),
+            (3840, 2160, 0.5),
+        ] {
+            let view = View {
+                origin: [800.0, 600.0],
+                zoom,
+                width: w,
+                height: h,
+            };
+            let t = Instant::now();
+            let _ = frame(&image, BlendSpace::Perceptual, &field, view, true).unwrap();
+            println!("frame {w}x{h} at {:.0}%: {:?}", zoom * 100.0, t.elapsed());
+        }
+        let t = Instant::now();
+        let warped = warp_layer(&image, &field, BlendSpace::Perceptual).unwrap();
+        println!(
+            "whole layer evaluated (touched tiles only): {:?}",
+            t.elapsed()
+        );
+        drop(warped);
+        let t = Instant::now();
+        let (d, f) = field.to_images().unwrap();
+        println!(
+            "field to images for .slop: {:?} ({}x{})",
+            t.elapsed(),
+            d.size().width,
+            f.size().height
+        );
     }
 }
