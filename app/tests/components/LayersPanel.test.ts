@@ -72,6 +72,7 @@ const LAYERS = [
 
 function open(layers = LAYERS) {
   const onedit = vi.fn(() => Promise.resolve());
+  const onloadpixels = vi.fn();
   const onfillcolor = vi.fn();
   const onstyle = vi.fn();
   const props = {
@@ -81,9 +82,18 @@ function open(layers = LAYERS) {
     onedit,
     onlive: vi.fn(),
     ongestureend: vi.fn(() => Promise.resolve()),
+    onloadpixels,
   };
   const view = render(LayersPanel, props);
-  return { ...view, props, onedit, onfillcolor, onstyle, user: userEvent.setup() };
+  return {
+    ...view,
+    props,
+    onedit,
+    onfillcolor,
+    onstyle,
+    onloadpixels,
+    user: userEvent.setup(),
+  };
 }
 
 /** The row of the layer named `name`. */
@@ -472,4 +482,23 @@ test("a layer being baked shows its thumbnail, dimmed, in place of its kind's", 
   const thumb = row("Merged").querySelector(".thumb.baking");
   expect(thumb?.querySelector("canvas")).not.toBeNull();
   expect(row("Merged").querySelector(".fold")).toBeNull();
+});
+
+test("Ctrl+click on a thumbnail loads the layer's pixels as the selection, the layers staying", async () => {
+  const masked = layer(6, "Masked", { mask: { enabled: true, contentKey: 6 } });
+  const { onloadpixels, user } = open([...LAYERS, masked]);
+  const thumb = (name: string, selector = ".thumb") =>
+    row(name).querySelector(selector) as HTMLElement;
+  await user.keyboard("[ControlLeft>]");
+  await user.click(thumb("Sky"));
+  expect(onloadpixels).toHaveBeenLastCalledWith(3, false, "replace");
+  await user.keyboard("[ShiftLeft>]");
+  await user.click(thumb("Sea"));
+  expect(onloadpixels).toHaveBeenLastCalledWith(4, false, "add");
+  await user.keyboard("[/ShiftLeft]");
+  await user.click(thumb("Masked", ".mask-thumb"));
+  expect(onloadpixels).toHaveBeenLastCalledWith(6, true, "replace");
+  await user.keyboard("[/ControlLeft]");
+  // The layers selected are as they were: Masked, the top one.
+  expect(selectedNames()).toEqual(["Masked"]);
 });

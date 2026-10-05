@@ -1,6 +1,16 @@
 import { fireEvent, screen, within } from "@testing-library/svelte";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { calls, documentView, layer, layerNames, menuLabels, open, respond, sent } from "./harness";
+import {
+  calls,
+  documentView,
+  layer,
+  layerNames,
+  menuLabels,
+  open,
+  respond,
+  row,
+  sent,
+} from "./harness";
 
 // The Select menu and what it opens: Grow and Similar, Transform Selection, Color Range,
 // Modify, Quick Mask, saved selections, Select and Mask.
@@ -497,4 +507,21 @@ test("the toolbar's Quick Mask button enters and leaves it, lit while it is on",
   await vi.waitFor(() =>
     expect(sent("set_quick_mask").at(-1)).toEqual({ documentId: 1, on: false, opacity: 50 }),
   );
+});
+
+test("Ctrl+click on a layer's thumbnail loads its pixels as the selection (Shift adds)", async () => {
+  respond("select_layer_pixels", (_args, doc) => ({ ...doc, revision: doc.revision + 1 }));
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), layer(2, "Hat")]));
+  await screen.findByText("cat.jpg");
+  const thumb = row("Cat").querySelector(".thumb") as HTMLElement;
+  await user.keyboard("[ControlLeft>]");
+  await user.click(thumb);
+  await user.keyboard("[ShiftLeft>]");
+  await user.click(thumb);
+  await user.keyboard("[/ShiftLeft][/ControlLeft]");
+  await vi.waitFor(() => expect(sent("select_layer_pixels")).toHaveLength(2));
+  expect(sent("select_layer_pixels")).toEqual([
+    { documentId: 1, layerId: 1, mask: false, mode: "replace" },
+    { documentId: 1, layerId: 1, mask: false, mode: "add" },
+  ]);
 });

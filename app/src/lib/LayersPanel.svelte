@@ -53,6 +53,8 @@
     type LayerSelection,
   } from "./layerSelection";
   import { isTextField } from "./keymap";
+  import type { SelectionMode } from "./engine";
+  import { modeFromKeys } from "./selection";
   import {
     effectsOf,
     fillEdit,
@@ -81,6 +83,7 @@
     onfillcolor,
     onstyle,
     onentryedit,
+    onloadpixels,
     ui = new LayersUi(),
   }: {
     doc: DocumentView;
@@ -91,6 +94,11 @@
     ui?: LayersUi;
     /** A double-click on a fill layer's thumbnail: the app lets its color be chosen. */
     onfillcolor?: (layer: LayerView) => void;
+    /**
+     * Ctrl+click on a layer's thumbnail (its mask's: `mask`): its pixels become the selection,
+     * by `mode`.
+     */
+    onloadpixels?: (layerId: number, mask: boolean, mode: SelectionMode) => void;
     /** A double-click on a pixel or fill layer's row, or on one of its effects: the app opens
      * Layer Style (ADR 0032) on `page`. */
     onstyle?: (layer: LayerView, page: StylePage) => void;
@@ -726,8 +734,19 @@
     }
     if ((e.target as HTMLElement).closest("button.eye")) return;
     list.focus({ preventScroll: true });
-    // A click on the layer's thumbnail or its mask's chooses what painting reaches.
+    // A click on the layer's thumbnail or its mask's chooses what painting reaches; with Ctrl,
+    // its pixels (or its mask) become the selection, as in Photoshop (Shift adds, Alt
+    // subtracts, both intersect).
     const thumb = (e.target as HTMLElement).closest(".thumb, .mask-thumb");
+    if (thumb && (e.ctrlKey || e.metaKey) && layer.kind !== "adjustment") {
+      e.preventDefault();
+      onloadpixels?.(
+        layer.id,
+        thumb.classList.contains("mask-thumb"),
+        modeFromKeys(e) ?? "replace",
+      );
+      return;
+    }
     if (thumb && layer.mask && !e.shiftKey && !e.altKey) {
       targetMask(layer.id, thumb.classList.contains("mask-thumb"));
     }

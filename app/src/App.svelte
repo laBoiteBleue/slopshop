@@ -5532,6 +5532,10 @@
             onfillcolor={pickFillLayerColor}
             onstyle={openStyle}
             onentryedit={openEntry}
+            onloadpixels={(layerId, mask, mode) => {
+              if (active)
+                selectionCommand((id) => engine.selectLayerPixels(id, layerId, mask, mode));
+            }}
           />
         {/key}
         <PanelDock
