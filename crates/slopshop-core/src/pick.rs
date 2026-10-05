@@ -59,7 +59,9 @@ const PICK_COVERAGE: f32 = 0.05;
 
 /// The topmost layer showing a pixel at document pixel (`x`, `y`): a layer, not a group (a
 /// group is searched inside). Hidden layers (or in hidden groups) are skipped; masks count, and
-/// a clipped layer only shows where its base does.
+/// a clipped layer only shows where its base does. A fill layer counts only within an enabled
+/// mask: without one it covers the whole canvas and would put every layer below it out of
+/// reach (it is chosen in the Layers panel).
 pub fn layer_at(document: &Document, x: i64, y: i64) -> Option<LayerId> {
     hit(document.layers(), Affine::IDENTITY, x, y)
 }
@@ -92,6 +94,7 @@ fn hit(layers: &[Layer], parent: Affine, x: i64, y: i64) -> Option<LayerId> {
                     return Some(id);
                 }
             }
+            LayerContent::Fill { .. } if !layer.mask.as_ref().is_some_and(|m| m.enabled) => {}
             _ if covers(layer, transform, x, y) => return Some(layer.id),
             _ => {}
         }
@@ -356,13 +359,8 @@ mod tests {
         assert_eq!(layer_at(&doc, 3, 3), Some(low));
         assert_eq!(
             layer_at(&doc, 0, 19),
-            Some(fill),
-            "transparent above the fill"
-        );
-        assert_eq!(
-            layer_at(&doc, -5, 3),
-            Some(fill),
-            "a fill covers everything"
+            None,
+            "transparent above a fill without a mask: not the fill"
         );
 
         // Hidden: skipped. Moved: picked where it went.
@@ -372,14 +370,14 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        assert_eq!(layer_at(&doc, 15, 15), Some(fill));
+        assert_eq!(layer_at(&doc, 15, 15), None);
         Edit::SetLayerTransform {
             id: low,
             transform: Affine::translation(6.0, 6.0),
         }
         .apply(&mut doc)
         .unwrap();
-        assert_eq!(layer_at(&doc, 3, 3), Some(fill));
+        assert_eq!(layer_at(&doc, 3, 3), None);
         assert_eq!(layer_at(&doc, 16, 16), Some(low));
 
         // A mask hiding the layer there: the pick goes through.
@@ -410,7 +408,30 @@ mod tests {
         .unwrap();
         // The mask moves with the layer: it shows (6..16) × (6..26) of the document.
         assert_eq!(layer_at(&doc, 12, 12), Some(low));
-        assert_eq!(layer_at(&doc, 17, 12), Some(fill));
+        assert_eq!(layer_at(&doc, 17, 12), None);
+
+        // A fill within its mask: picked where the mask shows it.
+        let fill_mask = RasterImage::from_placed(
+            Size::new(20, 20),
+            gray,
+            Rect::new(0, 0, 4, 20),
+            &[255u8; 80],
+            &[0],
+        )
+        .unwrap();
+        Edit::SetLayerMask {
+            id: fill,
+            mask: Some(LayerMask {
+                original: None,
+                image: Arc::new(fill_mask),
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(layer_at(&doc, 1, 19), Some(fill));
+        assert_eq!(layer_at(&doc, 5, 19), None);
     }
 
     #[test]
