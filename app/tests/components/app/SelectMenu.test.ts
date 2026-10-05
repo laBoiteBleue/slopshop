@@ -482,3 +482,19 @@ test("on a mask, the Eraser and Delete paint the background color, as Photoshop'
     expect(sent("paint_stroke").at(-1)).toMatchObject({ request: { color: [0, 0, 0] } }),
   );
 });
+
+test("the toolbar's Quick Mask button enters and leaves it, lit while it is on", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  const button = screen.getByRole("button", { name: "Edit in Quick Mask Mode (Q)" });
+  expect(button).toHaveAttribute("aria-pressed", "false");
+  await user.click(button);
+  await vi.waitFor(() =>
+    expect(sent("set_quick_mask")).toEqual([{ documentId: 1, on: true, opacity: 50 }]),
+  );
+  await vi.waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+  await user.click(button);
+  await vi.waitFor(() =>
+    expect(sent("set_quick_mask").at(-1)).toEqual({ documentId: 1, on: false, opacity: 50 }),
+  );
+});

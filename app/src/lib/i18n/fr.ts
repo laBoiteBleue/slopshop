@@ -336,6 +336,8 @@ const fr: Messages = {
   "tools.background": "Définir la couleur d'arrière-plan",
   "tools.swapColors": "Permuter les couleurs de premier plan et d'arrière-plan (X)",
   "tools.defaultColors": "Couleurs de premier plan et d'arrière-plan par défaut (D)",
+  "tools.quickMask": "Modifier en mode Masque rapide (Q)",
+  "tools.standardMode": "Modifier en mode Standard (Q) : quitter le masque rapide",
   "tools.marquee": "Outil Rectangle de sélection",
   "tools.ellipse": "Outil Ellipse de sélection",
   "tools.lasso": "Outil Lasso",

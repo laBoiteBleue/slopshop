@@ -333,6 +333,8 @@ const en = {
   "tools.background": "Set background color",
   "tools.swapColors": "Switch foreground and background colors (X)",
   "tools.defaultColors": "Default foreground and background colors (D)",
+  "tools.quickMask": "Edit in Quick Mask Mode (Q)",
+  "tools.standardMode": "Edit in Standard Mode (Q): leave Quick Mask",
   "tools.marquee": "Rectangular Marquee Tool",
   "tools.ellipse": "Elliptical Marquee Tool",
   "tools.lasso": "Lasso Tool",
