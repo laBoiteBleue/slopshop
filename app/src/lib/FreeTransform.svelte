@@ -6,7 +6,15 @@
   // skew, and outside to rotate about the pivot (Shift: steps of 15°). The right-click menu
   // rotates and flips about the pivot. Enter, a double-click inside or a click outside (without
   // dragging) applies, Esc cancels. The owner applies `onchange`'s matrix live (ADR 0018).
+  //
+  // Distort and Perspective (ADR 0038, pixel layers only): Ctrl and a corner places it freely,
+  // Alt+Shift+Ctrl and a corner moves the corner paired with it the other way (Photoshop's
+  // Perspective); Edit > Transform > Distort and Perspective make that a corner's plain drag.
+  // Once a corner is free, the box is a quad: corners distort, sides move with their two
+  // corners, inside moves it, outside turns it; the map is the box to that quad.
   import * as affine from "./affine";
+  import * as homography from "./homography";
+  import type { Homography } from "./homography";
   import { isTextField } from "./keymap";
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
@@ -20,6 +28,7 @@
     movedBy,
     onWholePixels,
     resizeCursor,
+    ROTATION_STEP,
     rotatedTo,
     scalePercent,
     scaledTo,
@@ -34,6 +43,9 @@
     box,
     matrix = $bindable(),
     pivot = $bindable(),
+    quad = $bindable(null),
+    distortable = false,
+    mode = $bindable("free"),
     targets = [],
     smartGuides = true,
     onchange,
@@ -48,21 +60,32 @@
     /** The reference point, in the box's coordinates: rotations and Alt scale about it. */
     pivot: [number, number];
     /**
+     * The box's corners (top left, top right, bottom right, bottom left) once one is placed
+     * freely (Distort, Perspective): the map is then the box to this quad. Null while affine.
+     */
+    quad?: [number, number][] | null;
+    /** Corners may be placed freely: pixel layers (the engine puts nothing else in perspective). */
+    distortable?: boolean;
+    /** Edit > Transform > Distort or Perspective: what a corner's plain drag does. */
+    mode?: "free" | "distort" | "perspective";
+    /**
      * What moves and scales snap to (the canvas, the other layers), as in Photoshop; none when
      * snapping is off. Ctrl held: no snapping.
      */
     targets?: SnapTarget[];
     /** The snaps' smart guides are drawn (View > Hide Extras hides them; the snap stays). */
     smartGuides?: boolean;
-    /** The transform since the beginning, a map of the document's space. */
-    onchange: (matrix: Matrix) => void;
+    /** The transform since the beginning, a map of the document's space (nine numbers once in perspective). */
+    onchange: (matrix: Matrix | Homography) => void;
     oncommit: () => void;
     oncancel: () => void;
   } = $props();
 
   type Drag = {
     pointerId: number;
-    kind: "move" | "scale" | "rotate" | "skew" | "pivot";
+    kind: "move" | "scale" | "rotate" | "skew" | "pivot" | "distort" | "perspective" | "side";
+    /** The box's corners in the document when the drag began. */
+    quad: [number, number][];
     /** The handle dragged (scale). */
     handle: number;
     /** `matrix` and its angle when the drag began, and the document point it began at. */
@@ -86,11 +109,17 @@
   /** The right-click menu, where it opened. */
   let menuAt = $state<{ x: number; y: number } | null>(null);
   const handles = $derived(frame.handles);
-  const screen = $derived(
-    handles.map(([x, y]) => mapping.toViewport(...affine.apply(matrix, x, y))),
-  );
-  const screenCenter = $derived(mapping.toViewport(...affine.apply(matrix, ...center)));
-  const screenPivot = $derived(mapping.toViewport(...affine.apply(matrix, ...pivot)));
+  /** The map in perspective, once a corner is free. */
+  const projective = $derived(quad ? homography.rectToQuad(box, quad) : null);
+  /** A point of the box as it was, where it is now in the document. */
+  function placed(x: number, y: number): [number, number] {
+    return projective ? homography.apply(projective, x, y) : affine.apply(matrix, x, y);
+  }
+  /** The map so far: six numbers, or nine in perspective. */
+  const current = (): Matrix | Homography => projective ?? matrix;
+  const screen = $derived(handles.map(([x, y]) => mapping.toViewport(...placed(x, y))));
+  const screenCenter = $derived(mapping.toViewport(...placed(...center)));
+  const screenPivot = $derived(mapping.toViewport(...placed(...pivot)));
   const outline = $derived([0, 2, 4, 6].map((i) => `${screen[i][0]},${screen[i][1]}`).join(" "));
 
   const RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"];
@@ -115,6 +144,7 @@
     drag = {
       pointerId: e.pointerId,
       kind,
+      quad: quad ?? homography.corners(box).map(([x, y]) => affine.apply(matrix, x, y)),
       handle,
       start: matrix,
       // The box's angle, for Shift's steps (the fields may have changed it).
@@ -130,14 +160,53 @@
 
   /** A rotation or flip of the box about the pivot (the right-click menu), as one step. */
   function turn(by: Matrix) {
-    const [px, py] = affine.apply(matrix, ...pivot);
-    matrix = affine.andThen(matrix, affine.about(by, px, py));
-    onchange(matrix);
+    const [px, py] = placed(...pivot);
+    const about = affine.about(by, px, py);
+    if (quad) {
+      quad = quad.map(([x, y]) => affine.apply(about, x, y));
+    } else {
+      matrix = affine.andThen(matrix, about);
+    }
+    onchange(current());
+  }
+
+  /** What a press on handle `i` does: scale or skew, or with free corners distort them. */
+  function handleKind(e: PointerEvent, i: number): Drag["kind"] {
+    const ctrl = hasShortcutModifier(e);
+    if (distortable && i % 2 === 0) {
+      if (mode === "perspective" || (ctrl && e.altKey && e.shiftKey)) return "perspective";
+      if (mode === "distort" || ctrl || quad) return "distort";
+    }
+    if (distortable && i % 2 === 1 && (mode !== "free" || quad)) return "side";
+    return i % 2 === 1 && ctrl ? "skew" : "scale";
+  }
+
+  /** `next` as the box's corners, if a rectangle can be put in perspective to it. */
+  function distortTo(next: [number, number][]) {
+    if (homography.isConvex(next) && homography.rectToQuad(box, next)) quad = next;
   }
 
   const menuItems = $derived.by((): MenuItem[] => {
     const command = (label: string, run: () => void): MenuItem => ({ kind: "command", label, run });
+    const modes: MenuItem[] = distortable
+      ? [
+          {
+            kind: "command",
+            label: t("menu.edit.transform.distort"),
+            checked: mode === "distort",
+            run: () => (mode = mode === "distort" ? "free" : "distort"),
+          },
+          {
+            kind: "command",
+            label: t("menu.edit.transform.perspective"),
+            checked: mode === "perspective",
+            run: () => (mode = mode === "perspective" ? "free" : "perspective"),
+          },
+          { kind: "separator" },
+        ]
+      : [];
     return [
+      ...modes,
       command(t("menu.edit.transform.rotate180"), () => turn(affine.rotation(Math.PI))),
       command(t("menu.edit.transform.rotateCw"), () => turn(affine.rotation(Math.PI / 2))),
       command(t("menu.edit.transform.rotateCcw"), () => turn(affine.rotation(-Math.PI / 2))),
@@ -171,18 +240,45 @@
     let shown: SmartGuide[] = [];
     let text = "";
     if (drag.kind === "pivot") {
-      const inverse = affine.invert(matrix);
-      if (!inverse) return;
-      let point = affine.apply(inverse, ...p);
+      const inverse = projective ? homography.invert(projective) : null;
+      const affineInverse = projective ? null : affine.invert(matrix);
+      if (!inverse && !affineInverse) return;
+      let point = inverse ? homography.apply(inverse, ...p) : affine.apply(affineInverse!, ...p);
       // Onto a handle or the center within the snap distance, as Photoshop's reference point.
       const [sx, sy] = mapping.toViewport(...p);
       for (const snap of pivotSnaps) {
-        const [vx, vy] = mapping.toViewport(...affine.apply(matrix, ...snap));
+        const [vx, vy] = mapping.toViewport(...placed(...snap));
         if (Math.hypot(vx - sx, vy - sy) <= SNAP_CSS_PX) point = snap;
       }
       pivot = point;
       guides = [];
       return;
+    } else if (drag.kind === "distort" || drag.kind === "perspective" || drag.kind === "side") {
+      const [dx, dy] = [p[0] - from[0], p[1] - from[1]];
+      const next = drag.quad.map(([x, y]) => [x, y] as [number, number]);
+      if (drag.kind === "perspective") {
+        distortTo(homography.perspectiveDrag(drag.quad, drag.handle / 2, dx, dy));
+      } else {
+        // A corner, or a side's two corners.
+        const moved =
+          drag.kind === "side"
+            ? [(drag.handle - 1) / 2, ((drag.handle + 1) / 2) % 4]
+            : [drag.handle / 2];
+        for (const k of moved) next[k] = [next[k][0] + dx, next[k][1] + dy];
+        distortTo(next);
+      }
+    } else if (quad && drag.kind === "move") {
+      const [dx, dy] = [p[0] - from[0], p[1] - from[1]];
+      quad = drag.quad.map(([x, y]) => [x + dx, y + dy]);
+      text = t("transform.readout.move", { dx: number(dx, 0), dy: number(dy, 0) });
+    } else if (quad && drag.kind === "rotate") {
+      // About the pivot where it is now; Shift: steps of 15°.
+      const [px, py] = placed(...pivot);
+      let angle = Math.atan2(p[1] - py, p[0] - px) - Math.atan2(from[1] - py, from[0] - px);
+      if (e.shiftKey) angle = Math.round(angle / ROTATION_STEP) * ROTATION_STEP;
+      const about = affine.about(affine.rotation(angle), px, py);
+      quad = drag.quad.map(([x, y]) => affine.apply(about, x, y));
+      text = t("transform.readout.angle", { angle: number((angle * 180) / Math.PI, 1) });
     } else if (drag.kind === "skew") {
       matrix = skewedTo(frame, start, drag.handle, p, keys);
       text = t("transform.readout.skew", { angle: number(skewDegrees(matrix), 1) });
@@ -218,8 +314,8 @@
     }
     guides = shown;
     const rect = (e.currentTarget as Element).getBoundingClientRect();
-    readout = { text, x: e.clientX - rect.left + 16, y: e.clientY - rect.top + 16 };
-    onchange(matrix);
+    readout = text ? { text, x: e.clientX - rect.left + 16, y: e.clientY - rect.top + 16 } : null;
+    onchange(current());
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -260,9 +356,11 @@
   role="presentation"
   style:cursor={drag?.kind === "scale" || drag?.kind === "skew"
     ? cursorFor(drag.handle)
-    : drag?.kind === "move" || drag?.kind === "pivot"
-      ? "default"
-      : ROTATE_CURSOR}
+    : drag?.kind === "rotate"
+      ? ROTATE_CURSOR
+      : drag
+        ? "default"
+        : ROTATE_CURSOR}
   onpointerdown={(e) => begin(e, "rotate")}
   oncontextmenu={(e) => {
     e.preventDefault();
@@ -292,7 +390,7 @@
       height="8"
       role="presentation"
       style:cursor={drag ? undefined : cursorFor(i)}
-      onpointerdown={(e) => begin(e, i % 2 === 1 && hasShortcutModifier(e) ? "skew" : "scale", i)}
+      onpointerdown={(e) => begin(e, handleKind(e, i), i)}
     />
   {/each}
   <circle

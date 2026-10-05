@@ -673,8 +673,14 @@ answers:
     Layer or All Layers) and its size in the options bar, with the eyedropper's pointer and
     loupe; Alt held with the Brush takes the color, the Brush coming back on release.
   - ✅ Crop options: a ratio or a size, and Straighten (a line drawn along the horizon).
-  - Edit > Transform gains Distort and Perspective, in Free Transform's box: a projective
-    transform per layer, an ADR first. The Crop tool gets no perspective mode.
+  - ✅ Edit > Transform gains Distort and Perspective, in Free Transform's box: a projective
+    transform per layer ([ADR 0038](adr/0038-projective-transforms.md)). Ctrl and a corner
+    places it freely, Alt+Shift+Ctrl and a corner moves its pair the other way (as in
+    Photoshop); the menu entries, and the box's right-click menu, make that a corner's plain
+    drag. Once a corner is free the box is a quad: sides move with their two corners, inside
+    moves it, outside turns it; the options bar's numbers are grayed. Pixel layers only; a
+    corner that would fold the box stays put. Not yet: painting, moving selected pixels and
+    masks from a selection on a layer in perspective. The Crop tool gets no perspective mode.
   - ✅ Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); ✅ gradient
     fill layers come with it, one gradient engine (the Gradient Map's editor). ✅ The Paint Bucket in
     its slot: the Magic Wand's region, filled.

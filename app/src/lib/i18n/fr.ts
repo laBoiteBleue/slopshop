@@ -115,6 +115,8 @@ const fr: Messages = {
   "menu.edit.transform.rotateCcw": "Rotation 90° antihoraire",
   "menu.edit.transform.flipHorizontal": "Symétrie horizontale",
   "menu.edit.transform.flipVertical": "Symétrie verticale",
+  "menu.edit.transform.distort": "Distorsion",
+  "menu.edit.transform.perspective": "Perspective",
   "transform.readout.move": "X {dx} · Y {dy}",
   "transform.readout.skew": "Inclinaison {angle}°",
   "transform.apply": "Valider",

@@ -214,6 +214,8 @@
   import ContextMenu from "./lib/ContextMenu.svelte";
   import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
+  import * as homography from "./lib/homography";
+  import type { Homography } from "./lib/homography";
   import { antsRequest, prefersReducedMotion } from "./lib/ants";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
 
@@ -2837,6 +2839,12 @@
     matrix: Matrix;
     /** The reference point, in the box's coordinates (the center at first). */
     pivot: [number, number];
+    /** The box's corners once one is placed freely (Distort, Perspective, ADR 0038). */
+    quad: [number, number][] | null;
+    /** What a corner's plain drag does (Edit > Transform > Distort, Perspective). */
+    mode: "free" | "distort" | "perspective";
+    /** Corners may be placed freely: the layers are all pixel layers. */
+    distortable: boolean;
     /**
      * Layers just placed (files dropped on the image): their placement, applied before the
      * box's matrix and in the same undo entry, and the insertions that Esc takes back.
@@ -2897,8 +2905,14 @@
   async function startFreeTransform(
     place: { ids: number[]; at: [number, number] | null; insertions: number } | null = null,
     pixels = false,
+    mode: Transforming["mode"] = "free",
   ) {
     const doc = active;
+    // Already under way: Edit > Transform > Distort or Perspective switches its corners' drag.
+    if (transforming && !transforming.selection && mode !== "free") {
+      transforming.mode = mode;
+      return;
+    }
     if (!doc || transforming) return;
     if (tool === "crop") tool = "move";
     // Edit > Free Transform with a selection: its pixels (a double-click takes the layer).
@@ -2932,6 +2946,10 @@
       targets: snaps.targets,
       matrix: affine.IDENTITY,
       pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
+      quad: null,
+      mode,
+      // Only pixel layers are put in perspective (ADR 0038).
+      distortable: ids.every((id) => findLayer(doc.layers, id)?.kind === "raster"),
       placed,
       selection: false,
     };
@@ -2959,20 +2977,35 @@
       targets: snaps.targets,
       matrix: affine.IDENTITY,
       pivot: [(box.left + box.right) / 2, (box.top + box.bottom) / 2],
+      quad: null,
+      mode: "free",
+      distortable: false,
       placed: null,
       selection: true,
     };
   }
 
-  function onTransformChange(matrix: Matrix) {
+  function onTransformChange(matrix: Matrix | Homography) {
     const current = transforming;
     if (!current) return;
-    current.matrix = matrix;
+    if (matrix.length === 6) current.matrix = matrix;
     // The selection's outline follows the matrix; nothing is sent until Enter.
     if (current.selection) return;
-    const total = current.placed ? affine.andThen(current.placed.matrix, matrix) : matrix;
+    const total = placedThen(current, matrix);
     const request: EditRequest = { kind: "transformLayers", ids: current.ids, matrix: total };
     void sync(engine.performLive(current.document, request, true));
+  }
+
+  /** `matrix` after the placement of layers just placed, if any. */
+  function placedThen(current: Transforming, matrix: Matrix | Homography): Matrix | Homography {
+    if (!current.placed) return matrix;
+    if (matrix.length === 6) return affine.andThen(current.placed.matrix, matrix);
+    return homography.andThen(homography.fromAffine(current.placed.matrix), matrix);
+  }
+
+  /** The transform so far: the box's matrix, or in perspective the map to its quad. */
+  function transformOf(current: Transforming): Matrix | Homography {
+    return (current.quad && homography.rectToQuad(current.box, current.quad)) || current.matrix;
   }
 
   function commitTransform() {
@@ -2990,11 +3023,11 @@
       }
       return;
     }
-    const total = current.placed
-      ? affine.andThen(current.placed.matrix, current.matrix)
-      : current.matrix;
-    if (!affine.isIdentity(current.matrix)) lastTransform = current.matrix;
-    if (affine.isIdentity(total)) void cancelGesture(current.document);
+    const map = transformOf(current);
+    const total = placedThen(current, map);
+    const unchanged = (m: Matrix | Homography) => m.length === 6 && affine.isIdentity(m);
+    if (!unchanged(map)) lastTransform = map;
+    if (unchanged(total)) void cancelGesture(current.document);
     else void endGesture(current.document);
   }
 
@@ -3061,7 +3094,7 @@
    * The last transform applied (Free Transform, Edit > Transform), a map of the document's
    * space: what Edit > Transform > Again repeats.
    */
-  let lastTransform = $state<Matrix | null>(null);
+  let lastTransform = $state<Matrix | Homography | null>(null);
 
   /** Edit > Transform > Again (Shift+Ctrl+T): the last transform, on the selected layers. */
   function repeatTransform() {
@@ -4673,6 +4706,20 @@
             items: [
               item("repeatTransform"),
               separator,
+              // Pixel layers only (ADR 0038): in the box, a corner's plain drag distorts.
+              cmd(
+                t("menu.edit.transform.distort"),
+                () => void startFreeTransform(null, false, "distort"),
+                undefined,
+                activeLayer?.kind !== "raster",
+              ),
+              cmd(
+                t("menu.edit.transform.perspective"),
+                () => void startFreeTransform(null, false, "perspective"),
+                undefined,
+                activeLayer?.kind !== "raster",
+              ),
+              separator,
               cmd(
                 t("menu.edit.transform.rotate180"),
                 () => void quickTransform(affine.rotation(Math.PI)),
@@ -5285,6 +5332,7 @@
       <TransformFields
         matrix={transforming.matrix}
         pivot={transforming.pivot}
+        disabled={transforming.quad !== null}
         canvas={active ?? { width: 1, height: 1 }}
         onchange={onTransformChange}
       />
@@ -5488,6 +5536,9 @@
                     box={transforming.box}
                     bind:matrix={transforming.matrix}
                     bind:pivot={transforming.pivot}
+                    bind:quad={transforming.quad}
+                    bind:mode={transforming.mode}
+                    distortable={transforming.distortable}
                     targets={snapping ? withGuides(transforming.targets, active) : []}
                     smartGuides={!extrasHidden}
                     onchange={onTransformChange}

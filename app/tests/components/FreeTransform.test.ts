@@ -13,7 +13,10 @@ const MAPPING: ViewMapping = {
   hand: false,
 };
 
-function open(mapping: ViewMapping = MAPPING) {
+function open(
+  mapping: ViewMapping = MAPPING,
+  more: { distortable?: boolean; mode?: "free" | "distort" | "perspective" } = {},
+) {
   const onchange = vi.fn();
   const oncommit = vi.fn();
   const oncancel = vi.fn();
@@ -25,6 +28,7 @@ function open(mapping: ViewMapping = MAPPING) {
     onchange,
     oncommit,
     oncancel,
+    ...more,
   });
   const svg = container.querySelector("svg") as SVGSVGElement;
   return {
@@ -133,4 +137,86 @@ test("at 200%, moves and scales keep the box's edges on whole pixels", async () 
   const [a, , , , e] = last(onchange);
   expect(a * 100 + e).toBe(Math.round(a * 100 + e));
   expect(e).toBe(11);
+});
+
+/** Where the last map sent puts point (`x`, `y`): six numbers or nine. */
+function placedBy(fn: ReturnType<typeof vi.fn>, x: number, y: number): [number, number] {
+  const m = fn.mock.lastCall?.[0] as number[];
+  if (m.length === 6) return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+  const w = m[6] * x + m[7] * y + m[8];
+  return [(m[0] * x + m[2] * y + m[4]) / w, (m[1] * x + m[3] * y + m[5]) / w];
+}
+
+const near = (p: [number, number], q: [number, number]) => {
+  expect(p[0]).toBeCloseTo(q[0], 6);
+  expect(p[1]).toBeCloseTo(q[1], 6);
+};
+
+test("Ctrl and a corner place it freely: the box goes to that quad (Distort)", async () => {
+  const { onchange, svg, handles, user } = open(MAPPING, { distortable: true });
+  await user.keyboard("[ControlLeft>]");
+  await drag(user, handles[2], svg, [100, 0], [90, 10]);
+  await user.keyboard("[/ControlLeft]");
+  expect(onchange.mock.lastCall?.[0]).toHaveLength(9);
+  near(placedBy(onchange, 100, 0), [90, 10]);
+  near(placedBy(onchange, 0, 0), [0, 0]);
+  near(placedBy(onchange, 100, 50), [100, 50]);
+  // Free now: a plain corner drag distorts too, the box drawn through the corners.
+  await drag(user, handles[6], svg, [0, 50], [5, 60]);
+  near(placedBy(onchange, 0, 50), [5, 60]);
+  near(placedBy(onchange, 100, 0), [90, 10]);
+});
+
+test("Alt+Shift+Ctrl and a corner move its pair the other way (Perspective)", async () => {
+  const { onchange, svg, handles, user } = open(MAPPING, { distortable: true });
+  await user.keyboard("[ControlLeft>][AltLeft>][ShiftLeft>]");
+  await drag(user, handles[2], svg, [100, 0], [90, 0]);
+  await user.keyboard("[/ShiftLeft][/AltLeft][/ControlLeft]");
+  // The top narrowed symmetrically.
+  near(placedBy(onchange, 100, 0), [90, 0]);
+  near(placedBy(onchange, 0, 0), [10, 0]);
+  near(placedBy(onchange, 100, 50), [100, 50]);
+});
+
+test("Edit > Transform > Perspective: a corner's plain drag", async () => {
+  const { onchange, svg, handles, user } = open(MAPPING, {
+    distortable: true,
+    mode: "perspective",
+  });
+  await drag(user, handles[4], svg, [100, 50], [100, 70]);
+  near(placedBy(onchange, 100, 50), [100, 70]);
+  near(placedBy(onchange, 100, 0), [100, -20]);
+});
+
+test("a corner that would fold the box stays where it was", async () => {
+  const { onchange, svg, handles, user } = open(MAPPING, { distortable: true, mode: "distort" });
+  await drag(user, handles[0], svg, [0, 0], [10, 5]);
+  near(placedBy(onchange, 0, 0), [10, 5]);
+  // Across the opposite corner: a bow tie, refused.
+  await drag(user, handles[0], svg, [10, 5], [150, 80]);
+  near(placedBy(onchange, 0, 0), [10, 5]);
+});
+
+test("in perspective, a drag inside moves the quad and a side handle its two corners", async () => {
+  const { onchange, svg, body, handles, user } = open(MAPPING, {
+    distortable: true,
+    mode: "distort",
+  });
+  await drag(user, handles[2], svg, [100, 0], [90, 10]);
+  await drag(user, body, svg, [50, 25], [60, 30]);
+  near(placedBy(onchange, 100, 0), [100, 15]);
+  near(placedBy(onchange, 0, 0), [10, 5]);
+  // The bottom side's handle, where it is now (the quad's bottom middle), dragged down.
+  await drag(user, handles[5], svg, [60, 55], [60, 65]);
+  near(placedBy(onchange, 0, 50), [10, 65]);
+  near(placedBy(onchange, 100, 50), [110, 65]);
+  near(placedBy(onchange, 0, 0), [10, 5]);
+});
+
+test("layers that cannot be put in perspective: Ctrl and a corner still scale", async () => {
+  const { onchange, svg, handles, user } = open();
+  await user.keyboard("[ControlLeft>]");
+  await drag(user, handles[4], svg, [100, 50], [200, 100]);
+  await user.keyboard("[/ControlLeft]");
+  expect(onchange.mock.lastCall?.[0]).toHaveLength(6);
 });
