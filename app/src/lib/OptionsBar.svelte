@@ -26,6 +26,7 @@
     eraser = $bindable(),
     eyedropper = $bindable({ sample: "all", size: 1 }),
     crop = $bindable({ mode: "free" }),
+    straighten = $bindable(false),
     canvasSize = { width: 1, height: 1 },
     transform,
     quickMask = false,
@@ -63,6 +64,8 @@
     eyedropper?: { sample: "all" | "layer"; size: number };
     /** Crop: the frame's ratio or size (pixels), if any. */
     crop?: CropAspect;
+    /** Crop: a drag draws a line along what should be level, and the image turns. */
+    straighten?: boolean;
     /** The document's size: Crop's Original Ratio, and the size it starts from. */
     canvasSize?: { width: number; height: number };
     /** Quick Mask is on (whatever the tool): said, with its overlay's opacity. */
@@ -185,6 +188,17 @@
       <option value="ratio">{t("options.crop.ratio")}</option>
       <option value="size">{t("options.crop.size")}</option>
     </select>
+    <button
+      class="icon-btn"
+      class:on={straighten}
+      aria-pressed={straighten}
+      onmousedown={keepFocus}
+      title={t("options.crop.straightenHint")}
+      aria-label={t("options.crop.straighten")}
+      onclick={() => (straighten = !straighten)}
+    >
+      <Icon name="straighten" />
+    </button>
     {#if crop.mode !== "free"}
       {@const size = crop.mode === "size"}
       <SliderField

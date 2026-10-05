@@ -229,7 +229,11 @@ built. Contributors: propose here first.
   options bar chooses a ratio (Free, Original Ratio, 1 : 1, 4 : 5, 5 : 7, 2 : 3, 16 : 9, or typed
   in W and H, which a button swaps): the frame fits the largest of it, centered, and every
   handle keeps it; or a size in pixels: the frame takes it and only moves, a press outside it
-  putting it there (no resampling: the size is the frame's). Remembered for the session. Enter,
+  putting it there (no resampling: the size is the frame's). Remembered for the session.
+  Straighten (its button there): a drag draws a line along what should be level, or upright
+  when it is nearer to vertical; on release the image turns by that angle (Image Rotation's
+  arbitrary turn, one undo entry: nothing is resampled into the layers) and the frame starts
+  on the largest part of the canvas's proportions inside the turned image, to adjust and apply. Enter,
   a double-click inside or a click outside applies; Esc starts the frame over. As in Photoshop,
   the tool stays active: a new frame starts on the cropped canvas (and follows an undo); another
   tool drops the frame. Whole pixels only, and nothing
@@ -618,7 +622,7 @@ answers:
   - ✅ Eyedropper (I): a click takes the foreground color (Alt: the background), Sample (Current
     Layer or All Layers) and its size in the options bar, with the eyedropper's pointer and
     loupe; Alt held with the Brush takes the color, the Brush coming back on release.
-  - Crop options: ✅ a ratio or a size; Straighten (a line drawn along the horizon).
+  - ✅ Crop options: a ratio or a size, and Straighten (a line drawn along the horizon).
   - Edit > Transform gains Distort and Perspective, in Free Transform's box: a projective
     transform per layer, an ADR first. The Crop tool gets no perspective mode.
   - Gradient (G) paints into the layer (paint, [ADR 0027](adr/0027-painting.md)); gradient fill

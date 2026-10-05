@@ -354,6 +354,9 @@ const fr: Messages = {
   "options.crop.width": "L :",
   "options.crop.height": "H :",
   "options.crop.swap": "Permuter la largeur et la hauteur",
+  "options.crop.straighten": "Redresser",
+  "options.crop.straightenHint":
+    "Redresser : tracez une ligne le long de ce qui doit être horizontal ou vertical",
   "options.sample": "Échantillon :",
   "options.sample.all": "Tous les calques",
   "options.sample.layer": "Calque actif",

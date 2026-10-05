@@ -95,6 +95,11 @@ test("Crop's ratio or size: presets, the canvas's ratio, a size, swapped", async
   expect(fields()).toEqual(["400", "300"]);
   await user.click(screen.getByRole("button", { name: "Swap the width and the height" }));
   expect(fields()).toEqual(["300", "400"]);
+  // Straighten, a switch.
+  const straighten = screen.getByRole("button", { name: "Straighten" });
+  expect(straighten).toHaveAttribute("aria-pressed", "false");
+  await user.click(straighten);
+  expect(straighten).toHaveAttribute("aria-pressed", "true");
 });
 
 test("the Brush and the Eraser keep their own settings", async () => {

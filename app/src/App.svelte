@@ -154,7 +154,7 @@
   } from "./lib/layerEdits";
   import { hexToSrgb, srgbToHex } from "./lib/color";
   import { grayOf } from "./lib/colorModel";
-  import type { CropAspect } from "./lib/crop";
+  import { insetAfterTurn, type CropAspect } from "./lib/crop";
   import MarqueeTool from "./lib/MarqueeTool.svelte";
   import ModifyDialog from "./lib/ModifyDialog.svelte";
   import SaveSelectionDialog from "./lib/SaveSelectionDialog.svelte";
@@ -2954,10 +2954,25 @@
   // The Crop tool (C, ADR 0017): a frame on the image while the tool is active; applying it
   // reframes the canvas, and nothing is deleted. As in Photoshop, a new frame then starts on the
   // new canvas, and Esc starts it over. What the frame snaps to is fetched when it opens.
-  type Cropping = { document: number; width: number; height: number; targets: Bounds[] };
+  type Cropping = {
+    document: number;
+    width: number;
+    height: number;
+    targets: Bounds[];
+    /** The frame to start with, if not the canvas (after Straighten). */
+    start?: Bounds;
+  };
   let cropping = $state<Cropping | null>(null);
   /** The options bar's ratio or size for the Crop tool's frame, for the session. */
   let cropAspect = $state<CropAspect>({ mode: "free" });
+  /** The options bar's Straighten: a drag on the image levels it. */
+  let straightening = $state(false);
+  /**
+   * The image turned by Straighten (its size before, the turn): the next frame is the largest
+   * inside the turned image.
+   */
+  let straightened: { document: number; width: number; height: number; degrees: number } | null =
+    null;
   /** Bumped by each frame requested: only the latest one opens. */
   let cropRequest = 0;
   /** A crop being applied: the next frame waits for the new canvas. */
@@ -2968,7 +2983,25 @@
     // Nothing moves: every visible layer is a target.
     const { targets } = await snapTargets(doc, []);
     if (request !== cropRequest) return;
-    cropping = { document: doc.id, width: doc.width, height: doc.height, targets };
+    const turned = straightened?.document === doc.id ? straightened : null;
+    straightened = null;
+    const start = turned
+      ? insetAfterTurn(turned.width, turned.height, turned.degrees, doc)
+      : undefined;
+    cropping = { document: doc.id, width: doc.width, height: doc.height, targets, start };
+  }
+
+  /** Straighten's line drawn: the image turns (one undo entry), the frame inside it. */
+  function straighten(degrees: number) {
+    const doc = active;
+    if (!doc) return;
+    straightening = false;
+    const request = rotateEdit(degrees, true);
+    if (!request) return;
+    straightened = { document: doc.id, width: doc.width, height: doc.height, degrees };
+    void edit(doc.id, request).then(() => {
+      if (activeId === doc.id) void viewport?.fit();
+    });
   }
 
   $effect(() => {
@@ -4992,6 +5025,7 @@
       bind:eraser={eraserOptions}
       bind:eyedropper={eyedropperOptions}
       bind:crop={cropAspect}
+      bind:straighten={straightening}
       canvasSize={active ?? undefined}
       transform={transforming ? transformBar : undefined}
       quickMask={active?.quickMask ?? false}
@@ -5190,15 +5224,20 @@
                   />
                 {/if}
                 {#if cropping && cropping.document === active?.id}
-                  <CropBox
-                    {mapping}
-                    canvas={canvasBounds(active)}
-                    targets={snapping ? withGuides(cropping.targets, active) : []}
-                    smartGuides={!extrasHidden}
-                    aspect={cropAspect}
-                    onapply={applyCrop}
-                    oncancel={() => (cropping = null)}
-                  />
+                  {#key cropping}
+                    <CropBox
+                      {mapping}
+                      canvas={canvasBounds(active)}
+                      targets={snapping ? withGuides(cropping.targets, active) : []}
+                      smartGuides={!extrasHidden}
+                      aspect={cropAspect}
+                      start={cropping.start}
+                      straighten={straightening}
+                      onstraighten={straighten}
+                      onapply={applyCrop}
+                      oncancel={() => (cropping = null)}
+                    />
+                  {/key}
                 {:else if transforming && transforming.document === active?.id}
                   <FreeTransform
                     {mapping}

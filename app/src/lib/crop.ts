@@ -74,3 +74,47 @@ export function keepRatio(b: Bounds, start: Bounds, handle: number | null, ratio
   out[yEdge] = ay + Math.sign(b[yEdge] - ay || 1) * (size / ratio);
   return out;
 }
+
+/**
+ * Straighten: the turn (degrees, clockwise) that makes the line drawn from `from` to `to`
+ * (document pixels) level, or upright when it is nearer to vertical; null for a line too short
+ * to tell, or already straight.
+ */
+export function straightenTurn(from: [number, number], to: [number, number]): number | null {
+  const [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+  if (Math.hypot(dx, dy) < 2) return null;
+  // The line's angle from the horizontal, clockwise on screen, within (-90°, 90°].
+  let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (angle > 90) angle -= 180;
+  if (angle <= -90) angle += 180;
+  // Nearer to vertical: made upright instead.
+  const turn = Math.abs(angle) > 45 ? Math.sign(angle) * 90 - angle : -angle;
+  return Math.abs(turn) < 1e-6 ? null : turn;
+}
+
+/**
+ * After a `width × height` canvas turned by `degrees` (the canvas grown to `grown` around it,
+ * centered): the largest frame of the canvas's proportions inside the turned image, so that no
+ * transparent corner is kept; whole pixels, inward.
+ */
+export function insetAfterTurn(
+  width: number,
+  height: number,
+  degrees: number,
+  grown: { width: number; height: number },
+): Bounds {
+  const radians = (degrees * Math.PI) / 180;
+  const [cos, sin] = [Math.abs(Math.cos(radians)), Math.abs(Math.sin(radians))];
+  const scale = Math.min(
+    width / (width * cos + height * sin),
+    height / (width * sin + height * cos),
+  );
+  const [w, h] = [width * scale, height * scale];
+  const [cx, cy] = [grown.width / 2, grown.height / 2];
+  return {
+    left: Math.ceil(cx - w / 2),
+    top: Math.ceil(cy - h / 2),
+    right: Math.floor(cx + w / 2),
+    bottom: Math.floor(cy + h / 2),
+  };
+}
