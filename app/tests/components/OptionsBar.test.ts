@@ -153,6 +153,26 @@ test("the Clone Stamp has a brush, Aligned and what it samples", async () => {
   expect(clone).toMatchObject({ aligned: false, sample: "all" });
 });
 
+test("the Brush and the Eraser can paint as Photoshop's Pencil; the Clone Stamp cannot", async () => {
+  const brush = {
+    size: 20,
+    hardness: 1,
+    opacity: 1,
+    flow: 1,
+    pressureSize: false,
+    pressureOpacity: false,
+    pencil: false,
+  };
+  const { user } = open("brush", { brush });
+  await user.click(check("Pencil"));
+  expect(brush.pencil).toBe(true);
+});
+
+test("the Clone Stamp has no Pencil", () => {
+  open("cloneStamp");
+  expect(screen.queryByRole("checkbox", { name: "Pencil" })).not.toBeInTheDocument();
+});
+
 test("the Brush and the Eraser keep their own settings", async () => {
   const { props, user } = open("eraser");
   await user.click(check("Pressure: size"));

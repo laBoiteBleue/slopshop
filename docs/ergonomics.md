@@ -664,7 +664,8 @@ answers:
     vector ADR, as Type and Shapes.
   - The options bar holds how the next gesture acts; Properties what the selected object is,
     edited afterwards. A tool has variants only when the gesture differs: the Pencil is an
-    option of the Brush, vertical text a property of text, a triangle a polygon of 3 sides.
+    option of the Brush (✅, and of the Eraser: whole pixels, no anti-aliasing, a diameter of 1
+    painting one pixel), vertical text a property of text, a triangle a polygon of 3 sides.
 - **Decided, not added**: Hand, Zoom and Rotate View tools (again), a Screen Mode button (F11
   and Tab do it), Single Row and Single Column Marquees, the Magnetic Lasso (Quick Selection
   follows edges), Content-Aware Move, Red Eye, Color Replacement (Hue/Saturation through a

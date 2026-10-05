@@ -348,6 +348,8 @@ const en = {
   "tools.variants": "{name} ({key}) — right-click or hold for the other tools",
   "options.label": "Tool options",
   "options.autoSelect": "Auto-Select",
+  "options.pencil": "Pencil",
+  "options.pencil.hint": "Hard pixels, without anti-aliasing (Photoshop's Pencil)",
   "options.clone.aligned": "Aligned",
   "options.clone.aligned.hint":
     "The source follows the strokes, as far from them as the first one set",

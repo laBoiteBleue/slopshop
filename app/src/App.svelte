@@ -681,6 +681,7 @@
     flow: 1,
     pressureSize: true,
     pressureOpacity: false,
+    pencil: false,
   });
   let eraserOptions = $state({
     size: 50,
@@ -689,6 +690,7 @@
     flow: 1,
     pressureSize: true,
     pressureOpacity: false,
+    pencil: false,
   });
   /** The foreground (the Brush's) and background colors, `#rrggbb` sRGB. */
   let colors = $state({ foreground: "#000000", background: "#ffffff" });
