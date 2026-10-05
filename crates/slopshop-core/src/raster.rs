@@ -1182,8 +1182,9 @@ pub(crate) fn pad_tile(tile: &mut [u8], width: usize, height: usize, bpp: usize)
     }
 }
 
-/// `f` on every item, on every core (each thread taking a contiguous share); its results in
-/// order.
+/// `f` on every item, on every core; its results in order. Each thread takes the next item when
+/// it is done with one: items cost unequally (empty tiles, tiles at an edge, a brush's dabs),
+/// and fixed shares would leave threads idle.
 pub(crate) fn parallel_for_each<T: Send, R: Send>(
     items: &mut [T],
     f: impl Fn(&mut T) -> R + Sync,
@@ -1192,19 +1193,43 @@ pub(crate) fn parallel_for_each<T: Send, R: Send>(
     if items.len() <= 1 || threads == 1 {
         return items.iter_mut().map(f).collect();
     }
-    let per_thread = items.len().div_ceil(threads);
-    let f = &f;
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = items
-            .chunks_mut(per_thread)
-            .map(|chunk| scope.spawn(move || chunk.iter_mut().map(f).collect::<Vec<R>>()))
+    let count = items.len();
+    let next = std::sync::Mutex::new(items.iter_mut().enumerate());
+    let (f, next) = (&f, &next);
+    let done: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.min(count))
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut done = Vec::new();
+                    loop {
+                        // A panicking `f` poisons nothing here: the lock is not held by it.
+                        let item = next
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .next();
+                        let Some((index, item)) = item else {
+                            return done;
+                        };
+                        done.push((index, f(item)));
+                    }
+                })
+            })
             .collect();
         workers
             .into_iter()
             // Invariant: `f` does not panic; if it does, that bug is raised again here.
             .flat_map(|worker| worker.join().expect("worker panicked"))
             .collect()
-    })
+    });
+    let mut results: Vec<Option<R>> = (0..count).map(|_| None).collect();
+    for (index, result) in done {
+        results[index] = Some(result);
+    }
+    results
+        .into_iter()
+        // Invariant: every index was taken from the iterator once.
+        .map(|result| result.expect("every item was done"))
+        .collect()
 }
 
 /// Rows of one tile's buffer, from `first_row` on, for one thread to compute.
