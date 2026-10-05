@@ -4,7 +4,7 @@ Status: accepted (2026-10-03, validated by the maintainer; their choices: what P
 stack inside the layer, whose entries are not editable but can be deleted, in their order; files
 and history keep only paint deltas and parameters, never a re-stored copy of every tile).
 Revises [ADR 0027](0027-painting.md), points 3 to 5. Points 3 to 5 revised by
-[ADR 0034](0034-editable-operations.md): entries are editable, tools that read pixels replay.
+[ADR 0034](0034-editable-operations.md): entries are editable; tools that read pixels stay baked (amended 2026-10-05).
 
 ## Context
 
