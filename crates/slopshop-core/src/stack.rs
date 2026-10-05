@@ -2080,8 +2080,53 @@ struct Region {
 /// slider dragged over a filter) is skipped rather than computed for nothing.
 static BACKGROUND: Mutex<()> = Mutex::new(());
 
-/// A stack to evaluate, and the pixels of an earlier state of it with that state.
-type Recipe = (LayerStack, Option<(Pixels, LayerStack)>);
+/// A stack to evaluate, and where its evaluation starts from.
+type Recipe = (LayerStack, Earlier);
+
+/// What the evaluation of a state of a stack starts from (only the tiles that differ are
+/// evaluated then): the state before it, held weakly so that a state replaced at once (a slider
+/// dragged) is dropped rather than kept, and evaluated, for the next one; and the last state
+/// evaluated before it, with its pixels, for when the state before was never evaluated.
+#[derive(Debug, Default)]
+struct Earlier {
+    state: Option<(std::sync::Weak<LazyPixels>, LayerStack)>,
+    evaluated: Option<(Arc<RasterImage>, LayerStack)>,
+}
+
+impl Earlier {
+    fn of(earlier: Option<(Pixels, LayerStack)>) -> Self {
+        let Some((pixels, before)) = earlier else {
+            return Self::default();
+        };
+        if let Some(image) = pixels.ready_image() {
+            return Self {
+                state: None,
+                evaluated: Some((Arc::clone(image), before)),
+            };
+        }
+        // Being evaluated (its recipe taken): its pixels, once there, are found through `state`.
+        let evaluated = match pixels.0.pending.try_lock() {
+            Ok(recipe) => recipe.as_ref().and_then(|(_, e)| e.evaluated.clone()),
+            Err(std::sync::TryLockError::Poisoned(recipe)) => recipe
+                .into_inner()
+                .as_ref()
+                .and_then(|(_, e)| e.evaluated.clone()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        Self {
+            state: Some((Arc::downgrade(&pixels.0), before)),
+            evaluated,
+        }
+    }
+
+    /// An earlier state and its pixels: the one before if it was evaluated meanwhile, else the
+    /// last one evaluated before it.
+    fn start(self) -> Option<(Arc<RasterImage>, LayerStack)> {
+        self.state
+            .and_then(|(state, before)| Some((Arc::clone(state.upgrade()?.ready.get()?), before)))
+            .or(self.evaluated)
+    }
+}
 
 /// A quick look at a stack's result while it is evaluated (see [`LayerStack::preview`] and
 /// [`LayerStack::look_at`]): what its topmost filter gives at a pyramid level, `factor` layer
@@ -2232,6 +2277,11 @@ pub type LookFilter = Arc<dyn Fn(&LookJob) -> Option<RasterImage> + Send + Sync>
 /// (see `Pixels::evaluate_in_background`).
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// The same for a stack without a filter, which the display evaluates itself meanwhile: long
+/// enough to skip the states of a slider being dragged, short enough that the pixels are there
+/// soon after it stops.
+const SETTLE_WITHOUT_FILTER: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// The largest preview, in pixels: a few tens of milliseconds to compute.
 const PREVIEW_PIXELS: u64 = 4_000_000;
 
@@ -2316,7 +2366,7 @@ impl Pixels {
             format: stack.format(),
             ready: OnceLock::new(),
             stack: Some(stack.clone()),
-            pending: Mutex::new(Some((stack, earlier))),
+            pending: Mutex::new(Some((stack, Earlier::of(earlier)))),
             started: std::sync::atomic::AtomicBool::new(false),
             meanwhile,
             preview: OnceLock::new(),
@@ -2363,18 +2413,22 @@ impl Pixels {
             .spawn(move || {
                 // A filter's quick look first, not waiting for the other evaluations: what a
                 // slider dragged over a filter shows at once.
-                if let Some(stack) = pixels.0.stack.as_ref().filter(|s| s.has_shown_filter()) {
-                    if let Ok(Some(preview)) = stack.preview(PREVIEW_PIXELS) {
-                        let _ = pixels.0.preview.set(preview);
+                let settle = match pixels.0.stack.as_ref().filter(|s| s.has_shown_filter()) {
+                    Some(stack) => {
+                        if let Ok(Some(preview)) = stack.preview(PREVIEW_PIXELS) {
+                            let _ = pixels.0.preview.set(preview);
+                        }
+                        SETTLE
                     }
-                    // The display looks at what it shows (`look_for`). The whole layer, which
-                    // painting it or moving its pixels needs, once this state has lasted: a
-                    // slider dragged over the filter replaces it at each setting, and nobody
-                    // holds those any more by then.
-                    std::thread::sleep(SETTLE);
-                    if Arc::strong_count(&pixels.0) <= 1 {
-                        return;
-                    }
+                    None => SETTLE_WITHOUT_FILTER,
+                };
+                // The display looks at what it shows (`look_for`) or evaluates the stack itself.
+                // The whole layer, which painting it or moving its pixels needs, once this
+                // state has lasted: a slider dragged replaces it at each setting, and nobody
+                // holds those any more by then.
+                std::thread::sleep(settle);
+                if Arc::strong_count(&pixels.0) <= 1 {
+                    return;
                 }
                 let _one_at_a_time = BACKGROUND.lock().unwrap_or_else(PoisonError::into_inner);
                 // Only this thread holds them any more: nobody needs them.
@@ -2553,13 +2607,10 @@ impl Pixels {
     }
 }
 
-/// `stack`'s result, from `earlier` when it is evaluated (else from the original).
-fn evaluated(stack: &LayerStack, earlier: Option<(Pixels, LayerStack)>) -> Arc<RasterImage> {
-    let result = match earlier {
-        Some((pixels, before)) => match pixels.ready_image() {
-            Some(shown) => stack.reevaluate(&before, shown),
-            None => stack.evaluate(),
-        },
+/// `stack`'s result, from an earlier state when one is evaluated (else from the original).
+fn evaluated(stack: &LayerStack, earlier: Earlier) -> Arc<RasterImage> {
+    let result = match earlier.start() {
+        Some((shown, before)) => stack.reevaluate(&before, &shown),
         None => stack.evaluate(),
     };
     // Invariant: a stack's tiles are of its own making (lengths and places checked when made),
@@ -4710,6 +4761,67 @@ mod tests {
         // What painting it needs is there soon after a filter is applied, not waited for then.
         let stack = LayerStack::new(halves())
             .with_filter(blur(3.0, None), None)
+            .unwrap();
+        let pixels = Pixels::pending(stack, None);
+        pixels.evaluate_in_background();
+        assert!(
+            pixels.ready_image().is_none(),
+            "not at once: the state may be replaced"
+        );
+        let start = std::time::Instant::now();
+        while pixels.ready_image().is_none() && start.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(pixels.ready_image().is_some());
+    }
+
+    #[test]
+    fn a_state_replaced_before_it_is_evaluated_is_dropped_not_kept_by_the_next() {
+        // A slider dragged over an entry: every setting replaces the state before at once.
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let once = plain.with_effect(effect(Adjustment::Invert, None)).unwrap();
+        let first = Pixels::pending(once.clone(), Some((Pixels::ready(original), plain)));
+        let held = Arc::downgrade(&first.0);
+        let twice = once.with_effect(effect(Adjustment::Invert, None)).unwrap();
+        let second = Pixels::pending(twice.clone(), Some((first, once)));
+        // Nobody holds the first any more: its background evaluation is skipped, and a long
+        // drag leaves no chain of states behind.
+        assert!(held.upgrade().is_none());
+        let thrice = twice.with_effect(effect(Adjustment::Invert, None)).unwrap();
+        let third = Pixels::pending(thrice.clone(), Some((second, twice)));
+        // Evaluated from the last state evaluated (the original's): the same pixels as whole.
+        assert_eq!(difference(&third.get(), &thrice.evaluate().unwrap()), 0);
+    }
+
+    #[test]
+    fn a_state_evaluated_meanwhile_is_where_the_next_one_starts_from() {
+        let original = halves();
+        let plain = LayerStack::new(Arc::clone(&original));
+        let inside = selection(|x, _| x < 40);
+        let once = plain
+            .with_effect(effect(Adjustment::Invert, Some(inside.clone())))
+            .unwrap();
+        let first = Pixels::pending(once.clone(), Some((Pixels::ready(original), plain)));
+        let twice = once
+            .with_effect(effect(Adjustment::Invert, Some(inside)))
+            .unwrap();
+        let second = Pixels::pending(twice.clone(), Some((first.clone(), once)));
+        // Held elsewhere (the document) and evaluated after the next state was made.
+        let evaluated = first.get();
+        let result = second.get();
+        assert_eq!(difference(&result, &twice.evaluate().unwrap()), 0);
+        // Only the tiles under the selection were evaluated again: the others are the first's.
+        assert!(Arc::ptr_eq(
+            tile_of(&result, 1, 0),
+            tile_of(&evaluated, 1, 0)
+        ));
+    }
+
+    #[test]
+    fn a_layer_without_a_filter_is_evaluated_in_the_background_once_its_state_lasts() {
+        let stack = LayerStack::new(halves())
+            .with_effect(effect(Adjustment::Invert, None))
             .unwrap();
         let pixels = Pixels::pending(stack, None);
         pixels.evaluate_in_background();
