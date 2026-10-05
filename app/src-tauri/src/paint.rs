@@ -430,9 +430,13 @@ pub(crate) fn paint(
         let mut active = match previous {
             Some(active) => active,
             None => {
-                let mut documents = state.documents()?;
-                let document = documents.get_mut(document_id)?;
-                let (stroke, growth) = start(document.session.document(), &request, true)?;
+                // A copy (its pixels shared): a layer whose pixels are still evaluated (a filter
+                // just applied) is waited for without holding the documents meanwhile.
+                let doc = {
+                    let mut documents = state.documents()?;
+                    documents.get_mut(document_id)?.session.document().clone()
+                };
+                let (stroke, growth) = start(&doc, &request, true)?;
                 ActiveStroke {
                     id: request.stroke,
                     document_id,

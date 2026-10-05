@@ -2228,6 +2228,10 @@ impl LookJob {
 /// crop, or `None` when it does not take that job (the CPU computes it then).
 pub type LookFilter = Arc<dyn Fn(&LookJob) -> Option<RasterImage> + Send + Sync>;
 
+/// How long a state with a filter shows before its whole layer is evaluated in the background
+/// (see `Pixels::evaluate_in_background`).
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// The largest preview, in pixels: a few tens of milliseconds to compute.
 const PREVIEW_PIXELS: u64 = 4_000_000;
 
@@ -2363,9 +2367,14 @@ impl Pixels {
                     if let Ok(Some(preview)) = stack.preview(PREVIEW_PIXELS) {
                         let _ = pixels.0.preview.set(preview);
                     }
-                    // The display looks at what it shows (`look_for`): the whole layer is
-                    // evaluated only when something needs it (`get`).
-                    return;
+                    // The display looks at what it shows (`look_for`). The whole layer, which
+                    // painting it or moving its pixels needs, once this state has lasted: a
+                    // slider dragged over the filter replaces it at each setting, and nobody
+                    // holds those any more by then.
+                    std::thread::sleep(SETTLE);
+                    if Arc::strong_count(&pixels.0) <= 1 {
+                        return;
+                    }
                 }
                 let _one_at_a_time = BACKGROUND.lock().unwrap_or_else(PoisonError::into_inner);
                 // Only this thread holds them any more: nobody needs them.
@@ -4694,6 +4703,25 @@ mod tests {
             let v = if x < 150 { 0 } else { 255 };
             vec![v, v, v, 255]
         })
+    }
+
+    #[test]
+    fn a_filtered_layer_is_evaluated_in_the_background_once_its_state_lasts() {
+        // What painting it needs is there soon after a filter is applied, not waited for then.
+        let stack = LayerStack::new(halves())
+            .with_filter(blur(3.0, None), None)
+            .unwrap();
+        let pixels = Pixels::pending(stack, None);
+        pixels.evaluate_in_background();
+        assert!(
+            pixels.ready_image().is_none(),
+            "not at once: the state may be replaced"
+        );
+        let start = std::time::Instant::now();
+        while pixels.ready_image().is_none() && start.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(pixels.ready_image().is_some());
     }
 
     #[test]
