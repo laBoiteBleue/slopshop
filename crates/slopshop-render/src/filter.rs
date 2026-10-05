@@ -30,7 +30,26 @@ pub(crate) struct GpuFilter {
     line: wgpu::ComputePipeline,
     noise: wgpu::ComputePipeline,
     median: wgpu::ComputePipeline,
+    /// Buffers of looks computed, kept for the next ones of the same size (a slider dragged
+    /// over a filter asks for the same crop at each setting).
+    kept: std::sync::Mutex<Vec<LookBuffers>>,
 }
+
+/// The buffers a look of `width` × `height` pixels is computed in.
+#[derive(Debug)]
+struct LookBuffers {
+    width: u32,
+    height: u32,
+    /// Whether `rows` has room for a blur kept between two passes.
+    keeps: bool,
+    packed: wgpu::Buffer,
+    rows: wgpu::Buffer,
+    output: wgpu::Buffer,
+    readback: wgpu::Buffer,
+}
+
+/// How many sizes of look buffers are kept (one or two layers' looks at once).
+const KEPT_LOOKS: usize = 2;
 
 impl GpuFilter {
     pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -91,6 +110,7 @@ impl GpuFilter {
             line: pipeline("line_main"),
             noise: pipeline("noise_main"),
             median: pipeline("median_main"),
+            kept: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -140,57 +160,98 @@ impl GpuFilter {
         {
             return None;
         }
+        let keeps = kernels.iter().any(|pass| pass.mode == KEEP);
         let scopes = [
             wgpu::ErrorFilter::Internal,
             wgpu::ErrorFilter::Validation,
             wgpu::ErrorFilter::OutOfMemory,
         ]
         .map(|filter| self.device.push_error_scope(filter));
-        let result = self.blur(job, &kernels, width, height);
+        let buffers = self.buffers(width, height, keeps);
+        let result = self.blur(job, &kernels, &buffers);
         let mut failed = false;
         for scope in scopes.into_iter().rev() {
             failed |= pollster::block_on(scope.pop()).is_some();
         }
-        let bytes = result.filter(|_| !failed)?;
+        if failed {
+            return None;
+        }
+        self.keep(buffers);
         // Level 0 only: a look is shown at the level it is made for.
-        let tiles = tiles_of(&bytes, width, height);
-        RasterImage::from_level0_tiles_only(job.size, job.format, tiles).ok()
+        RasterImage::from_level0_tiles_only(job.size, job.format, result?).ok()
     }
 
-    /// The crop's pixels filtered by each pass in turn, as 8-bit RGBA rows.
-    fn blur(&self, job: &LookJob, kernels: &[Pass], width: u32, height: u32) -> Option<Vec<u8>> {
-        let input = rows_of(job, width, height);
+    /// Buffers for a look of `width` × `height`: those of an earlier look of that size, else
+    /// new ones.
+    fn buffers(&self, width: u32, height: u32, keeps: bool) -> LookBuffers {
+        let mut kept = self
+            .kept
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(at) = kept
+            .iter()
+            .position(|b| b.width == width && b.height == height && (b.keeps || !keeps))
+        {
+            return kept.swap_remove(at);
+        }
+        drop(kept);
+        let bytes = u64::from(width) * u64::from(height) * 4;
+        let buffer = |label, size, usage| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage,
+                mapped_at_creation: false,
+            })
+        };
+        use wgpu::BufferUsages as U;
+        LookBuffers {
+            width,
+            height,
+            keeps,
+            packed: buffer("filter input", bytes, U::STORAGE | U::COPY_DST),
+            // Twice as large when a blur is kept between two passes (in its second half).
+            rows: buffer(
+                "filter rows",
+                bytes * 4 * if keeps { 2 } else { 1 },
+                U::STORAGE,
+            ),
+            output: buffer("filter output", bytes, U::STORAGE | U::COPY_SRC),
+            readback: buffer("filter readback", bytes, U::MAP_READ | U::COPY_DST),
+        }
+    }
+
+    /// Keep `buffers` for the next looks, the most recent sizes only.
+    fn keep(&self, buffers: LookBuffers) {
+        let mut kept = self
+            .kept
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if kept.len() >= KEPT_LOOKS {
+            kept.remove(0);
+        }
+        kept.push(buffers);
+    }
+
+    /// The crop's pixels filtered by each pass in turn, as the look's tiles.
+    fn blur(
+        &self,
+        job: &LookJob,
+        kernels: &[Pass],
+        buffers: &LookBuffers,
+    ) -> Option<Vec<std::sync::Arc<[u8]>>> {
+        let (width, height) = (buffers.width, buffers.height);
+        let LookBuffers {
+            packed,
+            rows,
+            output,
+            readback,
+            ..
+        } = buffers;
         let bytes = u64::from(width) * u64::from(height) * 4;
         let device = &self.device;
-        let packed = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("filter input"),
-            contents: &input,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        // Twice as large when a blur is kept between two passes (in its second half).
-        let kept = if kernels.iter().any(|pass| pass.mode == KEEP) {
-            2
-        } else {
-            1
-        };
-        let rows = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("filter rows"),
-            size: bytes * 4 * kept,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("filter output"),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("filter readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        self.queue
+            .write_buffer(packed, 0, &rows_of(job, width, height));
         let groups = (width.div_ceil(WORKGROUP), height.div_ceil(WORKGROUP));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("filter"),
@@ -199,7 +260,7 @@ impl GpuFilter {
         let mut fresh = false;
         for pass in kernels {
             if fresh {
-                encoder.copy_buffer_to_buffer(&output, 0, &packed, 0, bytes);
+                encoder.copy_buffer_to_buffer(output, 0, packed, 0, bytes);
                 fresh = false;
             }
             fresh |= pass.mode != KEEP;
@@ -267,7 +328,7 @@ impl GpuFilter {
                 pass.dispatch_workgroups(groups.0, groups.1, 1);
             }
         }
-        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+        encoder.copy_buffer_to_buffer(output, 0, readback, 0, bytes);
         self.queue.submit([encoder.finish()]);
         let slice = readback.slice(..);
         let (tx, rx) = mpsc::channel();
@@ -275,11 +336,11 @@ impl GpuFilter {
             // The receiver only disappears if we already returned; nothing to report then.
             let _ = tx.send(result);
         });
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-        rx.recv().ok()?.ok()?;
-        let bytes = slice.get_mapped_range().ok()?.to_vec();
+        crate::wait_mapped(device, &rx).ok()?;
+        // The tiles straight from the mapped rows.
+        let tiles = tiles_of(&slice.get_mapped_range().ok()?, width, height);
         readback.unmap();
-        Some(bytes)
+        Some(tiles)
     }
 }
 
@@ -431,14 +492,14 @@ fn gaussian(sigma: f64) -> Option<Vec<f32>> {
 }
 
 /// Contiguous 8-bit RGBA rows (`width` × `height`) as tiles, row-major, edge tiles padded by
-/// repeating their last row and column as images pad them.
+/// repeating their last row and column as images pad them. A row of tiles a thread.
 fn tiles_of(rows: &[u8], width: u32, height: u32) -> Vec<std::sync::Arc<[u8]>> {
     let t = TILE_SIZE as usize;
     let (width, height) = (width as usize, height as usize);
     let (columns, tile_rows) = (width.div_ceil(t), height.div_ceil(t));
-    let mut tiles = Vec::with_capacity(columns * tile_rows);
-    for tile_row in 0..tile_rows {
-        for col in 0..columns {
+    let mut tiles: Vec<Option<std::sync::Arc<[u8]>>> = vec![None; columns * tile_rows];
+    in_parallel(&mut tiles, columns, |tile_row, out| {
+        for (col, slot) in out.iter_mut().enumerate() {
             let (x0, y0) = (col * t, tile_row * t);
             let (w, h) = (t.min(width - x0), t.min(height - y0));
             let mut tile = vec![0u8; t * t * 4];
@@ -457,29 +518,57 @@ fn tiles_of(rows: &[u8], width: u32, height: u32) -> Vec<std::sync::Arc<[u8]>> {
                     px.copy_from_slice(&last);
                 }
             }
-            tiles.push(std::sync::Arc::from(tile));
+            *slot = Some(std::sync::Arc::from(tile));
         }
-    }
-    tiles
+    });
+    tiles.into_iter().flatten().collect()
 }
 
-/// The crop's tiles as contiguous 8-bit RGBA rows (`width` × `height`).
+/// The crop's tiles as contiguous 8-bit RGBA rows (`width` × `height`). A row of tiles a thread.
 fn rows_of(job: &LookJob, width: u32, height: u32) -> Vec<u8> {
     let t = TILE_SIZE as usize;
     let columns = (width as usize).div_ceil(t);
     let (width, height) = (width as usize, height as usize);
     let mut out = vec![0u8; width * height * 4];
-    for (y, row) in out.chunks_mut(width * 4).enumerate() {
-        let (tile_row, ty) = (y / t, y % t);
-        for col in 0..columns {
-            let Some(tile) = job.tiles.get(tile_row * columns + col) else {
-                continue;
-            };
-            let x0 = col * t;
-            let w = t.min(width - x0);
-            row[x0 * 4..(x0 + w) * 4].copy_from_slice(&tile[ty * t * 4..(ty * t + w) * 4]);
+    debug_assert!(height > 0);
+    in_parallel(&mut out, t * width * 4, |tile_row, band| {
+        for (ty, row) in band.chunks_mut(width * 4).enumerate() {
+            for col in 0..columns {
+                let Some(tile) = job.tiles.get(tile_row * columns + col) else {
+                    continue;
+                };
+                let x0 = col * t;
+                let w = t.min(width - x0);
+                row[x0 * 4..(x0 + w) * 4].copy_from_slice(&tile[ty * t * 4..(ty * t + w) * 4]);
+            }
         }
-        debug_assert!(height > 0);
-    }
+    });
     out
+}
+
+/// `f(index, chunk)` for each `chunk`-long part of `items` (the last may be shorter), on a few
+/// threads: copying a look's pixels takes milliseconds on one.
+fn in_parallel<T: Send>(items: &mut [T], chunk: usize, f: impl Fn(usize, &mut [T]) + Sync) {
+    let parts = items.len().div_ceil(chunk.max(1));
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(8)
+        .min(parts);
+    if threads <= 1 {
+        for (index, part) in items.chunks_mut(chunk.max(1)).enumerate() {
+            f(index, part);
+        }
+        return;
+    }
+    let per_thread = parts.div_ceil(threads);
+    let f = &f;
+    std::thread::scope(|scope| {
+        for (n, group) in items.chunks_mut(per_thread * chunk).enumerate() {
+            scope.spawn(move || {
+                for (i, part) in group.chunks_mut(chunk).enumerate() {
+                    f(n * per_thread + i, part);
+                }
+            });
+        }
+    });
 }
