@@ -19,7 +19,10 @@ async function pixelsAround(cx: number, cy: number, radius: number) {
   return pixels;
 }
 
-/** The window shows the document at 200% from its corner; the image ends at x = 1000. */
+/**
+ * The window shows the document at 50 % from its corner (two document pixels per screen pixel:
+ * the tiles asked span twice as many); the image ends at x = 1000.
+ */
 function sourceOf(version: unknown = 1) {
   return {
     point: (x: number, y: number) => (x < 1000 ? ([x * 2, y * 2] as [number, number]) : null),
@@ -36,7 +39,7 @@ test("the loupe is above right of the pointer once its pixels arrive, the sample
   render(Loupe, { x: 100, y: 60, source, current: "#ff0000" });
   expect(loupe()).not.toHaveClass("shown");
   await vi.waitFor(() => expect(loupe()).toHaveClass("shown"));
-  expect(source.pixels).toHaveBeenCalledWith(200, 120, 64);
+  expect(source.pixels).toHaveBeenCalledWith(200, 120, 128);
   const place = loupePlacement(100, 60, { width: window.innerWidth, height: window.innerHeight });
   expect(loupe().style.left).toBe(`${place.left}px`);
   expect(loupe().style.top).toBe(`${place.top}px`);
@@ -66,7 +69,7 @@ test("a change of the document asks for its pixels again", async () => {
   await vi.waitFor(() => expect(loupe()).toHaveClass("shown"));
   const next = sourceOf(2);
   props.source = next;
-  await vi.waitFor(() => expect(next.pixels).toHaveBeenCalledWith(200, 120, 64));
+  await vi.waitFor(() => expect(next.pixels).toHaveBeenCalledWith(200, 120, 128));
 });
 
 test("off the image the loupe hides, and asks nothing", async () => {

@@ -1,17 +1,27 @@
 import { expect, test, vi } from "vitest";
 import { LOUPE_RADIUS, LOUPE_SIDE } from "../src/lib/eyedropper";
-import { TILE_MARGIN, TILE_RADIUS, covers, cut, loupeTiles, type Tile } from "../src/lib/loupeTile";
-
-const SIDE = 2 * TILE_RADIUS + 1;
+import {
+  LEAD_MS,
+  MAX_TILE_RADIUS,
+  TILE_MARGIN,
+  TILE_RADIUS,
+  covers,
+  cut,
+  loupeTiles,
+  nextTile,
+  pointerMotion,
+  type Tile,
+} from "../src/lib/loupeTile";
 
 /** A tile around (`cx`, `cy`) whose every pixel holds its own document coordinates (mod 256). */
-function tileAround(cx: number, cy: number): Uint8ClampedArray<ArrayBuffer> {
-  const pixels = new Uint8ClampedArray(SIDE * SIDE * 4);
-  for (let row = 0; row < SIDE; row++) {
-    for (let col = 0; col < SIDE; col++) {
-      const x = cx - TILE_RADIUS + col;
-      const y = cy - TILE_RADIUS + row;
-      pixels.set([x & 255, y & 255, 7, 255], (row * SIDE + col) * 4);
+function tileAround(cx: number, cy: number, radius = TILE_RADIUS): Uint8ClampedArray<ArrayBuffer> {
+  const side = 2 * radius + 1;
+  const pixels = new Uint8ClampedArray(side * side * 4);
+  for (let row = 0; row < side; row++) {
+    for (let col = 0; col < side; col++) {
+      const x = cx - radius + col;
+      const y = cy - radius + row;
+      pixels.set([x & 255, y & 255, 7, 255], (row * side + col) * 4);
     }
   }
   return pixels;
@@ -44,9 +54,9 @@ test("the loupe's pixels are cut from the tile around the point asked", () => {
 function setup() {
   const answers: (() => void)[] = [];
   const fetch = vi.fn(
-    (x: number, y: number, _radius: number) =>
+    (x: number, y: number, radius: number) =>
       new Promise<Uint8ClampedArray | null>((resolve) =>
-        answers.push(() => resolve(tileAround(x, y))),
+        answers.push(() => resolve(tileAround(x, y, radius))),
       ),
   );
   const onready = vi.fn();
@@ -141,4 +151,62 @@ test("once dropped, an answer tells nothing", async () => {
   answers.shift()?.();
   await new Promise((done) => setTimeout(done));
   expect(onready).not.toHaveBeenCalled();
+});
+
+test("still at 100 %, the tile asked is the smallest, around the pointer", () => {
+  expect(nextTile(300, 200, { velocity: [0, 0], scale: 1 })).toEqual({
+    x: 300,
+    y: 200,
+    radius: TILE_RADIUS,
+  });
+});
+
+test("zoomed out, the tile spans more document pixels, up to the largest", () => {
+  const quarter = nextTile(300, 200, { velocity: [0, 0], scale: 4 });
+  expect(quarter.radius).toBeGreaterThan(4 * 48);
+  expect(quarter.radius).toBeLessThanOrEqual(MAX_TILE_RADIUS);
+  expect(nextTile(300, 200, { velocity: [0, 0], scale: 40 }).radius).toBe(MAX_TILE_RADIUS);
+});
+
+test("moving, the tile is asked ahead of the pointer, the pointer still in it", () => {
+  // 1 document pixel per millisecond to the right.
+  const ahead = nextTile(300, 200, { velocity: [1, 0], scale: 1 });
+  expect(ahead.x).toBe(300 + LEAD_MS);
+  expect(ahead.y).toBe(200);
+  const tile = { ...ahead, pixels: new Uint8ClampedArray() };
+  expect(covers(tile, 300, 200, LOUPE_RADIUS)).toBe(true);
+  // Very fast: the lead is cut so that the loupe stays inside.
+  const far = nextTile(300, 200, { velocity: [50, 0], scale: 1 });
+  expect(far.radius).toBe(MAX_TILE_RADIUS);
+  expect(covers({ ...far, pixels: new Uint8ClampedArray() }, 300, 200, LOUPE_RADIUS)).toBe(true);
+});
+
+test("a pointer moving fast gets the next tile before it leaves the one kept", async () => {
+  const { fetch, tiles, answer } = setup();
+  const moving = { velocity: [1, 0] as [number, number], scale: 1 };
+  tiles.at(200, 200, "v1", moving);
+  await answer();
+  const [center, , radius] = fetch.mock.lastCall!;
+  expect(center).toBe(200 + LEAD_MS);
+  // Well inside the tile, but where the pointer goes next is past it: asked already.
+  const x = center + radius - LOUPE_RADIUS - LEAD_MS + 1;
+  expect(
+    covers(
+      { x: center, y: 200, radius, pixels: tileAround(0, 0) },
+      x,
+      200,
+      2 * LOUPE_RADIUS + TILE_MARGIN,
+    ),
+  ).toBe(true);
+  expect(tiles.at(x, 200, "v1", moving)).not.toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+test("the pointer's motion: its velocity smoothed, still after a pause, the last zoom kept", () => {
+  const motion = pointerMotion();
+  expect(motion.at([100, 100], 0, 2)).toEqual({ velocity: [0, 0], scale: 2 });
+  expect(motion.at([110, 100], 10, null)).toEqual({ velocity: [0.5, 0], scale: 2 });
+  expect(motion.at([120, 100], 20, 2).velocity).toEqual([0.75, 0]);
+  // A pause: still again.
+  expect(motion.at([121, 100], 1000, 2).velocity).toEqual([0, 0]);
 });
