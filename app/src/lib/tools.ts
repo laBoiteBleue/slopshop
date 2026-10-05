@@ -16,6 +16,7 @@ export type ToolId =
   | "quickSelection"
   | "wand"
   | "crop"
+  | "eyedropper"
   | "brush"
   | "eraser"
   | "restoreEraser";
@@ -58,6 +59,7 @@ export const SLOTS: readonly ToolSlot[] = [
     ],
   },
   { key: "C", tools: [{ id: "crop", icon: "crop", name: "tools.crop" }] },
+  { key: "I", tools: [{ id: "eyedropper", icon: "eyedropper", name: "tools.eyedropper" }] },
   { key: "B", tools: [{ id: "brush", icon: "brush", name: "tools.brush" }] },
   {
     key: "E",

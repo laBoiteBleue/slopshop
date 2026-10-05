@@ -122,7 +122,7 @@ test("Info shows the color and place under the pointer, the selection and the do
   expect(value("Document")).toHaveTextContent("400 × 300 px");
   state.pointer = [12.7, 40.2];
   await vi.waitFor(() => expect(value("R")).toHaveTextContent("255"));
-  expect(sampled).toEqual([{ documentId: 3, x: 12.5, y: 40.5 }]);
+  expect(sampled).toEqual([{ documentId: 3, x: 12.5, y: 40.5, size: 1, layerId: null }]);
   expect(value("X")).toHaveTextContent("12");
   expect(value("Y")).toHaveTextContent("40");
   expect(value("#")).toHaveTextContent("#ff8000");

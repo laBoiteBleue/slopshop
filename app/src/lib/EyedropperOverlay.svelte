@@ -1,6 +1,7 @@
 <script lang="ts">
-  // The image while Select > Color Range is open: the eyedropper's pointer (Shift shows the one
-  // adding, Alt the one taking away), a loupe over the pixels around it, and a click samples.
+  // The image while it is sampled (the Eyedropper tool, Alt with the Brush, Select > Color
+  // Range): the eyedropper's pointer (for Color Range, Shift shows the one adding, Alt the one
+  // taking away), a loupe over the pixels around it, and a click samples.
   import {
     eyedropperCursor,
     eyedropperFromKeys,

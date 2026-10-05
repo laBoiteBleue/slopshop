@@ -3183,11 +3183,17 @@ mod tests {
         let mut documents = state.documents().unwrap();
         let shown = documents.get_mut(doc.id).unwrap().session.document();
         // The red paint over the white background, the background elsewhere.
-        assert_eq!(paint::sample_color_at(shown, 50.5, 50.5), Some([255, 0, 0]));
-        assert_eq!(paint::sample_color_at(shown, 150.0, 150.0), Some([255; 3]));
-        assert_eq!(paint::sample_color_at(shown, -1.0, 10.0), None);
-        assert_eq!(paint::sample_color_at(shown, 1e12, 10.0), None);
-        assert_eq!(paint::sample_color_at(shown, f64::NAN, 10.0), None);
+        assert_eq!(
+            paint::sample_color_at(shown, 50.5, 50.5, 1),
+            Some([255, 0, 0])
+        );
+        assert_eq!(
+            paint::sample_color_at(shown, 150.0, 150.0, 1),
+            Some([255; 3])
+        );
+        assert_eq!(paint::sample_color_at(shown, -1.0, 10.0, 1), None);
+        assert_eq!(paint::sample_color_at(shown, 1e12, 10.0, 1), None);
+        assert_eq!(paint::sample_color_at(shown, f64::NAN, 10.0, 1), None);
         // The loupe: the pixel under the point in the middle, clear off the canvas.
         let patch = paint::sample_patch_at(shown, 50.5, 50.5, 2);
         assert_eq!(patch.len(), 5 * 5 * 4);
@@ -3203,12 +3209,25 @@ mod tests {
         for far in [1e300, -1e300, f64::NAN] {
             assert_eq!(paint::sample_patch_at(shown, far, far, 1), vec![0; 9 * 4]);
         }
+        // Sample Size: the average of the pixels around, transparent ones not counting.
+        let edge = paint::sample_color_at(shown, 0.5, 0.5, 3).unwrap();
+        assert_eq!(edge, [255; 3], "off the canvas does not darken it");
+        // The layer alone: nothing where it is transparent, its red where it is painted.
+        let alone = crate::selection::sampled_document(shown, Some(layer.get())).unwrap();
+        assert_eq!(paint::sample_color_at(&alone, 150.0, 150.0, 1), None);
+        assert_eq!(
+            paint::sample_color_at(&alone, 50.5, 50.5, 1),
+            Some([255, 0, 0])
+        );
         // Nothing shown: no color.
         let clear =
             RasterImage::from_pixels(Size::new(4, 4), PixelFormat::RGBA8_SRGB, &[0; 4 * 4 * 4])
                 .unwrap();
         let session = image_session(clear, "clear");
-        assert_eq!(paint::sample_color_at(session.document(), 1.0, 1.0), None);
+        assert_eq!(
+            paint::sample_color_at(session.document(), 1.0, 1.0, 1),
+            None
+        );
     }
 
     #[test]

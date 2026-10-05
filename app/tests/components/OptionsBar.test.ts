@@ -62,6 +62,24 @@ test("the Magic Wand's checkboxes change its settings", async () => {
   expect(props.wand).toEqual({ tolerance: 32, contiguous: false, sampleAll: true });
 });
 
+test("the Eyedropper's Sample Size and Sample change its settings", async () => {
+  const eyedropper = { sample: "all", size: 1 };
+  const { user } = open("eyedropper", { eyedropper });
+  const size = screen.getByRole("combobox", { name: "Sample Size:" });
+  expect([...size.querySelectorAll("option")].map((o) => o.textContent?.trim())).toEqual([
+    "Point Sample",
+    "3 by 3 Average",
+    "5 by 5 Average",
+    "11 by 11 Average",
+    "31 by 31 Average",
+    "51 by 51 Average",
+    "101 by 101 Average",
+  ]);
+  await user.selectOptions(size, "5 by 5 Average");
+  await user.selectOptions(screen.getByRole("combobox", { name: "Sample:" }), "Current Layer");
+  expect(eyedropper).toEqual({ sample: "layer", size: 5 });
+});
+
 test("the Brush and the Eraser keep their own settings", async () => {
   const { props, user } = open("eraser");
   await user.click(check("Pressure: size"));
