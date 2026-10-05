@@ -473,6 +473,15 @@ impl FilterEntry {
             .map(|c| (c.below.clone(), Arc::clone(&c.input)))
     }
 
+    /// Its result over `below`, if it is known.
+    fn known_output(&self, below: &LayerStack) -> Option<Arc<RasterImage>> {
+        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        cache
+            .as_ref()
+            .filter(|c| c.below == *below)
+            .and_then(|c| c.output.clone())
+    }
+
     /// The result of the entry over `below` (the stack of the entries below it): from its
     /// cache, or computed now (and `below` evaluated first when it was not known).
     fn output(&self, below: &LayerStack) -> Result<Arc<RasterImage>, StackError> {
@@ -3276,12 +3285,9 @@ impl LayerStack {
             }
             _ => return Ok(None),
         };
-        let Some((known, input)) = filter.known_input() else {
+        let Some((input, run)) = self.known_run(index) else {
             return Ok(None);
         };
-        if known != below {
-            return Ok(None);
-        }
         let Some(level) = input
             .levels()
             .iter()
@@ -3301,13 +3307,13 @@ impl LayerStack {
         // A coarse pixel is `factor` pixels of the layer: where the selection is read from, and
         // how far the filter reaches.
         let scale = Affine::scale(f64::from(factor), f64::from(factor));
-        for (n, step) in filter.steps.iter().enumerate() {
+        for (n, step) in run.iter().enumerate() {
             let coarse_step = FilterStep {
                 filter: step.filter.scaled(factor),
                 to_document: scale.then(step.to_document),
-                ..(**step).clone()
+                ..(*step).clone()
             };
-            let last = n + 1 == filter.steps.len();
+            let last = n + 1 == run.len();
             image = Arc::new(filtered(&coarse_step, &image, last)?);
         }
         Ok(Some(Preview {
@@ -3332,10 +3338,50 @@ impl LayerStack {
     }
 
     /// What [`Self::look_at`] computes, to be computed elsewhere (on the GPU, ADR 0035).
+    /// What a look at filter entry `index` computes from: the steps of the filters from the
+    /// lowest one needed up to it (filters shown one on another), and what that lowest one
+    /// applies to, known already (its input, or the result of the filter below it). A filter
+    /// applied over another whose pixels are not evaluated yet is then shown at once, both
+    /// computed on the part shown. `None` when nothing below is known.
+    fn known_run(&self, index: usize) -> Option<(Arc<RasterImage>, Vec<&FilterStep>)> {
+        let mut first = index;
+        loop {
+            let Entry::Filter(filter) = &self.entries[first] else {
+                return None;
+            };
+            if first < index && filter.hidden {
+                return None;
+            }
+            let below = self.below(first);
+            let known = filter
+                .known_input()
+                .filter(|(stack, _)| *stack == below)
+                .map(|(_, input)| input)
+                .or_else(|| match first.checked_sub(1).map(|i| &self.entries[i]) {
+                    Some(Entry::Filter(under)) if !under.hidden => {
+                        under.known_output(&self.below(first - 1))
+                    }
+                    _ => None,
+                });
+            if let Some(input) = known {
+                let steps = self.entries[first..=index]
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        Entry::Filter(filter) => Some(filter.steps.iter().map(|s| &**s)),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                return Some((input, steps));
+            }
+            first = first.checked_sub(1)?;
+        }
+    }
+
     pub fn look_job(&self, rect: [f64; 4], level: usize) -> Option<LookJob> {
         let index = self.last_filter()?;
-        let filter = match &self.entries[index] {
-            Entry::Filter(filter) => filter,
+        match &self.entries[index] {
+            Entry::Filter(_) => {}
             Entry::Liquify(liquify) => {
                 let (known, input) = liquify.known_input()?;
                 if known != self.below(index) {
@@ -3344,11 +3390,8 @@ impl LayerStack {
                 return self.liquify_job(index, liquify, &input, rect, level);
             }
             _ => return None,
-        };
-        let (known, input) = filter.known_input()?;
-        if known != self.below(index) {
-            return None;
         }
+        let (input, run) = self.known_run(index)?;
         let whole = input.size();
         if rect[0] >= f64::from(whole.width)
             || rect[1] >= f64::from(whole.height)
@@ -3363,9 +3406,8 @@ impl LayerStack {
         let factor = (1u32 << level) as f32;
         let coarse = &input.levels()[level];
         let size = coarse.size();
-        // How far the filter reads around a pixel at this level.
-        let reach: f64 = filter
-            .steps
+        // How far the filters read around a pixel at this level.
+        let reach: f64 = run
             .iter()
             .map(|step| step.filter.scaled(factor).reach())
             .sum();
@@ -3393,13 +3435,12 @@ impl LayerStack {
         // A pixel of the crop is `factor` pixels of the layer, from `origin`.
         let placed = Affine::translation(f64::from(origin[0]), f64::from(origin[1]))
             .then(Affine::scale(f, f));
-        let steps = filter
-            .steps
+        let steps = run
             .iter()
             .map(|step| FilterStep {
                 filter: step.filter.scaled(factor),
                 to_document: placed.then(step.to_document),
-                ..(**step).clone()
+                ..(*step).clone()
             })
             .collect();
         Some(LookJob {
@@ -4958,6 +4999,42 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let state = Pixels(held.upgrade().expect("held by its thread until then"));
         assert!(state.0.preview.get().is_none());
+    }
+
+    #[test]
+    fn a_filter_over_a_filter_not_evaluated_yet_has_a_look_at_once() {
+        let original = halves();
+        let once = LayerStack::new(Arc::clone(&original))
+            .with_filter(blur(3.0, None), Some(Arc::clone(&original)))
+            .unwrap();
+        // Another filter (two blurs would make one entry), applied before the first one's pixels
+        // were evaluated: its own input is not known.
+        let high = FilterStep {
+            filter: Filter::HighPass { radius: 2.0 },
+            ..blur(2.0, None)
+        };
+        let twice = once.with_filter(high.clone(), None).unwrap();
+        let rect = [100.0, 50.0, 200.0, 150.0];
+        let job = twice.look_job(rect, 0).expect("a look at once");
+        assert_eq!(job.steps.len(), 2, "both filters, on the part shown");
+        let look = job.run().unwrap();
+        let exact = twice.evaluate().unwrap();
+        let [ox, oy] = look.origin;
+        for (x, y) in [(100, 50), (149, 80), (150, 100), (199, 149)] {
+            let (a, b) = (pixel(&look.image, x - ox, y - oy), pixel(&exact, x, y));
+            assert!(
+                a.iter().zip(&b).all(|(a, b)| a.abs_diff(*b) <= 1),
+                "({x}, {y}): {a:?} {b:?}"
+            );
+        }
+        assert!(
+            twice.preview(150 * 130).unwrap().is_some(),
+            "and a quick look"
+        );
+        // Once the first one's result is known, the look starts from it.
+        let output = once.evaluate().unwrap();
+        let known = once.with_filter(high, Some(output)).unwrap();
+        assert_eq!(known.look_job(rect, 0).unwrap().steps.len(), 1);
     }
 
     #[test]
