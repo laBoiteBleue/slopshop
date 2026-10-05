@@ -2021,6 +2021,8 @@ struct RasterPlan<'a> {
 }
 
 /// Where a planned raster is in the document.
+// A few plans per frame, copied freely: a perspective's numbers inline cost less than a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy)]
 enum Place {
     /// A whole-pixel offset (ADR 0017), clamped to the shader's `i32`.

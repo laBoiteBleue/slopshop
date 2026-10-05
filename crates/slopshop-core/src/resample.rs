@@ -7,12 +7,18 @@
 //! receives the same numbers and the same kernel table ([`weight_table`]), and runs the same
 //! loop as [`Resampling::sample`].
 //!
+//! A layer in perspective (ADR 0038) has no constant ellipse: [`Resampling::placed`] reads one
+//! level for the whole layer, the finest any of its corners needs, and each sample's ellipse comes
+//! from the map's Jacobian there, its extent capped at [`MAX_EXTENT`] texels (where the layer
+//! recedes most, a sample reads at most that many).
+//!
 //! Coordinates: texel (i, j) of a level covers `[i, i + 1) × [j, j + 1)` in that level's texel
 //! space, its center is at (i + ½, j + ½); document pixel (x, y) is sampled at its center too.
 
 use std::sync::OnceLock;
 
-use crate::transform::Affine;
+use crate::geom::Size;
+use crate::transform::{Affine, Projective};
 
 /// Radius of the kernel, in texels (of an unstretched ellipse): the third zero of Jinc.
 pub const RADIUS: f64 = 3.238_315_484_166_236;
@@ -109,6 +115,20 @@ pub struct Resampling {
     inverse: Affine,
     /// Document pixels per output pixel, at least 1.
     scale: f64,
+    /// A placement in perspective (ADR 0038); `to_texel` and `filter` are then those at the
+    /// image's center, for reference only.
+    perspective: Option<Perspective>,
+}
+
+/// A layer placed by a projective map: what [`Resampling`] computes at each sample.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Perspective {
+    /// Document point → texel coordinates of the level read.
+    pub to_texel: Projective,
+    /// Document → image (level 0) pixels.
+    inverse: Projective,
+    /// The image's size (level 0).
+    size: Size,
 }
 
 impl Resampling {
@@ -117,7 +137,7 @@ impl Resampling {
     /// document pixels, like export). `None` when the transform is not invertible.
     pub fn new(transform: Affine, scale: f64, levels: usize) -> Option<Self> {
         let inverse = transform.inverse()?;
-        let scale = if scale > 1.0 { scale } else { 1.0 };
+        let scale = at_least_one(scale);
         let (major, minor) = axes(inverse, scale);
         let coarsest = levels.saturating_sub(1);
         let mut level = if minor > 1.0 {
@@ -131,10 +151,80 @@ impl Resampling {
         Some(Self::build(inverse, scale, level))
     }
 
+    /// Sampling an image of `size` (level 0) and `levels` pyramid levels placed by any
+    /// `transform`: [`Self::new`] for an affine one; for a projective one (ADR 0038), the level
+    /// is the finest the image's corners need, and each sample's ellipse comes from the
+    /// Jacobian there. `None` when the transform is not invertible.
+    pub fn placed(transform: Projective, scale: f64, levels: usize, size: Size) -> Option<Self> {
+        if let Some(t) = transform.as_affine() {
+            return Self::new(t, scale, levels);
+        }
+        let inverse = transform.inverse()?;
+        let scale = at_least_one(scale);
+        let (w, h) = (f64::from(size.width), f64::from(size.height));
+        let minor = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+            .map(|(x, y)| transform.apply(x, y))
+            .into_iter()
+            .map(|(x, y)| axes(inverse.local_affine(x, y), scale).1)
+            .fold(f64::INFINITY, f64::min);
+        let coarsest = levels.saturating_sub(1);
+        let level = if minor > 1.0 && minor.is_finite() {
+            (minor.log2().floor() as usize).min(coarsest)
+        } else {
+            0
+        };
+        Some(Self::build_perspective(inverse, scale, level, size))
+    }
+
     /// The same sampling from another pyramid level (the renderer coarsens levels when tiles do
     /// not fit its cache).
     pub fn at_level(self, level: usize) -> Self {
-        Self::build(self.inverse, self.scale, level)
+        match self.perspective {
+            Some(p) => Self::build_perspective(p.inverse, self.scale, level, p.size),
+            None => Self::build(self.inverse, self.scale, level),
+        }
+    }
+
+    /// The placement in perspective, if it is one (ADR 0038).
+    pub fn perspective(&self) -> Option<&Perspective> {
+        self.perspective.as_ref()
+    }
+
+    fn build_perspective(inverse: Projective, scale: f64, level: usize, size: Size) -> Self {
+        let factor = f64::from(1u32 << level.min(31));
+        let to_texel = inverse.then(Affine::scale(1.0 / factor, 1.0 / factor).into());
+        // The image's center in the document, where the reference numbers are taken.
+        let center = inverse.inverse().map_or((0.0, 0.0), |forward| {
+            forward.apply(f64::from(size.width) / 2.0, f64::from(size.height) / 2.0)
+        });
+        let local = to_texel.local_affine(center.0, center.1);
+        Self {
+            level,
+            to_texel: local,
+            filter: ewa(local, scale),
+            inverse: inverse.local_affine(center.0, center.1),
+            scale,
+            perspective: Some(Perspective {
+                to_texel,
+                inverse,
+                size,
+            }),
+        }
+    }
+
+    /// Where document point (`x`, `y`) falls in the level's texels, and the filter there; `None`
+    /// beyond the horizon line of a layer in perspective (nothing of it shows there).
+    fn at(&self, x: f64, y: f64) -> Option<((f64, f64), Filter)> {
+        match &self.perspective {
+            None => Some((self.to_texel.apply(x, y), self.filter)),
+            Some(p) => {
+                if p.to_texel.w(x, y) <= 0.0 {
+                    return None;
+                }
+                let local = p.to_texel.local_affine(x, y);
+                Some((p.to_texel.apply(x, y), ewa(local, self.scale)))
+            }
+        }
     }
 
     fn build(inverse: Affine, scale: f64, level: usize) -> Self {
@@ -151,14 +241,28 @@ impl Resampling {
             filter,
             inverse,
             scale,
+            perspective: None,
         }
     }
 
     /// The part of the image (level-0 pixels, `[x0, y0, x1, y1]`) that samples within the
     /// document area `[x0, y0, x1, y1]` read.
     pub fn source_area(&self, area: [f64; 4]) -> [f64; 4] {
-        let [x0, y0, x1, y1] = self.inverse.map_rect(area);
         let factor = f64::from(1u32 << self.level.min(31));
+        if let Some(p) = &self.perspective {
+            // Clipped to the image: the area may reach the horizon line, beyond which the
+            // inverse map runs off to infinity (ADR 0038).
+            let (w, h) = (f64::from(p.size.width), f64::from(p.size.height));
+            let [x0, y0, x1, y1] = p.inverse.map_rect(area);
+            let m = (MAX_EXTENT + 1.0) * factor;
+            return [
+                (x0 - m).max(-m),
+                (y0 - m).max(-m),
+                (x1 + m).min(w + m),
+                (y1 + m).min(h + m),
+            ];
+        }
+        let [x0, y0, x1, y1] = self.inverse.map_rect(area);
         let (mx, my) = match self.filter {
             Filter::Nearest => (1.0, 1.0),
             Filter::Ewa { extent, .. } => ((extent[0] + 1.0) * factor, (extent[1] + 1.0) * factor),
@@ -169,8 +273,10 @@ impl Resampling {
     /// Whether sampling at document point `(x, y)` reads any texel of a level of `width` ×
     /// `height` texels (if not, the sample is transparent).
     pub fn reaches(&self, (x, y): (f64, f64), width: u32, height: u32) -> bool {
-        let (u, v) = self.to_texel.apply(x, y);
-        let [eu, ev] = match self.filter {
+        let Some(((u, v), filter)) = self.at(x, y) else {
+            return false;
+        };
+        let [eu, ev] = match filter {
             Filter::Nearest => [0.5, 0.5],
             Filter::Ewa { extent, .. } => extent,
         };
@@ -186,8 +292,10 @@ impl Resampling {
         (x, y): (f64, f64),
         mut fetch: impl FnMut(i64, i64) -> Option<[f64; 4]>,
     ) -> ([f64; 4], f64) {
-        let (u, v) = self.to_texel.apply(x, y);
-        let Filter::Ewa { q, extent } = self.filter else {
+        let Some(((u, v), filter)) = self.at(x, y) else {
+            return ([0.0; 4], 0.0);
+        };
+        let Filter::Ewa { q, extent } = filter else {
             return match fetch(u.floor() as i64, v.floor() as i64) {
                 Some(color) => (color, 1.0),
                 None => ([0.0; 4], 0.0),
@@ -235,6 +343,11 @@ impl Resampling {
         let color = std::array::from_fn(|c| (sum[c] / total).clamp(lo[c], hi[c]));
         (color, (inside / total).clamp(0.0, 1.0))
     }
+}
+
+/// `scale`, at least 1 (NaN: 1).
+fn at_least_one(scale: f64) -> f64 {
+    if scale > 1.0 { scale } else { 1.0 }
 }
 
 /// Lengths of the major and minor axes of an output pixel (a unit circle of `scale` document

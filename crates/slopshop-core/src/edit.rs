@@ -526,7 +526,7 @@ impl Edit {
                 }
             }
             Edit::SetLayerTransform { id, transform } => {
-                validate_transform(transform)?;
+                validate_transform(doc.layer(id).ok_or(EditError::UnknownLayer(id))?, transform)?;
                 let layer = doc.layer_mut_moved(id).ok_or(EditError::UnknownLayer(id))?;
                 let previous = std::mem::replace(&mut layer.transform, transform);
                 Edit::SetLayerTransform {
@@ -1068,7 +1068,7 @@ impl Edit {
                 .then(by.into())
                 .then(back)
                 .snapped();
-            validate_transform(transform)?;
+            validate_transform(layer, transform)?;
             edits.push(Edit::SetLayerTransform { id, transform });
         }
         Ok(Edit::Batch(edits))
@@ -1117,7 +1117,7 @@ impl Edit {
         }
         for layer in doc.layers() {
             let transform = layer.transform.then(by.into()).snapped();
-            validate_transform(transform)?;
+            validate_transform(layer, transform)?;
             edits.push(Edit::SetLayerTransform {
                 id: layer.id,
                 transform,
@@ -1523,7 +1523,7 @@ fn validate_new_layer(
             return Err(EditError::LayerIdInUse(layer.id));
         }
         validate_opacity(layer.opacity)?;
-        validate_transform(layer.transform)?;
+        validate_transform(layer, layer.transform)?;
         if layer
             .mask
             .as_ref()
@@ -1582,13 +1582,34 @@ fn swap_paint(
     }
 }
 
-/// Transforms layers may have: finite and invertible (ADR 0018); affine until layers are
-/// resampled through projective ones (ADR 0038).
-pub(crate) fn validate_transform(transform: Projective) -> Result<(), EditError> {
-    match transform.as_affine() {
-        Some(t) if t.is_valid_layer_transform() => Ok(()),
-        _ => Err(EditError::InvalidTransform),
+/// Transforms `layer` may have: finite and invertible (ADR 0018); projective only for a pixel
+/// layer, its pixels and its mask's all on the near side of the horizon line (ADR 0038).
+pub(crate) fn validate_transform(layer: &Layer, transform: Projective) -> Result<(), EditError> {
+    let valid = match transform.as_affine() {
+        Some(t) => t.is_valid_layer_transform(),
+        None => projected_bounds(layer).is_some_and(|b| transform.is_valid_layer_transform(b)),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(EditError::InvalidTransform)
     }
+}
+
+/// The content of a pixel layer, in its own pixels (`[x0, y0, x1, y1]`: its image's and its
+/// mask's); `None` for the other layers, which are not placed in perspective (ADR 0038).
+fn projected_bounds(layer: &Layer) -> Option<[f64; 4]> {
+    let LayerContent::Raster { image, .. } = &layer.content else {
+        return None;
+    };
+    let size = image.size();
+    let (mut w, mut h) = (f64::from(size.width), f64::from(size.height));
+    if let Some(mask) = &layer.mask {
+        let m = mask.image.size();
+        w = w.max(f64::from(m.width));
+        h = h.max(f64::from(m.height));
+    }
+    Some([0.0, 0.0, w, h])
 }
 
 pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {
@@ -3176,7 +3197,7 @@ mod tests {
                 Err(EditError::InvalidTransform)
             );
         }
-        // In perspective: refused until layers are resampled through it (ADR 0038).
+        // In perspective: only a pixel layer (ADR 0038), not these fills.
         let keystone = crate::transform::Projective::from_rect_to_quad(
             [0.0, 0.0, 8.0, 8.0],
             [(2.0, 0.0), (6.0, 0.0), (8.0, 8.0), (0.0, 8.0)],
@@ -3186,6 +3207,43 @@ mod tests {
             Edit::SetLayerTransform {
                 id: ids[0],
                 transform: keystone
+            }
+            .apply(&mut doc),
+            Err(EditError::InvalidTransform)
+        );
+    }
+
+    #[test]
+    fn a_pixel_layer_may_be_put_in_perspective_this_side_of_the_horizon() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let image = RasterImage::from_pixels(
+            Size::new(8, 8),
+            crate::color::PixelFormat::RGBA8_SRGB,
+            &[255; 8 * 8 * 4],
+        )
+        .unwrap();
+        let id = raster_layer(&mut doc, Arc::new(image));
+        let keystone = crate::transform::Projective::from_rect_to_quad(
+            [0.0, 0.0, 8.0, 8.0],
+            [(2.0, 0.0), (6.0, 0.0), (8.0, 8.0), (0.0, 8.0)],
+        )
+        .unwrap();
+        assert_round_trip(
+            &mut doc,
+            Edit::SetLayerTransform {
+                id,
+                transform: keystone,
+            },
+        );
+        // A map whose horizon line runs through the image: refused.
+        let crossing = crate::transform::Projective::from_array([
+            1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -0.25, 1.0,
+        ])
+        .unwrap();
+        assert_eq!(
+            Edit::SetLayerTransform {
+                id,
+                transform: crossing
             }
             .apply(&mut doc),
             Err(EditError::InvalidTransform)

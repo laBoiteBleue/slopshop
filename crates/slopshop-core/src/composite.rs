@@ -627,14 +627,13 @@ enum Placement {
 }
 
 /// How `image`, placed by `transform`, is sampled: the level read and the placement. `None`
-/// for a transform that is not invertible (edits refuse them), and for now for a projective one
-/// (ADR 0038: its resampling comes next; edits refuse them meanwhile).
+/// for a transform that is not invertible (edits refuse them).
 fn placement(image: &RasterImage, transform: Projective) -> Option<(&RasterLevel, Placement)> {
     let levels = image.levels();
     match transform.integer_translation() {
         Some((x, y)) => Some((levels.first()?, Placement::Offset(x, y))),
         None => {
-            let r = Resampling::new(transform.as_affine()?, 1.0, levels.len())?;
+            let r = Resampling::placed(transform, 1.0, levels.len(), image.size())?;
             Some((levels.get(r.level)?, Placement::Resampled(Box::new(r))))
         }
     }
@@ -1267,7 +1266,7 @@ fn saturate(v: f64, report: &mut CompositeReport) -> f32 {
 mod tests {
     use std::sync::Arc;
 
-    use crate::transform::Affine;
+    use crate::transform::{Affine, Projective};
 
     use super::*;
     use crate::adjust::Adjustment;
@@ -2564,6 +2563,94 @@ mod tests {
         // The left edge runs through pixel 2: half covered.
         let edge = at(2, 7)[3];
         assert!(edge > 0.2 && edge < 0.8, "{edge}");
+    }
+
+    #[test]
+    fn a_layer_in_perspective_shows_its_pixels_in_its_quad() {
+        // Left half red, right half blue, 40 × 20, onto a quad narrower at the top.
+        let size = Size::new(40, 20);
+        let pixels: Vec<[f32; 4]> = (0..size.pixel_count())
+            .map(|i| {
+                if i % 40 < 20 {
+                    [1.0, 0.0, 0.0, 1.0]
+                } else {
+                    [0.0, 0.0, 1.0, 1.0]
+                }
+            })
+            .collect();
+        let mut doc = Document::new(Size::new(60, 40));
+        let mut layer = new_layer(
+            &mut doc,
+            float_raster(size, &pixels),
+            BlendMode::Normal,
+            1.0,
+        );
+        let quad = [(20.0, 5.0), (40.0, 5.0), (55.0, 35.0), (5.0, 35.0)];
+        layer.transform = Projective::from_rect_to_quad([0.0, 0.0, 40.0, 20.0], quad).unwrap();
+        push(&mut doc, layer);
+        let out = all(&doc);
+        let at = |x: usize, y: usize| &out[(y * 60 + x) * 4..][..4];
+        // Well inside the left half of the quad: red; the right half: blue.
+        let left = at(15, 28);
+        assert!(
+            left[0] > 0.99 && left[2] < 0.01 && left[3] > 0.99,
+            "{left:?}"
+        );
+        let right = at(44, 28);
+        assert!(
+            right[2] > 0.99 && right[0] < 0.01 && right[3] > 0.99,
+            "{right:?}"
+        );
+        // The middle of the top edge, narrowed: the halves meet at x = 30.
+        let top_left = at(28, 8);
+        let top_right = at(32, 8);
+        assert!(
+            top_left[0] > 0.9 && top_right[2] > 0.9,
+            "{top_left:?} {top_right:?}"
+        );
+        // Outside the quad: nothing.
+        assert_eq!(at(10, 8), [0.0; 4]);
+        assert_eq!(at(30, 2), [0.0; 4]);
+        assert_eq!(at(30, 38), [0.0; 4]);
+    }
+
+    #[test]
+    fn a_layer_in_perspective_reads_one_level_and_nothing_beyond_its_horizon() {
+        use crate::resample::Resampling;
+        // A quad that shrinks the far edge eight times: the level is the near edge's.
+        let to = Projective::from_rect_to_quad(
+            [0.0, 0.0, 512.0, 512.0],
+            [(224.0, 0.0), (288.0, 0.0), (512.0, 512.0), (0.0, 512.0)],
+        )
+        .unwrap();
+        let r = Resampling::placed(to, 1.0, 10, Size::new(512, 512)).unwrap();
+        assert_eq!(r.level, 0);
+        assert!(r.perspective().is_some());
+        // Zoomed out, a coarser level, the finest the corners need: the near edge, magnified
+        // eight times vertically, needs level 0 up to 8 document pixels per screen pixel.
+        let far = Resampling::placed(to, 64.0, 10, Size::new(512, 512)).unwrap();
+        assert!(far.level > 0, "{}", far.level);
+        // Beyond the horizon line (where `w` of the inverse falls to 0) nothing is read.
+        let back = to.inverse().unwrap();
+        let [g, h, i] = [6, 7, 8].map(|k| back.to_array()[k]);
+        // A point on the far side of w = 0, along the gradient of w.
+        let t = -(i + 1.0) / (g * g + h * h);
+        let beyond = (g * t, h * t);
+        assert!(back.w(beyond.0, beyond.1) < 0.0);
+        assert!(!r.reaches(beyond, 512, 512));
+        assert_eq!(
+            r.sample(crate::resample::weight_table(), beyond, |_, _| Some(
+                [1.0; 4]
+            ))
+            .1,
+            0.0
+        );
+        // An affine map is resampled as before.
+        let affine = Affine::scale(0.5, 0.5);
+        assert_eq!(
+            Resampling::placed(affine.into(), 1.0, 10, Size::new(512, 512)),
+            Resampling::new(affine, 1.0, 10)
+        );
     }
 
     fn adjustment(adjustment: Adjustment) -> LayerContent {

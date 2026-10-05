@@ -843,7 +843,7 @@ fn validate_restored(
         if crate::edit::validate_opacity(layer.opacity).is_err() {
             return Err(RestoreError::InvalidOpacity(id));
         }
-        if crate::edit::validate_transform(layer.transform).is_err() {
+        if crate::edit::validate_transform(layer, layer.transform).is_err() {
             return Err(RestoreError::InvalidTransform(id));
         }
         if let LayerContent::Fill { color } = &layer.content

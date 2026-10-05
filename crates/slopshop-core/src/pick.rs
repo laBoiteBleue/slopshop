@@ -174,7 +174,13 @@ fn mask_shows(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
 
 /// The image's pixel under the center of document pixel (`x`, `y`), in its own coordinates.
 fn local(image: &RasterImage, transform: Projective, x: i64, y: i64) -> Option<(u32, u32)> {
-    let (u, v) = transform.inverse()?.apply(x as f64 + 0.5, y as f64 + 0.5);
+    let inverse = transform.inverse()?;
+    let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+    // Beyond the horizon line of a layer in perspective, nothing of it shows (ADR 0038).
+    if inverse.w(px, py) <= 0.0 {
+        return None;
+    }
+    let (u, v) = inverse.apply(px, py);
     let (lx, ly) = (u.floor(), v.floor());
     let size = image.size();
     (lx >= 0.0 && ly >= 0.0 && lx < f64::from(size.width) && ly < f64::from(size.height))
@@ -340,7 +346,41 @@ pub fn bounds_of(document: &Document, ids: &[LayerId]) -> Option<Bounds> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::transform::Affine;
+    use crate::transform::{Affine, Projective};
+
+    #[test]
+    fn a_layer_in_perspective_is_picked_inside_its_quad_only() {
+        let mut doc = Document::new(Size::new(60, 40));
+        let image = RasterImage::from_pixels(
+            Size::new(40, 20),
+            crate::color::PixelFormat::RGBA8_SRGB,
+            &[255; 40 * 20 * 4],
+        )
+        .unwrap();
+        let id = doc.allocate_layer_id();
+        let quad = [(20.0, 5.0), (40.0, 5.0), (55.0, 35.0), (5.0, 35.0)];
+        crate::edit::Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                style: None,
+                transform: Projective::from_rect_to_quad([0.0, 0.0, 40.0, 20.0], quad).unwrap(),
+                clipped: false,
+                id,
+                name: "quad".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: crate::blend::BlendMode::Normal,
+                mask: None,
+                content: LayerContent::raster(Arc::new(image)),
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(layer_at(&doc, 30, 20), Some(id));
+        assert_eq!(layer_at(&doc, 8, 8), None);
+        assert_eq!(layer_at(&doc, 30, 1), None);
+    }
 
     use super::*;
     use crate::blend::BlendMode;
