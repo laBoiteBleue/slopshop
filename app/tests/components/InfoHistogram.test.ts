@@ -72,6 +72,39 @@ test("Histogram asks for the counts, again as the document changes, and shows a 
   await vi.waitFor(() => expect(calls).toHaveLength(2));
 });
 
+test("Histogram asks again once the document rests, not at each step of a drag", async () => {
+  const calls: unknown[] = [];
+  mockIPC((cmd, args) => {
+    if (cmd !== "histogram") return null;
+    calls.push(args);
+    return {
+      red: counts({}),
+      green: counts({}),
+      blue: counts({}),
+      luminosity: counts({}),
+      step: 1,
+    };
+  });
+  const state = reactive({ doc: doc(), pointer: null as [number, number] | null });
+  render(Histogram, { context: context(state) });
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  // A slider dragged: a new revision every few milliseconds.
+  for (let revision = 2; revision <= 8; revision++) {
+    state.doc = doc({ revision });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(calls).toHaveLength(1);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(calls).toHaveLength(2);
+  // Another document: at once (sooner than a rest).
+  state.doc = doc({ id: 4, revision: 1 });
+  await vi.waitFor(
+    () => expect(calls).toEqual([{ documentId: 3 }, { documentId: 3 }, { documentId: 4 }]),
+    { timeout: 100 },
+  );
+});
+
 test("Info shows the color and place under the pointer, the selection and the document", async () => {
   const sampled: unknown[] = [];
   mockIPC((cmd, args) => {

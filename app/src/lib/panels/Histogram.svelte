@@ -9,23 +9,31 @@
   // The dock's Histogram panel (ADR 0036): how many pixels of the visible image (within the
   // selection) have each value, as displayed, for the three colors over each other or one
   // channel, with Photoshop's statistics. Asked from the engine only while the panel shows,
-  // again as the document changes (one request at a time while a slider moves).
+  // again as the document changes, once it rests (a slider dragged changes it at each step,
+  // and each count composites the image on the CPU, the stacks being edited evaluated whole).
   import { engine, type HistogramView } from "../engine";
   import { HISTOGRAM_CHANNELS, channelCounts, histogramPath, histogramStats } from "../histogram";
   import { t } from "../i18n/index.svelte";
-  import { latestWins } from "../latest";
+  import { onceSettled } from "../settle";
   import { panelContext } from "./context";
+
+  /** How long the document stays as it is before its counts are asked again. */
+  const SETTLE_MS = 150;
 
   const app = panelContext();
   let view = $state<HistogramView | null>(null);
 
-  const fetcher = latestWins(async (documentId: number) => {
+  const fetcher = onceSettled(SETTLE_MS, async (documentId: number) => {
     const counts = await engine.histogram(documentId);
     if (documentId === app.doc.id) view = counts;
   });
+  /** The document counted last: another one is asked at once. */
+  let counted: number | null = null;
   $effect(() => {
     void app.doc.revision;
-    fetcher.push(app.doc.id);
+    const id = app.doc.id;
+    fetcher.push(id, id !== counted);
+    counted = id;
   });
   $effect(() => () => fetcher.drop());
 
