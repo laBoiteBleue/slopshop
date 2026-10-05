@@ -1270,24 +1270,36 @@
     showFilter(filterDialog);
   }
 
-  /** OK: one undo entry (none when an entry is left as it was). */
+  /**
+   * OK: one undo entry (none when an entry is left as it was). What the canvas shows already
+   * (Preview on, the same settings) is kept as it is, with what was computed of it: applying
+   * it again would compute the filter again.
+   */
   function applyFilterDialog(values: number[]) {
     const dialog = filterDialog;
     filterDialog = null;
     if (!dialog) return;
+    const shown = dialog.preview && JSON.stringify(values) === JSON.stringify(dialog.values);
     if (!dialog.entry) {
       const settings = { filter: dialog.filter, values };
       filterValues[dialog.filter] = values;
       lastFilter = settings;
-      void sync(
-        engine.replaceGesture(dialog.documentId, applyFilterEdit(dialog.layerId, settings)),
-      );
+      void (shown
+        ? endGesture(dialog.documentId)
+        : sync(
+            engine.replaceGesture(dialog.documentId, applyFilterEdit(dialog.layerId, settings)),
+          ));
       return;
     }
     const { index, hidden, original, step } = dialog.entry;
     const settings = dialog.entry.settings.map((s, i) => (i === step ? { ...s, values } : s));
     if (JSON.stringify(settings) === JSON.stringify(original)) {
       void cancelGesture(dialog.documentId);
+      return;
+    }
+    // Shown with the entry's eye open: the same edit when it was open.
+    if (shown && !hidden) {
+      void endGesture(dialog.documentId);
       return;
     }
     void sync(
