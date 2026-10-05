@@ -107,6 +107,13 @@ pub enum Paint {
     /// in `[0, 1]`: white shows or selects, black hides. The Brush paints the gray of its color
     /// ([`gray_of_srgb`]) and the Eraser 0 (ADR 0027).
     Gray(f32),
+    /// A gradient across the canvas (the Gradient tool): each pixel the color at its place, at
+    /// the gradient's opacity there; with `gray`, on a coverage (a mask, Quick Mask), the gray
+    /// of that color ([`gray_of_srgb`]).
+    Gradient {
+        field: crate::gradient::GradientField,
+        gray: bool,
+    },
 }
 
 /// The gray a color paints in a mask or in Quick Mask, in `[0, 1]`: the sRGB encoding of its
@@ -274,6 +281,14 @@ impl Stroke {
         {
             return Err(PaintError::InvalidColor);
         }
+        if let Paint::Gradient { field, gray } = paint {
+            if !field.is_valid() {
+                return Err(PaintError::InvalidColor);
+            }
+            if gray && base.format().layout != ChannelLayout::Gray {
+                return Err(PaintError::NotACoverage);
+            }
+        }
         if let Paint::Gray(value) = paint {
             if !(0.0..=1.0).contains(&value) {
                 return Err(PaintError::InvalidColor);
@@ -337,6 +352,8 @@ impl Stroke {
     ) -> Result<Self, PaintError> {
         let op = match paint {
             Paint::Color(c) => PaintOp::Color(c),
+            Paint::Gradient { field, gray: false } => PaintOp::Gradient { field, to_document },
+            Paint::Gradient { gray: true, .. } => return Err(PaintError::NotACoverage),
             Paint::Erase => PaintOp::Erase,
             Paint::Restore => PaintOp::Restore,
             Paint::Gray(_) => return Err(PaintError::NotACoverage),
@@ -713,13 +730,37 @@ impl Stroke {
             return;
         }
         let codec = &self.codec;
-        if let Paint::Gray(value) = self.paint {
+        // A gradient: its color at the pixel's place, its opacity there scaling the amount.
+        let (paint, amount) = match self.paint {
+            Paint::Gradient { field, gray } => {
+                let t = f64::from(TILE_SIZE);
+                let (dx, dy) = self.to_document.apply(
+                    f64::from(coord.col) * t + x as f64 + 0.5,
+                    f64::from(coord.row) * t + y as f64 + 0.5,
+                );
+                let ([r, g, b], alpha) = field.at(dx, dy);
+                let amount = amount * alpha as f32;
+                if amount <= 0.0 {
+                    return;
+                }
+                let paint = if gray {
+                    Paint::Gray(gray_of_srgb([r as f32, g as f32, b as f32]))
+                } else {
+                    Paint::Color(LinearRgba::from_srgb_encoded_to_working(
+                        r as f32, g as f32, b as f32, 1.0,
+                    ))
+                };
+                (paint, amount)
+            }
+            paint => (paint, amount),
+        };
+        if let Paint::Gray(value) = paint {
             // Source-over of an opaque gray on the coverage.
             let (gray, _) = codec.read_mapped(px, &mut |v| v);
             codec.write([gray[0] + (value - gray[0]) * amount; 3], 1.0, px);
             return;
         }
-        if self.paint == Paint::Erase && codec.scale_alpha(px, 1.0 - amount) {
+        if paint == Paint::Erase && codec.scale_alpha(px, 1.0 - amount) {
             // Only the alpha changes: the colors stay as they were (ADR 0027).
             return;
         }
@@ -727,7 +768,7 @@ impl Stroke {
         let below = mat_vec(&self.to_working, color.map(f64::from));
         let mut dst = [below[0], below[1], below[2], f64::from(alpha)];
         let amount = f64::from(amount);
-        match self.paint {
+        match paint {
             Paint::Color(c) => {
                 let src = [
                     f64::from(c.r) * amount,
@@ -743,7 +784,7 @@ impl Stroke {
                 }
             }
             // Painted above; a stroke on pixels never restores (refused by `new`).
-            Paint::Gray(_) | Paint::Restore => return,
+            Paint::Gray(_) | Paint::Restore | Paint::Gradient { .. } => return,
         }
         let rgb = [dst[0], dst[1], dst[2]];
         let rgb = if self.base.format().layout.is_gray() {
@@ -1286,6 +1327,106 @@ mod tests {
         // sRGB green's luminance (0.7152) encoded: 220.
         let v = pixel(&image, 16, 16)[0];
         assert!((219..=221).contains(&v), "{v}");
+    }
+
+    /// Black to white from x = 0 to x = 300, opaque to transparent with `fade`.
+    fn gradient(gray: bool, fade: bool) -> Paint {
+        Paint::Gradient {
+            field: crate::gradient::GradientField {
+                gradient: crate::gradient::Gradient::BLACK_TO_WHITE,
+                alpha: [1.0, if fade { 0.0 } else { 1.0 }],
+                shape: crate::gradient::GradientShape::Linear,
+                from: [0.0, 0.0],
+                to: [300.0, 0.0],
+            },
+            gray,
+        }
+    }
+
+    #[test]
+    fn a_gradient_fills_each_pixel_with_the_color_at_its_place() {
+        let size = Size::new(300, 20);
+        let base = filled(size, rgba8(), &[255, 0, 0, 255]);
+        let full = Brush {
+            opacity: 1.0,
+            ..Brush::default()
+        };
+        let mut s = stroke(Arc::clone(&base), full, gradient(false, false));
+        s.fill();
+        let image = s.finish().unwrap().unwrap();
+        // Pixel centers: t = 0.5 / 300 at the first, 299.5 / 300 at the last.
+        let near =
+            |px: Vec<u8>, want: [u8; 4]| px.iter().zip(want).all(|(&v, w)| v.abs_diff(w) <= 1);
+        assert!(near(pixel(&image, 0, 10), [0, 0, 0, 255]));
+        assert!(near(pixel(&image, 299, 10), [255, 255, 255, 255]));
+        let middle = pixel(&image, 150, 10);
+        assert!(
+            (126..=129).contains(&middle[0]) && middle[0] == middle[2],
+            "{middle:?}"
+        );
+        // Opaque to transparent: the red shows more and more.
+        let mut s = stroke(Arc::clone(&base), full, gradient(false, true));
+        s.fill();
+        let faded = s.finish().unwrap().unwrap();
+        assert!(near(pixel(&faded, 0, 10), [0, 0, 0, 255]));
+        assert!(near(pixel(&faded, 299, 10), [255, 0, 0, 255]));
+        // On a layer's stack: the same pixels, kept as paint.
+        let plain = LayerStack::new(Arc::clone(&base));
+        let mut s = Stroke::on_stack(
+            &plain,
+            Arc::clone(&base),
+            Affine::IDENTITY,
+            None,
+            BlendSpace::Perceptual,
+            full,
+            gradient(false, false),
+        )
+        .unwrap();
+        s.fill();
+        let (stack, shown) = s.finish_stack().unwrap().unwrap();
+        assert_eq!(stack.entries().len(), 1);
+        for x in [0, 150, 299] {
+            assert_eq!(pixel(&shown, x, 10), pixel(&image, x, 10), "x = {x}");
+        }
+        // Placed in the document: the colors follow the document, not the layer's pixels.
+        let moved = Stroke::new(
+            Arc::clone(&base),
+            Affine::translation(150.0, 0.0),
+            None,
+            BlendSpace::Perceptual,
+            full,
+            gradient(false, false),
+        );
+        let mut moved = moved.unwrap();
+        moved.fill();
+        let moved = moved.finish().unwrap().unwrap();
+        assert_eq!(pixel(&moved, 0, 10), middle);
+    }
+
+    #[test]
+    fn a_gradient_on_a_coverage_paints_its_grays() {
+        let size = Size::new(300, 20);
+        let full = Brush {
+            opacity: 1.0,
+            ..Brush::default()
+        };
+        let mut s = stroke(coverage(size, 0), full, gradient(true, false));
+        s.fill();
+        let image = s.finish().unwrap().unwrap();
+        // 0.5 / 300 and 299.5 / 300 of the way.
+        assert!(coverage_at(&image, 0, 10) < 120);
+        assert!(coverage_at(&image, 299, 10) > u16::MAX - 120);
+        assert!(coverage_at(&image, 150, 10).abs_diff(u16::MAX / 2) < 200);
+        // Its grays on pixels, its colors on a coverage: refused.
+        let refused = Stroke::new(
+            filled(size, rgba8(), &[0, 0, 0, 255]),
+            Affine::IDENTITY,
+            None,
+            BlendSpace::Perceptual,
+            full,
+            gradient(true, false),
+        );
+        assert!(matches!(refused, Err(PaintError::NotACoverage)));
     }
 
     /// A uniform 16-bit coverage of `value`, as masks and selections are.

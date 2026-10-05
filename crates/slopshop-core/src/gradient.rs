@@ -1,6 +1,7 @@
-//! Gradients of the Gradient Map adjustment: color stops along `[0, 1]`, the colors in between
-//! interpolated linearly, and the lookup tables both compositors read, so that the CPU
-//! reference and the GPU give the same values (as Curves', [`crate::curve`]).
+//! Gradients: color stops along `[0, 1]`, the colors in between interpolated linearly. The
+//! Gradient Map adjustment reads them through lookup tables both compositors share, so that the
+//! CPU reference and the GPU give the same values (as Curves', [`crate::curve`]); the Gradient
+//! tool lays them across the canvas ([`GradientField`]).
 
 use crate::curve::CURVE_LUT;
 
@@ -116,6 +117,56 @@ impl Gradient {
     }
 }
 
+/// How a [`GradientField`] spreads from its start to its end (Photoshop's first two).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientShape {
+    /// Along the line, square to it.
+    Linear,
+    /// Around the start, the end on its rim.
+    Radial,
+}
+
+/// A gradient laid across the canvas by the Gradient tool: its colors from `from` to `to`
+/// (document pixels), shaped by `shape`, and an opacity going from `alpha[0]` to `alpha[1]`
+/// (Photoshop's "Foreground to Transparent"). Before the start and past the end, the end
+/// colors stay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientField {
+    pub gradient: Gradient,
+    pub alpha: [f32; 2],
+    pub shape: GradientShape,
+    pub from: [f64; 2],
+    pub to: [f64; 2],
+}
+
+impl GradientField {
+    /// Finite points apart, opacities in `[0, 1]`.
+    pub fn is_valid(&self) -> bool {
+        let finite = self.from.iter().chain(&self.to).all(|v| v.is_finite());
+        let apart = self.from != self.to;
+        finite && apart && self.alpha.iter().all(|a| (0.0..=1.0).contains(a))
+    }
+
+    /// Where document point (`x`, `y`) falls along the gradient, in `[0, 1]`.
+    pub fn position(&self, x: f64, y: f64) -> f64 {
+        let [fx, fy] = self.from;
+        let (dx, dy) = (self.to[0] - fx, self.to[1] - fy);
+        let length2 = dx * dx + dy * dy;
+        let t = match self.shape {
+            GradientShape::Linear => ((x - fx) * dx + (y - fy) * dy) / length2,
+            GradientShape::Radial => ((x - fx).powi(2) + (y - fy).powi(2)).sqrt() / length2.sqrt(),
+        };
+        if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) }
+    }
+
+    /// The sRGB-encoded color (in `[0, 1]`) and the opacity at document point (`x`, `y`).
+    pub fn at(&self, x: f64, y: f64) -> ([f64; 3], f64) {
+        let t = self.position(x, y);
+        let [a0, a1] = self.alpha.map(f64::from);
+        (self.gradient.color(t), a0 + (a1 - a0) * t)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +216,44 @@ mod tests {
         assert_eq!(luts[0].len(), CURVE_LUT);
         assert_eq!(luts[1][0], 0.0);
         assert_eq!(luts[2][CURVE_LUT - 1], 1.0);
+    }
+
+    #[test]
+    fn a_field_lays_the_gradient_from_its_start_to_its_end() {
+        let field = GradientField {
+            gradient: Gradient::BLACK_TO_WHITE,
+            alpha: [1.0, 0.0],
+            shape: GradientShape::Linear,
+            from: [10.0, 0.0],
+            to: [110.0, 0.0],
+        };
+        assert!(field.is_valid());
+        // Square to the line: the same position whatever y.
+        assert_eq!(field.position(60.0, -40.0), 0.5);
+        assert_eq!(field.position(0.0, 5.0), 0.0, "before the start");
+        assert_eq!(field.position(500.0, 5.0), 1.0, "past the end");
+        let (color, alpha) = field.at(35.0, 0.0);
+        assert_eq!(color, [0.25; 3]);
+        assert_eq!(alpha, 0.75);
+        // Radial: by the distance to the start.
+        let radial = GradientField {
+            shape: GradientShape::Radial,
+            ..field
+        };
+        assert_eq!(radial.position(10.0, 50.0), 0.5);
+        assert!(
+            !GradientField {
+                to: [10.0, 0.0],
+                ..field
+            }
+            .is_valid()
+        );
+        assert!(
+            !GradientField {
+                alpha: [1.5, 0.0],
+                ..field
+            }
+            .is_valid()
+        );
     }
 }

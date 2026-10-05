@@ -16,6 +16,7 @@ use slopshop_core::HistoryLabel;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
+use slopshop_core::gradient::{GradientField, GradientShape};
 use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, gray_of_srgb};
 use slopshop_core::selection::{Selection, sample_region};
 use slopshop_core::stack::LayerStack;
@@ -331,25 +332,31 @@ pub(crate) fn grown_transform(transform: Affine, (left, top): (u32, u32)) -> Aff
 }
 
 /// A stroke on the request's target in `doc`, a layer grown to the canvas if it needs to
-/// (`grow_layer`: strokes; not a clear, which only removes).
+/// (`grow_layer`: strokes; not a clear, which only removes). With `gradient`, it lays that
+/// instead of the request's color (the Gradient tool).
 fn start(
     doc: &Document,
     request: &PaintRequest,
     grow_layer: bool,
+    gradient: Option<GradientField>,
 ) -> Result<(Stroke, Option<Growth>), String> {
     // In gray, a color paints its luminance and the Eraser hides (ADR 0027).
-    let gray = Paint::Gray(request.color.map_or(0.0, gray_of_srgb));
+    let gray = match gradient {
+        Some(field) => Paint::Gradient { field, gray: true },
+        None => Paint::Gray(request.color.map_or(0.0, gray_of_srgb)),
+    };
     let selection = doc.selection().map(|s| Arc::clone(s.image()));
     let (image, to_document, growth, paint, selection) = match request.target() {
         Target::Layer(id) => {
             // Restoring only reaches paint: no need to grow.
             let (image, growth) = grow(doc, id, grow_layer && !request.restore)?;
-            let paint = match request.color {
+            let paint = match (request.color, gradient) {
                 _ if request.restore => Paint::Restore,
-                Some([r, g, b]) => {
+                (_, Some(field)) => Paint::Gradient { field, gray: false },
+                (Some([r, g, b]), None) => {
                     Paint::Color(LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0))
                 }
-                None => Paint::Erase,
+                (None, None) => Paint::Erase,
             };
             // Into the parent, then into the document.
             let to_document = growth.transform.then(doc.parent_transform(id));
@@ -436,7 +443,7 @@ pub(crate) fn paint(
                     let mut documents = state.documents()?;
                     documents.get_mut(document_id)?.session.document().clone()
                 };
-                let (stroke, growth) = start(&doc, &request, true)?;
+                let (stroke, growth) = start(&doc, &request, true, None)?;
                 ActiveStroke {
                     id: request.stroke,
                     document_id,
@@ -555,6 +562,96 @@ pub async fn fill(
         Ok(document.view())
     })
     .await
+}
+
+/// A gradient as the Gradient tool sends it: its stops (`[location, r, g, b]`, sRGB 8-bit), the
+/// opacity at its start and at its end, its shape, from `from` to `to` (document pixels).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientRequest {
+    stops: Vec<[u16; 4]>,
+    alpha: [f32; 2],
+    shape: GradientShapeRequest,
+    from: [f64; 2],
+    to: [f64; 2],
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum GradientShapeRequest {
+    Linear,
+    Radial,
+}
+
+impl GradientRequest {
+    pub(crate) fn field(&self) -> Result<GradientField, String> {
+        let field = GradientField {
+            gradient: crate::ipc::gradient_of_stops(&self.stops)?,
+            alpha: self.alpha,
+            shape: match self.shape {
+                GradientShapeRequest::Linear => GradientShape::Linear,
+                GradientShapeRequest::Radial => GradientShape::Radial,
+            },
+            from: self.from,
+            to: self.to,
+        };
+        if field.is_valid() {
+            Ok(field)
+        } else {
+            Err("a gradient goes from one point to another, its opacities in [0, 1]".to_owned())
+        }
+    }
+}
+
+/// The Gradient tool (G): `gradient` laid on `target` at `opacity`, within the selection, as
+/// paint (Edit > Fill's path: the layer grows to the canvas, one undo entry; a gray on a mask
+/// or in Quick Mask).
+#[tauri::command]
+pub async fn paint_gradient(
+    app: tauri::AppHandle,
+    document_id: u64,
+    layer_id: u64,
+    target: PaintTarget,
+    gradient: GradientRequest,
+    opacity: f32,
+) -> Result<DocumentView, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        if !(0.0..=1.0).contains(&opacity) {
+            return Err("the opacity is between 0 and 1".to_owned());
+        }
+        let edit = gradient_edit(
+            document.session.document(),
+            layer_id,
+            target,
+            &gradient,
+            opacity,
+        )?;
+        if let Some(edit) = edit {
+            document
+                .session
+                .with_label(Some(HistoryLabel::new("gradient")), |s| s.perform(edit))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(document.view())
+    })
+    .await
+}
+
+/// [`paint_gradient`]'s edit; `None`: nothing to paint.
+pub(crate) fn gradient_edit(
+    doc: &Document,
+    layer_id: u64,
+    target: PaintTarget,
+    gradient: &GradientRequest,
+    opacity: f32,
+) -> Result<Option<Edit>, String> {
+    let field = gradient.field()?;
+    // A color for the request (it grows the layer); the gradient is what is laid.
+    let request = fill_request(layer_id, target, Some([0.0; 3]), opacity);
+    fill_edit_with(doc, &request, None, Some(field))
 }
 
 /// The Paint Bucket (G): the pixels of a color similar to the one at (`x`, `y`) (the Magic
@@ -687,12 +784,22 @@ pub(crate) fn fill_edit(
     request: &PaintRequest,
     stroke: Option<StrokeRequest>,
 ) -> Result<Option<Edit>, String> {
+    fill_edit_with(doc, request, stroke, None)
+}
+
+/// [`fill_edit`], laying `gradient` instead of the request's color if given.
+fn fill_edit_with(
+    doc: &Document,
+    request: &PaintRequest,
+    stroke: Option<StrokeRequest>,
+    gradient: Option<GradientField>,
+) -> Result<Option<Edit>, String> {
     // Erasing only removes: no need to grow.
-    let grow_layer = request.color.is_some();
+    let grow_layer = request.color.is_some() || gradient.is_some();
     let (mut painting, growth) = match stroke {
-        None => start(doc, request, grow_layer)?,
+        None => start(doc, request, grow_layer, gradient)?,
         Some(stroke) => match banded(doc, stroke)? {
-            Some(banded) => start(&banded, request, grow_layer)?,
+            Some(banded) => start(&banded, request, grow_layer, gradient)?,
             None => return Ok(None),
         },
     };

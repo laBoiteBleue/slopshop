@@ -1724,8 +1724,17 @@ fn with_gradient(adjustment: Adjustment, stops: Option<&[[u16; 4]]>) -> Result<A
     let Adjustment::GradientMap { reverse, .. } = adjustment else {
         return Ok(adjustment);
     };
-    use slopshop_core::gradient::{Gradient, GradientStop};
     let stops = stops.ok_or("a gradient map needs its stops")?;
+    let gradient = gradient_of_stops(stops)?;
+    Ok(Adjustment::GradientMap { gradient, reverse })
+}
+
+/// The gradient of the stops `[location, r, g, b]` the UI sends (Gradient Map, the Gradient
+/// tool).
+pub(crate) fn gradient_of_stops(
+    stops: &[[u16; 4]],
+) -> Result<slopshop_core::gradient::Gradient, String> {
+    use slopshop_core::gradient::{Gradient, GradientStop};
     let stops: Vec<GradientStop> = stops
         .iter()
         .map(|&[location, r, g, b]| {
@@ -1736,8 +1745,7 @@ fn with_gradient(adjustment: Adjustment, stops: Option<&[[u16; 4]]>) -> Result<A
             })
         })
         .collect::<Result<_, String>>()?;
-    let gradient = Gradient::new(&stops).ok_or(format!("invalid gradient stops {stops:?}"))?;
-    Ok(Adjustment::GradientMap { gradient, reverse })
+    Gradient::new(&stops).ok_or(format!("invalid gradient stops {stops:?}"))
 }
 
 /// A gradient's stops as the UI gets them, `[location, r, g, b]`.
