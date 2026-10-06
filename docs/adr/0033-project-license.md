@@ -1,7 +1,8 @@
 # 0033 — Project license: GPL-3.0-only
 
 Status: accepted (2026-10-04, the maintainer's decision; amended the same day: the `.slop`
-specification's license, no outside code contributions yet, the Adobe notice).
+specification's license, no outside code contributions yet, the Adobe notice; amended on
+2026-10-06: outside contributions accepted under the DCO).
 
 ## Context
 
@@ -28,8 +29,12 @@ application.
    the format: [file-format.md](../file-format.md) is under CC BY 4.0, and the golden
    `.slop` files (`crates/slopshop-io/src/slop/fixtures/`) under CC0 1.0. The official texts
    are in `LICENSES/`.
-6. **No outside code contributions yet.** Issues and discussions are welcome; pull requests
-   from outside wait for contribution terms, which depend on the plugin question below.
+6. **Outside contributions under the Developer Certificate of Origin** (amended 2026-10-06, the
+   maintainer's decision). Contributions are licensed under GPL-3.0-only, like the rest of the
+   code ("inbound = outbound"); each commit carries a `Signed-off-by:` line certifying the
+   [DCO](../../DCO), checked on every outside pull request (`.github/workflows/dco.yml`). No
+   contributor license agreement. Until that date, outside code contributions were not
+   accepted.
 7. The README states that SlopShop is not affiliated with Adobe.
 
 Left open, to decide separately:
@@ -50,6 +55,9 @@ Left open, to decide separately:
 
 - `deny.toml` allows `GPL-3.0-only` for the `slopshop-*` crates.
 - The About dialog and the README state the new license.
-- Contribution terms (a DCO keeps contributions GPL-3.0-only, so a later plugin permission
-  would need every contributor's agreement; a CLA keeps that possible but needs a reviewed
-  text) are chosen with the plugin architecture, before the first outside contribution.
+- Contribution terms: the DCO was chosen over a CLA (2026-10-06). A CLA would have kept
+  relicensing and additional permissions in the maintainer's hands, at the cost of a legal
+  text to review and of friction for contributors. With the DCO, every contributor keeps the
+  copyright of their contribution under GPL-3.0-only: proprietary plugins remain possible as
+  separate programs across a process boundary (point 4), but an additional permission under
+  section 7 covering contributed code would need the agreement of its authors.
