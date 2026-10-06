@@ -2307,6 +2307,14 @@
 
   // Select > Color Range: a panel beside the image, whose clicks sample colors.
   let colorRange = $state<ColorRangeState | null>(null);
+  /**
+   * An overlay on the image takes the pointer whatever the tool (Select and Mask's brush, Color
+   * Range's eyedropper): the Move tool does not move anything meanwhile.
+   */
+  const overlayTakesPointer = $derived(
+    (refining?.document === active?.id && refineSettings.brush.on) ||
+      colorRange?.document === active?.id,
+  );
   /** Edit > Preferences (Ctrl+K) is open. */
   let preferences = $state(false);
 
@@ -5473,7 +5481,9 @@
               quickMaskOpacity={active.quickMaskOpacity}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
-              onmove={tool === "move" && !transforming ? onMoveDrag : undefined}
+              onmove={tool === "move" && !transforming && !overlayTakesPointer
+                ? onMoveDrag
+                : undefined}
               onmoveend={onMoveEnd}
               ondoubleclick={() => void startFreeTransform()}
               {smartGuides}
