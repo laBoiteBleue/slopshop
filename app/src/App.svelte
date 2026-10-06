@@ -27,6 +27,7 @@
     type PasteKind,
     type PaintTarget,
     type AppInfo,
+    type UpdateInfo,
     type DocumentInfo,
     type ProjectPage,
     type DocumentView,
@@ -111,6 +112,14 @@
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
+  import UpdateDialog from "./lib/UpdateDialog.svelte";
+  import {
+    CHECK_DELAY,
+    checkDue,
+    loadUpdateSettings,
+    saveUpdateSettings,
+    updateFailureMessage,
+  } from "./lib/updates";
   import DocumentInfoDialog from "./lib/DocumentInfoDialog.svelte";
   import PrintDialog from "./lib/PrintDialog.svelte";
   import { baseName, recentLabels } from "./lib/recent";
@@ -4076,6 +4085,47 @@
     }
   }
 
+  // --- Updates (ADR 0039) ----------------------------------------------------------------------
+
+  /** This build updates itself: Help > Check for Updates is offered. */
+  let updatable = $state(false);
+  /** A newer version found: the menu bar's notice offers it. */
+  let availableUpdate = $state<UpdateInfo | null>(null);
+  /** The Update dialog, while open. */
+  let updateDialog = $state(false);
+
+  /**
+   * Asks for a newer version. The automatic check says nothing unless it finds one (the notice
+   * shows); Help > Check for Updates opens the dialog, or says why there is nothing to install.
+   */
+  async function checkForUpdates(manual: boolean) {
+    try {
+      availableUpdate = await engine.updateCheck();
+      if (!manual) saveUpdateSettings({ ...loadUpdateSettings(), lastCheck: Date.now() });
+      if (availableUpdate && manual) updateDialog = true;
+      else if (manual) {
+        await message(t("update.upToDate"), { title: t("update.check.title"), kind: "info" });
+      }
+    } catch (e) {
+      if (!manual) return;
+      const reason = updateFailureMessage(e);
+      if (reason) await message(reason, { title: t("update.check.title"), kind: "error" });
+    }
+  }
+
+  /** Before installing an update: the restart loses unsaved changes, so ask first. */
+  async function confirmUpdateInstall(): Promise<boolean> {
+    const names = tabs.filter((d) => d.dirty || saving.includes(d.id)).map(tabTitle);
+    if (names.length === 0) return true;
+    const buttons = { ok: t("update.discard"), cancel: t("close.cancel") };
+    const answer = await message(t("update.unsaved", { names: names.join(", ") }), {
+      title: t("close.title"),
+      kind: "warning",
+      buttons,
+    });
+    return answer === buttons.ok || answer === "Ok";
+  }
+
   /** A page of the project (Help menu), in the browser. */
   function openProjectPage(page: ProjectPage) {
     engine.openProjectPage(page).catch((e) => showError(String(e)));
@@ -5143,6 +5193,9 @@
           cmd(t("menu.help.reportBug"), () => openProjectPage("newIssue")),
           cmd(t("menu.help.contribute"), () => openProjectPage("contributing")),
           separator,
+          ...(updatable
+            ? [cmd(t("menu.help.checkForUpdates"), () => void checkForUpdates(true))]
+            : []),
           cmd(t("menu.help.about"), () => void showAbout()),
         ],
       },
@@ -5292,8 +5345,21 @@
       (info) => (gpu = info),
       (e) => (gpuError = String(e)),
     );
+    // A quiet check for a newer version, once the app has started, at most once a day.
+    let updateTimer: ReturnType<typeof setTimeout> | undefined;
+    engine.updateSupported().then(
+      (supported) => {
+        if (destroyed || !supported) return;
+        updatable = true;
+        if (checkDue(loadUpdateSettings(), Date.now())) {
+          updateTimer = setTimeout(() => void checkForUpdates(false), CHECK_DELAY);
+        }
+      },
+      () => {},
+    );
     return () => {
       destroyed = true;
+      clearTimeout(updateTimer);
       stopEvents?.();
       stopExportEvents?.();
       stopAiProgress?.();
@@ -5327,6 +5393,11 @@
     <MenuBar {menus} onopen={() => void refreshClipboard()} />
     <span class="brand">SlopShop</span>
     <span class="tag">{t("app.preAlpha")}</span>
+    {#if availableUpdate}
+      <button type="button" class="update" onclick={() => (updateDialog = true)}>
+        {t("update.available", { version: availableUpdate.version })}
+      </button>
+    {/if}
   </header>
 
   <!-- Hidden panels stay mounted (Tab): their state (the layers selected…) must survive. -->
@@ -6013,6 +6084,14 @@
   <PreferencesDialog onclose={() => (preferences = false)} />
 {/if}
 
+{#if updateDialog && availableUpdate}
+  <UpdateDialog
+    update={availableUpdate}
+    confirmInstall={confirmUpdateInstall}
+    onclose={() => (updateDialog = false)}
+  />
+{/if}
+
 {#if shortcutsList}
   <KeyboardShortcutsDialog
     {menus}
@@ -6304,6 +6383,25 @@
     color: var(--brand);
     font-size: 10px;
     line-height: 15px;
+  }
+
+  /* A newer version was found: discreet, it waits for a click. */
+  .update {
+    align-self: center;
+    padding: 0 6px;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 11px;
+    line-height: 16px;
+    cursor: pointer;
+  }
+
+  .update:hover {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   main {

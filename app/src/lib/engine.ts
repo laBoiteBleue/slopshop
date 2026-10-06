@@ -1126,6 +1126,17 @@ export type AppInfo = {
 /** A page of the project the Help menu opens (the engine knows the addresses). */
 export type ProjectPage = "home" | "newIssue" | "contributing";
 
+/** A newer version of SlopShop (ADR 0039). */
+export type UpdateInfo = {
+  version: string;
+  currentVersion: string;
+  /** The release notes, as published (Markdown). */
+  notes: string | null;
+};
+
+/** Bytes of the update downloaded; `total` is 0 when the server did not say. */
+export type UpdateProgress = { done: number; total: number };
+
 // Tauri runs async commands concurrently, so two quick requests could reach the engine in the
 // wrong order. Mutations go through a queue that keeps them in submission order; view
 // requests have their own queue (their order relative to edits does not matter). Opens take
@@ -1735,6 +1746,20 @@ export const engine = {
   appInfo: () => invoke<AppInfo>("app_info"),
   /** Opens a page of the project in the browser. */
   openProjectPage: (page: ProjectPage) => invoke<void>("open_project_page", { page }),
+  /** Whether this build updates itself (release bundles; on Linux, the AppImage). */
+  updateSupported: () => invoke<boolean>("update_supported"),
+  /** A newer version, or null when this one is the latest. Rejects with an `UpdateFailure`. */
+  updateCheck: () => invoke<UpdateInfo | null>("update_check"),
+  /**
+   * Downloads the version the last check found, installs it and restarts (on success the app
+   * exits). Rejects with an `UpdateFailure` (`cancelled` after `updateCancel`).
+   */
+  updateInstall: (onProgress: (progress: UpdateProgress) => void) => {
+    const progress = new Channel<UpdateProgress>();
+    progress.onmessage = onProgress;
+    return invoke<void>("update_install", { progress });
+  },
+  updateCancel: () => invoke<void>("update_cancel"),
   /**
    * The AI components `feature` needs on this machine, or without a feature every one it can
    * use (and any other still installed). `null`: AI is not offered on this platform yet.

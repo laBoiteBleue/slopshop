@@ -479,6 +479,7 @@ const fr: Messages = {
   "menu.help.keyboardShortcuts": "Raccourcis clavier",
   "menu.help.reportBug": "Signaler un bug",
   "menu.help.contribute": "Contribuer à SlopShop",
+  "menu.help.checkForUpdates": "Rechercher des mises à jour…",
   "menu.help.about": "À propos de SlopShop",
   "key.shift": "Maj",
   "key.alt": "Alt",
@@ -1207,6 +1208,9 @@ const fr: Messages = {
   "preferences.ai.intro":
     "Les fonctions d’IA tournent sur cet ordinateur. Leurs composants sont téléchargés une fois, depuis leurs éditeurs, quand une fonction en a besoin pour la première fois.",
   "preferences.close": "Fermer",
+  "preferences.updates": "Mises à jour",
+  "preferences.updates.automatic":
+    "Rechercher les mises à jour au démarrage (une fois par jour au plus)",
   "ai.unsupported": "Les fonctions d’IA ne sont pas encore disponibles sur ce système.",
   "ai.installed": "Installé, {size}",
   "ai.notInstalled": "Non installé, {size} à télécharger",
@@ -1247,6 +1251,28 @@ const fr: Messages = {
   "ai.component.birefnet": "BiRefNet : sélection du sujet",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",
+  "update.available": "Mise à jour {version}",
+  "update.title": "SlopShop {version} est disponible",
+  "update.current": "Vous avez la version {version}.",
+  "update.notes": "Nouveautés",
+  "update.progress": "{done} sur {total}",
+  "update.install": "Installer et redémarrer",
+  "update.later": "Plus tard",
+  "update.cancel": "Annuler",
+  "update.check.title": "Mises à jour",
+  "update.upToDate": "SlopShop est à jour.",
+  "update.unsaved":
+    "Des documents ont des modifications non enregistrées : {names}. Installer la mise à jour sans les enregistrer ?",
+  "update.discard": "Installer sans enregistrer",
+  "update.error.network":
+    "Le serveur des mises à jour est injoignable ({detail}). Vérifiez la connexion et réessayez.",
+  "update.error.signature":
+    "La mise à jour téléchargée n’a pas passé la vérification de signature et n’a pas été installée ({detail}).",
+  "update.error.exporting":
+    "Des exportations sont en cours : installez la mise à jour une fois qu’elles sont terminées.",
+  "update.error.busy": "La mise à jour est déjà en cours de téléchargement.",
+  "update.error.unsupported": "Cette copie de SlopShop ne se met pas à jour elle-même.",
+  "update.error.failed": "La mise à jour a échoué : {detail}",
 };
 
 export default fr;

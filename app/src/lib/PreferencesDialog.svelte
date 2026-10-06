@@ -1,7 +1,7 @@
 <script lang="ts">
-  // Edit > Preferences (Ctrl+K): the interface's language, and the AI components (ADR 0025):
-  // what is installed, its size and licenses; download what is missing, remove what is not
-  // wanted.
+  // Edit > Preferences (Ctrl+K): the interface's language, the AI components (ADR 0025): what
+  // is installed, its size and licenses; download what is missing, remove what is not wanted;
+  // and, in builds that update themselves, the automatic check for updates (ADR 0039).
   import { onMount } from "svelte";
   import { engine, type AiComponent } from "./engine";
   import AiDownloadDialog from "./AiDownloadDialog.svelte";
@@ -9,8 +9,18 @@
   import { formatBytes } from "./format";
   import { getLocale, locales, setLocale, t, type Locale } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
+  import { loadUpdateSettings, saveUpdateSettings } from "./updates";
 
   let { onclose }: { onclose: () => void } = $props();
+
+  /** Whether this build updates itself: the Updates section shows only then. */
+  let updatable = $state(false);
+  let automaticUpdates = $state(loadUpdateSettings().automatic);
+
+  function setAutomaticUpdates(automatic: boolean) {
+    automaticUpdates = automatic;
+    saveUpdateSettings({ ...loadUpdateSettings(), automatic });
+  }
 
   let dialog: HTMLDialogElement;
   /** `undefined` while loading; `null`: AI is not offered on this platform. */
@@ -43,6 +53,10 @@
   onMount(() => {
     dialog.showModal();
     void refresh();
+    engine.updateSupported().then(
+      (supported) => (updatable = supported),
+      () => (updatable = false),
+    );
     // Modal: the app's shortcuts must not act behind the dialog.
     const isolate = (e: KeyboardEvent) => e.stopPropagation();
     window.addEventListener("keydown", isolate, true);
@@ -128,6 +142,19 @@
       <p class="error" role="alert">{error}</p>
     {/if}
   </section>
+  {#if updatable}
+    <section class="body" aria-labelledby="preferences-updates">
+      <h2 id="preferences-updates">{t("preferences.updates")}</h2>
+      <label class="check">
+        <input
+          type="checkbox"
+          checked={automaticUpdates}
+          onchange={(e) => setAutomaticUpdates(e.currentTarget.checked)}
+        />
+        {t("preferences.updates.automatic")}
+      </label>
+    </section>
+  {/if}
   <footer>
     <button type="button" class="btn primary" onclick={onclose}>{t("preferences.close")}</button>
   </footer>
@@ -239,6 +266,17 @@
   .error {
     color: var(--danger-fg);
     user-select: text;
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .check input {
+    margin: 0;
+    accent-color: var(--accent);
   }
 
   footer {
