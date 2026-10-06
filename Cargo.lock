@@ -5604,7 +5604,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slopshop-ai"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flate2",
  "ort",
@@ -5614,7 +5614,7 @@ dependencies = [
 
 [[package]]
 name = "slopshop-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arboard",
  "serde",
@@ -5634,7 +5634,7 @@ dependencies = [
 
 [[package]]
 name = "slopshop-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "png 0.18.1",
  "slopshop-core",
@@ -5644,11 +5644,11 @@ dependencies = [
 
 [[package]]
 name = "slopshop-core"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "slopshop-io"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "avif-serialize",
  "blake3",
@@ -5688,7 +5688,7 @@ dependencies = [
 
 [[package]]
 name = "slopshop-raw"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rawler",
  "slopshop-core",
@@ -5696,7 +5696,7 @@ dependencies = [
 
 [[package]]
 name = "slopshop-render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pollster",
  "slopshop-core",
