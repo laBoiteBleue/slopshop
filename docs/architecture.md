@@ -198,6 +198,13 @@ an error, disappear after a few seconds). "Show in folder" reveals a finished fi
 `reveal_in_folder` (tauri-plugin-opener, not exposed to JavaScript). Closing the main window while jobs run cancels them and waits,
 off the main thread and a few seconds at most, for them to remove their temporary files.
 
+Updates (`src-tauri/src/update.rs`, ADR 0039): tauri-plugin-updater, registered only when the
+bundle configuration sets it up (release builds; on Linux, the AppImage), driven from Rust and
+not exposed to JavaScript. `update_supported`, `update_check` (the manifest at the `updates`
+pre-release), `update_install` (download with progress over a `Channel`, signature check, the AI
+helper stopped, install, restart) and `update_cancel`. The UI checks quietly after startup, at
+most once a day (`app/src/lib/updates.ts`), and offers what it finds in the menu bar.
+
 AI selection (`src-tauri/src/segment.rs`, ADR 0025): the `slopshop-ai` helper is started on
 first use and kept, the model loaded. The image SAM sees (the document, or the view when zoomed
 in, at most 1024 pixels on a side, rendered by the GPU) is encoded once and reused while only
