@@ -300,6 +300,68 @@ fn document(state: &AppState, document_id: u64) -> Result<Document, AiFailure> {
         .clone())
 }
 
+/// What the models see where the image is transparent: a flat mid gray (sRGB 128), not the
+/// view's checkerboard, whose squares they would take for texture against the subject.
+const MODEL_BACKGROUND: u8 = 128;
+
+/// `source` seen through `view` as `output`-sized 8-bit sRGB pixels for a model, without alpha:
+/// transparent parts over [`MODEL_BACKGROUND`].
+fn model_rgb(
+    state: &AppState,
+    source: &Document,
+    view: ViewTransform,
+    output: Size,
+) -> Result<Vec<u8>, AiFailure> {
+    let frame = state
+        .renderer()
+        .map_err(internal)?
+        .render_view_transparent(source, view, output)
+        .map_err(internal)?;
+    Ok(over_background(&frame.data))
+}
+
+/// Straight-alpha 8-bit sRGB pixels flattened over [`MODEL_BACKGROUND`] in linear light (as the
+/// view composites), to RGB.
+fn over_background(rgba: &[u8]) -> Vec<u8> {
+    let decode = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let encode = |l: f32| {
+        let c = if l <= 0.003_130_8 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        };
+        (c.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    let linear: Vec<f32> = (0..=255).map(decode).collect();
+    let background = linear[usize::from(MODEL_BACKGROUND)];
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| match a {
+            255 => [r, g, b],
+            0 => [MODEL_BACKGROUND; 3],
+            _ => {
+                let a = f32::from(a) / 255.0;
+                let over = |c: u8| encode(linear[usize::from(c)] * a + background * (1.0 - a));
+                [over(r), over(g), over(b)]
+            }
+        })
+        .collect()
+}
+
+/// Where Select > Subject looks: where `source` (the sampled layer, or every layer) can show
+/// on the canvas, or the whole canvas when nothing can.
+fn subject_region(source: &Document) -> Rect {
+    slopshop_core::pick::canvas_extent(source).unwrap_or_else(|| source.size().bounds())
+}
+
 /// `[x, y, width, height]` within the canvas.
 fn clamp_region(region: [u32; 4], canvas: Size) -> Result<Rect, AiFailure> {
     let [x, y, width, height] = region;
@@ -356,18 +418,7 @@ impl Session {
             origin: [f64::from(region.x), f64::from(region.y)],
             scale,
         };
-        let frame = state
-            .renderer()
-            .map_err(internal)?
-            .render_view(&source, view, output)
-            .map_err(internal)?;
-        let rgb: Vec<u8> = frame
-            .data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2]])
-            .collect();
+        let rgb = model_rgb(state, &source, view, output)?;
         let key = self.next_key;
         self.next_key += 1;
         self.encoded = None;
@@ -489,23 +540,13 @@ impl Session {
         task.stage = "refine";
         task.expect(plan.windows().len() as u64);
         let source = selection::sampled_document(doc, layer_id).map_err(internal)?;
-        let renderer = state.renderer().map_err(internal)?;
         for window in plan.windows().to_vec() {
             let size = window.input_size();
             let view = ViewTransform {
                 origin: [f64::from(window.rect.x), f64::from(window.rect.y)],
                 scale: f64::from(window.scale),
             };
-            let frame = renderer
-                .render_view(&source, view, size)
-                .map_err(internal)?;
-            let rgb: Vec<u8> = frame
-                .data
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|p| [p[0], p[1], p[2]])
-                .collect();
+            let rgb = model_rgb(state, &source, view, size)?;
             let trimap = plan.trimap(&window);
             let client = self.client(root)?;
             let alpha = match client.matte(size.width, size.height, rgb, trimap.clone()) {
@@ -719,9 +760,9 @@ pub(crate) async fn ai_refine_base(
     .map_err(internal)?
 }
 
-/// Select > Subject: BiRefNet's mask of the image's main subject (the whole document, at most
-/// 1024 pixels on a side), refined at full resolution when `refine` is set, combined with the
-/// selection by `mode`, as one undo entry.
+/// Select > Subject: BiRefNet's mask of the image's main subject (where the sampled layer, or
+/// every layer, shows on the canvas, at most 1024 pixels on a side), refined at full resolution
+/// when `refine` is set, combined with the selection by `mode`, as one undo entry.
 #[tauri::command]
 pub(crate) async fn ai_select_subject(
     app: AppHandle,
@@ -738,30 +779,20 @@ pub(crate) async fn ai_select_subject(
         require(&root, Feature::Subject)?;
         let mut task = Task::start(&app, task);
         task.expect(1);
-        let canvas = doc.size();
-        let region = Rect::new(0, 0, canvas.width, canvas.height);
         let source = selection::sampled_document(&doc, layer_id).map_err(internal)?;
-        let scale = (f64::from(canvas.width.max(canvas.height)) / SAM_SIDE).max(1.0);
+        // Where the layer (or the layers) can show, at its own resolution up to the model's:
+        // a small layer on a large canvas is not seen as a thumbnail.
+        let region = subject_region(&source);
+        let scale = (f64::from(region.width.max(region.height)) / SAM_SIDE).max(1.0);
         let output = Size::new(
-            (f64::from(canvas.width) / scale).ceil().max(1.0) as u32,
-            (f64::from(canvas.height) / scale).ceil().max(1.0) as u32,
+            (f64::from(region.width) / scale).ceil().max(1.0) as u32,
+            (f64::from(region.height) / scale).ceil().max(1.0) as u32,
         );
         let view = ViewTransform {
-            origin: [0.0, 0.0],
+            origin: [f64::from(region.x), f64::from(region.y)],
             scale,
         };
-        let frame = state
-            .renderer()
-            .map_err(internal)?
-            .render_view(&source, view, output)
-            .map_err(internal)?;
-        let rgb: Vec<u8> = frame
-            .data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2]])
-            .collect();
+        let rgb = model_rgb(&state, &source, view, output)?;
         let mut session = lock(&state)?;
         let client = session.client(&root)?;
         let logits = match client.subject(output.width, output.height, rgb) {
@@ -802,4 +833,59 @@ pub(crate) async fn ai_select_subject(
     })
     .await
     .map_err(internal)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slopshop_core::{Affine, BlendMode, Edit, Layer, LayerContent};
+
+    #[test]
+    fn transparency_is_seen_over_flat_gray_not_the_checkerboard() {
+        let rgba = [
+            10, 20, 30, 255, // opaque: as it is
+            10, 20, 30, 0, // transparent: the background
+            255, 255, 255, 128, // half white: between, in linear light
+        ];
+        let rgb = over_background(&rgba);
+        assert_eq!(&rgb[..6], &[10, 20, 30, 128, 128, 128]);
+        // Alpha 128 of white (1.0) over sRGB 128 (0.216) is 0.610 in linear light: sRGB 205.
+        assert_eq!(&rgb[6..], &[205, 205, 205]);
+    }
+
+    #[test]
+    fn select_subject_looks_where_the_layer_is() {
+        let mut doc = Document::new(Size::new(100, 80));
+        let image = RasterImage::from_pixels(
+            Size::new(20, 10),
+            slopshop_core::color::PixelFormat::RGBA8_SRGB,
+            &[255; 20 * 10 * 4],
+        )
+        .expect("a 20 x 10 image");
+        let layer = Layer {
+            style: None,
+            id: doc.allocate_layer_id(),
+            name: "small".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            content: LayerContent::raster(Arc::new(image)),
+            mask: None,
+            clipped: false,
+            transform: Affine::translation(30.0, 40.0).into(),
+        };
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .expect("a new layer");
+        assert_eq!(subject_region(&doc), Rect::new(30, 40, 20, 10));
+        // Nothing on the canvas: the whole canvas.
+        assert_eq!(
+            subject_region(&Document::new(Size::new(100, 80))),
+            Rect::new(0, 0, 100, 80)
+        );
+    }
 }
