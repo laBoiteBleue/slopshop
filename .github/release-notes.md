@@ -18,7 +18,16 @@ pass, but nobody has used the application on those systems yet. Reports are very
 [open an issue](https://github.com/laBoiteBleue/slopshop/issues/new/choose), even to say that
 it works.
 
-A GPU with DirectX 12 (Windows), Metal (macOS) or Vulkan (Linux) is required.
+## System requirements
+
+- **Operating system**: Windows 10 or 11 (64-bit); macOS 10.13 or later; Linux x86-64 with
+  WebKitGTK 4.1 (Ubuntu 22.04, Debian 12, Fedora 38 or later).
+- **Graphics**: a GPU with DirectX 12 (Windows), Metal (macOS) or Vulkan (Linux) drivers;
+  integrated graphics are enough.
+- **Memory**: 8 GB of RAM; 16 GB or more for images of hundreds of megapixels.
+- **Disk**: about 100 MB, plus up to about 1 GB for the optional AI models.
+- **AI tools (optional)**: Windows x64, macOS on Apple silicon, Linux; not available on Intel
+  Macs.
 
 ## The installers are not signed
 
