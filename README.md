@@ -1,3 +1,5 @@
+**English** · [Français](README.fr.md)
+
 # SlopShop
 
 > A modern, open-source image editor for creating professional-grade slop — non-destructive,
@@ -5,150 +7,137 @@
 
 The name is a joke. The engineering is not.
 
-> [!WARNING]
-> **SlopShop is at a very early stage.** It is not usable for editing images yet. The repository
-> currently contains the project foundations and a minimal desktop shell that validates the
-> stack and the architecture. Everything below marked as a *goal* is **not implemented**.
+![SlopShop: a photo graded with adjustment layers in a group, a filter kept as an editable entry of the layer, and the Curves editor](docs/images/screenshot-main.jpg)
 
-## Vision
+> [!NOTE]
+> **SlopShop is at an early stage (pre-alpha).** It already does real editing: layers,
+> selections, painting and retouching, adjustments, filters, transforms, and layered PSD files.
+> It has no text, shapes or generative AI yet, and some rough edges: keep copies of the files
+> that matter to you, and please [report what breaks](https://github.com/laBoiteBleue/slopshop/issues/new/choose).
 
-SlopShop aims to become a modern alternative to professional editors such as Photoshop:
+## Download
 
-- **Open source and cross-platform** (Windows, macOS, Linux).
-- **Fast and GPU-first**: rendering and processing run on the GPU whenever it makes sense.
-- **Non-destructive by design**: original pixels stay intact; edits are layers/nodes with
-  parameters that can be changed, reordered, disabled or undone at any time.
-- **Very large images**: documents larger than RAM or VRAM, through tiles, caches, mip levels
-  and partial recomputation.
-- **Local AI, native but optional**: AI tools integrated as non-destructive layers, running
-  locally, never required to use the editor.
-- **Extensible architecture**, and an interface familiar to users of professional editors.
+Installers for each version are on the
+[releases page](https://github.com/laBoiteBleue/slopshop/releases).
 
-Users will mostly see a classic layer stack; internally, the document model is designed to be
-able to evolve into a **DAG** (directed acyclic graph) of operations.
+| System                                        | Installer                   | Tested by hand |
+| --------------------------------------------- | --------------------------- | -------------- |
+| Windows 10 and 11 (64-bit)                    | `.exe` (or `.msi`)          | Yes            |
+| macOS, Apple silicon and Intel                | `.dmg`                      | **No**         |
+| Linux (x86-64): Debian/Ubuntu, Fedora, others | `.deb`, `.rpm`, `.AppImage` | **No**         |
 
-## High-definition AI: the strategic bet
+The maintainer tests on Windows only. The macOS and Linux builds come from continuous
+integration, where the engine's tests pass on both systems, but nobody has used the application
+there yet: reports are very welcome, even to say that it works.
 
-Generative models usually work at around 1–2 megapixels. Professional images are often 8K, 12K,
-50 or 100 megapixels. Today, using a generative tool on such an image usually means accepting a
-lower-resolution result, or upscaling it afterwards.
+The installers are not code-signed yet, so Windows and macOS warn before the first launch. The
+release notes say how to get past the warning on each system. There are no automatic updates
+yet.
 
-**Goal:** apply generative tools to very high-resolution images **without permanently reducing
-their resolution** — producing results that are globally coherent *and* detailed at the
-document's native resolution, while strictly protecting the pixels outside the edited area.
-A plain AI upscale of a low-resolution result is explicitly *not* the goal.
+### System requirements
 
-The strategy is deliberately **not decided yet**. Candidate approaches (region-of-interest
-processing, multi-resolution generation, image pyramids, overlapping tiles with shared context,
-iterative refinement, re-injection of the original high frequencies, strict masking, caching of
-high-resolution results…) are documented and will be compared experimentally before an
-architecture is chosen. See [`docs/research/hd-generative-ai.md`](docs/research/hd-generative-ai.md).
+|                         | Minimum                                                                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Operating system**    | Windows 10 or 11 (64-bit); macOS 10.13 or later; Linux x86-64 with WebKitGTK 4.1 (Ubuntu 22.04, Debian 12, Fedora 38 or later)                           |
+| **Graphics**            | A GPU with DirectX 12 (Windows), Metal (macOS) or Vulkan (Linux) drivers; SlopShop needs only the base level of those APIs, integrated graphics included |
+| **Memory**              | 8 GB of RAM; 16 GB or more for images of hundreds of megapixels                                                                                          |
+| **Disk**                | About 100 MB, plus up to about 1 GB for the optional AI models                                                                                           |
+| **AI tools (optional)** | Windows x64 (DirectML, any DirectX 12 GPU), macOS on Apple silicon (Core ML), Linux (on the processor). Not available on Intel Macs.                     |
 
-AI operations will be non-destructive nodes storing their parameters, prompt, model and
-version, seed, mask, source region, dependencies and cached result. An upstream change can
-*invalidate* a generation without recomputing it automatically, and expensive generations can be
-previewed first and rendered at full definition later.
+## What it can do
 
-## Stack
+- **Layers**: pixel layers, groups, clipping masks, layer masks, Photoshop's blend modes;
+  adjustment layers (Brightness/Contrast, Levels, Curves, Exposure, Vibrance, Hue/Saturation,
+  Color Balance, Black & White, Photo Filter, Channel Mixer, Invert, Posterize, Threshold,
+  Gradient Map, Selective Color); solid color and gradient fill layers; layer styles (shadows,
+  glows, stroke, color overlay); merging and flattening, explicit and undoable.
+- **Selections**: marquees, lassos, Magic Wand, Quick Selection, Color Range; Object Selection
+  and Select Subject with local AI; Select and Mask with edge refinement; Quick Mask; modify,
+  grow, transform, save and load selections.
+- **Painting and retouching**: Brush, Pencil, Eraser and Restore Eraser with pen pressure,
+  Paint Bucket, Gradient, Clone Stamp, Healing Brush and Patch, Dodge and Burn, Blur, Sharpen
+  and Smudge; Edit > Fill and Stroke.
+- **Filters**: Gaussian and Motion Blur, Unsharp Mask, High Pass, Add Noise, Dust & Scratches,
+  Clarity and Texture, Liquify.
+- **Transforms**: Move with snapping and smart guides, Align and Distribute, Free Transform
+  with Distort and Perspective, Image Size, Canvas Size, rotation, Crop with Straighten, Trim,
+  rulers and guides.
+- **Files**: opens more than twenty formats in their native precision (PNG, JPEG, TIFF, WebP,
+  AVIF, JPEG XL, JPEG 2000, OpenEXR, Radiance HDR, DICOM, FITS, SVG, PDF, camera RAW and more),
+  Photoshop PSD and PSB with their layers; exports to nearly all of them, PSD and PSB with
+  layers;
+  saves documents in SlopShop's own `.slop` format (lossless, incremental, crash-safe); prints.
+  Details: [docs/formats.md](docs/formats.md).
+- **Interface**: Photoshop's menus, tools and shortcuts, document tabs, History, Histogram and
+  Info panels, English and French.
+- **Headless**: a `slopshop` command renders and converts without the interface
+  ([docs/cli.md](docs/cli.md)).
 
-| Layer          | Technology                                      |
-| -------------- | ----------------------------------------------- |
-| Engine         | Rust (workspace of crates, runs headless)       |
-| GPU            | [wgpu](https://wgpu.rs) (WebGPU API, native backends: Vulkan, Metal, DX12) |
-| Desktop shell  | [Tauri 2](https://tauri.app)                    |
-| User interface | [Svelte 5](https://svelte.dev) + TypeScript (Vite) |
+Not yet: text, shapes, paths and vector masks; generative AI (Remove, Generative Fill);
+plugins and scripting; saving the undo history in documents; the native viewport on macOS.
+The [feature map](docs/feature-map.md) lists every feature, done or not, and the
+[roadmap](docs/roadmap.md) what comes next.
 
-## Architectural principles
+## Why SlopShop
 
-- **The engine owns the document.** Image and document logic live in Rust crates, never in the
-  frontend. The UI displays views and sends intents.
-- **Headless first.** The engine works without the UI: tests, CLI, batch processing, headless
-  rendering.
-- **No big buffers over IPC.** Only viewport-sized display frames go to the UI, as raw binary.
-- **Every document change is an undoable edit.** No hidden mutation.
-- **Explicit pixels.** Never assume sRGB 8-bit; formats and color spaces are explicit, and
-  conversions are never silent.
-- **Never assume an image fits in memory.** Tiles, regions of interest, caches and mip levels
-  are part of the design from day one.
+- **Non-destructive all the way down.** Not only adjustment layers: brush strokes, filters and
+  adjustments applied to a layer are entries in that layer's own stack, each one editable
+  again, hideable and removable, over pixels that are never rewritten. Transforms are always
+  resampled from the original, and crops never delete anything.
+- **Fast, on the GPU.** Compositing, most filters and the marching ants run on the GPU
+  (DirectX 12, Metal, Vulkan through [wgpu](https://wgpu.rs)), checked against a CPU reference. Images are
+  tiled, with mip levels, so documents of hundreds of megapixels stay smooth.
+- **Precise color.** 8 and 16-bit integer, 16 and 32-bit float, HDR; layers composited in
+  linear light; embedded color profiles applied; no silent or lossy conversion.
+- **Local, optional AI.** The AI tools run on your machine, after you agree to download each
+  model and its license. No account, no cloud, no upload. They are never required to use the
+  editor.
+- **Familiar.** Photoshop's menus, tools and shortcuts, and layered PSD files in and out.
+- **Free software, built in Rust.** A memory-safe engine that runs without the interface, an
+  open document format, and the freedom to study, change and share it all.
 
-Details: [`docs/architecture.md`](docs/architecture.md), the decision records in
-[`docs/adr/`](docs/adr/) and the [roadmap](docs/roadmap.md).
+### Where it is going
 
-## What exists today
+Generative models work at 1 to 2 megapixels; professional images reach 50 or 100. SlopShop's
+long-term bet is to apply generative tools to such images **without lowering their
+resolution**, and without touching the pixels outside the edited area. The approach is still
+open and will be decided by experiment: see
+[docs/research/hd-generative-ai.md](docs/research/hd-generative-ai.md).
 
-- A Rust engine with a minimal document model (procedural fill layers), reversible edits with
-  undo/redo, tiling geometry and explicit color/pixel formats.
-- A headless wgpu renderer that composites a view of the document in linear light.
-- A `slopshop` CLI (GPU info, headless render to PNG, export, `.slop` documents).
-- Export to PNG (8/16-bit), TIFF (8/16-bit, 32-bit float), OpenEXR (32/16-bit float), JPEG
-  and WebP (lossy or lossless), AVIF (8/10-bit, HDR included), lossless JPEG XL (8/16-bit), BMP
-  and Targa (8-bit sRGB),
-  Netpbm (8/16-bit) and PFM (32-bit
-  float), QOI, farbfeld (16-bit), Radiance HDR, ICO, GIF (one frame, 256 colors),
-  uncompressed DDS, FITS (8/16-bit, 32-bit float), DICOM (Secondary Capture, 8/16-bit), PDF
-  (one page) and JPEG 2000 (8/16-bit, lossless or lossy) at full resolution, streamed in
-  bands (WebP, AVIF, JPEG XL, JPEG 2000, ICO and GIF excepted: they hold
-  the image, WebP at most 16383 px per side), with the color space always tagged (sRGB/cICP/ICC, EXR
-  chromaticities), transparency flattened over a chosen background when the file has no alpha,
-  gray files (PNG, TIFF, JPEG and others; the default for gray images), and every lossy conversion
-  reported ([ADR 0008](docs/adr/0008-export.md), [ADR 0010](docs/adr/0010-jpeg-webp-export.md),
-  [ADR 0011](docs/adr/0011-gray-export.md)). Export to Photoshop PSD and PSB (8/16-bit) keeps the
-  layers: groups, clipping, masks, blend modes, adjustment layers and layer styles.
-- Opening images of hundreds of megapixels in their native precision (8/16-bit, 16/32-bit
-  float, HDR): PNG, JPEG, TIFF, WebP, JPEG XL, AVIF, JPEG 2000, GIF, BMP, TGA, ICO, PNM/PFM, QOI, farbfeld, EXR,
-  HDR, DDS, DICOM and FITS (the display window or an automatic stretch as a Levels layer), SVG, PDF pages (rasterized at a chosen resolution, picked in an Import PDF dialog), and Photoshop PSD/PSB with their layers, groups and clipping masks (blend modes, masks, solid
-  color fills, the adjustment layers SlopShop has, layer styles: shadows, glows, Color Overlay,
-  Stroke and Fill; other adjustments and effects are not supported yet and are reported).
-  A layered file imported into a document arrives as a group.
-  Embedded ICC profiles (matrix/TRC) are applied; layers are composited in linear Rec.2020.
-  Camera RAW files (DNG and the cameras rawler knows) open developed as shot, in linear float
-  ([ADR 0023](docs/adr/0023-camera-raw-helper.md)); Krita/GIMP files and more are open to
-  contributors
-  ([ADR 0006](docs/adr/0006-universal-import-and-licensing.md)); HEIC is not supported.
-- A desktop app validating the stack, laid out like Photoshop (menu bar and shortcuts, a toolbar with
-  the Move, marquee, lasso, Magic Wand and Crop tools, an options bar): document tabs (reorder, rename, drop a tab on the canvas
-  to copy its layers), smooth zoom and pan presented natively on Windows, layers panel (add
-  fill, thumbnails, visibility, live opacity, Photoshop's blend modes, layer masks, rename, drag to reorder, delete; several layers at once with Ctrl/Shift+click; groups as folders, Ctrl+G; duplicate with Ctrl+J (with a selection, Layer via Copy and Layer via Cut, Shift+Ctrl+J); a right-click menu; layers dragged to another tab are copied there; clipping masks with Alt+Ctrl+G or Alt+click; the Move tool: drag the layers on the image, or nudge
-  them with the arrows; it picks the layer under the pointer and snaps to the canvas and to the other layers with smart guides; Free Transform (Ctrl+T) scales, rotates and moves layers non-destructively with high-quality resampling, and Edit > Transform turns and flips them exactly; Image Size, Canvas Size, Image Rotation and the Crop tool, all without cutting or rewriting pixels; selections: rectangular and elliptical marquees, lasso and polygonal lasso, Magic Wand, Color Range, added, subtracted or intersected, feathered, inverted, with marching ants and Quick Mask (Q), turned into layer masks or a crop; adjustment layers: Brightness/Contrast, Levels, Curves (with a curve editor), Exposure, Vibrance, Hue/Saturation, Color Balance, Black & White, Photo Filter, Channel Mixer, Invert, Posterize and Threshold, with a Properties panel) with
-  perceptual or linear blending per document, images dropped on the canvas
-  become layers, paste (Ctrl+V) of copied images and files, folders and zip archives opened like several files, export with progress and cancel, undo/redo, English and French interface.
-- Saving documents with their layers in SlopShop's own `.slop` format: lossless, in the
-  images' native precision, incremental (a save only writes what changed) and crash-safe
-  ([ADR 0009](docs/adr/0009-document-file-format.md)). Undo history is not saved yet.
+## Screenshots
 
-No painting, filters or AI yet; selections make layer masks and crops, nothing else yet.
+| Select Subject with local AI                                                                                                 | Free Transform in perspective                                                                          |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| ![The subject of a photo selected by the local AI model, outlined by marching ants](docs/images/screenshot-ai-selection.jpg) | ![A layer distorted with Free Transform's perspective handles](docs/images/screenshot-perspective.jpg) |
 
-## Getting started
+## Building from source
 
 Prerequisites:
 
 - [Rust](https://rustup.rs) (stable; the exact toolchain is pinned by `rust-toolchain.toml`)
 - [Node.js](https://nodejs.org) 24+ with npm
-- Tauri system dependencies for your OS: see the
+- Tauri's system dependencies for your OS: see the
   [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (WebView2 on Windows,
   Xcode Command Line Tools on macOS, WebKitGTK and friends on Linux)
 - On Windows, Visual Studio's C++ ATL component as well (Visual Studio Installer > Modify >
   Individual components > "C++ ATL for latest build tools"): the shader compiler, DXC, is
   built in and links against it ([ADR 0019](docs/adr/0019-dxc-shader-compiler.md))
-- A GPU with Vulkan, Metal or DirectX 12 support
 
-Run the desktop app:
+Run the desktop app, or build its installers:
 
 ```sh
 cd app
 npm install
-npm run tauri dev
+npm run tauri dev     # development build
+npm run bundle        # installers for this system, in target/release/bundle/
 ```
 
 Headless CLI:
 
 ```sh
 cargo run -p slopshop-cli -- gpu
-cargo run -p slopshop-cli -- render --size 1024x768 --out out/demo.png
 cargo run -p slopshop-cli -- export photo.jpg photo.png
 ```
-
-Every command and option is documented in [docs/cli.md](docs/cli.md).
 
 Checks (also run by CI):
 
@@ -159,19 +148,25 @@ cargo test --workspace
 cd app && npm run format:check && npm run check && npm test && npm run build
 ```
 
-## Languages
-
-The code and documentation are in English. The application is available in **English and
-French**; adding a language means adding one translation catalog (see
-[ADR 0004](docs/adr/0004-ui-internationalization.md)).
+Under the hood: a Rust engine (a workspace of crates that runs headless), GPU rendering with
+[wgpu](https://wgpu.rs), a [Tauri 2](https://tauri.app) desktop shell and a
+[Svelte 5](https://svelte.dev) + TypeScript interface. The image logic lives in the engine,
+never in the interface. Details: [docs/architecture.md](docs/architecture.md) and the decision
+records in [docs/adr/](docs/adr/).
 
 ## Contributing
 
-Issues and discussions are welcome. Code contributions from outside the project are not
-accepted yet: their terms are still to be decided ([ADR 0033](docs/adr/0033-project-license.md)).
-Development rules (for humans and AI agents alike) are in [`CLAUDE.md`](CLAUDE.md);
-[docs/formats.md](docs/formats.md) lists every format Photoshop handles, what SlopShop
-supports and the priorities.
+Contributions are welcome, from bug reports to code: start with
+[CONTRIBUTING.md](CONTRIBUTING.md). Testing on macOS and Linux is the most valuable help right
+now. Questions and ideas go to
+[Discussions](https://github.com/laBoiteBleue/slopshop/discussions); security problems to
+[SECURITY.md](SECURITY.md).
+
+## Languages
+
+The code and documentation are in English. The application is available in **English and
+French** (Edit > Preferences); adding a language means adding one translation catalog (see
+[ADR 0004](docs/adr/0004-ui-internationalization.md)).
 
 ## License
 
@@ -191,6 +186,13 @@ the download.
 
 The name "SlopShop" and the project's logo are not licensed under the GPL: any rights in the
 name and the branding are separate from the license of the code.
+
+The photos in the screenshots are in the public domain (CC0), from Wikimedia Commons:
+[San Juan Valley](https://commons.wikimedia.org/wiki/File:San_Juan_Valley.jpg) by Wilfredor,
+[Lotus flower](<https://commons.wikimedia.org/wiki/File:Lotus_flower_(978659).jpg>) by Hong
+Zhang, and
+[Scuol-Motta Naluns](<https://commons.wikimedia.org/wiki/File:Scuol-Motta_Naluns,_15-09-2023._(actm.)_09.jpg>)
+by Agnes Monkelbaan.
 
 SlopShop is an independent project, not affiliated with, endorsed by or sponsored by Adobe.
 Adobe and Photoshop are either registered trademarks or trademarks of Adobe in the United
