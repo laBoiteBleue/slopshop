@@ -41,7 +41,15 @@ SlopShop has no code-signing certificate yet, so each system warns before the fi
   Terminal.
 - **Linux**: make the AppImage executable (`chmod +x SlopShop_*.AppImage`) before running it.
 
-There is no automatic update yet: new versions are announced on the
+## Updates
+
+SlopShop looks for a new version after it starts, at most once a day, and shows **Update** at
+the right of the menu bar when there is one; **Help > Check for Updates** looks at once. The
+update is downloaded, its signature checked, then installed, and SlopShop restarts. The check
+can be turned off in **Edit > Preferences > Updates**. On Linux, only the AppImage updates
+itself; the `.deb` and `.rpm` packages are updated by installing the new ones.
+
+SlopShop 0.1.0 does not update itself: install a newer version by hand once, from the
 [releases page](https://github.com/laBoiteBleue/slopshop/releases).
 
 ## AI models
@@ -50,7 +58,7 @@ The installers do not contain the AI models. The optional AI tools download thei
 models on request, in **Edit > Preferences > AI components**, after showing their licenses (up to about
 1 GB); nothing is downloaded without your consent. They go to SlopShop's data folder:
 
-- Windows: `%LOCALAPPDATA%dev.slopshop.appai`
+- Windows: `%LOCALAPPDATA%\dev.slopshop.app\ai`
 - macOS: `~/Library/Application Support/dev.slopshop.app/ai`
 - Linux: `~/.local/share/dev.slopshop.app/ai`
 

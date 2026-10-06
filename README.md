@@ -39,8 +39,12 @@ encore utilisé l'application sur ces systèmes : vos retours sont les bienvenus
 que ça marche.
 
 Les installeurs ne sont pas encore signés : Windows et macOS affichent un avertissement au
-premier lancement. Les notes de version expliquent comment le passer sur chaque système. Il n'y
-a pas encore de mise à jour automatique.
+premier lancement. Les notes de version expliquent comment le passer sur chaque système.
+
+SlopShop cherche une nouvelle version après son démarrage, une fois par jour au plus, et
+l'installe à la demande (Aide > Rechercher des mises à jour) ; la vérification se désactive dans
+Édition > Préférences > Mises à jour. La version 0.1.0 ne se met pas à jour elle-même : installez
+une version plus récente à la main une fois.
 
 ### Configuration minimale
 
@@ -228,8 +232,11 @@ integration, where the engine's tests pass on both systems, but nobody has used 
 there yet: reports are very welcome, even to say that it works.
 
 The installers are not code-signed yet, so Windows and macOS warn before the first launch. The
-release notes say how to get past the warning on each system. There are no automatic updates
-yet.
+release notes say how to get past the warning on each system.
+
+SlopShop looks for a new version after it starts, at most once a day, and installs it when asked
+(Help > Check for Updates); the check can be turned off in Edit > Preferences > Updates. Version
+0.1.0 does not update itself: install a newer version by hand once.
 
 ### System requirements
 
