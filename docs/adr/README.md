@@ -43,5 +43,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0036 | [Panels, the Window menu and the saved layout](0036-panels-and-layout.md) | accepted |
 | 0037 | [Liquify: a displacement field kept as an entry of the layer's stack](0037-liquify.md) | accepted |
 | 0038 | [Projective layer transforms: Distort and Perspective](0038-projective-transforms.md) | accepted |
+| 0039 | [In-app updates](0039-in-app-updates.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
