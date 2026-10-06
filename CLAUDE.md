@@ -16,7 +16,7 @@ The name is a joke; the engineering is not.
 | `crates/slopshop-ai`    | AI helper: protocol + client (library), and the executable running the models through ONNX Runtime loaded at run time (ADR 0025). |
 | `app/src-tauri`         | Tauri shell: thin IPC layer (DTOs + commands) over core/render. No image logic.        |
 | `app/src`               | Svelte 5 + TypeScript UI. Presentation and input only.                                 |
-| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), `formats.md` (format support and plan), `ergonomics.md` (UX principles and ideas to validate), `file-format.md` (`.slop` spec), `feature-map.md` + `.csv` (what SlopShop does with each feature of professional editors), ADRs in `docs/adr/`, research in `docs/research/`. |
+| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), `formats.md` (format support and plan), `ergonomics.md` (UX principles and ideas to validate), `file-format.md` (`.slop` spec), `releasing.md` (publishing a version; the version is written once, in the root `Cargo.toml`), `feature-map.md` + `.csv` (what SlopShop does with each feature of professional editors), ADRs in `docs/adr/`, research in `docs/research/`. |
 
 Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). Never the reverse.
 
