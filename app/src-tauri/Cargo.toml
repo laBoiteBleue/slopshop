@@ -46,9 +46,9 @@ tauri-plugin-window-state = "2.5.0"
 # signature, runs the installer. Official plugin (MIT OR Apache-2.0), driven from Rust only;
 # it brings an HTTPS client (reqwest, rustls), which std lacks.
 tauri-plugin-updater = "2.13.1"
-
-[dev-dependencies]
-# Tests deserialize IPC requests the way Tauri does.
+# The code `tauri::generate_context!` writes for a configuration with plugins (the release
+# bundle's updater) names `serde_json`; Tauri already depends on it. Tests also deserialize IPC
+# requests with it, the way Tauri does.
 serde_json = "1"
 
 [lints]
