@@ -5,8 +5,20 @@
   },
   "bundle": {
     "externalBin": ["binaries/slopshop-raw", "binaries/slopshop-ai"],
+    "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "MAINTAINER_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/laBoiteBleue/slopshop/releases/download/updates/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
