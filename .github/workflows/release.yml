@@ -1,8 +1,9 @@
 name: Release
 
 # Pushing a tag `vX.Y.Z` builds the installers for Windows, macOS (Apple silicon and Intel) and
-# Linux, and attaches them to a draft pre-release that the maintainer checks and publishes by
-# hand. The tag must match the workspace version in Cargo.toml.
+# Linux, and attaches them to a draft release that the maintainer checks and publishes by hand,
+# with copies under version-free names that the README links to (`releases/latest/download/…`).
+# The tag must match the workspace version in Cargo.toml.
 #
 # A pull request that changes the packaging, or a manual run, only builds: the installers are
 # kept as workflow artifacts, so the pipeline can be checked before a real release.
@@ -55,7 +56,7 @@ jobs:
           # The id comes from the creation itself: a new draft is not always listed at once.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
             -f tag_name="$GITHUB_REF_NAME" -f name="SlopShop $GITHUB_REF_NAME" \
-            -F draft=true -F prerelease=true -F body=@.github/release-notes.md --jq .id)
+            -F draft=true -F prerelease=false -F body=@.github/release-notes.md --jq .id)
           if [ -z "$id" ]; then
             echo "::error::the draft release was not created"
             exit 1
@@ -129,7 +130,7 @@ jobs:
       # tauri.bundle.conf.json adds the helper executables (RAW, AI) to the bundle, and the
       # update packages, signed with the maintainer's key, with their manifest latest.json
       # (ADR 0039; updates.yml offers it once the release is published). Its addresses name the
-      # tag: `releases/latest` ignores pre-releases. On Windows it offers the NSIS installer.
+      # tag. On Windows it offers the NSIS installer.
       # Retries: on Windows, the DXC crate's build script queries the GitHub API without a
       # token, which shared runners sometimes see rate-limited (a misleading "mutable release"
       # error).
@@ -147,3 +148,23 @@ jobs:
           retryAttempts: 2
           uploadWorkflowArtifacts: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           workflowArtifactNamePattern: "[name]_[version]_[platform]_[arch]_[bundle]"
+
+  stable-downloads:
+    name: Version-free downloads
+    needs: [draft, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Copy the installers under version-free names
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.draft.outputs.id }}
+        run: node app/scripts/stable-downloads.mjs "$GITHUB_REPOSITORY" "$RELEASE_ID" "$GITHUB_REF_NAME"

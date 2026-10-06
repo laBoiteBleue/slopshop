@@ -24,14 +24,19 @@ Le nom est une blague. L'ingénierie, non.
 
 ## Télécharger
 
-Les installeurs de chaque version sont sur la
-[page des versions](https://github.com/laBoiteBleue/slopshop/releases).
+La dernière version, pour chaque système :
 
-| Système                                        | Installeur                  | Testé à la main |
-| ---------------------------------------------- | --------------------------- | --------------- |
-| Windows 10 et 11 (64 bits)                     | `.exe` (ou `.msi`)          | Oui             |
-| macOS, Apple silicon et Intel                  | `.dmg`                      | **Non**         |
-| Linux (x86-64) : Debian/Ubuntu, Fedora, autres | `.deb`, `.rpm`, `.AppImage` | **Non**         |
+| Système                               | Téléchargement                                                                                                                                                                                             | Testé à la main |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| Windows 10 et 11 (64 bits)            | [`.exe`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_x64-setup.exe) (ou [`.msi`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_x64_en-US.msi)) | Oui             |
+| macOS, Apple silicon (M1 et suivants) | [`.dmg` Apple silicon](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_aarch64.dmg)                                                                                             | **Non**         |
+| macOS, Intel                          | [`.dmg` Intel](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_x64.dmg)                                                                                                         | **Non**         |
+| Linux : Debian, Ubuntu                | [`.deb`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_amd64.deb)                                                                                                             | **Non**         |
+| Linux : Fedora, openSUSE              | [`.rpm`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop.x86_64.rpm)                                                                                                            | **Non**         |
+| Linux : autres distributions (x86-64) | [`.AppImage`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_amd64.AppImage)                                                                                                   | **Non**         |
+
+Ce qui a changé est sur la [page de la dernière version](https://github.com/laBoiteBleue/slopshop/releases/latest) ; les versions
+précédentes, sur la [page des versions](https://github.com/laBoiteBleue/slopshop/releases).
 
 Le mainteneur teste uniquement sous Windows. Les versions macOS et Linux sont produites par
 l'intégration continue, où les tests du moteur passent sur les deux systèmes, mais personne n'a
@@ -218,14 +223,19 @@ Adobe et Photoshop sont des marques déposées ou des marques commerciales d'Ado
 
 ## Download
 
-Installers for each version are on the
-[releases page](https://github.com/laBoiteBleue/slopshop/releases).
+The latest version, for each system:
 
-| System                                        | Installer                   | Tested by hand |
-| --------------------------------------------- | --------------------------- | -------------- |
-| Windows 10 and 11 (64-bit)                    | `.exe` (or `.msi`)          | Yes            |
-| macOS, Apple silicon and Intel                | `.dmg`                      | **No**         |
-| Linux (x86-64): Debian/Ubuntu, Fedora, others | `.deb`, `.rpm`, `.AppImage` | **No**         |
+| System                              | Download                                                                                                                                                                                                   | Tested by hand |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| Windows 10 and 11 (64-bit)          | [`.exe`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_x64-setup.exe) (or [`.msi`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_x64_en-US.msi)) | Yes            |
+| macOS, Apple silicon (M1 and later) | [Apple silicon `.dmg`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_aarch64.dmg)                                                                                             | **No**         |
+| macOS, Intel                        | [Intel `.dmg`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_x64.dmg)                                                                                                         | **No**         |
+| Linux: Debian, Ubuntu               | [`.deb`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_amd64.deb)                                                                                                             | **No**         |
+| Linux: Fedora, openSUSE             | [`.rpm`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop.x86_64.rpm)                                                                                                            | **No**         |
+| Linux: other distributions (x86-64) | [`.AppImage`](https://github.com/laBoiteBleue/slopshop/releases/latest/download/SlopShop_amd64.AppImage)                                                                                                   | **No**         |
+
+What changed is on the [latest version's page](https://github.com/laBoiteBleue/slopshop/releases/latest); earlier versions are on the
+[releases page](https://github.com/laBoiteBleue/slopshop/releases).
 
 The maintainer tests on Windows only. The macOS and Linux builds come from continuous
 integration, where the engine's tests pass on both systems, but nobody has used the application
