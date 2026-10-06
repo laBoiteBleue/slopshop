@@ -35,20 +35,22 @@ notes of `.github/release-notes.md`. It takes about 25 minutes.
 
 ## 3. Check the draft
 
-In the repository's Releases, open the draft: install the Windows installer and try it. Add
-what changed since the previous version at the top of the notes. Keep every file attached,
+In the repository's Releases, open the draft: install the Windows installer and try it. Write
+what changed since the previous version at the top of the notes, above the first `##` heading:
+that part is what the Update dialog of installed copies shows. Keep every file attached,
 including `latest.json`, the `.sig` files and the macOS `.app.tar.gz` archives: they are the
 update packages.
 
 ## 4. Publish
 
-Click **Publish release**. The Updates workflow copies the release's `latest.json` to the
-`updates` pre-release, which installed copies read: from then on they are offered the new
-version (at their next startup check, at most once a day, or with Help > Check for Updates).
-Drafts and tags never reach installed copies.
+Click **Publish release**. The Updates workflow gives the release's `latest.json` the published
+download addresses and the notes above the first heading (`app/scripts/update-manifest.mjs`),
+and puts it on the `updates` pre-release, which installed copies read: from then on they are
+offered the new version (at their next startup check, at most once a day, or with Help > Check
+for Updates). Drafts and tags never reach installed copies.
 
-To offer a release again (for example after replacing its `latest.json`), run the Updates
-workflow by hand with its tag. Installed copies never go back to an older version.
+To offer a release again (for example after editing its notes), run the Updates workflow by hand
+with its tag. Installed copies never go back to an older version.
 
 ## The signing key
 
