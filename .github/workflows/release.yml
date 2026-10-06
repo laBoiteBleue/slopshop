@@ -1,0 +1,127 @@
+name: Release
+
+# Pushing a tag `vX.Y.Z` builds the installers for Windows, macOS (Apple silicon and Intel) and
+# Linux, and attaches them to a draft pre-release that the maintainer checks and publishes by
+# hand. The tag must match the workspace version in Cargo.toml.
+#
+# A pull request that changes the packaging, or a manual run, only builds: the installers are
+# kept as workflow artifacts, so the pipeline can be checked before a real release.
+#
+# Nothing is code-signed yet (the macOS app is signed ad hoc): each system warns before the
+# first launch, as .github/release-notes.md explains. The maintainer tests on Windows only;
+# the macOS and Linux installers are built here and never tried by hand.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/release-notes.md
+      - app/scripts/stage-helpers.mjs
+      - app/src-tauri/tauri.conf.json
+      - app/src-tauri/tauri.bundle.conf.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  draft:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the tag against the version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+            exit 1
+          fi
+      - id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag \
+            --title "SlopShop $GITHUB_REF_NAME" --notes-file .github/release-notes.md
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n 1)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: draft
+    # Runs without the draft job on pull requests and manual runs.
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            args: ""
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          # The oldest supported Ubuntu, so that the AppImage runs on older distributions.
+          - name: Linux
+            os: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      # The toolchain comes from rust-toolchain.toml via rustup; cross targets are added to it.
+      - name: Add the Rust target
+        if: matrix.target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target || matrix.os }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      # tauri.bundle.conf.json adds the helper executables (RAW, AI) to the bundle.
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: app
+          args: --config src-tauri/tauri.bundle.conf.json ${{ matrix.args }}
+          releaseId: ${{ needs.draft.outputs.id }}
+          uploadWorkflowArtifacts: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          workflowArtifactNamePattern: "[name]_[version]_[platform]_[arch]_[bundle]"

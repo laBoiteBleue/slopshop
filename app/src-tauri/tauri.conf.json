@@ -32,6 +32,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "The SlopShop contributors",
+    "copyright": "Copyright (C) 2026 The SlopShop contributors",
+    "license": "GPL-3.0-only",
+    "homepage": "https://github.com/laBoiteBleue/slopshop",
+    "category": "GraphicsAndDesign",
+    "shortDescription": "A non-destructive, GPU-first image editor",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
