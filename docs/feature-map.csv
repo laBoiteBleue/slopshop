@@ -350,7 +350,7 @@ Menu,Select > Grow,,done,on the Magic Wand's engine
 Menu,Select > Similar,,done,on the Magic Wand's engine
 Menu,Select > Transform Selection,,done,on Free Transform's handles
 Menu,Select > Edit in Quick Mask Mode,,done,Q
-Menu,Select > Load Selection,,done,named selections in the document; also the Selections panel
+Menu,Select > Load Selection,,done,"named selections in the document, and the active layer's transparency or mask; also the Selections panel"
 Menu,Select > Save Selection,,done,named selections in the document; also the Selections panel
 Menu,Filter > Last Filter,,done,Repeat (Ctrl+F) and Last Filter Settings (Alt+Ctrl+F)
 Menu,Filter > Convert for Smart Filters,,covered,filters are editable entries of the layer's stack (ADR 0034)
