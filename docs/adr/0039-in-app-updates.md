@@ -14,7 +14,9 @@ application, and installs it. It updates the Windows installers (NSIS or MSI), t
 package manager.
 
 Releases are built as drafts, tested by the maintainer on Windows, then published; they are
-marked pre-release, which GitHub's `releases/latest` address ignores.
+marked pre-release, which GitHub's `releases/latest` address ignores. (Since 0.1.2 they are
+normal releases, so that the README can link to the latest one; the manifest stays on the
+`updates` pre-release, which installed copies already read.)
 
 ## Decision
 

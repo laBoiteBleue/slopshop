@@ -30,20 +30,24 @@ git push origin v0.1.1
 The tag must be the version with a `v` in front: the Release workflow stops otherwise. It
 builds the installers for Windows, macOS and Linux, and the update packages signed with the
 maintainer's key (repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), and attaches them to a **draft** pre-release with the
-notes of `.github/release-notes.md`. It takes about 25 minutes.
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), and attaches them to a **draft** release with the
+notes of `.github/release-notes.md`. A last job attaches copies of the installers under names
+without the version (`SlopShop_x64-setup.exe`…, `app/scripts/stable-downloads.mjs`): the
+README's download links (`releases/latest/download/…`) give the latest release's. It takes
+about 25 minutes.
 
 ## 3. Check the draft
 
 In the repository's Releases, open the draft: install the Windows installer and try it. Write
 what changed since the previous version at the top of the notes, above the first `##` heading:
 that part is what the Update dialog of installed copies shows. Keep every file attached,
-including `latest.json`, the `.sig` files and the macOS `.app.tar.gz` archives: they are the
-update packages.
+including `latest.json`, the `.sig` files and the macOS `.app.tar.gz` archives (the update
+packages) and the version-free copies (the README's links).
 
 ## 4. Publish
 
-Click **Publish release**. The Updates workflow gives the release's `latest.json` the published
+Leave **Set as the latest release** checked and click **Publish release**: the release page and
+the README's links now give this version. The Updates workflow gives the release's `latest.json` the published
 download addresses and the notes above the first heading (`app/scripts/update-manifest.mjs`),
 and puts it on the `updates` pre-release, which installed copies read: from then on they are
 offered the new version (at their next startup check, at most once a day, or with Help > Check
