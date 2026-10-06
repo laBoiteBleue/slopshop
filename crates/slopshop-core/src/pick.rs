@@ -2,6 +2,7 @@
 //! Photoshop) and where each layer's pixels are (snapping while moving, ADR 0017).
 
 use crate::document::{Document, Layer, LayerContent, LayerId};
+use crate::geom::Rect;
 use crate::raster::RasterImage;
 use crate::transform::Projective;
 
@@ -17,7 +18,7 @@ pub struct Bounds {
 
 impl Bounds {
     /// The box around `rect` (in a layer's pixels) placed by `transform`, in whole pixels.
-    fn placed(rect: crate::geom::Rect, transform: Projective) -> Bounds {
+    fn placed(rect: Rect, transform: Projective) -> Bounds {
         let [x0, y0, x1, y1] = transform.map_rect([
             f64::from(rect.x),
             f64::from(rect.y),
@@ -232,6 +233,30 @@ fn collect_bounds(layers: &[Layer], parent: Projective, out: &mut Vec<(LayerId, 
 /// no pixels. What Image > Reveal All brings onto the canvas. `None`: no such pixel.
 pub fn content_extent(document: &Document) -> Option<Bounds> {
     layers_extent(document.layers(), Projective::IDENTITY).within
+}
+
+/// Where some layer's pixels can show on the canvas, in whole document pixels: the
+/// [`content_extent`] within the canvas, or the whole canvas when a fill shows everywhere.
+/// `None`: none can. What AI selection shows its models (the active layer, or every layer).
+pub fn canvas_extent(document: &Document) -> Option<Rect> {
+    let canvas = document.size();
+    let extent = layers_extent(document.layers(), Projective::IDENTITY);
+    if extent.everywhere {
+        return Some(canvas.bounds());
+    }
+    let b = extent.within?.intersection(Bounds {
+        left: 0,
+        top: 0,
+        right: i64::from(canvas.width),
+        bottom: i64::from(canvas.height),
+    })?;
+    // Within the canvas: in u32.
+    Some(Rect::new(
+        b.left as u32,
+        b.top as u32,
+        (b.right - b.left) as u32,
+        (b.bottom - b.top) as u32,
+    ))
 }
 
 /// Where layers have pixels.
@@ -730,6 +755,34 @@ mod tests {
             enabled: true,
             replaces_alpha: false,
         }
+    }
+
+    #[test]
+    fn the_canvas_extent_is_the_content_extent_within_the_canvas() {
+        let mut doc = Document::new(Size::new(20, 20));
+        assert_eq!(canvas_extent(&doc), None);
+        // Partly off the canvas: only its part on the canvas.
+        let mut moved = layer(&mut doc, square(Rect::new(2, 2, 10, 10)));
+        moved.transform = Affine::translation(-7.0, 5.0).into();
+        let moved = push(&mut doc, moved);
+        assert_eq!(canvas_extent(&doc), Some(Rect::new(0, 7, 5, 10)));
+        // Wholly off the canvas: nothing shows.
+        Edit::SetLayerTransform {
+            id: moved,
+            transform: Affine::translation(-40.0, 0.0).into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(canvas_extent(&doc), None);
+        // A fill shows everywhere.
+        let fill = layer(
+            &mut doc,
+            LayerContent::Fill {
+                color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+            },
+        );
+        push(&mut doc, fill);
+        assert_eq!(canvas_extent(&doc), Some(Rect::new(0, 0, 20, 20)));
     }
 
     #[test]
