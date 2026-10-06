@@ -411,6 +411,37 @@ test("Select and Mask's refine-edge brush: a stroke sent on release, then edge d
   await vi.waitFor(() => expect(sent("refine_brush")[1]).toMatchObject({ erase: true }));
 });
 
+test("the refine-edge brush paints with the Move tool active: nothing moves", async () => {
+  // Regression: the press reached the image beneath, where the Move tool (the default) moved
+  // the layer or the selected pixels and took the pointer from the brush.
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Select and Mask…", { selector: ".label" }));
+  await user.click(await screen.findByRole("button", { name: "Refine Edge Brush" }));
+  const canvas = document.querySelector("svg.paint") as SVGSVGElement;
+  await fireEvent.pointerDown(canvas, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 40, clientY: 10 });
+  await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 40, clientY: 10 });
+  await vi.waitFor(() => expect(sent("refine_brush")).toHaveLength(1));
+  expect(sent("layer_at")).toEqual([]);
+  expect(sent("selection_bounds_at")).toEqual([]);
+});
+
+test("Color Range's eyedropper samples with the Move tool active: nothing moves", async () => {
+  const user = open({ ...documentView(1, "cat.jpg", [layer(1, "Cat")]), selectionKey: 7 });
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("Color Range…", { selector: ".label" }));
+  const eyedropper = document.querySelector(".eyedropper") as HTMLElement;
+  await fireEvent.pointerDown(eyedropper, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+  await fireEvent.pointerMove(eyedropper, { pointerId: 1, clientX: 40, clientY: 10 });
+  await fireEvent.pointerUp(eyedropper, { pointerId: 1, clientX: 40, clientY: 10 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(sent("layer_at")).toEqual([]);
+  expect(sent("selection_bounds_at")).toEqual([]);
+});
+
 test("Color Range shows its progress and the cancel button while it computes", async () => {
   let finish: (() => void) | null = null;
   respond("color_range", (_, doc) => new Promise((resolve) => (finish = () => resolve(doc))));
