@@ -34,3 +34,6 @@ Thumbs.db
 
 # Temporary agent worktrees
 /.claude/worktrees/
+
+# Helper executables staged for bundling (app/scripts/stage-helpers.mjs)
+/app/src-tauri/binaries/

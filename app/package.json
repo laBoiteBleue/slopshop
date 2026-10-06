@@ -11,6 +11,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "tauri": "tauri",
+    "bundle": "tauri build --config src-tauri/tauri.bundle.conf.json",
     "test": "vitest run"
   },
   "dependencies": {
