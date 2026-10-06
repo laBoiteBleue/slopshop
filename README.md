@@ -44,6 +44,10 @@ yet.
 | **Disk**                | About 100 MB, plus up to about 1 GB for the optional AI models                                                                                           |
 | **AI tools (optional)** | Windows x64 (DirectML, any DirectX 12 GPU), macOS on Apple silicon (Core ML), Linux (on the processor). Not available on Intel Macs.                     |
 
+The AI models are not in the installers: each one is downloaded on request, in Edit >
+Preferences > AI components, into SlopShop's data folder (the release notes give its location on each
+system), and can be removed from the same panel.
+
 ## What it can do
 
 - **Layers**: pixel layers, groups, clipping masks, layer masks, Photoshop's blend modes;

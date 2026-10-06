@@ -44,5 +44,15 @@ SlopShop has no code-signing certificate yet, so each system warns before the fi
 There is no automatic update yet: new versions are announced on the
 [releases page](https://github.com/laBoiteBleue/slopshop/releases).
 
-The optional AI features download their runtime and models on request, after showing their
-licenses; nothing is downloaded without your consent.
+## AI models
+
+The installers do not contain the AI models. The optional AI tools download their runtime and
+models on request, in **Edit > Preferences > AI components**, after showing their licenses (up to about
+1 GB); nothing is downloaded without your consent. They go to SlopShop's data folder:
+
+- Windows: `%LOCALAPPDATA%dev.slopshop.appai`
+- macOS: `~/Library/Application Support/dev.slopshop.app/ai`
+- Linux: `~/.local/share/dev.slopshop.app/ai`
+
+Each component can be removed from the same panel. Uninstalling SlopShop keeps them, except
+with the Windows `.exe` installer's uninstaller when "Delete the application data" is checked.

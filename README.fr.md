@@ -47,6 +47,10 @@ a pas encore de mise à jour automatique.
 | **Disque**                    | Environ 100 Mo, plus jusqu'à 1 Go environ pour les modèles d'IA facultatifs                                                                                    |
 | **Outils d'IA (facultatifs)** | Windows x64 (DirectML, tout GPU DirectX 12), macOS sur Apple silicon (Core ML), Linux (sur le processeur). Indisponibles sur les Mac Intel.                    |
 
+Les modèles d'IA ne sont pas dans les installeurs : chacun se télécharge à la demande, dans
+Édition > Préférences > Composants IA, dans le dossier de données de SlopShop (les notes de version donnent
+son emplacement sur chaque système), et peut être supprimé depuis le même panneau.
+
 ## Ce qu'il sait faire
 
 - **Calques** : calques de pixels, groupes, masques d'écrêtage, masques de fusion, modes de
