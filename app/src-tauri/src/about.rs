@@ -91,4 +91,42 @@ mod tests {
         assert_eq!(page, ProjectPage::NewIssue);
         assert!(serde_json::from_str::<ProjectPage>("\"https://example.org\"").is_err());
     }
+
+    #[test]
+    fn the_version_is_written_once() {
+        // A release changes the workspace's version only (docs/releasing.md): no crate, no
+        // workspace dependency and no npm package may hold a version of its own.
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap();
+        let workspace = read(&root.join("Cargo.toml"));
+        let versions = workspace
+            .lines()
+            .filter(|l| l.trim_start().starts_with("version ="))
+            .count();
+        assert_eq!(versions, 1, "only [workspace.package] has a version");
+        assert!(
+            workspace
+                .lines()
+                .filter(|l| l.starts_with("slopshop-"))
+                .all(|l| !l.contains("version")),
+            "the workspace's own crates are named by path only"
+        );
+        let mut manifests = vec![root.join("app/src-tauri/Cargo.toml")];
+        for entry in std::fs::read_dir(root.join("crates")).unwrap() {
+            manifests.push(entry.unwrap().path().join("Cargo.toml"));
+        }
+        for manifest in manifests {
+            assert!(
+                read(&manifest).contains("version.workspace = true"),
+                "{} takes the workspace's version",
+                manifest.display()
+            );
+        }
+        let package: serde_json::Value =
+            serde_json::from_str(&read(&root.join("app/package.json"))).unwrap();
+        assert!(
+            package.get("version").is_none(),
+            "package.json has no version"
+        );
+    }
 }
