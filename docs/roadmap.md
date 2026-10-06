@@ -4,7 +4,8 @@ A living plan, ordered by dependency rather than by date. Priorities are validat
 maintainer; each phase ends with a usable, tested state. Items marked 🔶 require a decision
 (ADR) before implementation — see the open questions in [architecture.md](architecture.md).
 Ergonomics (principles, ideas waiting for validation) have their own page:
-[ergonomics.md](ergonomics.md).
+[ergonomics.md](ergonomics.md). What SlopShop does with each feature of professional editors,
+including the ones it leaves out: [feature-map.md](feature-map.md).
 
 ## Phase 0 — Foundations *(in progress)*
 
@@ -338,11 +339,13 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
     Transform (transforms). Later (the audit's choice): Mixer Brush, Color Sampler, Custom
     Shape; Pen, Type and Shapes wait for vector content
 
-## Before opening to contributors *(the maintainer's order, 2026-10-05)*
+## Opened to contributors *(2026-10-06)*
 
-Once the toolbar is done (and tested by the maintainer), three projects, in this order, before
-SlopShop is opened to contributors and promoted (the preparation is ready on the branch
-`chore/open-to-contributions`):
+The maintainer opened SlopShop to contributors on 2026-10-06, before the AI and monetization
+projects that had been planned first: contribution guide, DCO sign-off (ADR 0033), installers
+for Windows, macOS and Linux, a bilingual README with screenshots, the
+[feature map](feature-map.md). Development continues with the projects below, in this order
+(the maintainer's order of 2026-10-05):
 
 - [x] **Transforms**: Distort and Perspective in Free Transform, the layer's transform made
       projective (ADR 0038: CPU and GPU, `.slop` 0.25, Edit > Transform's entries; painting,
@@ -358,7 +361,8 @@ Raised on 2026-10-05, to schedule:
       the Type tool surprises users and contributors alike
 - [ ] 🔶 The layer stack or a DAG (Phase 2), to settle before AI nodes; history memory limits
 - [ ] Very large images (Phase 4)
-- [ ] Distribution (Phase 5): a first release, installers, auto-update, user documentation
+- [ ] Distribution (Phase 5): installers built by CI on a version tag (done 2026-10-06, not
+      code-signed); code signing, auto-update, user documentation
 - [ ] macOS and Linux tested by hand (CI builds and tests them; nobody has used the app there)
 
 ## Phase 4 — Very large images
@@ -416,5 +420,6 @@ first.
 
 - [ ] 🔶 Plugin/extension API (nodes, importers/exporters)
 - [ ] Scripting and batch processing through the CLI
-- [ ] Signed releases, installers, auto-update
+- [x] Installers for Windows, macOS and Linux, built on a version tag (`release.yml`)
+- [ ] Code signing, auto-update
 - [ ] More interface languages (one catalog each)
