@@ -1,0 +1,50 @@
+name: Updates
+
+# Installed copies read the update manifest from the permanent pre-release `updates`
+# (ADR 0039). When the maintainer publishes a release, its latest.json (written by release.yml)
+# is copied there: from then on, installed copies are offered that version. Drafts and tags reach
+# no one. A manual run offers the release named, e.g. to go back to an earlier manifest.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The published release to offer (vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: updates
+  cancel-in-progress: false
+
+jobs:
+  offer:
+    name: Offer the release
+    # Not for the `updates` pre-release itself, nor for other tags.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Copy its manifest to the updates pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir manifest
+          # Its packages must be the release's own, not whatever `latest` is at the time.
+          if ! grep -q "/releases/download/$TAG/" manifest/latest.json; then
+            echo "::error::latest.json of $TAG does not point to the packages of $TAG"
+            exit 1
+          fi
+          if ! gh release view updates --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create updates --repo "$GITHUB_REPOSITORY" --prerelease \
+              --target main --title "Update manifest" \
+              --notes "Not a release: the manifest installed copies of SlopShop read to learn of a new version (ADR 0039). Download SlopShop from the other releases."
+          fi
+          gh release upload updates manifest/latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Installed copies are now offered $TAG."
