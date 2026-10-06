@@ -16,7 +16,7 @@ The name is a joke; the engineering is not.
 | `crates/slopshop-ai`    | AI helper: protocol + client (library), and the executable running the models through ONNX Runtime loaded at run time (ADR 0025). |
 | `app/src-tauri`         | Tauri shell: thin IPC layer (DTOs + commands) over core/render. No image logic.        |
 | `app/src`               | Svelte 5 + TypeScript UI. Presentation and input only.                                 |
-| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), `formats.md` (format support and plan), `ergonomics.md` (UX principles and ideas to validate), `file-format.md` (`.slop` spec), ADRs in `docs/adr/`, research in `docs/research/`. |
+| `docs/`                 | `architecture.md`, `roadmap.md`, `cli.md` (CLI reference, kept in sync by a test), `formats.md` (format support and plan), `ergonomics.md` (UX principles and ideas to validate), `file-format.md` (`.slop` spec), `feature-map.md` + `.csv` (what SlopShop does with each feature of professional editors), ADRs in `docs/adr/`, research in `docs/research/`. |
 
 Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). Never the reverse.
 
@@ -36,34 +36,59 @@ cargo run -p slopshop-cli -- --help              # headless CLI
 ```
 
 **Before finishing any task:** format, lint and test (all commands above except `tauri dev`) and
-make sure they pass. Say so explicitly if something could not be run. Then follow the Workflow:
-merge on green CI, or stop for the maintainer when the change needs their decision.
+make sure they pass. Say so explicitly if something could not be run. Then follow the Workflow
+below, which depends on who drives the session.
 
 ## Workflow
+
+For everyone:
 
 - **One branch and one pull request per feature or fix**, one at a time: branch from an
   up-to-date `main` (`feat/…`, `fix/…`) before the first change. CI runs on every pull
   request (Linux, macOS, Windows).
+- Each pull request description says which tests cover the change (Rust and UI), or why a part
+  has none.
+- **Stop and ask before** decisions that are hard to reverse (file format changes beyond a
+  compatible addition, architecture, structuring ADRs, significant or native dependencies),
+  product and ergonomics choices, `unsafe` code, and anything risky for the user's data or the
+  repository.
+- Pull requests are merged with "Rebase and merge", so `main` stays linear and keeps the
+  individual commits.
+- Commits are small and logical, with clear messages (conventional-commit style prefixes).
+- To check the running app visually, capture only its window (e.g. Win32 `PrintWindow`), never
+  a region of the screen: other applications with private data may be in front.
+
+**Maintainer sessions** (the git and GitHub user is `laBoiteBleue`):
+
 - **Autonomy (maintainer decision, 2026-09-30).** For work covered by automated tests and
   following established conventions (engine, formats, CLI, GPU rendering checked against the
   CPU, UI that follows existing patterns, bug fixes with a regression test, docs): implement,
   run the checks below, commit, push, open the pull request (`gh pr create`) and merge it
   once its CI is green, then move on to the next roadmap item. Keep a cumulative "to test"
   list in the pull requests and replies, which the maintainer goes through when they choose;
-  problems they find are fixed first.
-- Each pull request description says which tests cover the change (Rust and UI), or why a part
-  has none.
-- **Stop and ask before** decisions that are hard to reverse (file format changes beyond a
-  compatible addition, architecture, structuring ADRs, significant or native dependencies),
-  product and ergonomics choices, `unsafe` code, and anything risky for the maintainer's data
-  or the repository.
-- Pull requests are merged with "Rebase and merge", so `main` stays linear and keeps the
-  individual commits. Push nothing else without being asked.
-- Commits are small and logical, with clear messages (conventional-commit style prefixes).
+  problems they find are fixed first. "Stop and ask" above means asking the maintainer.
+- Push nothing else without being asked.
 - The maintainer tests on Windows only: macOS/Linux-specific work cannot be validated by them;
   keep it deferred or rely on CI, and say explicitly what is untested on those platforms.
-- To check the running app visually, capture only its window (e.g. Win32 `PrintWindow`), never
-  a region of the screen: other applications with private data may be in front.
+- Outside pull requests are reviewed like any change: the rules below apply to them, and a
+  contribution without tests is not merged.
+
+**Contributor sessions** (anyone else). AI-assisted contributions are encouraged, provided
+they come with their guardrails; follow [CONTRIBUTING.md](CONTRIBUTING.md):
+
+- Work on a branch of your fork and open a pull request; never merge it, the maintainer
+  reviews and merges. For anything beyond a small fix, check that an issue agreed on the
+  approach first.
+- **Sign off every commit** (`git commit -s`): the sign-off certifies the Developer
+  Certificate of Origin ([DCO](DCO)) for the person driving the session, who must have read
+  the change. A check on each pull request verifies it.
+- The tests are the proof: unit tests for the logic, integration tests through the public API
+  or the CLI, round trips for formats, damaged inputs for decoders, CPU references for GPU
+  code, component tests for UI changes, a regression test for every fix. A change without
+  tests is not done.
+- "Stop and ask" above means asking the person driving the session, and raising the question
+  in the issue or pull request. Say in the pull request that an AI agent helped, and how the
+  change was tested.
 
 ## Languages
 
