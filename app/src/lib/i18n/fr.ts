@@ -570,6 +570,7 @@ const fr: Messages = {
   "welcome.new": "Nouveau document…",
   "welcome.drop": "…ou déposez des fichiers ici",
   "welcome.recent": "Récents",
+  "welcome.starting": "Démarrage…",
 
   "drop.newTab": "Déposez pour ouvrir dans un nouvel onglet",
   "drop.layer": "Déposez pour ajouter comme calque",

@@ -5770,6 +5770,13 @@
               <RecentFiles paths={recentFiles} onopen={(path) => void openFiles([path], "tab")} />
             {/if}
           </div>
+        {:else}
+          <!-- Until the engine is ready (the GPU starts up): something shows it is coming. -->
+          <div class="welcome" role="status">
+            <img src="/favicon.svg" alt="" draggable="false" />
+            <p>{t("welcome.starting")}</p>
+            <span class="spinner large" aria-hidden="true"></span>
+          </div>
         {/if}
         {#if dropTarget}
           <div class="drop-hint" class:layer={dropTarget === "layer"}>
@@ -6579,6 +6586,11 @@
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+  }
+
+  .spinner.large {
+    width: 16px;
+    height: 16px;
   }
 
   @keyframes spin {

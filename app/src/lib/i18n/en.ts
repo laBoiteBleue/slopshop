@@ -562,6 +562,7 @@ const en = {
   "welcome.new": "New document…",
   "welcome.drop": "…or drop files here",
   "welcome.recent": "Recent",
+  "welcome.starting": "Starting…",
 
   "drop.newTab": "Drop to open in a new tab",
   "drop.layer": "Drop to add as a layer",
