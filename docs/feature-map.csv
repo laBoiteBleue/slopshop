@@ -1,0 +1,844 @@
+area,reference,platform,status,slopshop
+Menu,File > New,,done,
+Menu,File > Open,,done,
+Menu,File > Browse in Bridge,,wont,Adobe Bridge is a separate Adobe product
+Menu,File > Open As,,open,choose the format when the extension is wrong
+Menu,File > Open as Smart Object,,open,needs embedded documents as layers
+Menu,File > Open Recent,,done,with Clear Recent File List
+Menu,File > Close,,done,
+Menu,File > Close All,,done,Alt+Ctrl+W
+Menu,File > Close Others,,open,good first issue
+Menu,File > Save,,done,
+Menu,File > Save As,,done,
+Menu,File > Save a Copy,,open,good first issue
+Menu,File > Revert,,open,good first issue
+Menu,File > Export > Quick Export as PNG,,open,
+Menu,File > Export > Export As,,done,"File > Export: every format in docs/formats.md, with progress and cancel"
+Menu,File > Export > Export Preferences,,open,
+Menu,File > Export > Save for Web (Legacy),,wont,dated; File > Export covers it
+Menu,File > Export > Artboards to Files,,open,needs artboards
+Menu,File > Export > Artboards to PDF,,open,needs artboards
+Menu,File > Export > Layers to Files,,open,
+Menu,File > Export > Color Lookup Tables,,open,
+Menu,File > Export > Paths to Illustrator,,wont,"Illustrator-specific; SVG export of paths instead, once paths exist"
+Menu,File > Export > Render Video,,wont,video editing is out of scope for now
+Menu,File > Generate > Image Assets,,wont,dated (Generator); Layers to Files and the CLI cover it
+Menu,File > Share for Review,,wont,Adobe service or account
+Menu,File > Invite to Edit,,wont,Adobe service or account
+Menu,File > Search Adobe Stock,,wont,Adobe service or account
+Menu,File > Place Embedded,,partial,"File > Import as Layers, drop or paste: images become layers; not yet as embedded documents"
+Menu,File > Place Linked,,open,needs linked documents as layers
+Menu,File > Import > Variable Data Sets,,open,"data-driven graphics, likely through CLI batch processing"
+Menu,File > Import > Video Frames to Layers,,open,
+Menu,File > Import > Notes,,wont,dated (PDF annotations)
+Menu,File > Import > Images from Device,macOS,wont,dated; the operating system imports from scanners and cameras
+Menu,File > Import > WIA Support,Windows,done,"File > Import from Scanner or Camera, through Windows' scanning dialog (WIA)"
+Menu,File > Automate > Batch,,planned,batch processing through the CLI (Phase 5)
+Menu,File > Automate > Create Droplet,,covered,the slopshop CLI
+Menu,File > Automate > Crop and Straighten Photos,,open,
+Menu,File > Automate > Contact Sheet II,,open,
+Menu,File > Automate > Fit Image,,covered,"Image Size, and the CLI for batches"
+Menu,File > Automate > PDF Presentation,,wont,dated
+Menu,File > Automate > Photomerge,,open,
+Menu,File > Scripts > Image Processor,,planned,batch processing through the CLI (Phase 5)
+Menu,File > Scripts > Delete All Empty Layers,,open,
+Menu,File > Scripts > Flatten All Layer Effects,,open,destructive: explicit and opt-in
+Menu,File > Scripts > Flatten All Masks,,open,destructive: explicit and opt-in
+Menu,File > Scripts > Layer Comps to Files,,open,
+Menu,File > Scripts > Layer Comps to PDF,,open,
+Menu,File > Scripts > Layer Comps to WPG,,wont,dated (Web Photo Gallery)
+Menu,File > Scripts > Load Files into Stack,,done,File > Import as Layers; folders and zip archives too
+Menu,File > Scripts > Script Events Manager,,open,with scripting (Phase 5; the plugin API needs an ADR)
+Menu,File > Scripts > Statistics,,open,
+Menu,File > Scripts > Browse,,open,with scripting (Phase 5; the plugin API needs an ADR)
+Menu,File > File Info,,partial,"File > Document Info: size, resolution, layers, pixel formats, memory; EXIF, XMP and IPTC metadata are open"
+Menu,File > Print,,done,"File > Print: paper, print size, resolution, position"
+Menu,File > Print One Copy,,open,File > Print exists; good first issue
+Menu,File > Exit,,done,File > Exit (Ctrl+Q)
+Menu,Edit > Undo,,done,
+Menu,Edit > Redo,,done,
+Menu,Edit > Toggle Last State,,open,good first issue
+Menu,Edit > Fade,,covered,every operation is a layer with its own opacity and blend mode
+Menu,Edit > Cut,,done,"the selected pixels, or the selected layers without a selection"
+Menu,Edit > Copy,,done,"the selected pixels, or the selected layers without a selection"
+Menu,Edit > Copy Merged,,done,
+Menu,Edit > Paste,,done,
+Menu,Edit > Paste in Place,,done,
+Menu,Edit > Paste Into,,done,a group masked by the selection
+Menu,Edit > Paste Outside,,open,Paste Into exists; the inverted mask is a good first issue
+Menu,Edit > Clear,,done,"Delete with a selection: erased as paint, the original kept"
+Menu,Edit > Search,,open,a command palette
+Menu,Edit > Check Spelling,,open,text layers are not started
+Menu,Edit > Find and Replace Text,,open,text layers are not started
+Menu,Edit > Fill,,done,"Shift+F5: colors, black, 50% gray or white at an opacity, as paint in the layer's stack; Pattern and History contents are open"
+Menu,Edit > Content-Aware Fill,,planned,"object removal is the likely first AI feature; AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+Menu,Edit > Generative Fill,,planned,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+Menu,Edit > Stroke,,done,"inside, centered or outside the selection; width, color, opacity; as paint in the layer's stack"
+Menu,Edit > Content-Aware Scale,,open,proposed as an option of Free Transform's scaling; an ADR first (roadmap: advanced transforms)
+Menu,Edit > Puppet Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
+Menu,Edit > Perspective Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
+Menu,Edit > Free Transform,,done,
+Menu,Edit > Transform > Again,,done,with Duplicate and Transform Again
+Menu,Edit > Transform > Scale,,done,"Free Transform (Ctrl+T), non-destructive"
+Menu,Edit > Transform > Rotate,,done,"Free Transform (Ctrl+T), non-destructive"
+Menu,Edit > Transform > Skew,,done,"Free Transform: side handles with Ctrl, or the Skew field"
+Menu,Edit > Transform > Distort,,done,"pixel layers, non-destructive (ADR 0038); groups are open"
+Menu,Edit > Transform > Perspective,,done,"pixel layers, non-destructive (ADR 0038); groups are open"
+Menu,Edit > Transform > Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
+Menu,Edit > Transform > Rotate 180°,,done,
+Menu,Edit > Transform > Rotate 90° Clockwise,,done,
+Menu,Edit > Transform > Rotate 90° Counter Clockwise,,done,
+Menu,Edit > Transform > Flip Horizontal,,done,
+Menu,Edit > Transform > Flip Vertical,,done,
+Menu,Edit > Auto-Align Layers,,open,
+Menu,Edit > Auto-Blend Layers,,open,
+Menu,Edit > Define Brush Preset,,partial,the brush picker saves size and hardness as presets; brush tips from the image are open
+Menu,Edit > Define Pattern,,open,
+Menu,Edit > Define Custom Shape,,open,waits for vector content (an ADR)
+Menu,Edit > Purge > Undo,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
+Menu,Edit > Purge > Clipboard,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
+Menu,Edit > Purge > Histories,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
+Menu,Edit > Purge > Video Cache,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
+Menu,Edit > Purge > All,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
+Menu,Edit > Adobe PDF Presets,,wont,Adobe-specific
+Menu,Edit > Presets,,open,
+Menu,Edit > Remote Connections,,wont,dated (Generator)
+Menu,Edit > Color Settings,,open,"the working space is fixed (linear Rec.2020, ADR 0007)"
+Menu,Edit > Assign Profile,,open,embedded profiles are applied on import (ADR 0007)
+Menu,Edit > Convert to Profile,,open,embedded profiles are applied on import (ADR 0007)
+Menu,Edit > Keyboard Shortcuts,,partial,a searchable list of every shortcut; not customizable yet
+Menu,Edit > Menus,,open,
+Menu,Edit > Toolbar,,open,
+Menu,Edit > Preferences,,partial,the interface language and the AI components
+Menu,Image > Mode > Bitmap,,wont,dated as a document mode; 1-bit files are imported; Threshold or a dithered export instead
+Menu,Image > Mode > Grayscale,,partial,gray documents are imported and exported; no conversion command yet
+Menu,Image > Mode > Duotone,,open,duotone PSDs open as gray; a Gradient Map adjustment layer gives the look; spot inks need a color model ADR
+Menu,Image > Mode > Indexed Color,,wont,"dated as a document mode; palette quantization belongs to export (GIF, PNG-8)"
+Menu,Image > Mode > RGB Color,,done,
+Menu,Image > Mode > CMYK Color,,open,"needs an ADR (color model, ADR 0007); PSD/TIFF in CMYK or Lab are refused today"
+Menu,Image > Mode > Lab Color,,open,"needs an ADR (color model, ADR 0007); PSD/TIFF in CMYK or Lab are refused today"
+Menu,Image > Mode > Multichannel,,wont,dated
+Menu,Image > Mode > 8 Bits/Channel,,covered,each layer keeps its native precision and compositing is in float; the depth is chosen at export
+Menu,Image > Mode > 16 Bits/Channel,,covered,each layer keeps its native precision and compositing is in float; the depth is chosen at export
+Menu,Image > Mode > 32 Bits/Channel,,covered,each layer keeps its native precision and compositing is in float; the depth is chosen at export
+Menu,Image > Mode > Color Table,,wont,"dated as a document mode; palette quantization belongs to export (GIF, PNG-8)"
+Menu,Image > Adjustments > Brightness/Contrast,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Levels,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Curves,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Exposure,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Vibrance,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Hue/Saturation,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Color Balance,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Black & White,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Photo Filter,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Channel Mixer,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Color Lookup,,open,as an adjustment layer
+Menu,Image > Adjustments > Invert,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Posterize,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Threshold,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Gradient Map,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Selective Color,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
+Menu,Image > Adjustments > Shadows/Highlights,,open,as an adjustment layer
+Menu,Image > Adjustments > HDR Toning,,wont,dated; a tone-mapping node instead
+Menu,Image > Adjustments > Desaturate,,covered,Hue/Saturation or Black & White adjustment layers
+Menu,Image > Adjustments > Match Color,,open,as an adjustment layer
+Menu,Image > Adjustments > Replace Color,,open,as an adjustment layer
+Menu,Image > Adjustments > Equalize,,open,as an adjustment layer
+Menu,Image > Auto Tone,,done,Levels computed from the visible image
+Menu,Image > Auto Contrast,,done,Levels computed from the visible image
+Menu,Image > Auto Color,,done,Levels computed from the visible image
+Menu,Image > Image Size,,done,non-destructive: nothing is cut or rewritten
+Menu,Image > Canvas Size,,done,non-destructive: nothing is cut or rewritten
+Menu,Image > Image Rotation > 180°,,done,"exact, non-destructive"
+Menu,Image > Image Rotation > 90° Clockwise,,done,"exact, non-destructive"
+Menu,Image > Image Rotation > 90° Counter Clockwise,,done,"exact, non-destructive"
+Menu,Image > Image Rotation > Arbitrary,,done,"the layers turned through their transforms, the canvas grown to hold them"
+Menu,Image > Image Rotation > Flip Canvas Horizontal,,done,"exact, non-destructive"
+Menu,Image > Image Rotation > Flip Canvas Vertical,,done,"exact, non-destructive"
+Menu,Image > Crop,,done,"the Crop tool (C), or Image > Crop to the selection; nothing is deleted"
+Menu,Image > Trim,,done,a crop: transparent or corner-colored margins
+Menu,Image > Reveal All,,done,the canvas grown to every layer's pixels
+Menu,Image > Duplicate,,open,good first issue
+Menu,Image > Apply Image,,open,as nodes
+Menu,Image > Calculations,,open,as nodes
+Menu,Image > Variables,,open,"data-driven graphics, likely through CLI batch processing"
+Menu,Image > Apply Data Set,,open,"data-driven graphics, likely through CLI batch processing"
+Menu,Image > Trap,,wont,dated (prepress)
+Menu,Image > Analysis,,open,measurement
+Menu,Layer > New > Layer,,done,Shift+Ctrl+N
+Menu,Layer > New > Background from Layer,,covered,there is no special locked Background layer
+Menu,Layer > New > Group,,done,
+Menu,Layer > New > Group from Layers,,done,
+Menu,Layer > New > Artboard,,open,
+Menu,Layer > New > Artboard from Group,,open,
+Menu,Layer > New > Artboard from Layers,,open,
+Menu,Layer > New > Layer via Copy,,done,
+Menu,Layer > New > Layer via Cut,,done,
+Menu,Layer > Duplicate Layer,,done,
+Menu,Layer > Delete,,done,
+Menu,Layer > Rename Layer,,done,
+Menu,Layer > Layer Style > Blending Options,,partial,"Fill Opacity (ADR 0032); Blend If, knockout and channels are open"
+Menu,Layer > Layer Style > Bevel & Emboss,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
+Menu,Layer > Layer Style > Stroke,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Inner Shadow,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Inner Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Satin,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
+Menu,Layer > Layer Style > Color Overlay,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Gradient Overlay,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
+Menu,Layer > Layer Style > Pattern Overlay,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
+Menu,Layer > Layer Style > Outer Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Drop Shadow,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Copy Layer Style,,open,layer styles exist (ADR 0032); good first issue
+Menu,Layer > Layer Style > Paste Layer Style,,open,layer styles exist (ADR 0032); good first issue
+Menu,Layer > Layer Style > Clear Layer Style,,done,
+Menu,Layer > Layer Style > Global Light,,open,layer styles exist (ADR 0032); PSD import reads the global light
+Menu,Layer > Layer Style > Create Layers,,open,layer styles exist (ADR 0032); destructive: explicit and opt-in
+Menu,Layer > Layer Style > Hide All Effects,,open,each effect has its eye in the layers panel; good first issue
+Menu,Layer > Layer Style > Scale Effects,,open,layer styles exist (ADR 0032); PSD import reads the style's scale
+Menu,Layer > New Fill Layer > Solid Color,,done,
+Menu,Layer > New Fill Layer > Gradient,,done,editable in the Properties panel
+Menu,Layer > New Fill Layer > Pattern,,open,needs patterns
+Menu,Layer > New Adjustment Layer > Brightness/Contrast,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Levels,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Curves,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Exposure,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Vibrance,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Hue/Saturation,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Color Balance,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Black & White,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Photo Filter,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Channel Mixer,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Color Lookup,,open,
+Menu,Layer > New Adjustment Layer > Invert,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Posterize,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Threshold,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Gradient Map,,done,with PSD import and export
+Menu,Layer > New Adjustment Layer > Selective Color,,done,with PSD import and export
+Menu,Layer > Layer Content Options,,done,"the Properties panel, for adjustment and fill layers"
+Menu,Layer > Layer Mask,,done,"Reveal or Hide All or Selection, From Transparency, enable, disable, delete; painting in masks"
+Menu,Layer > Vector Mask,,open,waits for vector content (an ADR)
+Menu,Layer > Create Clipping Mask,,done,
+Menu,Layer > Release Clipping Mask,,done,
+Menu,Layer > Smart Objects > Convert to Smart Object,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > New Smart Object via Copy,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Edit Contents,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Relink to File,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Relink to Library Graphic,,wont,Adobe service or account
+Menu,Layer > Smart Objects > Replace Contents,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Export Contents,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Embed Linked,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Embed All Linked,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Update Modified Content,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Update All Modified Content,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > None,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Entropy,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Kurtosis,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Maximum,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Mean,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Median,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Minimum,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Range,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Skewness,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Standard Deviation,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Summation,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Smart Objects > Stack Mode > Variance,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
+Menu,Layer > Video Layers > New Video Layer from File,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > New Blank Video Layer,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Insert Blank Frame,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Duplicate Frame,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Delete Frame,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Replace Footage,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Interpret Footage,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Show Altered Video,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Restore Frame,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Restore All Frames,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Reload Frame,,wont,video editing is out of scope for now
+Menu,Layer > Video Layers > Rasterize,,wont,video editing is out of scope for now
+Menu,Layer > Rasterize > Type,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Shape,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Fill Content,,done,Layer > Bake to Pixels > Rasterize (ADR 0031)
+Menu,Layer > Rasterize > Vector Mask,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Smart Object,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Video,,wont,video editing is out of scope for now
+Menu,Layer > Rasterize > 3D,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Menu,Layer > Rasterize > Layer,,done,"Layer > Bake to Pixels > Rasterize: painted layers, fill layers and groups (ADR 0031)"
+Menu,Layer > Rasterize > All Layers,,covered,"Select > All Layers, then Layer > Bake to Pixels > Rasterize"
+Menu,Layer > New Layer Based Slice,,wont,dated (slices for web layouts); Export covers the need
+Menu,Layer > Group Layers,,done,
+Menu,Layer > Ungroup Layers,,done,
+Menu,Layer > Hide Layers,,done,
+Menu,Layer > Show Layers,,done,
+Menu,Layer > Arrange > Bring to Front,,done,
+Menu,Layer > Arrange > Bring Forward,,done,
+Menu,Layer > Arrange > Send Backward,,done,
+Menu,Layer > Arrange > Send to Back,,done,
+Menu,Layer > Arrange > Reverse,,open,the other Arrange commands exist; good first issue
+Menu,Layer > Align > Top Edges,,done,also in the Move tool's options bar
+Menu,Layer > Align > Vertical Centers,,done,also in the Move tool's options bar
+Menu,Layer > Align > Bottom Edges,,done,also in the Move tool's options bar
+Menu,Layer > Align > Left Edges,,done,also in the Move tool's options bar
+Menu,Layer > Align > Horizontal Centers,,done,also in the Move tool's options bar
+Menu,Layer > Align > Right Edges,,done,also in the Move tool's options bar
+Menu,Layer > Align > Distribute Horizontally,,done,Layer > Distribute: centers or spacing
+Menu,Layer > Align > Distribute Vertically,,done,Layer > Distribute: centers or spacing
+Menu,Layer > Align > Align to Selection,,done,"with a selection, the layers align on its box"
+Menu,Layer > Align > Align to Canvas,,partial,a single layer aligns on the canvas; several layers align on each other
+Menu,Layer > Lock Layers,,open,
+Menu,Layer > Link Layers,,open,
+Menu,Layer > Select Linked Layers,,open,
+Menu,Layer > Merge Layers,,done,Layer > Bake to Pixels (ADR 0031): explicit and opt-in
+Menu,Layer > Merge Visible,,done,Layer > Bake to Pixels (ADR 0031): explicit and opt-in
+Menu,Layer > Flatten Image,,done,Layer > Bake to Pixels (ADR 0031): explicit and opt-in
+Menu,Layer > Matting,,open,
+Menu,Layer > Matting > Defringe,,open,
+Menu,Layer > Matting > Remove Black Matte,,open,
+Menu,Layer > Matting > Remove White Matte,,open,
+Menu,Type > More from Adobe Fonts,,wont,Adobe service or account
+Menu,Type > Panels,,open,text layers are not started
+Menu,Type > Anti-Alias,,open,text layers are not started
+Menu,Type > Orientation,,open,text layers are not started
+Menu,Type > OpenType,,open,text layers are not started
+Menu,Type > Extrude to 3D,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Menu,Type > Create Work Path,,open,text layers are not started
+Menu,Type > Convert to Shape,,open,text layers are not started
+Menu,Type > Rasterize Type Layer,,open,text layers are not started
+Menu,Type > Convert to Paragraph Text,,open,text layers are not started
+Menu,Type > Warp Text,,open,text layers are not started
+Menu,Type > Match Font,,open,text layers are not started
+Menu,Type > Font Preview Size,,open,text layers are not started
+Menu,Type > Language Options,,open,text layers are not started
+Menu,Type > Update All Text Layers,,open,text layers are not started
+Menu,Type > Replace All Missing Fonts,,open,text layers are not started
+Menu,Type > Paste Lorem Ipsum,,open,text layers are not started
+Menu,Type > Panels > Character,,open,text layers are not started
+Menu,Type > Panels > Paragraph,,open,text layers are not started
+Menu,Type > Panels > Character Styles,,open,text layers are not started
+Menu,Type > Panels > Paragraph Styles,,open,text layers are not started
+Menu,Type > Panels > Glyphs,,open,text layers are not started
+Menu,Type > OpenType > Standard Ligatures,,open,text layers are not started
+Menu,Type > OpenType > Contextual Alternates,,open,text layers are not started
+Menu,Type > OpenType > Discretionary Ligatures,,open,text layers are not started
+Menu,Type > OpenType > Swash,,open,text layers are not started
+Menu,Type > OpenType > Stylistic Alternates,,open,text layers are not started
+Menu,Type > OpenType > Titling Alternates,,open,text layers are not started
+Menu,Type > OpenType > Ordinals,,open,text layers are not started
+Menu,Type > OpenType > Fractions,,open,text layers are not started
+Menu,Type > OpenType > Justification Alternates,,open,text layers are not started
+Menu,Type > OpenType > Stylistic Sets,,open,text layers are not started
+Menu,Type > Language Options > Default Features,,open,text layers are not started
+Menu,Type > Language Options > Middle Eastern Features,,open,text layers are not started
+Menu,Type > Language Options > East Asian Features,,open,text layers are not started
+Menu,Select > All,,done,
+Menu,Select > Deselect,,done,
+Menu,Select > Reselect,,done,
+Menu,Select > Inverse,,done,
+Menu,Select > All Layers,,done,
+Menu,Select > Deselect Layers,,done,
+Menu,Select > Find Layers,,open,
+Menu,Select > Isolate Layers,,open,
+Menu,Select > Color Range,,done,"eyedroppers, Fuzziness, Localized, Sample All Layers, Invert"
+Menu,Select > Focus Area,,open,"the selection model and the AI runtime exist (ADR 0024, ADR 0025)"
+Menu,Select > Subject,,done,"local AI (BiRefNet), edges refined by ViTMatte (ADR 0025)"
+Menu,Select > Sky,,open,"local AI segmentation, as Select Subject (ADR 0025)"
+Menu,Select > Select and Mask,,done,"a panel beside the image, not a workspace"
+Menu,Select > Modify > Border,,done,with a live preview
+Menu,Select > Modify > Smooth,,done,with a live preview
+Menu,Select > Modify > Expand,,done,with a live preview
+Menu,Select > Modify > Contract,,done,with a live preview
+Menu,Select > Modify > Feather,,done,with a live preview
+Menu,Select > Grow,,done,on the Magic Wand's engine
+Menu,Select > Similar,,done,on the Magic Wand's engine
+Menu,Select > Transform Selection,,done,on Free Transform's handles
+Menu,Select > Edit in Quick Mask Mode,,done,Q
+Menu,Select > Load Selection,,done,named selections in the document; also the Selections panel
+Menu,Select > Save Selection,,done,named selections in the document; also the Selections panel
+Menu,Filter > Last Filter,,done,Repeat (Ctrl+F) and Last Filter Settings (Alt+Ctrl+F)
+Menu,Filter > Convert for Smart Filters,,covered,filters are editable entries of the layer's stack (ADR 0034)
+Menu,Filter > Neural Filters,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+Menu,Filter > Filter Gallery,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter > Adaptive Wide Angle,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Camera Raw Filter,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Menu,Filter > Lens Correction,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Liquify,,done,an editable displacement field in the layer's stack (ADR 0037)
+Menu,Filter > Vanishing Point,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > 3D > Generate Normal Map,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Menu,Filter > 3D > Generate Bump Map,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Menu,Filter > Blur > Average,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Blur,,wont,dated fixed kernels; Gaussian Blur with a radius covers them
+Menu,Filter > Blur > Blur More,,wont,dated fixed kernels; Gaussian Blur with a radius covers them
+Menu,Filter > Blur > Box Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Gaussian Blur,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
+Menu,Filter > Blur > Lens Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Motion Blur,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
+Menu,Filter > Blur > Radial Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Shape Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Smart Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Surface Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur Gallery > Field Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur Gallery > Iris Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur Gallery > Tilt-Shift,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur Gallery > Path Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur Gallery > Spin Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Displace,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Pinch,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Polar Coordinates,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Ripple,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Shear,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Spherize,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Twirl,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Wave,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > ZigZag,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Noise > Add Noise,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
+Menu,Filter > Noise > Despeckle,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Noise > Dust & Scratches,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
+Menu,Filter > Noise > Median,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Noise > Reduce Noise,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Color Halftone,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Crystallize,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Facet,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Fragment,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Mezzotint,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Mosaic,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Pixelate > Pointillize,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Render > Clouds,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Render > Difference Clouds,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Render > Fibers,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Render > Lens Flare,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Render > Lighting Effects,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Sharpen > Sharpen,,wont,dated fixed kernels; Unsharp Mask and Smart Sharpen cover them
+Menu,Filter > Sharpen > Sharpen Edges,,wont,dated fixed kernels; Unsharp Mask and Smart Sharpen cover them
+Menu,Filter > Sharpen > Sharpen More,,wont,dated fixed kernels; Unsharp Mask and Smart Sharpen cover them
+Menu,Filter > Sharpen > Smart Sharpen,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Sharpen > Unsharp Mask,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
+Menu,Filter > Stylize > Diffuse,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Emboss,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Extrude,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Find Edges,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Oil Paint,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Solarize,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Tiles,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Trace Contour,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Wind,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Video > De-Interlace,,wont,video editing is out of scope for now
+Menu,Filter > Video > NTSC Colors,,wont,video editing is out of scope for now
+Menu,Filter > Other > Custom,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Other > High Pass,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
+Menu,Filter > Other > HSB/HSL,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Other > Maximum,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Other > Minimum,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Other > Offset,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter Gallery > Artistic > Colored Pencil,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Cutout,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Dry Brush,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Film Grain,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Fresco,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Neon Glow,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Paint Daubs,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Palette Knife,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Plastic Wrap,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Poster Edges,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Rough Pastels,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Smudge Stick,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Sponge,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Underpainting,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Artistic > Watercolor,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Accented Edges,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Angled Strokes,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Crosshatch,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Dark Strokes,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Ink Outlines,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Spatter,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Sprayed Strokes,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Brush Strokes > Sumi-e,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Distort > Diffuse Glow,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Distort > Glass,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Distort > Ocean Ripple,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Bas Relief,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Chalk & Charcoal,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Charcoal,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Chrome,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Conté Crayon,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Graphic Pen,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Halftone Pattern,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Note Paper,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Photocopy,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Plaster,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Reticulation,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Stamp,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Torn Edges,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Sketch > Water Paper,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Stylize > Glowing Edges,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Texture > Craquelure,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Texture > Grain,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Texture > Mosaic Tiles,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Texture > Patchwork,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Texture > Stained Glass,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,Filter Gallery > Texture > Texturizer,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
+Menu,View > Proof Setup,,open,soft proofing; CMYK needs an ADR
+Menu,View > Proof Colors,,open,soft proofing; CMYK needs an ADR
+Menu,View > Gamut Warning,,open,soft proofing; CMYK needs an ADR
+Menu,View > Pixel Aspect Ratio,,wont,dated (video)
+Menu,View > Pixel Aspect Ratio Correction,,wont,dated (video)
+Menu,View > 32-bit Preview Options,,open,"display transform options (exposure, HDR view): views, not document changes"
+Menu,View > Zoom In,,done,
+Menu,View > Zoom Out,,done,
+Menu,View > Fit on Screen,,done,
+Menu,View > 100%,,done,
+Menu,View > 200%,,open,good first issue
+Menu,View > Print Size,,open,needs the screen's physical resolution
+Menu,View > Actual Size,,open,needs the screen's physical resolution
+Menu,View > Flip Horizontal,,open,"a view flip, not a document change"
+Menu,View > Pattern Preview,,open,
+Menu,View > Screen Mode,,partial,View > Full Screen (F11) and Window > Hide Panels (Tab)
+Menu,View > Extras,,done,View > Hide Extras (Ctrl+H)
+Menu,View > Show > Layer Edges,,open,
+Menu,View > Show > Selection Edges,,partial,hidden with Extras (Ctrl+H); no toggle of its own
+Menu,View > Show > Target Path,,open,
+Menu,View > Show > Grid,,open,
+Menu,View > Show > Guides,,partial,hidden with Extras (Ctrl+H); no toggle of its own
+Menu,View > Show > Canvas Guides,,open,
+Menu,View > Show > Smart Guides,,done,"with the Move tool, Free Transform and Crop"
+Menu,View > Show > Slices,,wont,dated (slices for web layouts); Export covers the need
+Menu,View > Show > Notes,,wont,dated
+Menu,View > Show > Pixel Grid,,partial,"drawn at high zoom, hidden with Extras; no toggle of its own"
+Menu,View > Show > Mesh,,open,Liquify exists without a mesh display (ADR 0037); Puppet Warp is open
+Menu,View > Show > Edit Pins,,open,with Puppet Warp (roadmap: advanced transforms)
+Menu,View > Show > All,,open,
+Menu,View > Show > None,,open,
+Menu,View > Show > Show Extra Options,,open,
+Menu,View > Rulers,,done,Ctrl+R; units by a right-click on a ruler
+Menu,View > Snap,,done,
+Menu,View > Snap To > Guides,,done,with View > Snap
+Menu,View > Snap To > Grid,,open,
+Menu,View > Snap To > Layers,,done,
+Menu,View > Snap To > Slices,,wont,dated (slices for web layouts); Export covers the need
+Menu,View > Snap To > Document Bounds,,done,
+Menu,View > Snap To > All,,open,
+Menu,View > Snap To > None,,open,
+Menu,View > Guides > New Guide,,partial,dragged from a ruler; no dialog
+Menu,View > Guides > New Guide Layout,,open,
+Menu,View > Guides > New Guides from Shape,,open,
+Menu,View > Guides > Clear Guides,,done,
+Menu,View > Guides > Lock Guides,,open,
+Menu,View > Guides > Edit Selected Guides,,open,
+Menu,Window > Arrange > Tile All Vertically,,open,
+Menu,Window > Arrange > Tile All Horizontally,,open,
+Menu,Window > Arrange > 2-up Horizontal,,open,
+Menu,Window > Arrange > 2-up Vertical,,open,
+Menu,Window > Arrange > 3-up Horizontal,,open,
+Menu,Window > Arrange > 3-up Vertical,,open,
+Menu,Window > Arrange > 3-up Stacked,,open,
+Menu,Window > Arrange > 4-up,,open,
+Menu,Window > Arrange > 6-up,,open,
+Menu,Window > Arrange > Consolidate All to Tabs,,covered,documents always open in tabs
+Menu,Window > Arrange > Float in Window,,open,
+Menu,Window > Arrange > Float All in Windows,,open,
+Menu,Window > Arrange > Match Zoom,,open,
+Menu,Window > Arrange > Match Location,,open,
+Menu,Window > Arrange > Match Rotation,,open,
+Menu,Window > Arrange > Match All,,open,
+Menu,Window > Arrange > New Window,,open,
+Menu,Window > Workspace,,partial,"Window > Reset Layout; panels dock, fold and resize (ADR 0030, ADR 0036); no named workspaces"
+Menu,Window > Actions,,open,with scripting (Phase 5)
+Menu,Window > Brush Settings,,open,"the brush engine exists (ADR 0027): size, hardness, flow, opacity and pen pressure in the options bar; tips and dynamics are open"
+Menu,Window > Brushes,,partial,brush presets in the options bar's picker; no panel
+Menu,Window > Channels,,partial,saved selections (alpha channels) in the Selections panel; color channels are open
+Menu,Window > Character,,open,text layers are not started
+Menu,Window > Character Styles,,open,text layers are not started
+Menu,Window > Clone Source,,open,"the Clone Stamp exists; several sources, offset, scale and overlay are open"
+Menu,Window > Color,,open,
+Menu,Window > Comments,,wont,Adobe service or account
+Menu,Window > Contextual Task Bar,,open,
+Menu,Window > Device Preview,,wont,dated
+Menu,Window > Glyphs,,open,text layers are not started
+Menu,Window > Gradients,,open,
+Menu,Window > Histogram,,done,ADR 0036
+Menu,Window > History,,done,named history entries (ADR 0036)
+Menu,Window > Info,,done,ADR 0036
+Menu,Window > Layer Comps,,open,
+Menu,Window > Layers,,done,
+Menu,Window > Learn,,wont,Adobe service or account
+Menu,Window > Libraries,,wont,Adobe service or account
+Menu,Window > Measurement Log,,open,
+Menu,Window > Navigator,,open,
+Menu,Window > Notes,,open,
+Menu,Window > Paragraph,,open,text layers are not started
+Menu,Window > Paragraph Styles,,open,text layers are not started
+Menu,Window > Paths,,open,
+Menu,Window > Patterns,,open,
+Menu,Window > Properties,,done,
+Menu,Window > Shapes,,open,
+Menu,Window > Styles,,open,
+Menu,Window > Swatches,,open,
+Menu,Window > Timeline,,wont,video editing is out of scope for now
+Menu,Window > Tool Presets,,open,
+Menu,Window > Workspace > Essentials (Default),,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Window > Workspace > 3D,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Menu,Window > Workspace > Graphic and Web,,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Window > Workspace > Motion,,wont,video editing is out of scope for now
+Menu,Window > Workspace > Painting,,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Window > Workspace > Photography,,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Window > Workspace > Reset,,done,Window > Reset Layout
+Menu,Window > Workspace > New Workspace,,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Window > Workspace > Delete Workspace,,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Window > Workspace > Keyboard Shortcuts & Menus,,open,"panels dock, fold and resize (ADR 0030, ADR 0036); named workspaces are open"
+Menu,Help > Photoshop Help,,open,user documentation does not exist yet
+Menu,Help > Hands-on Tutorials,,open,user documentation does not exist yet
+Menu,Help > What's New,,open,user documentation does not exist yet
+Menu,Help > About Photoshop,,done,Help > About SlopShop
+Menu,Help > System Info,,partial,`slopshop gpu` in the CLI
+Menu,Help > GPU Compatibility,,partial,`slopshop gpu` in the CLI
+Menu,Help > Sign In/Sign Out,,wont,"no account, no license activation"
+Menu,Help > Updates,,planned,auto-update (Phase 5)
+Menu,Help > Manage My Account,,wont,"no account, no license activation"
+Menu,Help > Deactivate,,wont,"no account, no license activation"
+Menu,Help > Content Credentials,,open,"C2PA provenance, relevant to AI edits"
+Menu,Help > Generative AI Guidelines,,wont,Adobe policy; SlopShop's AI runs locally
+Tool,Tools panel > Move > Move,,done,"Auto-Select, layers picked in the image, snapping, smart guides, arrows, selected pixels moved as paint"
+Tool,Tools panel > Move > Artboard,,open,needs artboards
+Tool,Tools panel > Marquee > Rectangular Marquee,,done,"modes, feather, anti-alias (ADR 0024)"
+Tool,Tools panel > Marquee > Elliptical Marquee,,done,"modes, feather, anti-alias (ADR 0024)"
+Tool,Tools panel > Marquee > Single Row Marquee,,open,good first issue (the marquees exist)
+Tool,Tools panel > Marquee > Single Column Marquee,,open,good first issue (the marquees exist)
+Tool,Tools panel > Lasso > Lasso,,done,
+Tool,Tools panel > Lasso > Polygonal Lasso,,done,
+Tool,Tools panel > Lasso > Magnetic Lasso,,open,the lassos exist (ADR 0024)
+Tool,Tools panel > Lasso > Selection Brush,,open,the selection model exists (ADR 0024)
+Tool,Tools panel > Selection > Object Selection,,done,"local AI (SAM 2.1): hover, click or box (ADR 0025)"
+Tool,Tools panel > Selection > Quick Selection,,done,by color (ADR 0026)
+Tool,Tools panel > Selection > Magic Wand,,done,"tolerance, contiguous, anti-alias, sample all layers"
+Tool,Tools panel > Crop > Crop,,done,"ratio, size, Straighten; nothing is deleted"
+Tool,Tools panel > Crop > Perspective Crop,,open,Crop and Free Transform's Perspective exist (ADR 0038)
+Tool,Tools panel > Crop > Slice,,wont,dated (slices for web layouts); Export covers the need
+Tool,Tools panel > Crop > Slice Select,,wont,dated (slices for web layouts); Export covers the need
+Tool,Tools panel > Frame > Frame,,open,
+Tool,Tools panel > Measure/Sample > Eyedropper,,done,"I, or Alt with the painting tools; sample size and layers"
+Tool,Tools panel > Measure/Sample > 3D Material Eyedropper,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Tool,Tools panel > Measure/Sample > Color Sampler,,open,later (toolbar audit of 2026-10-05); the Eyedropper and the Info panel exist
+Tool,Tools panel > Measure/Sample > Ruler,,open,
+Tool,Tools panel > Measure/Sample > Note,,wont,dated
+Tool,Tools panel > Measure/Sample > Count,,open,
+Tool,Tools panel > Retouch > Remove,,planned,"object removal is the likely first AI feature; AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+Tool,Tools panel > Retouch > Spot Healing Brush,,open,the Healing Brush exists; an automatic source is open
+Tool,Tools panel > Retouch > Healing Brush,,done,"as paint in the layer's stack, the original kept"
+Tool,Tools panel > Retouch > Patch,,done,a mode of the Healing Brush
+Tool,Tools panel > Retouch > Content-Aware Move,,open,the Patch and moving selected pixels exist; the content-aware blend is open
+Tool,Tools panel > Retouch > Red Eye,,open,the painting engine exists (ADR 0027)
+Tool,Tools panel > Paint > Brush,,done,"size, hardness, flow, opacity, pen pressure (ADR 0027)"
+Tool,Tools panel > Paint > Pencil,,done,an option of the Brush and the Eraser
+Tool,Tools panel > Paint > Color Replacement,,open,the brush engine exists (ADR 0027)
+Tool,Tools panel > Paint > Mixer Brush,,open,later (toolbar audit of 2026-10-05); the brush engine exists
+Tool,Tools panel > Clone > Clone Stamp,,done,Aligned option; as paint in the layer's stack
+Tool,Tools panel > Clone > Pattern Stamp,,open,needs patterns; the Clone Stamp exists
+Tool,Tools panel > History > History Brush,,open,the Restore Eraser paints back the original pixels; painting from a history state is open
+Tool,Tools panel > History > Art History Brush,,wont,dated
+Tool,Tools panel > Eraser > Eraser,,done,"erases as paint, the original kept; hides on masks; the Restore Eraser brings pixels back"
+Tool,Tools panel > Eraser > Background Eraser,,open,"the Eraser exists (ADR 0027): erasing is paint, the original kept"
+Tool,Tools panel > Eraser > Magic Eraser,,open,"the Magic Wand and the Eraser exist (ADR 0024, ADR 0027)"
+Tool,Tools panel > Fill > Gradient,,done,
+Tool,Tools panel > Fill > Paint Bucket,,done,
+Tool,Tools panel > Fill > 3D Material Drop,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
+Tool,Tools panel > Blur > Blur,,done,"as paint in the layer's stack, the original kept"
+Tool,Tools panel > Blur > Sharpen,,done,"as paint in the layer's stack, the original kept"
+Tool,Tools panel > Blur > Smudge,,done,"as paint in the layer's stack, the original kept"
+Tool,Tools panel > Dodge/Burn > Dodge,,done,"as paint in the layer's stack, the original kept"
+Tool,Tools panel > Dodge/Burn > Burn,,done,"as paint in the layer's stack, the original kept"
+Tool,Tools panel > Dodge/Burn > Sponge,,open,Dodge and Burn exist; good next tone tool
+Tool,Tools panel > Pen > Pen,,open,paths are not started
+Tool,Tools panel > Pen > Freeform Pen,,open,paths are not started
+Tool,Tools panel > Pen > Curvature Pen,,open,paths are not started
+Tool,Tools panel > Pen > Add Anchor Point,,open,paths are not started
+Tool,Tools panel > Pen > Delete Anchor Point,,open,paths are not started
+Tool,Tools panel > Pen > Convert Point,,open,paths are not started
+Tool,Tools panel > Type > Horizontal Type,,open,text layers are not started
+Tool,Tools panel > Type > Vertical Type,,open,text layers are not started
+Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
+Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started
+Tool,Tools panel > Path > Path Selection,,open,paths are not started
+Tool,Tools panel > Path > Direct Selection,,open,paths are not started
+Tool,Tools panel > Shape > Rectangle,,open,shape layers are not started
+Tool,Tools panel > Shape > Ellipse,,open,shape layers are not started
+Tool,Tools panel > Shape > Triangle,,open,shape layers are not started
+Tool,Tools panel > Shape > Polygon,,open,shape layers are not started
+Tool,Tools panel > Shape > Line,,open,shape layers are not started
+Tool,Tools panel > Shape > Custom Shape,,open,shape layers are not started
+Tool,Tools panel > Navigation > Hand,,partial,"Space+drag, middle button or wheel; no tool button"
+Tool,Tools panel > Navigation > Rotate View,,open,"a view rotation, not a document change"
+Tool,Tools panel > Navigation > Zoom,,partial,Ctrl+wheel and the zoom slider; no tool button
+Workspace,Filter > Liquify > Forward Warp,,done,ADR 0037
+Workspace,Filter > Liquify > Reconstruct,,done,ADR 0037
+Workspace,Filter > Liquify > Smooth,,done,ADR 0037
+Workspace,Filter > Liquify > Twirl Clockwise,,done,ADR 0037
+Workspace,Filter > Liquify > Pucker,,done,ADR 0037
+Workspace,Filter > Liquify > Bloat,,done,ADR 0037
+Workspace,Filter > Liquify > Push Left,,done,ADR 0037
+Workspace,Filter > Liquify > Freeze Mask,,done,ADR 0037
+Workspace,Filter > Liquify > Thaw Mask,,done,ADR 0037
+Workspace,Filter > Liquify > Face-Aware Liquify,,open,Liquify exists (ADR 0037); needs face landmarks (local AI)
+Workspace,Filter > Liquify > Brush Size,,done,ADR 0037
+Workspace,Filter > Liquify > Brush Density,,done,ADR 0037
+Workspace,Filter > Liquify > Brush Pressure,,done,ADR 0037
+Workspace,Filter > Liquify > Brush Rate,,done,ADR 0037
+Workspace,Filter > Liquify > Stylus Pressure,,open,Liquify exists (ADR 0037); pen pressure is not read yet
+Workspace,Filter > Liquify > Reconstruct Options,,open,Liquify exists (ADR 0037); not yet
+Workspace,Filter > Liquify > Restore All,,done,ADR 0037
+Workspace,Filter > Liquify > Load Mesh,,open,Liquify exists (ADR 0037); not yet
+Workspace,Filter > Liquify > Save Mesh,,open,Liquify exists (ADR 0037); not yet
+Workspace,Filter > Liquify > Show Backdrop,,open,Liquify exists (ADR 0037); not yet
+Workspace,Filter > Liquify > Show Mask,,done,Show Freeze Mask
+Workspace,Filter > Liquify > Preview,,open,Liquify exists (ADR 0037): it always previews; no toggle
+Workspace,Select > Select and Mask > View Mode,,done,"Marching Ants, Overlay, On Black, On White, Mask"
+Workspace,Select > Select and Mask > Transparency,,partial,the Overlay view at Quick Mask's opacity
+Workspace,Select > Select and Mask > Edge Detection Radius,,done,edge detection by local AI (ViTMatte)
+Workspace,Select > Select and Mask > Smart Radius,,open,edge detection by local AI (ViTMatte) exists
+Workspace,Select > Select and Mask > Refine Edge Brush,,done,
+Workspace,Select > Select and Mask > Refine Hair,,covered,edge detection (ViTMatte) mattes hair along the whole edge
+Workspace,Select > Select and Mask > Quick Selection,,open,"Select and Mask is a light panel beside the image, not a workspace (2026-10-04)"
+Workspace,Select > Select and Mask > Brush,,open,"Select and Mask is a light panel beside the image, not a workspace (2026-10-04)"
+Workspace,Select > Select and Mask > Object Selection,,open,"Select and Mask is a light panel beside the image, not a workspace (2026-10-04)"
+Workspace,Select > Select and Mask > Lasso,,open,"Select and Mask is a light panel beside the image, not a workspace (2026-10-04)"
+Workspace,Select > Select and Mask > Polygonal Lasso,,open,"Select and Mask is a light panel beside the image, not a workspace (2026-10-04)"
+Workspace,Select > Select and Mask > Hand,,covered,"a panel beside the image: the usual wheel, Space and middle-button navigation"
+Workspace,Select > Select and Mask > Zoom,,covered,"a panel beside the image: the usual wheel, Space and middle-button navigation"
+Workspace,Select > Select and Mask > Smooth,,done,shown live on the image
+Workspace,Select > Select and Mask > Feather,,done,shown live on the image
+Workspace,Select > Select and Mask > Contrast,,done,shown live on the image
+Workspace,Select > Select and Mask > Shift Edge,,done,shown live on the image
+Workspace,Select > Select and Mask > Decontaminate Colors,,open,Select and Mask exists
+Workspace,Select > Select and Mask > Output To: Selection,,done,
+Workspace,Select > Select and Mask > Output To: Layer Mask,,done,
+Workspace,Select > Select and Mask > Output To: New Layer,,open,the other outputs exist; good first issue
+Workspace,Select > Select and Mask > Output To: New Layer with Layer Mask,,done,
+Workspace,Select > Select and Mask > Output To: New Document,,open,the other outputs exist; good first issue
+Workspace,Select > Select and Mask > Output To: New Document with Layer Mask,,open,the other outputs exist; good first issue
+Workspace,Select > Select and Mask > Remember Settings,,done,settings are always kept for the next time
+Workspace,Filter > Camera Raw Filter / Camera Raw > Basic,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Curve,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Detail,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Color Mixer,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Color Grading,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Optics,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Geometry,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Effects,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Calibration,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Masking,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Healing,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Red Eye,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Crop,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Presets,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Workspace,Filter > Camera Raw Filter / Camera Raw > Snapshots,,open,camera RAW opens as shot (ADR 0023); a development node is open
+Panel,Window > Actions,,open,with scripting (Phase 5)
+Panel,Window > Brush Settings,,open,"the brush engine exists (ADR 0027): size, hardness, flow, opacity and pen pressure in the options bar; tips and dynamics are open"
+Panel,Window > Brushes,,partial,brush presets in the options bar's picker; no panel
+Panel,Window > Channels,,partial,saved selections (alpha channels) in the Selections panel; color channels are open
+Panel,Window > Character,,open,text layers are not started
+Panel,Window > Character Styles,,open,text layers are not started
+Panel,Window > Clone Source,,open,"the Clone Stamp exists; several sources, offset, scale and overlay are open"
+Panel,Window > Color,,open,
+Panel,Window > Comments,,wont,Adobe service or account
+Panel,Window > Glyphs,,open,text layers are not started
+Panel,Window > Gradients,,open,
+Panel,Window > Histogram,,done,ADR 0036
+Panel,Window > History,,done,named history entries (ADR 0036)
+Panel,Window > Info,,done,ADR 0036
+Panel,Window > Layer Comps,,open,
+Panel,Window > Layers,,done,
+Panel,Window > Libraries,,wont,Adobe service or account
+Panel,Window > Measurement Log,,open,
+Panel,Window > Navigator,,open,
+Panel,Window > Notes,,open,
+Panel,Window > Paragraph,,open,text layers are not started
+Panel,Window > Paragraph Styles,,open,text layers are not started
+Panel,Window > Paths,,open,
+Panel,Window > Patterns,,open,
+Panel,Window > Properties,,done,
+Panel,Window > Shapes,,open,
+Panel,Window > Styles,,open,
+Panel,Window > Swatches,,open,
+Panel,Window > Timeline,,wont,video editing is out of scope for now
+Panel,Window > Tool Presets,,open,
+Preferences,Edit > Preferences > General (Win) / Photoshop > Settings > General (macOS),,open,
+Preferences,Edit > Preferences > Interface (Win) / Photoshop > Settings > Interface (macOS),,partial,the interface language (Edit > Preferences)
+Preferences,Edit > Preferences > Workspace (Win) / Photoshop > Settings > Workspace (macOS),,open,
+Preferences,Edit > Preferences > Notifications (Win) / Photoshop > Settings > Notifications (macOS),,open,
+Preferences,Edit > Preferences > Tools (Win) / Photoshop > Settings > Tools (macOS),,open,
+Preferences,Edit > Preferences > History & Content Credentials (Win) / Photoshop > Settings > History & Content Credentials (macOS),,open,
+Preferences,Edit > Preferences > File Handling (Win) / Photoshop > Settings > File Handling (macOS),,open,
+Preferences,Edit > Preferences > Export (Win) / Photoshop > Settings > Export (macOS),,open,
+Preferences,Edit > Preferences > Performance (Win) / Photoshop > Settings > Performance (macOS),,open,RAM/VRAM budgets (Phase 4)
+Preferences,Edit > Preferences > Image Processing (Win) / Photoshop > Settings > Image Processing (macOS),,open,
+Preferences,Edit > Preferences > Scratch Disks (Win) / Photoshop > Settings > Scratch Disks (macOS),,planned,out-of-core tile store with a disk cache (Phase 4)
+Preferences,Edit > Preferences > Cursors (Win) / Photoshop > Settings > Cursors (macOS),,open,
+Preferences,Edit > Preferences > Transparency & Gamut (Win) / Photoshop > Settings > Transparency & Gamut (macOS),,open,
+Preferences,Edit > Preferences > Units & Rulers (Win) / Photoshop > Settings > Units & Rulers (macOS),,partial,"ruler units, by a right-click on a ruler"
+Preferences,"Edit > Preferences > Guides, Grid & Slices (Win) / Photoshop > Settings > Guides, Grid & Slices (macOS)",,open,
+Preferences,Edit > Preferences > Plug-ins (Win) / Photoshop > Settings > Plug-ins (macOS),,open,with the plugin API (needs an ADR)
+Preferences,Edit > Preferences > Type (Win) / Photoshop > Settings > Type (macOS),,open,
+Preferences,Edit > Preferences > Advanced Controls (Win) / Photoshop > Settings > Advanced Controls (macOS),,open,
+Preferences,Edit > Preferences > Technology Previews (Win) / Photoshop > Settings > Technology Previews (macOS),,open,
+Extensibility,Actions,,open,with scripting (Phase 5)
+Extensibility,Batch,,planned,batch processing through the CLI (Phase 5)
+Extensibility,Create Droplet,,covered,the slopshop CLI
+Extensibility,Image Processor,,planned,batch processing through the CLI (Phase 5)
+Extensibility,Script Events Manager,,open,with scripting (Phase 5; needs an ADR)
+Extensibility,JavaScript scripting,,open,with scripting (Phase 5; needs an ADR)
+Extensibility,UXP scripting,,wont,Adobe's API; SlopShop's own plugin API is planned (needs an ADR)
+Extensibility,AppleScript,macOS,open,with scripting (Phase 5)
+Extensibility,COM/VBScript,Windows,open,with scripting (Phase 5)
+Extensibility,UXP plugins,,wont,Adobe's API; SlopShop's own plugin API is planned (needs an ADR)
+Extensibility,Hybrid UXP plugins,,wont,Adobe's API; SlopShop's own plugin API is planned (needs an ADR)
+Extensibility,File format plug-ins,,planned,"importers and exporters in the plugin API (Phase 5, needs an ADR)"
+Extensibility,Filter plug-ins,,open,Photoshop .8bf compatibility is an open question
+Format,File formats > PSD,,done,"layers, groups, clipping, masks, blend modes, fill layers, 15 adjustment layers, 6 layer effects; text, shapes and smart objects as pixels; see docs/formats.md"
+Format,File formats > PSB,,done,"layers, groups, clipping, masks, blend modes, fill layers, 15 adjustment layers, 6 layer effects; text, shapes and smart objects as pixels; see docs/formats.md"
+Format,File formats > PSDC,,wont,proprietary cloud format; use PSD
+Format,File formats > JPEG,,done,see docs/formats.md
+Format,File formats > JPEG 2000,,done,see docs/formats.md
+Format,File formats > PNG,,done,see docs/formats.md
+Format,File formats > GIF,,done,"animations open as layers; export one frame, 256 colors; see docs/formats.md"
+Format,File formats > TIFF,,done,see docs/formats.md
+Format,File formats > WebP,,done,see docs/formats.md
+Format,File formats > AVIF,,done,see docs/formats.md
+Format,File formats > HEIF/HEIC,,open,blocked by HEVC patents for now; see docs/formats.md
+Format,File formats > BMP,,done,see docs/formats.md
+Format,File formats > Cineon,,open,P2; see docs/formats.md
+Format,File formats > DICOM,,done,see docs/formats.md
+Format,File formats > IFF,,open,"P3, good first issue; see docs/formats.md"
+Format,File formats > OpenEXR,,done,see docs/formats.md
+Format,File formats > PCX,,open,"P3, good first issue; see docs/formats.md"
+Format,File formats > DCS 1.0,,open,"P3, blocked by PostScript licenses; see docs/formats.md"
+Format,File formats > DCS 2.0,,open,"P3, blocked by PostScript licenses; see docs/formats.md"
+Format,File formats > EPS,,open,"P3, blocked by PostScript licenses; see docs/formats.md"
+Format,File formats > PDF,,done,pages imported as layers; one-page export; see docs/formats.md
+Format,File formats > Photoshop Raw,,open,"P3, good first issue; see docs/formats.md"
+Format,File formats > PICT,,open,"P3, good first issue; see docs/formats.md"
+Format,File formats > PICT Resource,,wont,dated (classic Mac OS resource forks)
+Format,File formats > Pixar,,open,"P3, good first issue; see docs/formats.md"
+Format,File formats > Portable Bit Map,,done,see docs/formats.md
+Format,File formats > Radiance,,done,see docs/formats.md
+Format,File formats > Scitex CT,,open,"P3, good first issue; see docs/formats.md"
+Format,File formats > Targa,,done,see docs/formats.md
+Format,File formats > Wireless Bitmap,,open,"P3, good first issue; see docs/formats.md"
+AI,AI Assisted Editor (Beta),,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Natural-language image edits,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Visual Markup guidance,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Mask-guided AI edits,,planned,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Generative Fill,,planned,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Generative Expand,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Generate Image,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Generate Background,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Remove Background,,partial,"Select > Subject (local AI), then Layer Mask > Reveal Selection; no one-click command"
+AI,Harmonize,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Generative Upscale,,planned,"AI upscaling for enlargements as a node, on the AI track (roadmap)"
+AI,Generative Denoise,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Generative Sharpen,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Remove Distractions,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Remove Reflections,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Find Distractions,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Partner AI models,,open,local models first; remote backends would need a decision
+AI,Adobe Stock search and place,,wont,Adobe service or account
+AI,Send Layers to Firefly Boards,,wont,Adobe service or account
+AI,Prompt suggestions,,open,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+AI,Projects,,wont,Adobe service or account
+AI,Firefly image import preserving original,,wont,Adobe service or account
+AI,Text along shape/path,,open,text layers are not started
