@@ -502,6 +502,13 @@ impl Client {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            /// No console window opens over a windowless editor (its output stays inherited).
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
         if !launch.library_paths.is_empty() {
             let mut paths: Vec<std::path::PathBuf> = launch
                 .library_paths
