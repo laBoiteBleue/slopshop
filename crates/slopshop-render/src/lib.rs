@@ -21,7 +21,7 @@ pub use region::{export_renderer, export_source};
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
 use slopshop_core::adjust::{Adjustment, SRGB_LUMA};
@@ -207,6 +207,30 @@ pub struct Renderer {
     /// Frames' output buffers, kept for the next frames of the same size (see
     /// [`Self::output_buffer`]).
     outputs: Mutex<Vec<wgpu::Buffer>>,
+    /// Shared with [`Self::gpu_filter`]: both submit to the same queue.
+    submissions: SubmissionGate,
+}
+
+/// Lets work be submitted from any thread, except while one thread needs the queue idle
+/// ([`Renderer::without_submissions`]). The lock guards no data: a panic while it was held
+/// leaves nothing inconsistent, so poisoning is ignored.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SubmissionGate(Arc<RwLock<()>>);
+
+impl SubmissionGate {
+    pub(crate) fn submit(
+        &self,
+        queue: &wgpu::Queue,
+        commands: wgpu::CommandBuffer,
+    ) -> wgpu::SubmissionIndex {
+        let _submitting = self.0.read().unwrap_or_else(PoisonError::into_inner);
+        queue.submit([commands])
+    }
+
+    fn exclusive<T>(&self, f: impl FnOnce() -> T) -> T {
+        let _exclusive = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        f()
+    }
 }
 
 /// What a viewport frame shows over the image: view state, never part of the document or of
@@ -542,7 +566,8 @@ impl Renderer {
                 .max(1)
         });
         let timestamp_period = (!timestamps.is_empty()).then(|| queue.get_timestamp_period());
-        let gpu_filter = Arc::new(filter::GpuFilter::new(&device, &queue));
+        let submissions = SubmissionGate::default();
+        let gpu_filter = Arc::new(filter::GpuFilter::new(&device, &queue, submissions.clone()));
         Ok(Self {
             instance,
             adapter_info: adapter.get_info(),
@@ -568,6 +593,7 @@ impl Renderer {
             max_dispatch_pixels,
             caches: Mutex::new(GpuCaches::default()),
             outputs: Mutex::new(Vec::new()),
+            submissions,
             tile_capacity,
             placeholder_tiles,
             ewa_table,
@@ -832,6 +858,19 @@ impl Renderer {
         outputs.push(buffer);
     }
 
+    /// Submit `commands` to the queue; waits while a window surface is configured
+    /// ([`Self::without_submissions`]). Every submission goes through here or the gate.
+    fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
+        self.submissions.submit(&self.queue, commands)
+    }
+
+    /// Run `f` while no other thread submits work. Configuring a window surface waits for the
+    /// GPU to be idle, then fails ("Failed to wait for GPU to come idle") if work was submitted
+    /// meanwhile, as when the display cache fills from other threads after an image opens.
+    fn without_submissions<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.submissions.exclusive(f)
+    }
+
     /// Run `f`, capturing the GPU errors it causes on this thread (out of memory, validation,
     /// internal) as a [`RenderError`]. Without this, wgpu's default handler panics, possibly
     /// while a lock is held. A captured error takes precedence over the result of `f`, which
@@ -1089,7 +1128,7 @@ impl Renderer {
         if let Some(pass) = pass {
             // The tiles the frame reads stay resident only until it is submitted: submit it
             // first, so that the overlay's uploads cannot replace them under it.
-            self.queue.submit([encoder.finish()]);
+            self.submit(encoder.finish());
             encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1098,7 +1137,7 @@ impl Renderer {
             self.record_selection_pass(&mut encoder, frame, pass, tiles);
         }
         finish(&mut encoder, frame.pixels);
-        self.queue.submit([encoder.finish()]);
+        self.submit(encoder.finish());
     }
 
     /// Quick Mask and Select and Mask's views (ADR 0024): the unselected area of the frame
@@ -2598,6 +2637,34 @@ mod tests {
         assert_eq!(r.capture_errors(|| Ok(7)).unwrap(), 7);
         // The device still works.
         view(&r, &Document::new(Size::new(64, 32))).unwrap();
+    }
+
+    /// Regression: configuring the window surface failed ("Failed to wait for GPU to come idle")
+    /// when another thread submitted work meanwhile, as the display cache did after an image
+    /// opened. Surfaces need a window: this checks that submissions wait for the configuration.
+    #[test]
+    fn submissions_wait_while_a_surface_is_configured() {
+        let Some(r) = renderer() else { return };
+        let (sent, received) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let submitted_meanwhile = r.without_submissions(|| {
+                scope.spawn(|| {
+                    let encoder = r
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                    r.submit(encoder.finish());
+                    sent.send(()).expect("the test waits for the submission");
+                });
+                received.recv_timeout(Duration::from_millis(200)).is_ok()
+            });
+            assert!(
+                !submitted_meanwhile,
+                "work was submitted during the configuration"
+            );
+            received
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the submission goes through once the surface is configured");
+        });
     }
 
     /// Regression: a panic while the tile caches were locked poisoned the lock, and every later

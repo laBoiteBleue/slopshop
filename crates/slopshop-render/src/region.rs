@@ -420,7 +420,7 @@ impl Renderer {
         }
         encoder.copy_buffer_to_buffer(&buffers.output, 0, &buffers.readback, 0, bytes);
         encoder.copy_buffer_to_buffer(&buffers.counter, 0, &buffers.readback, bytes, COUNTER_BYTES);
-        self.queue.submit([encoder.finish()]);
+        self.submit(encoder.finish());
 
         let (tx, rx) = mpsc::channel();
         buffers.readback.slice(..bytes + COUNTER_BYTES).map_async(

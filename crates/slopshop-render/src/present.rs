@@ -229,7 +229,7 @@ impl Renderer {
                 },
             );
         }
-        self.queue.submit([encoder.finish()]);
+        self.submit(encoder.finish());
         self.queue.present(frame);
         Ok(true)
     }
@@ -244,23 +244,27 @@ impl Renderer {
                 size.width, size.height
             )));
         }
-        self.capture_errors(|| {
-            presenter.surface.configure(
-                &self.device,
-                &wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
-                    format: SURFACE_FORMAT,
-                    color_space: wgpu::SurfaceColorSpace::Auto,
-                    width: size.width,
-                    height: size.height,
-                    present_mode: wgpu::PresentMode::AutoVsync,
-                    // One frame queued at most: input-to-screen latency over throughput.
-                    desired_maximum_frame_latency: 1,
-                    alpha_mode: presenter.alpha_mode,
-                    view_formats: Vec::new(),
-                },
-            );
-            Ok(())
+        // The display cache, filters and statistics submit work from other threads: they wait.
+        self.without_submissions(|| {
+            self.capture_errors(|| {
+                presenter.surface.configure(
+                    &self.device,
+                    &wgpu::SurfaceConfiguration {
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::COPY_DST,
+                        format: SURFACE_FORMAT,
+                        color_space: wgpu::SurfaceColorSpace::Auto,
+                        width: size.width,
+                        height: size.height,
+                        present_mode: wgpu::PresentMode::AutoVsync,
+                        // One frame queued at most: input-to-screen latency over throughput.
+                        desired_maximum_frame_latency: 1,
+                        alpha_mode: presenter.alpha_mode,
+                        view_formats: Vec::new(),
+                    },
+                );
+                Ok(())
+            })
         })?;
         presenter.configured = Some(size);
         presenter.stale = false;
