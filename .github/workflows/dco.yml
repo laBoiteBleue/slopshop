@@ -1,0 +1,41 @@
+name: DCO
+
+# Every commit of an outside pull request carries a `Signed-off-by:` line matching its author,
+# certifying the Developer Certificate of Origin (DCO file, ADR 0033). The repository owner's
+# pull requests and bots are exempt.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    name: Sign-off
+    if: >-
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for commit in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            author=$(git log -1 --format='%an <%ae>' "$commit")
+            if ! git log -1 --format='%B' "$commit" | grep -qiF "Signed-off-by: $author"; then
+              echo "::error::$(git log -1 --format='%h %s' "$commit"): no 'Signed-off-by: $author'"
+              missing=1
+            fi
+          done
+          if [ "$missing" = 1 ]; then
+            echo "Sign off each commit with 'git commit -s' (see CONTRIBUTING.md); to fix the"
+            echo "existing ones: git rebase --signoff origin/main, then force-push the branch."
+            exit 1
+          fi
