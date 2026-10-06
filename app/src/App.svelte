@@ -2280,6 +2280,14 @@
    */
   let selectionsCombination = $state.raw<Combination | null>(null);
 
+  /**
+   * A layer's pixels (its transparency) or its mask as the selection, by `mode`: Ctrl+click on
+   * its thumbnail, or Select > Load Selection.
+   */
+  function loadLayerPixels(layerId: number, mask: boolean, mode: SelectionMode) {
+    if (active) selectionCommand((id) => engine.selectLayerPixels(id, layerId, mask, mode));
+  }
+
   /** A saved selection loaded into the image (`mode`: Shift adds, Alt subtracts, both intersect). */
   async function loadSavedSelection(id: number, mode: SelectionMode) {
     const doc = active;
@@ -5025,10 +5033,27 @@
           {
             kind: "submenu",
             label: t("menu.select.load"),
-            disabled: !doc || doc.savedSelections.length === 0,
-            items: (doc?.savedSelections ?? []).map((saved) =>
-              cmd(saved.name, () => selectionCommand((id) => engine.loadSelection(id, saved.id))),
-            ),
+            disabled: !doc,
+            // The active layer's transparency or mask (as Ctrl+click on its thumbnails), then
+            // the saved selections.
+            items: [
+              cmd(
+                t("menu.select.load.transparency"),
+                () => activeLayer && loadLayerPixels(activeLayer.id, false, "replace"),
+                undefined,
+                !activeLayer || activeLayer.kind === "adjustment",
+              ),
+              cmd(
+                t("menu.select.load.mask"),
+                () => activeLayer && loadLayerPixels(activeLayer.id, true, "replace"),
+                undefined,
+                !activeLayer?.mask,
+              ),
+              ...(doc && doc.savedSelections.length > 0 ? [separator] : []),
+              ...(doc?.savedSelections ?? []).map((saved) =>
+                cmd(saved.name, () => selectionCommand((id) => engine.loadSelection(id, saved.id))),
+              ),
+            ],
           },
           separator,
           item("selectAllLayers"),
@@ -5710,10 +5735,7 @@
             onfillcolor={pickFillLayerColor}
             onstyle={openStyle}
             onentryedit={openEntry}
-            onloadpixels={(layerId, mask, mode) => {
-              if (active)
-                selectionCommand((id) => engine.selectLayerPixels(id, layerId, mask, mode));
-            }}
+            onloadpixels={loadLayerPixels}
           />
         {/key}
         <PanelDock

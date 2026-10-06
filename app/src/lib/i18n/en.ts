@@ -304,6 +304,8 @@ const en = {
   "menu.select.transform": "Transform Selection",
   "menu.select.save": "Save Selection…",
   "menu.select.load": "Load Selection",
+  "menu.select.load.transparency": "Layer Transparency",
+  "menu.select.load.mask": "Layer Mask",
   "saveSelection.title": "Save Selection",
   "saveSelection.name": "Name:",
   "saveSelection.default": "Selection {n}",

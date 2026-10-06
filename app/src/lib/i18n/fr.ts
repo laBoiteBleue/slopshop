@@ -307,6 +307,8 @@ const fr: Messages = {
   "menu.select.transform": "Transformer la sélection",
   "menu.select.save": "Mémoriser la sélection…",
   "menu.select.load": "Récupérer la sélection",
+  "menu.select.load.transparency": "Transparence du calque",
+  "menu.select.load.mask": "Masque de fusion du calque",
   "saveSelection.title": "Mémoriser la sélection",
   "saveSelection.name": "Nom :",
   "saveSelection.default": "Sélection {n}",

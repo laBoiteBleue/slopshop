@@ -317,25 +317,58 @@ test("Select > Save Selection names it; Load Selection lists the saved ones and 
   await user.hover(screen.getByText("Load Selection", { selector: ".label" }));
   const nested = () =>
     [...document.querySelectorAll(".dropdown.nested .label")].map((el) => el.textContent);
-  await vi.waitFor(() => expect(nested()).toEqual(["Hair", "Selection 1"]));
+  await vi.waitFor(() =>
+    expect(nested()).toEqual(["Layer Transparency", "Layer Mask", "Hair", "Selection 1"]),
+  );
   await user.click(screen.getByText("Hair", { selector: ".label" }));
   await vi.waitFor(() =>
     expect(sent("load_selection")).toEqual([{ documentId: 1, id: 4, mode: "replace" }]),
   );
 });
 
-test("Load Selection waits for a saved selection", async () => {
+test("Save Selection waits for a selection", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
   await screen.findByText("cat.jpg");
   await user.click(screen.getByRole("menuitem", { name: "Select" }));
-  const load = screen
-    .getByText("Load Selection", { selector: ".label" })
-    .closest("[role=menuitem]");
-  expect(load).toHaveAttribute("aria-disabled", "true");
   const save = screen
     .getByText("Save Selection…", { selector: ".label" })
     .closest("[role=menuitem]");
   expect(save).toHaveAttribute("aria-disabled", "true");
+});
+
+test("Load Selection loads the active layer's transparency; its mask needs one", async () => {
+  respond("select_layer_pixels", (_, doc) => ({ ...doc, selectionKey: 8 }));
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.hover(screen.getByText("Load Selection", { selector: ".label" }));
+  const entry = async (name: string) =>
+    (await screen.findByText(name, { selector: ".label" })).closest("[role=menuitem]");
+  // No mask, and no saved selection to list.
+  expect(await entry("Layer Mask")).toHaveAttribute("aria-disabled", "true");
+  const transparency = await entry("Layer Transparency");
+  expect(transparency).not.toHaveAttribute("aria-disabled", "true");
+  await user.click(transparency as HTMLElement);
+  await vi.waitFor(() =>
+    expect(sent("select_layer_pixels")).toEqual([
+      { documentId: 1, layerId: 1, mask: false, mode: "replace" },
+    ]),
+  );
+});
+
+test("Load Selection loads the active layer's mask", async () => {
+  respond("select_layer_pixels", (_, doc) => ({ ...doc, selectionKey: 8 }));
+  const masked = { ...layer(1, "Cat"), mask: { enabled: true, contentKey: 3 } };
+  const user = open(documentView(1, "cat.jpg", [masked]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.hover(screen.getByText("Load Selection", { selector: ".label" }));
+  await user.click(await screen.findByText("Layer Mask", { selector: ".label" }));
+  await vi.waitFor(() =>
+    expect(sent("select_layer_pixels")).toEqual([
+      { documentId: 1, layerId: 1, mask: true, mode: "replace" },
+    ]),
+  );
 });
 
 test("Select and Mask opens on the selection, shows it live, and outputs it", async () => {
