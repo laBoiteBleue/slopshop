@@ -13,6 +13,8 @@ use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
 use wgpu::util::DeviceExt;
 
+use crate::SubmissionGate;
+
 /// The farthest a pixel's result reads, in pixels on each side.
 const MAX_REACH: u32 = 1024;
 
@@ -24,6 +26,7 @@ const WORKGROUP: u32 = 16;
 pub(crate) struct GpuFilter {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    submissions: SubmissionGate,
     layout: wgpu::BindGroupLayout,
     rows: wgpu::ComputePipeline,
     columns: wgpu::ComputePipeline,
@@ -52,7 +55,11 @@ struct LookBuffers {
 const KEPT_LOOKS: usize = 2;
 
 impl GpuFilter {
-    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        submissions: SubmissionGate,
+    ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filter"),
             source: wgpu::ShaderSource::Wgsl(include_str!("filter.wgsl").into()),
@@ -104,6 +111,7 @@ impl GpuFilter {
         Self {
             device: device.clone(),
             queue: queue.clone(),
+            submissions,
             layout,
             rows: pipeline("rows_main"),
             columns: pipeline("columns_main"),
@@ -329,7 +337,7 @@ impl GpuFilter {
             }
         }
         encoder.copy_buffer_to_buffer(output, 0, readback, 0, bytes);
-        self.queue.submit([encoder.finish()]);
+        self.submissions.submit(&self.queue, encoder.finish());
         let slice = readback.slice(..);
         let (tx, rx) = mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

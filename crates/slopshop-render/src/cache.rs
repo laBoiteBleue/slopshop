@@ -510,7 +510,7 @@ impl Renderer {
                         &caches.tiles,
                         timing.take(),
                     );
-                    self.queue.submit([encoder.finish()]);
+                    self.submit(encoder.finish());
                 }
                 return None;
             };
