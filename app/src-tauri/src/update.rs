@@ -240,7 +240,10 @@ mod tests {
         };
         let bundle = read("tauri.bundle.conf.json");
         let updater = &bundle["plugins"][PLUGIN];
-        assert!(updater["pubkey"].as_str().is_some_and(|k| !k.is_empty()));
+        // A minisign public key: "untrusted comment: minisign public key:…", in base64.
+        assert!(updater["pubkey"].as_str().is_some_and(|k| {
+            k.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6")
+        }));
         let endpoint = updater["endpoints"][0].as_str().unwrap();
         assert_eq!(
             endpoint,
