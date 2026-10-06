@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/laBoiteBleue/slopshop/discussions
+    about: Ask a question or discuss an idea before it becomes a proposal.
+  - name: Security vulnerability
+    url: https://github.com/laBoiteBleue/slopshop/security/advisories/new
+    about: Report security problems privately, not in a public issue.
