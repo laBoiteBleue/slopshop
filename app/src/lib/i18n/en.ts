@@ -472,6 +472,7 @@ const en = {
   "menu.help.keyboardShortcuts": "Keyboard Shortcuts",
   "menu.help.reportBug": "Report a Bug",
   "menu.help.contribute": "Contribute to SlopShop",
+  "menu.help.checkForUpdates": "Check for Updates…",
   "menu.help.about": "About SlopShop",
   "key.shift": "Shift",
   "key.alt": "Alt",
@@ -1186,6 +1187,8 @@ const en = {
   "preferences.ai.intro":
     "The AI features run on this computer. Their components are downloaded once, from their publishers, when a feature first needs them.",
   "preferences.close": "Close",
+  "preferences.updates": "Updates",
+  "preferences.updates.automatic": "Check for updates after startup (at most once a day)",
   "ai.unsupported": "AI features are not available on this system yet.",
   "ai.installed": "Installed, {size}",
   "ai.notInstalled": "Not installed, {size} to download",
@@ -1224,6 +1227,27 @@ const en = {
   "ai.component.birefnet": "BiRefNet: select the subject",
   "ai.error.start": "The AI engine could not start: {detail}",
   "ai.error.model": "The AI model failed: {detail}",
+  "update.available": "Update {version}",
+  "update.title": "SlopShop {version} is available",
+  "update.current": "You have version {version}.",
+  "update.notes": "What’s new",
+  "update.progress": "{done} of {total}",
+  "update.install": "Install and Restart",
+  "update.later": "Later",
+  "update.cancel": "Cancel",
+  "update.check.title": "Updates",
+  "update.upToDate": "SlopShop is up to date.",
+  "update.unsaved":
+    "Some documents have unsaved changes: {names}. Install the update without saving them?",
+  "update.discard": "Install without saving",
+  "update.error.network":
+    "The update server could not be reached ({detail}). Check the connection and try again.",
+  "update.error.signature":
+    "The downloaded update failed its signature check and was not installed ({detail}).",
+  "update.error.exporting": "Exports are running: install the update once they have finished.",
+  "update.error.busy": "The update is already being downloaded.",
+  "update.error.unsupported": "This copy of SlopShop does not update itself.",
+  "update.error.failed": "The update failed: {detail}",
 } satisfies Record<string, string>;
 
 export default en;

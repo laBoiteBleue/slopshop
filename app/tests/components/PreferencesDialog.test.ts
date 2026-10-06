@@ -28,16 +28,20 @@ function component(id: string, installed: boolean): AiComponent {
 let components: AiComponent[] | null;
 let calls: [string, Record<string, unknown> | undefined][];
 let removal: unknown;
+/** Whether this build updates itself. */
+let updatable: boolean;
 
 beforeEach(() => {
   localStorage.clear();
   components = [component("sam2.1-tiny", true), component("birefnet-lite", false)];
   calls = [];
   removal = undefined;
+  updatable = false;
   mockIPC((cmd, payload) => {
     const args = payload as Record<string, unknown> | undefined;
     calls.push([cmd, args]);
     if (cmd === "ai_components") return components;
+    if (cmd === "update_supported") return updatable;
     if (cmd === "ai_remove") {
       if (removal) throw removal;
       components =
@@ -137,6 +141,28 @@ test("a platform without AI says so, with nothing to download", async () => {
     await screen.findByText("AI features are not available on this system yet."),
   ).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Download…" })).not.toBeInTheDocument();
+});
+
+test("builds that do not update themselves have no Updates section", async () => {
+  open();
+  await screen.findByText("SAM 2.1 tiny: object selection");
+  expect(calls.map(([cmd]) => cmd)).toContain("update_supported");
+  expect(screen.queryByRole("heading", { name: "Updates" })).not.toBeInTheDocument();
+});
+
+test("the automatic check for updates is on at first, and turning it off is remembered", async () => {
+  updatable = true;
+  const { user } = open();
+  const automatic = await screen.findByRole("checkbox", {
+    name: "Check for updates after startup (at most once a day)",
+  });
+  expect(automatic).toBeChecked();
+  await user.click(automatic);
+  expect(automatic).not.toBeChecked();
+  expect(JSON.parse(localStorage.getItem("slopshop.updates") ?? "null")).toEqual({
+    automatic: false,
+    lastCheck: null,
+  });
 });
 
 test("Close and Escape close it, but not behind the download dialog", async () => {
