@@ -14,3 +14,5 @@ Quick reminders:
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, and `npm run format && npm run check` in `app/`.
 - Significant decisions go in `docs/adr/`.
+- Contributors: sign off every commit (`git commit -s`, the DCO) and follow
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).
