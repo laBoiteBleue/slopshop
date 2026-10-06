@@ -23,6 +23,7 @@ mod recent;
 mod refine;
 mod segment;
 mod selection;
+mod update;
 mod vector;
 
 use std::collections::HashMap;
@@ -483,6 +484,8 @@ struct AppState {
     /// The paint stroke under way (see the `paint` module).
     paint: paint::PaintState,
     recent: recent::RecentFiles,
+    /// The update found and its download (see the `update` module).
+    update: update::UpdateState,
 }
 
 impl AppState {
@@ -507,6 +510,7 @@ impl AppState {
             quick: selection::QuickState::default(),
             paint: paint::PaintState::default(),
             recent: recent::RecentFiles::default(),
+            update: update::UpdateState::default(),
         }
     }
 
@@ -2154,6 +2158,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .setup(|app| {
+            update::register(app.handle())?;
             if app.state::<AppState>().requested_presenter == PresenterMode::Window {
                 // The engine draws the canvas area under the webview: let it show through.
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -2257,6 +2262,10 @@ pub fn run() {
             ai::ai_install,
             ai::ai_cancel_install,
             ai::ai_remove,
+            update::update_supported,
+            update::update_check,
+            update::update_install,
+            update::update_cancel,
             ai::ai_open_license,
             segment::ai_object_hover,
             segment::ai_object_select,
