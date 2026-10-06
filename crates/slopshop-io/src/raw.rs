@@ -51,12 +51,20 @@ pub(crate) fn decode(path: &Path) -> Result<Decoded, ImportError> {
     let helper = helper().ok_or_else(|| {
         ImportError::Decode("camera RAW: the slopshop-raw helper was not found".into())
     })?;
-    let mut child = Command::new(helper)
+    let mut command = Command::new(helper);
+    command
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// No console window opens over a windowless editor.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn()?;
     let decoded = child
         .stdout
         .take()
