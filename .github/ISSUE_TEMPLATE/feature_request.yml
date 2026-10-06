@@ -1,0 +1,35 @@
+name: Feature proposal
+description: Propose a feature, or offer to implement one.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before proposing a feature, look it up in
+        the [feature map](https://github.com/laBoiteBleue/slopshop/blob/main/docs/feature-map.md):
+        it may be planned already, wait for an engine feature, or be left out on purpose.
+  - type: textarea
+    id: need
+    attributes:
+      label: The need
+      description: What you want to do, and why the current tools do not let you.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: >
+        How it could work for the user. If you want to implement it, how you would do it:
+        SlopShop is non-destructive (every change is an undoable edit, original pixels stay
+        intact) and image logic lives in the Rust engine, never in the UI.
+  - type: dropdown
+    id: implement
+    attributes:
+      label: Would you like to implement it?
+      options:
+        - "No, just proposing"
+        - "Yes, with guidance"
+        - "Yes"
+    validations:
+      required: true
