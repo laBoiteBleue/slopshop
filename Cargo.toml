@@ -14,7 +14,7 @@ members = [
 # SlopShop's version, and the only place it is written: every crate, the application (Tauri
 # reads it, tauri.conf.json has none) and its About dialog take it from here. A release changes
 # this line, then `cargo update --workspace` (see docs/releasing.md).
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.93"
 license = "GPL-3.0-only"
