@@ -27,13 +27,14 @@ function layer(id: number, changes: Partial<LayerView> = {}): LayerView {
   };
 }
 
-test("Rasterize applies to fills, groups and pixel layers carrying paint or effects", () => {
+test("Rasterize applies to fills, vector layers, groups and pixel layers carrying paint or effects", () => {
   assert.equal(canRasterize([layer(1)]), false);
   assert.equal(canRasterize([layer(1, { kind: "adjustment" })]), false);
   assert.equal(canRasterize([layer(1), layer(2, { painted: true })]), true);
   assert.equal(canRasterize([layer(1, { kind: "fill" })]), true);
   assert.equal(canRasterize([layer(1, { kind: "gradientFill" })]), true);
   assert.equal(canRasterize([layer(1, { kind: "group" })]), true);
+  assert.equal(canRasterize([layer(1, { kind: "vector" })]), true);
 });
 
 test("Ctrl+E merges several layers, or one down onto the visible layer below it", () => {

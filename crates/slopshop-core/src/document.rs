@@ -962,6 +962,11 @@ fn validate_restored(
         {
             return Err(RestoreError::InvalidAdjustment(id));
         }
+        if let LayerContent::Vector { source, .. } = &layer.content
+            && !source.shape().is_valid()
+        {
+            return Err(RestoreError::InvalidShape(id));
+        }
         if let Some(mask) = &layer.mask
             && (!LayerMask::is_valid_image(&mask.image)
                 || mask.original.as_ref().is_some_and(|o| {
@@ -1006,6 +1011,8 @@ pub enum RestoreError {
     InvalidColor(LayerId),
     /// An adjustment with parameters out of range (ADR 0020).
     InvalidAdjustment(LayerId),
+    /// A vector shape that is not valid (ADR 0041).
+    InvalidShape(LayerId),
     /// A mask that is not a gray image.
     InvalidMask(LayerId),
     /// A group nested deeper than [`MAX_GROUP_DEPTH`].
@@ -1041,6 +1048,7 @@ impl fmt::Display for RestoreError {
             RestoreError::InvalidAdjustment(id) => {
                 write!(f, "{id} has adjustment parameters out of range")
             }
+            RestoreError::InvalidShape(id) => write!(f, "{id} has an invalid shape"),
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
             RestoreError::InvalidTransform(id) => {
                 write!(f, "{id} has a transform that is not finite and invertible")

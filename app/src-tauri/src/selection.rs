@@ -1278,8 +1278,16 @@ pub(crate) fn mask_size(
             let inverse = to_document
                 .inverse()
                 .ok_or("a layer transform is not invertible")?;
-            let [_, _, x1, y1] =
+            let [_, _, mut x1, mut y1] =
                 inverse.map_rect([0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)]);
+            // A shape reaching beyond the canvas keeps showing there (ADR 0041).
+            if let LayerContent::Vector { source, .. } = &layer.content
+                && let Some([_, _, sx1, sy1]) =
+                    slopshop_core::shape::path::shape_bounds(source.shape())
+            {
+                x1 = x1.max(sx1);
+                y1 = y1.max(sy1);
+            }
             let side = |v: f64| v.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
             Ok(Size::new(side(x1), side(y1)))
         }
@@ -1516,5 +1524,47 @@ mod tests {
             selection::sample_grid(&from, all, 600, 300)
         );
         assert_eq!(selection::bounds(&from), Some(all));
+    }
+
+    #[test]
+    fn a_vector_layers_mask_reaches_as_far_as_its_shape() {
+        use slopshop_core::shape::{Geometry, Paint, Shape, ShapeSource};
+        use slopshop_core::{BlendMode, Edit, Layer, LayerContent, Projective};
+        let mut doc = slopshop_core::Document::new(Size::new(100, 80));
+        let id = doc.allocate_layer_id();
+        let shape = |rect| {
+            LayerContent::vector(ShapeSource::new(
+                Shape {
+                    geometry: Geometry::Rectangle {
+                        rect,
+                        radii: [0.0; 4],
+                    },
+                    fill: Some(Paint::Solid(LinearRgba::new(1.0, 0.0, 0.0, 1.0))),
+                    stroke: None,
+                },
+                "",
+            ))
+        };
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "shape".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: shape([50.0, 10.0, 150.5, 60.0]),
+                mask: None,
+                clipped: false,
+                transform: Projective::IDENTITY,
+                style: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        // Beyond the canvas on the right: the mask covers it there too.
+        let layer = doc.layer(id).unwrap();
+        assert_eq!(mask_size(&doc, layer).unwrap(), Size::new(151, 80));
     }
 }

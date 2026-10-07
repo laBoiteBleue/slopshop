@@ -2946,6 +2946,11 @@
    * where they are (floating pixels). With `pixels` and a selection, its pixels float first
    * (Edit > Free Transform, see `floatSelection`).
    */
+  /** Pixel and vector layers go in perspective (ADR 0038, 0041). */
+  function distortable(layer: LayerView | null | undefined): boolean {
+    return layer?.kind === "raster" || layer?.kind === "vector";
+  }
+
   async function startFreeTransform(
     place: { ids: number[]; at: [number, number] | null; insertions: number } | null = null,
     pixels = false,
@@ -2993,7 +2998,7 @@
       quad: null,
       mode,
       // Only pixel layers are put in perspective (ADR 0038).
-      distortable: ids.every((id) => findLayer(doc.layers, id)?.kind === "raster"),
+      distortable: ids.every((id) => distortable(findLayer(doc.layers, id))),
       placed,
       selection: false,
     };
@@ -4802,18 +4807,19 @@
             items: [
               item("repeatTransform"),
               separator,
-              // Pixel layers only (ADR 0038): in the box, a corner's plain drag distorts.
+              // Pixel and vector layers only (ADR 0038, 0041): in the box, a corner's plain
+              // drag distorts.
               cmd(
                 t("menu.edit.transform.distort"),
                 () => void startFreeTransform(null, false, "distort"),
                 undefined,
-                activeLayer?.kind !== "raster",
+                !distortable(activeLayer),
               ),
               cmd(
                 t("menu.edit.transform.perspective"),
                 () => void startFreeTransform(null, false, "perspective"),
                 undefined,
-                activeLayer?.kind !== "raster",
+                !distortable(activeLayer),
               ),
               separator,
               cmd(

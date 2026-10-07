@@ -444,4 +444,43 @@ mod tests {
         assert!(close(at(&doc, 20, 16), [1.0, 0.0, 0.0, 1.0]));
         assert!(close(at(&doc, 4, 16), [0.0; 4]));
     }
+
+    #[test]
+    fn a_layer_with_an_invalid_shape_is_not_inserted_nor_restored() {
+        let mut doc = document();
+        let bad = ShapeSource::new(rectangle([10.0, 0.0, 0.0, 16.0], Some(RED), None), "");
+        let id = doc.allocate_layer_id();
+        let layer = Layer {
+            id,
+            name: "bad".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            content: LayerContent::vector(bad),
+            mask: None,
+            clipped: false,
+            transform: Projective::IDENTITY,
+            style: None,
+        };
+        assert_eq!(
+            Edit::InsertLayer {
+                parent: None,
+                index: 0,
+                layer: layer.clone(),
+            }
+            .apply(&mut doc)
+            .err(),
+            Some(crate::edit::EditError::InvalidShape)
+        );
+        assert!(matches!(
+            Document::restore(
+                Size::new(64, 64),
+                crate::color::WORKING_SPACE,
+                BlendSpace::Linear,
+                vec![layer],
+                id.get() + 1,
+            ),
+            Err(crate::document::RestoreError::InvalidShape(_))
+        ));
+    }
 }

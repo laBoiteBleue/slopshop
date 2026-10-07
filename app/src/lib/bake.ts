@@ -4,10 +4,11 @@
 import type { LayerView } from "./engine";
 import { childrenOf, outermost, type LayerTree } from "./layerTree";
 
-/** A solid color or gradient fill layer. */
-const isFill = (l: LayerView) => l.kind === "fill" || l.kind === "gradientFill";
+/** A solid color or gradient fill layer, or a vector layer: no pixels of its own. */
+const isFill = (l: LayerView) =>
+  l.kind === "fill" || l.kind === "gradientFill" || l.kind === "vector";
 
-/** Rasterize applies to a fill, a group, or a pixel layer carrying paint or effects. */
+/** Rasterize applies to a fill, a vector layer, a group, or a pixel layer carrying paint or effects. */
 export function canRasterize(layers: LayerView[]): boolean {
   return layers.some((l) => isFill(l) || l.kind === "group" || l.painted);
 }
