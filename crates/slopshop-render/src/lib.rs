@@ -1439,6 +1439,7 @@ fn start_stack_evaluations(document: &Document, looks: &Looks, start: bool) -> b
             && let LayerContent::Raster {
                 image,
                 stack: layer_stack,
+                ..
             } = &layer.content
             && (stack || image.ready_image().is_none())
         {
@@ -1470,6 +1471,7 @@ fn gather_looks(
         let LayerContent::Raster {
             image,
             stack: Some(stack),
+            ..
         } = &layer.content
         else {
             continue;
@@ -2704,6 +2706,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
@@ -2755,6 +2758,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
@@ -2795,6 +2799,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
@@ -2833,6 +2838,7 @@ mod tests {
         let layer = Layer {
             id: repainted.allocate_layer_id(),
             content: LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(painted.into()),
             },

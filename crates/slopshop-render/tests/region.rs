@@ -66,6 +66,7 @@ fn image(size: Size, format: PixelFormat, pixel: impl Fn(u32, u32) -> Vec<u8>) -
 
 fn raster(image: &Arc<RasterImage>) -> LayerContent {
     LayerContent::Raster {
+        source: None,
         stack: None,
         image: slopshop_core::stack::Pixels::ready(image.clone()),
     }

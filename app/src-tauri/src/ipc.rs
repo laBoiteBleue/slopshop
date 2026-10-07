@@ -1149,7 +1149,7 @@ impl EditRequest {
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         mask: None,
-                        content: LayerContent::raster(std::sync::Arc::new(image)),
+                        content: LayerContent::blank(std::sync::Arc::new(image)),
                     },
                 }
             }

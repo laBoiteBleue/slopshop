@@ -454,6 +454,7 @@ mod tests {
         let image =
             RasterImage::from_placed(Size::new(20, 20), format, rect, &pixels, &[0; 4]).unwrap();
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: crate::stack::Pixels::ready(Arc::new(image)),
         }

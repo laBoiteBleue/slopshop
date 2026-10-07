@@ -778,6 +778,7 @@ fn default_specs_follow_the_sources() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(p3),
             stack: None,
         },
@@ -794,6 +795,7 @@ fn default_specs_follow_the_sources() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(wide),
             stack: None,
         },
@@ -846,6 +848,7 @@ fn alpha_is_dropped_only_for_structurally_opaque_documents() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(small),
             stack: None,
         },
@@ -899,6 +902,7 @@ fn flattening_over_the_matte_equals_a_fill_below() {
         push_layer(
             &mut flattened_doc,
             LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.clone()),
             },
@@ -1166,6 +1170,7 @@ fn gray_documents_export_as_gray_by_default() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(gray),
             stack: None,
         },
@@ -1196,6 +1201,7 @@ fn gray_documents_export_as_gray_by_default() {
     push_layer(
         &mut doc,
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(rgb),
             stack: None,
         },
@@ -1264,6 +1270,7 @@ fn layered_document() -> Document {
         None,
         "Background",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(rgba(64, 48, &|x, y| {
                 [(x * 4) as u8, (y * 5) as u8, 120, 255]
@@ -1275,6 +1282,7 @@ fn layered_document() -> Document {
         None,
         "Moved \u{e9}toile",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(rgba(20, 16, &|x, y| {
                 [200, (x * 12) as u8, (y * 15) as u8, ((x + y) * 8) as u8]
@@ -1335,6 +1343,7 @@ fn layered_document() -> Document {
         Some(group),
         "Inside",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(rgba(30, 20, &|x, _| {
                 [30, 90, (x * 8) as u8, if x < 20 { 255 } else { 0 }]
@@ -1362,6 +1371,7 @@ fn layered_document() -> Document {
         None,
         "Hidden",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(rgba(8, 8, &|_, _| [255, 255, 255, 255])),
         },

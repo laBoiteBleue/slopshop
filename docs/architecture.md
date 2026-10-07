@@ -49,6 +49,10 @@ do not depend on each other: export receives its pixel source as a closure (see
   ([ADR 0017](adr/0017-non-destructive-transforms.md)) and an optional
   mask ([ADR 0014](adr/0014-layer-masks.md)); the document has a blend space. `revision`
   increases on every change.
+- `source`: what pixel layers show, kept once and referenced ([ADR 0040](adr/0040-sources.md)):
+  an immutable image with an identity and a name, shared by duplicated layers; a raster layer
+  holds its source, its own stack ([ADR 0029](adr/0029-layer-stack.md)) and, once it grew
+  around the source, where the source lies.
 - `resample`: how a transformed layer is sampled ([ADR 0018](adr/0018-resampling.md)): EWA
   with a Jinc-windowed Jinc kernel and anti-ringing, from the pyramid level matching the scale;
   computed per layer once, shared by the CPU compositor and the GPU (same kernel table).

@@ -10,6 +10,7 @@
 //! - [`selection`]: selections as coverage masks: shapes, combining, feather, outlines;
 //!   [`quick_select`]: Quick Selection by color (a minimum cut).
 //! - [`session`]: a document plus its undo/redo history.
+//! - [`source`]: what pixel layers show, kept once and referenced (ADR 0040).
 //! - [`stack`]: a raster layer's own stack of paint and applied effects (ADR 0029).
 //! - [`style`]: layer styles, effects drawn from a layer's shape (ADR 0032).
 //! - [`view`]: mapping between output (screen) pixels and document pixels.
@@ -55,6 +56,7 @@ pub mod raster;
 pub mod resample;
 pub mod selection;
 pub mod session;
+pub mod source;
 pub mod stack;
 pub mod style;
 pub mod thumbnail;
@@ -74,4 +76,5 @@ pub use geom::{Rect, Size};
 pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;
 pub use session::{Copies, HistoryLabel, Session};
+pub use source::{Source, SourceId};
 pub use transform::{Affine, Projective};

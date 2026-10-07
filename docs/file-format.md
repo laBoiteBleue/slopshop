@@ -244,11 +244,23 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   origin, possibly fractional or outside the canvas; at most 10 000 guides. Absent: none. An
   unknown `axis` is refused as made by a newer SlopShop. A writer of an older schema keeps
   them as an unknown field, without moving them when the canvas changes.
+  `sources` (0.26, [ADR 0040](adr/0040-sources.md)): what raster nodes show, kept once, each
+  `{ "name": "photo.jpg", "image": "b3:…" }` (`name` absent when nothing names it) and named
+  by its index in this list. Absent: none. Before schema 0.26, a reader gives each raster
+  node's original a source of its own, one per image (nodes of the same image share it),
+  named after the first node. A writer of an older schema drops the references and keeps the
+  list as an unknown field; a reader then ignores it, the file being of the older schema.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.
 - **Nodes** are keyed by id (decimal string). `type` and `version` select the parameters:
   - `slopshop.raster` v1 and v2: `params.image` is the key of an entry of `images`.
+    From schema 0.26, at any version, `params.source` is the index of its source in
+    `document.sources` (absent: a layer made empty, with none). Without a stack, the source's
+    image is `params.image`. A layer painted beyond its source grows around it: its original
+    (`params.image`) holds the source at `params.source_offset`, `[columns, rows]` of whole
+    tiles (absent: `[0, 0]`), within it, and its stack is written even without entries
+    (`"stack": []`). A missing source, or one outside the original, makes the file invalid.
   - `slopshop.fill` v1 and v2: `params.color` is a linear, straight-alpha RGBA color in the
     working space.
   - v2 (schema 0.2) adds `params.blend_mode`, one of `normal`, `darken`, `multiply`,

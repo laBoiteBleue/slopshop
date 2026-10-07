@@ -646,7 +646,7 @@ fn blank_session(
                 &[0, 0, 0, 0],
             )
             .map_err(|e| e.to_string())?;
-            LayerContent::raster(Arc::new(image))
+            LayerContent::blank(Arc::new(image))
         }
     };
     Ok(session_with_layer(size, layer_name, content))
@@ -654,10 +654,7 @@ fn blank_session(
 
 fn image_session(image: RasterImage, name: &str) -> Session {
     let size = image.size();
-    let content = LayerContent::Raster {
-        stack: None,
-        image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
-    };
+    let content = LayerContent::from_source(slopshop_core::Source::new(Arc::new(image), name));
     session_with_layer(size, name, content)
 }
 
@@ -1043,10 +1040,10 @@ fn insert_image(
                     opacity: 1.0,
                     blend_mode: BlendMode::Normal,
                     mask: None,
-                    content: LayerContent::Raster {
-                        stack: None,
-                        image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
-                    },
+                    content: LayerContent::from_source(slopshop_core::Source::new(
+                        Arc::new(image),
+                        layer_name,
+                    )),
                 },
             };
             session
@@ -2483,6 +2480,7 @@ mod tests {
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
                 content: LayerContent::Raster {
+                    source: None,
                     stack: None,
                     image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                 },
@@ -2721,7 +2719,7 @@ mod tests {
         let mut documents = state.documents().unwrap();
         let document = documents.get_mut(doc.id).unwrap();
         let layer = document.session.document().layer(id).unwrap().clone();
-        let LayerContent::Raster { image, stack } = &layer.content else {
+        let LayerContent::Raster { image, stack, .. } = &layer.content else {
             panic!("a raster layer");
         };
         let image = image.get();
@@ -2748,7 +2746,7 @@ mod tests {
             slopshop_core::Affine::translation(1000.0, 1000.0).into()
         );
         assert!(
-            matches!(&layer.content, LayerContent::Raster { image, stack: None }
+            matches!(&layer.content, LayerContent::Raster { image, stack: None, .. }
             if Arc::ptr_eq(&image.get(), &small))
         );
     }
@@ -2835,10 +2833,13 @@ mod tests {
         let mut documents = state.documents().unwrap();
         let document = documents.get_mut(doc.id).unwrap();
         let layer = document.session.document().layer(id).unwrap();
-        // The layer grew to the canvas at the first stroke: its pixels where they were.
-        let LayerContent::Raster { image, stack: None } = &layer.content else {
-            panic!("a raster layer without paint");
+        // The layer grew to the canvas at the first stroke: its pixels where they were, its
+        // stack empty but kept for where its source lies (ADR 0040).
+        let LayerContent::Raster { image, stack, .. } = &layer.content else {
+            panic!("a raster layer");
         };
+        assert!(stack.as_ref().is_some_and(|s| s.is_empty()));
+        assert!(!layer.is_painted());
         let image = image.get();
         let (x, y) = layer.transform.inverse().unwrap().apply(50.5, 50.5);
         let tile = image.levels()[0]
@@ -2893,6 +2894,7 @@ mod tests {
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         content: LayerContent::Raster {
+                            source: None,
                             stack: None,
                             image: slopshop_core::stack::Pixels::ready(Arc::clone(&pixels)),
                         },
@@ -2914,7 +2916,7 @@ mod tests {
         assert_eq!(mask.image.gray_at(150, 150), 1.0);
         assert!(mask.original.is_some());
         assert!(
-            matches!(&layer.content, LayerContent::Raster { image, stack: None }
+            matches!(&layer.content, LayerContent::Raster { image, stack: None, .. }
             if Arc::ptr_eq(&image.get(), &pixels))
         );
         // One undo entry.
@@ -4809,7 +4811,7 @@ mod tests {
             let mut documents = state.documents().unwrap();
             let document = documents.get_mut(doc.id).unwrap();
             let layer = document.session.document().layer(id).unwrap();
-            let LayerContent::Raster { image, stack } = &layer.content else {
+            let LayerContent::Raster { image, stack, .. } = &layer.content else {
                 panic!("a raster layer");
             };
             let original = stack.as_ref().unwrap().original().size();
@@ -4858,7 +4860,7 @@ mod tests {
             document.session.undo().unwrap();
         }
         let layer = document.session.document().layer(id).unwrap();
-        let LayerContent::Raster { image, stack } = &layer.content else {
+        let LayerContent::Raster { image, stack, .. } = &layer.content else {
             panic!("a raster layer");
         };
         assert_eq!((image.size(), stack.is_none()), (size, true));

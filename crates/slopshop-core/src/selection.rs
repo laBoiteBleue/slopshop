@@ -4106,6 +4106,7 @@ mod tests {
                 opacity: 1.0,
                 blend_mode: crate::blend::BlendMode::Normal,
                 content: LayerContent::Raster {
+                    source: None,
                     stack: None,
                     image: crate::stack::Pixels::ready(Arc::new(image)),
                 },

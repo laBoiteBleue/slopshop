@@ -436,9 +436,20 @@ impl Edit {
             }
             Edit::SetLayerStack { id, stack, shown } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
-                let LayerContent::Raster { image, stack: kept } = &mut layer.content else {
+                let LayerContent::Raster {
+                    source,
+                    image,
+                    stack: kept,
+                } = &mut layer.content
+                else {
                     return Err(EditError::NotRaster(id));
                 };
+                // Without entries, the stack goes unless the layer grew around its source
+                // (ADR 0040): it then keeps where the source lies.
+                let keep = !stack.is_empty()
+                    || source
+                        .as_ref()
+                        .is_some_and(|s| !Arc::ptr_eq(s.image(), stack.original()));
                 let before = kept
                     .clone()
                     .unwrap_or_else(|| crate::stack::LayerStack::new(image.get()));
@@ -464,7 +475,7 @@ impl Edit {
                     None => Pixels::pending(stack.clone(), Some((image.clone(), before.clone()))),
                 };
                 *image = shown;
-                *kept = (!stack.is_empty()).then_some(stack);
+                *kept = keep.then_some(stack);
                 Edit::SetLayerStack {
                     id,
                     stack: before,
@@ -776,10 +787,11 @@ impl Edit {
                 if let LayerContent::Raster {
                     stack: Some(stack), ..
                 } = &layer.content
+                    && !stack.is_empty()
                 {
                     edits.push(Edit::SetLayerStack {
                         id: layer.id,
-                        stack: crate::stack::LayerStack::new(Arc::clone(stack.original())),
+                        stack: stack.cleared(),
                         shown: Some(Arc::clone(stack.original())),
                     });
                 }
@@ -3378,7 +3390,7 @@ mod tests {
     /// What layer `id` shows and its stack.
     fn shown(doc: &Document, id: LayerId) -> (Arc<RasterImage>, Option<LayerStack>) {
         match &doc.layer(id).unwrap().content {
-            LayerContent::Raster { image, stack } => (image.get(), stack.clone()),
+            LayerContent::Raster { image, stack, .. } => (image.get(), stack.clone()),
             _ => panic!("a raster layer"),
         }
     }
@@ -3856,5 +3868,71 @@ mod tests {
         );
         // Not a Liquify entry.
         assert!(Edit::set_liquify(&doc, id, 0, pushed(size, 20.0), None).is_err());
+    }
+
+    #[test]
+    fn a_layer_grown_around_its_source_keeps_its_place_once_its_paint_is_deleted() {
+        let size = Size::new(300, 260);
+        let mut doc = Document::new(size);
+        let image = Arc::new(
+            RasterImage::from_placed(
+                size,
+                crate::color::PixelFormat::RGBA8_SRGB,
+                crate::geom::Rect::new(0, 0, 10, 10),
+                &[200u8, 10, 10, 255].repeat(100),
+                &[0; 4],
+            )
+            .unwrap(),
+        );
+        let source = crate::source::Source::new(Arc::clone(&image), "photo.png");
+        let mut layer = fill_layer(&mut doc, "photo");
+        layer.content = LayerContent::from_source(Arc::clone(&source));
+        let id = layer.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let t = crate::raster::TILE_SIZE;
+        let grown = LayerStack::new(Arc::clone(&image))
+            .with_effect(Effect {
+                adjustment: crate::adjust::Adjustment::Invert,
+                selection: None,
+                to_document: crate::transform::Projective::IDENTITY,
+                space: BlendSpace::Perceptual,
+            })
+            .unwrap()
+            .grown((1, 1), Size::new(300 + t, 260 + t))
+            .unwrap();
+        Edit::SetLayerStack {
+            id,
+            stack: grown,
+            shown: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(doc.layer(id).unwrap().is_painted());
+        Edit::delete_paint(&doc, &[id])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let layer = doc.layer(id).unwrap();
+        // Nothing applied any more, but the layer still knows where its source lies.
+        assert!(!layer.is_painted());
+        assert!(Arc::ptr_eq(layer.content.source().unwrap(), &source));
+        let LayerContent::Raster {
+            stack: Some(stack), ..
+        } = &layer.content
+        else {
+            panic!("a grown layer keeps its stack");
+        };
+        assert!(stack.is_empty());
+        assert_eq!(stack.source_offset(), (1, 1));
+        assert_eq!(
+            Edit::delete_paint(&doc, &[id]).map(|_| ()),
+            Err(EditError::NoLayers)
+        );
     }
 }

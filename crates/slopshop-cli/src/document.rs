@@ -60,10 +60,10 @@ pub fn save(args: &[String]) -> Result<(), String> {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             mask: None,
-            content: LayerContent::Raster {
-                stack: None,
-                image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
-            },
+            content: LayerContent::from_source(slopshop_core::Source::new(
+                Arc::new(image),
+                layer_name(input),
+            )),
         };
         Edit::InsertLayer {
             parent: None,
