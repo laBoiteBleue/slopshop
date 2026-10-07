@@ -59,9 +59,11 @@ export const PIXEL_GRID_ZOOM = 8;
 /**
  * Where the pixel grid is drawn, in the viewport's CSS pixels: the part of the canvas
  * (`width` × `height` document pixels) inside the viewport (`viewWidth` × `viewHeight`), its
- * cells `cell` wide, the first line at (`offsetX`, `offsetY`) from the area's corner (≤ 0);
- * null below [`PIXEL_GRID_ZOOM`] or with nothing in sight. Only the visible part: a whole
- * canvas at 800% would be a huge element.
+ * cells `cell` wide, a line at (`offsetX`, `offsetY`) from the area's corner (within one cell
+ * before it); null below [`PIXEL_GRID_ZOOM`] or with nothing in sight. Only the visible part:
+ * a whole canvas at 800% would be a huge element. The offset is that of the line nearest the
+ * corner, not of the canvas's edge: the webview places backgrounds in fixed point (1/64 px),
+ * and a fractional cell repeated from an edge thousands of cells away drifts off the pixels.
  */
 export function pixelGrid(
   view: View,
@@ -86,13 +88,16 @@ export function pixelGrid(
   const right = Math.min(x1, viewWidth);
   const bottom = Math.min(y1, viewHeight);
   if (right <= left || bottom <= top) return null;
+  const cell = view.zoom / dpr;
+  // The canvas's edge is at or before the corner: keep the line within one cell of it.
+  const phase = (edge: number) => (edge % cell === 0 ? 0 : edge % cell);
   return {
     left,
     top,
     width: right - left,
     height: bottom - top,
-    cell: view.zoom / dpr,
-    offsetX: x0 - left,
-    offsetY: y0 - top,
+    cell,
+    offsetX: phase(x0 - left),
+    offsetY: phase(y0 - top),
   };
 }
