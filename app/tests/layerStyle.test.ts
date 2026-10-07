@@ -150,3 +150,23 @@ test("Gradient Overlay comes black to white upward, aligned, between Color Overl
     ["colorOverlay", "gradientOverlay", "outerGlow"],
   );
 });
+
+test("Satin comes black, Multiply, 50 %, 19°, 11 and 14 pixels, inverted, under the overlays", () => {
+  assert.deepEqual(defaultEffect("satin"), {
+    enabled: true,
+    color: [0, 0, 0],
+    mode: "multiply",
+    opacity: 0.5,
+    angle: 19,
+    distance: 11,
+    size: 14,
+    invert: true,
+  });
+  let style = withEffect(null, "colorOverlay", true);
+  style = withEffect(style, "satin", true);
+  style = withEffect(style, "innerGlow", true);
+  assert.deepEqual(
+    effectsOf(style).map((e) => e.id),
+    ["innerGlow", "satin", "colorOverlay"],
+  );
+});

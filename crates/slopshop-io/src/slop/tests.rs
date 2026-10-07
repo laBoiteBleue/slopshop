@@ -1752,7 +1752,7 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
 }
 
 #[test]
-fn gradient_overlays_round_trip_on_every_kind_of_layer() {
+fn gradient_overlays_and_satins_round_trip_on_every_kind_of_layer() {
     use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
     use slopshop_core::style::{GradientOverlay, LayerStyle};
     let mut doc = golden_document();
@@ -1782,9 +1782,16 @@ fn gradient_overlays_round_trip_on_every_kind_of_layer() {
         opacity: 0.25,
         enabled: true,
     };
+    let satin = slopshop_core::style::Satin {
+        angle: 77.0,
+        distance: 13.5,
+        invert: false,
+        ..slopshop_core::style::Satin::default()
+    };
     for &id in &ids {
         let style = LayerStyle {
             gradient_overlay: Some(overlay),
+            satin: Some(satin),
             ..LayerStyle::default()
         };
         // Adjustment layers take no style.
@@ -1801,9 +1808,9 @@ fn gradient_overlays_round_trip_on_every_kind_of_layer() {
     let styled = loaded
         .all_layers()
         .filter(|l| {
-            l.style
-                .as_ref()
-                .is_some_and(|s| s.settings().gradient_overlay == Some(overlay))
+            l.style.as_ref().is_some_and(|s| {
+                s.settings().gradient_overlay == Some(overlay) && s.settings().satin == Some(satin)
+            })
         })
         .count();
     assert!(styled >= 3, "{styled}");

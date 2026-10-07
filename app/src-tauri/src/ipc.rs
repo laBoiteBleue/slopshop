@@ -192,7 +192,23 @@ pub struct StyleDto {
     /// Absent from requests of before: none.
     #[serde(default)]
     pub gradient_overlay: Option<GradientOverlayDto>,
+    /// Absent from requests of before: none.
+    #[serde(default)]
+    pub satin: Option<SatinDto>,
     pub stroke: Option<StrokeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SatinDto {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub mode: String,
+    pub opacity: f32,
+    pub angle: f64,
+    pub distance: f64,
+    pub size: f64,
+    pub invert: bool,
 }
 
 /// A Gradient Overlay: its gradient's stops as Gradient Map's (`[location 0–4096, r, g, b]`,
@@ -304,6 +320,16 @@ impl StyleDto {
                 mode: o.mode.id().to_owned(),
                 opacity: o.opacity,
             }),
+            satin: style.satin.map(|s| SatinDto {
+                enabled: s.enabled,
+                color: srgb(s.color),
+                mode: s.mode.id().to_owned(),
+                opacity: s.opacity,
+                angle: s.angle,
+                distance: s.distance,
+                size: s.size,
+                invert: s.invert,
+            }),
             gradient_overlay: style.gradient_overlay.map(|o| GradientOverlayDto {
                 enabled: o.enabled,
                 stops: gradient_stops(&o.gradient),
@@ -339,7 +365,7 @@ impl StyleDto {
     pub fn style(&self) -> Result<slopshop_core::style::LayerStyle, String> {
         use slopshop_core::selection::StrokeLocation;
         use slopshop_core::style::{
-            ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Stroke,
+            ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
         };
         let shadow = |s: &Option<DropShadowDto>| -> Result<Option<DropShadow>, String> {
             Ok(match s {
@@ -381,6 +407,19 @@ impl StyleDto {
                     color: working(o.color),
                     mode: mode(&o.mode)?,
                     opacity: o.opacity,
+                }),
+                None => None,
+            },
+            satin: match &self.satin {
+                Some(s) => Some(Satin {
+                    enabled: s.enabled,
+                    color: working(s.color),
+                    mode: mode(&s.mode)?,
+                    opacity: s.opacity,
+                    angle: s.angle,
+                    distance: s.distance,
+                    size: s.size,
+                    invert: s.invert,
                 }),
                 None => None,
             },

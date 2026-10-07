@@ -10,6 +10,7 @@ export type EffectId =
   | "stroke"
   | "innerShadow"
   | "innerGlow"
+  | "satin"
   | "colorOverlay"
   | "gradientOverlay"
   | "outerGlow"
@@ -20,6 +21,7 @@ export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
   { id: "stroke", label: "style.stroke" },
   { id: "innerShadow", label: "style.innerShadow" },
   { id: "innerGlow", label: "style.innerGlow" },
+  { id: "satin", label: "style.satin" },
   { id: "colorOverlay", label: "style.colorOverlay" },
   { id: "gradientOverlay", label: "style.gradientOverlay" },
   { id: "outerGlow", label: "style.outerGlow" },
@@ -35,6 +37,7 @@ export const PLAIN: LayerStyle = {
   innerGlow: null,
   colorOverlay: null,
   gradientOverlay: null,
+  satin: null,
   stroke: null,
 };
 
@@ -65,6 +68,16 @@ export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle
     outerGlow: { ...glow, color: [1, 1, 190 / 255] },
     innerGlow: { ...glow, color: [1, 1, 190 / 255] },
     colorOverlay: { enabled: true, color: [1, 0, 0], mode: "normal", opacity: 1 },
+    satin: {
+      enabled: true,
+      color: [0, 0, 0],
+      mode: "multiply",
+      opacity: 0.5,
+      angle: 19,
+      distance: 11,
+      size: 14,
+      invert: true,
+    },
     // Black to white from bottom to top, aligned with the layer.
     gradientOverlay: {
       enabled: true,

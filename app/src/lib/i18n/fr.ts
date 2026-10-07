@@ -804,6 +804,8 @@ const fr: Messages = {
   "style.fillOpacity": "Opacité du fond",
   "style.stroke": "Contour",
   "style.colorOverlay": "Incrustation couleur",
+  "style.satin": "Satin",
+  "style.invert": "Inverser",
   "style.gradientOverlay": "Incrustation en dégradé",
   "style.gradient": "Dégradé",
   "style.reverse": "Inverser",
