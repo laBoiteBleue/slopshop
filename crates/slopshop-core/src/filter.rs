@@ -49,6 +49,22 @@ pub const MAX_EMBOSS_AMOUNT: f32 = 500.0;
 pub const MIN_MOSAIC_CELL: f32 = 2.0;
 pub const MAX_MOSAIC_CELL: f32 = 200.0;
 
+/// Offset's range in pixels, either way (Photoshop's).
+pub const MAX_OFFSET: f32 = 30000.0;
+
+/// Twirl's angle range in degrees, either way (Photoshop's).
+pub const MAX_TWIRL: f32 = 999.0;
+
+/// What Offset brings in where the layer moved away (Photoshop's Undefined Areas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffsetEdge {
+    Transparent,
+    /// The edge's pixels repeated.
+    Repeat,
+    /// What went out on the other side.
+    Wrap,
+}
+
 /// Maximum's and Minimum's radius range in whole pixels (Photoshop's, Squareness): each pixel
 /// the largest (smallest) value of the square of `2 radius + 1` pixels around it.
 pub const MIN_EXTREME_RADIUS: f32 = 1.0;
@@ -147,6 +163,25 @@ pub enum Filter {
     /// Photoshop's Mosaic: square cells of `cell` pixels, from the layer's origin, each the
     /// average of its pixels.
     Mosaic { cell: f32 },
+    /// Photoshop's Offset: the layer's pixels moved by `horizontal`, `vertical` pixels, `edge`
+    /// what comes in.
+    Offset {
+        horizontal: f32,
+        vertical: f32,
+        edge: OffsetEdge,
+    },
+    /// Photoshop's Twirl: turned around the frame's center by `angle` degrees there, less and
+    /// less out to the frame's inscribed circle (clockwise for a positive angle).
+    Twirl { angle: f32 },
+    /// Photoshop's Pinch: squeezed toward the frame's center (a positive `amount`, percent) or
+    /// pushed out from it (negative), within the frame's inscribed circle.
+    Pinch { amount: f32 },
+    /// Photoshop's Spherize (Normal): as if wrapped around a sphere filling the frame's
+    /// inscribed ellipse, bulging (a positive `amount`, percent) or hollow (negative).
+    Spherize { amount: f32 },
+    /// Photoshop's Polar Coordinates: rectangular to polar (`to_polar`: the frame's top edge at
+    /// its center, its width around it) or back.
+    PolarCoordinates { to_polar: bool },
     /// Lightroom's Texture and Clarity (-100 to 100): each color pushed away from (or, below 0,
     /// toward) its blur of a few pixels by `texture`, and from its blur of tens of pixels by
     /// `clarity`, in the midtones. `scale` is how many of the layer's pixels a pixel it is
@@ -160,7 +195,7 @@ pub enum Filter {
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 15] = [
+    pub const IDS: [&'static str; 20] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -176,6 +211,11 @@ impl Filter {
         "emboss",
         "solarize",
         "mosaic",
+        "offset",
+        "twirl",
+        "pinch",
+        "spherize",
+        "polarCoordinates",
     ];
 
     /// The identifier the UI and files know it by.
@@ -196,6 +236,11 @@ impl Filter {
             Self::FindEdges => "findEdges",
             Self::Emboss { .. } => "emboss",
             Self::Mosaic { .. } => "mosaic",
+            Self::Offset { .. } => "offset",
+            Self::Twirl { .. } => "twirl",
+            Self::Pinch { .. } => "pinch",
+            Self::Spherize { .. } => "spherize",
+            Self::PolarCoordinates { .. } => "polarCoordinates",
         }
     }
 
@@ -236,6 +281,22 @@ impl Filter {
                 amount,
             } => vec![angle, height, amount],
             Self::Mosaic { cell } => vec![cell],
+            Self::Offset {
+                horizontal,
+                vertical,
+                edge,
+            } => vec![
+                horizontal,
+                vertical,
+                match edge {
+                    OffsetEdge::Transparent => 0.0,
+                    OffsetEdge::Repeat => 1.0,
+                    OffsetEdge::Wrap => 2.0,
+                },
+            ],
+            Self::Twirl { angle } => vec![angle],
+            Self::Pinch { amount } | Self::Spherize { amount } => vec![amount],
+            Self::PolarCoordinates { to_polar } => vec![f32::from(u8::from(to_polar))],
         }
     }
 
@@ -263,6 +324,24 @@ impl Filter {
                 amount,
             }),
             ("mosaic", &[cell]) => Some(Self::Mosaic { cell }),
+            ("offset", &[horizontal, vertical, edge]) => Some(Self::Offset {
+                horizontal,
+                vertical,
+                edge: match edge {
+                    0.0 => OffsetEdge::Transparent,
+                    1.0 => OffsetEdge::Repeat,
+                    2.0 => OffsetEdge::Wrap,
+                    _ => return None,
+                },
+            }),
+            ("twirl", &[angle]) => Some(Self::Twirl { angle }),
+            ("pinch", &[amount]) => Some(Self::Pinch { amount }),
+            ("spherize", &[amount]) => Some(Self::Spherize { amount }),
+            ("polarCoordinates", &[to_polar]) => match to_polar {
+                0.0 => Some(Self::PolarCoordinates { to_polar: false }),
+                1.0 => Some(Self::PolarCoordinates { to_polar: true }),
+                _ => None,
+            },
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
@@ -328,6 +407,15 @@ impl Filter {
                 amount: 100.0,
             }),
             "mosaic" => Some(Self::Mosaic { cell: 10.0 }),
+            "offset" => Some(Self::Offset {
+                horizontal: 0.0,
+                vertical: 0.0,
+                edge: OffsetEdge::Wrap,
+            }),
+            "twirl" => Some(Self::Twirl { angle: 50.0 }),
+            "pinch" => Some(Self::Pinch { amount: 50.0 }),
+            "spherize" => Some(Self::Spherize { amount: 100.0 }),
+            "polarCoordinates" => Some(Self::PolarCoordinates { to_polar: true }),
             _ => None,
         }
     }
@@ -397,6 +485,18 @@ impl Filter {
             Self::Mosaic { cell } => {
                 cell.fract() == 0.0 && (MIN_MOSAIC_CELL..=MAX_MOSAIC_CELL).contains(&cell)
             }
+            Self::Offset {
+                horizontal,
+                vertical,
+                ..
+            } => [horizontal, vertical]
+                .iter()
+                .all(|v| v.fract() == 0.0 && (-MAX_OFFSET..=MAX_OFFSET).contains(v)),
+            Self::Twirl { angle } => angle.is_finite() && (-MAX_TWIRL..=MAX_TWIRL).contains(&angle),
+            Self::Pinch { amount } | Self::Spherize { amount } => {
+                amount.is_finite() && (-100.0..=100.0).contains(&amount)
+            }
+            Self::PolarCoordinates { .. } => true,
         }
     }
 
@@ -417,7 +517,12 @@ impl Filter {
             | Self::Solarize
             | Self::FindEdges
             | Self::Emboss { .. }
-            | Self::Mosaic { .. } => None,
+            | Self::Mosaic { .. }
+            | Self::Offset { .. }
+            | Self::Twirl { .. }
+            | Self::Pinch { .. }
+            | Self::Spherize { .. }
+            | Self::PolarCoordinates { .. } => None,
         }
     }
 
@@ -493,6 +598,12 @@ impl Filter {
             Self::Mosaic { cell } => Self::Mosaic {
                 cell: (cell / factor).max(1.0),
             },
+            // Mapped in the layer's own pixels whatever the level (see [`Self::source`]).
+            Self::Offset { .. }
+            | Self::Twirl { .. }
+            | Self::Pinch { .. }
+            | Self::Spherize { .. }
+            | Self::PolarCoordinates { .. } => *self,
             Self::ClarityTexture {
                 texture,
                 clarity,
@@ -520,6 +631,12 @@ impl Filter {
             Self::FindEdges => 2.0,
             Self::Emboss { height, .. } => f64::from(height) + 2.0,
             Self::Mosaic { cell } => f64::from(cell) + 2.0,
+            // A pixel may read from anywhere in the layer.
+            Self::Offset { .. }
+            | Self::Twirl { .. }
+            | Self::Pinch { .. }
+            | Self::Spherize { .. }
+            | Self::PolarCoordinates { .. } => f64::INFINITY,
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
             }
@@ -590,11 +707,123 @@ impl Filter {
                 factor: 1,
                 kernel: Kernel::Cells(f64::from(cell)),
             },
+            // Sampled where [`Self::source`] says, not filtered by a kernel.
+            Self::Offset { .. }
+            | Self::Twirl { .. }
+            | Self::Pinch { .. }
+            | Self::Spherize { .. }
+            | Self::PolarCoordinates { .. } => Plan {
+                factor: 1,
+                kernel: Kernel::Identity,
+            },
             Self::ClarityTexture { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
             _ => Plan::gaussian(f64::from(self.blur_radius().unwrap_or(MIN_BLUR_RADIUS))),
+        }
+    }
+
+    /// Whether the filter moves pixels (a distortion): each pixel the layer sampled where
+    /// [`Self::source`] says, rather than filtered by a kernel.
+    pub fn samples(&self) -> bool {
+        matches!(
+            self,
+            Self::Offset { .. }
+                | Self::Twirl { .. }
+                | Self::Pinch { .. }
+                | Self::Spherize { .. }
+                | Self::PolarCoordinates { .. }
+        )
+    }
+
+    /// Where the pixel at layer point `p` (layer pixels) is read from, for a distortion of
+    /// `frame` (`[left, top, right, bottom]`: the selection's box within the layer, or the
+    /// layer) on a layer of `layer` pixels (width, height); `None`: nothing (transparent).
+    pub fn source(&self, p: [f64; 2], frame: [f64; 4], layer: [f64; 2]) -> Option<[f64; 2]> {
+        let [left, top, right, bottom] = frame;
+        let (w, h) = (right - left, bottom - top);
+        let c = [(left + right) / 2.0, (top + bottom) / 2.0];
+        let v = [p[0] - c[0], p[1] - c[1]];
+        let d = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        let radius = w.min(h) / 2.0;
+        match *self {
+            Self::Offset {
+                horizontal,
+                vertical,
+                edge,
+            } => {
+                let q = [p[0] - f64::from(horizontal), p[1] - f64::from(vertical)];
+                match edge {
+                    // The edge repeats where the layer is read beyond it.
+                    OffsetEdge::Repeat => Some(q),
+                    OffsetEdge::Wrap => {
+                        Some([q[0].rem_euclid(layer[0]), q[1].rem_euclid(layer[1])])
+                    }
+                    OffsetEdge::Transparent => {
+                        (q[0] >= 0.0 && q[1] >= 0.0 && q[0] < layer[0] && q[1] < layer[1])
+                            .then_some(q)
+                    }
+                }
+            }
+            Self::Twirl { angle } => {
+                if d >= radius || radius <= 0.0 {
+                    return Some(p);
+                }
+                // The most at the center, nothing on the circle; read from as far back.
+                let turn = f64::from(angle).to_radians() * (1.0 - d / radius);
+                let (sin, cos) = (-turn).sin_cos();
+                Some([
+                    c[0] + v[0] * cos - v[1] * sin,
+                    c[1] + v[0] * sin + v[1] * cos,
+                ])
+            }
+            Self::Pinch { amount } => {
+                if d >= radius || radius <= 0.0 || d == 0.0 {
+                    return Some(p);
+                }
+                let k = (std::f64::consts::FRAC_PI_2 * d / radius)
+                    .sin()
+                    .powf(-f64::from(amount) / 100.0);
+                Some([c[0] + v[0] * k, c[1] + v[1] * k])
+            }
+            Self::Spherize { amount } => {
+                let half = [w / 2.0, h / 2.0];
+                if half[0] <= 0.0 || half[1] <= 0.0 {
+                    return Some(p);
+                }
+                let u = [v[0] / half[0], v[1] / half[1]];
+                let r = (u[0] * u[0] + u[1] * u[1]).sqrt();
+                if r >= 1.0 || r == 0.0 {
+                    return Some(p);
+                }
+                let a = f64::from(amount) / 100.0;
+                // Bulging reads closer to the center (what is there grows), hollow farther.
+                let target = if a >= 0.0 {
+                    1.0 - (1.0 - r * r).sqrt()
+                } else {
+                    (1.0 - (1.0 - r).powi(2)).sqrt()
+                };
+                let s = (r + a.abs() * (target - r)) / r;
+                Some([c[0] + u[0] * s * half[0], c[1] + u[1] * s * half[1]])
+            }
+            Self::PolarCoordinates { to_polar } => {
+                let tau = std::f64::consts::TAU;
+                if w <= 0.0 || h <= 0.0 || radius <= 0.0 {
+                    return Some(p);
+                }
+                if to_polar {
+                    // Around the center, clockwise from the top: the source's width; out to the
+                    // inscribed circle: its height from the top edge.
+                    let phi = v[0].atan2(-v[1]).rem_euclid(tau);
+                    Some([left + phi / tau * w, top + d / radius * h])
+                } else {
+                    let phi = (p[0] - left) / w * tau;
+                    let rho = (p[1] - top) / h * radius;
+                    Some([c[0] + rho * phi.sin(), c[1] - rho * phi.cos()])
+                }
+            }
+            _ => Some(p),
         }
     }
 
@@ -609,6 +838,11 @@ impl Filter {
                 | Self::Maximum { .. }
                 | Self::Minimum { .. }
                 | Self::Mosaic { .. }
+                | Self::Offset { .. }
+                | Self::Twirl { .. }
+                | Self::Pinch { .. }
+                | Self::Spherize { .. }
+                | Self::PolarCoordinates { .. }
         )
     }
 
@@ -638,7 +872,12 @@ impl Filter {
             | Self::BoxBlur { .. }
             | Self::Maximum { .. }
             | Self::Minimum { .. }
-            | Self::Mosaic { .. } => blurred,
+            | Self::Mosaic { .. }
+            | Self::Offset { .. }
+            | Self::Twirl { .. }
+            | Self::Pinch { .. }
+            | Self::Spherize { .. }
+            | Self::PolarCoordinates { .. } => blurred,
             Self::Solarize => color(&|o, _| if o > 0.5 { 1.0 - o } else { o }),
             // The kernel's gradient magnitude, per channel: dark lines on white, alpha kept.
             Self::FindEdges => {
@@ -1500,7 +1739,7 @@ mod tests {
         let blur = Filter::GaussianBlur { radius: 12.5 };
         assert_eq!(Filter::from_params(blur.id(), &blur.params()), Some(blur));
         assert_eq!(Filter::from_params("gaussianBlur", &[1.0, 2.0]), None);
-        assert_eq!(Filter::from_params("twirl", &[1.0]), None);
+        assert_eq!(Filter::from_params("oilPaint", &[1.0]), None);
         assert!(blur.is_valid());
         for radius in [0.0, 1001.0, f32::NAN] {
             assert!(!Filter::GaussianBlur { radius }.is_valid(), "{radius}");
@@ -2304,5 +2543,84 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn distortions_read_from_where_they_move_pixels() {
+        let frame = [0.0, 0.0, 200.0, 100.0];
+        let layer = [200.0, 100.0];
+        let center = [100.0, 50.0];
+        let close =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        let distance =
+            |a: [f64; 2]| ((a[0] - center[0]).powi(2) + (a[1] - center[1]).powi(2)).sqrt();
+        // Twirl: the center stays, points turn along their circle, nothing beyond it moves.
+        let twirl = Filter::Twirl { angle: 180.0 };
+        assert!(close(twirl.source(center, frame, layer).unwrap(), center));
+        let p = [120.0, 50.0];
+        let q = twirl.source(p, frame, layer).unwrap();
+        assert!((distance(q) - 20.0).abs() < 1e-9 && !close(q, p));
+        assert!(close(
+            twirl.source([10.0, 5.0], frame, layer).unwrap(),
+            [10.0, 5.0]
+        ));
+        // Pinch in: read from farther out, so what is there shrinks toward the center.
+        let pinch = Filter::Pinch { amount: 50.0 };
+        assert!(distance(pinch.source(p, frame, layer).unwrap()) > 20.0);
+        let push = Filter::Pinch { amount: -50.0 };
+        assert!(distance(push.source(p, frame, layer).unwrap()) < 20.0);
+        // Spherize: a bulge reads closer to the center; a hollow farther.
+        let bulge = Filter::Spherize { amount: 100.0 };
+        assert!(distance(bulge.source(p, frame, layer).unwrap()) < 20.0);
+        let hollow = Filter::Spherize { amount: -100.0 };
+        assert!(distance(hollow.source(p, frame, layer).unwrap()) > 20.0);
+        // Polar coordinates there and back again: where it was.
+        let (to, from) = (
+            Filter::PolarCoordinates { to_polar: true },
+            Filter::PolarCoordinates { to_polar: false },
+        );
+        for p in [[130.0, 40.0], [80.0, 70.0], [101.0, 20.0]] {
+            let there = from.source(p, frame, layer).unwrap();
+            let back = to.source(there, frame, layer).unwrap();
+            assert!(close(back, p), "{p:?} {there:?} {back:?}");
+        }
+        // Offset: wrapped around, the edge repeated, or nothing.
+        let offset = |edge| Filter::Offset {
+            horizontal: 30.0,
+            vertical: -10.0,
+            edge,
+        };
+        assert!(close(
+            offset(OffsetEdge::Wrap)
+                .source([10.0, 95.0], frame, layer)
+                .unwrap(),
+            [180.0, 5.0]
+        ));
+        assert_eq!(
+            offset(OffsetEdge::Transparent).source([10.0, 50.0], frame, layer),
+            None
+        );
+        assert!(close(
+            offset(OffsetEdge::Repeat)
+                .source([10.0, 50.0], frame, layer)
+                .unwrap(),
+            [-20.0, 60.0]
+        ));
+        // Settings.
+        assert!(Filter::Twirl { angle: -999.0 }.is_valid());
+        assert!(!Filter::Twirl { angle: 1000.0 }.is_valid());
+        assert!(!Filter::Pinch { amount: 101.0 }.is_valid());
+        assert!(
+            !Filter::Offset {
+                horizontal: 30000.5,
+                vertical: 0.0,
+                edge: OffsetEdge::Wrap
+            }
+            .is_valid()
+        );
+        assert_eq!(Filter::from_params("offset", &[1.0, 2.0, 3.0]), None);
+        assert_eq!(Filter::from_params("polarCoordinates", &[0.5]), None);
+        assert!(twirl.samples() && !Filter::Mosaic { cell: 4.0 }.samples());
+        assert_eq!(twirl.scaled(4.0), twirl, "mapped in the layer's own pixels");
     }
 }

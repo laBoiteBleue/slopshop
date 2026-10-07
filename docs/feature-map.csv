@@ -380,12 +380,12 @@ Menu,Filter > Blur Gallery > Tilt-Shift,,open,"as an editable filter in the laye
 Menu,Filter > Blur Gallery > Path Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Blur Gallery > Spin Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Distort > Displace,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Distort > Pinch,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Distort > Polar Coordinates,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Pinch,,done,"an editable entry of the layer's stack, around the selection's or the layer's center; on the CPU"
+Menu,Filter > Distort > Polar Coordinates,,done,"an editable entry of the layer's stack, both ways; on the CPU"
 Menu,Filter > Distort > Ripple,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Distort > Shear,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Distort > Spherize,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Distort > Twirl,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Distort > Spherize,,partial,"an editable entry of the layer's stack, Normal mode (Horizontal and Vertical only are open); on the CPU"
+Menu,Filter > Distort > Twirl,,done,"an editable entry of the layer's stack, around the selection's or the layer's center; on the CPU"
 Menu,Filter > Distort > Wave,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Distort > ZigZag,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Noise > Add Noise,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
@@ -426,7 +426,7 @@ Menu,Filter > Other > High Pass,,done,"an editable entry of the layer's stack, C
 Menu,Filter > Other > HSB/HSL,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Other > Maximum,,partial,"an editable entry of the layer's stack, exact whatever the radius; on the CPU; Squareness only (Roundness is open)"
 Menu,Filter > Other > Minimum,,partial,"an editable entry of the layer's stack, exact whatever the radius; on the CPU; Squareness only (Roundness is open)"
-Menu,Filter > Other > Offset,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Other > Offset,,done,"an editable entry of the layer's stack (transparent, repeated edge or wrapped around); on the CPU"
 Menu,Filter Gallery > Artistic > Colored Pencil,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
 Menu,Filter Gallery > Artistic > Cutout,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
 Menu,Filter Gallery > Artistic > Dry Brush,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists

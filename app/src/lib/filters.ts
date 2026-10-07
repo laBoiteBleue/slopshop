@@ -59,6 +59,30 @@ const squareRadius = (label: MessageKey, max: number, min = 1): NumberParam => (
   scale: "log",
 });
 
+/** An amount from -100 to 100 %, Photoshop's (Pinch, Spherize): below 0, the other way. */
+const percent = (label: MessageKey): NumberParam => ({
+  kind: "number",
+  key: "amount",
+  label,
+  unit: "filter.percent",
+  min: -100,
+  max: 100,
+  decimals: 0,
+  scale: "linear",
+});
+
+/** A shift in whole pixels either way, Offset's (Photoshop's -30000 to 30000). */
+const shift = (key: string, label: MessageKey): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  unit: "filter.pixels",
+  min: -30000,
+  max: 30000,
+  decimals: 0,
+  scale: "linear",
+});
+
 /** A strength from -100 to 100, Lightroom's: 0 does nothing, below it the opposite. */
 const strength = (key: string, label: MessageKey): NumberParam => ({
   kind: "number",
@@ -222,6 +246,47 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     defaults: [135, 3, 100],
   },
   mosaic: { params: [squareRadius("filter.mosaic.cell", 200, 2)], defaults: [10] },
+  twirl: {
+    params: [
+      {
+        kind: "number",
+        key: "angle",
+        label: "filter.twirl.angle",
+        unit: "filter.degrees",
+        min: -999,
+        max: 999,
+        decimals: 0,
+        scale: "linear",
+      },
+    ],
+    defaults: [50],
+  },
+  pinch: { params: [percent("filter.pinch.amount")], defaults: [50] },
+  spherize: { params: [percent("filter.spherize.amount")], defaults: [100] },
+  polarCoordinates: {
+    params: [
+      {
+        kind: "choice",
+        key: "conversion",
+        label: "filter.polarCoordinates.conversion",
+        options: ["filter.polarCoordinates.polarToRect", "filter.polarCoordinates.rectToPolar"],
+      },
+    ],
+    defaults: [1],
+  },
+  offset: {
+    params: [
+      shift("horizontal", "filter.offset.horizontal"),
+      shift("vertical", "filter.offset.vertical"),
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.offset.edge",
+        options: ["filter.offset.transparent", "filter.offset.repeat", "filter.offset.wrap"],
+      },
+    ],
+    defaults: [0, 0, 2],
+  },
 };
 
 /** Whether `filter` has settings: those without (Find Edges, Solarize) apply at once, as in
@@ -261,11 +326,12 @@ export function sliderValue(param: NumberParam, p: number): number {
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.blur", filters: ["boxBlur", "gaussianBlur", "motionBlur"] },
+  { label: "menu.filter.distort", filters: ["pinch", "polarCoordinates", "spherize", "twirl"] },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
   { label: "menu.filter.pixelate", filters: ["mosaic"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
   { label: "menu.filter.stylize", filters: ["emboss", "findEdges", "solarize"] },
-  { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum"] },
+  { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum", "offset"] },
 ];
 
 /** Whether `values` are settings `filter` accepts. */

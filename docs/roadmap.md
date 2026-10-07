@@ -329,6 +329,11 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       and Box Blur (its looks on the GPU up to a radius of 64)
 - [x] Stylize > Find Edges, Emboss and Solarize (Find Edges and Solarize applied at once, no
       dialog), Pixelate > Mosaic (cells from the layer's origin, whole across tiles); on the CPU
+- [x] Filters that move pixels (ADR 0034 point 7, "the whole image" and "a frame"): each pixel
+      the layer sampled where the filter says, around the selection's box or the layer; a
+      filter's frame (where a look's crop lies on its layer) given to every filter, so that
+      Mosaic's looks align with the layer too: Distort > Pinch, Polar Coordinates, Spherize
+      (Normal), Twirl, Other > Offset; on the CPU
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
