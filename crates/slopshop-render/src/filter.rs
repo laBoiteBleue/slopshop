@@ -446,7 +446,12 @@ impl Pass {
                     ..none
                 }]);
             }
-            Filter::DustAndScratches { radius, threshold } => {
+            // Median: Dust & Scratches without a threshold (what differs takes the median).
+            Filter::Median { radius } | Filter::DustAndScratches { radius, .. } => {
+                let threshold = match filter {
+                    Filter::DustAndScratches { threshold, .. } => threshold,
+                    _ => 0.0,
+                };
                 // Beyond, the CPU takes the median on the layer reduced.
                 if f64::from(radius) > MEDIAN_UP_TO {
                     return None;

@@ -366,7 +366,7 @@ Menu,Filter > 3D > Generate Bump Map,,wont,3D is out of scope (Adobe retired Pho
 Menu,Filter > Blur > Average,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Blur > Blur,,wont,dated fixed kernels; Gaussian Blur with a radius covers them
 Menu,Filter > Blur > Blur More,,wont,dated fixed kernels; Gaussian Blur with a radius covers them
-Menu,Filter > Blur > Box Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Blur > Box Blur,,done,"an editable entry of the layer's stack, a square of 1 to 2000 whole pixels (beyond 64 on the layer reduced); on the CPU"
 Menu,Filter > Blur > Gaussian Blur,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
 Menu,Filter > Blur > Lens Blur,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Blur > Motion Blur,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
@@ -391,7 +391,7 @@ Menu,Filter > Distort > ZigZag,,open,"as an editable filter in the layer's stack
 Menu,Filter > Noise > Add Noise,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
 Menu,Filter > Noise > Despeckle,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Noise > Dust & Scratches,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
-Menu,Filter > Noise > Median,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Noise > Median,,done,"an editable entry of the layer's stack, CPU and GPU (Dust & Scratches without a threshold)"
 Menu,Filter > Noise > Reduce Noise,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Pixelate > Color Halftone,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Pixelate > Crystallize,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
@@ -424,8 +424,8 @@ Menu,Filter > Video > NTSC Colors,,wont,video editing is out of scope for now
 Menu,Filter > Other > Custom,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Other > High Pass,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
 Menu,Filter > Other > HSB/HSL,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Other > Maximum,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Other > Minimum,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Other > Maximum,,partial,"an editable entry of the layer's stack, exact whatever the radius; on the CPU; Squareness only (Roundness is open)"
+Menu,Filter > Other > Minimum,,partial,"an editable entry of the layer's stack, exact whatever the radius; on the CPU; Squareness only (Roundness is open)"
 Menu,Filter > Other > Offset,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter Gallery > Artistic > Colored Pencil,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists
 Menu,Filter Gallery > Artistic > Cutout,,wont,dated (Filter Gallery has been legacy for years); could return as a plugin once the plugin API exists

@@ -178,3 +178,17 @@ test("the edits that apply a filter and set a filter entry", () => {
     filters: steps,
   });
 });
+
+test("Box Blur, Median, Maximum and Minimum: a whole radius, up to 2000 or 500 pixels", () => {
+  expect(FILTERS.boxBlur.defaults).toEqual([10]);
+  expect(validValues("boxBlur", [2000])).toBe(true);
+  expect(validValues("boxBlur", [2001])).toBe(false);
+  for (const filter of ["median", "maximum", "minimum"] as const) {
+    expect(FILTERS[filter].defaults).toEqual([1]);
+    expect(validValues(filter, [1])).toBe(true);
+    expect(validValues(filter, [500])).toBe(true);
+    for (const values of [[0], [1.5], [501], [1, 1]]) {
+      expect(validValues(filter, values)).toBe(false);
+    }
+  }
+});
