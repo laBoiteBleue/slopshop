@@ -941,10 +941,11 @@ const fr: Messages = {
   "selections.title": "Sélections",
   "sources.title": "Sources",
   "sources.empty":
-    "Les images ouvertes et importées, les pixels collés ou figés apparaissent ici : les calques dupliqués partagent la leur.",
+    "Les images ouvertes et importées, les pixels collés ou figés, les motifs et les formes apparaissent ici : les copies liées partagent la leur.",
   "sources.layers.one": "1 calque",
   "sources.layers.other": "{count} calques",
   "sources.size": "{width} × {height}",
+  "sources.shape": "Forme",
   "sources.unnamed": "Sans titre",
   "sources.select": "Sélectionner les calques",
   "sources.newLayer": "Nouveau calque depuis la source",

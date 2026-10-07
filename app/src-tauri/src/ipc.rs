@@ -82,8 +82,11 @@ pub struct DocumentView {
 pub struct SourceView {
     /// Its identity while the app runs (the source thumbnail is asked by it).
     pub id: u64,
+    /// `image` (pixels, a pattern) or `shape` (a vector layer's, ADR 0041).
+    pub kind: &'static str,
     /// What the user knows it by (a file's name); empty when nothing names it.
     pub name: String,
+    /// Its pixels; a shape's box, in its own space.
     pub width: u32,
     pub height: u32,
     /// The layers showing it, bottom to top.
@@ -179,8 +182,8 @@ pub struct LayerView {
     /// Being baked into pixels (ADR 0031): a merge's group shown until its pixels come; the
     /// panel shows it as the layer it becomes.
     pub baking: bool,
-    /// The source a pixel layer shows (ADR 0040), `SourceView::id`; none for a layer made empty
-    /// and for the other kinds.
+    /// The source a layer shows (ADR 0040), `SourceView::id`: a pixel or pattern fill layer's,
+    /// a vector layer's shape; none for a layer made empty and for the other kinds.
     pub source: Option<u64>,
     /// How many other layers are linked to this one: showing the same source (pixels, a
     /// pattern or a shape), changed with it (ADR 0040). 0: none.
@@ -659,11 +662,25 @@ impl DocumentView {
                 .into_iter()
                 .map(|(source, layers)| SourceView {
                     id: source.id().get(),
+                    kind: "image",
                     name: source.name().to_owned(),
                     width: source.image().size().width,
                     height: source.image().size().height,
                     layers: layers.into_iter().map(LayerId::get).collect(),
                 })
+                .chain(doc.shape_sources().into_iter().map(|(source, layers)| {
+                    let [x0, y0, x1, y1] = slopshop_core::shape::path::shape_bounds(source.shape())
+                        .unwrap_or_default();
+                    let side = |v: f64| v.ceil().clamp(0.0, f64::from(u32::MAX)) as u32;
+                    SourceView {
+                        id: source.id().get(),
+                        kind: "shape",
+                        name: source.name().to_owned(),
+                        width: side(x1 - x0),
+                        height: side(y1 - y0),
+                        layers: layers.into_iter().map(LayerId::get).collect(),
+                    }
+                }))
                 .collect(),
         }
     }
@@ -873,7 +890,11 @@ impl LayerView {
             },
             style: layer.style.as_ref().map(|s| StyleDto::new(s.settings())),
             baking: false,
-            source: layer.content.source().map(|s| s.id().get()),
+            source: match &layer.content {
+                // Its shape, in the bin too (ADR 0041).
+                LayerContent::Vector { source, .. } => Some(source.id().get()),
+                content => content.source().map(|s| s.id().get()),
+            },
             // Set for the whole document by `DocumentView::new`.
             linked: 0,
         }
@@ -1738,6 +1759,7 @@ impl EditRequest {
                     .sources()
                     .into_iter()
                     .map(|(s, _)| s.id())
+                    .chain(document.shape_sources().into_iter().map(|(s, _)| s.id()))
                     .find(|id| id.get() == source)
                     .ok_or("the source is no longer in the document")?;
                 Edit::delete_source(document, id).map_err(|e| e.to_string())?
@@ -1748,13 +1770,24 @@ impl EditRequest {
                 parent,
                 index,
             } => {
-                let source = session
-                    .document()
+                let document = session.document();
+                // An image, else a shape: a linked copy of its vector layers (ADR 0041).
+                let content = match document
                     .sources()
                     .into_iter()
                     .map(|(s, _)| s)
                     .find(|s| s.id().get() == source)
-                    .ok_or("the source is no longer in the document")?;
+                {
+                    Some(image) => LayerContent::from_source(image),
+                    None => LayerContent::vector(
+                        document
+                            .shape_sources()
+                            .into_iter()
+                            .map(|(s, _)| s)
+                            .find(|s| s.id().get() == source)
+                            .ok_or("the source is no longer in the document")?,
+                    ),
+                };
                 Edit::InsertLayer {
                     parent: parent.map(LayerId::from_raw),
                     index,
@@ -1768,7 +1801,7 @@ impl EditRequest {
                         opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         mask: None,
-                        content: LayerContent::from_source(source),
+                        content,
                     },
                 }
             }

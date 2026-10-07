@@ -484,8 +484,11 @@ export type DocumentView = {
 export type SourceView = {
   /** Its identity while the app runs (`engine.sourceThumbnail` asks by it). */
   id: number;
+  /** Pixels (an image, a pattern), or a vector layer's shape (ADR 0041). Absent: an image. */
+  kind?: "image" | "shape";
   /** An opened file's name; empty when nothing names it. */
   name: string;
+  /** Its pixels; a shape's box. */
   width: number;
   height: number;
   /** The layers showing it, bottom to top. */

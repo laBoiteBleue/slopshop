@@ -592,6 +592,22 @@ impl Document {
         sources
     }
 
+    /// The shapes vector layers show (ADR 0041), each with the layers showing it (linked
+    /// copies, ADR 0040), in the order layers first show them: the bin's shape entries.
+    pub fn shape_sources(&self) -> Vec<(Arc<crate::shape::ShapeSource>, Vec<LayerId>)> {
+        let mut shapes: Vec<(Arc<crate::shape::ShapeSource>, Vec<LayerId>)> = Vec::new();
+        for layer in self.all_layers() {
+            let LayerContent::Vector { source, .. } = &layer.content else {
+                continue;
+            };
+            match shapes.iter_mut().find(|(s, _)| Arc::ptr_eq(s, source)) {
+                Some((_, layers)) => layers.push(layer.id),
+                None => shapes.push((Arc::clone(source), vec![layer.id])),
+            }
+        }
+        shapes
+    }
+
     /// An empty document. Colors are stored in linear light (the working space is linear);
     /// layers blend in the default [`BlendSpace`] (perceptual).
     pub fn new(size: Size) -> Self {
