@@ -1089,8 +1089,8 @@ impl Edit {
         }
     }
 
-    /// The edit that deletes source `source` from the document (the Sources panel, ADR 0040
-    /// amended): the layers showing it go, and a Pattern Overlay using it leaves its style (the
+    /// The edit that deletes source `source` (an image or a shape) from the document (the
+    /// Sources panel, ADR 0040 amended): the layers showing it go, and a Pattern Overlay using it leaves its style (the
     /// layer stays). One undo entry. [`EditError::NoLayers`] when nothing uses it.
     pub fn delete_source(
         doc: &Document,
@@ -1099,7 +1099,11 @@ impl Edit {
         let mut removed = Vec::new();
         let mut restyled = Vec::new();
         for layer in doc.all_layers() {
-            if layer.content.source().is_some_and(|s| s.id() == source) {
+            let shows = match &layer.content {
+                LayerContent::Vector { source: shape, .. } => shape.id() == source,
+                content => content.source().is_some_and(|s| s.id() == source),
+            };
+            if shows {
                 removed.push(Edit::RemoveLayer { id: layer.id });
                 continue;
             }

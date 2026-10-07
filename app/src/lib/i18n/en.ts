@@ -922,10 +922,11 @@ const en = {
   "selections.title": "Selections",
   "sources.title": "Sources",
   "sources.empty":
-    "Opened and imported images, pasted and baked pixels show here: duplicated layers share theirs.",
+    "Opened and imported images, pasted and baked pixels, patterns and shapes show here: linked copies share theirs.",
   "sources.layers.one": "1 layer",
   "sources.layers.other": "{count} layers",
   "sources.size": "{width} × {height}",
+  "sources.shape": "Shape",
   "sources.unnamed": "Untitled",
   "sources.select": "Select Layers",
   "sources.newLayer": "New Layer from Source",

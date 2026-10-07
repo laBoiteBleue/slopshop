@@ -50,5 +50,19 @@ test("the right-click menu selects the layers or makes a new layer showing the s
 test("without sources, what will show there", () => {
   open([]);
   expect(screen.queryByRole("option")).not.toBeInTheDocument();
-  expect(screen.getByText(/duplicated layers share theirs/)).toBeInTheDocument();
+  expect(screen.getByText(/linked copies share theirs/)).toBeInTheDocument();
+});
+
+test("a shape is in the bin too, said to be one", () => {
+  const box: SourceView = {
+    id: 9,
+    kind: "shape",
+    name: "Rectangle 1",
+    width: 40,
+    height: 20,
+    layers: [4, 5],
+  };
+  open([photo, box]);
+  expect(row("Rectangle 1")).toHaveTextContent("Shape · 40 × 20 · 2 layers");
+  expect(row("photo.jpg")).not.toHaveTextContent("Shape");
 });

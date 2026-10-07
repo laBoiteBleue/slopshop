@@ -1,5 +1,6 @@
 <script lang="ts">
-  // The Sources panel (in the dock, ADR 0040): what the pixel layers show, kept once, like a
+  // The Sources panel (in the dock, ADR 0040): what the layers show (pixels, patterns and
+  // vector shapes, ADR 0041), kept once, like a
   // video editor's media bin. Each row is a source: its thumbnail, its name, its size and how
   // many layers show it. A click selects those layers; the right-click menu also makes a new
   // layer showing it. The source of the active layer is marked. Sources are read-only and go
@@ -79,6 +80,7 @@
           <span class="text">
             <span class="source-name">{name(source) || t("sources.unnamed")}</span>
             <span class="detail">
+              {#if source.kind === "shape"}{t("sources.shape")} ·{/if}
               {t("sources.size", { width: source.width, height: source.height })} · {count(source)}
             </span>
           </span>

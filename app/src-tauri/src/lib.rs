@@ -1752,25 +1752,39 @@ async fn source_thumbnail(
     max_side: u32,
 ) -> Result<Response, String> {
     let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
-    let image = {
+    // An image (a layer's source, a Pattern Overlay's, a pattern loaded for one, ADR 0042), or
+    // a shape (ADR 0041), drawn small.
+    enum Shown {
+        Image(Arc<slopshop_core::RasterImage>),
+        Shape(Arc<slopshop_core::shape::ShapeSource>),
+    }
+    let shown = {
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
-        // A layer's source, a Pattern Overlay's, or a pattern loaded for one (ADR 0042).
-        document
-            .session
-            .document()
+        let doc = document.session.document();
+        let image = doc
             .all_layers()
             .flat_map(|l| l.sources())
             .chain(document.loaded_patterns.values())
             .find(|source| source.id().get() == source_id)
-            .map(|source| Arc::clone(source.image()))
-            .ok_or("unknown source")?
+            .map(|source| Shown::Image(Arc::clone(source.image())));
+        match image {
+            Some(image) => image,
+            None => doc
+                .shape_sources()
+                .into_iter()
+                .map(|(s, _)| s)
+                .find(|s| s.id().get() == source_id)
+                .map(Shown::Shape)
+                .ok_or("unknown source")?,
+        }
     };
-    let thumbnail = tauri::async_runtime::spawn_blocking(move || {
-        slopshop_core::thumbnail::raster_thumbnail(&image, max_side)
+    let thumbnail = tauri::async_runtime::spawn_blocking(move || match shown {
+        Shown::Image(image) => Ok(slopshop_core::thumbnail::raster_thumbnail(&image, max_side)),
+        Shown::Shape(shape) => shape_thumbnail(&shape, max_side),
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
     Ok(Response::new(thumbnail_bytes(
         thumbnail.size,
         thumbnail.pixels,
@@ -1782,6 +1796,48 @@ const THUMBNAIL_LOOK_PIXELS: u64 = 1 << 18;
 
 /// A thumbnail as [`layer_thumbnail`] sends it: width and height (`u32` little-endian), then
 /// the pixels.
+/// A shape drawn to fit `max_side` pixels (the bin's thumbnail): composited alone, as a
+/// vector layer is, then made a thumbnail as an image is.
+fn shape_thumbnail(
+    shape: &Arc<slopshop_core::shape::ShapeSource>,
+    max_side: u32,
+) -> Result<slopshop_core::thumbnail::Thumbnail, String> {
+    let [x0, y0, x1, y1] =
+        slopshop_core::shape::path::shape_bounds(shape.shape()).ok_or("an empty shape")?;
+    let (w, h) = (x1 - x0, y1 - y0);
+    let scale = f64::from(max_side.max(1)) / w.max(h).max(1e-9);
+    let side = |v: f64| (v * scale).ceil().clamp(1.0, f64::from(max_side.max(1))) as u32;
+    let size = Size::new(side(w), side(h));
+    let mut doc = slopshop_core::Document::new(size);
+    let id = doc.allocate_layer_id();
+    Edit::InsertLayer {
+        parent: None,
+        index: 0,
+        layer: slopshop_core::Layer {
+            style: None,
+            transform: slopshop_core::Affine::translation(-x0, -y0)
+                .then(slopshop_core::Affine::scale(scale, scale))
+                .into(),
+            clipped: false,
+            id,
+            name: String::new(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: slopshop_core::BlendMode::Normal,
+            mask: None,
+            content: LayerContent::vector(Arc::clone(shape)),
+        },
+    }
+    .apply(&mut doc)
+    .map_err(|e| e.to_string())?;
+    let mut pixels = vec![0.0f32; size.pixel_count() as usize * 4];
+    slopshop_core::composite::composite_region(&doc, size.bounds(), &mut pixels)
+        .map_err(|e| e.to_string())?;
+    let image = slopshop_core::copy::merged_image(&pixels, size, doc.blend_space())
+        .map_err(|e| e.to_string())?;
+    Ok(slopshop_core::thumbnail::raster_thumbnail(&image, max_side))
+}
+
 pub(crate) fn thumbnail_bytes(size: Size, pixels: Vec<u8>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(8 + pixels.len());
     bytes.extend(size.width.to_le_bytes());
@@ -4813,6 +4869,50 @@ mod tests {
                 .into_edit(&mut s)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn shapes_are_in_the_bin_with_their_linked_layers() {
+        let mut s = blank_session();
+        let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,10.0,50.0,30.0],"radii":[0.0,0.0,0.0,0.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
+        let request = |json: String| -> EditRequest { serde_json::from_str(&json).unwrap() };
+        let perform = |s: &mut Session, json: String| {
+            let edit = request(json).into_edit(s).unwrap();
+            s.perform(edit).unwrap();
+        };
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"addShape","name":"Rectangle 1","shape":{shape}}}"#),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let bin = view.sources.iter().find(|v| v.kind == "shape").unwrap();
+        assert_eq!(
+            (bin.width, bin.height, bin.name.as_str()),
+            (40, 20, "Rectangle 1")
+        );
+        assert_eq!(view.layers[1].source, Some(bin.id));
+        let id = bin.id;
+        // A new layer from it: a linked copy.
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"addSourceLayer","source":{id},"name":"Rectangle 1","index":2}}"#),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[2].kind, "vector");
+        assert_eq!((view.layers[1].linked, view.layers[2].linked), (1, 1));
+        let bin = view.sources.iter().find(|v| v.kind == "shape").unwrap();
+        assert_eq!(bin.layers.len(), 2);
+        // Its thumbnail: drawn to fit.
+        let shapes = s.document().shape_sources();
+        let thumbnail = shape_thumbnail(&shapes[0].0, 64).unwrap();
+        assert_eq!((thumbnail.size.width, thumbnail.size.height), (64, 32));
+        // Deleted with both its layers.
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"deleteSource","source":{id}}}"#),
+        );
+        assert_eq!(s.document().layers().len(), 1);
+        assert!(s.document().shape_sources().is_empty());
     }
 
     #[test]

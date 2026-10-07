@@ -391,7 +391,7 @@ Raised on 2026-10-05, to schedule:
         Independent Copy (ADR 0040 amendment)
   - [x] Bin entries named (their own name, else their first layer's; independent copies
         "… copy"); deleting a source and the layers showing it, after a confirmation
-  - [ ] Shapes in the bin
+  - [x] Shapes in the bin (a thumbnail, a new linked layer from one, deleted with their layers)
   - [ ] A source dragged onto the canvas, a source renamed
   - [ ] Replace Contents
 - [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR, as a source
