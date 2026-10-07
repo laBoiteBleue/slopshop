@@ -17,6 +17,7 @@
     active = null,
     onselect,
     onnewlayer,
+    ondelete,
   }: {
     documentId: number;
     sources: SourceView[];
@@ -28,6 +29,8 @@
     onselect: (layers: number[]) => void;
     /** A new layer showing this source. */
     onnewlayer: (source: SourceView) => void;
+    /** Delete this source and the layers showing it (the app asks first). */
+    ondelete?: (source: SourceView) => void;
   } = $props();
 
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -51,6 +54,8 @@
       items: [
         command(t("sources.select"), () => onselect(source.layers)),
         command(t("sources.newLayer"), () => onnewlayer(source)),
+        { kind: "separator" },
+        command(t("sources.delete"), () => ondelete?.(source)),
       ],
     };
   }

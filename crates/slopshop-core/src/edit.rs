@@ -1089,6 +1089,46 @@ impl Edit {
         }
     }
 
+    /// The edit that deletes source `source` from the document (the Sources panel, ADR 0040
+    /// amended): the layers showing it go, and a Pattern Overlay using it leaves its style (the
+    /// layer stays). One undo entry. [`EditError::NoLayers`] when nothing uses it.
+    pub fn delete_source(
+        doc: &Document,
+        source: crate::source::SourceId,
+    ) -> Result<Edit, EditError> {
+        let mut removed = Vec::new();
+        let mut restyled = Vec::new();
+        for layer in doc.all_layers() {
+            if layer.content.source().is_some_and(|s| s.id() == source) {
+                removed.push(Edit::RemoveLayer { id: layer.id });
+                continue;
+            }
+            if let Some(style) = &layer.style
+                && style
+                    .settings()
+                    .pattern_overlay
+                    .as_ref()
+                    .is_some_and(|o| o.pattern.source.id() == source)
+            {
+                let settings = crate::style::LayerStyle {
+                    pattern_overlay: None,
+                    ..style.settings().clone()
+                };
+                restyled.push(Edit::SetLayerStyle {
+                    id: layer.id,
+                    style: Some(Box::new(settings)),
+                });
+            }
+        }
+        // Groups show no source: none of these is inside another.
+        let mut edits = restyled;
+        edits.extend(removed);
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that gives vector layer `id` shape `shape`, and every layer linked to it (showing
     /// the same shape source, ADR 0040): one new source, shared as the old one was, named as
     /// it.

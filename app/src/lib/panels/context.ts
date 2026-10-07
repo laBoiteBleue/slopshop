@@ -27,6 +27,8 @@ export type PanelContext = {
   pickShapeColor(layer: LayerView, which: "fill" | "stroke"): void;
   /** Another library pattern chosen for a pattern fill layer (ADR 0042). */
   pickPattern(layer: LayerView): void;
+  /** Delete a source and the layers showing it, once the user confirmed (ADR 0040). */
+  deleteSource(source: number, name: string): void;
   /** Select > Save Selection… (it asks a name). */
   saveSelection(): void;
   /** A saved selection loaded into the image (Shift adds, Alt subtracts, both intersect). */

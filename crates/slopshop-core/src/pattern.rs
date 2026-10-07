@@ -355,4 +355,65 @@ mod tests {
         assert_eq!(at(&out, 10, 5), at(&reference, 0, 0));
         assert_eq!(at(&out, 13, 7), at(&reference, 3, 2));
     }
+
+    #[test]
+    fn deleting_a_source_deletes_its_layers_and_its_pattern_overlays_undoably() {
+        use crate::style::{LayerStyle, PatternOverlay};
+        let source = Source::new(numbered(), "numbers");
+        let (mut doc, fill) =
+            with_pattern(PatternFill::new(Arc::clone(&source)), Projective::IDENTITY);
+        // A box showing another source, with a Pattern Overlay of this one.
+        let boxed = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: Layer {
+                id: boxed,
+                name: "box".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(numbered()),
+                mask: None,
+                clipped: false,
+                transform: Projective::IDENTITY,
+                style: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::SetLayerStyle {
+            id: boxed,
+            style: Some(Box::new(LayerStyle {
+                pattern_overlay: Some(PatternOverlay::new(Arc::clone(&source))),
+                ..LayerStyle::default()
+            })),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let before = pixels(&doc);
+        let undo = Edit::delete_source(&doc, source.id())
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert!(doc.layer(fill).is_none());
+        let kept = doc.layer(boxed).unwrap();
+        assert!(
+            kept.style
+                .as_ref()
+                .unwrap()
+                .settings()
+                .pattern_overlay
+                .is_none()
+        );
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(fill).is_some());
+        assert_eq!(pixels(&doc), before);
+        // Nothing uses an unknown source.
+        let other = Source::new(numbered(), "");
+        assert_eq!(
+            Edit::delete_source(&doc, other.id()).err(),
+            Some(EditError::NoLayers)
+        );
+    }
 }
