@@ -22,7 +22,7 @@ use super::manifest::{
     NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
     NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE,
     NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM,
-    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, Writer,
+    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -194,6 +194,15 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
             // Without a stack: the pixels themselves, always there.
             LayerContent::Raster { image, .. } => out.push(image.get()),
             _ => {}
+        }
+        // A source the layer grew around (ADR 0040) is not its original.
+        if let Some(source) = layer.content.source()
+            && layer
+                .content
+                .original()
+                .is_none_or(|original| !Arc::ptr_eq(original, source.image()))
+        {
+            out.push(Arc::clone(source.image()));
         }
         if let Some(mask) = &layer.mask {
             out.push(Arc::clone(&mask.image));
@@ -566,6 +575,15 @@ fn build_manifest(
             .find(|(known, _)| known.id() == image.id())
             .map(|(_, record)| record.key)
     };
+    // The sources, in the order the layers first show them: a node names its own by index.
+    let mut sources: Vec<&Arc<slopshop_core::Source>> = Vec::new();
+    let mut source_index = HashMap::new();
+    for source in document.all_layers().filter_map(|l| l.content.source()) {
+        source_index.entry(source.id()).or_insert_with(|| {
+            sources.push(source);
+            sources.len() - 1
+        });
+    }
     let mut nodes = std::collections::BTreeMap::new();
     for layer in document.all_layers() {
         let id = layer.id.get();
@@ -672,6 +690,20 @@ fn build_manifest(
             Value::Object(map) => map,
             _ => Map::new(),
         };
+        if let Some(source) = layer.content.source() {
+            params.insert(
+                "source".to_owned(),
+                Value::from(source_index.get(&source.id()).copied()),
+            );
+        }
+        if let LayerContent::Raster {
+            stack: Some(stack), ..
+        } = &layer.content
+            && stack.source_offset() != (0, 0)
+        {
+            let (columns, rows) = stack.source_offset();
+            params.insert("source_offset".to_owned(), json!([columns, rows]));
+        }
         params.insert("blend_mode".to_owned(), Value::from(layer.blend_mode.id()));
         if let Some(style) = &layer.style {
             params.insert("style".to_owned(), super::style::to_json(style.settings()));
@@ -795,6 +827,13 @@ fn build_manifest(
                     }
                     .to_owned(),
                     position: g.position,
+                })
+                .collect(),
+            sources: sources
+                .iter()
+                .map(|source| SourceDto {
+                    name: source.name().to_owned(),
+                    image: key_of(source.image()).map(Hash::to_key).unwrap_or_default(),
                 })
                 .collect(),
             extra: residue.document.clone(),

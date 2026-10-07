@@ -361,6 +361,12 @@ Raised on 2026-10-05, to schedule:
 - [ ] **Sources** ([ADR 0040](adr/0040-sources.md), 2026-10-07): layers reference read-only
       sources kept once, Duplicate shares them, Make Unique, Replace Contents, a Sources
       panel; this settles the layer stack or DAG question (a tree of layers plus references)
+  - [x] The engine: image sources (imports named after their file, pasted and baked pixels
+        unnamed, empty layers without), Duplicate sharing them, Rasterize and merges making
+        new ones, layers growing around theirs; `.slop` schema 0.26, older files read with a
+        source per original
+  - [ ] Make Unique and the Sources panel
+  - [ ] Replace Contents
 - [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR, as a source
       kind without a stack (ADR 0040, point 8); an editor without the Type tool surprises
       users and contributors alike

@@ -799,4 +799,30 @@ mod tests {
         assert!(!can_rasterize(layer));
         assert!(Arc::ptr_eq(layer.content.original().unwrap(), &shows));
     }
+
+    #[test]
+    fn rasterizing_gives_the_layer_a_source_of_its_own() {
+        let mut doc = Document::new(Size::new(100, 100));
+        let layer = plain(&mut doc, "pixels", boxed(Rect::new(0, 0, 10, 10)));
+        let source = Arc::clone(layer.content.source().unwrap());
+        let mut duplicate = layer.clone();
+        duplicate.id = doc.allocate_layer_id();
+        let id = push(&mut doc, layer);
+        let duplicate = push(&mut doc, duplicate);
+        Edit::apply_effect(&doc, &[id], crate::adjust::Adjustment::Invert)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        Edit::Batch(rasterize_in_place(&doc, &[id]).unwrap())
+            .apply(&mut doc)
+            .unwrap();
+        // A hard copy: a new source, showing what the layer showed.
+        let content = &doc.layer(id).unwrap().content;
+        let baked = content.source().unwrap();
+        assert!(!Arc::ptr_eq(baked, &source));
+        assert!(Arc::ptr_eq(baked.image(), content.original().unwrap()));
+        // The source it had is untouched for the layer still showing it.
+        let kept = doc.layer(duplicate).unwrap().content.source().unwrap();
+        assert!(Arc::ptr_eq(kept, &source));
+    }
 }

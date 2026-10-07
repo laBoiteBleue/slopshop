@@ -96,6 +96,7 @@ fn raster(size: Size, format: PixelFormat, pixel: impl Fn(u32, u32) -> Vec<u8>) 
         }
     }
     LayerContent::Raster {
+        source: None,
         stack: None,
         image: Pixels::ready(Arc::new(
             RasterImage::from_pixels(size, format, &bytes).unwrap(),
@@ -426,6 +427,7 @@ fn large(width: u32, height: u32, overlays: u32) -> Document {
             }
         });
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: Pixels::ready(Arc::new(
                 RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &bytes).unwrap(),

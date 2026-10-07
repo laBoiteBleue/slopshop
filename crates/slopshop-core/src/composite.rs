@@ -430,6 +430,7 @@ fn push_layer<'a>(
         && let LayerContent::Raster {
             image,
             stack: Some(stack),
+            ..
         } = &layer.content
         && image.ready_image().is_none()
         // A filter is not evaluated by the display (ADR 0034): its quick look stands in for
@@ -1331,6 +1332,7 @@ mod tests {
 
     fn raster(size: Size, format: PixelFormat, pixels: &[u8]) -> LayerContent {
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: crate::stack::Pixels::ready(Arc::new(
                 RasterImage::from_pixels(size, format, pixels).unwrap(),
@@ -1780,6 +1782,7 @@ mod tests {
         let id = add(
             &mut doc,
             LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: crate::stack::Pixels::ready(image.clone()),
             },
@@ -1844,6 +1847,7 @@ mod tests {
         let id = add(
             &mut doc,
             LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: crate::stack::Pixels::ready(image.clone()),
             },
@@ -2460,6 +2464,7 @@ mod tests {
                 let mut layer = new_layer(
                     &mut reference,
                     LayerContent::Raster {
+                        source: None,
                         stack: None,
                         image: crate::stack::Pixels::ready(Arc::new(placed_image)),
                     },

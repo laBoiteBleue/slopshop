@@ -238,6 +238,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::Raster {
+                source: None,
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
             },
@@ -368,6 +369,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content: LayerContent::Raster {
+                    source: None,
                     stack: None,
                     image: slopshop_core::stack::Pixels::ready(image.clone()),
                 },

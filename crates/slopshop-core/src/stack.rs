@@ -50,6 +50,9 @@ const MAX_PIXEL_BYTES: usize = 16;
 #[derive(Debug, Clone)]
 pub struct LayerStack {
     original: Arc<RasterImage>,
+    /// Where the layer's source lies in `original`, in whole tiles (columns, rows): the layer
+    /// grows around its source when painted beyond it (ADR 0040), the source never changes.
+    source_offset: (u32, u32),
     entries: Vec<Entry>,
 }
 
@@ -2838,7 +2841,9 @@ fn try_evaluated(stack: &LayerStack, earlier: Earlier) -> Result<Arc<RasterImage
 impl PartialEq for LayerStack {
     fn eq(&self, other: &Self) -> bool {
         // Immutable and shared: the same allocations, the same stack.
-        Arc::ptr_eq(&self.original, &other.original) && self.entries == other.entries
+        Arc::ptr_eq(&self.original, &other.original)
+            && self.source_offset == other.source_offset
+            && self.entries == other.entries
     }
 }
 
@@ -2847,6 +2852,7 @@ impl LayerStack {
     pub fn new(original: Arc<RasterImage>) -> Self {
         Self {
             original,
+            source_offset: (0, 0),
             entries: Vec::new(),
         }
     }
@@ -2858,6 +2864,7 @@ impl LayerStack {
     ) -> Result<Self, StackError> {
         let stack = Self {
             original,
+            source_offset: (0, 0),
             entries: Vec::new(),
         };
         for entry in &entries {
@@ -2899,6 +2906,29 @@ impl LayerStack {
         &self.original
     }
 
+    /// Where the layer's source lies in the original, in whole tiles (columns, rows).
+    pub fn source_offset(&self) -> (u32, u32) {
+        self.source_offset
+    }
+
+    /// The stack with its source at `offset` in the original (a stack read back from a file).
+    pub fn with_source_offset(self, source_offset: (u32, u32)) -> Self {
+        Self {
+            source_offset,
+            ..self
+        }
+    }
+
+    /// The stack without its entries: the original alone, its source where it was (Layer >
+    /// Delete Paint).
+    pub fn cleared(&self) -> Self {
+        Self {
+            original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
+            entries: Vec::new(),
+        }
+    }
+
     /// Bottom to top.
     pub fn entries(&self) -> &[Entry] {
         &self.entries
@@ -2930,6 +2960,7 @@ impl LayerStack {
         }
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -2953,6 +2984,7 @@ impl LayerStack {
                 entries.push(entry);
                 return Ok(Self {
                     original: Arc::clone(&self.original),
+                    source_offset: self.source_offset,
                     entries,
                 });
             }
@@ -3049,7 +3081,8 @@ impl LayerStack {
                 })),
             })
             .collect();
-        Self::with_entries(original, entries)
+        Ok(Self::with_entries(original, entries)?
+            .with_source_offset((self.source_offset.0 + left, self.source_offset.1 + top)))
     }
 
     /// The stack with `effect` applied on top: an entry of its own, or combined with the top
@@ -3071,6 +3104,7 @@ impl LayerStack {
         }
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3104,6 +3138,7 @@ impl LayerStack {
         entries.push(Entry::Filter(Arc::new(entry)));
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3127,6 +3162,7 @@ impl LayerStack {
         entries.push(entry);
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3177,6 +3213,7 @@ impl LayerStack {
         entries[index] = edited;
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3220,6 +3257,7 @@ impl LayerStack {
         }
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3276,6 +3314,7 @@ impl LayerStack {
         entries[index] = changed;
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3345,6 +3384,7 @@ impl LayerStack {
         entries[index] = edited;
         Ok(Self {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries,
         })
     }
@@ -3413,6 +3453,7 @@ impl LayerStack {
     fn below(&self, index: usize) -> LayerStack {
         LayerStack {
             original: Arc::clone(&self.original),
+            source_offset: self.source_offset,
             entries: self.entries[..index].to_vec(),
         }
     }
@@ -3737,6 +3778,7 @@ impl LayerStack {
         };
         Ok(LayerStack {
             original: output,
+            source_offset: self.source_offset,
             entries: self.entries[index + 1..].to_vec(),
         })
     }
@@ -3906,6 +3948,7 @@ impl TopPaint {
             Some(top) if top.space == space => (
                 LayerStack {
                     original: Arc::clone(&stack.original),
+                    source_offset: stack.source_offset,
                     entries: stack.entries[..stack.entries.len() - 1].to_vec(),
                 },
                 PaintEntry {
@@ -4154,6 +4197,7 @@ impl TopPaint {
         }
         Ok(LayerStack {
             original: Arc::clone(&self.below.original),
+            source_offset: self.below.source_offset,
             entries,
         })
     }
@@ -4266,6 +4310,7 @@ impl RestorePaint {
             .collect();
         LayerStack {
             original: Arc::clone(&self.stack.original),
+            source_offset: self.stack.source_offset,
             entries,
         }
     }
@@ -6212,5 +6257,24 @@ mod tests {
         };
         assert!(Arc::ptr_eq(&entry.known_input().unwrap().1, &original));
         assert!(seeded.look_at([0.0, 0.0, 50.0, 50.0], 0).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_grown_stack_keeps_where_its_source_lies() {
+        let original = gradient(true);
+        let stack = LayerStack::new(Arc::clone(&original))
+            .with_effect(effect(Adjustment::Invert, None))
+            .unwrap();
+        assert_eq!(stack.source_offset(), (0, 0));
+        let once = stack.grown((1, 0), Size::new(W + T, H)).unwrap();
+        assert_eq!(once.source_offset(), (1, 0));
+        let twice = once.grown((0, 2), Size::new(W + T, H + 2 * T)).unwrap();
+        assert_eq!(twice.source_offset(), (1, 2));
+        // Delete Paint: the entries go, the source stays where it lies.
+        let cleared = twice.cleared();
+        assert!(cleared.is_empty());
+        assert_eq!(cleared.source_offset(), (1, 2));
+        assert!(Arc::ptr_eq(cleared.original(), twice.original()));
+        assert_ne!(cleared, LayerStack::new(Arc::clone(twice.original())));
     }
 }

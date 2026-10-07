@@ -98,7 +98,7 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
     };
     for layer in doc.all_layers() {
         match &layer.content {
-            LayerContent::Raster { image, stack } => {
+            LayerContent::Raster { image, stack, .. } => {
                 layers.raster += 1;
                 let format = image.format();
                 match formats.iter_mut().find(|(f, _)| *f == format) {
@@ -214,6 +214,7 @@ mod tests {
         );
         let raster = |id| {
             let content = LayerContent::Raster {
+                source: None,
                 image: slopshop_core::stack::Pixels::ready(Arc::clone(&rgba)),
                 stack: None,
             };

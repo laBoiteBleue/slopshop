@@ -502,6 +502,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content: LayerContent::Raster {
+                    source: None,
                     stack: None,
                     image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                 },

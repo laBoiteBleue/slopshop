@@ -869,6 +869,7 @@ mod tests {
                     blend_mode: BlendMode::Normal,
                     mask: None,
                     content: LayerContent::Raster {
+                        source: None,
                         stack: None,
                         image: crate::stack::Pixels::ready(image.clone()),
                     },
@@ -1041,5 +1042,59 @@ mod tests {
             s.duplicate_layers_edit(&[], |n| n.to_owned()),
             Err(EditError::NoLayers)
         );
+    }
+
+    #[test]
+    fn duplicates_share_their_source_and_empty_layers_have_none() {
+        use crate::color::PixelFormat;
+        use crate::raster::RasterImage;
+        let size = Size::new(4, 4);
+        let transparent = || {
+            Arc::new(
+                RasterImage::from_placed(
+                    size,
+                    PixelFormat::RGBA8_SRGB,
+                    crate::geom::Rect::new(0, 0, 0, 0),
+                    &[],
+                    &[0; 4],
+                )
+                .unwrap(),
+            )
+        };
+        let mut s = Session::new(Document::new(size));
+        let photo = crate::source::Source::new(transparent(), "photo.png");
+        let insert = |s: &mut Session, name: &str, content: LayerContent| {
+            let id = add_layer(s, name);
+            let mut layer = s.document().layer(id).unwrap().clone();
+            layer.content = content;
+            let (parent, index) = s.document().locate(id).unwrap();
+            s.perform(Edit::Batch(vec![
+                Edit::RemoveLayer { id },
+                Edit::InsertLayer {
+                    parent,
+                    index,
+                    layer,
+                },
+            ]))
+            .unwrap();
+            id
+        };
+        let a = insert(&mut s, "a", LayerContent::from_source(Arc::clone(&photo)));
+        let empty = insert(&mut s, "empty", LayerContent::blank(transparent()));
+        assert!(
+            s.document()
+                .layer(empty)
+                .unwrap()
+                .content
+                .source()
+                .is_none()
+        );
+        let edit = s
+            .duplicate_layers_edit(&[a], |name| format!("{name} copy"))
+            .unwrap();
+        s.perform(edit).unwrap();
+        let copy = &s.document().layers()[1];
+        assert_eq!(copy.name, "a copy");
+        assert!(Arc::ptr_eq(copy.content.source().unwrap(), &photo));
     }
 }

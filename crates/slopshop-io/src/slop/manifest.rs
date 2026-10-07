@@ -16,7 +16,10 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 25;
+pub(crate) const SCHEMA_MINOR: u32 = 26;
+/// The first schema listing the document's sources (ADR 0040); before it, each raster node's
+/// original is read as a source.
+pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
 
 /// The pyramid algorithm of `RasterImage` (box filter, linear light, premultiplied alpha).
 /// Stored levels tagged with another algorithm are rebuilt on load.
@@ -132,8 +135,22 @@ pub(crate) struct DocumentDto {
     /// The guides (schema 0.22, View > Rulers), in the order they were placed. Absent: none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guides: Vec<GuideDto>,
+    /// The sources raster nodes show (schema 0.26, ADR 0040), each named by its index here.
+    /// Absent: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceDto>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// A source (schema 0.26, ADR 0040): content that raster nodes show, kept once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SourceDto {
+    /// What the user knows it by; absent when nothing names it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The key of its image.
+    pub image: String,
 }
 
 /// A guide (schema 0.22): `axis` is `vertical` (at a distance from the left edge) or

@@ -1440,10 +1440,7 @@ fn build_layer(
         < (bounds.width() * bounds.height()) as u64;
 
     Ok(Built {
-        content: LayerContent::Raster {
-            stack: None,
-            image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
-        },
+        content: LayerContent::raster(Arc::new(image)),
         mask: build_mask(record, raw, context)?,
         cropped,
     })

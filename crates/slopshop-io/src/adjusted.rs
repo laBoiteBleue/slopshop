@@ -64,14 +64,8 @@ pub(crate) fn grouped(
                 warnings.push(warning);
             }
         }
-        let mut image = layer(
-            next,
-            image_name,
-            LayerContent::Raster {
-                stack: None,
-                image: slopshop_core::stack::Pixels::ready(Arc::new(imported.image)),
-            },
-        );
+        let source = slopshop_core::Source::new(Arc::new(imported.image), image_name.clone());
+        let mut image = layer(next, image_name, LayerContent::from_source(source));
         image.visible = index == 0;
         children.push(image);
         next += 1;

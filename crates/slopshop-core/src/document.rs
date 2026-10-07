@@ -123,7 +123,13 @@ pub enum LayerContent {
     /// once painted or adjusted, the result of its stack (ADR 0029), which keeps the pixels it
     /// had before, never written, and what was applied to them (the result shares the tiles
     /// nothing reached). `None`: nothing applied, `image` is the original.
+    ///
+    /// `source` is what the layer shows before anything is applied (ADR 0040), shared with
+    /// the layers duplicated from it: the original is the source's image, at the stack's
+    /// source offset once the layer grew around it. `None` for a layer made empty (Layer > New
+    /// Layer), whose pixels are only what was painted on it.
     Raster {
+        source: Option<Arc<crate::source::Source>>,
         image: crate::stack::Pixels,
         stack: Option<crate::stack::LayerStack>,
     },
@@ -147,7 +153,21 @@ impl PartialEq for LayerContent {
             (Self::Fill { color: a }, Self::Fill { color: b }) => a == b,
             (Self::GradientFill { field: a }, Self::GradientFill { field: b }) => a == b,
             // Immutable images: same allocation, same content.
-            (Self::Raster { image: a, stack: c }, Self::Raster { image: b, stack: d }) => {
+            (
+                Self::Raster {
+                    source: s,
+                    image: a,
+                    stack: c,
+                },
+                Self::Raster {
+                    source: t,
+                    image: b,
+                    stack: d,
+                },
+            ) => {
+                if !same_source(s, t) {
+                    return false;
+                }
                 match (c, d) {
                     // The image is the stack's result, evaluated again by undo: the stack tells.
                     (Some(c), Some(d)) => c == d,
@@ -171,6 +191,18 @@ impl PartialEq for LayerContent {
     }
 }
 
+/// Whether two optional sources are the same (immutable: the same allocation).
+fn same_source(
+    a: &Option<Arc<crate::source::Source>>,
+    b: &Option<Arc<crate::source::Source>>,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// Whether two optional images are the same allocation (immutable images: same content).
 fn same_image(a: &Option<Arc<RasterImage>>, b: &Option<Arc<RasterImage>>) -> bool {
     match (a, b) {
@@ -181,11 +213,35 @@ fn same_image(a: &Option<Arc<RasterImage>>, b: &Option<Arc<RasterImage>>) -> boo
 }
 
 impl LayerContent {
-    /// Raster content showing `image`, not painted.
+    /// Raster content showing `image`, not painted: a new source of its own, unnamed (pixels
+    /// pasted, baked, computed).
     pub fn raster(image: Arc<RasterImage>) -> Self {
+        Self::from_source(crate::source::Source::new(image, ""))
+    }
+
+    /// Raster content showing `source`, not painted.
+    pub fn from_source(source: Arc<crate::source::Source>) -> Self {
         Self::Raster {
+            image: crate::stack::Pixels::ready(Arc::clone(source.image())),
+            source: Some(source),
+            stack: None,
+        }
+    }
+
+    /// Raster content made empty (Layer > New Layer): `image` (transparent) and no source.
+    pub fn blank(image: Arc<RasterImage>) -> Self {
+        Self::Raster {
+            source: None,
             image: crate::stack::Pixels::ready(image),
             stack: None,
+        }
+    }
+
+    /// A raster's source (ADR 0040), if it has one.
+    pub fn source(&self) -> Option<&Arc<crate::source::Source>> {
+        match self {
+            Self::Raster { source, .. } => source.as_ref(),
+            _ => None,
         }
     }
 
@@ -311,7 +367,7 @@ impl Layer {
     /// Whether something was applied to the layer's pixels (paint or effects, ADR 0029) or its
     /// mask was painted (ADR 0027): what Delete Paint removes.
     pub fn is_painted(&self) -> bool {
-        matches!(self.content, LayerContent::Raster { stack: Some(_), .. })
+        matches!(&self.content, LayerContent::Raster { stack: Some(s), .. } if !s.is_empty())
             || self.mask.as_ref().is_some_and(|m| m.original.is_some())
     }
 
@@ -872,6 +928,7 @@ fn validate_restored(
         if let LayerContent::Raster {
             image,
             stack: Some(stack),
+            ..
         } = &layer.content
             && (stack.original().size() != image.size() || stack.format() != image.format())
         {

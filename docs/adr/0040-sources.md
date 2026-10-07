@@ -32,7 +32,8 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
 ## Decision
 
 1. **A document holds sources, and layers reference them.** A source is immutable content
-   with a stable `SourceId` (as `LayerId`), a name and a kind:
+   with an identity (`SourceId`, unique in the process, as images have; a file numbers its
+   sources on its own), a name and a kind:
    - **Image**: tiled pixels and their pyramid, as a raster layer's original is today.
    - Later, each in its own ADR: **vector** (text, shapes, paths), **document** (layers of
      their own, the embedded Smart Object), **linked file**, **stack** (several sources
@@ -40,7 +41,10 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
    A pixel layer becomes **a source reference + its transform + its own stack** (ADR 0029,
    0034): paint, adjustments, filters and Liquify stay per layer, as effects stay per clip in a
    video editor. A new empty layer has no source, only its stack: every pixel layer is a
-   reference, one kind of content rather than two.
+   reference, one kind of content rather than two. A layer painted beyond its source grows
+   around it (ADR 0027): its original is the source in a larger grid, at an offset of whole
+   tiles the stack keeps, and the source itself never changes. Such a stack is kept even
+   without entries, for that offset (amended 2026-10-07, first implementation).
 2. **Sources are read-only.** Nothing writes into a source. Changing what a source shows
    makes a new source and points layers at it: every layer that referenced the old one
    (Replace Contents, a text corrected, a document edited), or only the active layer (Make
@@ -83,12 +87,14 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
    (source, region, pyramid level), in a bounded cache as the stack's pixels (ADR 0029); every
    layer referencing it reads the same tiles. A source never changes, so its tiles never go
    stale: a new source has new keys.
-10. **`.slop`**: the document gains a `sources` table (id, name, kind, content); raster nodes
-    reference a source id instead of holding their original image. Breaking compatibility is
-    accepted while the model is designed (maintainer, 2026-10-07). Before it is released, a
-    reader of the earlier schema turns each layer's original into a source, so that files
-    saved with v0.1 open. PSD export writes each layer evaluated; PSD Smart
-    Objects come with document sources.
+10. **`.slop`**: the document gains a `sources` table (name, image: schema 0.26), raster
+    nodes name theirs by its index and keep their original as before (the source's image when
+    the layer did not grow), with the source's offset when it grew. Breaking compatibility was
+    accepted while the model is designed (maintainer, 2026-10-07), but the first version needs
+    no break: older readers ignore the table, and files of earlier schemas read each original
+    as a source (one per image, so that layers duplicated then share theirs, named after the
+    first layer), so that files saved with v0.1 open. PSD export writes each layer evaluated;
+    PSD Smart Objects come with document sources.
 
 ## Alternatives
 

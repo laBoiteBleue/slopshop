@@ -27,7 +27,7 @@ use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER,
     NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
-    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -275,6 +275,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
         ..Residue::default()
     };
     let mut used = HashSet::new();
+    let mut sources = Sources::of(&manifest, &rasters)?;
     let mut layers = Vec::with_capacity(doc.stack.len());
     for id in &doc.stack {
         layers.push(read_node(
@@ -282,6 +283,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
             0,
             &manifest,
             &rasters,
+            &mut sources,
             &mut residue,
             &mut used,
         )?);
@@ -313,13 +315,79 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     Ok((document, index, records, residue))
 }
 
+/// The sources raster nodes show (ADR 0040): the document's list from schema 0.26. Before it,
+/// each original is read as a source, shared by the nodes of the same original (layers
+/// duplicated then) and named after the first of them.
+pub(super) struct Sources {
+    listed: Option<Vec<Arc<slopshop_core::Source>>>,
+    made: HashMap<ImageId, Arc<slopshop_core::Source>>,
+}
+
+impl Sources {
+    pub(super) fn of(
+        manifest: &Manifest,
+        rasters: &HashMap<Hash, Arc<RasterImage>>,
+    ) -> Result<Self, FileError> {
+        let listed = if manifest.schema.minor < SCHEMA_MINOR_SOURCES {
+            None
+        } else {
+            let listed = manifest
+                .document
+                .sources
+                .iter()
+                .map(|dto| {
+                    let image = Hash::from_key(&dto.image)
+                        .and_then(|key| rasters.get(&key))
+                        .ok_or_else(|| corrupt("a source with a missing image"))?;
+                    Ok(slopshop_core::Source::new(
+                        Arc::clone(image),
+                        dto.name.clone(),
+                    ))
+                })
+                .collect::<Result<_, FileError>>()?;
+            Some(listed)
+        };
+        Ok(Self {
+            listed,
+            made: HashMap::new(),
+        })
+    }
+
+    /// The source of raster node `node`, whose original is `original`: the one its
+    /// `params.source` names (none without it), or in a file of before, the original's.
+    pub(super) fn of_node(
+        &mut self,
+        node: &NodeDto,
+        original: &Arc<RasterImage>,
+    ) -> Result<Option<Arc<slopshop_core::Source>>, FileError> {
+        let Some(listed) = &self.listed else {
+            let source = self.made.entry(original.id()).or_insert_with(|| {
+                slopshop_core::Source::new(Arc::clone(original), node.name.clone())
+            });
+            return Ok(Some(Arc::clone(source)));
+        };
+        match node.params.get("source") {
+            None | Some(Value::Null) => Ok(None),
+            Some(index) => index
+                .as_u64()
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| listed.get(i))
+                .cloned()
+                .map(Some)
+                .ok_or_else(|| corrupt("raster node with a missing source")),
+        }
+    }
+}
+
 /// The layer of node `id` (`depth`: groups around it), a group with its children. Each node may
 /// be used once: the stack and the groups form a tree.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn read_node(
     id: u64,
     depth: usize,
     manifest: &Manifest,
     rasters: &HashMap<Hash, Arc<RasterImage>>,
+    sources: &mut Sources,
     residue: &mut Residue,
     used: &mut HashSet<u64>,
 ) -> Result<Layer, FileError> {
@@ -347,7 +415,7 @@ pub(super) fn read_node(
             let image = rasters
                 .get(&key)
                 .ok_or_else(|| corrupt("raster node with a missing image"))?;
-            raster_content(node, manifest, image, rasters)?
+            raster_content(node, manifest, image, rasters, sources)?
         }
         NODE_FILL if known_fill => {
             let color = node
@@ -381,7 +449,9 @@ pub(super) fn read_node(
             let children = node
                 .inputs
                 .iter()
-                .map(|&child| read_node(child, depth + 1, manifest, rasters, residue, used))
+                .map(|&child| {
+                    read_node(child, depth + 1, manifest, rasters, sources, residue, used)
+                })
                 .collect::<Result<_, _>>()?;
             LayerContent::Group {
                 children,
@@ -568,6 +638,7 @@ fn raster_content(
     manifest: &Manifest,
     image: &Arc<RasterImage>,
     rasters: &HashMap<Hash, Arc<RasterImage>>,
+    sources: &mut Sources,
 ) -> Result<LayerContent, FileError> {
     use slopshop_core::filter::Filter;
     use slopshop_core::stack::{
@@ -607,25 +678,42 @@ fn raster_content(
     };
     // Version 6: the painted pixels over the original.
     if let Some(original) = painted_original(node, &node.params, rasters)? {
+        let source = sources.of_node(node, &original)?;
         let space = document_blend_space(&manifest.document)?;
         let paint = PaintEntry::from_painted(&original, image, space).map_err(invalid)?;
-        let stack = LayerStack::new(original)
+        let stack = LayerStack::new(Arc::clone(&original))
             .with_top_paint(Arc::new(paint))
             .map_err(invalid)?;
-        // The conversion is exact: the painted pixels are the stack's result.
-        let shown = if image.format() == stack.format() {
+        // The conversion is exact: the painted pixels are the stack's result (the original
+        // itself when nothing was painted).
+        let shown = if stack.is_empty() {
+            slopshop_core::stack::Pixels::ready(Arc::clone(&original))
+        } else if image.format() == stack.format() {
             slopshop_core::stack::Pixels::ready(Arc::clone(image))
         } else {
             slopshop_core::stack::Pixels::pending(stack.clone(), None)
         };
         let stack = (!stack.is_empty()).then_some(stack);
         return Ok(LayerContent::Raster {
+            source,
             image: shown,
             stack,
         });
     }
+    let source = sources.of_node(node, image)?;
+    let unstacked = |source: Option<Arc<slopshop_core::Source>>| match source {
+        // Nothing applied: the layer shows its source itself.
+        Some(source) if !Arc::ptr_eq(source.image(), image) => {
+            Err(corrupt("raster node showing another image than its source"))
+        }
+        source => Ok(LayerContent::Raster {
+            source,
+            image: slopshop_core::stack::Pixels::ready(Arc::clone(image)),
+            stack: None,
+        }),
+    };
     let entries = match node.params.get("stack") {
-        None | Some(Value::Null) => return Ok(LayerContent::raster(Arc::clone(image))),
+        None | Some(Value::Null) => return unstacked(source),
         Some(Value::Array(entries)) if node.version >= NODE_VERSION_STACK => entries,
         Some(_) => return Err(corrupt("invalid stack")),
     };
@@ -745,13 +833,42 @@ fn raster_content(
             return Err(FileError::UnknownNodeType("stack entry".to_owned()));
         }
     }
-    let stack = LayerStack::with_entries(Arc::clone(image), stack).map_err(invalid)?;
-    if stack.is_empty() {
-        return Ok(LayerContent::raster(Arc::clone(image)));
+    let offset = match node.params.get("source_offset") {
+        None => (0, 0),
+        Some(value) => value
+            .as_array()
+            .filter(|v| v.len() == 2)
+            .and_then(|v| {
+                let at = |i: usize| v[i].as_u64().and_then(|v| u32::try_from(v).ok());
+                Some((at(0)?, at(1)?))
+            })
+            .ok_or_else(|| corrupt("invalid source offset"))?,
+    };
+    if let Some(source) = &source {
+        // The layer grew around its source: the source lies within its original.
+        let (size, grid) = (source.image().size(), image.size());
+        let fits = |offset: u32, side: u32, of: u32| {
+            u64::from(offset) * u64::from(TILE_SIZE) + u64::from(side) <= u64::from(of)
+        };
+        if !fits(offset.0, size.width, grid.width) || !fits(offset.1, size.height, grid.height) {
+            return Err(corrupt("a source outside its layer"));
+        }
+    }
+    let stack = LayerStack::with_entries(Arc::clone(image), stack)
+        .map_err(invalid)?
+        .with_source_offset(offset);
+    // Without entries, a stack is kept only by a layer grown around its source.
+    if stack.is_empty()
+        && source
+            .as_ref()
+            .is_none_or(|s| Arc::ptr_eq(s.image(), image))
+    {
+        return unstacked(source);
     }
     // Evaluated when first asked: the document opens at once, the renderer showing the
     // stack meanwhile (ADR 0029).
     Ok(LayerContent::Raster {
+        source,
         image: slopshop_core::stack::Pixels::pending(stack.clone(), None),
         stack: Some(stack),
     })

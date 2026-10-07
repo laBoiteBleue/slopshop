@@ -112,6 +112,7 @@ fn sample_document() -> Document {
         &mut doc,
         "photo",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(rgb8.clone()),
         },
@@ -121,6 +122,7 @@ fn sample_document() -> Document {
         &mut doc,
         "rgba16",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(image(
                 size,
@@ -136,6 +138,7 @@ fn sample_document() -> Document {
         &mut doc,
         "gray f16",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(40, 520),
@@ -150,6 +153,7 @@ fn sample_document() -> Document {
         &mut doc,
         "rgba f32",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(17, 9),
@@ -165,6 +169,7 @@ fn sample_document() -> Document {
         &mut doc,
         "photo (copie)",
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(rgb8),
             stack: None,
         },
@@ -322,8 +327,12 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
                 assert_eq!(bits(c), bits(d), "{}", x.name);
             }
             (
-                LayerContent::Raster { image: i, stack: s },
-                LayerContent::Raster { image: j, stack: t },
+                LayerContent::Raster {
+                    image: i, stack: s, ..
+                },
+                LayerContent::Raster {
+                    image: j, stack: t, ..
+                },
             ) => {
                 assert_same_image(&i.get(), &j.get(), &x.name);
                 assert_same_stack(s.as_ref(), t.as_ref(), &x.name);
@@ -415,6 +424,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         &mut doc,
         "original",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(Arc::clone(&original)),
         },
@@ -428,6 +438,7 @@ fn an_image_sharing_tiles_with_a_saved_one_reuses_their_hashes() {
         &mut doc,
         "shared",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(Arc::new(shared)),
         },
@@ -464,6 +475,7 @@ fn a_new_layer_appends_only_its_tiles_and_the_session_carries_on() {
         &mut doc,
         "nouveau",
         LayerContent::Raster {
+            source: None,
             image: slopshop_core::stack::Pixels::ready(added),
             stack: None,
         },
@@ -496,6 +508,7 @@ fn removed_data_is_compacted_away_once_it_dominates() {
         &mut doc,
         "gros",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(image(
                 size,
@@ -543,6 +556,7 @@ fn two_generations(name: &str) -> (PathBuf, Document, Document, Vec<u8>, Vec<u8>
         &mut second,
         "ajout",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(300, 10),
@@ -645,6 +659,7 @@ fn damaged_files_are_errors_never_panics() {
         &mut doc,
         "image",
         LayerContent::Raster {
+            source: None,
             stack: None,
             image: slopshop_core::stack::Pixels::ready(image(
                 Size::new(40, 30),
@@ -1035,6 +1050,7 @@ fn golden_document_v0_3() -> Document {
         .collect();
     let ramp = image(size, ChannelLayout::GrayAlpha, SampleType::F16, ramp);
     let raster = |image: &Arc<RasterImage>| LayerContent::Raster {
+        source: None,
         stack: None,
         image: slopshop_core::stack::Pixels::ready(image.clone()),
     };
@@ -1352,6 +1368,7 @@ fn damaged_layer_trees_are_refused() {
                     0,
                     &manifest,
                     &std::collections::HashMap::new(),
+                    &mut read::Sources::of(&manifest, &std::collections::HashMap::new())?,
                     &mut residue,
                     &mut used,
                 )
@@ -1776,6 +1793,7 @@ fn layers_in_perspective_round_trip_at_node_version_11() {
             LayerContent::Raster {
                 image,
                 stack: Some(_),
+                ..
             } => Some((l.id, image.size())),
             _ => None,
         })
@@ -2067,4 +2085,128 @@ fn guides_round_trip_in_their_order_and_unknown_axes_are_newer() {
         read(r#","guides":[{"axis":"diagonal","position":4}]"#),
         Err("newerVersion")
     );
+}
+
+#[test]
+fn sources_round_trip_shared_named_and_placed_in_grown_layers() {
+    use slopshop_core::LayerId;
+    let size = Size::new(300, 270);
+    let pixels = |seed| noise(size.pixel_count() as usize * 4, seed);
+    let rgba = |pixels| image(size, ChannelLayout::Rgba, SampleType::U8, pixels);
+    let mut doc = Document::new(size);
+    let photo = slopshop_core::Source::new(rgba(pixels(7)), "photo.jpg");
+    let a = push(
+        &mut doc,
+        "a",
+        LayerContent::from_source(Arc::clone(&photo)),
+        1.0,
+    );
+    let b = push(
+        &mut doc,
+        "b",
+        LayerContent::from_source(Arc::clone(&photo)),
+        1.0,
+    );
+    let unnamed = push(
+        &mut doc,
+        "pasted",
+        LayerContent::raster(rgba(pixels(8))),
+        1.0,
+    );
+    let blank = push(&mut doc, "blank", LayerContent::blank(rgba(pixels(9))), 1.0);
+    // B grew around the source (painted beyond it, the paint deleted since).
+    let t = slopshop_core::raster::TILE_SIZE;
+    let grown = LayerStack::new(Arc::clone(photo.image()))
+        .grown((1, 0), Size::new(300 + t, 270))
+        .unwrap();
+    Edit::SetLayerStack {
+        id: LayerId::from_raw(b),
+        stack: grown,
+        shown: None,
+    }
+    .apply(&mut doc)
+    .unwrap();
+
+    let path = temp_path("sources.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let layer = |id| loaded.layer(LayerId::from_raw(id)).unwrap();
+    let source = |id| layer(id).content.source().cloned();
+    let (from_a, from_b) = (source(a).unwrap(), source(b).unwrap());
+    assert!(Arc::ptr_eq(&from_a, &from_b), "one source, shared again");
+    assert_eq!(from_a.name(), "photo.jpg");
+    assert_same_image(from_a.image(), photo.image(), "the source");
+    assert_eq!(source(unnamed).unwrap().name(), "");
+    assert!(source(blank).is_none());
+    match &layer(b).content {
+        LayerContent::Raster {
+            stack: Some(stack), ..
+        } => {
+            assert!(stack.is_empty());
+            assert_eq!(stack.source_offset(), (1, 0));
+        }
+        _ => panic!("the grown layer keeps where its source lies"),
+    }
+    // Saved again unchanged, the sources stay as they were.
+    let mut file = SlopFile::open(&path).unwrap().1;
+    file.save(&loaded).unwrap();
+    let (again, _) = SlopFile::open(&path).unwrap();
+    let names: Vec<_> = again
+        .all_layers()
+        .filter_map(|l| l.content.source().map(|s| s.name().to_owned()))
+        .collect();
+    assert_eq!(names, ["photo.jpg", "photo.jpg", ""]);
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn files_before_sources_give_each_original_a_source_named_after_its_layer() {
+    for version in ["0.1", "0.4", "0.12"] {
+        let (loaded, _) = SlopFile::open(&golden_path(version)).unwrap();
+        let mut by_original: Vec<(Arc<RasterImage>, Arc<slopshop_core::Source>)> = Vec::new();
+        for layer in loaded.all_layers() {
+            let LayerContent::Raster { .. } = &layer.content else {
+                continue;
+            };
+            let source = layer.content.source().expect("every raster has a source");
+            let original = layer.content.original().unwrap();
+            assert!(Arc::ptr_eq(source.image(), original), "{version}");
+            match by_original.iter().find(|(o, _)| Arc::ptr_eq(o, original)) {
+                // Layers of the same original (duplicated then) share one source.
+                Some((_, first)) => assert!(Arc::ptr_eq(first, source), "{version}"),
+                None => {
+                    assert_eq!(source.name(), layer.name, "{version}");
+                    by_original.push((Arc::clone(original), Arc::clone(source)));
+                }
+            }
+        }
+        assert!(!by_original.is_empty(), "{version}");
+    }
+}
+
+#[test]
+fn a_raster_node_naming_a_missing_source_is_refused() {
+    let json = r#"{"schema":{"major":0,"minor":26},"writer":{"app":"test","version":"0"},
+        "document":{"size":[1,1],"working_space":{"primaries":{"r":[0.708,0.292],"g":[0.17,0.797],"b":[0.131,0.046],"w":[0.3127,0.329]},"transfer":{"kind":"linear"}},"next_node_id":2,"stack":[1]},
+        "nodes":{"1":{"type":"slopshop.raster","version":3,"name":"r","visible":true,"opacity":1.0,"params":{"blend_mode":"normal","image":"","source":3},"inputs":[]}},"images":{}}"#;
+    let manifest: manifest::Manifest = serde_json::from_str(json).unwrap();
+    let rasters = std::collections::HashMap::new();
+    let mut sources = read::Sources::of(&manifest, &rasters).unwrap();
+    let node = &manifest.nodes["1"];
+    let original = image(
+        Size::new(1, 1),
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        vec![0; 4],
+    );
+    let refused = sources
+        .of_node(node, &original)
+        .map(|_| ())
+        .map_err(|e| e.code());
+    assert_eq!(refused, Err("corrupt"));
+    // Without `source`, a node of this schema shows none (a layer made empty).
+    let mut blank = node.clone();
+    blank.params.remove("source");
+    assert!(sources.of_node(&blank, &original).unwrap().is_none());
 }
