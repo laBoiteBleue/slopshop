@@ -1,7 +1,6 @@
 # 0044 — Warps: a deformation mesh placing a layer
 
-Status: proposed (2026-10-07, drafted for the maintainer, who approved the warps the same day;
-the roadmap asks for an ADR first; the questions at the end are theirs).
+Status: accepted (2026-10-07, the maintainer's answers below).
 
 ## Context
 
@@ -22,7 +21,7 @@ All three deformations end as the same thing: **a mesh of small pieces, each map
 layer's content to its parent smoothly**. The GPU draws a textured mesh natively; the CPU can
 draw the same triangles exactly.
 
-## Decision (proposed)
+## Decision
 
 1. **A layer's placement gains an optional warp**: `Layer::warp`, applied in the content's
    space before the layer's transform (so Free Transform still moves, scales and puts a warped
@@ -69,12 +68,11 @@ draw the same triangles exactly.
 - Free Transform's overlay gains the grid; two new workspaces (Puppet, Perspective).
 - The deformation of groups (a warp on a group) is left open, as perspective on groups is.
 
-## Questions for the maintainer
+## Answers (the maintainer, 2026-10-07)
 
-1. Warp on every kind of layer from the start (pixel, fill, group, later vector), or pixel
-   layers first?
-2. Photoshop's Warp presets (15 of them): all at once, or a few (Arc, Bulge, Flag, Wave, Twist)?
-3. Puppet Warp's mesh: from the layer's visible pixels (Photoshop's), or a plain grid over its
-   box (simpler, less natural)?
-4. Painting on a warped layer: allowed (through the mesh, as proposed), or refused at first?
-5. The order: Warp, Perspective Warp, Puppet Warp?
+1. Pixel layers first; the other kinds later.
+2. Five presets to start: Arc, Bulge, Flag, Wave, Twist.
+3. Puppet Warp's mesh from the layer's visible pixels, as Photoshop.
+4. Painting on a warped layer refused at first, as on layers in perspective (point 4 then
+   applies later).
+5. Order: Warp, Perspective Warp, Puppet Warp.
