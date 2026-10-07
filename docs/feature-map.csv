@@ -255,7 +255,7 @@ Menu,Layer > Video Layers > Restore All Frames,,wont,video editing is out of sco
 Menu,Layer > Video Layers > Reload Frame,,wont,video editing is out of scope for now
 Menu,Layer > Video Layers > Rasterize,,wont,video editing is out of scope for now
 Menu,Layer > Rasterize > Type,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
-Menu,Layer > Rasterize > Shape,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Shape,,done,Layer > Bake to Pixels > Rasterize on a vector layer (ADR 0031)
 Menu,Layer > Rasterize > Fill Content,,done,Layer > Bake to Pixels > Rasterize (ADR 0031)
 Menu,Layer > Rasterize > Vector Mask,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
 Menu,Layer > Rasterize > Smart Object,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
@@ -656,12 +656,12 @@ Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started
 Tool,Tools panel > Path > Path Selection,,open,paths are not started
 Tool,Tools panel > Path > Direct Selection,,open,paths are not started
-Tool,Tools panel > Shape > Rectangle,,open,shape layers are not started
-Tool,Tools panel > Shape > Ellipse,,open,shape layers are not started
-Tool,Tools panel > Shape > Triangle,,open,shape layers are not started
-Tool,Tools panel > Shape > Polygon,,open,shape layers are not started
-Tool,Tools panel > Shape > Line,,open,shape layers are not started
-Tool,Tools panel > Shape > Custom Shape,,open,shape layers are not started
+Tool,Tools panel > Shape > Rectangle,,done,"U: a vector layer (ADR 0041); fill, stroke (inside, center, outside), corner radius"
+Tool,Tools panel > Shape > Ellipse,,done,U: a vector layer (ADR 0041)
+Tool,Tools panel > Shape > Triangle,,partial,the Polygon tool with three sides
+Tool,Tools panel > Shape > Polygon,,done,"U: sides, star with its indent"
+Tool,Tools panel > Shape > Line,,done,"U: stroke only, Shift at 45° steps"
+Tool,Tools panel > Shape > Custom Shape,,open,"vector layers exist (ADR 0041); waits for paths"
 Tool,Tools panel > Navigation > Hand,,partial,"Space+drag, middle button or wheel; no tool button"
 Tool,Tools panel > Navigation > Rotate View,,open,"a view rotation, not a document change"
 Tool,Tools panel > Navigation > Zoom,,partial,Ctrl+wheel and the zoom slider; no tool button

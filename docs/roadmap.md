@@ -390,6 +390,13 @@ Raised on 2026-10-05, to schedule:
 - [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR, as a source
       kind without a stack (ADR 0040, point 8); an editor without the Type tool surprises
       users and contributors alike
+  - [x] Vector layers (ADR 0041): shapes as sources, drawn anti-aliased where the layer is
+        placed (affine or in perspective), on the CPU and the GPU alike; `.slop` 0.30
+  - [x] Shape tools (U): Rectangle, Ellipse, Polygon (and stars), Line; fill and stroke in the
+        options bar
+  - [ ] A vector layer's shape edited in the Properties panel
+  - [ ] Pen and paths, vector masks
+  - [ ] Type
 - [ ] History memory limits
 - [ ] Very large images (Phase 4)
 - [ ] Distribution (Phase 5): installers built by CI on a version tag (done 2026-10-06, not

@@ -4,6 +4,7 @@
 import { hexToSrgb, srgbToHex } from "./color";
 import type { BlendModeId, EditRequest, LayerView } from "./engine";
 import type { GradientFill } from "./gradientFill";
+import type { Shape } from "./shapes";
 import { childrenOf, insertionPoint, outermost, type LayerTree } from "./layerTree";
 
 /** One edit, or one batch (a single undo entry) for several. */
@@ -127,6 +128,17 @@ export function newGradientFillLayer(
 ): EditRequest {
   const { parent, index } = insertionPoint(tree, active);
   return { kind: "addGradientFill", name, gradient, parent, index };
+}
+
+/** A new vector layer of `shape` above `active`, placed as `newFill` places a fill layer. */
+export function newShapeLayer(
+  tree: LayerTree,
+  active: number | null,
+  shape: Shape,
+  name: string,
+): EditRequest {
+  const { parent, index } = insertionPoint(tree, active);
+  return { kind: "addShape", name, shape, parent, index };
 }
 
 /** Whether `layer` has settings the Properties panel shows: an adjustment or a fill layer. */
