@@ -137,3 +137,22 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
 - Order of work: the core model (sources, references, `Repoint`, lifetime) with tests; image
   sources replacing raster originals, `.slop` and the earlier schema's reader; Duplicate and
   Make Unique; the Sources panel; then vector content.
+
+## Amendment (2026-10-08): linked and independent copies, the bin
+
+The maintainer's answers, as Photoshop does with Smart Objects:
+
+- **Duplicate (Ctrl+J) makes a linked copy**: the copy shows the same source. A change of
+  the source (a vector layer's shape, ADR 0041; Replace Contents when it comes) reaches every
+  linked copy; painting, filters, masks and styles stay each layer's.
+- **Layer > Duplicate as Independent Copy** (Photoshop's New Smart Object via Copy): the copy
+  shows a source of its own, of the same pixels or shape (nothing copied), named after the
+  original's. Make Source Unique still unlinks a layer afterwards.
+- **The Layers panel marks linked layers** (a link and how many others change with them), so
+  that a change reaching several layers never surprises.
+- **Every pixel layer's content is in the bin, named**: an independent copy ("Logo copy"), and
+  what Rasterize, Merge and Flatten make (named after the layer they make), not unnamed
+  entries. A source no layer shows leaves the bin. Vector shapes are shown there too.
+- **Deleting a source from the bin** deletes the layers that show it, after a confirmation
+  listing them, as one undo entry; a Pattern Overlay using it is removed from its style, the
+  layer kept.

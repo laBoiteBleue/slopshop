@@ -398,11 +398,15 @@
     void edit({ kind: "translateLayers", ids: selectedIds, dx, dy });
   }
 
-  /** Copies of the selected layers, each above its original (Layer > Duplicate Layer, Ctrl+J). */
-  export function duplicateSelected() {
+  /**
+   * Copies of the selected layers, each above its original (Layer > Duplicate Layer, Ctrl+J):
+   * linked to it (ADR 0040), or with `independent` sources of their own (Layer > Duplicate as
+   * Independent Copy).
+   */
+  export function duplicateSelected(independent = false) {
     if (selection.length === 0) return;
     const nameFormat = t("layers.copyName", { name: "{name}" });
-    void edit({ kind: "duplicateLayers", ids: selectedIds, nameFormat });
+    void edit({ kind: "duplicateLayers", ids: selectedIds, nameFormat, independent });
   }
 
   /** Hide the selected layers, or show them all when the active one is hidden. */
@@ -1168,6 +1172,16 @@
           {/if}
           {#if hasEffects(layer.style)}
             <span class="fx" title={t("layers.fx")}>fx</span>
+          {/if}
+          <!-- Linked copies change together (ADR 0040). -->
+          {#if (layer.linked ?? 0) > 0}
+            <span
+              class="painted linked"
+              title={t("layers.linked", { n: layer.linked ?? 0 })}
+              aria-label={t("layers.linked", { n: layer.linked ?? 0 })}
+            >
+              <Icon name="link" size={12} />
+            </span>
           {/if}
           {#if layer.entries.length > 0 || effectsOf(layer.style).length > 0}
             <button

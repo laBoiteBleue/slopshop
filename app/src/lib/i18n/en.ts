@@ -148,6 +148,7 @@ const en = {
   "layerVia.empty": "The selected area holds no pixels of the layer.",
   "menu.layer.duplicate": "Duplicate Layer",
   "menu.layer.duplicateLayers": "Duplicate Layers",
+  "menu.layer.duplicateIndependent": "Duplicate as Independent Copy",
   "menu.layer.hideLayer": "Hide Layer",
   "menu.layer.hideLayers": "Hide Layers",
   "menu.layer.showLayer": "Show Layer",
@@ -1215,6 +1216,8 @@ const en = {
   "layers.addFill": "Add fill layer",
   "layers.clippedHint": "Clipped to the layer below (Alt+click the line between them to release)",
   "layers.copyName": "{name} copy",
+  "layers.linked":
+    "Linked to {n} other layers: they change together (Layer > Make Source Unique to unlink)",
   "layers.newGroup": "New group",
   "layers.defaultGroupName": "Group {n}",
   "layers.expand": "Expand group",

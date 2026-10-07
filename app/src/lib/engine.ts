@@ -172,6 +172,8 @@ export type LayerView = {
   gradientFill?: GradientFill | null;
   /** A vector layer's shape (ADR 0041); null for a path, not edited here yet. */
   shape?: Shape | null;
+  /** How many other layers are linked to this one (the same source or shape, ADR 0040). */
+  linked?: number;
   /** A pattern fill layer's pattern (ADR 0042): its source, scale and angle (degrees). */
   pattern?: { source: number; scale: number; angle: number } | null;
 };
@@ -659,7 +661,8 @@ export type EditRequest =
   /** Layer > Arrange: `ids` moved within their groups. */
   | { kind: "arrangeLayers"; ids: number[]; arrange: "front" | "forward" | "backward" | "back" }
   /** Copies right above their originals, named by `nameFormat` (`{name}`: the original's). */
-  | { kind: "duplicateLayers"; ids: number[]; nameFormat: string }
+  /** Linked copies (ADR 0040), or `independent` ones with sources of their own. */
+  | { kind: "duplicateLayers"; ids: number[]; nameFormat: string; independent?: boolean }
   /** Copies as `duplicateLayers`, then `matrix` applied to them (Duplicate and Transform Again). */
   | {
       kind: "duplicateTransformLayers";

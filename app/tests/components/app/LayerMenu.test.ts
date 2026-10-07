@@ -219,3 +219,26 @@ test("Layer > New Fill Layer > Gradient adds the drawing colors' gradient across
     to: [expect.closeTo(200, 6), expect.closeTo(0, 6)],
   });
 });
+
+test("Layer > Duplicate Layer makes a linked copy, Duplicate as Independent Copy one of its own", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(row("Cat"));
+  for (const name of ["Duplicate Layer", "Duplicate as Independent Copy"]) {
+    await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+    await user.click(screen.getByText(name, { selector: ".label" }));
+  }
+  await vi.waitFor(() => expect(sent("perform")).toHaveLength(2));
+  expect(sent("perform").map((p) => (p as { edit: unknown }).edit)).toEqual([
+    { kind: "duplicateLayers", ids: [1], nameFormat: "{name} copy", independent: false },
+    { kind: "duplicateLayers", ids: [1], nameFormat: "{name} copy", independent: true },
+  ]);
+});
+
+test("linked layers show a link mark telling how many change with them", async () => {
+  const linked = (id: number, name: string): LayerView => ({ ...layer(id, name), linked: 1 });
+  open(documentView(1, "cat.jpg", [linked(1, "Logo"), linked(2, "Logo copy"), layer(3, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Logo copy", "Logo"]));
+  const marks = screen.getAllByLabelText(/^Linked to 1 other layers/);
+  expect(marks).toHaveLength(2);
+});

@@ -483,4 +483,31 @@ mod tests {
             Err(crate::document::RestoreError::InvalidShape(_))
         ));
     }
+
+    #[test]
+    fn a_linked_shape_changes_on_every_copy() {
+        let mut doc = document();
+        let source = ShapeSource::new(rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None), "Box");
+        let a = add_vector(&mut doc, Arc::clone(&source), Projective::IDENTITY);
+        let b = add_vector(&mut doc, source, Projective::IDENTITY);
+        let other = ShapeSource::new(rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None), "Other");
+        let c = add_vector(&mut doc, other, Projective::IDENTITY);
+        let shape_of = |doc: &Document, id| match &doc.layer(id).unwrap().content {
+            LayerContent::Vector { source, .. } => Arc::clone(source),
+            _ => unreachable!("a vector layer"),
+        };
+        let blue = rectangle([0.0, 0.0, 8.0, 8.0], Some(BLUE), None);
+        let undo = Edit::reshape(&doc, a, blue.clone())
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // Both linked copies changed, still linked, the name kept; the other one untouched.
+        assert_eq!(shape_of(&doc, a).shape(), &blue);
+        assert!(Arc::ptr_eq(&shape_of(&doc, a), &shape_of(&doc, b)));
+        assert_eq!(shape_of(&doc, b).name(), "Box");
+        assert_eq!(shape_of(&doc, c).shape().fill, Some(RED));
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(shape_of(&doc, b).shape().fill, Some(RED));
+        assert!(Arc::ptr_eq(&shape_of(&doc, a), &shape_of(&doc, b)));
+    }
 }

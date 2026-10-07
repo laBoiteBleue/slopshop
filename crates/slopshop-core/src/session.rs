@@ -403,6 +403,40 @@ impl Session {
         Ok(Edit::Batch(edits))
     }
 
+    /// [`Self::duplicate_layers_edit`] for independent copies (Photoshop's New Smart Object via
+    /// Copy): each copy, and each layer inside a copied group, shows a source of its own (the
+    /// same pixels or shape, nothing copied), named by `name` after the original's; the copies
+    /// are not linked to their originals (ADR 0040).
+    pub fn independent_copies_edit(
+        &mut self,
+        ids: &[LayerId],
+        name: impl Fn(&str) -> String,
+    ) -> Result<Edit, EditError> {
+        let Edit::Batch(edits) = self.duplicate_layers_edit(ids, &name)? else {
+            unreachable!("duplicate_layers_edit gives a batch");
+        };
+        Ok(Edit::Batch(
+            edits
+                .into_iter()
+                .map(|edit| match edit {
+                    Edit::InsertLayer {
+                        parent,
+                        index,
+                        mut layer,
+                    } => {
+                        make_independent(&mut layer, &name);
+                        Edit::InsertLayer {
+                            parent,
+                            index,
+                            layer,
+                        }
+                    }
+                    other => other,
+                })
+                .collect(),
+        ))
+    }
+
     /// A copy of `layer`, and for a group of everything inside it, with fresh ids, pushed to
     /// `ids` depth first.
     fn fresh_copy(&mut self, layer: &Layer, ids: &mut Vec<LayerId>) -> Layer {
@@ -491,6 +525,35 @@ impl Session {
                 Err(err)
             }
         }
+    }
+}
+
+/// `layer` (and the layers inside it) showing sources of its own, named by `name` after
+/// those it showed: the same pixels or shape, unlinked.
+fn make_independent(layer: &mut Layer, name: &impl Fn(&str) -> String) {
+    match &mut layer.content {
+        LayerContent::Raster {
+            source: Some(source),
+            ..
+        } => {
+            *source = crate::source::Source::new(Arc::clone(source.image()), name(source.name()));
+        }
+        LayerContent::PatternFill { pattern } => {
+            pattern.source = crate::source::Source::new(
+                Arc::clone(pattern.source.image()),
+                name(pattern.source.name()),
+            );
+        }
+        LayerContent::Vector { source, drawing } => {
+            *source = crate::shape::ShapeSource::new(source.shape().clone(), name(source.name()));
+            *drawing = Arc::default();
+        }
+        LayerContent::Group { children, .. } => {
+            for child in children {
+                make_independent(child, name);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1099,5 +1162,20 @@ mod tests {
         let copy = &s.document().layers()[1];
         assert_eq!(copy.name, "a copy");
         assert!(Arc::ptr_eq(copy.content.source().unwrap(), &photo));
+
+        // An independent copy: its own source, of the same pixels, named after the original's.
+        let edit = s
+            .independent_copies_edit(&[a], |name| format!("{name} copy"))
+            .unwrap();
+        s.perform(edit).unwrap();
+        let independent = &s.document().layers()[1];
+        assert_eq!(independent.name, "a copy");
+        let own = independent.content.source().unwrap();
+        assert!(!Arc::ptr_eq(own, &photo));
+        assert!(Arc::ptr_eq(own.image(), photo.image()), "no pixels copied");
+        assert_eq!(own.name(), "photo.png copy");
+        // The original's source is still shared with the linked copy only.
+        let sources = s.document().sources();
+        assert_eq!(sources.len(), 2);
     }
 }

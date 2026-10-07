@@ -150,6 +150,7 @@ const fr: Messages = {
   "layerVia.empty": "La zone sélectionnée ne contient aucun pixel du calque.",
   "menu.layer.duplicate": "Dupliquer le calque",
   "menu.layer.duplicateLayers": "Dupliquer les calques",
+  "menu.layer.duplicateIndependent": "Dupliquer en copie indépendante",
   "menu.layer.hideLayer": "Masquer le calque",
   "menu.layer.hideLayers": "Masquer les calques",
   "menu.layer.showLayer": "Afficher le calque",
@@ -1236,6 +1237,8 @@ const fr: Messages = {
   "layers.clippedHint":
     "Écrêté sur le calque inférieur (Alt+clic sur la ligne entre eux pour annuler)",
   "layers.copyName": "{name} copie",
+  "layers.linked":
+    "Lié à {n} autre(s) calque(s) : ils changent ensemble (Calque > Rendre la source unique pour les délier)",
   "layers.newGroup": "Nouveau groupe",
   "layers.defaultGroupName": "Groupe {n}",
   "layers.expand": "Déplier le groupe",

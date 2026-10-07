@@ -4719,6 +4719,51 @@ mod tests {
     }
 
     #[test]
+    fn copies_are_linked_unless_independent_and_linked_shapes_change_together() {
+        let mut s = blank_session();
+        let shape = r#"{"geometry":{"kind":"ellipse","center":[20.0,20.0],"radii":[10.0,5.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
+        let request = |json: String| -> EditRequest { serde_json::from_str(&json).unwrap() };
+        let perform = |s: &mut Session, json: String| {
+            let edit = request(json).into_edit(s).unwrap();
+            s.perform(edit).unwrap();
+        };
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"addShape","name":"Ellipse 1","shape":{shape}}}"#),
+        );
+        let id = s.document().layers()[1].id.get();
+        // Ctrl+J: a linked copy.
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"duplicateLayers","ids":[{id}],"nameFormat":"{{name}} copy"}}"#),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let linked: Vec<u32> = view.layers.iter().map(|l| l.linked).collect();
+        assert_eq!(linked, [0, 1, 1]);
+        // A change of the shape reaches both.
+        let blue = shape.replace("[1.0,0.0,0.0,1.0]", "[0.0,0.0,1.0,1.0]");
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"setShape","id":{id},"shape":{blue}}}"#),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        for layer in &view.layers[1..] {
+            let fill = layer.shape.as_ref().unwrap().fill.unwrap();
+            assert!(fill[2] > 0.99 && fill[0] < 0.01, "{fill:?}");
+        }
+        // An independent copy: linked to nothing, its own source named after the original's.
+        perform(
+            &mut s,
+            format!(
+                r#"{{"kind":"duplicateLayers","ids":[{id}],"nameFormat":"{{name}} copy","independent":true}}"#
+            ),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let linked: Vec<u32> = view.layers.iter().map(|l| l.linked).collect();
+        assert_eq!(linked, [0, 1, 0, 1]);
+    }
+
+    #[test]
     fn view_requests_deserialize_and_apply() {
         let doc = Size::new(4000, 3000);
         let mut viewport = Viewport::new(doc, Size::new(800, 600));
