@@ -238,6 +238,8 @@ impl LayerContent {
     }
 
     /// A raster's source (ADR 0040), if it has one.
+    ///
+    /// (The document's sources, with the layers showing each, are [`Document::sources`].)
     pub fn source(&self) -> Option<&Arc<crate::source::Source>> {
         match self {
             Self::Raster { source, .. } => source.as_ref(),
@@ -529,6 +531,23 @@ pub struct Document {
 }
 
 impl Document {
+    /// The sources the layers show (ADR 0040), in the order they first show them (bottom to
+    /// top, a group's layers in it), each with the layers showing it in that order: what the
+    /// Sources panel lists.
+    pub fn sources(&self) -> Vec<(Arc<crate::source::Source>, Vec<LayerId>)> {
+        let mut sources: Vec<(Arc<crate::source::Source>, Vec<LayerId>)> = Vec::new();
+        for layer in self.all_layers() {
+            let Some(source) = layer.content.source() else {
+                continue;
+            };
+            match sources.iter_mut().find(|(s, _)| Arc::ptr_eq(s, source)) {
+                Some((_, layers)) => layers.push(layer.id),
+                None => sources.push((Arc::clone(source), vec![layer.id])),
+            }
+        }
+        sources
+    }
+
     /// An empty document. Colors are stored in linear light (the working space is linear);
     /// layers blend in the default [`BlendSpace`] (perceptual).
     pub fn new(size: Size) -> Self {

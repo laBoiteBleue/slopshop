@@ -99,6 +99,12 @@ pub enum Edit {
         stack: crate::stack::LayerStack,
         shown: Option<Arc<RasterImage>>,
     },
+    /// A pixel layer shows another source of the same pixels (Layer > Make Unique, ADR 0040).
+    /// Its stack is unchanged: its original is still the source's image.
+    Repoint {
+        id: LayerId,
+        source: Arc<crate::source::Source>,
+    },
     /// The same for a layer's mask: `painted` is a gray coverage of the mask's size.
     SetMaskPaint {
         id: LayerId,
@@ -227,6 +233,10 @@ pub enum EditError {
     InvalidSavedSelectionId(SavedSelectionId),
     /// Too many guides, or one at a position that is not finite or out of range.
     InvalidGuides,
+    /// The layer shows no source (ADR 0040): a layer made empty, or not a pixel layer.
+    NoSource(LayerId),
+    /// A layer repointed to a source of other pixels than its own (ADR 0040).
+    OtherPixels(LayerId),
 }
 
 impl fmt::Display for EditError {
@@ -275,6 +285,10 @@ impl fmt::Display for EditError {
                 write!(f, "{id} was not allocated by this document or is in use")
             }
             EditError::InvalidGuides => write!(f, "invalid guides"),
+            EditError::NoSource(id) => write!(f, "layer {id} shows no source"),
+            EditError::OtherPixels(id) => {
+                write!(f, "layer {id} can only show a source of its own pixels")
+            }
             EditError::InvalidTransform => {
                 write!(f, "a transform must be finite and invertible")
             }
@@ -480,6 +494,23 @@ impl Edit {
                     id,
                     stack: before,
                     shown: None,
+                }
+            }
+            Edit::Repoint { id, source } => {
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Raster {
+                    source: Some(current),
+                    ..
+                } = &mut layer.content
+                else {
+                    return Err(EditError::NoSource(id));
+                };
+                if !Arc::ptr_eq(current.image(), source.image()) {
+                    return Err(EditError::OtherPixels(id));
+                }
+                Edit::Repoint {
+                    id,
+                    source: std::mem::replace(current, source),
                 }
             }
             Edit::SetMaskPaint { id, painted } => {
@@ -999,6 +1030,37 @@ impl Edit {
             } => Ok(stack),
             _ => Err(EditError::NotRaster(id)),
         }
+    }
+
+    /// The edit that gives each of `ids` showing a source other layers show too a source of its
+    /// own, of the same pixels (Layer > Make Unique, ADR 0040): changing it then leaves the
+    /// others. [`EditError::NoLayers`] when none of them shares its source.
+    pub fn make_unique(doc: &Document, ids: &[LayerId]) -> Result<Edit, EditError> {
+        let sources = doc.sources();
+        let shared = |id: LayerId| {
+            sources
+                .iter()
+                .find(|(_, layers)| layers.contains(&id))
+                .filter(|(_, layers)| layers.len() > 1)
+                .map(|(source, _)| source)
+        };
+        let mut edits = Vec::new();
+        let mut seen = HashSet::new();
+        for &id in ids {
+            doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            if let Some(source) = shared(id)
+                && seen.insert(id)
+            {
+                edits.push(Edit::Repoint {
+                    id,
+                    source: source.unique(),
+                });
+            }
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
     }
 
     /// The edit that gives raster layer `id` `stack` with the change from `before` (what it
@@ -3933,6 +3995,106 @@ mod tests {
         assert_eq!(
             Edit::delete_paint(&doc, &[id]).map(|_| ()),
             Err(EditError::NoLayers)
+        );
+    }
+
+    #[test]
+    fn make_unique_gives_a_shared_layer_a_source_of_its_own_undoably() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let image = Arc::new(
+            RasterImage::from_placed(
+                size,
+                crate::color::PixelFormat::RGBA8_SRGB,
+                crate::geom::Rect::new(0, 0, 2, 2),
+                &[9u8; 16],
+                &[0; 4],
+            )
+            .unwrap(),
+        );
+        let photo = crate::source::Source::new(Arc::clone(&image), "photo.png");
+        let other = crate::source::Source::new(Arc::clone(&image), "other.png");
+        let mut insert = |content: LayerContent| {
+            let mut layer = fill_layer(&mut doc, "layer");
+            layer.content = content;
+            let id = layer.id;
+            let index = doc.layers().len();
+            Edit::InsertLayer {
+                parent: None,
+                index,
+                layer,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            id
+        };
+        let a = insert(LayerContent::from_source(Arc::clone(&photo)));
+        let b = insert(LayerContent::from_source(Arc::clone(&photo)));
+        let alone = insert(LayerContent::from_source(Arc::clone(&other)));
+        let fill = insert(LayerContent::Fill {
+            color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
+        });
+        let listed = |doc: &Document| -> Vec<(String, Vec<LayerId>)> {
+            doc.sources()
+                .into_iter()
+                .map(|(s, layers)| (s.name().to_owned(), layers))
+                .collect()
+        };
+        assert_eq!(
+            listed(&doc),
+            [
+                ("photo.png".to_owned(), vec![a, b]),
+                ("other.png".to_owned(), vec![alone])
+            ]
+        );
+        // Nothing shared among these: nothing to do.
+        assert_eq!(
+            Edit::make_unique(&doc, &[alone, fill]).map(|_| ()),
+            Err(EditError::NoLayers)
+        );
+        let edit = Edit::make_unique(&doc, &[b]).unwrap();
+        let undo = edit.apply(&mut doc).unwrap();
+        let unique = doc.layer(b).unwrap().content.source().unwrap();
+        assert!(!Arc::ptr_eq(unique, &photo));
+        assert!(Arc::ptr_eq(unique.image(), &image), "no pixel copied");
+        assert_eq!(unique.name(), "photo.png");
+        assert_eq!(listed(&doc).len(), 3);
+        undo.apply(&mut doc).unwrap();
+        assert!(Arc::ptr_eq(
+            doc.layer(b).unwrap().content.source().unwrap(),
+            &photo
+        ));
+        // Only to a source of the same pixels, and only a layer showing one.
+        let elsewhere = crate::source::Source::new(
+            Arc::new(
+                RasterImage::from_placed(
+                    size,
+                    crate::color::PixelFormat::RGBA8_SRGB,
+                    crate::geom::Rect::new(0, 0, 0, 0),
+                    &[],
+                    &[0; 4],
+                )
+                .unwrap(),
+            ),
+            "",
+        );
+        assert_eq!(
+            Edit::Repoint {
+                id: a,
+                source: elsewhere
+            }
+            .apply(&mut doc)
+            .map(|_| ()),
+            Err(EditError::OtherPixels(a))
+        );
+        assert_eq!(
+            Edit::Repoint {
+                id: fill,
+                source: Arc::clone(&photo)
+            }
+            .apply(&mut doc)
+            .map(|_| ()),
+            Err(EditError::NoSource(fill))
         );
     }
 }

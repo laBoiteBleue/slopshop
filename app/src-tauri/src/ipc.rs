@@ -68,6 +68,23 @@ pub struct DocumentView {
     pub saved_selections: Vec<SavedSelectionView>,
     /// The guides (View > Rulers), in the order they were placed.
     pub guides: Vec<GuideView>,
+    /// What the pixel layers show (ADR 0040), in the order the layers first show them: the
+    /// Sources panel.
+    pub sources: Vec<SourceView>,
+}
+
+/// A source (ADR 0040): content kept once, shown by one layer or more.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceView {
+    /// Its identity while the app runs (the source thumbnail is asked by it).
+    pub id: u64,
+    /// What the user knows it by (a file's name); empty when nothing names it.
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    /// The layers showing it, bottom to top.
+    pub layers: Vec<u64>,
 }
 
 /// A guide, both ways: `vertical` at `position` document pixels from the canvas's left edge,
@@ -155,6 +172,9 @@ pub struct LayerView {
     /// Being baked into pixels (ADR 0031): a merge's group shown until its pixels come; the
     /// panel shows it as the layer it becomes.
     pub baking: bool,
+    /// The source a pixel layer shows (ADR 0040), `SourceView::id`; none for a layer made empty
+    /// and for the other kinds.
+    pub source: Option<u64>,
 }
 
 /// A layer's style as the UI reads and sends it (ADR 0032): colors sRGB-encoded RGB in `[0, 1]`
@@ -410,6 +430,17 @@ impl DocumentView {
                 })
                 .collect(),
             guides: doc.guides().iter().map(GuideView::from).collect(),
+            sources: doc
+                .sources()
+                .into_iter()
+                .map(|(source, layers)| SourceView {
+                    id: source.id().get(),
+                    name: source.name().to_owned(),
+                    width: source.image().size().width,
+                    height: source.image().size().height,
+                    layers: layers.into_iter().map(LayerId::get).collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -545,6 +576,7 @@ impl LayerView {
             },
             style: layer.style.as_ref().map(|s| StyleDto::new(s.settings())),
             baking: false,
+            source: layer.content.source().map(|s| s.id().get()),
         }
     }
 }
@@ -745,6 +777,20 @@ pub enum EditRequest {
     /// Delete Paint, ADR 0027).
     DeletePaint {
         ids: Vec<u64>,
+    },
+    /// Each of `ids` sharing its source with other layers gets a source of its own, of the same
+    /// pixels (Layer > Make Unique, ADR 0040).
+    MakeUnique {
+        ids: Vec<u64>,
+    },
+    /// A new layer showing source `source` (`SourceView::id`; the Sources panel), at `index`
+    /// among the layers of `parent` (absent: the top level).
+    AddSourceLayer {
+        source: u64,
+        name: String,
+        #[serde(default)]
+        parent: Option<u64>,
+        index: usize,
     },
     /// Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029).
     DeleteStackEntry {
@@ -990,6 +1036,8 @@ impl EditRequest {
             Self::AddEmptyLayer { .. } => HistoryLabel::new("newLayer"),
             Self::MoveLayers { .. } => HistoryLabel::new("arrange"),
             Self::DeletePaint { .. } => HistoryLabel::new("deletePaint"),
+            Self::MakeUnique { .. } => HistoryLabel::new("makeUnique"),
+            Self::AddSourceLayer { .. } => HistoryLabel::new("newLayer"),
             Self::DeleteStackEntry { .. } => HistoryLabel::new("deleteEntry"),
             Self::SetStackEntry {
                 steps: None,
@@ -1269,6 +1317,40 @@ impl EditRequest {
             EditRequest::DeletePaint { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::delete_paint(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::MakeUnique { ids } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::make_unique(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::AddSourceLayer {
+                source,
+                name,
+                parent,
+                index,
+            } => {
+                let source = session
+                    .document()
+                    .sources()
+                    .into_iter()
+                    .map(|(s, _)| s)
+                    .find(|s| s.id().get() == source)
+                    .ok_or("the source is no longer in the document")?;
+                Edit::InsertLayer {
+                    parent: parent.map(LayerId::from_raw),
+                    index,
+                    layer: Layer {
+                        style: None,
+                        transform: slopshop_core::Projective::IDENTITY,
+                        clipped: false,
+                        id: session.allocate_layer_id(),
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::from_source(source),
+                    },
+                }
             }
             EditRequest::SetLayerVisible { id, visible } => Edit::SetLayerVisible {
                 id: LayerId::from_raw(id),
@@ -3150,6 +3232,85 @@ mod tests {
         let view = LayerView::new(session.document().layer(id).unwrap());
         assert!(view.entries[0].hidden);
         assert!((view.entries[0].steps[0].values[0] - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sources_are_listed_made_unique_and_shown_by_new_layers_from_the_ui() {
+        use slopshop_core::color::PixelFormat;
+        use slopshop_core::raster::RasterImage;
+        let size = slopshop_core::Size::new(4, 4);
+        let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &[10_u8; 64]).unwrap();
+        let photo = slopshop_core::Source::new(std::sync::Arc::new(image), "photo.jpg");
+        let mut document = Document::new(size);
+        let mut ids = Vec::new();
+        for index in 0..2 {
+            let id = document.allocate_layer_id();
+            ids.push(id);
+            Edit::InsertLayer {
+                parent: None,
+                index,
+                layer: Layer {
+                    id,
+                    name: "pixels".to_owned(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
+                    content: LayerContent::from_source(std::sync::Arc::clone(&photo)),
+                    mask: None,
+                    clipped: false,
+                    transform: slopshop_core::Affine::IDENTITY.into(),
+                    style: None,
+                },
+            }
+            .apply(&mut document)
+            .unwrap();
+        }
+        let mut session = Session::new(document);
+        let meta = DocumentMeta { id: 1, name: None };
+        let view = DocumentView::new(&session, &meta, Vec::new());
+        assert_eq!(view.sources.len(), 1);
+        let source = &view.sources[0];
+        assert_eq!(
+            (source.name.as_str(), source.width, source.height),
+            ("photo.jpg", 4, 4)
+        );
+        assert_eq!(
+            source.layers,
+            ids.iter().map(|id| id.get()).collect::<Vec<_>>()
+        );
+        assert_eq!(view.layers[0].source, Some(source.id));
+        // A new layer showing it, at the top.
+        let request: EditRequest = serde_json::from_str(&format!(
+            r#"{{"kind":"addSourceLayer","source":{},"name":"photo copy","index":2}}"#,
+            source.id
+        ))
+        .unwrap();
+        assert_eq!(request.history_label(), Some(HistoryLabel::new("newLayer")));
+        let edit = request.into_edit(&mut session).unwrap();
+        session.perform(edit).unwrap();
+        let view = DocumentView::new(&session, &meta, Vec::new());
+        assert_eq!(view.sources[0].layers.len(), 3);
+        assert_eq!(view.layers[2].name, "photo copy");
+        // The second one made unique: a source of its own.
+        let request: EditRequest = serde_json::from_str(&format!(
+            r#"{{"kind":"makeUnique","ids":[{}]}}"#,
+            ids[1].get()
+        ))
+        .unwrap();
+        assert_eq!(
+            request.history_label(),
+            Some(HistoryLabel::new("makeUnique"))
+        );
+        let edit = request.into_edit(&mut session).unwrap();
+        session.perform(edit).unwrap();
+        let view = DocumentView::new(&session, &meta, Vec::new());
+        assert_eq!(view.sources.len(), 2);
+        assert_ne!(view.layers[1].source, view.layers[0].source);
+        // An unknown source is an error, not a layer.
+        let request: EditRequest =
+            serde_json::from_str(r#"{"kind":"addSourceLayer","source":0,"name":"x","index":0}"#)
+                .unwrap();
+        assert!(request.into_edit(&mut session).is_err());
     }
 
     #[test]

@@ -216,12 +216,26 @@ test("Window > Options Bar and Toolbar hide them, saved; Reset Layout brings eve
   await fireEvent.pointerDown(tab, { pointerId: 1, button: 0, clientX: 10 });
   await fireEvent.pointerMove(tab, { pointerId: 1, clientX: 100 });
   await fireEvent.pointerUp(tab, { pointerId: 1, clientX: 100 });
-  expect(saved().order).toEqual(["selections", "history", "histogram", "info", "properties"]);
+  expect(saved().order).toEqual([
+    "selections",
+    "sources",
+    "history",
+    "histogram",
+    "info",
+    "properties",
+  ]);
   await choose("Reset Layout");
   expect(toolbar()).not.toHaveClass("hidden");
   expect(optionsBar()).not.toHaveClass("hidden");
   expect(saved()).toMatchObject({ toolbar: true, optionsBar: true });
-  expect(saved().order).toEqual(["properties", "selections", "history", "histogram", "info"]);
+  expect(saved().order).toEqual([
+    "properties",
+    "selections",
+    "sources",
+    "history",
+    "histogram",
+    "info",
+  ]);
   localStorage.clear();
 });
 

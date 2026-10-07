@@ -148,6 +148,11 @@ export type LayerView = {
    * the layer it becomes. Absent: false.
    */
   baking?: boolean;
+  /**
+   * The source a pixel layer shows (ADR 0040), `SourceView.id`; null for a layer made empty and
+   * the other kinds. Absent: none.
+   */
+  source?: number | null;
   /** An adjustment layer's adjustment (ADR 0020): its identifier and five parameters. */
   /** `values`: all `ADJUSTMENT_PARAMS` parameters (`Adjustment::params` order). Curves:
    * `curves`, the points `[input, output]` (0–255) of the composite, red, green and blue
@@ -377,6 +382,23 @@ export type DocumentView = {
   savedSelections: SavedSelectionView[];
   /** The guides (View > Rulers), in the order they were placed. */
   guides: Guide[];
+  /**
+   * What the pixel layers show (ADR 0040), in the order the layers first show them: the Sources
+   * panel. Absent: none.
+   */
+  sources?: SourceView[];
+};
+
+/** A source (ADR 0040): content kept once, shown by one layer or more. */
+export type SourceView = {
+  /** Its identity while the app runs (`engine.sourceThumbnail` asks by it). */
+  id: number;
+  /** An opened file's name; empty when nothing names it. */
+  name: string;
+  width: number;
+  height: number;
+  /** The layers showing it, bottom to top. */
+  layers: number[];
 };
 
 /**
@@ -450,6 +472,10 @@ export type EditRequest =
   | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
   /** Layer > Delete Paint: the layers' (and their masks') originals show again. */
   | { kind: "deletePaint"; ids: number[] }
+  /** Layer > Make Unique: each of `ids` sharing its source gets one of its own (ADR 0040). */
+  | { kind: "makeUnique"; ids: number[] }
+  /** A new layer showing source `source` (the Sources panel), at `index` in `parent`. */
+  | { kind: "addSourceLayer"; source: number; name: string; parent: number | null; index: number }
   /** Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029). */
   | { kind: "deleteStackEntry"; id: number; index: number }
   /** Entry `index` of a raster layer's stack hidden or shown by its eye, and for an effect,
@@ -1442,6 +1468,22 @@ export const engine = {
       layerId,
       maxSide,
       mask,
+    });
+    const view = new DataView(buffer);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
+    return new ImageData(pixels, width, height);
+  },
+  /**
+   * Thumbnail of source `sourceId` (ADR 0040), as `layerThumbnail` gives one: the source's own
+   * pixels, whatever its layers applied to them.
+   */
+  sourceThumbnail: async (documentId: number, sourceId: number, maxSide: number) => {
+    const buffer = await invoke<ArrayBuffer>("source_thumbnail", {
+      documentId,
+      sourceId,
+      maxSide,
     });
     const view = new DataView(buffer);
     const width = view.getUint32(0, true);

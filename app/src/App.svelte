@@ -226,6 +226,7 @@
   import * as homography from "./lib/homography";
   import type { Homography } from "./lib/homography";
   import { antsRequest, prefersReducedMotion } from "./lib/ants";
+  import { makeUniqueEdit } from "./lib/sources";
   import ZoomSlider from "./lib/ZoomSlider.svelte";
 
   /** Open documents, in tab order. */
@@ -319,6 +320,8 @@
     get pointer() {
       return pointerAt;
     },
+    selectLayers: (ids) => layersPanel?.selectLayers(ids),
+    newLayerFromSource: (source, name) => layersPanel?.newLayerFromSource(source, name),
   });
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
@@ -4627,6 +4630,16 @@
         undefined,
         !layersPanel?.selectionPainted(),
       ),
+      // The selected layers sharing their source get one of their own (ADR 0040).
+      makeUnique: command(
+        t("menu.layer.makeUnique"),
+        () => {
+          const request = makeUniqueEdit(doc ?? null, selection);
+          if (doc && request) void edit(doc.id, request);
+        },
+        undefined,
+        makeUniqueEdit(doc ?? null, selection) === null,
+      ),
       group: item("groupLayers"),
       clipping: item("clipping"),
       ungroup: item("ungroupLayers"),
@@ -4678,6 +4691,7 @@
       separator,
       c.clipping,
       c.deletePaint,
+      c.makeUnique,
       c.maskRevealAll,
       c.maskRevealSelection,
       c.maskFromTransparency,
@@ -4959,6 +4973,7 @@
           },
           layerCommands.clipping,
           layerCommands.deletePaint,
+          layerCommands.makeUnique,
           {
             kind: "submenu",
             label: t("menu.layer.style"),
