@@ -21,6 +21,7 @@
   const LAYER_KINDS: { key: keyof DocumentInfo["layers"]; label: MessageKey }[] = [
     { key: "raster", label: "documentInfo.raster" },
     { key: "fill", label: "documentInfo.fill" },
+    { key: "vector", label: "documentInfo.vector" },
     { key: "adjustment", label: "documentInfo.adjustment" },
     { key: "group", label: "documentInfo.group" },
     { key: "masks", label: "documentInfo.masks" },

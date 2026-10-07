@@ -1785,8 +1785,11 @@ fn encode_layers(
                     fields.flags |= FLAG_STACK_END;
                 }
             }
-            // Groups and adjustments are steps of their own.
-            LayerContent::Group { .. } | LayerContent::Adjustment { .. } => continue,
+            // Groups and adjustments are steps of their own; a vector layer is drawn as its
+            // paints.
+            LayerContent::Group { .. }
+            | LayerContent::Adjustment { .. }
+            | LayerContent::Vector { .. } => continue,
         }
         if let Some(mask) = mask_plan {
             set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);

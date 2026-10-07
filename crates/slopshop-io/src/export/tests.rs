@@ -3376,3 +3376,70 @@ fn layer_styles_round_trip_through_a_layered_psd() {
     )));
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn vector_layers_are_written_to_a_layered_psd_as_their_pixels() {
+    use slopshop_core::shape::{Geometry, Paint, Shape, ShapeSource};
+    let mut doc = fill_document(Size::new(40, 30), LinearRgba::new(1.0, 1.0, 1.0, 1.0));
+    let id = doc.allocate_layer_id();
+    Edit::InsertLayer {
+        parent: None,
+        index: 1,
+        layer: Layer {
+            id,
+            name: "Ellipse 1".into(),
+            visible: true,
+            opacity: 0.8,
+            blend_mode: BlendMode::Normal,
+            content: LayerContent::vector(ShapeSource::new(
+                Shape {
+                    geometry: Geometry::Ellipse {
+                        center: [20.0, 15.0],
+                        radii: [12.5, 9.0],
+                    },
+                    // Within sRGB, the file's space.
+                    fill: Some(Paint::Solid(LinearRgba::new(0.5, 0.3, 0.2, 1.0))),
+                    stroke: None,
+                },
+                "Ellipse 1",
+            )),
+            mask: None,
+            clipped: false,
+            transform: slopshop_core::Projective::IDENTITY,
+            style: None,
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("vector.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U16,
+        space: ColorSpace::SRGB,
+        dither: false,
+        large: false,
+    };
+    export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let crate::Opened::Layers(opened) = crate::open_file(&path).unwrap() else {
+        panic!("layers expected");
+    };
+    let back = &opened.document;
+    let top = back.layers().last().unwrap();
+    assert_eq!(top.name, "Ellipse 1");
+    assert!(matches!(top.content, LayerContent::Raster { .. }));
+    let (a, b) = (composite_all(&doc), composite_all(back));
+    let worst = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst < 0.004, "composites differ by {worst}");
+    std::fs::remove_file(&path).ok();
+}

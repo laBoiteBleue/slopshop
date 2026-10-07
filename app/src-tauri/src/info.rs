@@ -42,6 +42,7 @@ pub struct DocumentInfo {
 pub struct LayerCounts {
     pub raster: u32,
     pub fill: u32,
+    pub vector: u32,
     pub adjustment: u32,
     pub group: u32,
     pub masks: u32,
@@ -119,6 +120,7 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                 }
             }
             LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => layers.fill += 1,
+            LayerContent::Vector { .. } => layers.vector += 1,
             LayerContent::Adjustment { .. } => layers.adjustment += 1,
             LayerContent::Group { .. } => layers.group += 1,
         }

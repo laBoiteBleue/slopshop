@@ -1447,7 +1447,7 @@ fn shows_fill(layers: &[Layer]) -> bool {
 
 /// An effect drawing `color` where `coverage` shows, placed by `at`: a fill masked by the
 /// coverage (no color image is built).
-fn colored(
+pub(crate) fn colored(
     coverage: Arc<RasterImage>,
     color: LinearRgba,
     mode: BlendMode,
@@ -1562,6 +1562,7 @@ fn content_box(layer: &Layer) -> Option<[f64; 4]> {
             let (x, y) = (f64::from(r.x), f64::from(r.y));
             [x, y, x + f64::from(r.width), y + f64::from(r.height)]
         }),
+        LayerContent::Vector { source, .. } => crate::shape::path::shape_bounds(source.shape()),
         LayerContent::Group { children, .. } => children
             .iter()
             .filter(|c| c.visible)

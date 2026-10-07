@@ -20,6 +20,7 @@
 mod format;
 mod manifest;
 mod read;
+mod shape;
 mod style;
 mod write;
 

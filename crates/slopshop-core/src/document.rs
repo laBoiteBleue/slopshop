@@ -145,6 +145,13 @@ pub enum LayerContent {
     Adjustment {
         adjustment: crate::adjust::Adjustment,
     },
+    /// A vector shape (ADR 0041): its source, shared with the layers duplicated from it, and
+    /// what it draws where the layer is placed (a cache: never saved, reset when the layer
+    /// moves or changes). No stack (ADR 0040, point 8).
+    Vector {
+        source: Arc<crate::shape::ShapeSource>,
+        drawing: Arc<crate::shape::Drawing>,
+    },
 }
 
 impl PartialEq for LayerContent {
@@ -186,6 +193,8 @@ impl PartialEq for LayerContent {
                 },
             ) => p == q && a == b,
             (Self::Adjustment { adjustment: a }, Self::Adjustment { adjustment: b }) => a == b,
+            // Immutable sources: the same allocation, the same shape.
+            (Self::Vector { source: a, .. }, Self::Vector { source: b, .. }) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -225,6 +234,14 @@ impl LayerContent {
             image: crate::stack::Pixels::ready(Arc::clone(source.image())),
             source: Some(source),
             stack: None,
+        }
+    }
+
+    /// A vector layer's content showing `source` (ADR 0041), not drawn yet.
+    pub fn vector(source: Arc<crate::shape::ShapeSource>) -> Self {
+        Self::Vector {
+            source,
+            drawing: Arc::default(),
         }
     }
 
@@ -342,6 +359,7 @@ impl Layer {
         if let Some(style) = &mut self.style {
             *style = style.redrawn();
         }
+        self.redraw_vector();
         if let LayerContent::Group { children, .. } = &mut self.content {
             for child in children {
                 child.redraw_styles();
@@ -355,10 +373,18 @@ impl Layer {
         if let Some(style) = &mut self.style {
             *style = style.moved();
         }
+        self.redraw_vector();
         if let LayerContent::Group { children, .. } = &mut self.content {
             for child in children {
                 child.move_styles();
             }
+        }
+    }
+
+    /// A vector layer's drawing made anew: it moved, or its canvas changed (ADR 0041).
+    fn redraw_vector(&mut self) {
+        if let LayerContent::Vector { drawing, .. } = &mut self.content {
+            *drawing = Arc::default();
         }
     }
 

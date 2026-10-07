@@ -143,6 +143,63 @@ pub fn placed(path: &BezPath, transform: Projective, tolerance: f64) -> BezPath 
     out
 }
 
+/// The box of what `shape` covers in its own space (its outline, and its stroke's), `None`
+/// when it covers nothing.
+pub fn shape_bounds(shape: &super::model::Shape) -> Option<[f64; 4]> {
+    use kurbo::Shape as _;
+    let own = outline(&shape.geometry, TOLERANCE);
+    let mut b = (shape.fill.is_some() && shape.geometry.is_closed()).then(|| own.bounding_box());
+    if let Some(stroke) = &shape.stroke {
+        let widen = if stroke.align == super::model::StrokeAlign::Center {
+            1.0
+        } else {
+            2.0
+        };
+        let s = stroke_outline(&own, stroke, widen, TOLERANCE).bounding_box();
+        b = Some(b.map_or(s, |b| b.union(s)));
+    }
+    b.filter(|b| b.width() > 0.0 || b.height() > 0.0)
+        .map(|b| [b.x0, b.y0, b.x1, b.y1])
+}
+
+/// Whether `shape` covers point `p` of its own space: inside its fill, or on its stroke.
+pub fn shape_covers(shape: &super::model::Shape, p: [f64; 2]) -> bool {
+    use super::model::{FillRule, Geometry, StrokeAlign};
+    use kurbo::Shape as _;
+    let point = Point::new(p[0], p[1]);
+    let own = outline(&shape.geometry, TOLERANCE);
+    let rule = match &shape.geometry {
+        Geometry::Path { rule, .. } => *rule,
+        _ => FillRule::NonZero,
+    };
+    let inside_by = |path: &BezPath, rule: FillRule| {
+        let w = path.winding(point);
+        match rule {
+            FillRule::NonZero => w != 0,
+            FillRule::EvenOdd => w % 2 != 0,
+        }
+    };
+    let closed = shape.geometry.is_closed();
+    let inside = closed && inside_by(&own, rule);
+    if shape.fill.is_some() && inside {
+        return true;
+    }
+    shape.stroke.as_ref().is_some_and(|stroke| {
+        let widen = if stroke.align == StrokeAlign::Center || !closed {
+            1.0
+        } else {
+            2.0
+        };
+        let band = stroke_outline(&own, stroke, widen, TOLERANCE);
+        inside_by(&band, FillRule::NonZero)
+            && match stroke.align {
+                StrokeAlign::Center => true,
+                StrokeAlign::Inside => !closed || inside,
+                StrokeAlign::Outside => !closed || !inside,
+            }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +315,56 @@ mod tests {
             (b.x0 - 0.0).abs() < 1e-6 && (b.x1 - 100.0).abs() < 1e-6,
             "{b:?}"
         );
+    }
+
+    #[test]
+    fn a_shape_knows_its_box_and_the_points_it_covers() {
+        use crate::shape::model::Shape;
+        let red = Paint::Solid(crate::color::LinearRgba::new(1.0, 0.0, 0.0, 1.0));
+        let stroke = ShapeStroke {
+            paint: red,
+            width: 10.0,
+            align: StrokeAlign::Outside,
+            cap: StrokeCap::Butt,
+            join: StrokeJoin::Miter,
+            miter_limit: 4.0,
+            dashes: Vec::new(),
+            dash_offset: 0.0,
+        };
+        let rect = Geometry::Rectangle {
+            rect: [0.0, 0.0, 100.0, 50.0],
+            radii: [0.0; 4],
+        };
+        let filled = Shape {
+            geometry: rect.clone(),
+            fill: Some(red),
+            stroke: None,
+        };
+        assert_eq!(shape_bounds(&filled), Some([0.0, 0.0, 100.0, 50.0]));
+        assert!(shape_covers(&filled, [50.0, 25.0]) && !shape_covers(&filled, [-5.0, 25.0]));
+        // An outside stroke reaches 10 beyond; without a fill, the inside is not covered.
+        let outlined = Shape {
+            geometry: rect,
+            fill: None,
+            stroke: Some(stroke),
+        };
+        let b = shape_bounds(&outlined).unwrap();
+        assert!(
+            (b[0] + 10.0).abs() < 1e-6 && (b[2] - 110.0).abs() < 1e-6,
+            "{b:?}"
+        );
+        assert!(shape_covers(&outlined, [-5.0, 25.0]));
+        assert!(!shape_covers(&outlined, [5.0, 25.0]));
+        assert!(!shape_covers(&outlined, [50.0, 25.0]));
+        // Nothing to cover: no box.
+        let nothing = Shape {
+            geometry: Geometry::Line {
+                from: [0.0, 0.0],
+                to: [10.0, 0.0],
+            },
+            fill: Some(red),
+            stroke: None,
+        };
+        assert_eq!(shape_bounds(&nothing), None);
     }
 }

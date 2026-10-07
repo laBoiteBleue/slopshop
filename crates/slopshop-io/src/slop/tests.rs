@@ -2298,3 +2298,94 @@ fn a_raster_node_naming_a_missing_source_is_refused() {
     blank.params.remove("source");
     assert!(sources.of_node(&blank, &original).unwrap().is_none());
 }
+
+#[test]
+fn vector_layers_round_trip_with_their_shapes_shared_and_placed() {
+    use slopshop_core::LayerId;
+    use slopshop_core::shape::{
+        FillRule, Geometry, Paint, Segment, Shape, ShapeSource, ShapeStroke, StrokeAlign,
+        StrokeCap, StrokeJoin, Subpath,
+    };
+    let red = Paint::Solid(LinearRgba::new(1.0, 0.0, 0.0, 0.5));
+    let badge = ShapeSource::new(
+        Shape {
+            geometry: Geometry::Polygon {
+                center: [20.0, 20.0],
+                radius: 15.0,
+                sides: 5,
+                star: Some(0.4),
+                rotation: 90.0,
+            },
+            fill: Some(red),
+            stroke: Some(ShapeStroke {
+                paint: Paint::Solid(LinearRgba::new(0.0, 0.0, 1.0, 1.0)),
+                width: 2.5,
+                align: StrokeAlign::Outside,
+                cap: StrokeCap::Round,
+                join: StrokeJoin::Round,
+                miter_limit: 4.0,
+                dashes: vec![3.0, 1.0],
+                dash_offset: 0.5,
+            }),
+        },
+        "Badge",
+    );
+    let curve = ShapeSource::new(
+        Shape {
+            geometry: Geometry::Path {
+                subpaths: vec![Subpath {
+                    start: [0.0, 0.0],
+                    segments: vec![
+                        Segment::Line([30.0, 0.0]),
+                        Segment::Cubic([30.0, 30.0], [0.0, 30.0], [0.0, 0.0]),
+                    ],
+                    closed: true,
+                }],
+                rule: FillRule::EvenOdd,
+            },
+            fill: Some(red),
+            stroke: None,
+        },
+        "",
+    );
+    let mut doc = Document::new(Size::new(64, 48));
+    let a = push(&mut doc, "a", LayerContent::vector(Arc::clone(&badge)), 1.0);
+    let b = push(&mut doc, "b", LayerContent::vector(badge), 0.5);
+    let c = push(&mut doc, "c", LayerContent::vector(curve), 1.0);
+    Edit::SetLayerTransform {
+        id: LayerId::from_raw(b),
+        transform: slopshop_core::Affine::translation(10.5, -3.0).into(),
+    }
+    .apply(&mut doc)
+    .unwrap();
+
+    let path = temp_path("vectors.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    let source = |doc: &Document, id| match &doc.layer(LayerId::from_raw(id)).unwrap().content {
+        LayerContent::Vector { source, .. } => Arc::clone(source),
+        _ => panic!("not a vector layer"),
+    };
+    for id in [a, b, c] {
+        let (before, after) = (source(&doc, id), source(&loaded, id));
+        assert_eq!(after.shape(), before.shape());
+        assert_eq!(after.name(), before.name());
+        let (was, is) = (
+            doc.layer(LayerId::from_raw(id)).unwrap(),
+            loaded.layer(LayerId::from_raw(id)).unwrap(),
+        );
+        assert_eq!((is.opacity, is.transform), (was.opacity, was.transform));
+    }
+    assert!(
+        Arc::ptr_eq(&source(&loaded, a), &source(&loaded, b)),
+        "one shape, shared again"
+    );
+    // The same pixels.
+    let region = slopshop_core::geom::Rect::new(0, 0, 64, 48);
+    let mut before = vec![0.0f32; 64 * 48 * 4];
+    let mut after = before.clone();
+    slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
+    slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();
+    assert_eq!(before, after);
+    fs::remove_file(&path).ok();
+}

@@ -129,7 +129,8 @@ pub fn can_rasterize(layer: &Layer) -> bool {
     match &layer.content {
         LayerContent::Fill { .. }
         | LayerContent::GradientFill { .. }
-        | LayerContent::Group { .. } => true,
+        | LayerContent::Group { .. }
+        | LayerContent::Vector { .. } => true,
         LayerContent::Raster { .. } => layer.is_painted(),
         LayerContent::Adjustment { .. } => false,
     }

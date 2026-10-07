@@ -322,7 +322,8 @@ impl Writer<'_, '_> {
                     LayerContent::Group { children, .. } => self.count_rows(children),
                     LayerContent::Raster { .. }
                     | LayerContent::Fill { .. }
-                    | LayerContent::GradientFill { .. } => height,
+                    | LayerContent::GradientFill { .. }
+                    | LayerContent::Vector { .. } => height,
                     LayerContent::Adjustment { .. } => 0,
                 }
             })
@@ -362,16 +363,18 @@ impl Writer<'_, '_> {
             }
             let bounds = match &layer.content {
                 LayerContent::Raster { .. } => self.content_bounds(layer),
-                LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => {
-                    self.document.size().bounds()
-                }
+                // Vector layers are written as their pixels (Photoshop's shape layers: later).
+                LayerContent::Fill { .. }
+                | LayerContent::GradientFill { .. }
+                | LayerContent::Vector { .. } => self.document.size().bounds(),
                 _ => Rect::new(0, 0, 0, 0),
             };
             let mut record = self.record(layer, layer.name.clone(), bounds);
             match &layer.content {
                 LayerContent::Raster { .. }
                 | LayerContent::Fill { .. }
-                | LayerContent::GradientFill { .. } => {
+                | LayerContent::GradientFill { .. }
+                | LayerContent::Vector { .. } => {
                     let planes = if bounds.is_empty() {
                         None
                     } else {

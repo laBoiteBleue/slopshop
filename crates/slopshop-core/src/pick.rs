@@ -19,12 +19,21 @@ pub struct Bounds {
 impl Bounds {
     /// The box around `rect` (in a layer's pixels) placed by `transform`, in whole pixels.
     fn placed(rect: Rect, transform: Projective) -> Bounds {
-        let [x0, y0, x1, y1] = transform.map_rect([
-            f64::from(rect.x),
-            f64::from(rect.y),
-            rect.right() as f64,
-            rect.bottom() as f64,
-        ]);
+        Self::placed_box(
+            [
+                f64::from(rect.x),
+                f64::from(rect.y),
+                rect.right() as f64,
+                rect.bottom() as f64,
+            ],
+            transform,
+        )
+    }
+
+    /// The box around `[left, top, right, bottom]` (in a layer's space) placed by `transform`,
+    /// in whole pixels.
+    fn placed_box(rect: [f64; 4], transform: Projective) -> Bounds {
+        let [x0, y0, x1, y1] = transform.map_rect(rect);
         Bounds {
             left: x0.floor() as i64,
             top: y0.floor() as i64,
@@ -160,6 +169,11 @@ fn covers(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
             }
         }
         LayerContent::Group { children, .. } => hit(children, transform, x, y).is_some(),
+        // Its outline, at the pixel's center.
+        LayerContent::Vector { source, .. } => transform.inverse().is_some_and(|to_layer| {
+            let (lx, ly) = to_layer.apply(x as f64 + 0.5, y as f64 + 0.5);
+            crate::shape::path::shape_covers(source.shape(), [lx, ly])
+        }),
         // No pixels of its own: never what is under the pointer.
         LayerContent::Adjustment { .. } => false,
     }
@@ -218,6 +232,11 @@ fn collect_bounds(layers: &[Layer], parent: Projective, out: &mut Vec<(LayerId, 
             LayerContent::Raster { image, .. } => {
                 if let Some(rect) = image.get().content_bounds() {
                     out.push((layer.id, Bounds::placed(rect, transform)));
+                }
+            }
+            LayerContent::Vector { source, .. } => {
+                if let Some(b) = crate::shape::path::shape_bounds(source.shape()) {
+                    out.push((layer.id, Bounds::placed_box(b, transform)));
                 }
             }
             LayerContent::Fill { .. }
@@ -303,6 +322,10 @@ fn layer_extent(layer: &Layer, transform: Projective) -> Extent {
         },
         LayerContent::Adjustment { .. } => Extent::default(),
         LayerContent::Group { children, .. } => layers_extent(children, transform),
+        LayerContent::Vector { source, .. } => crate::shape::path::shape_bounds(source.shape())
+            .map_or(Extent::default(), |b| {
+                Extent::within(Bounds::placed_box(b, transform))
+            }),
         LayerContent::Raster { image, .. } => {
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).
             let rect = if mask.is_some_and(|m| m.replaces_alpha) {

@@ -19,11 +19,12 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_BEVEL,
-    NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN,
-    NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR, SavedSelectionDto, Schema, SourceDto, Writer,
+    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VECTOR, NODE_VERSION,
+    NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY,
+    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN,
+    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto,
+    SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -585,6 +586,17 @@ fn build_manifest(
             sources.len() - 1
         });
     }
+    // The shapes, likewise.
+    let mut shapes: Vec<&Arc<slopshop_core::shape::ShapeSource>> = Vec::new();
+    let mut shape_index = HashMap::new();
+    for layer in document.all_layers() {
+        if let LayerContent::Vector { source, .. } = &layer.content {
+            shape_index.entry(source.id()).or_insert_with(|| {
+                shapes.push(source);
+                shapes.len() - 1
+            });
+        }
+    }
     let mut nodes = std::collections::BTreeMap::new();
     for layer in document.all_layers() {
         let id = layer.id.get();
@@ -686,6 +698,10 @@ fn build_manifest(
             LayerContent::Adjustment { adjustment } => {
                 (NODE_ADJUSTMENT, adjustment_params(adjustment))
             }
+            LayerContent::Vector { source, .. } => (
+                NODE_VECTOR,
+                json!({ "shape": shape_index.get(&source.id()).copied() }),
+            ),
         };
         let mut params = match params {
             Value::Object(map) => map,
@@ -734,7 +750,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer
+                version: if matches!(layer.content, LayerContent::Vector { .. }) {
+                    NODE_VERSION_VECTOR
+                } else if layer
                     .style
                     .as_ref()
                     .is_some_and(|s| s.settings().bevel.is_some())
@@ -853,6 +871,13 @@ fn build_manifest(
                 .map(|source| SourceDto {
                     name: source.name().to_owned(),
                     image: key_of(source.image()).map(Hash::to_key).unwrap_or_default(),
+                })
+                .collect(),
+            shapes: shapes
+                .iter()
+                .map(|source| ShapeDto {
+                    name: source.name().to_owned(),
+                    shape: super::shape::to_json(source.shape()),
                 })
                 .collect(),
             extra: residue.document.clone(),

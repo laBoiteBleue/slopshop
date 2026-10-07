@@ -17,6 +17,7 @@ use slopshop_core::document::{
 use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
 use slopshop_core::selection::Selection;
+use slopshop_core::shape::ShapeSource;
 use slopshop_core::{BlendMode, BlendSpace};
 
 use super::format::{
@@ -25,10 +26,10 @@ use super::format::{
 };
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY,
-    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR_SOURCES,
+    NODE_VECTOR, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
+    NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
+    NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
+    NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -322,6 +323,8 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
 pub(super) struct Sources {
     listed: Option<Vec<Arc<slopshop_core::Source>>>,
     made: HashMap<ImageId, Arc<slopshop_core::Source>>,
+    /// The shapes vector nodes show (schema 0.30).
+    shapes: Vec<Arc<ShapeSource>>,
 }
 
 impl Sources {
@@ -348,10 +351,32 @@ impl Sources {
                 .collect::<Result<_, FileError>>()?;
             Some(listed)
         };
+        let shapes = manifest
+            .document
+            .shapes
+            .iter()
+            .map(|dto| {
+                super::shape::from_json(&dto.shape)
+                    .map(|shape| ShapeSource::new(shape, dto.name.clone()))
+                    .ok_or_else(|| corrupt("a shape that is not valid"))
+            })
+            .collect::<Result<_, FileError>>()?;
         Ok(Self {
             listed,
             made: HashMap::new(),
+            shapes,
         })
+    }
+
+    /// The shape of vector node `node`, the one its `params.shape` names.
+    fn shape_of(&self, node: &NodeDto) -> Result<Arc<ShapeSource>, FileError> {
+        node.params
+            .get("shape")
+            .and_then(Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok())
+            .and_then(|i| self.shapes.get(i))
+            .cloned()
+            .ok_or_else(|| corrupt("vector node with a missing shape"))
     }
 
     /// The source of raster node `node`, whose original is `original`: the one its
@@ -464,6 +489,9 @@ pub(super) fn read_node(
             LayerContent::Adjustment {
                 adjustment: adjustment_of(&node.params)?,
             }
+        }
+        NODE_VECTOR if node.version == NODE_VERSION_VECTOR => {
+            LayerContent::vector(sources.shape_of(node)?)
         }
         _ => return Err(FileError::UnknownNodeType(versioned())),
     };

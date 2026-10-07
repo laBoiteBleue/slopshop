@@ -1754,3 +1754,123 @@ fn styled_groups_match_the_cpu_reference_compositor() {
         assert_matches_cpu(&r, s.document(), size.bounds(), &format!("group {space:?}"));
     }
 }
+
+#[test]
+fn vector_layers_match_the_cpu_reference_compositor() {
+    use slopshop_core::shape::{
+        Geometry, Paint, Shape, ShapeSource, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
+    };
+    use slopshop_core::style::{DropShadow, LayerStyle};
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    let mut s = Session::new(Document::new(size));
+    push_layer(
+        &mut s,
+        raster(&image(size, PixelFormat::RGBA8_SRGB, pattern)),
+        1.0,
+    );
+    let stroke = |align| ShapeStroke {
+        paint: Paint::Solid(LinearRgba::new(0.05, 0.1, 0.8, 0.9)),
+        width: 6.0,
+        align,
+        cap: StrokeCap::Round,
+        join: StrokeJoin::Miter,
+        miter_limit: 4.0,
+        dashes: Vec::new(),
+        dash_offset: 0.0,
+    };
+    let red = Paint::Solid(LinearRgba::new(0.9, 0.05, 0.02, 1.0));
+    // A star filled and stroked outside, across a tile boundary (256).
+    let star = push_layer(
+        &mut s,
+        LayerContent::vector(ShapeSource::new(
+            Shape {
+                geometry: Geometry::Polygon {
+                    center: [230.0, 120.0],
+                    radius: 60.0,
+                    sides: 5,
+                    star: Some(0.45),
+                    rotation: 90.0,
+                },
+                fill: Some(red),
+                stroke: Some(stroke(StrokeAlign::Outside)),
+            },
+            "",
+        )),
+        0.8,
+    );
+    // An ellipse stroked inside, in perspective, under a drop shadow.
+    let ellipse = push_layer(
+        &mut s,
+        LayerContent::vector(ShapeSource::new(
+            Shape {
+                geometry: Geometry::Ellipse {
+                    center: [60.0, 50.0],
+                    radii: [50.0, 35.0],
+                },
+                fill: Some(Paint::Solid(LinearRgba::new(0.1, 0.7, 0.2, 0.6))),
+                stroke: Some(stroke(StrokeAlign::Inside)),
+            },
+            "",
+        )),
+        1.0,
+    );
+    let keystone = slopshop_core::Projective::from_rect_to_quad(
+        [0.0, 0.0, 120.0, 100.0],
+        [(30.0, 150.0), (170.0, 140.0), (190.0, 270.0), (10.0, 260.0)],
+    )
+    .unwrap();
+    s.perform(Edit::SetLayerTransform {
+        id: ellipse,
+        transform: keystone,
+    })
+    .unwrap();
+    s.perform(Edit::SetLayerStyle {
+        id: ellipse,
+        style: Some(Box::new(LayerStyle {
+            drop_shadow: Some(DropShadow {
+                distance: 8.0,
+                size: 6.0,
+                ..DropShadow::default()
+            }),
+            ..LayerStyle::default()
+        })),
+    })
+    .unwrap();
+    // A line, its stroke only, multiplied.
+    let line = push_layer(
+        &mut s,
+        LayerContent::vector(ShapeSource::new(
+            Shape {
+                geometry: Geometry::Line {
+                    from: [10.0, 10.0],
+                    to: [290.0, 200.0],
+                },
+                fill: None,
+                stroke: Some(stroke(StrokeAlign::Center)),
+            },
+            "",
+        )),
+        1.0,
+    );
+    s.perform(Edit::SetLayerBlendMode {
+        id: line,
+        mode: BlendMode::Multiply,
+    })
+    .unwrap();
+    // Rotated a little: the coverage follows it.
+    s.perform(Edit::SetLayerTransform {
+        id: star,
+        transform: Affine::translation(-230.0, -120.0)
+            .then(Affine::rotation(10f64.to_radians()))
+            .then(Affine::translation(230.0, 120.0))
+            .into(),
+    })
+    .unwrap();
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        let what = format!("vectors {space:?}");
+        assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        assert_matches_cpu(&r, s.document(), Rect::new(181, 37, 110, 90), &what);
+    }
+}
