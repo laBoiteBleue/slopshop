@@ -395,6 +395,17 @@ impl Layer {
         }
     }
 
+    /// Every source the layer shows: its content's (ADR 0040), then its Pattern Overlay's
+    /// (ADR 0042). A file keeps them all.
+    pub fn sources(&self) -> impl Iterator<Item = &Arc<crate::source::Source>> {
+        let overlay = self
+            .style
+            .as_ref()
+            .and_then(|s| s.settings().pattern_overlay.as_ref())
+            .map(|o| &o.pattern.source);
+        self.content.source().into_iter().chain(overlay)
+    }
+
     pub fn is_group(&self) -> bool {
         matches!(self.content, LayerContent::Group { .. })
     }

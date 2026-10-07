@@ -156,6 +156,9 @@ struct OpenDocument {
     /// Layers whose pixels are being composited (Layer > Bake to Pixels, ADR 0031): a merge's
     /// group, shown as the layer it becomes until its pixels replace it.
     baking: std::collections::HashSet<LayerId>,
+    /// Library patterns loaded for this document (`patterns::load_pattern`, ADR 0042), by
+    /// source id: what a Pattern Overlay being set may name before a layer shows it.
+    loaded_patterns: HashMap<u64, Arc<slopshop_core::Source>>,
 }
 
 impl OpenDocument {
@@ -180,6 +183,7 @@ impl OpenDocument {
             move_preview: None,
             previewed: std::sync::Mutex::new(None),
             baking: std::collections::HashSet::new(),
+            loaded_patterns: HashMap::new(),
         }
     }
 
@@ -1751,13 +1755,15 @@ async fn source_thumbnail(
     let image = {
         let mut documents = state.documents()?;
         let document = documents.get_mut(document_id)?;
+        // A layer's source, a Pattern Overlay's, or a pattern loaded for one (ADR 0042).
         document
             .session
             .document()
-            .sources()
-            .into_iter()
-            .find(|(source, _)| source.id().get() == source_id)
-            .map(|(source, _)| Arc::clone(source.image()))
+            .all_layers()
+            .flat_map(|l| l.sources())
+            .chain(document.loaded_patterns.values())
+            .find(|source| source.id().get() == source_id)
+            .map(|source| Arc::clone(source.image()))
             .ok_or("unknown source")?
     };
     let thumbnail = tauri::async_runtime::spawn_blocking(move || {
@@ -1805,7 +1811,7 @@ async fn perform(
     let mut documents = state.documents()?;
     let document = documents.get_mut(document_id)?;
     let label = edit.history_label();
-    let edit = edit.into_edit(&mut document.session)?;
+    let edit = edit.into_edit_with(&mut document.session, &document.loaded_patterns)?;
     document
         .session
         .with_label(label, |s| s.perform(edit))
@@ -1834,7 +1840,7 @@ async fn perform_live(
             .map_err(|e| e.to_string())?;
     }
     let label = edit.history_label();
-    let edit = edit.into_edit(&mut document.session)?;
+    let edit = edit.into_edit_with(&mut document.session, &document.loaded_patterns)?;
     document
         .session
         .with_label(label, |s| s.perform_in_gesture(edit))
@@ -1873,7 +1879,7 @@ async fn replace_gesture(
         .cancel_gesture()
         .map_err(|e| e.to_string())?;
     let label = edit.history_label();
-    let edit = edit.into_edit(&mut document.session)?;
+    let edit = edit.into_edit_with(&mut document.session, &document.loaded_patterns)?;
     document
         .session
         .with_label(label, |s| s.perform(edit))
@@ -2380,6 +2386,7 @@ pub fn run() {
             patterns::define_pattern,
             patterns::add_pattern_fill,
             patterns::replace_pattern,
+            patterns::load_pattern,
             paint::patch_selection,
             move_snap_targets,
             clipboard::paste,
@@ -4676,6 +4683,39 @@ mod tests {
         let request: EditRequest = serde_json::from_str(&json).unwrap();
         let edit = request.into_edit(&mut s).unwrap();
         assert!(s.perform(edit).is_err());
+    }
+
+    #[test]
+    fn a_pattern_overlay_names_a_loaded_pattern_or_a_documents_source() {
+        let mut s = blank_session();
+        let target = s.document().layers()[0].id.get();
+        let source =
+            slopshop_core::Source::new(slopshop_io::patterns::built_in("checkers").unwrap(), "");
+        let mut loaded = HashMap::new();
+        loaded.insert(source.id().get(), Arc::clone(&source));
+        let json = |id: u64| {
+            format!(
+                r#"{{"kind":"setLayerStyle","id":{target},"style":{{"fillOpacity":1.0,"dropShadow":null,"outerGlow":null,"innerShadow":null,"innerGlow":null,"colorOverlay":null,"stroke":null,"patternOverlay":{{"enabled":true,"source":{id},"scale":1.0,"angle":0.0,"link":true,"mode":"normal","opacity":1.0}}}}}}"#
+            )
+        };
+        // Unknown until loaded.
+        let request: EditRequest = serde_json::from_str(&json(source.id().get())).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+        let request: EditRequest = serde_json::from_str(&json(source.id().get())).unwrap();
+        let edit = request.into_edit_with(&mut s, &loaded).unwrap();
+        s.perform(edit).unwrap();
+        // Shown by the layer's style now: named without the loaded ones.
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let shown = view.layers[0]
+            .style
+            .as_ref()
+            .unwrap()
+            .pattern_overlay
+            .as_ref()
+            .unwrap();
+        assert_eq!(shown.source, source.id().get());
+        let request: EditRequest = serde_json::from_str(&json(source.id().get())).unwrap();
+        assert!(request.into_edit(&mut s).is_ok());
     }
 
     #[test]

@@ -137,6 +137,25 @@ pub async fn add_pattern_fill(
     Ok(document.view())
 }
 
+/// Library pattern `pattern` loaded for document `document_id` (a Pattern Overlay chosen in the
+/// Layer Style dialog): its source's id, which a style may then name. Kept while the document
+/// is open.
+#[tauri::command]
+pub async fn load_pattern(
+    app: AppHandle,
+    document_id: u64,
+    pattern: String,
+    source_name: String,
+) -> Result<u64, String> {
+    let source = source_of(&app, pattern, source_name).await?;
+    let state = app.state::<AppState>();
+    let mut documents = state.documents()?;
+    let document = documents.get_mut(document_id)?;
+    let id = source.id().get();
+    document.loaded_patterns.insert(id, source);
+    Ok(id)
+}
+
 /// Another library pattern for pattern fill layer `layer_id`, its scale and angle kept (the
 /// Properties panel), one undo entry.
 #[tauri::command]

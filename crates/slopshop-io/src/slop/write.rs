@@ -22,9 +22,9 @@ use super::manifest::{
     NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_PATTERN_FILL, NODE_RASTER, NODE_VECTOR,
     NODE_VERSION, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
     NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
-    NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK, NODE_VERSION_STYLED,
-    NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto, Writer,
+    NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM,
+    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -205,6 +205,14 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
                 .is_none_or(|original| !Arc::ptr_eq(original, source.image()))
         {
             out.push(Arc::clone(source.image()));
+        }
+        // A Pattern Overlay's pattern (ADR 0042).
+        if let Some(overlay) = layer
+            .style
+            .as_ref()
+            .and_then(|s| s.settings().pattern_overlay.as_ref())
+        {
+            out.push(Arc::clone(overlay.pattern.source.image()));
         }
         if let Some(mask) = &layer.mask {
             out.push(Arc::clone(&mask.image));
@@ -580,7 +588,7 @@ fn build_manifest(
     // The sources, in the order the layers first show them: a node names its own by index.
     let mut sources: Vec<&Arc<slopshop_core::Source>> = Vec::new();
     let mut source_index = HashMap::new();
-    for source in document.all_layers().filter_map(|l| l.content.source()) {
+    for source in document.all_layers().flat_map(|l| l.sources()) {
         source_index.entry(source.id()).or_insert_with(|| {
             sources.push(source);
             sources.len() - 1
@@ -728,7 +736,11 @@ fn build_manifest(
         }
         params.insert("blend_mode".to_owned(), Value::from(layer.blend_mode.id()));
         if let Some(style) = &layer.style {
-            params.insert("style".to_owned(), super::style::to_json(style.settings()));
+            let index = |s: &slopshop_core::Source| source_index.get(&s.id()).copied();
+            params.insert(
+                "style".to_owned(),
+                super::style::to_json(style.settings(), &index),
+            );
         }
         if layer.clipped {
             params.insert("clipped".to_owned(), Value::from(true));
@@ -755,7 +767,13 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if matches!(layer.content, LayerContent::PatternFill { .. }) {
+                version: if layer
+                    .style
+                    .as_ref()
+                    .is_some_and(|s| s.settings().pattern_overlay.is_some())
+                {
+                    NODE_VERSION_PATTERN_OVERLAY
+                } else if matches!(layer.content, LayerContent::PatternFill { .. }) {
                     NODE_VERSION_PATTERN
                 } else if matches!(layer.content, LayerContent::Vector { .. }) {
                     NODE_VERSION_VECTOR

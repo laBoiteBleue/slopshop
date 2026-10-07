@@ -697,7 +697,7 @@ impl Edit {
                 let previous = std::mem::replace(&mut layer.style, style);
                 Edit::SetLayerStyle {
                     id,
-                    style: previous.map(|s| Box::new(*s.settings())),
+                    style: previous.map(|s| Box::new(s.settings().clone())),
                 }
             }
             Edit::SetLayerClipped { id, clipped } => {

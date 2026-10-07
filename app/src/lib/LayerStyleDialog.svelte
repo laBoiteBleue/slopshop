@@ -11,6 +11,7 @@
   import SliderField from "./SliderField.svelte";
   import StyleEffectFields from "./StyleEffectFields.svelte";
   import GradientEditor from "./GradientEditor.svelte";
+  import SourceThumbnail from "./SourceThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
 
@@ -18,14 +19,18 @@
   export type StylePage = "blending" | EffectId;
 
   let {
+    documentId,
     style,
     page,
     onchange,
     onpage,
     onpickcolor,
+    onpickpattern,
     onok,
     oncancel,
   }: {
+    /** The document, whose sources the Pattern Overlay's thumbnail shows. */
+    documentId: number;
     /** The style as the dialog opens (or opens again after the color picker). */
     style: LayerStyle | null;
     page: StylePage;
@@ -35,6 +40,9 @@
     onpage: (page: StylePage) => void;
     /** An effect's color swatch clicked: the app shows the picker, then this dialog again. */
     onpickcolor: (effect: EffectId, color?: EffectColor) => void;
+    /** A Pattern Overlay's pattern to choose (ADR 0042): the app shows the picker, then this
+     * dialog again with it. */
+    onpickpattern: () => void;
     onok: () => void;
     oncancel: () => void;
   } = $props();
@@ -72,6 +80,11 @@
 
   /** An effect's checkbox: on (added at its defaults if it was not there) or off. */
   function toggle(id: EffectId, enabled: boolean) {
+    // A Pattern Overlay starts with its pattern chosen.
+    if (id === "patternOverlay" && enabled && !draft.patternOverlay) {
+      onpickpattern();
+      return;
+    }
     const next = withEffect(draft, id, enabled);
     draft[id] = next[id] as never;
     if (enabled) onpage(id);
@@ -424,6 +437,56 @@
         {:else}
           <p class="empty">{t("style.off")}</p>
         {/if}
+      {:else if page === "patternOverlay"}
+        <h3>{t("style.patternOverlay")}</h3>
+        {#if draft.patternOverlay}
+          {@render modes(
+            draft.patternOverlay.mode,
+            (m) => (draft.patternOverlay!.mode = m as never),
+            t("style.mode"),
+          )}
+          <SliderField
+            label={t("style.opacity")}
+            bind:value={draft.patternOverlay.opacity}
+            min={0}
+            max={100}
+            unit="%"
+            factor={100}
+          />
+          <div class="field">
+            <span>{t("style.pattern")}</span>
+            <button
+              type="button"
+              class="pattern"
+              title={t("patterns.replace")}
+              aria-label={t("patterns.replace")}
+              onclick={onpickpattern}
+            >
+              <SourceThumbnail {documentId} source={draft.patternOverlay.source} size={40} />
+            </button>
+          </div>
+          <SliderField
+            label={t("style.scale")}
+            bind:value={draft.patternOverlay.scale}
+            min={1}
+            max={1000}
+            unit="%"
+            factor={100}
+          />
+          <SliderField
+            label={t("style.angle")}
+            bind:value={draft.patternOverlay.angle}
+            min={-180}
+            max={180}
+            unit="°"
+          />
+          <label class="check">
+            <input type="checkbox" bind:checked={draft.patternOverlay.link} />
+            {t("style.linkWithLayer")}
+          </label>
+        {:else}
+          <p class="empty">{t("style.off")}</p>
+        {/if}
       {:else}
         <!-- A shadow or a glow, outside or inside the shape. -->
         <h3>{t(`style.${page}`)}</h3>
@@ -561,5 +624,13 @@
 
   .buttons .btn {
     min-width: 80px;
+  }
+
+  .pattern {
+    display: inline-flex;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    background: none;
+    cursor: pointer;
   }
 </style>

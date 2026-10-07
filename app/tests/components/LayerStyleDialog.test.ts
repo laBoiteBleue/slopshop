@@ -3,16 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { LayerStyle } from "../../src/lib/engine";
 import LayerStyleDialog, { type StylePage } from "../../src/lib/LayerStyleDialog.svelte";
-import { withEffect } from "../../src/lib/layerStyle";
+import { withEffect, withPatternOverlay } from "../../src/lib/layerStyle";
 import { forgetDialogPlaces } from "../../src/lib/dialogDrag";
 
 function open(style: LayerStyle | null, page: StylePage = "blending") {
   const props = {
+    documentId: 1,
     style,
     page,
     onchange: vi.fn(),
     onpage: vi.fn(),
     onpickcolor: vi.fn(),
+    onpickpattern: vi.fn(),
     onok: vi.fn(),
     oncancel: vi.fn(),
   };
@@ -184,4 +186,21 @@ test("Bevel and Emboss: its style, direction and each of its two colors", async 
   expect(onpickcolor).toHaveBeenLastCalledWith("bevel", "shadowColor");
   await user.click(within(settings).getByRole("button", { name: "Highlight Color" }));
   expect(onpickcolor).toHaveBeenLastCalledWith("bevel", "highlightColor");
+});
+
+test("a Pattern Overlay starts with its pattern chosen, then its settings change", async () => {
+  const empty = open(null);
+  await empty.user.click(screen.getByRole("checkbox", { name: "Pattern Overlay" }));
+  // Nothing to draw yet: the app shows the picker.
+  expect(empty.onpickpattern).toHaveBeenCalled();
+  expect(empty.onchange).not.toHaveBeenCalled();
+});
+
+test("a Pattern Overlay's scale, angle and link", async () => {
+  const { onchange, onpickpattern, user } = open(withPatternOverlay(null, 9), "patternOverlay");
+  const settings = screen.getByRole("region", { name: "Pattern Overlay" });
+  await user.click(within(settings).getByRole("checkbox", { name: "Link with Layer" }));
+  expect(last(onchange).patternOverlay).toMatchObject({ source: 9, link: false, scale: 1 });
+  await user.click(within(settings).getByRole("button", { name: "Choose another pattern" }));
+  expect(onpickpattern).toHaveBeenCalled();
 });

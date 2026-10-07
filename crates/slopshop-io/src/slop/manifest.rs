@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 31;
+pub(crate) const SCHEMA_MINOR: u32 = 32;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -94,8 +94,13 @@ pub(crate) const NODE_VERSION_VECTOR: u32 = 15;
 /// `params.angle` (degrees, counterclockwise), and the parameters every node has. Written at
 /// [`NODE_VERSION_PATTERN`]; older readers refuse the unknown type.
 pub(crate) const NODE_PATTERN_FILL: &str = "slopshop.patternFill";
-/// Version of the pattern fill nodes (schema 0.31). The newest node version this code reads.
+/// Version of the pattern fill nodes (schema 0.31).
 pub(crate) const NODE_VERSION_PATTERN: u32 = 16;
+/// Version of the nodes, of any type but adjustments, whose style has a Pattern Overlay
+/// (schema 0.32, ADR 0042): `params.style.pattern_overlay` names its pattern in the document's
+/// sources. Written only for those, so that older readers refuse them instead of dropping the
+/// effect. The newest node version this code reads.
+pub(crate) const NODE_VERSION_PATTERN_OVERLAY: u32 = 17;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

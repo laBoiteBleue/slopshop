@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import assert from "node:assert/strict";
 import type { LayerView } from "../src/lib/engine";
 import {
@@ -13,6 +13,7 @@ import {
   withEffect,
   withFill,
   withoutEffect,
+  withPatternOverlay,
 } from "../src/lib/layerStyle";
 
 function layer(id: number, changes: Partial<LayerView> = {}): LayerView {
@@ -194,4 +195,30 @@ test("Bevel and Emboss comes first, Photoshop's Inner Bevel lit from 120° at 30
     effectsOf(style).map((e) => e.id),
     ["bevel", "stroke"],
   );
+});
+
+test("a Pattern Overlay is added with its pattern, its settings kept when it changes", () => {
+  // Without a pattern, nothing to add.
+  expect(withEffect(null, "patternOverlay", true).patternOverlay).toBeNull();
+  const style = withPatternOverlay(null, 4);
+  expect(style.patternOverlay).toEqual({
+    enabled: true,
+    source: 4,
+    scale: 1,
+    angle: 0,
+    link: true,
+    mode: "normal",
+    opacity: 1,
+  });
+  const scaled = {
+    ...style,
+    patternOverlay: { ...style.patternOverlay!, scale: 2, enabled: false },
+  };
+  expect(withPatternOverlay(scaled, 7).patternOverlay).toMatchObject({
+    source: 7,
+    scale: 2,
+    enabled: true,
+  });
+  // Turned off and on with its checkbox, as the others.
+  expect(withEffect(style, "patternOverlay", false).patternOverlay?.enabled).toBe(false);
 });

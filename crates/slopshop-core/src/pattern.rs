@@ -291,4 +291,68 @@ mod tests {
         undo.apply(&mut doc).unwrap();
         assert!(Arc::ptr_eq(&source_of(&doc, a), &source_of(&doc, b)));
     }
+
+    #[test]
+    fn a_pattern_overlay_fills_the_layers_shape_with_the_pattern() {
+        use crate::style::{LayerStyle, PatternOverlay};
+        let source = Source::new(numbered(), "numbers");
+        // The pattern alone, for reference.
+        let (fill, _) = with_pattern(PatternFill::new(Arc::clone(&source)), Projective::IDENTITY);
+        let reference = pixels(&fill);
+        // An opaque white box (10..30 × 5..25) with a Pattern Overlay.
+        let (mut doc, id) =
+            with_pattern(PatternFill::new(Arc::clone(&source)), Projective::IDENTITY);
+        Edit::RemoveLayer { id }.apply(&mut doc).unwrap();
+        let size = Size::new(20, 20);
+        let white = vec![255u8; 20 * 20 * 4];
+        let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &white).unwrap();
+        let boxed = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id: boxed,
+                name: "box".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(Arc::new(image)),
+                mask: None,
+                clipped: false,
+                transform: crate::transform::Affine::translation(10.0, 5.0).into(),
+                style: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let style = |link| LayerStyle {
+            pattern_overlay: Some(PatternOverlay {
+                link_with_layer: link,
+                ..PatternOverlay::new(Arc::clone(&source))
+            }),
+            ..LayerStyle::default()
+        };
+        // Not linked: the pattern stays where the canvas is.
+        Edit::SetLayerStyle {
+            id: boxed,
+            style: Some(Box::new(style(false))),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let out = pixels(&doc);
+        assert_eq!(at(&out, 15, 12), at(&reference, 15, 12));
+        assert_eq!(at(&out, 29, 24), at(&reference, 29, 24));
+        // Outside the shape: nothing.
+        assert_eq!(at(&out, 5, 12), [0.0; 4]);
+        // Linked: it moves with the layer, from its origin.
+        Edit::SetLayerStyle {
+            id: boxed,
+            style: Some(Box::new(style(true))),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let out = pixels(&doc);
+        assert_eq!(at(&out, 10, 5), at(&reference, 0, 0));
+        assert_eq!(at(&out, 13, 7), at(&reference, 3, 2));
+    }
 }

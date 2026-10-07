@@ -1933,3 +1933,58 @@ fn pattern_fills_match_the_cpu_reference_compositor() {
         }
     }
 }
+
+#[test]
+fn pattern_overlays_match_the_cpu_reference_compositor() {
+    use slopshop_core::style::{LayerStyle, PatternOverlay};
+    let Some(r) = renderer() else { return };
+    let size = Size::new(200, 160);
+    let mut s = Session::new(Document::new(size));
+    push_layer(
+        &mut s,
+        raster(&image(size, PixelFormat::RGBA8_SRGB, pattern)),
+        1.0,
+    );
+    let disc = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+        let d = ((f64::from(x) - 110.0).powi(2) + (f64::from(y) - 80.0).powi(2)).sqrt();
+        vec![40, 160, 220, ((50.0 - d) * 64.0).clamp(0.0, 255.0) as u8]
+    });
+    let id = push_layer(&mut s, raster(&disc), 0.9);
+    s.perform(Edit::SetLayerTransform {
+        id,
+        transform: Affine::translation(-17.0, 9.5).into(),
+    })
+    .unwrap();
+    let tile = image(Size::new(24, 16), PixelFormat::RGBA8_SRGB, |x, y| {
+        vec![(x * 10) as u8, (y * 15) as u8, 90, 255]
+    });
+    let source = slopshop_core::Source::new(tile, "");
+    for (k, (link, scale, angle)) in [(true, 1.0, 0.0), (false, 0.45, 25.0), (true, 2.5, -60.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut overlay = PatternOverlay::new(Arc::clone(&source));
+        overlay.link_with_layer = link;
+        overlay.pattern.scale = scale;
+        overlay.pattern.angle = angle;
+        overlay.mode = BlendMode::Multiply;
+        overlay.opacity = 0.8;
+        s.perform(Edit::SetLayerStyle {
+            id,
+            style: Some(Box::new(LayerStyle {
+                pattern_overlay: Some(overlay),
+                ..LayerStyle::default()
+            })),
+        })
+        .unwrap();
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            s.perform(Edit::SetBlendSpace { space }).unwrap();
+            assert_matches_cpu(
+                &r,
+                s.document(),
+                size.bounds(),
+                &format!("overlay {k} {space:?}"),
+            );
+        }
+    }
+}

@@ -245,7 +245,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   unknown `axis` is refused as made by a newer SlopShop. A writer of an older schema keeps
   them as an unknown field, without moving them when the canvas changes.
   `sources` (0.26, [ADR 0040](adr/0040-sources.md)): what raster and pattern fill (0.31) nodes
-  show, kept once, each `{ "name": "photo.jpg", "image": "b3:…" }` (`name` absent when nothing
+  and Pattern Overlays (0.32) show, kept once, each `{ "name": "photo.jpg", "image": "b3:…" }` (`name` absent when nothing
   names it) and named by its index in this list. Absent: none. Before schema 0.26, a reader gives each raster
   node's original a source of its own, one per image (nodes of the same image share it),
   named after the first node. A writer of an older schema drops the references and keeps the
@@ -381,6 +381,12 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `(lit − flat) / (1 − flat)`; less, the shadow's `(flat − lit) / flat`; each blurred by
     `soften / 2`; drawn above everything else, shadow then highlight. Only those nodes are
     written at v14.
+  - v17 (schema 0.32, [ADR 0042](adr/0042-patterns.md)) is a node of any type but adjustments
+    whose style has a Pattern Overlay: `params.style.pattern_overlay` holds `enabled`,
+    `source` (the index of its pattern in `document.sources`), `scale` and `angle` (as a
+    pattern fill's), `link` (the pattern moves with the layer; else it is placed in the
+    document's space), `mode` and `opacity`. The pattern is drawn as a pattern fill within the
+    layer's shape, under the Gradient and Color Overlays. Only those nodes are written at v17.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier
