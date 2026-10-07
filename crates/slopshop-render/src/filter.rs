@@ -8,7 +8,9 @@ use std::sync::mpsc;
 
 use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::{ChannelLayout, PixelFormat};
-use slopshop_core::filter::{CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, line_offsets};
+use slopshop_core::filter::{
+    BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, line_offsets,
+};
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
 use wgpu::util::DeviceExt;
@@ -443,6 +445,19 @@ impl Pass {
                     amount,
                     seed,
                     flags: u32::from(gaussian) | u32::from(monochromatic) << 1,
+                    ..none
+                }]);
+            }
+            // A box: the separable pass with equal weights (beyond, the CPU reduces the layer).
+            Filter::BoxBlur { radius } => {
+                if f64::from(radius) > BOX_UP_TO {
+                    return None;
+                }
+                let side = 2 * radius as usize + 1;
+                return Some(vec![Self {
+                    kind: Kind::Separable,
+                    reach: radius as u32,
+                    weights: vec![1.0 / side as f32; side],
                     ..none
                 }]);
             }
