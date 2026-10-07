@@ -17,6 +17,7 @@ export type EffectId =
   | "satin"
   | "colorOverlay"
   | "gradientOverlay"
+  | "patternOverlay"
   | "outerGlow"
   | "dropShadow";
 
@@ -29,6 +30,7 @@ export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
   { id: "satin", label: "style.satin" },
   { id: "colorOverlay", label: "style.colorOverlay" },
   { id: "gradientOverlay", label: "style.gradientOverlay" },
+  { id: "patternOverlay", label: "style.patternOverlay" },
   { id: "outerGlow", label: "style.outerGlow" },
   { id: "dropShadow", label: "style.dropShadow" },
 ];
@@ -42,13 +44,17 @@ export const PLAIN: LayerStyle = {
   innerGlow: null,
   colorOverlay: null,
   gradientOverlay: null,
+  patternOverlay: null,
   satin: null,
   stroke: null,
   bevel: null,
 };
 
+/** The effects added at their defaults: a Pattern Overlay needs its pattern chosen first. */
+export type DefaultEffectId = Exclude<EffectId, "patternOverlay">;
+
 /** An effect as Photoshop adds it (as `style.rs`'s defaults), enabled. */
-export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle[E]> {
+export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<LayerStyle[E]> {
   const shadow = {
     enabled: true,
     color: [0, 0, 0],
@@ -123,7 +129,7 @@ export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle
       mode: "normal",
       opacity: 1,
     },
-  } satisfies { [K in EffectId]: NonNullable<LayerStyle[K]> };
+  } satisfies { [K in DefaultEffectId]: NonNullable<LayerStyle[K]> };
   return structuredClone(effects[id]) as NonNullable<LayerStyle[E]>;
 }
 
@@ -139,8 +145,29 @@ export function simplified(style: LayerStyle): LayerStyle | null {
  */
 export function withEffect(style: LayerStyle | null, id: EffectId, enabled: boolean): LayerStyle {
   const base = style ?? PLAIN;
-  const effect = base[id] ?? defaultEffect(id);
+  const current = base[id];
+  // A Pattern Overlay is added with its pattern chosen (`withPatternOverlay`).
+  if (!current && id === "patternOverlay") return base;
+  const effect = current ?? defaultEffect(id as DefaultEffectId);
   return { ...base, [id]: { ...effect, enabled } };
+}
+
+/**
+ * `style` (or none) with a Pattern Overlay of source `source`, on: its other settings kept, or
+ * Photoshop's (100 %, upright, linked to the layer, Normal, opaque) when it had none.
+ */
+export function withPatternOverlay(style: LayerStyle | null, source: number): LayerStyle {
+  const base = style ?? PLAIN;
+  const overlay = base.patternOverlay ?? {
+    enabled: true,
+    source,
+    scale: 1,
+    angle: 0,
+    link: true,
+    mode: "normal" as const,
+    opacity: 1,
+  };
+  return { ...base, patternOverlay: { ...overlay, source, enabled: true } };
 }
 
 /** `style` (or none) with Fill Opacity `fill` in [0, 1]; nothing when that leaves it plain. */

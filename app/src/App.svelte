@@ -108,6 +108,7 @@
     EFFECTS,
     styleEdit,
     withEffect,
+    withPatternOverlay,
     type EffectId,
     type EffectColor,
   } from "./lib/layerStyle";
@@ -1139,7 +1140,9 @@
    * The pattern picker (ADR 0042), for a new pattern fill layer or for the pattern of fill
    * layer `layer` (the Properties panel).
    */
-  let patternPicker = $state<{ kind: "new" } | { kind: "replace"; layer: number } | null>(null);
+  let patternPicker = $state<
+    { kind: "new" } | { kind: "replace"; layer: number } | { kind: "overlay" } | null
+  >(null);
   /** Edit > Define Pattern's dialog, with the name it proposes. */
   let definingPattern = $state<{ documentId: number; name: string } | null>(null);
 
@@ -1149,12 +1152,40 @@
     const picker = patternPicker;
     patternPicker = null;
     if (!doc || !picker) return;
+    if (picker.kind === "overlay") {
+      void overlayPattern(doc.id, entry, name);
+      return;
+    }
     commitTransform();
     if (picker.kind === "replace") {
       void sync(engine.replacePattern(doc.id, picker.layer, entry.id, name));
       return;
     }
     layersPanel?.addPatternFill(entry.id, name);
+  }
+
+  /**
+   * A Pattern Overlay's pattern chosen (ADR 0042): loaded for the document, set in the style
+   * being edited, then the Layer Style dialog again.
+   */
+  async function overlayPattern(documentId: number, entry: PatternEntry, name: string) {
+    try {
+      const source = await engine.loadPattern(documentId, entry.id, name);
+      if (!styleDialog) return;
+      changeStyle(withPatternOverlay($state.snapshot(styleDialog.style), source));
+      styleDialog.page = "patternOverlay";
+    } catch (e) {
+      showError(String(e));
+    } finally {
+      if (styleDialog) styleDialog.picking = false;
+    }
+  }
+
+  /** The Layer Style dialog's Pattern Overlay asks for its pattern: the picker for a moment. */
+  function pickStylePattern() {
+    if (!styleDialog) return;
+    styleDialog.picking = true;
+    patternPicker = { kind: "overlay" };
   }
 
   /** Edit > Define Pattern: a name proposed after the library's patterns. */
@@ -1758,6 +1789,8 @@
       live(doc.id, styleEdit(layer.id, style));
     }
     styleDialog = { documentId: doc.id, layerId: layer.id, style, page, picking: false };
+    // A Pattern Overlay starts with its pattern chosen.
+    if (page === "patternOverlay" && !style?.patternOverlay) pickStylePattern();
   }
 
   function changeStyle(style: LayerStyle) {
@@ -6159,11 +6192,13 @@
 {/if}
 {#if styleDialog && !styleDialog.picking}
   <LayerStyleDialog
+    documentId={styleDialog.documentId}
     style={styleDialog.style}
     page={styleDialog.page}
     onchange={changeStyle}
     onpage={(page) => styleDialog && (styleDialog.page = page)}
     onpickcolor={pickStyleColor}
+    onpickpattern={pickStylePattern}
     onok={() => closeStyle(true)}
     oncancel={() => closeStyle(false)}
   />
@@ -6180,10 +6215,17 @@
 {#if patternPicker}
   <PatternPicker
     title={t(
-      patternPicker.kind === "new" ? "menu.layer.newFill.pattern" : "patterns.replace",
+      patternPicker.kind === "new"
+        ? "menu.layer.newFill.pattern"
+        : patternPicker.kind === "overlay"
+          ? "style.patternOverlay"
+          : "patterns.replace",
     ).replace("…", "")}
     onpick={pickPattern}
-    onclose={() => (patternPicker = null)}
+    onclose={() => {
+      patternPicker = null;
+      if (styleDialog) styleDialog.picking = false;
+    }}
   />
 {/if}
 {#if definingPattern}

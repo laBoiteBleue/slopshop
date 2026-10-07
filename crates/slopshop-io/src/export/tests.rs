@@ -3358,7 +3358,7 @@ fn layer_styles_round_trip_through_a_layered_psd() {
             .all_layers()
             .filter(|l| matches!(l.content, LayerContent::Group { .. }) == group)
             .find_map(|l| l.style.as_ref())
-            .map(|s| *s.settings())
+            .map(|s| s.settings().clone())
             .unwrap()
     };
     let back = style_of(false);

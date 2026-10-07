@@ -14,6 +14,7 @@ respond("pattern_thumbnail", () => new Uint8Array([1, 0, 0, 0, 1, 0, 0, 0, 0, 0,
 respond("add_pattern_fill", (_args, doc) => ({ ...doc, revision: doc.revision + 1 }));
 respond("layer_thumbnail", () => new Uint8Array([1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 255]).buffer);
 respond("replace_pattern", (_args, doc) => ({ ...doc, revision: doc.revision + 1 }));
+respond("load_pattern", () => 77);
 respond("define_pattern", (args) => ({
   id: "file:pattern-2.png",
   name: (args as { name: string }).name,
@@ -87,4 +88,35 @@ test("a pattern fill's scale and angle are changed in Properties, its pattern re
     pattern: "builtin:checkers",
     sourceName: "Checkers",
   });
+});
+
+test("Layer > Layer Style > Pattern Overlay asks for the pattern, then sends it live", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await vi.waitFor(() => expect(row("Cat")).toBeInTheDocument());
+  await user.click(screen.getByRole("menuitem", { name: "Layer" }));
+  await user.hover(screen.getByText("Layer Style", { selector: ".label" }));
+  await user.click(screen.getByText("Pattern Overlay…", { selector: ".label" }));
+  // The picker first, the dialog behind it.
+  await user.click(await screen.findByRole("option", { name: "Dots" }));
+  await waitFor(() => expect(sent("load_pattern")).toHaveLength(1));
+  expect(sent("load_pattern")[0]).toEqual({
+    documentId: 1,
+    pattern: "builtin:dots",
+    sourceName: "Dots",
+  });
+  await vi.waitFor(() =>
+    expect(sent("perform_live")).toContainEqual(
+      expect.objectContaining({
+        edit: expect.objectContaining({
+          kind: "setLayerStyle",
+          id: 1,
+          style: expect.objectContaining({
+            patternOverlay: expect.objectContaining({ enabled: true, source: 77, scale: 1 }),
+          }),
+        }),
+      }),
+    ),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Layer Style" });
+  expect(within(dialog).getByRole("checkbox", { name: "Pattern Overlay" })).toBeChecked();
 });

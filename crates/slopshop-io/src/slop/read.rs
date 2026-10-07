@@ -28,9 +28,9 @@ use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP,
     NODE_PATTERN_FILL, NODE_RASTER, NODE_VECTOR, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED,
     NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
-    NODE_VERSION_PATTERN, NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK, NODE_VERSION_STYLED,
-    NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR_SOURCES,
+    NODE_VERSION_PATTERN, NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE,
+    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -369,6 +369,11 @@ impl Sources {
         })
     }
 
+    /// The document's listed source `i` (schema 0.26 and up).
+    fn listed_at(&self, i: usize) -> Option<Arc<slopshop_core::Source>> {
+        self.listed.as_ref()?.get(i).cloned()
+    }
+
     /// The source `params.source` of node `node` names in the document's list (a pattern's,
     /// schema 0.31: always listed).
     fn listed_of(&self, node: &NodeDto) -> Result<Arc<slopshop_core::Source>, FileError> {
@@ -439,11 +444,14 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
-    let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version);
+    // A Pattern Overlay (v17) on any node type but adjustments.
+    let overlaid = node.version == NODE_VERSION_PATTERN_OVERLAY;
+    let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version) || overlaid;
     // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill = known_version
         || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version)
-        || (NODE_VERSION_GRADIENT_OVERLAY..=NODE_VERSION_BEVEL).contains(&node.version);
+        || (NODE_VERSION_GRADIENT_OVERLAY..=NODE_VERSION_BEVEL).contains(&node.version)
+        || overlaid;
     let content = match node.kind.as_str() {
         NODE_RASTER if known_raster => {
             let key = node
@@ -503,7 +511,7 @@ pub(super) fn read_node(
                 adjustment: adjustment_of(&node.params)?,
             }
         }
-        NODE_PATTERN_FILL if node.version == NODE_VERSION_PATTERN => {
+        NODE_PATTERN_FILL if node.version == NODE_VERSION_PATTERN || overlaid => {
             let number = |key| node.params.get(key).and_then(Value::as_f64);
             let pattern = slopshop_core::pattern::PatternFill {
                 source: sources.listed_of(node)?,
@@ -515,7 +523,7 @@ pub(super) fn read_node(
             }
             LayerContent::PatternFill { pattern }
         }
-        NODE_VECTOR if node.version == NODE_VERSION_VECTOR => {
+        NODE_VECTOR if node.version == NODE_VERSION_VECTOR || overlaid => {
             LayerContent::vector(sources.shape_of(node)?)
         }
         _ => return Err(FileError::UnknownNodeType(versioned())),
@@ -533,7 +541,7 @@ pub(super) fn read_node(
     let style = match node.params.get("style") {
         None | Some(Value::Null) => None,
         Some(value) if node.version >= NODE_VERSION_STYLED => Some(
-            super::style::from_json(value)
+            super::style::from_json(value, &|i| sources.listed_at(i))
                 .map(slopshop_core::style::Style::new)
                 .ok_or_else(|| corrupt("invalid layer style"))?,
         ),

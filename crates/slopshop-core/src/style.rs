@@ -36,7 +36,7 @@ pub const MAX_DISTANCE: f64 = 30_000.0;
 pub const MAX_SIZE: f64 = 250.0;
 
 /// A layer's style: its effects (`None` for those not added) and its Fill Opacity.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LayerStyle {
     /// The opacity of the layer's own content, its effects untouched (Photoshop's "Fill").
     pub fill_opacity: f32,
@@ -49,6 +49,7 @@ pub struct LayerStyle {
     pub inner_glow: Option<Glow>,
     pub color_overlay: Option<ColorOverlay>,
     pub gradient_overlay: Option<GradientOverlay>,
+    pub pattern_overlay: Option<PatternOverlay>,
     pub satin: Option<Satin>,
     pub stroke: Option<Stroke>,
     pub bevel: Option<BevelEmboss>,
@@ -64,6 +65,7 @@ impl Default for LayerStyle {
             inner_glow: None,
             color_overlay: None,
             gradient_overlay: None,
+            pattern_overlay: None,
             satin: None,
             stroke: None,
             bevel: None,
@@ -693,6 +695,32 @@ impl Default for ColorOverlay {
 pub const MIN_GRADIENT_SCALE: f64 = 10.0;
 pub const MAX_GRADIENT_SCALE: f64 = 150.0;
 
+/// The layer's shape filled with a pattern (Photoshop's Pattern Overlay, ADR 0042): its source
+/// repeated, scaled and turned as a pattern fill layer's, under the Gradient Overlay.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternOverlay {
+    pub enabled: bool,
+    pub pattern: crate::pattern::PatternFill,
+    /// The pattern moves with the layer (Photoshop's Link with Layer), else it stays where the
+    /// canvas is.
+    pub link_with_layer: bool,
+    pub mode: BlendMode,
+    pub opacity: f32,
+}
+
+impl PatternOverlay {
+    /// Photoshop's settings for `source`: 100 %, upright, linked, Normal, opaque.
+    pub fn new(source: Arc<crate::source::Source>) -> Self {
+        Self {
+            enabled: true,
+            pattern: crate::pattern::PatternFill::new(source),
+            link_with_layer: true,
+            mode: BlendMode::Normal,
+            opacity: 1.0,
+        }
+    }
+}
+
 /// The layer's shape filled with a gradient (Photoshop's Gradient Overlay), Linear or Radial.
 /// The gradient spans a box, the layer's (Align with Layer) or the canvas, through its center
 /// at `angle`.
@@ -1035,6 +1063,10 @@ impl LayerStyle {
                     && o.angle.is_finite()
                     && (MIN_GRADIENT_SCALE..=MAX_GRADIENT_SCALE).contains(&o.scale)
             })
+            && self
+                .pattern_overlay
+                .as_ref()
+                .is_none_or(|o| opacity_ok(o.opacity) && o.pattern.is_valid())
             && self.stroke.is_none_or(|s| {
                 opacity_ok(s.opacity) && color_ok(s.color) && (1.0..=MAX_MODIFY).contains(&s.size)
             })
@@ -1049,6 +1081,7 @@ impl LayerStyle {
             || self.inner_glow.is_some_and(|g| g.enabled)
             || self.color_overlay.is_some_and(|o| o.enabled)
             || self.gradient_overlay.is_some_and(|o| o.enabled)
+            || self.pattern_overlay.as_ref().is_some_and(|o| o.enabled)
             || self.satin.is_some_and(|s| s.enabled)
             || self.bevel.is_some_and(|b| b.enabled)
             || self.stroke.is_some_and(|s| s.enabled)
@@ -1225,6 +1258,21 @@ impl LayerStyle {
         canvas: Size,
     ) -> Option<Drawn> {
         let mut drawn = Drawn::default();
+        // Under the other overlays, as in Photoshop.
+        if let Some(overlay) = self.pattern_overlay.as_ref().filter(|o| o.enabled) {
+            drawn.over.push(effect_layer(
+                LayerContent::PatternFill {
+                    pattern: overlay.pattern.clone(),
+                },
+                overlay.mode,
+                overlay.opacity,
+                if overlay.link_with_layer {
+                    to_document
+                } else {
+                    Projective::IDENTITY
+                },
+            ));
+        }
         if let Some(overlay) = self.gradient_overlay.filter(|o| o.enabled) {
             let whole = [0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)];
             // A fill layer has no box of its own: the canvas.
@@ -2204,14 +2252,14 @@ mod tests {
     fn a_new_color_recolors_the_same_masks_a_new_size_draws_that_effect_only() {
         let (mut doc, id) = document();
         let style = shadow_and_stroke();
-        styled(&mut doc, id, style);
+        styled(&mut doc, id, style.clone());
         let before = masks(&doc);
         assert_eq!(before.len(), 2);
         let mut recolored = style;
         if let Some(stroke) = &mut recolored.stroke {
             stroke.color = LinearRgba::new(0.0, 1.0, 0.0, 1.0);
         }
-        styled(&mut doc, id, recolored);
+        styled(&mut doc, id, recolored.clone());
         assert!(same(&masks(&doc), &before));
         assert_eq!(at(&doc, 31, 25), [0.0, 1.0, 0.0, 1.0]);
         // The shadow larger: drawn again; the stroke kept.

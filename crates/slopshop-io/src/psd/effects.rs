@@ -776,6 +776,7 @@ mod tests {
                 ..Glow::default()
             }),
             color_overlay: Some(ColorOverlay::default()),
+            pattern_overlay: None,
             gradient_overlay: Some(GradientOverlay {
                 gradient: Gradient::new(&[
                     GradientStop {

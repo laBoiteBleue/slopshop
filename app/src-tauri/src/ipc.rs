@@ -6,6 +6,9 @@
 //!
 //! Layer ids travel as JSON numbers: exact up to 2^53, far beyond what a session allocates.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use slopshop_core::adjust::Adjustment;
 use slopshop_core::align::{self, Align, Distribute};
@@ -198,11 +201,29 @@ pub struct StyleDto {
     pub gradient_overlay: Option<GradientOverlayDto>,
     /// Absent from requests of before: none.
     #[serde(default)]
+    pub pattern_overlay: Option<PatternOverlayDto>,
+    /// Absent from requests of before: none.
+    #[serde(default)]
     pub satin: Option<SatinDto>,
     pub stroke: Option<StrokeDto>,
     /// Absent from requests of before: none.
     #[serde(default)]
     pub bevel: Option<BevelDto>,
+}
+
+/// A Pattern Overlay (ADR 0042): `source` is a source of the document (one of its layers', or a
+/// library pattern loaded for it by `load_pattern`); scale (layer pixels per pattern pixel) and
+/// angle (degrees) as a pattern fill's; `link`: it moves with the layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternOverlayDto {
+    pub enabled: bool,
+    pub source: u64,
+    pub scale: f64,
+    pub angle: f64,
+    pub link: bool,
+    pub mode: String,
+    pub opacity: f32,
 }
 
 /// A Bevel and Emboss: `style` `innerBevel`, `outerBevel`, `emboss` or `pillowEmboss`.
@@ -387,6 +408,15 @@ impl StyleDto {
                 size: s.size,
                 invert: s.invert,
             }),
+            pattern_overlay: style.pattern_overlay.as_ref().map(|o| PatternOverlayDto {
+                enabled: o.enabled,
+                source: o.pattern.source.id().get(),
+                scale: o.pattern.scale,
+                angle: o.pattern.angle,
+                link: o.link_with_layer,
+                mode: o.mode.id().to_owned(),
+                opacity: o.opacity,
+            }),
             gradient_overlay: style.gradient_overlay.map(|o| GradientOverlayDto {
                 enabled: o.enabled,
                 stops: gradient_stops(&o.gradient),
@@ -419,7 +449,11 @@ impl StyleDto {
     }
 
     /// The style it describes; its ranges are checked by the edit.
-    pub fn style(&self) -> Result<slopshop_core::style::LayerStyle, String> {
+    /// The style it describes; `source(id)` finds a Pattern Overlay's source.
+    pub fn style(
+        &self,
+        source: &dyn Fn(u64) -> Option<Arc<slopshop_core::Source>>,
+    ) -> Result<slopshop_core::style::LayerStyle, String> {
         use slopshop_core::selection::StrokeLocation;
         use slopshop_core::style::{
             BevelEmboss, ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
@@ -500,6 +534,20 @@ impl StyleDto {
                     distance: s.distance,
                     size: s.size,
                     invert: s.invert,
+                }),
+                None => None,
+            },
+            pattern_overlay: match &self.pattern_overlay {
+                Some(o) => Some(slopshop_core::style::PatternOverlay {
+                    enabled: o.enabled,
+                    pattern: slopshop_core::pattern::PatternFill {
+                        source: source(o.source).ok_or("unknown pattern source")?,
+                        scale: o.scale,
+                        angle: o.angle,
+                    },
+                    link_with_layer: o.link,
+                    mode: mode(&o.mode)?,
+                    opacity: o.opacity,
                 }),
                 None => None,
             },
@@ -1315,9 +1363,21 @@ impl EditRequest {
         })
     }
 
-    /// Build the core edit. Needs the session to allocate ids for new layers. Fails on an
-    /// unknown blend mode or blend space identifier.
+    /// [`Self::into_edit_with`] without library patterns loaded.
+    #[cfg(test)]
     pub fn into_edit(self, session: &mut Session) -> Result<Edit, String> {
+        self.into_edit_with(session, &HashMap::new())
+    }
+
+    /// Build the core edit. Needs the session to allocate ids for new layers. Fails on an
+    /// unknown blend mode or blend space identifier. `loaded` holds the library patterns loaded
+    /// for the document (`load_pattern`) that a Pattern Overlay may name besides its layers'
+    /// sources.
+    pub fn into_edit_with(
+        self,
+        session: &mut Session,
+        loaded: &HashMap<u64, Arc<slopshop_core::Source>>,
+    ) -> Result<Edit, String> {
         Ok(match self {
             EditRequest::AddFillLayer {
                 name,
@@ -1357,7 +1417,19 @@ impl EditRequest {
             EditRequest::SetLayerStyle { id, style } => Edit::SetLayerStyle {
                 id: LayerId::from_raw(id),
                 style: match style {
-                    Some(dto) => Some(Box::new(dto.style()?)),
+                    Some(dto) => {
+                        let document = session.document();
+                        let find = |id: u64| {
+                            loaded.get(&id).cloned().or_else(|| {
+                                document
+                                    .all_layers()
+                                    .flat_map(|l| l.sources())
+                                    .find(|s| s.id().get() == id)
+                                    .cloned()
+                            })
+                        };
+                        Some(Box::new(dto.style(&find)?))
+                    }
                     None => None,
                 },
             },
@@ -1922,7 +1994,7 @@ impl EditRequest {
             EditRequest::Batch { edits } => Edit::Batch(
                 edits
                     .into_iter()
-                    .map(|edit| edit.into_edit(session))
+                    .map(|edit| edit.into_edit_with(session, loaded))
                     .collect::<Result<_, _>>()?,
             ),
         })

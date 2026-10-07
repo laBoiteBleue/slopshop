@@ -8,6 +8,8 @@
 //!                   "spread": 0, "size": 5 },
 //!   "inner_shadow": { …as drop_shadow… }, "inner_glow": { …as outer_glow… },
 //!   "color_overlay": { "enabled": true, "color": [r, g, b], "mode": "normal", "opacity": 1 },
+//!   "pattern_overlay": { "enabled": true, "source": 0, "scale": 1, "angle": 0, "link": true,
+//!                        "mode": "normal", "opacity": 1 },
 //!   "gradient_overlay": { "enabled": true, "gradient": [[0, 0, 0, 0], [4096, 255, 255, 255]],
 //!                         "reverse": false, "shape": "linear", "angle": 90, "scale": 100,
 //!                         "align": true, "mode": "normal", "opacity": 1 },
@@ -57,8 +59,12 @@ fn bevel_style_id(style: BevelStyle) -> &'static str {
     }
 }
 
-/// `style` as `params.style`.
-pub(super) fn to_json(style: &LayerStyle) -> Value {
+/// `style` as `params.style`; `source_index` gives a Pattern Overlay's source its index in
+/// the document's sources.
+pub(super) fn to_json(
+    style: &LayerStyle,
+    source_index: &dyn Fn(&slopshop_core::Source) -> Option<usize>,
+) -> Value {
     let mut value = Map::new();
     value.insert("fill_opacity".into(), json!(style.fill_opacity));
     let shadow = |s: DropShadow| {
@@ -101,6 +107,20 @@ pub(super) fn to_json(style: &LayerStyle) -> Value {
             json!({
                 "enabled": o.enabled,
                 "color": color(o.color),
+                "mode": o.mode.id(),
+                "opacity": o.opacity,
+            }),
+        );
+    }
+    if let Some(o) = &style.pattern_overlay {
+        value.insert(
+            "pattern_overlay".into(),
+            json!({
+                "enabled": o.enabled,
+                "source": source_index(&o.pattern.source),
+                "scale": o.pattern.scale,
+                "angle": o.pattern.angle,
+                "link": o.link_with_layer,
                 "mode": o.mode.id(),
                 "opacity": o.opacity,
             }),
@@ -227,8 +247,12 @@ fn effect<T>(
     }
 }
 
-/// `params.style` as a style; `None` when it is malformed or out of range.
-pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
+/// `params.style` as a style; `None` when it is malformed or out of range. `source(i)` is the
+/// document's source `i` (a Pattern Overlay's).
+pub(super) fn from_json(
+    value: &Value,
+    source: &dyn Fn(usize) -> Option<std::sync::Arc<slopshop_core::Source>>,
+) -> Option<LayerStyle> {
     let style = value.as_object()?;
     let fill_opacity = style.get("fill_opacity")?.as_f64()? as f32;
     let shadow = |f: &Fields| {
@@ -261,6 +285,21 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         Some(ColorOverlay {
             enabled: f.enabled()?,
             color: f.color()?,
+            mode: f.mode()?,
+            opacity: f.opacity()?,
+        })
+    })
+    .ok()?;
+    let pattern_overlay = effect(style, "pattern_overlay", |f| {
+        let index = usize::try_from(f.0.get("source")?.as_u64()?).ok()?;
+        Some(slopshop_core::style::PatternOverlay {
+            enabled: f.enabled()?,
+            pattern: slopshop_core::pattern::PatternFill {
+                source: source(index)?,
+                scale: f.number("scale")?,
+                angle: f.number("angle")?,
+            },
+            link_with_layer: f.0.get("link")?.as_bool()?,
             mode: f.mode()?,
             opacity: f.opacity()?,
         })
@@ -368,6 +407,7 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         inner_glow,
         color_overlay,
         gradient_overlay,
+        pattern_overlay,
         satin,
         stroke,
         bevel,

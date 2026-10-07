@@ -1742,11 +1742,11 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
 
     // Styles are refused when they are out of range.
     let mut bad = serde_json::json!({ "fill_opacity": 2.0 });
-    assert_eq!(super::style::from_json(&bad), None);
+    assert_eq!(super::style::from_json(&bad, &|_| None), None);
     bad = serde_json::json!({ "fill_opacity": 1.0, "stroke": { "size": 3 } });
-    assert_eq!(super::style::from_json(&bad), None);
+    assert_eq!(super::style::from_json(&bad, &|_| None), None);
     assert_eq!(
-        super::style::from_json(&serde_json::json!({ "fill_opacity": 1.0 })),
+        super::style::from_json(&serde_json::json!({ "fill_opacity": 1.0 }), &|_| None),
         Some(LayerStyle::default())
     );
 }
@@ -1833,10 +1833,16 @@ fn gradient_overlays_and_satins_round_trip_on_every_kind_of_layer() {
             "angle": 90, "scale": 100, "align": true, "mode": "normal", "opacity": 1 } })
     };
     let fine = serde_json::json!([[0, 0, 0, 0], [4096, 255, 255, 255]]);
-    assert!(super::style::from_json(&json(fine.clone(), "linear")).is_some());
-    assert_eq!(super::style::from_json(&json(fine, "diamond")), None);
+    assert!(super::style::from_json(&json(fine.clone(), "linear"), &|_| None).is_some());
+    assert_eq!(
+        super::style::from_json(&json(fine, "diamond"), &|_| None),
+        None
+    );
     let backwards = serde_json::json!([[4096, 0, 0, 0], [0, 255, 255, 255]]);
-    assert_eq!(super::style::from_json(&json(backwards, "linear")), None);
+    assert_eq!(
+        super::style::from_json(&json(backwards, "linear"), &|_| None),
+        None
+    );
 }
 
 #[test]
@@ -2441,6 +2447,70 @@ fn pattern_fills_round_trip_with_their_source_shared() {
     // The same pixels.
     let region = slopshop_core::geom::Rect::new(0, 0, 64, 48);
     let mut before = vec![0.0f32; 64 * 48 * 4];
+    let mut after = before.clone();
+    slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
+    slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();
+    assert_eq!(before, after);
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn pattern_overlays_round_trip_with_their_source() {
+    use slopshop_core::LayerId;
+    use slopshop_core::style::{LayerStyle, PatternOverlay, Style};
+    let size = Size::new(48, 40);
+    let tile = image(
+        Size::new(8, 8),
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        noise(8 * 8 * 4, 5),
+    );
+    let source = slopshop_core::Source::new(tile, "Grain");
+    let mut doc = Document::new(size);
+    let shape = image(
+        size,
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        noise(48 * 40 * 4, 6),
+    );
+    let id = push(&mut doc, "shape", LayerContent::raster(shape), 1.0);
+    let overlay = PatternOverlay {
+        link_with_layer: false,
+        mode: BlendMode::Multiply,
+        opacity: 0.6,
+        ..PatternOverlay::new(Arc::clone(&source))
+    };
+    let mut overlay = overlay;
+    overlay.pattern.scale = 1.5;
+    overlay.pattern.angle = -20.0;
+    Edit::SetLayerStyle {
+        id: LayerId::from_raw(id),
+        style: Some(Box::new(LayerStyle {
+            pattern_overlay: Some(overlay.clone()),
+            ..LayerStyle::default()
+        })),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("pattern-overlay.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    let style: Option<&Style> = loaded.layer(LayerId::from_raw(id)).unwrap().style.as_ref();
+    let back = style.unwrap().settings().pattern_overlay.clone().unwrap();
+    assert_eq!(back.pattern.source.name(), "Grain");
+    assert_same_image(back.pattern.source.image(), source.image(), "the pattern");
+    assert_eq!(
+        (
+            back.link_with_layer,
+            back.mode,
+            back.opacity,
+            back.pattern.scale,
+            back.pattern.angle
+        ),
+        (false, BlendMode::Multiply, 0.6, 1.5, -20.0)
+    );
+    let region = slopshop_core::geom::Rect::new(0, 0, 48, 40);
+    let mut before = vec![0.0f32; 48 * 40 * 4];
     let mut after = before.clone();
     slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
     slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();

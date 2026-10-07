@@ -237,6 +237,8 @@ export type LayerStyle = {
   /** Absent: none. */
   gradientOverlay?: StyleGradientOverlay | null;
   /** Absent: none. */
+  patternOverlay?: StylePatternOverlay | null;
+  /** Absent: none. */
   satin?: StyleSatin | null;
   /** Absent: none. */
   bevel?: StyleBevel | null;
@@ -248,6 +250,21 @@ export type LayerStyle = {
     mode: BlendModeId;
     opacity: number;
   } | null;
+};
+
+/**
+ * A layer style's Pattern Overlay (ADR 0042): `source`, a source of the document (or a library
+ * pattern loaded for it, `loadPattern`), scaled (layer pixels per pattern pixel) and turned
+ * (degrees); `link`: it moves with the layer.
+ */
+export type StylePatternOverlay = {
+  enabled: boolean;
+  source: number;
+  scale: number;
+  angle: number;
+  link: boolean;
+  mode: BlendModeId;
+  opacity: number;
 };
 
 /** A layer style's Bevel and Emboss: the shape lit as if raised. */
@@ -1621,6 +1638,9 @@ export const engine = {
         index,
       }),
     ),
+  /** A library pattern loaded for a document (a Pattern Overlay's): its source's id. */
+  loadPattern: (documentId: number, pattern: string, sourceName: string) =>
+    serial(() => invoke<number>("load_pattern", { documentId, pattern, sourceName })),
   /** Another library pattern for a pattern fill layer, its scale and angle kept. */
   replacePattern: (documentId: number, layerId: number, pattern: string, sourceName: string) =>
     serial(() =>

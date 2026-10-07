@@ -404,7 +404,8 @@ Raised on 2026-10-05, to schedule:
         sampled with wrapping on the CPU and the GPU alike; `.slop` 0.31
   - [x] The library (a folder of PNG files with an index, four generated patterns), Edit >
         Define Pattern, Layer > New Fill Layer > Pattern, the pattern picker, Properties
-  - [ ] Pattern Overlay, Edit > Fill > Pattern, Pattern Stamp, the Patterns panel
+  - [x] Pattern Overlay (layer style)
+  - [ ] Edit > Fill > Pattern, Pattern Stamp, the Patterns panel
 - [ ] History memory limits
 - [ ] Very large images (Phase 4)
 - [ ] Distribution (Phase 5): installers built by CI on a version tag (done 2026-10-06, not
