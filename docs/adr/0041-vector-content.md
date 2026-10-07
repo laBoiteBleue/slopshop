@@ -1,8 +1,6 @@
 # 0041 — Vector content: shapes, paths, text and vector masks
 
-Status: proposed (2026-10-07, drafted for the maintainer; the questions at the end are theirs).
-Builds on [ADR 0040](0040-sources.md), point 8: vector content is a source kind without a
-stack, painting goes on a pixel layer clipped above it, Rasterize gives pixels.
+Status: accepted (2026-10-07, the maintainer's answers below; drafted for them the same day).
 
 ## Context
 
@@ -33,7 +31,7 @@ A survey of the Rust libraries (2026-10-07) found:
   SVG importer. Alternative: `cosmic-text` (complete for editing, but older dependencies,
   bitmaps for screens, no system font API, no vertical text).
 
-## Decision (proposed)
+## Decision
 
 1. **Two vector source kinds** (ADR 0040, point 1), immutable like every source:
    - **Shape**: paths (cubic Béziers, closed or open, a fill rule), a fill (a color or a
@@ -98,20 +96,20 @@ A survey of the Rust libraries (2026-10-07) found:
 - Text adds the largest dependencies; it comes last, after shapes and paths prove the
   rasterizer and the cache.
 
-## Questions for the maintainer
+## Answers (the maintainer, 2026-10-07)
 
-1. Text stack: Parley (active, no vertical text yet) or cosmic-text (more complete editing,
-   older dependencies)?
-2. Coverage on the CPU only, uploaded as tiles (exact CPU/GPU match), as proposed?
-3. Coverage depth: 8 bits, or 16 for 16- and 32-bit documents?
-4. Text anti-aliasing: always smooth and unhinted, or Photoshop's None/Sharp/Crisp/Strong/
-   Smooth?
-5. Fonts missing on another computer: embed the fonts used in `.slop` (when their licence's
-   `fsType` allows), keep the glyph outlines, or substitute and warn?
-6. A bundled default font (Inter or Noto Sans, OFL), and how much size it may add?
-7. Vertical text, text on a path, warped text: first version or later?
-8. Color emoji: drawn, or outlines only?
-9. Path operations (unite, subtract, intersect shapes): which crate, and in the first version?
-10. Text edited on the canvas from the first version (a caret, a selection, IME), or in the
-    Properties panel first?
-11. PSD's editable text: later, keeping its pixels meanwhile, as proposed?
+1. Text: Parley.
+2. Coverage computed on the CPU only and uploaded as tiles: yes.
+3. 8-bit coverage (16 bits later if banding shows).
+4. Text always smooth and unhinted.
+5. Missing fonts: embedded in `.slop` when their licence's `fsType` allows it; otherwise the
+   glyph outlines kept and a warning.
+6. Inter bundled as the default font (OFL). Wanted besides: a list of fonts to choose from,
+   and a study of downloading fonts on demand or embedding them (a proposal to come).
+7. Vertical text, text on a path and warped text: later.
+8. Color emoji: later (outlines first).
+9. Path operations: later.
+10. Text edited on the canvas from the first version.
+11. PSD's editable text: later, its pixels kept meanwhile.
+
+Order of work: shapes, then the Pen and paths (and vector masks), then text, then PSD.
