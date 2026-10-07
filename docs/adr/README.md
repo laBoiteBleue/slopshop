@@ -47,5 +47,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0040 | [Sources: what layers show, kept once and referenced](0040-sources.md) | accepted |
 | 0041 | [Vector content: shapes, paths, text and vector masks](0041-vector-content.md) | accepted |
 | 0042 | [Patterns: image sources repeated across a plane](0042-patterns.md) | accepted |
+| 0043 | [Panoramas, aligned layers and image stacks](0043-panorama-and-stacks.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.
