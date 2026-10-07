@@ -2984,7 +2984,10 @@ fn pdf_pages_render_back_as_the_image() {
         assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
         assert_eq!(rendered.image.size(), size);
         let worst = worst_difference(&raster_document(rendered.image), &doc);
-        assert!(worst <= 1.5, "{layout:?}: {worst}");
+        // With transparency, hayro (0.8) composites the soft mask in 8 bits: a level more
+        // where pixels are partly transparent.
+        let most = if layout.has_alpha() { 2.0 } else { 1.5 };
+        assert!(worst <= most, "{layout:?}: {worst}");
     }
 }
 
