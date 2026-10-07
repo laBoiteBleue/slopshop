@@ -11,20 +11,25 @@
 //!   "gradient_overlay": { "enabled": true, "gradient": [[0, 0, 0, 0], [4096, 255, 255, 255]],
 //!                         "reverse": false, "shape": "linear", "angle": 90, "scale": 100,
 //!                         "align": true, "mode": "normal", "opacity": 1 },
+//!   "satin": { "enabled": true, "color": [r, g, b], "mode": "multiply", "opacity": 0.5,
+//!              "angle": 19, "distance": 11, "size": 14, "invert": true },
 //!   "stroke": { "enabled": true, "size": 3, "position": "outside", "color": [r, g, b],
 //!               "mode": "normal", "opacity": 1 } }
 //! ```
 //!
 //! Colors are linear working-space RGB, as a fill node's; a gradient's stops are Gradient
 //! Map's (`[location 0–4096, r, g, b]`, sRGB-encoded). Effects not added are absent; a node
-//! with a Gradient Overlay is written at node version 12 (schema 0.27).
+//! with a Gradient Overlay is written at node version 12 (schema 0.27), one with a Satin at 13
+//! (schema 0.28).
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
 use slopshop_core::color::LinearRgba;
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
-use slopshop_core::style::{ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Stroke};
+use slopshop_core::style::{
+    ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
+};
 
 fn color(c: LinearRgba) -> Value {
     json!([c.r, c.g, c.b])
@@ -109,6 +114,21 @@ pub(super) fn to_json(style: &LayerStyle) -> Value {
                 "align": o.align_with_layer,
                 "mode": o.mode.id(),
                 "opacity": o.opacity,
+            }),
+        );
+    }
+    if let Some(s) = style.satin {
+        value.insert(
+            "satin".into(),
+            json!({
+                "enabled": s.enabled,
+                "color": color(s.color),
+                "mode": s.mode.id(),
+                "opacity": s.opacity,
+                "angle": s.angle,
+                "distance": s.distance,
+                "size": s.size,
+                "invert": s.invert,
             }),
         );
     }
@@ -238,6 +258,19 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         })
     })
     .ok()?;
+    let satin = effect(style, "satin", |f| {
+        Some(Satin {
+            enabled: f.enabled()?,
+            color: f.color()?,
+            mode: f.mode()?,
+            opacity: f.opacity()?,
+            angle: f.number("angle")?,
+            distance: f.number("distance")?,
+            size: f.number("size")?,
+            invert: f.0.get("invert")?.as_bool()?,
+        })
+    })
+    .ok()?;
     let stroke = effect(style, "stroke", |f| {
         let position = match f.0.get("position")?.as_str()? {
             "inside" => StrokeLocation::Inside,
@@ -263,6 +296,7 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         inner_glow,
         color_overlay,
         gradient_overlay,
+        satin,
         stroke,
     };
     style.is_valid().then_some(style)

@@ -12,8 +12,8 @@ use slopshop_core::color::LinearRgba;
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
 use slopshop_core::style::{
-    ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, MAX_GRADIENT_SCALE, MAX_SIZE,
-    MIN_GRADIENT_SCALE, Stroke,
+    ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, MAX_GRADIENT_SCALE,
+    MAX_SATIN_DISTANCE, MAX_SIZE, MIN_GRADIENT_SCALE, Satin, Stroke,
 };
 
 use super::descriptor::{self, Descriptor, Value};
@@ -266,6 +266,27 @@ impl Read {
         overlay
     }
 
+    /// A Satin (`ChFX`); a contour other than linear is approximated.
+    fn satin(&mut self, d: &Descriptor) -> Satin {
+        if d.object(b"MpgS")
+            .and_then(|c| c.list(b"Crv "))
+            .is_some_and(|points| points.len() > 2)
+        {
+            self.approximated = true;
+        }
+        Satin {
+            enabled: self.enabled(d),
+            color: self.color(d),
+            mode: self.mode(d),
+            opacity: Self::opacity(d),
+            angle: d.number(b"lagl").unwrap_or(19.0),
+            distance: (d.number(b"Dstn").unwrap_or(11.0) * self.scale)
+                .clamp(0.0, MAX_SATIN_DISTANCE),
+            size: self.size(d, b"blur"),
+            invert: d.bool(b"Invr").unwrap_or(true),
+        }
+    }
+
     fn overlay(&mut self, d: &Descriptor) -> ColorOverlay {
         ColorOverlay {
             enabled: self.enabled(d),
@@ -334,11 +355,17 @@ pub(crate) fn read(block: &[u8], global_angle: f64) -> Option<ImportedStyle> {
     if let Some(e) = effect(&d, b"GrFl", b"gradientFillMulti", &mut read) {
         style.gradient_overlay = Some(read.gradient_overlay(e));
     }
+    if let Some(e) = d
+        .object(b"ChFX")
+        .filter(|o| o.bool(b"present").unwrap_or(true))
+    {
+        style.satin = Some(read.satin(e));
+    }
     if let Some(e) = effect(&d, b"FrFX", b"frameFXMulti", &mut read) {
         style.stroke = Some(read.stroke(e));
     }
     // What SlopShop does not draw, when enabled.
-    for key in [&b"ebbl"[..], b"ChFX", b"patternFill"] {
+    for key in [&b"ebbl"[..], b"patternFill"] {
         let on = match d.get(key) {
             Some(Value::Object(o)) => o.bool(b"enab").unwrap_or(true),
             Some(Value::List(list)) => !list.is_empty(),
@@ -556,6 +583,17 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
     if let Some(o) = style.gradient_overlay {
         items.push((b"GrFl", b"Objc", object(b"GrFl", &gradient_overlay(o))));
     }
+    if let Some(s) = style.satin {
+        let mut satin = common(s.enabled, s.mode, s.color, s.opacity);
+        satin.extend([
+            (&b"AntA"[..], b"bool", vec![1]),
+            (b"Invr", b"bool", vec![u8::from(s.invert)]),
+            (b"lagl", b"UntF", unit(b"#Ang", s.angle)),
+            (b"Dstn", b"UntF", unit(b"#Pxl", s.distance)),
+            (b"blur", b"UntF", unit(b"#Pxl", s.size)),
+        ]);
+        items.push((b"ChFX", b"Objc", object(b"ChFX", &satin)));
+    }
     if let Some(s) = style.stroke {
         let mut stroke = common(s.enabled, s.mode, s.color, s.opacity);
         let position: &[u8] = match s.position {
@@ -634,6 +672,13 @@ mod tests {
                 opacity: 0.6,
                 enabled: true,
             }),
+            satin: Some(Satin {
+                angle: -40.0,
+                distance: 20.0,
+                size: 7.0,
+                invert: false,
+                ..Satin::default()
+            }),
             stroke: Some(Stroke {
                 position: StrokeLocation::Center,
                 size: 7.0,
@@ -689,6 +734,12 @@ mod tests {
             )
         );
         assert!((g.opacity - h.opacity).abs() < 1e-6);
+        let (s, t) = (style.satin.unwrap(), back.satin.unwrap());
+        assert_eq!(
+            (s.angle, s.distance, s.size, s.invert, s.mode, s.enabled),
+            (t.angle, t.distance, t.size, t.invert, t.mode, t.enabled)
+        );
+        assert!((s.opacity - t.opacity).abs() < 1e-6);
         assert_eq!(write(&LayerStyle::default()), None);
     }
 

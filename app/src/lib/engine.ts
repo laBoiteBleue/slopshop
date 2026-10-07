@@ -222,6 +222,8 @@ export type LayerStyle = {
   } | null;
   /** Absent: none. */
   gradientOverlay?: StyleGradientOverlay | null;
+  /** Absent: none. */
+  satin?: StyleSatin | null;
   stroke: {
     enabled: boolean;
     size: number;
@@ -230,6 +232,19 @@ export type LayerStyle = {
     mode: BlendModeId;
     opacity: number;
   } | null;
+};
+
+/** A layer style's Satin: shading inside the shape that follows its edges. */
+export type StyleSatin = {
+  enabled: boolean;
+  color: [number, number, number];
+  mode: BlendModeId;
+  opacity: number;
+  /** Degrees, counterclockwise from the right. */
+  angle: number;
+  distance: number;
+  size: number;
+  invert: boolean;
 };
 
 /** A layer style's Gradient Overlay: the layer's shape filled with a gradient. */

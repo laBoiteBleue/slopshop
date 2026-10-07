@@ -225,6 +225,54 @@
         {:else}
           <p class="empty">{t("style.off")}</p>
         {/if}
+      {:else if page === "satin"}
+        <h3>{t("style.satin")}</h3>
+        {#if draft.satin}
+          {@render modes(
+            draft.satin.mode,
+            (m) => (draft.satin!.mode = m as never),
+            t("style.mode"),
+          )}
+          <div class="field">
+            <span>{t("style.color")}</span>
+            {@render swatch(draft.satin.color, "satin")}
+          </div>
+          <SliderField
+            label={t("style.opacity")}
+            bind:value={draft.satin.opacity}
+            min={0}
+            max={100}
+            unit="%"
+            factor={100}
+          />
+          <SliderField
+            label={t("style.angle")}
+            bind:value={draft.satin.angle}
+            min={-180}
+            max={180}
+            unit="°"
+          />
+          <SliderField
+            label={t("style.distance")}
+            bind:value={draft.satin.distance}
+            min={0}
+            max={250}
+            unit="px"
+          />
+          <SliderField
+            label={t("style.size")}
+            bind:value={draft.satin.size}
+            min={0}
+            max={250}
+            unit="px"
+          />
+          <label class="check">
+            <input type="checkbox" bind:checked={draft.satin.invert} />
+            {t("style.invert")}
+          </label>
+        {:else}
+          <p class="empty">{t("style.off")}</p>
+        {/if}
       {:else if page === "gradientOverlay"}
         <h3>{t("style.gradientOverlay")}</h3>
         {#if draft.gradientOverlay}

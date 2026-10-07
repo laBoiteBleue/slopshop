@@ -345,6 +345,13 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     angle from edge to edge (`(w·|cos| + h·|sin|) × scale`); radial, from the center out to half
     the box's longer side × scale. It fills the layer's shape, under a Color Overlay. Only those
     nodes are written at v12, so that older readers refuse them rather than drop the effect.
+  - v13 (schema 0.28) is a raster, fill or group node whose style has a Satin:
+    `params.style.satin` holds `enabled`, `color`, `mode`, `opacity`, `angle` (degrees,
+    counterclockwise from the right), `distance` and `size` (0 to 250 pixels) and `invert`. The
+    shape is blurred by a Gaussian of `size / 2` pixels; at each pixel, the blurred shape half
+    the distance before and after it along the angle (whole pixels) differ by `d`; the effect's
+    coverage is `d`, or `1 − d` inverted, within the shape, above the overlays and under Inner
+    Glow. Only those nodes are written at v13.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier

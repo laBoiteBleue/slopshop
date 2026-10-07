@@ -159,3 +159,16 @@ test("Gradient Overlay: reverse, its style, align, angle and scale sent as they 
   expect(within(settings).queryByRole("button", { name: "Color" })).not.toBeInTheDocument();
   expect(onpickcolor).not.toHaveBeenCalled();
 });
+
+test("Satin: its color asked for, Invert and its distance sent as they change", async () => {
+  const { onchange, onpickcolor, user } = open(withEffect(null, "satin", true), "satin");
+  const settings = screen.getByRole("region", { name: "Satin" });
+  await user.click(within(settings).getByRole("button", { name: "Color" }));
+  expect(onpickcolor).toHaveBeenCalledWith("satin");
+  await user.click(within(settings).getByRole("checkbox", { name: "Invert" }));
+  expect(last(onchange).satin?.invert).toBe(false);
+  // Opacity, Angle, Distance, Size.
+  const [, , distance] = within(settings).getAllByRole("spinbutton");
+  await fireEvent.input(distance, { target: { value: "30" } });
+  expect(last(onchange).satin).toMatchObject({ distance: 30, mode: "multiply" });
+});

@@ -49,6 +49,7 @@ pub struct LayerStyle {
     pub inner_glow: Option<Glow>,
     pub color_overlay: Option<ColorOverlay>,
     pub gradient_overlay: Option<GradientOverlay>,
+    pub satin: Option<Satin>,
     pub stroke: Option<Stroke>,
 }
 
@@ -62,6 +63,7 @@ impl Default for LayerStyle {
             inner_glow: None,
             color_overlay: None,
             gradient_overlay: None,
+            satin: None,
             stroke: None,
         }
     }
@@ -344,9 +346,10 @@ enum Slot {
     InnerGlow,
     InnerShadow,
     Stroke,
+    Satin,
 }
 
-const SLOTS: usize = 5;
+const SLOTS: usize = 6;
 
 /// What an effect's mask is made of: its geometry (not its color, mode or opacity).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -361,6 +364,14 @@ enum MaskKey {
     },
     /// The band along the outline.
     Band { size: f64, position: StrokeLocation },
+    /// Satin's: the shape blurred by a Gaussian of `sigma`, minus itself moved by `offset`
+    /// (whole pixels, the two copies `offset` apart), the difference's magnitude, inverted with
+    /// `invert`.
+    Satin {
+        sigma: f64,
+        offset: (f64, f64),
+        invert: bool,
+    },
 }
 
 impl MaskKey {
@@ -402,6 +413,24 @@ impl MaskKey {
                 ..
             } => hard + 3.0 * sigma + dx.abs().max(dy.abs()),
             MaskKey::Band { size, .. } => size + 1.0,
+            MaskKey::Satin {
+                sigma,
+                offset: (dx, dy),
+                ..
+            } => 3.0 * sigma + dx.abs().max(dy.abs()),
+        }
+    }
+
+    /// Satin's from its settings: the copies half its distance either side of the shape.
+    fn satin(s: Satin) -> Self {
+        let radians = s.angle.to_radians();
+        MaskKey::Satin {
+            sigma: s.size.min(MAX_FEATHER) / 2.0,
+            offset: (
+                (radians.cos() * s.distance).round(),
+                (-radians.sin() * s.distance).round(),
+            ),
+            invert: s.invert,
         }
     }
 
@@ -437,6 +466,19 @@ impl MaskKey {
             } => {
                 let band = selection::stroke_band(size, shape, width, position).ok()??;
                 Some((Arc::new(band), Projective::translation(x, y)))
+            }
+            MaskKey::Satin {
+                sigma,
+                offset,
+                invert,
+            } => {
+                let blurred = if sigma > 0.0 {
+                    Arc::new(selection::modify(size, shape, Modify::Feather(sigma)).ok()??)
+                } else {
+                    Arc::clone(shape)
+                };
+                let satin = satin_mask(&blurred, offset, invert)?;
+                Some((Arc::new(satin), Projective::translation(x, y)))
             }
         }
     }
@@ -684,6 +726,42 @@ impl GradientOverlay {
     }
 }
 
+/// Satin's distance and size range, in pixels (Photoshop's).
+pub const MAX_SATIN_DISTANCE: f64 = 250.0;
+
+/// Shading inside the shape that follows its edges (Photoshop's Satin): the shape blurred by
+/// `size`, two copies of it `distance` apart along `angle`, their difference, inverted with
+/// `invert` (Photoshop's default), drawn in `color`. A linear contour (Photoshop's default is
+/// Gaussian).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Satin {
+    pub enabled: bool,
+    pub color: LinearRgba,
+    pub mode: BlendMode,
+    pub opacity: f32,
+    /// Degrees, counterclockwise from the right.
+    pub angle: f64,
+    pub distance: f64,
+    pub size: f64,
+    pub invert: bool,
+}
+
+impl Default for Satin {
+    /// Photoshop's: black, Multiply, 50 %, 19°, 11 pixels apart, 14 pixels, inverted.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
+            mode: BlendMode::Multiply,
+            opacity: 0.5,
+            angle: 19.0,
+            distance: 11.0,
+            size: 14.0,
+            invert: true,
+        }
+    }
+}
+
 /// A band along the layer's outline (Photoshop's Stroke, a color fill).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stroke {
@@ -806,6 +884,13 @@ impl LayerStyle {
             && self
                 .color_overlay
                 .is_none_or(|o| opacity_ok(o.opacity) && color_ok(o.color))
+            && self.satin.is_none_or(|s| {
+                opacity_ok(s.opacity)
+                    && color_ok(s.color)
+                    && s.angle.is_finite()
+                    && (0.0..=MAX_SATIN_DISTANCE).contains(&s.distance)
+                    && (0.0..=MAX_SIZE).contains(&s.size)
+            })
             && self.gradient_overlay.is_none_or(|o| {
                 opacity_ok(o.opacity)
                     && o.angle.is_finite()
@@ -825,6 +910,7 @@ impl LayerStyle {
             || self.inner_glow.is_some_and(|g| g.enabled)
             || self.color_overlay.is_some_and(|o| o.enabled)
             || self.gradient_overlay.is_some_and(|o| o.enabled)
+            || self.satin.is_some_and(|s| s.enabled)
             || self.stroke.is_some_and(|s| s.enabled)
     }
 
@@ -863,6 +949,17 @@ impl LayerStyle {
                 g.opacity,
             );
         }
+        // Above the overlays, under the inner glow and shadow, as in Photoshop.
+        if let Some(s) = self.satin.filter(|s| s.enabled) {
+            add(
+                Place::Over,
+                Slot::Satin,
+                MaskKey::satin(s),
+                s.color,
+                s.mode,
+                s.opacity,
+            );
+        }
         if let Some(g) = self.inner_glow.filter(|g| g.enabled) {
             let key = MaskKey::glow(g, true);
             add(
@@ -896,7 +993,7 @@ impl LayerStyle {
     }
 
     /// Photoshop's order, bottom to top: Drop Shadow, Outer Glow, the content, Gradient Overlay,
-    /// Color Overlay, Inner Glow, Inner Shadow, Stroke. The masks `shape` does not know yet are computed (on
+    /// Color Overlay, Satin, Inner Glow, Inner Shadow, Stroke. The masks `shape` does not know yet are computed (on
     /// every core) from the layer's coverage, itself computed once for them all.
     fn draw(
         &self,
@@ -1208,6 +1305,37 @@ fn colored(
     layer
 }
 
+/// Satin's mask from the blurred shape `blurred` (a gray coverage): at each pixel, the
+/// difference of the shape half `offset` before and after it, inverted with `invert`; nothing
+/// where the shape is not (the effect is drawn within it).
+fn satin_mask(blurred: &RasterImage, offset: (f64, f64), invert: bool) -> Option<RasterImage> {
+    let size = blurred.size();
+    let (w, h) = (size.width as usize, size.height as usize);
+    let values = selection::sample_grid(blurred, size.bounds(), w, h);
+    // Half the distance either way, in whole pixels.
+    let (hx, hy) = (
+        (offset.0 / 2.0).round() as i64,
+        (offset.1 / 2.0).round() as i64,
+    );
+    let at = |x: i64, y: i64| {
+        if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
+            0.0
+        } else {
+            values[y as usize * w + x as usize]
+        }
+    };
+    let full = f32::from(u16::MAX);
+    let mut bytes = Vec::with_capacity(w * h * 2);
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let d = (at(x - hx, y - hy) - at(x + hx, y + hy)).abs().min(1.0);
+            let v = if invert { 1.0 - d } else { d };
+            bytes.extend(((v * full).round() as u16).to_ne_bytes());
+        }
+    }
+    RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).ok()
+}
+
 /// The box of `layer`'s pixels in its own space, its hidden children aside (a group: theirs
 /// placed by their transforms); `None` for fills and adjustment layers, and when nothing shows.
 fn content_box(layer: &Layer) -> Option<[f64; 4]> {
@@ -1501,6 +1629,74 @@ mod tests {
             },
         );
         assert_eq!(at(&doc, 25, 25), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_satin_shades_inside_the_shape_along_its_edges() {
+        // A larger white box: 40 pixels, from 10 to 50.
+        let mut doc = Document::new(Size::new(64, 64));
+        let image = RasterImage::from_placed(
+            doc.size(),
+            crate::color::PixelFormat::RGBA8_SRGB,
+            Rect::new(10, 10, 40, 40),
+            &[255u8; 40 * 40 * 4],
+            &[0; 4],
+        )
+        .unwrap();
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "box".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(Arc::new(image)),
+                mask: None,
+                clipped: false,
+                transform: crate::transform::Projective::IDENTITY,
+                style: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let satin = |invert| LayerStyle {
+            satin: Some(Satin {
+                angle: 0.0,
+                distance: 10.0,
+                size: 4.0,
+                invert,
+                ..Satin::default()
+            }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, satin(true));
+        // Inverted (Photoshop's default): the copies agree in the middle, the black at half its
+        // opacity multiplies there (half the perceptual white, 0.21 in linear light); near the
+        // left and right edges they differ, less of it.
+        let middle = at(&doc, 30, 30)[0];
+        let edge = at(&doc, 12, 30)[0];
+        assert!((middle - 0.214).abs() < 0.03, "{middle}");
+        assert!(edge > middle + 0.2, "{edge} {middle}");
+        // Along the edges the copies move along (top and bottom middle): as the middle.
+        assert!((at(&doc, 30, 11)[0] - middle).abs() < 0.1);
+        assert_eq!(at(&doc, 5, 5)[3], 0.0, "nothing outside the shape");
+        // Not inverted: the other way round.
+        styled(&mut doc, id, satin(false));
+        assert!(at(&doc, 30, 30)[0] > 0.95);
+        assert!(at(&doc, 12, 30)[0] < 0.9);
+        assert!(
+            !LayerStyle {
+                satin: Some(Satin {
+                    distance: 251.0,
+                    ..Satin::default()
+                }),
+                ..LayerStyle::default()
+            }
+            .is_valid()
+        );
     }
 
     #[test]

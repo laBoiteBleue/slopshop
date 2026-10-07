@@ -776,6 +776,8 @@ const en = {
   "style.fillOpacity": "Fill Opacity",
   "style.stroke": "Stroke",
   "style.colorOverlay": "Color Overlay",
+  "style.satin": "Satin",
+  "style.invert": "Invert",
   "style.gradientOverlay": "Gradient Overlay",
   "style.gradient": "Gradient",
   "style.reverse": "Reverse",
