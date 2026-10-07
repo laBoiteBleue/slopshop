@@ -45,7 +45,7 @@ hayro-jpeg2000 = { version = "0.4.0", default-features = false, features = ["sim
 # the formats plan (MuPDF, Poppler and Ghostscript are GPL/AGPL; PDFium would be C++). Default
 # features: the 14 standard fonts and the predefined CMaps, embedded, for files that do not
 # embed theirs. Brings the Linebender stack (vello_cpu, skrifa, kurbo), all MIT OR Apache-2.0.
-hayro = "0.7.1"
+hayro = "0.8.0"
 # - its pixmaps as bytes without a copy; already in the tree through hayro.
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 # AVIF import: rav1d (BSD-2-Clause), the Rust port of dav1d, without its assembly (which needs

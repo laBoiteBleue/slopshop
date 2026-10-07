@@ -12,11 +12,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_interpret::util::TransformExt;
 use hayro::hayro_syntax::{LoadPdfError, Pdf};
 use hayro::vello_cpu::color::AlphaColor;
-use hayro::vello_cpu::color::PremulRgba8;
 use hayro::vello_cpu::color::Srgb;
 use hayro::vello_cpu::color::palette::css::{TRANSPARENT, WHITE};
+use hayro::vello_cpu::peniko::ImageAlphaType;
+use hayro::vello_cpu::{RasterizerSettings, RenderContext, Resources, TargetInit};
 use hayro::{RenderCache, RenderSettings};
 use slopshop_core::Size;
 use slopshop_core::color::{AlphaMode, ChannelLayout, ColorSpace, SampleType};
@@ -125,7 +127,7 @@ impl PdfFile {
             width: u32::from(pixmap.width()),
             height: u32::from(pixmap.height()),
             // Opaque on white: premultiplied and straight alpha are the same.
-            pixels: bytes(pixmap.take()),
+            pixels: pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied),
         })
     }
 
@@ -149,7 +151,7 @@ impl PdfFile {
             icc: None,
             space: Some(ColorSpace::SRGB),
             orientation: Orientation::Normal,
-            pixels: bytes(pixmap.take()),
+            pixels: pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied),
             warnings: if skipped {
                 vec![ImportWarning::PdfContentSkipped]
             } else {
@@ -195,26 +197,30 @@ impl PdfFile {
         let scale = dpi / POINTS_PER_INCH;
         // Checked above: both fit in u16.
         let (width, height) = (width.max(1) as u16, height.max(1) as u16);
-        let pixmap = hayro::render(
+        // `hayro::render`'s steps, at the size worked out above (its own rounds down).
+        let mut ctx = RenderContext::new(width, height);
+        let transform = hayro::vello_cpu::kurbo::Affine::scale(f64::from(scale))
+            * page.initial_transform(true).to_kurbo();
+        hayro::render_into(
             page,
             &RenderCache::new(),
             &settings,
-            &RenderSettings {
-                x_scale: scale,
-                y_scale: scale,
-                width: Some(width),
-                height: Some(height),
-                bg_color: background,
+            &RenderSettings::default(),
+            &mut ctx,
+            transform,
+        );
+        ctx.flush();
+        let mut pixmap = hayro::vello_cpu::Pixmap::new(width, height);
+        ctx.render_with(
+            &mut pixmap,
+            &mut Resources::default(),
+            RasterizerSettings {
+                target_init: TargetInit::Clear(background),
+                ..Default::default()
             },
         );
         Ok((pixmap, skipped.load(Ordering::Relaxed)))
     }
-}
-
-/// The pixels as bytes, without copying them (both are 1-byte aligned, 4 bytes a pixel).
-fn bytes(pixels: Vec<PremulRgba8>) -> Vec<u8> {
-    bytemuck::allocation::try_cast_vec(pixels)
-        .unwrap_or_else(|(_, pixels)| bytemuck::cast_slice(&pixels).to_vec())
 }
 
 #[cfg(test)]
