@@ -7,7 +7,7 @@
   import { onMount, untrack } from "svelte";
   import { BLEND_MODE_GROUPS, type LayerStyle } from "./engine";
   import { srgbToHex } from "./color";
-  import { EFFECTS, PLAIN, withEffect, type EffectId } from "./layerStyle";
+  import { EFFECTS, PLAIN, withEffect, type EffectColor, type EffectId } from "./layerStyle";
   import SliderField from "./SliderField.svelte";
   import StyleEffectFields from "./StyleEffectFields.svelte";
   import GradientEditor from "./GradientEditor.svelte";
@@ -34,7 +34,7 @@
     /** Another page shown. */
     onpage: (page: StylePage) => void;
     /** An effect's color swatch clicked: the app shows the picker, then this dialog again. */
-    onpickcolor: (effect: EffectId) => void;
+    onpickcolor: (effect: EffectId, color?: EffectColor) => void;
     onok: () => void;
     oncancel: () => void;
   } = $props();
@@ -83,6 +83,7 @@
   }
 
   const POSITIONS = ["outside", "inside", "center"] as const;
+  const BEVEL_STYLES = ["innerBevel", "outerBevel", "emboss", "pillowEmboss"] as const;
 </script>
 
 {#snippet modes(value: string, set: (mode: string) => void, label: string)}
@@ -99,14 +100,14 @@
   </label>
 {/snippet}
 
-{#snippet swatch(color: number[], effect: EffectId)}
+{#snippet swatch(color: number[], effect: EffectId, which: EffectColor = "color")}
   <button
     type="button"
     class="swatch"
     style:background={srgbToHex(color)}
-    title={t("style.color")}
-    aria-label={t("style.color")}
-    onclick={() => onpickcolor(effect)}
+    title={t(which === "color" ? "style.color" : `style.${which}`)}
+    aria-label={t(which === "color" ? "style.color" : `style.${which}`)}
+    onclick={() => onpickcolor(effect, which)}
   ></button>
 {/snippet}
 
@@ -217,6 +218,99 @@
           <SliderField
             label={t("style.opacity")}
             bind:value={draft.colorOverlay.opacity}
+            min={0}
+            max={100}
+            unit="%"
+            factor={100}
+          />
+        {:else}
+          <p class="empty">{t("style.off")}</p>
+        {/if}
+      {:else if page === "bevel"}
+        <h3>{t("style.bevel")}</h3>
+        {#if draft.bevel}
+          <label class="field">
+            <span>{t("style.bevelStyle")}</span>
+            <select bind:value={draft.bevel.style}>
+              {#each BEVEL_STYLES as id (id)}
+                <option value={id}>{t(`style.bevelStyle.${id}`)}</option>
+              {/each}
+            </select>
+          </label>
+          <SliderField
+            label={t("style.depth")}
+            bind:value={draft.bevel.depth}
+            min={1}
+            max={1000}
+            unit="%"
+          />
+          <label class="field">
+            <span>{t("style.direction")}</span>
+            <select
+              value={draft.bevel.up ? "up" : "down"}
+              onchange={(e) => (draft.bevel!.up = e.currentTarget.value === "up")}
+            >
+              <option value="up">{t("style.direction.up")}</option>
+              <option value="down">{t("style.direction.down")}</option>
+            </select>
+          </label>
+          <SliderField
+            label={t("style.size")}
+            bind:value={draft.bevel.size}
+            min={0}
+            max={250}
+            unit="px"
+          />
+          <SliderField
+            label={t("style.soften")}
+            bind:value={draft.bevel.soften}
+            min={0}
+            max={16}
+            unit="px"
+          />
+          <SliderField
+            label={t("style.angle")}
+            bind:value={draft.bevel.angle}
+            min={-180}
+            max={180}
+            unit="°"
+          />
+          <SliderField
+            label={t("style.altitude")}
+            bind:value={draft.bevel.altitude}
+            min={0}
+            max={90}
+            unit="°"
+          />
+          {@render modes(
+            draft.bevel.highlightMode,
+            (m) => (draft.bevel!.highlightMode = m as never),
+            t("style.highlightMode"),
+          )}
+          <div class="field">
+            <span>{t("style.highlightColor")}</span>
+            {@render swatch(draft.bevel.highlightColor, "bevel", "highlightColor")}
+          </div>
+          <SliderField
+            label={t("style.opacity")}
+            bind:value={draft.bevel.highlightOpacity}
+            min={0}
+            max={100}
+            unit="%"
+            factor={100}
+          />
+          {@render modes(
+            draft.bevel.shadowMode,
+            (m) => (draft.bevel!.shadowMode = m as never),
+            t("style.shadowMode"),
+          )}
+          <div class="field">
+            <span>{t("style.shadowColor")}</span>
+            {@render swatch(draft.bevel.shadowColor, "bevel", "shadowColor")}
+          </div>
+          <SliderField
+            label={t("style.opacity")}
+            bind:value={draft.bevel.shadowOpacity}
             min={0}
             max={100}
             unit="%"

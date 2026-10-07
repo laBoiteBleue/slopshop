@@ -352,6 +352,18 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     the distance before and after it along the angle (whole pixels) differ by `d`; the effect's
     coverage is `d`, or `1 − d` inverted, within the shape, above the overlays and under Inner
     Glow. Only those nodes are written at v13.
+  - v14 (schema 0.29) is a raster, fill or group node whose style has a Bevel and Emboss:
+    `params.style.bevel` holds `enabled`, `style` (`innerBevel`, `outerBevel`, `emboss` or
+    `pillowEmboss`), `depth` (1 to 1000, percent), `up`, `size` (0 to 250 pixels), `soften`
+    (0 to 16 pixels), `angle` and `altitude` (degrees, the light), and `highlight` and `shadow`,
+    each `{ "color", "mode", "opacity" }`. The shape blurred by a Gaussian of `size / 2` (`a`,
+    0.5 on the edge) gives a height: `clamp(2a − 1, 0, 1)` (Inner), `clamp(2a, 0, 1)` (Outer),
+    `a` (Emboss), `|2a − 1|` (Pillow), negated when not `up`; its slope (central differences)
+    times `size × depth / 100` gives the surface's normal, lit by the unit vector toward the
+    light. Where the light falls on it more than on the flat plane, the highlight's coverage
+    `(lit − flat) / (1 − flat)`; less, the shadow's `(flat − lit) / flat`; each blurred by
+    `soften / 2`; drawn above everything else, shadow then highlight. Only those nodes are
+    written at v14.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier

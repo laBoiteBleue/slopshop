@@ -103,7 +103,13 @@
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
-  import { EFFECTS, styleEdit, withEffect, type EffectId } from "./lib/layerStyle";
+  import {
+    EFFECTS,
+    styleEdit,
+    withEffect,
+    type EffectId,
+    type EffectColor,
+  } from "./lib/layerStyle";
   import AdjustDialog from "./lib/AdjustDialog.svelte";
   import FilterDialog from "./lib/FilterDialog.svelte";
   import LiquifyWorkspace from "./lib/LiquifyWorkspace.svelte";
@@ -1683,20 +1689,21 @@
   }
 
   /** An effect's color, in the picker; then the dialog again. */
-  function pickStyleColor(effect: EffectId) {
+  function pickStyleColor(effect: EffectId, which: EffectColor = "color") {
     const dialog = styleDialog;
-    const current = dialog?.style?.[effect];
+    const current = dialog?.style?.[effect] as Record<string, unknown> | null | undefined;
     // Gradient Overlay has its stops' colors, not one.
-    if (!dialog || !current || !("color" in current)) return;
+    const color = current?.[which];
+    if (!dialog || !Array.isArray(color)) return;
     dialog.picking = true;
     pickColor = {
-      title: t("style.color"),
-      color: srgbToHex(current.color),
+      title: t(which === "color" ? "style.color" : `style.${which}`),
+      color: srgbToHex(color as number[]),
       apply: (hex) => {
         if (!styleDialog?.style?.[effect]) return;
         const style = structuredClone($state.snapshot(styleDialog.style));
-        const target = style[effect];
-        if (target && "color" in target) target.color = hexToSrgb(hex);
+        const target = style[effect] as Record<string, unknown> | null | undefined;
+        if (target && Array.isArray(target[which])) target[which] = hexToSrgb(hex);
         changeStyle(style);
         styleDialog.picking = false;
       },

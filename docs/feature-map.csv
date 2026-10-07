@@ -178,7 +178,7 @@ Menu,Layer > Duplicate Layer,,done,
 Menu,Layer > Delete,,done,
 Menu,Layer > Rename Layer,,done,
 Menu,Layer > Layer Style > Blending Options,,partial,"Fill Opacity (ADR 0032); Blend If, knockout and channels are open"
-Menu,Layer > Layer Style > Bevel & Emboss,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
+Menu,Layer > Layer Style > Bevel & Emboss,,partial,"Inner and Outer Bevel, Emboss, Pillow Emboss, Smooth, depth, up or down, size, soften, angle and altitude, highlight and shadow; CPU and GPU; PSD import and export; not yet: Chisel, Stroke Emboss, contours, texture"
 Menu,Layer > Layer Style > Stroke,,done,"non-destructive, with PSD import and export (ADR 0032)"
 Menu,Layer > Layer Style > Inner Shadow,,done,"non-destructive, with PSD import and export (ADR 0032)"
 Menu,Layer > Layer Style > Inner Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"

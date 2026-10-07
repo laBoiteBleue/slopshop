@@ -5,8 +5,12 @@
 import type { EditRequest, LayerStyle, LayerView } from "./engine";
 import type { MessageKey } from "./i18n/en";
 
+/** A color of an effect the color picker sets: most have one; Bevel and Emboss two. */
+export type EffectColor = "color" | "highlightColor" | "shadowColor";
+
 /** An effect a style can hold. */
 export type EffectId =
+  | "bevel"
   | "stroke"
   | "innerShadow"
   | "innerGlow"
@@ -18,6 +22,7 @@ export type EffectId =
 
 /** In the order of Photoshop's Layer Style dialog and layers panel (topmost drawn first). */
 export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
+  { id: "bevel", label: "style.bevel" },
   { id: "stroke", label: "style.stroke" },
   { id: "innerShadow", label: "style.innerShadow" },
   { id: "innerGlow", label: "style.innerGlow" },
@@ -39,6 +44,7 @@ export const PLAIN: LayerStyle = {
   gradientOverlay: null,
   satin: null,
   stroke: null,
+  bevel: null,
 };
 
 /** An effect as Photoshop adds it (as `style.rs`'s defaults), enabled. */
@@ -68,6 +74,22 @@ export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle
     outerGlow: { ...glow, color: [1, 1, 190 / 255] },
     innerGlow: { ...glow, color: [1, 1, 190 / 255] },
     colorOverlay: { enabled: true, color: [1, 0, 0], mode: "normal", opacity: 1 },
+    bevel: {
+      enabled: true,
+      style: "innerBevel",
+      depth: 100,
+      up: true,
+      size: 5,
+      soften: 0,
+      angle: 120,
+      altitude: 30,
+      highlightColor: [1, 1, 1],
+      highlightMode: "screen",
+      highlightOpacity: 0.75,
+      shadowColor: [0, 0, 0],
+      shadowMode: "multiply",
+      shadowOpacity: 0.75,
+    },
     satin: {
       enabled: true,
       color: [0, 0, 0],

@@ -1788,10 +1788,19 @@ fn gradient_overlays_and_satins_round_trip_on_every_kind_of_layer() {
         invert: false,
         ..slopshop_core::style::Satin::default()
     };
+    let bevel = slopshop_core::style::BevelEmboss {
+        style: slopshop_core::style::BevelStyle::OuterBevel,
+        depth: 330.0,
+        up: false,
+        soften: 2.5,
+        highlight_mode: BlendMode::ColorDodge,
+        ..slopshop_core::style::BevelEmboss::default()
+    };
     for &id in &ids {
         let style = LayerStyle {
             gradient_overlay: Some(overlay),
             satin: Some(satin),
+            bevel: Some(bevel),
             ..LayerStyle::default()
         };
         // Adjustment layers take no style.
@@ -1809,7 +1818,9 @@ fn gradient_overlays_and_satins_round_trip_on_every_kind_of_layer() {
         .all_layers()
         .filter(|l| {
             l.style.as_ref().is_some_and(|s| {
-                s.settings().gradient_overlay == Some(overlay) && s.settings().satin == Some(satin)
+                s.settings().gradient_overlay == Some(overlay)
+                    && s.settings().satin == Some(satin)
+                    && s.settings().bevel == Some(bevel)
             })
         })
         .count();
