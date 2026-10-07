@@ -1724,6 +1724,39 @@ async fn layer_thumbnail(
     )))
 }
 
+/// Thumbnail of source `source_id` (ADR 0040, the Sources panel), as [`layer_thumbnail`] sends
+/// one: the source's own pixels, whatever its layers applied to them.
+#[tauri::command]
+async fn source_thumbnail(
+    state: State<'_, AppState>,
+    document_id: u64,
+    source_id: u64,
+    max_side: u32,
+) -> Result<Response, String> {
+    let max_side = max_side.min(MAX_THUMBNAIL_SIDE);
+    let image = {
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        document
+            .session
+            .document()
+            .sources()
+            .into_iter()
+            .find(|(source, _)| source.id().get() == source_id)
+            .map(|(source, _)| Arc::clone(source.image()))
+            .ok_or("unknown source")?
+    };
+    let thumbnail = tauri::async_runtime::spawn_blocking(move || {
+        slopshop_core::thumbnail::raster_thumbnail(&image, max_side)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(Response::new(thumbnail_bytes(
+        thumbnail.size,
+        thumbnail.pixels,
+    )))
+}
+
 /// The largest quick look a thumbnail is made from while a filter is applied (ADR 0034).
 const THUMBNAIL_LOOK_PIXELS: u64 = 1 << 18;
 
@@ -2269,6 +2302,7 @@ pub fn run() {
             segment::ai_select_subject,
             segment::ai_cancel,
             layer_thumbnail,
+            source_thumbnail,
             add_mask_from_transparency,
             selection::select_shape,
             selection::select_all,

@@ -406,6 +406,19 @@
     });
   }
 
+  /**
+   * A new layer showing source `source` (ADR 0040: the Sources panel), named `name`, above the
+   * active layer (in its group) or at the top, selected.
+   */
+  export function newLayerFromSource(source: number, name: string) {
+    const { parent, index } = insertionPoint(tree, selected?.id ?? null);
+    const before = new Set(allLayers.map((l) => l.id));
+    void edit({ kind: "addSourceLayer", source, name, parent, index }).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
+  }
+
   /** The selected layers, or layers inside them, carry paint (Layer > Delete Paint). */
   export function selectionPainted(): boolean {
     return carriesPaint(selection);

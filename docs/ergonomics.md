@@ -415,6 +415,14 @@ built. Contributors: propose here first.
   (`CONTRIBUTING.md`) in the browser, About SlopShop (version as built, license, a link to the
   project). Nothing of Photoshop's online services. Not yet: Documentation (no user
   documentation is published) and Check for Updates (no releases nor update mechanism).
+- Sources panel ([ADR 0040](adr/0040-sources.md)), in the dock after Selections, like a video
+  editor's media bin: each source the pixel layers show, its thumbnail (its own pixels,
+  whatever the layers applied), its name (an opened file's, else its first layer's), its size
+  and how many layers show it; the active layer's source marked by the accent. A click selects
+  the layers showing it; the right-click menu has Select Layers and New Layer from Source (above
+  the active layer). Layer > Make Source Unique (and the layers' right-click menu) gives the
+  selected layers that share their source one of their own, grayed when none does. Not yet: a
+  source dragged onto the canvas, renaming a source.
 
 ## Proposed
 

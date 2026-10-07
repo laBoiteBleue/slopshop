@@ -12,7 +12,7 @@ function memory(items: Record<string, string> = {}) {
 test("nothing saved: the default layout", () => {
   expect(loadLayout(memory())).toEqual({
     dock: { open: "properties", height: 280 },
-    order: ["properties", "selections", "history", "histogram", "info"],
+    order: ["properties", "selections", "sources", "history", "histogram", "info"],
     panelWidth: 260,
     optionsBar: true,
     toolbar: true,
@@ -23,7 +23,7 @@ test("the layout saved last comes back", () => {
   const store = memory();
   const layout: Layout = {
     dock: { open: null, height: 333 },
-    order: ["selections", "history", "properties", "info", "histogram"],
+    order: ["selections", "history", "properties", "info", "sources", "histogram"],
     panelWidth: 410,
     optionsBar: false,
     toolbar: true,
@@ -56,7 +56,7 @@ test("unknown panels are dropped, missing ones get their place, odd values the d
   });
   expect(loadLayout(store)).toEqual({
     ...defaultLayout(),
-    order: ["selections", "properties", "history", "histogram", "info"],
+    order: ["selections", "properties", "sources", "history", "histogram", "info"],
     toolbar: false,
   });
   expect(loadLayout(memory({ "slopshop.layout": "{not json" }))).toEqual(defaultLayout());

@@ -367,7 +367,9 @@ Raised on 2026-10-05, to schedule:
         unnamed, empty layers without), Duplicate sharing them, Rasterize and merges making
         new ones, layers growing around theirs; `.slop` schema 0.26, older files read with a
         source per original
-  - [ ] Make Unique and the Sources panel
+  - [x] Make Unique (Layer > Make Source Unique) and the Sources panel (select the layers
+        showing a source, a new layer from it)
+  - [ ] A source dragged onto the canvas, a source renamed
   - [ ] Replace Contents
 - [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR, as a source
       kind without a stack (ADR 0040, point 8); an editor without the Type tool surprises

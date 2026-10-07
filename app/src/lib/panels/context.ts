@@ -31,6 +31,10 @@ export type PanelContext = {
   readonly combinedSelections: CombinedRow[];
   /** The document point under the pointer over the image (document pixels), if any. */
   readonly pointer: [number, number] | null;
+  /** Select these layers in the Layers panel (the topmost active). */
+  selectLayers(ids: number[]): void;
+  /** A new layer showing source `source` above the active layer, selected (ADR 0040). */
+  newLayerFromSource(source: number, name: string): void;
 };
 
 /** The context's key (tests give panels a context of their own). */
