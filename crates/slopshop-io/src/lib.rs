@@ -26,6 +26,7 @@ mod jpeg2000;
 mod jxl;
 mod lab;
 mod orient;
+pub mod patterns;
 pub mod pdf;
 mod pfm;
 mod psd;

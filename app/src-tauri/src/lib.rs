@@ -18,6 +18,7 @@ mod ipc;
 mod liquify;
 mod move_pixels;
 mod paint;
+mod patterns;
 mod print;
 mod recent;
 mod refine;
@@ -1775,7 +1776,7 @@ const THUMBNAIL_LOOK_PIXELS: u64 = 1 << 18;
 
 /// A thumbnail as [`layer_thumbnail`] sends it: width and height (`u32` little-endian), then
 /// the pixels.
-fn thumbnail_bytes(size: Size, pixels: Vec<u8>) -> Vec<u8> {
+pub(crate) fn thumbnail_bytes(size: Size, pixels: Vec<u8>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(8 + pixels.len());
     bytes.extend(size.width.to_le_bytes());
     bytes.extend(size.height.to_le_bytes());
@@ -2374,6 +2375,11 @@ pub fn run() {
             layers_touching,
             paint::paint_bucket,
             paint::paint_gradient,
+            patterns::list_patterns,
+            patterns::pattern_thumbnail,
+            patterns::define_pattern,
+            patterns::add_pattern_fill,
+            patterns::replace_pattern,
             paint::patch_selection,
             move_snap_targets,
             clipboard::paste,
@@ -4621,6 +4627,55 @@ mod tests {
         );
         let request: EditRequest = serde_json::from_str(&json).unwrap();
         assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn a_pattern_fills_scale_and_angle_are_set_its_pattern_kept() {
+        use slopshop_core::pattern::PatternFill;
+        let mut s = blank_session();
+        let source =
+            slopshop_core::Source::new(slopshop_io::patterns::built_in("dots").unwrap(), "Dots");
+        let id = s.allocate_layer_id();
+        s.perform(Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: slopshop_core::Layer {
+                style: None,
+                transform: slopshop_core::Projective::IDENTITY,
+                clipped: false,
+                id,
+                name: "Pattern Fill 1".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: slopshop_core::BlendMode::Normal,
+                mask: None,
+                content: LayerContent::PatternFill {
+                    pattern: PatternFill::new(Arc::clone(&source)),
+                },
+            },
+        })
+        .unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[1].kind, "patternFill");
+        let json = format!(
+            r#"{{"kind":"setPatternFill","id":{},"scale":2.5,"angle":30.0}}"#,
+            id.get()
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let pattern = view.layers[1].pattern.as_ref().unwrap();
+        assert_eq!((pattern.scale, pattern.angle), (2.5, 30.0));
+        assert_eq!(pattern.source, source.id().get());
+        // Out of range: refused.
+        let json = format!(
+            r#"{{"kind":"setPatternFill","id":{},"scale":50.0,"angle":0.0}}"#,
+            id.get()
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        assert!(s.perform(edit).is_err());
     }
 
     #[test]

@@ -76,6 +76,7 @@
 
   let {
     doc,
+    onaddpattern,
     onedit,
     onlive,
     ongestureend,
@@ -121,6 +122,18 @@
     onlayerdrag?: (drag: { ids: number[]; pointerId: number; x: number; y: number } | null) => void;
     /** A discrete edit (one undo entry) of document `documentId`; settles once applied. */
     onedit: (documentId: number, edit: EditRequest) => Promise<void>;
+    /**
+     * A pattern fill layer of library pattern `pattern` (its source named `sourceName`) named
+     * `name`, placed at `index` in `parent` (ADR 0042); settles once added.
+     */
+    onaddpattern?: (
+      documentId: number,
+      pattern: string,
+      sourceName: string,
+      name: string,
+      parent: number | null,
+      index: number,
+    ) => Promise<void>;
     /** A live edit within a gesture (applied immediately). */
     onlive: (documentId: number, edit: EditRequest) => void;
     /**
@@ -290,6 +303,21 @@
     const name = t(`layers.defaultShapeName.${kind}`, { n });
     const before = new Set(allLayers.map((l) => l.id));
     void edit(newShapeLayer(tree, selected?.id ?? null, shape, name)).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
+  }
+
+  /**
+   * A pattern fill layer of library pattern `pattern` above the active layer, selected (Layer >
+   * New Fill Layer > Pattern, ADR 0042): its scale and angle stay editable in Properties.
+   */
+  export function addPatternFill(pattern: string, sourceName: string) {
+    const n = allLayers.filter((l) => l.kind === "patternFill").length + 1;
+    const name = t("layers.defaultPatternFillName", { n });
+    const before = new Set(allLayers.map((l) => l.id));
+    const { parent, index } = insertionPoint(tree, selected?.id ?? null);
+    void onaddpattern?.(documentId, pattern, sourceName, name, parent, index).then(() => {
       const added = allLayers.find((l) => !before.has(l.id));
       if (added) select([added.id], added.id);
     });

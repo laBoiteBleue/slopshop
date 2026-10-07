@@ -399,6 +399,12 @@ Raised on 2026-10-05, to schedule:
   - [x] A vector layer's fill, stroke, corner radius, sides and star in the Properties panel
   - [ ] Pen and paths, vector masks
   - [ ] Type
+- [ ] Patterns (ADR 0042)
+  - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
+        sampled with wrapping on the CPU and the GPU alike; `.slop` 0.31
+  - [x] The library (a folder of PNG files with an index, four generated patterns), Edit >
+        Define Pattern, Layer > New Fill Layer > Pattern, the pattern picker, Properties
+  - [ ] Pattern Overlay, Edit > Fill > Pattern, Pattern Stamp, the Patterns panel
 - [ ] History memory limits
 - [ ] Very large images (Phase 4)
 - [ ] Distribution (Phase 5): installers built by CI on a version tag (done 2026-10-06, not

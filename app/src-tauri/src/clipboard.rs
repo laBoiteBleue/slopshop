@@ -229,6 +229,19 @@ fn merged(
     document: &Document,
     name: String,
 ) -> Result<Option<Layer>, String> {
+    Ok(merged_image(renderer, document)?.map(|(image, region)| {
+        let at = Affine::translation(f64::from(region.x), f64::from(region.y));
+        raster_layer(name, image, at)
+    }))
+}
+
+/// What Copy Merged takes (Edit > Define Pattern too, ADR 0042): the visible layers composited
+/// within the selection's bounds (the whole canvas without one), limited to it where it is
+/// soft, and where that is in the document; `None` for an empty selection. Blocking.
+pub(crate) fn merged_image(
+    renderer: Option<&Renderer>,
+    document: &Document,
+) -> Result<Option<(Arc<RasterImage>, Rect)>, String> {
     let size = document.size();
     let selection = document.selection();
     let region = match selection {
@@ -249,8 +262,7 @@ fn merged(
     })?;
     let image = RasterImage::from_pixels(region.size(), slopshop_core::copy::MERGED_FORMAT, &bytes)
         .map_err(|e| e.to_string())?;
-    let at = Affine::translation(f64::from(region.x), f64::from(region.y));
-    Ok(Some(raster_layer(name, Arc::new(image), at)))
+    Ok(Some((Arc::new(image), region)))
 }
 
 /// `region` of `document` composited band by band (premultiplied working-space `f32`, on the

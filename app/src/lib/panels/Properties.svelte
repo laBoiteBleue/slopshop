@@ -17,6 +17,7 @@
     size={app.doc}
     onfillcolor={app.pickFillColor}
     onshapecolor={app.pickShapeColor}
+    onpattern={app.pickPattern}
     onedit={app.edit}
     onlive={app.live}
     ongestureend={app.gestureEnd}
