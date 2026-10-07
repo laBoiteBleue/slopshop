@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 29;
+pub(crate) const SCHEMA_MINOR: u32 = 30;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -80,8 +80,15 @@ pub(crate) const NODE_VERSION_GRADIENT_OVERLAY: u32 = 12;
 /// only for those, so that older readers refuse them instead of dropping the effect.
 pub(crate) const NODE_VERSION_SATIN: u32 = 13;
 /// Version of the raster, fill and group nodes whose style has a Bevel and Emboss (schema
-/// 0.29): written only for those. The newest node version this code reads.
+/// 0.29): written only for those.
 pub(crate) const NODE_VERSION_BEVEL: u32 = 14;
+/// A vector layer (schema 0.30, ADR 0041): `params.shape`, the index of its shape in the
+/// document's `shapes`, and the parameters every node has. Written at
+/// [`NODE_VERSION_VECTOR`]; older readers refuse the unknown type rather than misread it.
+pub(crate) const NODE_VECTOR: &str = "slopshop.vector";
+/// Version of the vector nodes (schema 0.30), which read every parameter of the versions
+/// before it. The newest node version this code reads.
+pub(crate) const NODE_VERSION_VECTOR: u32 = 15;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {
@@ -147,6 +154,10 @@ pub(crate) struct DocumentDto {
     /// Absent: none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceDto>,
+    /// The shapes vector nodes show (schema 0.30, ADR 0041), each named by its index here.
+    /// Absent: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shapes: Vec<ShapeDto>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -159,6 +170,16 @@ pub(crate) struct SourceDto {
     pub name: String,
     /// The key of its image.
     pub image: String,
+}
+
+/// A shape source (schema 0.30, ADR 0041): a vector shape that vector nodes show, kept once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ShapeDto {
+    /// What the user knows it by; absent when nothing names it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The shape, as `slop::shape` describes it.
+    pub shape: Value,
 }
 
 /// A guide (schema 0.22): `axis` is `vertical` (at a distance from the left edge) or

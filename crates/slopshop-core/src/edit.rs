@@ -7,7 +7,7 @@
 //! On error the document content is unchanged. (A failing [`Edit::Batch`] rolls back what it
 //! applied; its revision still advances, since revisions must never be reused.)
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -104,6 +104,12 @@ pub enum Edit {
     Repoint {
         id: LayerId,
         source: Arc<crate::source::Source>,
+    },
+    /// A vector layer shows another shape (ADR 0041): its shape changed (a new source, shapes
+    /// are immutable), or a source of its own of the same shape (Make Unique).
+    SetShape {
+        id: LayerId,
+        source: Arc<crate::shape::ShapeSource>,
     },
     /// The same for a layer's mask: `painted` is a gray coverage of the mask's size.
     SetMaskPaint {
@@ -235,6 +241,10 @@ pub enum EditError {
     InvalidGuides,
     /// The layer shows no source (ADR 0040): a layer made empty, or not a pixel layer.
     NoSource(LayerId),
+    /// The layer is not a vector layer.
+    NotVector(LayerId),
+    /// A shape that is not valid (`Shape::is_valid`).
+    InvalidShape,
     /// A layer repointed to a source of other pixels than its own (ADR 0040).
     OtherPixels(LayerId),
 }
@@ -286,6 +296,8 @@ impl fmt::Display for EditError {
             }
             EditError::InvalidGuides => write!(f, "invalid guides"),
             EditError::NoSource(id) => write!(f, "layer {id} shows no source"),
+            EditError::NotVector(id) => write!(f, "layer {id} is not a vector layer"),
+            EditError::InvalidShape => write!(f, "invalid shape"),
             EditError::OtherPixels(id) => {
                 write!(f, "layer {id} can only show a source of its own pixels")
             }
@@ -511,6 +523,25 @@ impl Edit {
                 Edit::Repoint {
                     id,
                     source: std::mem::replace(current, source),
+                }
+            }
+            Edit::SetShape { id, source } => {
+                if !source.shape().is_valid() {
+                    return Err(EditError::InvalidShape);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::Vector {
+                    source: current, ..
+                } = &mut layer.content
+                else {
+                    return Err(EditError::NotVector(id));
+                };
+                let previous = std::mem::replace(current, source);
+                // What it draws, and its style's effects, change with its shape.
+                layer.redraw_styles();
+                Edit::SetShape {
+                    id,
+                    source: previous,
                 }
             }
             Edit::SetMaskPaint { id, painted } => {
@@ -1044,14 +1075,29 @@ impl Edit {
                 .filter(|(_, layers)| layers.len() > 1)
                 .map(|(source, _)| source)
         };
+        // How many layers show each shape (ADR 0041).
+        let mut shapes: HashMap<crate::source::SourceId, usize> = HashMap::new();
+        for layer in doc.all_layers() {
+            if let LayerContent::Vector { source, .. } = &layer.content {
+                *shapes.entry(source.id()).or_default() += 1;
+            }
+        }
         let mut edits = Vec::new();
         let mut seen = HashSet::new();
         for &id in ids {
-            doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
-            if let Some(source) = shared(id)
-                && seen.insert(id)
-            {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(source) = shared(id) {
                 edits.push(Edit::Repoint {
+                    id,
+                    source: source.unique(),
+                });
+            } else if let LayerContent::Vector { source, .. } = &layer.content
+                && shapes.get(&source.id()).is_some_and(|&n| n > 1)
+            {
+                edits.push(Edit::SetShape {
                     id,
                     source: source.unique(),
                 });
@@ -1657,19 +1703,29 @@ pub(crate) fn validate_transform(layer: &Layer, transform: Projective) -> Result
 }
 
 /// The content of a pixel layer, in its own pixels (`[x0, y0, x1, y1]`: its image's and its
-/// mask's); `None` for the other layers, which are not placed in perspective (ADR 0038).
+/// mask's), or of a vector layer (its shape's box, ADR 0041, and its mask's); `None` for the
+/// other layers, which are not placed in perspective (ADR 0038).
 fn projected_bounds(layer: &Layer) -> Option<[f64; 4]> {
-    let LayerContent::Raster { image, .. } = &layer.content else {
-        return None;
+    let [x0, y0, x1, y1] = match &layer.content {
+        LayerContent::Raster { image, .. } => {
+            let size = image.size();
+            [0.0, 0.0, f64::from(size.width), f64::from(size.height)]
+        }
+        LayerContent::Vector { source, .. } => crate::shape::path::shape_bounds(source.shape())?,
+        _ => return None,
     };
-    let size = image.size();
-    let (mut w, mut h) = (f64::from(size.width), f64::from(size.height));
-    if let Some(mask) = &layer.mask {
-        let m = mask.image.size();
-        w = w.max(f64::from(m.width));
-        h = h.max(f64::from(m.height));
-    }
-    Some([0.0, 0.0, w, h])
+    Some(match &layer.mask {
+        Some(mask) => {
+            let m = mask.image.size();
+            [
+                x0.min(0.0),
+                y0.min(0.0),
+                x1.max(f64::from(m.width)),
+                y1.max(f64::from(m.height)),
+            ]
+        }
+        None => [x0, y0, x1, y1],
+    })
 }
 
 pub(crate) fn validate_opacity(opacity: f32) -> Result<(), EditError> {

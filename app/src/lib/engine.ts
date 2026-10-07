@@ -125,7 +125,7 @@ export type LayerView = {
   name: string;
   visible: boolean;
   opacity: number;
-  kind: "fill" | "gradientFill" | "raster" | "group" | "adjustment";
+  kind: "fill" | "gradientFill" | "raster" | "vector" | "group" | "adjustment";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
@@ -1343,7 +1343,14 @@ export type DocumentInfo = {
   blendSpace: "perceptual" | "linear";
   /** Pixels per inch. */
   resolution: number;
-  layers: { raster: number; fill: number; adjustment: number; group: number; masks: number };
+  layers: {
+    raster: number;
+    fill: number;
+    vector: number;
+    adjustment: number;
+    group: number;
+    masks: number;
+  };
   /** The raster layers' pixel formats, the most used first. */
   formats: {
     bits: number;

@@ -165,6 +165,25 @@ fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
             LayerContent::Fill { color } => {
                 format!("fill ({}, {}, {}, {})", color.r, color.g, color.b, color.a)
             }
+            LayerContent::Vector { source, .. } => {
+                let shape = source.shape();
+                let kind = match shape.geometry {
+                    slopshop_core::shape::Geometry::Rectangle { .. } => "rectangle",
+                    slopshop_core::shape::Geometry::Ellipse { .. } => "ellipse",
+                    slopshop_core::shape::Geometry::Polygon { .. } => "polygon",
+                    slopshop_core::shape::Geometry::Line { .. } => "line",
+                    slopshop_core::shape::Geometry::Path { .. } => "path",
+                };
+                format!(
+                    "vector {kind}{}{}",
+                    if shape.fill.is_some() { " filled" } else { "" },
+                    if shape.stroke.is_some() {
+                        " stroked"
+                    } else {
+                        ""
+                    }
+                )
+            }
             LayerContent::GradientFill { field } => format!(
                 "gradient fill {:?} {} stops from {:?} to {:?}",
                 field.shape,

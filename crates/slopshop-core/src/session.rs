@@ -58,6 +58,7 @@ impl HistoryLabel {
             Edit::SetLayerStack { .. } => "pixels",
             Edit::SetMaskPaint { .. } => "maskPixels",
             Edit::Repoint { .. } => "makeUnique",
+            Edit::SetShape { .. } => "shape",
             Edit::SetFillColor { .. } => "fillColor",
             Edit::SetGradientFill { .. } => "gradientFill",
             Edit::SetAdjustment { adjustment, .. } => {

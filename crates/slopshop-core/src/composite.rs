@@ -481,6 +481,17 @@ fn push_layer<'a>(
         pass_through,
     } = &layer.content
     else {
+        if let LayerContent::Vector { source, drawing } = &layer.content {
+            push_vector(
+                layer,
+                &drawing.drawn(source, transform, plan.canvas).paints,
+                transform,
+                (mode, opacity, atop),
+                drawn.zip(styled.map(|s| s.settings().fill_opacity)),
+                steps,
+            );
+            return;
+        }
         let Some(drawn) = drawn else {
             steps.push(Step::Layer {
                 layer,
@@ -543,6 +554,52 @@ fn push_layer<'a>(
         atop: false,
     });
     push_style_tail(drawn, mode, opacity, atop, steps);
+}
+
+/// A vector layer's steps (ADR 0041): its `paints` (fills masked by their coverage) blended as
+/// one with the layer's mask (placed by `transform`) and `blend` (mode, opacity, atop); a single
+/// paint without a mask directly. A styled layer's paints are its content, at Fill Opacity
+/// within its effects.
+fn push_vector<'a>(
+    layer: &'a Layer,
+    paints: &'a [Layer],
+    transform: Projective,
+    blend: (BlendMode, f32, bool),
+    styled: Option<(&'a crate::style::Drawn, f32)>,
+    steps: &mut Vec<Step<'a>>,
+) {
+    let (mode, opacity, atop) = blend;
+    let mask = enabled(layer);
+    match (styled, paints) {
+        (None, []) => {}
+        (None, [paint]) if mask.is_none() => steps.push(Step::Layer {
+            layer: paint,
+            mode,
+            opacity,
+            atop,
+            transform: paint.transform,
+            stack: false,
+        }),
+        _ => {
+            steps.push(Step::Begin { isolated: true });
+            steps.extend(paints.iter().map(|paint| effect_step(paint, false)));
+            let (own_mode, own_opacity, own_atop) = match styled {
+                Some((_, fill_opacity)) => (BlendMode::Normal, fill_opacity, false),
+                None => (mode, opacity, atop),
+            };
+            steps.push(Step::End {
+                mask,
+                mask_transform: transform,
+                mode: own_mode,
+                opacity: own_opacity,
+                isolated: true,
+                atop: own_atop,
+            });
+            if let Some((drawn, _)) = styled {
+                push_style_tail(drawn, mode, opacity, atop, steps);
+            }
+        }
+    }
 }
 
 /// The end of a styled layer's steps: the effects recoloring its content (atop it), then those
@@ -715,8 +772,10 @@ fn source(
                 placement,
             }
         }
-        // Groups and adjustments are steps of their own.
-        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => return None,
+        // Groups and adjustments are steps of their own; a vector layer is drawn as its paints.
+        LayerContent::Group { .. }
+        | LayerContent::Adjustment { .. }
+        | LayerContent::Vector { .. } => return None,
     };
     Some(Source {
         mode,

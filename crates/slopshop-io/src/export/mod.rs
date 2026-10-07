@@ -1053,6 +1053,8 @@ fn is_structurally_gray(document: &Document) -> bool {
             .all(|s| s.color[0] == s.color[1] && s.color[1] == s.color[2]),
         // Adjustments keep gray gray (equal channels stay equal).
         LayerContent::Group { .. } | LayerContent::Adjustment { .. } => true,
+        // Drawn as fills (the steps show those): never met here.
+        LayerContent::Vector { .. } => false,
     });
     neutral && raster
 }
@@ -1113,7 +1115,9 @@ fn is_structurally_opaque(document: &Document) -> bool {
                 && x + i64::from(size.width) >= i64::from(canvas.width)
                 && y + i64::from(size.height) >= i64::from(canvas.height)
         }
-        LayerContent::Group { .. } | LayerContent::Adjustment { .. } => false,
+        LayerContent::Group { .. }
+        | LayerContent::Adjustment { .. }
+        | LayerContent::Vector { .. } => false,
     }
 }
 

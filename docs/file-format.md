@@ -250,6 +250,23 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   node's original a source of its own, one per image (nodes of the same image share it),
   named after the first node. A writer of an older schema drops the references and keeps the
   list as an unknown field; a reader then ignores it, the file being of the older schema.
+  `shapes` (0.30, [ADR 0041](adr/0041-vector-content.md)): the vector shapes vector nodes show,
+  kept once, each `{ "name": "Rectangle 1", "shape": {…} }` (`name` absent when nothing names
+  it) and named by its index in this list. Absent: none. A shape is
+  `{ "geometry", "fill", "stroke" }` in its layer's own space: `geometry` one of
+  `{ "rectangle": { "rect": [l, t, r, b], "radii": [tl, tr, br, bl] } }`,
+  `{ "ellipse": { "center": [x, y], "radii": [rx, ry] } }`,
+  `{ "polygon": { "center", "radius", "sides" (3 to 100), "star" (inner radius over
+  `radius`, absent: a polygon), "rotation" (degrees counterclockwise from the right, of its
+  first corner) } }`, `{ "line": { "from", "to" } }` (stroke only) or
+  `{ "path": { "rule": "nonzero" | "evenodd", "subpaths": [{ "start": [x, y],
+  "segments": [[x, y] (a line) | [ax, ay, bx, by, x, y] (a cubic Bézier)], "closed" }] } }`;
+  `fill` `{ "solid": [r, g, b, a] }` (linear working-space RGB, as a fill node's color), absent
+  without one; `stroke` `{ "paint", "width" (pixels, up to 10 000), "align" ("inside",
+  "center", "outside"), "cap" ("butt", "round", "square"), "join" ("miter", "round",
+  "bevel"), "miter_limit" (≥ 1, in widths), "dashes" (dashes and gaps in turn, in widths;
+  empty: solid), "dash_offset" }`, absent without one. Coordinates are finite, within 1e7. A
+  shape that is not valid makes the file invalid.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.
@@ -430,8 +447,15 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     to [0, 1]. Its color is the gradient's at `t` (sRGB-encoded), its opacity interpolated
     linearly between the two. It covers the whole canvas, like a fill. Older readers refuse the
     unknown type.
-  - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills (solid or gradient) and
-    adjustments.
+  - `slopshop.vector` v15 (schema 0.30, [ADR 0041](adr/0041-vector-content.md)): a vector layer,
+    `params.shape` the index of its shape in `document.shapes`, with the parameters of the
+    other nodes (blend mode, mask, clipping, transform, possibly in perspective, style). Its
+    fill, then its stroke, are drawn anti-aliased where its transform places the shape (curves
+    flattened within 0.02 pixels, coverage by the shape's fill rule; an inside or outside
+    stroke is twice as wide, cut by the shape), blended as one layer. Older readers refuse the
+    unknown type.
+  - `opacity` is in [0, 1]. `inputs` is empty for rasters, fills (solid or gradient), vector
+    layers and adjustments.
   - A reader refuses a node type or version it does not know ("made by a newer SlopShop").
 - **Images** are keyed by image key. `layout` is `gray`, `gray-alpha`, `rgb` or `rgba`; `sample`
   is `u8`, `u16`, `f16` or `f32`; `alpha` is `straight` or `premultiplied`. `levels` lists the

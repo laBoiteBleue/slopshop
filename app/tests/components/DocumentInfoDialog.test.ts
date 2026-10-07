@@ -13,7 +13,7 @@ function info(changes: Partial<DocumentInfo> = {}): DocumentInfo {
     workingSpace: "srgb",
     blendSpace: "perceptual",
     resolution: 300,
-    layers: { raster: 1, fill: 0, adjustment: 0, group: 0, masks: 0 },
+    layers: { raster: 1, fill: 0, vector: 0, adjustment: 0, group: 0, masks: 0 },
     formats: [{ bits: 8, float: false, channels: "rgba", space: "srgb", layers: 1 }],
     memoryBytes: 24 * 1024 * 1024,
     source: null,
@@ -46,11 +46,12 @@ test("it says what the document is made of, with sizes in the user's units", () 
 test("an unnamed document is Untitled, and only the kinds of layers present are counted", () => {
   open({
     name: null,
-    layers: { raster: 3, fill: 0, adjustment: 2, group: 0, masks: 1 },
+    layers: { raster: 3, fill: 0, vector: 4, adjustment: 2, group: 0, masks: 1 },
     blendSpace: "linear",
   });
   expect(definition("Name")).toHaveTextContent("Untitled");
   expect(definition("Pixel layers")).toHaveTextContent("3");
+  expect(definition("Vector layers")).toHaveTextContent("4");
   expect(definition("Adjustment layers")).toHaveTextContent("2");
   expect(definition("Layer masks")).toHaveTextContent("1");
   expect(screen.queryByText("Fill layers")).not.toBeInTheDocument();

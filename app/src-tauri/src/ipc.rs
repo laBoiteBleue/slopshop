@@ -631,6 +631,15 @@ impl LayerView {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
             LayerContent::GradientFill { .. } => ("gradientFill", [0.0; 4], 0, false),
             LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
+            // The UI shows a shape's fill (or stroke) color, as a fill layer's.
+            LayerContent::Vector { source, .. } => {
+                let shape = source.shape();
+                let paint = shape.fill.or(shape.stroke.as_ref().map(|s| s.paint));
+                let swatch = paint.map_or([0.0; 4], |slopshop_core::shape::Paint::Solid(c)| {
+                    c.working_to_srgb_encoded()
+                });
+                ("vector", swatch, 0, true)
+            }
             LayerContent::Adjustment { .. } => ("adjustment", [0.0; 4], 0, false),
             // Never waits for a stack's pixels (ADR 0029): the original's color meanwhile.
             LayerContent::Raster { image, .. } => (
