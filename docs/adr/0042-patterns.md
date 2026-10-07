@@ -1,7 +1,6 @@
 # 0042 — Patterns: image sources repeated across a plane
 
-Status: proposed (2026-10-07, drafted for the maintainer, who approved patterns as a track the
-same day; the questions at the end are theirs).
+Status: accepted (2026-10-07, the maintainer's answers below).
 
 ## Context
 
@@ -18,19 +17,19 @@ Overlay already are fill layers within the shape), paint in a layer's stack
 ([ADR 0029](0029-layer-stack.md)) and resampling shared by the CPU and the GPU
 ([ADR 0018](0018-resampling.md)).
 
-## Decision (proposed)
+## Decision
 
 1. **A pattern is an image source** (ADR 0040) used as a tile: its pixels repeat across the
    plane, its origin at the layer's origin. A document keeps the patterns its layers use as
    sources, shown in the Sources panel like the others; nothing is copied when several layers
    use one.
 2. **The library** (the Patterns panel and the pickers) lives outside documents, in the app's
-   data folder, as images with a name (one `.slop`-like file per pattern, or a folder of PNG
-   files with a small index; *question 1*). Choosing a pattern from the library for a fill makes
+   data folder, as a folder of PNG files with a small index (names, order), which other apps
+   can read. Choosing a pattern from the library for a fill makes
    a source of it in the document; a document opened elsewhere keeps its patterns.
 3. **Define Pattern** (Edit menu): the rectangle of the selection (the whole canvas without
-   one), of what the image shows (all visible layers merged, as Photoshop) or of the active
-   layer (*question 2*), named in a dialog, added to the library.
+   one), of what the image shows (all visible layers merged, as Photoshop), named in a dialog,
+   added to the library.
 4. **Uses, in this order**:
    - **Pattern fill layers** (Layer > New Fill Layer > Pattern): a new fill content holding the
      pattern source, a scale (1–1000 %), an angle and "Link with Layer" (the transform moves the
@@ -68,14 +67,11 @@ Overlay already are fill layers within the shape), paint in a layer's stack
 - Photoshop's `.pat` files could be imported into the library later (their format is
   documented); not in the first version.
 
-## Questions for the maintainer
+## Answers (the maintainer, 2026-10-07)
 
-1. The library's storage: a folder of PNG files with an index (easy to share, other apps can
-   read them), or one file per pattern keeping 16-bit and color spaces exactly?
-2. Define Pattern from what the image shows (Photoshop's) or from the active layer?
-3. Built-in patterns: none, or a few generated ones (checkers, stripes, dots, noise) so that the
-   library is not empty at first?
-4. A Patterns panel in the dock, or only the pickers (one less panel)?
-5. Pattern Preview (View menu, editing a pattern seamlessly across its edges): with the first
-   version or later?
-6. Order of work as above (fill layers, Overlay, Fill, Stamp), or another?
+1. The library: a folder of PNG files with an index (other apps can read them).
+2. Define Pattern from what the image shows (all visible layers), as Photoshop.
+3. A few generated built-in patterns (checkers, stripes, dots, noise).
+4. Pickers first; the Patterns panel later.
+5. Pattern Preview: later.
+6. Order: pattern fill layers, Pattern Overlay, Edit > Fill > Pattern, Pattern Stamp.
