@@ -910,6 +910,13 @@ pub enum EditRequest {
         #[serde(default)]
         index: Option<usize>,
     },
+    /// A pattern fill layer's scale (layer pixels per pattern pixel) and angle (degrees,
+    /// counterclockwise), its pattern kept (ADR 0042).
+    SetPatternFill {
+        id: u64,
+        scale: f64,
+        angle: f64,
+    },
     /// A vector layer's shape (the Properties panel, the options bar).
     SetShape {
         id: u64,
@@ -1421,6 +1428,22 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content: LayerContent::vector(source),
+                    },
+                }
+            }
+            EditRequest::SetPatternFill { id, scale, angle } => {
+                let id = LayerId::from_raw(id);
+                let LayerContent::PatternFill { pattern } =
+                    &session.document().layer(id).ok_or("unknown layer")?.content
+                else {
+                    return Err("not a pattern fill layer".to_owned());
+                };
+                Edit::SetPatternFill {
+                    id,
+                    pattern: slopshop_core::pattern::PatternFill {
+                        scale,
+                        angle,
+                        ..pattern.clone()
                     },
                 }
             }

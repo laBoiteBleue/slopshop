@@ -93,7 +93,7 @@ Menu,Edit > Transform > Flip Vertical,,done,
 Menu,Edit > Auto-Align Layers,,open,
 Menu,Edit > Auto-Blend Layers,,open,
 Menu,Edit > Define Brush Preset,,partial,the brush picker saves size and hardness as presets; brush tips from the image are open
-Menu,Edit > Define Pattern,,open,
+Menu,Edit > Define Pattern,,done,"what the image shows within the selection, added to the library (a folder of PNG files, ADR 0042)"
 Menu,Edit > Define Custom Shape,,open,waits for vector content (an ADR)
 Menu,Edit > Purge > Undo,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
 Menu,Edit > Purge > Clipboard,,wont,memory is managed automatically: RAM/VRAM budgets (Phase 4) and history limits (Phase 2)
@@ -197,7 +197,7 @@ Menu,Layer > Layer Style > Hide All Effects,,open,each effect has its eye in the
 Menu,Layer > Layer Style > Scale Effects,,open,layer styles exist (ADR 0032); PSD import reads the style's scale
 Menu,Layer > New Fill Layer > Solid Color,,done,
 Menu,Layer > New Fill Layer > Gradient,,done,editable in the Properties panel
-Menu,Layer > New Fill Layer > Pattern,,open,needs patterns
+Menu,Layer > New Fill Layer > Pattern,,done,"a library pattern repeated across the canvas; scale, angle and pattern in Properties (ADR 0042); Link with Layer: always"
 Menu,Layer > New Adjustment Layer > Brightness/Contrast,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Levels,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Curves,,done,with PSD import and export

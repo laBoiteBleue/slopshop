@@ -474,6 +474,12 @@ export type SourceView = {
 };
 
 /**
+ * A pattern of the library (ADR 0042): a generated one (`builtin:<id>`, named by the UI) or the
+ * user's (`file:…`, named by them).
+ */
+export type PatternEntry = { id: string; name: string };
+
+/**
  * A guide: `vertical` at `position` document pixels from the canvas's left edge, else
  * horizontal from its top edge.
  */
@@ -550,6 +556,8 @@ export type EditRequest =
     }
   /** A vector layer's shape. */
   | { kind: "setShape"; id: number; shape: Shape }
+  /** A pattern fill layer's scale (layer pixels per pattern pixel) and angle (degrees). */
+  | { kind: "setPatternFill"; id: number; scale: number; angle: number }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
   | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
   /** Layer > Delete Paint: the layers' (and their masks') originals show again. */
@@ -1580,6 +1588,44 @@ export const engine = {
     const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
     return new ImageData(pixels, width, height);
   },
+  /** The pattern library (ADR 0042): the generated patterns, then the user's. */
+  listPatterns: () => invoke<PatternEntry[]>("list_patterns"),
+  /** A library pattern's thumbnail, at most `maxSide` pixels on its longer side. */
+  patternThumbnail: async (pattern: string, maxSide: number) => {
+    const buffer = await invoke<ArrayBuffer>("pattern_thumbnail", { pattern, maxSide });
+    const view = new DataView(buffer);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    const pixels = new Uint8ClampedArray(buffer, 8, width * height * 4);
+    return new ImageData(pixels, width, height);
+  },
+  /** Edit > Define Pattern: what the image shows within the selection, added to the library. */
+  definePattern: (documentId: number, name: string) =>
+    serial(() => invoke<PatternEntry | null>("define_pattern", { documentId, name })),
+  /** Layer > New Fill Layer > Pattern: a pattern fill layer of library pattern `pattern`. */
+  addPatternFill: (
+    documentId: number,
+    pattern: string,
+    sourceName: string,
+    name: string,
+    parent: number | null,
+    index: number,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("add_pattern_fill", {
+        documentId,
+        pattern,
+        sourceName,
+        name,
+        parent,
+        index,
+      }),
+    ),
+  /** Another library pattern for a pattern fill layer, its scale and angle kept. */
+  replacePattern: (documentId: number, layerId: number, pattern: string, sourceName: string) =>
+    serial(() =>
+      invoke<DocumentView>("replace_pattern", { documentId, layerId, pattern, sourceName }),
+    ),
   /** Add a mask made from the transparency of a raster layer (one undo entry). */
   /** The layer showing a pixel at document pixel (x, y): the Move tool's Auto-Select. */
   layerAt: (documentId: number, x: number, y: number) =>

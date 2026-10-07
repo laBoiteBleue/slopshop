@@ -25,6 +25,8 @@ export type PanelContext = {
   pickFillColor(layer: LayerView): void;
   /** A vector layer's fill or stroke color chosen (ADR 0041). */
   pickShapeColor(layer: LayerView, which: "fill" | "stroke"): void;
+  /** Another library pattern chosen for a pattern fill layer (ADR 0042). */
+  pickPattern(layer: LayerView): void;
   /** Select > Save Selection… (it asks a name). */
   saveSelection(): void;
   /** A saved selection loaded into the image (Shift adds, Alt subtracts, both intersect). */

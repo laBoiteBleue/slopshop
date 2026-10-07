@@ -54,7 +54,8 @@
   let key = $derived(mask ? (layer.mask?.contentKey ?? null) : layer.contentKey);
   /** Being baked (ADR 0031): what it will show, rendered small before its pixels come. */
   let baking = $derived(!mask && layer.baking === true);
-  let isImage = $derived(mask || layer.kind === "raster" || baking);
+  // A pattern fill shows its pattern (ADR 0042).
+  let isImage = $derived(mask || layer.kind === "raster" || layer.kind === "patternFill" || baking);
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   /** Whether the row has been scrolled into view: thumbnails are rendered only then. */

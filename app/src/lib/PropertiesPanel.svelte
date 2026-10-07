@@ -10,6 +10,7 @@
   import AdjustmentFields from "./AdjustmentFields.svelte";
   import GradientEditor from "./GradientEditor.svelte";
   import ShapeProperties from "./ShapeProperties.svelte";
+  import LayerThumbnail from "./LayerThumbnail.svelte";
   import {
     fillPlacement,
     placed,
@@ -28,6 +29,7 @@
     ongestureend,
     onfillcolor,
     onshapecolor,
+    onpattern,
   }: {
     documentId: number;
     /** An adjustment or a fill layer. */
@@ -38,6 +40,8 @@
     onfillcolor?: (layer: LayerView) => void;
     /** A vector layer's fill or stroke swatch was clicked (ADR 0041). */
     onshapecolor?: (layer: LayerView, which: "fill" | "stroke") => void;
+    /** A pattern fill layer's pattern was clicked: the app lets another be chosen (ADR 0042). */
+    onpattern?: (layer: LayerView) => void;
     onedit: (documentId: number, edit: EditRequest) => void;
     onlive: (documentId: number, edit: EditRequest) => void;
     ongestureend: (documentId: number) => void;
@@ -119,6 +123,57 @@
         onclick={() => onfillcolor?.(layer)}
       ></button>
     </label>
+  </section>
+{:else if layer.kind === "patternFill" && layer.pattern}
+  {@const pattern = layer.pattern}
+  <section class="panel" aria-label={t("properties.title")}>
+    <div class="title">
+      <span>{t("menu.layer.newFill.pattern").replace("…", "")}</span>
+    </div>
+    <div class="row">
+      <button
+        type="button"
+        class="pattern"
+        title={t("patterns.replace")}
+        aria-label={t("patterns.replace")}
+        onclick={() => onpattern?.(layer)}
+      >
+        <LayerThumbnail {documentId} {layer} size={40} />
+      </button>
+    </div>
+    <div class="row">
+      <label for="pattern-scale">{t("properties.gradientScale")}</label>
+      <input
+        id="pattern-scale"
+        type="number"
+        min="1"
+        max="1000"
+        step="1"
+        value={Math.round(pattern.scale * 100)}
+        onchange={(e) => {
+          const percent = typed(e);
+          if (percent === null) return;
+          const scale = Math.min(Math.max(percent, 1), 1000) / 100;
+          onedit(documentId, { kind: "setPatternFill", id: layer.id, scale, angle: pattern.angle });
+        }}
+      />
+      <span class="unit">%</span>
+    </div>
+    <div class="row">
+      <label for="pattern-angle">{t("properties.gradientAngle")}</label>
+      <input
+        id="pattern-angle"
+        type="number"
+        step="1"
+        value={pattern.angle}
+        onchange={(e) => {
+          const angle = typed(e);
+          if (angle === null) return;
+          onedit(documentId, { kind: "setPatternFill", id: layer.id, scale: pattern.scale, angle });
+        }}
+      />
+      <span class="unit">°</span>
+    </div>
   </section>
 {:else if layer.kind === "vector" && layer.shape}
   <ShapeProperties {documentId} {layer} shape={layer.shape} {onedit} onpickcolor={onshapecolor} />
@@ -252,6 +307,14 @@
 
   .unit {
     color: var(--text-muted);
+  }
+
+  .pattern {
+    display: inline-flex;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    background: none;
+    cursor: pointer;
   }
 
   .swatch {

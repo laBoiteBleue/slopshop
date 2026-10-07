@@ -62,6 +62,7 @@
     type AiComponent,
     type AiFeature,
     type AiFailure,
+    type PatternEntry,
   } from "./lib/engine";
   import { t } from "./lib/i18n/index.svelte";
   import type { MessageKey } from "./lib/i18n/en";
@@ -114,6 +115,9 @@
   import FilterDialog from "./lib/FilterDialog.svelte";
   import LiquifyWorkspace from "./lib/LiquifyWorkspace.svelte";
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
+  import PatternPicker from "./lib/PatternPicker.svelte";
+  import DefinePatternDialog from "./lib/DefinePatternDialog.svelte";
+  import { nextPatternName } from "./lib/patterns";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
@@ -330,6 +334,7 @@
     selectionCommand: (run) => selectionCommand(run),
     pickFillColor: (layer) => pickFillLayerColor(layer),
     pickShapeColor: (layer, which) => pickShapeLayerColor(layer, which),
+    pickPattern: (layer) => (patternPicker = { kind: "replace", layer: layer.id }),
     saveSelection: () => openSaveSelection(),
     loadSelection: (id, mode) => void loadSavedSelection(id, mode),
     get combinedSelections() {
@@ -1128,6 +1133,51 @@
     commitTransform();
     const shape = shapeOf(geometry, shapeOptions);
     if (shape) layersPanel?.addShape(shape);
+  }
+
+  /**
+   * The pattern picker (ADR 0042), for a new pattern fill layer or for the pattern of fill
+   * layer `layer` (the Properties panel).
+   */
+  let patternPicker = $state<{ kind: "new" } | { kind: "replace"; layer: number } | null>(null);
+  /** Edit > Define Pattern's dialog, with the name it proposes. */
+  let definingPattern = $state<{ documentId: number; name: string } | null>(null);
+
+  /** A pattern chosen in the picker: a new pattern fill layer of it, or the layer's new one. */
+  function pickPattern(entry: PatternEntry, name: string) {
+    const doc = active;
+    const picker = patternPicker;
+    patternPicker = null;
+    if (!doc || !picker) return;
+    commitTransform();
+    if (picker.kind === "replace") {
+      void sync(engine.replacePattern(doc.id, picker.layer, entry.id, name));
+      return;
+    }
+    layersPanel?.addPatternFill(entry.id, name);
+  }
+
+  /** Edit > Define Pattern: a name proposed after the library's patterns. */
+  async function openDefinePattern() {
+    const doc = active;
+    if (!doc) return;
+    const entries = await engine.listPatterns().catch(() => []);
+    definingPattern = {
+      documentId: doc.id,
+      name: nextPatternName(entries, (n) => t("patterns.define.default", { n })),
+    };
+  }
+
+  async function definePattern(name: string) {
+    const target = definingPattern;
+    definingPattern = null;
+    if (!target) return;
+    try {
+      const entry = await engine.definePattern(target.documentId, name);
+      if (!entry) showError(t("patterns.define.empty"));
+    } catch (e) {
+      showError(String(e));
+    }
   }
 
   /** The Paint Bucket's options: the fill's opacity, then the Magic Wand's region. */
@@ -4849,6 +4899,8 @@
           item("fill"),
           cmd(t("menu.edit.stroke"), openStroke, undefined, !doc || doc.selectionKey == null),
           separator,
+          cmd(t("menu.edit.definePattern"), openDefinePattern, undefined, !doc),
+          separator,
           item("freeTransform"),
           {
             kind: "submenu",
@@ -5010,6 +5062,7 @@
                 layersPanel?.addFill(colors.foreground),
               ),
               cmd(t("menu.layer.newFill.gradient"), addGradientFill),
+              cmd(t("menu.layer.newFill.pattern"), () => (patternPicker = { kind: "new" })),
             ],
           },
           {
@@ -5901,6 +5954,8 @@
         {#key active.id}
           <LayersPanel
             bind:this={layersPanelInstance}
+            onaddpattern={(documentId, pattern, sourceName, name, parent, index) =>
+              sync(engine.addPatternFill(documentId, pattern, sourceName, name, parent, index))}
             doc={active}
             ui={layersUis.of(active.id)}
             onedit={edit}
@@ -6120,6 +6175,22 @@
     onpickcolor={pickFillColor}
     onchoose={applyFill}
     onclose={() => (fillDialog = null)}
+  />
+{/if}
+{#if patternPicker}
+  <PatternPicker
+    title={t(
+      patternPicker.kind === "new" ? "menu.layer.newFill.pattern" : "patterns.replace",
+    ).replace("…", "")}
+    onpick={pickPattern}
+    onclose={() => (patternPicker = null)}
+  />
+{/if}
+{#if definingPattern}
+  <DefinePatternDialog
+    name={definingPattern.name}
+    onapply={(name) => void definePattern(name)}
+    onclose={() => (definingPattern = null)}
   />
 {/if}
 {#if strokeDialog && !strokeDialog.picking}
