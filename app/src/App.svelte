@@ -155,6 +155,7 @@
   import {
     FILTERS,
     FILTER_MENU,
+    hasSettings,
     withNewSeeds,
     applyFilterEdit,
     filterEntryEdit,
@@ -1486,6 +1487,12 @@
     const doc = active;
     const layer = filterLayer();
     if (!doc || !layer || filterDialog || adjustDialog || entryDialog) return;
+    // Nothing to set (Find Edges, Solarize): applied at once, as in Photoshop.
+    if (!hasSettings(filter)) {
+      lastFilter = { filter, values: [] };
+      void edit(doc.id, applyFilterEdit(layer.id, lastFilter));
+      return;
+    }
     filterDialog = {
       documentId: doc.id,
       layerId: layer.id,
@@ -5144,7 +5151,12 @@
             kind: "submenu" as const,
             label: t(label),
             items: filters.map((filter) =>
-              cmd(`${t(`filter.${filter}`)}…`, () => openFilter(filter), undefined, !filterLayer()),
+              cmd(
+                hasSettings(filter) ? `${t(`filter.${filter}`)}…` : t(`filter.${filter}`),
+                () => openFilter(filter),
+                undefined,
+                !filterLayer(),
+              ),
             ),
           })),
         ],

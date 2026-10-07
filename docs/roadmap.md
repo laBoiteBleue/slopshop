@@ -322,6 +322,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Dust & Scratches, Clarity and Texture on the GPU (looks)
 - [x] Blur > Box Blur (beyond a radius of 64 on the layer reduced), Noise > Median (CPU and GPU),
       Other > Maximum and Minimum (Squareness, exact whatever the radius); on the CPU but Median
+- [x] Stylize > Find Edges, Emboss and Solarize (Find Edges and Solarize applied at once, no
+      dialog), Pixelate > Mosaic (cells from the layer's origin, whole across tiles); on the CPU
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
