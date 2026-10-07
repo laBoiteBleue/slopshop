@@ -5636,6 +5636,10 @@ dependencies = [
 [[package]]
 name = "slopshop-core"
 version = "0.1.2"
+dependencies = [
+ "kurbo",
+ "vello_cpu",
+]
 
 [[package]]
 name = "slopshop-io"

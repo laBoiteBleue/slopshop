@@ -14,7 +14,7 @@ use crate::raster::RasterImage;
 pub struct SourceId(u64);
 
 impl SourceId {
-    fn next() -> Self {
+    pub(crate) fn next() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }

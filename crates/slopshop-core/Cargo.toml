@@ -8,8 +8,13 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# Intentionally dependency-free (see CLAUDE.md).
+# Dependency-free but for vector shapes (ADR 0041, the maintainer's choice of 2026-10-07):
+# kurbo (MIT OR Apache-2.0) for Béziers, live shapes and strokes' outlines, and vello_cpu
+# (MIT OR Apache-2.0, `forbid(unsafe)`) for their anti-aliased coverage. Both were in the tree
+# already through the PDF import (hayro), at these versions.
 [dependencies]
+kurbo = "0.13.1"
+vello_cpu = { version = "0.3.0", default-features = false, features = ["std", "u8_pipeline"] }
 
 [lints]
 workspace = true
