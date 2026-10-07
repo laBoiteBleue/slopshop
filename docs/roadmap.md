@@ -193,8 +193,9 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
 - [x] Layer styles: Outer and Inner Glow, Inner Shadow (`.slop` node v9)
 - [x] Layer styles: PSD import and export (`lfx2`, Fill), styles on groups (drawn from
       what they hold)
-- [ ] 🔶 Stack-to-DAG evolution of the model
-      ([ADR 0003](adr/0003-document-model-edits-history.md))
+- [ ] Stack-to-DAG evolution of the model
+      ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
+      [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources
 - [ ] Render caches keyed by (node, region, level, revision); partial recomputation
 - [x] History panel and named history entries ([ADR 0036](adr/0036-panels-and-layout.md))
 - [x] Histogram and Info panels ([ADR 0036](adr/0036-panels-and-layout.md))
@@ -357,9 +358,13 @@ for Windows, macOS and Linux, a bilingual README with screenshots, the
 
 Raised on 2026-10-05, to schedule:
 
-- [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR; an editor without
-      the Type tool surprises users and contributors alike
-- [ ] 🔶 The layer stack or a DAG (Phase 2), to settle before AI nodes; history memory limits
+- [ ] **Sources** ([ADR 0040](adr/0040-sources.md), 2026-10-07): layers reference read-only
+      sources kept once, Duplicate shares them, Make Unique, Replace Contents, a Sources
+      panel; this settles the layer stack or DAG question (a tree of layers plus references)
+- [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR, as a source
+      kind without a stack (ADR 0040, point 8); an editor without the Type tool surprises
+      users and contributors alike
+- [ ] History memory limits
 - [ ] Very large images (Phase 4)
 - [ ] Distribution (Phase 5): installers built by CI on a version tag (done 2026-10-06, not
       code-signed); code signing, auto-update, user documentation

@@ -281,8 +281,10 @@ document ──▶ pixel source ──▶ band channel ──▶ convert ──�
   snapshots and undo do not duplicate pixels, and eviction to disk for images larger than RAM.
 - **Mip levels** of tiles for zoomed-out views, and caches keyed by (node, region, level,
   revision) for partial recomputation.
-- **Operation nodes** (adjustments, filters, AI generations) and the evolution of the stack
-  into a **DAG**; see [ADR 0003](adr/0003-document-model-edits-history.md).
+- **Sources** ([ADR 0040](adr/0040-sources.md)): layers reference read-only sources (images,
+  later vector content, embedded documents, linked files, AI results) kept once per document;
+  the layer tree plus these references is the document's graph, without cycles by
+  construction.
 - **AI nodes** with parameters, prompt, model + version, seed, mask, source region,
   dependencies and cached results, with invalidation instead of automatic recomputation; see
   [research notes](research/hd-generative-ai.md).
@@ -293,7 +295,7 @@ document ──▶ pixel source ──▶ band channel ──▶ convert ──�
 | Topic                         | Current choice                          | Decide before                     |
 | ----------------------------- | --------------------------------------- | --------------------------------- |
 | Viewport presentation         | Native surface on Windows, frames over IPC elsewhere ([ADR 0002](adr/0002-viewport-frame-transport.md)) | interactive tools (brush, pan/zoom at 60 fps) |
-| Document model (stack vs DAG) | Stack of layers with stable ids         | first non-trivial node type       |
+| Document model (stack vs DAG) | Tree of layers referencing read-only sources ([ADR 0040](adr/0040-sources.md)) | settled |
 | Color management              | Named spaces (linear sRGB working)      | first real image import           |
 | Tile storage / out-of-core    | Geometry only                           | pixel layers                      |
 | HD generative AI strategy     | Research only                           | first AI feature                  |
