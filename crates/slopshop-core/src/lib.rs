@@ -10,6 +10,7 @@
 //! - [`selection`]: selections as coverage masks: shapes, combining, feather, outlines;
 //!   [`quick_select`]: Quick Selection by color (a minimum cut).
 //! - [`session`]: a document plus its undo/redo history.
+//! - [`shape`]: vector shapes, their outlines and coverage (ADR 0041).
 //! - [`source`]: what pixel layers show, kept once and referenced (ADR 0040).
 //! - [`stack`]: a raster layer's own stack of paint and applied effects (ADR 0029).
 //! - [`style`]: layer styles, effects drawn from a layer's shape (ADR 0032).
@@ -56,6 +57,7 @@ pub mod raster;
 pub mod resample;
 pub mod selection;
 pub mod session;
+pub mod shape;
 pub mod source;
 pub mod stack;
 pub mod style;

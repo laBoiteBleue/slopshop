@@ -69,7 +69,14 @@ A survey of the Rust libraries (2026-10-07) found:
 8. **Order of work**: shapes in the engine (sources, coverage, cache, CPU and GPU, `.slop`),
    the Shape tools; then paths and the Pen, vector masks; then text; then PSD.
 
-## Dependencies (to approve)
+## Dependencies
+
+Where they live (the maintainer's choice, 2026-10-07): `kurbo` and `vello_cpu` are
+dependencies of `slopshop-core`, an exception to its rule of having none, so that the CPU
+compositor, export and the CLI draw shapes as the display does. Curves are flattened finely
+(a few hundredths of a pixel) before `vello_cpu` covers them: its own flattening loses about a
+tenth of a pixel of coverage along curved edges.
+
 
 | Crate | Licence | Why |
 | ----- | ------- | --- |
