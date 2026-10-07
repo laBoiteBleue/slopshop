@@ -8,17 +8,23 @@
 //!                   "spread": 0, "size": 5 },
 //!   "inner_shadow": { …as drop_shadow… }, "inner_glow": { …as outer_glow… },
 //!   "color_overlay": { "enabled": true, "color": [r, g, b], "mode": "normal", "opacity": 1 },
+//!   "gradient_overlay": { "enabled": true, "gradient": [[0, 0, 0, 0], [4096, 255, 255, 255]],
+//!                         "reverse": false, "shape": "linear", "angle": 90, "scale": 100,
+//!                         "align": true, "mode": "normal", "opacity": 1 },
 //!   "stroke": { "enabled": true, "size": 3, "position": "outside", "color": [r, g, b],
 //!               "mode": "normal", "opacity": 1 } }
 //! ```
 //!
-//! Colors are linear working-space RGB, as a fill node's. Effects not added are absent.
+//! Colors are linear working-space RGB, as a fill node's; a gradient's stops are Gradient
+//! Map's (`[location 0–4096, r, g, b]`, sRGB-encoded). Effects not added are absent; a node
+//! with a Gradient Overlay is written at node version 12 (schema 0.27).
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
 use slopshop_core::color::LinearRgba;
+use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
-use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
+use slopshop_core::style::{ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Stroke};
 
 fn color(c: LinearRgba) -> Value {
     json!([c.r, c.g, c.b])
@@ -76,6 +82,31 @@ pub(super) fn to_json(style: &LayerStyle) -> Value {
             json!({
                 "enabled": o.enabled,
                 "color": color(o.color),
+                "mode": o.mode.id(),
+                "opacity": o.opacity,
+            }),
+        );
+    }
+    if let Some(o) = style.gradient_overlay {
+        let stops: Vec<Value> = o
+            .gradient
+            .stops()
+            .iter()
+            .map(|s| json!([s.location, s.color[0], s.color[1], s.color[2]]))
+            .collect();
+        value.insert(
+            "gradient_overlay".into(),
+            json!({
+                "enabled": o.enabled,
+                "gradient": stops,
+                "reverse": o.reverse,
+                "shape": match o.shape {
+                    GradientShape::Linear => "linear",
+                    GradientShape::Radial => "radial",
+                },
+                "angle": o.angle,
+                "scale": o.scale,
+                "align": o.align_with_layer,
                 "mode": o.mode.id(),
                 "opacity": o.opacity,
             }),
@@ -176,6 +207,37 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         })
     })
     .ok()?;
+    let gradient_overlay = effect(style, "gradient_overlay", |f| {
+        let stops =
+            f.0.get("gradient")?
+                .as_array()?
+                .iter()
+                .map(|s| {
+                    let s = s.as_array().filter(|s| s.len() == 4)?;
+                    let byte = |v: &Value| v.as_u64().and_then(|v| u8::try_from(v).ok());
+                    Some(GradientStop {
+                        location: s[0].as_u64().and_then(|v| u16::try_from(v).ok())?,
+                        color: [byte(&s[1])?, byte(&s[2])?, byte(&s[3])?],
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+        Some(GradientOverlay {
+            enabled: f.enabled()?,
+            gradient: Gradient::new(&stops)?,
+            reverse: f.0.get("reverse")?.as_bool()?,
+            shape: match f.0.get("shape")?.as_str()? {
+                "linear" => GradientShape::Linear,
+                "radial" => GradientShape::Radial,
+                _ => return None,
+            },
+            angle: f.number("angle")?,
+            scale: f.number("scale")?,
+            align_with_layer: f.0.get("align")?.as_bool()?,
+            mode: f.mode()?,
+            opacity: f.opacity()?,
+        })
+    })
+    .ok()?;
     let stroke = effect(style, "stroke", |f| {
         let position = match f.0.get("position")?.as_str()? {
             "inside" => StrokeLocation::Inside,
@@ -200,6 +262,7 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         inner_shadow,
         inner_glow,
         color_overlay,
+        gradient_overlay,
         stroke,
     };
     style.is_valid().then_some(style)

@@ -24,6 +24,7 @@ use crate::color::{LinearRgba, WORKING_SPACE};
 use crate::composite::composite_region;
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use crate::geom::{Rect, Size};
+use crate::gradient::{Gradient, GradientField, GradientShape, GradientStop};
 use crate::pick;
 use crate::raster::{RasterImage, parallel_for_each};
 use crate::selection::{self, MAX_FEATHER, MAX_MODIFY, Modify, SELECTION_FORMAT, StrokeLocation};
@@ -47,6 +48,7 @@ pub struct LayerStyle {
     /// A glow inside the shape, from its edge: `spread` being Photoshop's "Choke".
     pub inner_glow: Option<Glow>,
     pub color_overlay: Option<ColorOverlay>,
+    pub gradient_overlay: Option<GradientOverlay>,
     pub stroke: Option<Stroke>,
 }
 
@@ -59,6 +61,7 @@ impl Default for LayerStyle {
             inner_shadow: None,
             inner_glow: None,
             color_overlay: None,
+            gradient_overlay: None,
             stroke: None,
         }
     }
@@ -322,6 +325,9 @@ impl ShapeCache {
 #[derive(Debug, Default)]
 struct Shaped {
     coverage: Option<Coverage>,
+    /// The box of the layer's pixels in its own space (Gradient Overlay aligned with it), once
+    /// asked: `Some(None)` when nothing shows.
+    content_box: Option<Option<[f64; 4]>>,
     /// By effect ([`Slot`]): its geometry, and its mask placed in the document (none when
     /// nothing shows).
     masks: [Option<(MaskKey, Option<Placed>)>; SLOTS],
@@ -580,6 +586,104 @@ impl Default for ColorOverlay {
     }
 }
 
+/// Gradient Overlay's scale range, in percent of the box it spans (Photoshop's).
+pub const MIN_GRADIENT_SCALE: f64 = 10.0;
+pub const MAX_GRADIENT_SCALE: f64 = 150.0;
+
+/// The layer's shape filled with a gradient (Photoshop's Gradient Overlay), Linear or Radial.
+/// The gradient spans a box, the layer's (Align with Layer) or the canvas, through its center
+/// at `angle`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientOverlay {
+    pub enabled: bool,
+    pub gradient: Gradient,
+    /// The gradient's colors the other way.
+    pub reverse: bool,
+    pub shape: GradientShape,
+    /// Degrees, counterclockwise from the right: at 90 the gradient's start is at the bottom.
+    pub angle: f64,
+    /// Percent of the box the gradient spans ([`MIN_GRADIENT_SCALE`] to
+    /// [`MAX_GRADIENT_SCALE`]).
+    pub scale: f64,
+    /// Across the layer's pixels' box (Photoshop's Align with Layer), else the canvas.
+    pub align_with_layer: bool,
+    pub mode: BlendMode,
+    pub opacity: f32,
+}
+
+impl Default for GradientOverlay {
+    /// Photoshop's: black to white from bottom to top, Linear, aligned with the layer, 100 %.
+    fn default() -> Self {
+        let stops = [
+            GradientStop {
+                location: 0,
+                color: [0, 0, 0],
+            },
+            GradientStop {
+                location: 4096,
+                color: [255, 255, 255],
+            },
+        ];
+        Self {
+            enabled: true,
+            gradient: Gradient::new(&stops).expect("two stops at both ends make a gradient"),
+            reverse: false,
+            shape: GradientShape::Linear,
+            angle: 90.0,
+            scale: 100.0,
+            align_with_layer: true,
+            mode: BlendMode::Normal,
+            opacity: 1.0,
+        }
+    }
+}
+
+impl GradientOverlay {
+    /// The gradient laid across `area` (`[left, top, right, bottom]`, document pixels): from the
+    /// box's edge to the opposite one along the angle (Linear), or from its center out to half
+    /// its longer side (Radial), scaled. `None` for an empty box.
+    pub fn field(&self, [left, top, right, bottom]: [f64; 4]) -> Option<GradientField> {
+        let (w, h) = (right - left, bottom - top);
+        let center = [(left + right) / 2.0, (top + bottom) / 2.0];
+        let (sin, cos) = self.angle.to_radians().sin_cos();
+        // Up is negative y: at 90 degrees the gradient goes up.
+        let direction = [cos, -sin];
+        let scale = self.scale / 100.0;
+        let (from, length) = match self.shape {
+            GradientShape::Linear => {
+                let half = (w * cos.abs() + h * sin.abs()) / 2.0 * scale;
+                let from = [
+                    center[0] - direction[0] * half,
+                    center[1] - direction[1] * half,
+                ];
+                (from, 2.0 * half)
+            }
+            GradientShape::Radial => (center, w.max(h) / 2.0 * scale),
+        };
+        // Empty, or not a number.
+        if length.is_nan() || length <= 0.0 {
+            return None;
+        }
+        let to = [
+            from[0] + direction[0] * length,
+            from[1] + direction[1] * length,
+        ];
+        let gradient = if self.reverse {
+            self.gradient.reversed()
+        } else {
+            self.gradient
+        };
+        let field = GradientField {
+            gradient,
+            alpha: [1.0, 1.0],
+            shape: self.shape,
+            from,
+            to,
+        };
+        field.is_valid().then_some(field)
+    }
+}
+
 /// A band along the layer's outline (Photoshop's Stroke, a color fill).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stroke {
@@ -702,6 +806,11 @@ impl LayerStyle {
             && self
                 .color_overlay
                 .is_none_or(|o| opacity_ok(o.opacity) && color_ok(o.color))
+            && self.gradient_overlay.is_none_or(|o| {
+                opacity_ok(o.opacity)
+                    && o.angle.is_finite()
+                    && (MIN_GRADIENT_SCALE..=MAX_GRADIENT_SCALE).contains(&o.scale)
+            })
             && self.stroke.is_none_or(|s| {
                 opacity_ok(s.opacity) && color_ok(s.color) && (1.0..=MAX_MODIFY).contains(&s.size)
             })
@@ -715,6 +824,7 @@ impl LayerStyle {
             || self.outer_glow.is_some_and(|g| g.enabled)
             || self.inner_glow.is_some_and(|g| g.enabled)
             || self.color_overlay.is_some_and(|o| o.enabled)
+            || self.gradient_overlay.is_some_and(|o| o.enabled)
             || self.stroke.is_some_and(|s| s.enabled)
     }
 
@@ -785,8 +895,8 @@ impl LayerStyle {
         masked
     }
 
-    /// Photoshop's order, bottom to top: Drop Shadow, Outer Glow, the content, Color Overlay,
-    /// Inner Glow, Inner Shadow, Stroke. The masks `shape` does not know yet are computed (on
+    /// Photoshop's order, bottom to top: Drop Shadow, Outer Glow, the content, Gradient Overlay,
+    /// Color Overlay, Inner Glow, Inner Shadow, Stroke. The masks `shape` does not know yet are computed (on
     /// every core) from the layer's coverage, itself computed once for them all.
     fn draw(
         &self,
@@ -820,7 +930,16 @@ impl LayerStyle {
                 }
             }
         }
-        let mut drawn = self.assemble(&masked, &shaped).unwrap_or_default();
+        if self
+            .gradient_overlay
+            .is_some_and(|o| o.enabled && o.align_with_layer)
+            && shaped.content_box.is_none()
+        {
+            shaped.content_box = Some(content_box(layer));
+        }
+        let mut drawn = self
+            .assemble(&masked, &shaped, to_document, canvas)
+            .unwrap_or_default();
         drawn.at = to_document;
         drawn
     }
@@ -835,14 +954,37 @@ impl LayerStyle {
     ) -> Option<Drawn> {
         let mut shaped = shape.0.try_lock().ok()?;
         shaped.align(to_document, canvas);
-        let mut drawn = self.assemble(&self.masked(), &shaped)?;
+        let mut drawn = self.assemble(&self.masked(), &shaped, to_document, canvas)?;
         drawn.at = to_document;
         Some(drawn)
     }
 
-    /// The effects as layers, from the masks `shaped` knows: `None` when one is missing.
-    fn assemble(&self, masked: &[Masked], shaped: &Shaped) -> Option<Drawn> {
+    /// The effects as layers, from the masks `shaped` knows: `None` when one is missing (or the
+    /// layer's box a Gradient Overlay aligned with it needs).
+    fn assemble(
+        &self,
+        masked: &[Masked],
+        shaped: &Shaped,
+        to_document: Projective,
+        canvas: Size,
+    ) -> Option<Drawn> {
         let mut drawn = Drawn::default();
+        if let Some(overlay) = self.gradient_overlay.filter(|o| o.enabled) {
+            let whole = [0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)];
+            // A fill layer has no box of its own: the canvas.
+            let area = match overlay.align_with_layer {
+                true => (*shaped.content_box.as_ref()?).map_or(whole, |b| placed(b, to_document)),
+                false => whole,
+            };
+            if let Some(field) = overlay.field(area) {
+                drawn.over.push(effect_layer(
+                    LayerContent::GradientFill { field },
+                    overlay.mode,
+                    overlay.opacity,
+                    Projective::IDENTITY,
+                ));
+            }
+        }
         if let Some(overlay) = self.color_overlay.filter(|o| o.enabled) {
             drawn.over.push(effect_layer(
                 LayerContent::Fill {
@@ -1066,6 +1208,42 @@ fn colored(
     layer
 }
 
+/// The box of `layer`'s pixels in its own space, its hidden children aside (a group: theirs
+/// placed by their transforms); `None` for fills and adjustment layers, and when nothing shows.
+fn content_box(layer: &Layer) -> Option<[f64; 4]> {
+    match &layer.content {
+        LayerContent::Raster { image, .. } => image.get().content_bounds().map(|r| {
+            let (x, y) = (f64::from(r.x), f64::from(r.y));
+            [x, y, x + f64::from(r.width), y + f64::from(r.height)]
+        }),
+        LayerContent::Group { children, .. } => children
+            .iter()
+            .filter(|c| c.visible)
+            .filter_map(|c| content_box(c).map(|b| placed(b, c.transform)))
+            .reduce(|a, b| {
+                [
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    a[2].max(b[2]),
+                    a[3].max(b[3]),
+                ]
+            }),
+        LayerContent::Fill { .. }
+        | LayerContent::GradientFill { .. }
+        | LayerContent::Adjustment { .. } => None,
+    }
+}
+
+/// The box around box `b` placed by `transform`.
+fn placed([left, top, right, bottom]: [f64; 4], transform: Projective) -> [f64; 4] {
+    let corners = [(left, top), (right, top), (left, bottom), (right, bottom)]
+        .map(|(x, y)| transform.apply(x, y));
+    corners.iter().fold(
+        [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
+        |[l, t, r, b], &(x, y)| [l.min(x), t.min(y), r.max(x), b.max(y)],
+    )
+}
+
 /// The margin of the grown canvas, the reach of an effect, whole pixels.
 fn margin(reach: f64) -> u32 {
     reach.ceil().clamp(0.0, f64::from(u32::MAX / 4)) as u32
@@ -1226,6 +1404,103 @@ mod tests {
         // The overlay: blue within the shape, nothing outside it.
         assert_eq!(at(&doc, 25, 25), [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(at(&doc, 40, 40)[3], 0.0);
+    }
+
+    #[test]
+    fn a_gradient_overlay_spans_its_box_along_its_angle() {
+        let o = |angle, scale, shape| GradientOverlay {
+            angle,
+            scale,
+            shape,
+            ..GradientOverlay::default()
+        };
+        let close =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        let area = [20.0, 10.0, 60.0, 30.0];
+        // At 90 degrees: from the bottom edge to the top one, through the center.
+        let up = o(90.0, 100.0, GradientShape::Linear).field(area).unwrap();
+        assert!(
+            close(up.from, [40.0, 30.0]) && close(up.to, [40.0, 10.0]),
+            "{up:?}"
+        );
+        // At 0: left to right; at half the scale, half the width around the center.
+        let half = o(0.0, 50.0, GradientShape::Linear).field(area).unwrap();
+        assert!(
+            close(half.from, [30.0, 20.0]) && close(half.to, [50.0, 20.0]),
+            "{half:?}"
+        );
+        // Radial: from the center out to half the longer side.
+        let radial = o(0.0, 100.0, GradientShape::Radial).field(area).unwrap();
+        assert!(close(radial.from, [40.0, 20.0]) && close(radial.to, [60.0, 20.0]));
+        // Reversed: the stops the other way; an empty box: nothing.
+        let reversed = GradientOverlay {
+            reverse: true,
+            ..GradientOverlay::default()
+        };
+        assert_eq!(
+            reversed.field(area).unwrap().gradient.stops()[0].color,
+            [255; 3]
+        );
+        assert_eq!(
+            o(90.0, 100.0, GradientShape::Linear).field([5.0, 5.0, 5.0, 5.0]),
+            None
+        );
+        // Ranges.
+        let style = |overlay| LayerStyle {
+            gradient_overlay: Some(overlay),
+            ..LayerStyle::default()
+        };
+        assert!(style(o(-180.0, 10.0, GradientShape::Linear)).is_valid());
+        assert!(!style(o(0.0, 9.0, GradientShape::Linear)).is_valid());
+        assert!(!style(o(0.0, 151.0, GradientShape::Linear)).is_valid());
+        assert!(!style(o(f64::NAN, 100.0, GradientShape::Linear)).is_valid());
+    }
+
+    #[test]
+    fn a_gradient_overlay_fills_the_shape_across_the_layer_or_the_canvas() {
+        let (mut doc, id) = document();
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                gradient_overlay: Some(GradientOverlay::default()),
+                ..LayerStyle::default()
+            },
+        );
+        // Black at the bottom of the 10-pixel box (20 to 30), white at its top, gray between;
+        // nothing outside the shape.
+        let bottom = at(&doc, 25, 29)[0];
+        let top = at(&doc, 25, 20)[0];
+        let middle = at(&doc, 25, 25)[0];
+        assert!(bottom < 0.01 && top > 0.8, "{bottom} {top}");
+        assert!(bottom < middle && middle < top);
+        assert_eq!(at(&doc, 40, 40)[3], 0.0);
+        // Across the canvas (64 pixels high): the box sits in its middle, mid-grays only.
+        let canvas = GradientOverlay {
+            align_with_layer: false,
+            ..GradientOverlay::default()
+        };
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                gradient_overlay: Some(canvas),
+                ..LayerStyle::default()
+            },
+        );
+        let (bottom, top) = (at(&doc, 25, 29)[0], at(&doc, 25, 20)[0]);
+        assert!(bottom > 0.05 && top < 0.5 && bottom < top, "{bottom} {top}");
+        // Under a Color Overlay: the color is on top.
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                gradient_overlay: Some(GradientOverlay::default()),
+                color_overlay: Some(ColorOverlay::default()),
+                ..LayerStyle::default()
+            },
+        );
+        assert_eq!(at(&doc, 25, 25), [1.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]

@@ -1752,6 +1752,76 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
 }
 
 #[test]
+fn gradient_overlays_round_trip_on_every_kind_of_layer() {
+    use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
+    use slopshop_core::style::{GradientOverlay, LayerStyle};
+    let mut doc = golden_document();
+    let ids: Vec<_> = doc.all_layers().map(|l| l.id).collect();
+    let overlay = GradientOverlay {
+        gradient: Gradient::new(&[
+            GradientStop {
+                location: 0,
+                color: [10, 200, 30],
+            },
+            GradientStop {
+                location: 2048,
+                color: [250, 0, 128],
+            },
+            GradientStop {
+                location: 4096,
+                color: [0, 0, 255],
+            },
+        ])
+        .unwrap(),
+        reverse: true,
+        shape: GradientShape::Radial,
+        angle: 33.5,
+        scale: 75.0,
+        align_with_layer: false,
+        mode: BlendMode::Overlay,
+        opacity: 0.25,
+        enabled: true,
+    };
+    for &id in &ids {
+        let style = LayerStyle {
+            gradient_overlay: Some(overlay),
+            ..LayerStyle::default()
+        };
+        // Adjustment layers take no style.
+        let _ = Edit::SetLayerStyle {
+            id,
+            style: Some(Box::new(style)),
+        }
+        .apply(&mut doc);
+    }
+    let path = temp_path("gradient-overlay.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let styled = loaded
+        .all_layers()
+        .filter(|l| {
+            l.style
+                .as_ref()
+                .is_some_and(|s| s.settings().gradient_overlay == Some(overlay))
+        })
+        .count();
+    assert!(styled >= 3, "{styled}");
+    fs::remove_file(&path).ok();
+    // Malformed: stops out of order, an unknown shape.
+    let json = |gradient: serde_json::Value, shape: &str| {
+        serde_json::json!({ "fill_opacity": 1.0, "gradient_overlay": {
+            "enabled": true, "gradient": gradient, "reverse": false, "shape": shape,
+            "angle": 90, "scale": 100, "align": true, "mode": "normal", "opacity": 1 } })
+    };
+    let fine = serde_json::json!([[0, 0, 0, 0], [4096, 255, 255, 255]]);
+    assert!(super::style::from_json(&json(fine.clone(), "linear")).is_some());
+    assert_eq!(super::style::from_json(&json(fine, "diamond")), None);
+    let backwards = serde_json::json!([[4096, 0, 0, 0], [0, 255, 255, 255]]);
+    assert_eq!(super::style::from_json(&json(backwards, "linear")), None);
+}
+
+#[test]
 fn hidden_entries_round_trip() {
     let mut doc = golden_document();
     let (id, stack) = doc

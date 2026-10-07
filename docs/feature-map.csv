@@ -184,7 +184,7 @@ Menu,Layer > Layer Style > Inner Shadow,,done,"non-destructive, with PSD import 
 Menu,Layer > Layer Style > Inner Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"
 Menu,Layer > Layer Style > Satin,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
 Menu,Layer > Layer Style > Color Overlay,,done,"non-destructive, with PSD import and export (ADR 0032)"
-Menu,Layer > Layer Style > Gradient Overlay,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
+Menu,Layer > Layer Style > Gradient Overlay,,partial,"Linear and Radial, angle, scale, reverse, aligned with the layer or the canvas, CPU and GPU; PSD import and export; not yet: Angle, Reflected and Diamond styles, an offset, transparency stops"
 Menu,Layer > Layer Style > Pattern Overlay,,open,layer styles exist (ADR 0032); this effect is not drawn yet (PSD import approximates it)
 Menu,Layer > Layer Style > Outer Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"
 Menu,Layer > Layer Style > Drop Shadow,,done,"non-destructive, with PSD import and export (ADR 0032)"

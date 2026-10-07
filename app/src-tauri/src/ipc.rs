@@ -189,7 +189,26 @@ pub struct StyleDto {
     pub inner_shadow: Option<DropShadowDto>,
     pub inner_glow: Option<GlowDto>,
     pub color_overlay: Option<ColorOverlayDto>,
+    /// Absent from requests of before: none.
+    #[serde(default)]
+    pub gradient_overlay: Option<GradientOverlayDto>,
     pub stroke: Option<StrokeDto>,
+}
+
+/// A Gradient Overlay: its gradient's stops as Gradient Map's (`[location 0–4096, r, g, b]`,
+/// sRGB-encoded), `linear` or `radial`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientOverlayDto {
+    pub enabled: bool,
+    pub stops: Vec<[u16; 4]>,
+    pub reverse: bool,
+    pub shape: String,
+    pub angle: f64,
+    pub scale: f64,
+    pub align: bool,
+    pub mode: String,
+    pub opacity: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -285,6 +304,21 @@ impl StyleDto {
                 mode: o.mode.id().to_owned(),
                 opacity: o.opacity,
             }),
+            gradient_overlay: style.gradient_overlay.map(|o| GradientOverlayDto {
+                enabled: o.enabled,
+                stops: gradient_stops(&o.gradient),
+                reverse: o.reverse,
+                shape: match o.shape {
+                    slopshop_core::gradient::GradientShape::Linear => "linear",
+                    slopshop_core::gradient::GradientShape::Radial => "radial",
+                }
+                .to_owned(),
+                angle: o.angle,
+                scale: o.scale,
+                align: o.align_with_layer,
+                mode: o.mode.id().to_owned(),
+                opacity: o.opacity,
+            }),
             stroke: style.stroke.map(|s| StrokeDto {
                 enabled: s.enabled,
                 size: s.size,
@@ -304,7 +338,9 @@ impl StyleDto {
     /// The style it describes; its ranges are checked by the edit.
     pub fn style(&self) -> Result<slopshop_core::style::LayerStyle, String> {
         use slopshop_core::selection::StrokeLocation;
-        use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
+        use slopshop_core::style::{
+            ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Stroke,
+        };
         let shadow = |s: &Option<DropShadowDto>| -> Result<Option<DropShadow>, String> {
             Ok(match s {
                 Some(s) => Some(DropShadow {
@@ -343,6 +379,24 @@ impl StyleDto {
                 Some(o) => Some(ColorOverlay {
                     enabled: o.enabled,
                     color: working(o.color),
+                    mode: mode(&o.mode)?,
+                    opacity: o.opacity,
+                }),
+                None => None,
+            },
+            gradient_overlay: match &self.gradient_overlay {
+                Some(o) => Some(GradientOverlay {
+                    enabled: o.enabled,
+                    gradient: gradient_of_stops(&o.stops)?,
+                    reverse: o.reverse,
+                    shape: match o.shape.as_str() {
+                        "linear" => slopshop_core::gradient::GradientShape::Linear,
+                        "radial" => slopshop_core::gradient::GradientShape::Radial,
+                        other => return Err(format!("unknown gradient shape {other}")),
+                    },
+                    angle: o.angle,
+                    scale: o.scale,
+                    align_with_layer: o.align,
                     mode: mode(&o.mode)?,
                     opacity: o.opacity,
                 }),

@@ -1679,7 +1679,8 @@
   function pickStyleColor(effect: EffectId) {
     const dialog = styleDialog;
     const current = dialog?.style?.[effect];
-    if (!dialog || !current) return;
+    // Gradient Overlay has its stops' colors, not one.
+    if (!dialog || !current || !("color" in current)) return;
     dialog.picking = true;
     pickColor = {
       title: t("style.color"),
@@ -1687,7 +1688,8 @@
       apply: (hex) => {
         if (!styleDialog?.style?.[effect]) return;
         const style = structuredClone($state.snapshot(styleDialog.style));
-        style[effect]!.color = hexToSrgb(hex);
+        const target = style[effect];
+        if (target && "color" in target) target.color = hexToSrgb(hex);
         changeStyle(style);
         styleDialog.picking = false;
       },

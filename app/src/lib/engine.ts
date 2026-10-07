@@ -220,6 +220,8 @@ export type LayerStyle = {
     mode: BlendModeId;
     opacity: number;
   } | null;
+  /** Absent: none. */
+  gradientOverlay?: StyleGradientOverlay | null;
   stroke: {
     enabled: boolean;
     size: number;
@@ -228,6 +230,23 @@ export type LayerStyle = {
     mode: BlendModeId;
     opacity: number;
   } | null;
+};
+
+/** A layer style's Gradient Overlay: the layer's shape filled with a gradient. */
+export type StyleGradientOverlay = {
+  enabled: boolean;
+  /** As Gradient Map's: `[location 0–4096, r, g, b]`, sRGB-encoded 0–255. */
+  stops: number[][];
+  reverse: boolean;
+  shape: "linear" | "radial";
+  /** Degrees, counterclockwise from the right: at 90 the start is at the bottom. */
+  angle: number;
+  /** Percent of the box the gradient spans, 10 to 150. */
+  scale: number;
+  /** Across the layer's box (Align with Layer), else the canvas. */
+  align: boolean;
+  mode: BlendModeId;
+  opacity: number;
 };
 
 /** A shadow of a layer style: Drop Shadow, Inner Shadow. */

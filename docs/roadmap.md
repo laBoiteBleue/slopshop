@@ -193,6 +193,9 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
 - [x] Layer styles: Outer and Inner Glow, Inner Shadow (`.slop` node v9)
 - [x] Layer styles: PSD import and export (`lfx2`, Fill), styles on groups (drawn from
       what they hold)
+- [x] Layer styles: Gradient Overlay (Linear and Radial, angle, scale, reverse, aligned with
+      the layer or the canvas; drawn as a gradient fill within the shape; PSD `GrFl`), `.slop`
+      node v12
 - [ ] Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
       [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources
