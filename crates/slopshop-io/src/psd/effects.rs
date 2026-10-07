@@ -12,8 +12,9 @@ use slopshop_core::color::LinearRgba;
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
 use slopshop_core::style::{
-    ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, MAX_GRADIENT_SCALE,
-    MAX_SATIN_DISTANCE, MAX_SIZE, MIN_GRADIENT_SCALE, Satin, Stroke,
+    BevelEmboss, BevelStyle, ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle,
+    MAX_BEVEL_DEPTH, MAX_BEVEL_SOFTEN, MAX_GRADIENT_SCALE, MAX_SATIN_DISTANCE, MAX_SIZE,
+    MIN_BEVEL_DEPTH, MIN_GRADIENT_SCALE, Satin, Stroke,
 };
 
 use super::descriptor::{self, Descriptor, Value};
@@ -266,6 +267,80 @@ impl Read {
         overlay
     }
 
+    /// A Bevel and Emboss (`ebbl`): Smooth; Chisel, Stroke Emboss, a texture, a gloss contour
+    /// other than linear are approximated.
+    fn bevel(&mut self, d: &Descriptor) -> BevelEmboss {
+        let style = match d.enumerated(b"bvlS") {
+            Some(b"InrB") | None => BevelStyle::InnerBevel,
+            Some(b"OtrB") => BevelStyle::OuterBevel,
+            Some(b"Embs") => BevelStyle::Emboss,
+            Some(b"PlEb") => BevelStyle::PillowEmboss,
+            Some(_) => {
+                self.approximated = true;
+                BevelStyle::InnerBevel
+            }
+        };
+        if d.enumerated(b"bvlT").is_some_and(|t| t != b"SfBL")
+            || d.bool(b"useTexture").unwrap_or(false)
+            || d.object(b"TrnS")
+                .and_then(|c| c.list(b"Crv "))
+                .is_some_and(|points| points.len() > 2)
+        {
+            self.approximated = true;
+        }
+        let angle = if d.bool(b"uglg").unwrap_or(false) {
+            self.global_angle
+        } else {
+            d.number(b"lagl").unwrap_or(120.0)
+        };
+        let part = |read: &mut Self, mode: &[u8], color: &[u8], opacity: &[u8], default| {
+            let mode = match d.enumerated(mode).and_then(mode_of) {
+                Some(mode) => mode,
+                None => default,
+            };
+            let rgb = d.object(color).filter(|c| c.class == b"RGBC").map(|c| {
+                [b"Rd  ", b"Grn ", b"Bl  "].map(|k| (c.number(k).unwrap_or(0.0) / 255.0) as f32)
+            });
+            let color = match rgb {
+                Some([r, g, b]) => LinearRgba::from_srgb_encoded_to_working(
+                    r.clamp(0.0, 1.0),
+                    g.clamp(0.0, 1.0),
+                    b.clamp(0.0, 1.0),
+                    1.0,
+                ),
+                None => {
+                    read.approximated |= d.get(color).is_some();
+                    LinearRgba::new(0.0, 0.0, 0.0, 1.0)
+                }
+            };
+            let opacity = (d.number(opacity).unwrap_or(75.0) / 100.0).clamp(0.0, 1.0) as f32;
+            (color, mode, opacity)
+        };
+        let (highlight_color, highlight_mode, highlight_opacity) =
+            part(self, b"hglM", b"hglC", b"hglO", BlendMode::Screen);
+        let (shadow_color, shadow_mode, shadow_opacity) =
+            part(self, b"sdwM", b"sdwC", b"sdwO", BlendMode::Multiply);
+        BevelEmboss {
+            enabled: self.enabled(d),
+            style,
+            depth: d
+                .number(b"srgR")
+                .unwrap_or(100.0)
+                .clamp(MIN_BEVEL_DEPTH, MAX_BEVEL_DEPTH),
+            up: d.enumerated(b"bvlD") != Some(b"Out "),
+            size: self.size(d, b"blur"),
+            soften: (d.number(b"Sftn").unwrap_or(0.0) * self.scale).clamp(0.0, MAX_BEVEL_SOFTEN),
+            angle,
+            altitude: d.number(b"Lald").unwrap_or(30.0).clamp(0.0, 90.0),
+            highlight_color,
+            highlight_mode,
+            highlight_opacity,
+            shadow_color,
+            shadow_mode,
+            shadow_opacity,
+        }
+    }
+
     /// A Satin (`ChFX`); a contour other than linear is approximated.
     fn satin(&mut self, d: &Descriptor) -> Satin {
         if d.object(b"MpgS")
@@ -361,19 +436,23 @@ pub(crate) fn read(block: &[u8], global_angle: f64) -> Option<ImportedStyle> {
     {
         style.satin = Some(read.satin(e));
     }
+    if let Some(e) = d
+        .object(b"ebbl")
+        .filter(|o| o.bool(b"present").unwrap_or(true))
+    {
+        style.bevel = Some(read.bevel(e));
+    }
     if let Some(e) = effect(&d, b"FrFX", b"frameFXMulti", &mut read) {
         style.stroke = Some(read.stroke(e));
     }
-    // What SlopShop does not draw, when enabled.
-    for key in [&b"ebbl"[..], b"patternFill"] {
-        let on = match d.get(key) {
-            Some(Value::Object(o)) => o.bool(b"enab").unwrap_or(true),
-            Some(Value::List(list)) => !list.is_empty(),
-            _ => false,
-        };
-        if on && read.on {
-            read.approximated = true;
-        }
+    // What SlopShop does not draw yet, when enabled: Pattern Overlay.
+    let pattern = match d.get(b"patternFill") {
+        Some(Value::Object(o)) => o.bool(b"enab").unwrap_or(true),
+        Some(Value::List(list)) => !list.is_empty(),
+        _ => false,
+    };
+    if pattern && read.on {
+        read.approximated = true;
     }
     style.is_valid().then_some(ImportedStyle {
         style,
@@ -594,6 +673,56 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
         ]);
         items.push((b"ChFX", b"Objc", object(b"ChFX", &satin)));
     }
+    if let Some(b) = style.bevel {
+        let style: &[u8] = match b.style {
+            BevelStyle::InnerBevel => b"InrB",
+            BevelStyle::OuterBevel => b"OtrB",
+            BevelStyle::Emboss => b"Embs",
+            BevelStyle::PillowEmboss => b"PlEb",
+        };
+        let bevel = vec![
+            (&b"enab"[..], b"bool", vec![u8::from(b.enabled)]),
+            (b"present", b"bool", vec![1]),
+            (b"showInDialog", b"bool", vec![1]),
+            (
+                b"hglM",
+                b"enum",
+                enumerated(b"BlnM", mode_id(b.highlight_mode)),
+            ),
+            (b"hglC", b"Objc", color(b.highlight_color)),
+            (
+                b"hglO",
+                b"UntF",
+                unit(b"#Prc", f64::from(b.highlight_opacity) * 100.0),
+            ),
+            (
+                b"sdwM",
+                b"enum",
+                enumerated(b"BlnM", mode_id(b.shadow_mode)),
+            ),
+            (b"sdwC", b"Objc", color(b.shadow_color)),
+            (
+                b"sdwO",
+                b"UntF",
+                unit(b"#Prc", f64::from(b.shadow_opacity) * 100.0),
+            ),
+            (b"bvlT", b"enum", enumerated(b"bvlT", b"SfBL")),
+            (b"bvlS", b"enum", enumerated(b"BESl", style)),
+            (b"uglg", b"bool", vec![0]),
+            (b"lagl", b"UntF", unit(b"#Ang", b.angle)),
+            (b"Lald", b"UntF", unit(b"#Ang", b.altitude)),
+            (b"srgR", b"UntF", unit(b"#Prc", b.depth)),
+            (b"blur", b"UntF", unit(b"#Pxl", b.size)),
+            (
+                b"bvlD",
+                b"enum",
+                enumerated(b"BESs", if b.up { b"In  " } else { b"Out " }),
+            ),
+            (b"Sftn", b"UntF", unit(b"#Pxl", b.soften)),
+            (b"useTexture", b"bool", vec![0]),
+        ];
+        items.push((b"ebbl", b"Objc", object(b"ebbl", &bevel)));
+    }
     if let Some(s) = style.stroke {
         let mut stroke = common(s.enabled, s.mode, s.color, s.opacity);
         let position: &[u8] = match s.position {
@@ -679,6 +808,18 @@ mod tests {
                 invert: false,
                 ..Satin::default()
             }),
+            bevel: Some(BevelEmboss {
+                style: BevelStyle::PillowEmboss,
+                depth: 250.0,
+                up: false,
+                size: 12.0,
+                soften: 3.0,
+                angle: 45.0,
+                altitude: 60.0,
+                highlight_mode: BlendMode::Overlay,
+                shadow_opacity: 0.4,
+                ..BevelEmboss::default()
+            }),
             stroke: Some(Stroke {
                 position: StrokeLocation::Center,
                 size: 7.0,
@@ -740,6 +881,21 @@ mod tests {
             (t.angle, t.distance, t.size, t.invert, t.mode, t.enabled)
         );
         assert!((s.opacity - t.opacity).abs() < 1e-6);
+        let (b, c) = (style.bevel.unwrap(), back.bevel.unwrap());
+        assert_eq!(
+            (
+                b.style, b.depth, b.up, b.size, b.soften, b.angle, b.altitude
+            ),
+            (
+                c.style, c.depth, c.up, c.size, c.soften, c.angle, c.altitude
+            )
+        );
+        assert_eq!(
+            (b.highlight_mode, b.shadow_mode),
+            (c.highlight_mode, c.shadow_mode)
+        );
+        assert!((b.shadow_opacity - c.shadow_opacity).abs() < 1e-6);
+        assert!(close(b.highlight_color, c.highlight_color));
         assert_eq!(write(&LayerStyle::default()), None);
     }
 

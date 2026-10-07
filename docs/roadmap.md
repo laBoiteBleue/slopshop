@@ -198,6 +198,8 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
       node v12
 - [x] Layer styles: Satin (the blurred shape against itself moved, inverted or not; a linear
       contour; PSD `ChFX`), `.slop` node v13
+- [x] Layer styles: Bevel and Emboss (Inner, Outer, Emboss, Pillow; Smooth; depth, direction,
+      size, soften, light angle and altitude, highlight and shadow; PSD `ebbl`), `.slop` node v14
 - [ ] Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
       [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources

@@ -13,6 +13,10 @@
 //!                         "align": true, "mode": "normal", "opacity": 1 },
 //!   "satin": { "enabled": true, "color": [r, g, b], "mode": "multiply", "opacity": 0.5,
 //!              "angle": 19, "distance": 11, "size": 14, "invert": true },
+//!   "bevel": { "enabled": true, "style": "innerBevel", "depth": 100, "up": true, "size": 5,
+//!              "soften": 0, "angle": 120, "altitude": 30,
+//!              "highlight": { "color": [r, g, b], "mode": "screen", "opacity": 0.75 },
+//!              "shadow": { "color": [r, g, b], "mode": "multiply", "opacity": 0.75 } },
 //!   "stroke": { "enabled": true, "size": 3, "position": "outside", "color": [r, g, b],
 //!               "mode": "normal", "opacity": 1 } }
 //! ```
@@ -20,7 +24,7 @@
 //! Colors are linear working-space RGB, as a fill node's; a gradient's stops are Gradient
 //! Map's (`[location 0–4096, r, g, b]`, sRGB-encoded). Effects not added are absent; a node
 //! with a Gradient Overlay is written at node version 12 (schema 0.27), one with a Satin at 13
-//! (schema 0.28).
+//! (schema 0.28), one with a Bevel and Emboss at 14 (schema 0.29).
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
@@ -28,7 +32,8 @@ use slopshop_core::color::LinearRgba;
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
 use slopshop_core::style::{
-    ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
+    BevelEmboss, BevelStyle, ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin,
+    Stroke,
 };
 
 fn color(c: LinearRgba) -> Value {
@@ -40,6 +45,15 @@ fn position_id(position: StrokeLocation) -> &'static str {
         StrokeLocation::Inside => "inside",
         StrokeLocation::Center => "center",
         StrokeLocation::Outside => "outside",
+    }
+}
+
+fn bevel_style_id(style: BevelStyle) -> &'static str {
+    match style {
+        BevelStyle::InnerBevel => "innerBevel",
+        BevelStyle::OuterBevel => "outerBevel",
+        BevelStyle::Emboss => "emboss",
+        BevelStyle::PillowEmboss => "pillowEmboss",
     }
 }
 
@@ -129,6 +143,31 @@ pub(super) fn to_json(style: &LayerStyle) -> Value {
                 "distance": s.distance,
                 "size": s.size,
                 "invert": s.invert,
+            }),
+        );
+    }
+    if let Some(b) = style.bevel {
+        value.insert(
+            "bevel".into(),
+            json!({
+                "enabled": b.enabled,
+                "style": bevel_style_id(b.style),
+                "depth": b.depth,
+                "up": b.up,
+                "size": b.size,
+                "soften": b.soften,
+                "angle": b.angle,
+                "altitude": b.altitude,
+                "highlight": {
+                    "color": color(b.highlight_color),
+                    "mode": b.highlight_mode.id(),
+                    "opacity": b.highlight_opacity,
+                },
+                "shadow": {
+                    "color": color(b.shadow_color),
+                    "mode": b.shadow_mode.id(),
+                    "opacity": b.shadow_opacity,
+                },
             }),
         );
     }
@@ -271,6 +310,39 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         })
     })
     .ok()?;
+    let bevel = effect(style, "bevel", |f| {
+        let light = |key: &str| {
+            let fields = Fields(f.0.get(key)?.as_object()?);
+            Some((fields.color()?, fields.mode()?, fields.opacity()?))
+        };
+        let (highlight_color, highlight_mode, highlight_opacity) = light("highlight")?;
+        let (shadow_color, shadow_mode, shadow_opacity) = light("shadow")?;
+        let style = [
+            BevelStyle::InnerBevel,
+            BevelStyle::OuterBevel,
+            BevelStyle::Emboss,
+            BevelStyle::PillowEmboss,
+        ]
+        .into_iter()
+        .find(|s| Some(bevel_style_id(*s)) == f.0.get("style").and_then(Value::as_str))?;
+        Some(BevelEmboss {
+            enabled: f.enabled()?,
+            style,
+            depth: f.number("depth")?,
+            up: f.0.get("up")?.as_bool()?,
+            size: f.number("size")?,
+            soften: f.number("soften")?,
+            angle: f.number("angle")?,
+            altitude: f.number("altitude")?,
+            highlight_color,
+            highlight_mode,
+            highlight_opacity,
+            shadow_color,
+            shadow_mode,
+            shadow_opacity,
+        })
+    })
+    .ok()?;
     let stroke = effect(style, "stroke", |f| {
         let position = match f.0.get("position")?.as_str()? {
             "inside" => StrokeLocation::Inside,
@@ -298,6 +370,7 @@ pub(super) fn from_json(value: &Value) -> Option<LayerStyle> {
         gradient_overlay,
         satin,
         stroke,
+        bevel,
     };
     style.is_valid().then_some(style)
 }

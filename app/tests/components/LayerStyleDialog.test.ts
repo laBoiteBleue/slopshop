@@ -57,7 +57,7 @@ test("Blending Options sets Fill Opacity; an effect's swatch asks for its color"
   document.body.innerHTML = "";
   const second = open(withEffect(null, "colorOverlay", true), "colorOverlay");
   await second.user.click(screen.getByRole("button", { name: "Color" }));
-  expect(second.onpickcolor).toHaveBeenCalledWith("colorOverlay");
+  expect(second.onpickcolor).toHaveBeenCalledWith("colorOverlay", "color");
   expect(onpickcolor).not.toHaveBeenCalled();
 });
 
@@ -164,11 +164,24 @@ test("Satin: its color asked for, Invert and its distance sent as they change", 
   const { onchange, onpickcolor, user } = open(withEffect(null, "satin", true), "satin");
   const settings = screen.getByRole("region", { name: "Satin" });
   await user.click(within(settings).getByRole("button", { name: "Color" }));
-  expect(onpickcolor).toHaveBeenCalledWith("satin");
+  expect(onpickcolor).toHaveBeenCalledWith("satin", "color");
   await user.click(within(settings).getByRole("checkbox", { name: "Invert" }));
   expect(last(onchange).satin?.invert).toBe(false);
   // Opacity, Angle, Distance, Size.
   const [, , distance] = within(settings).getAllByRole("spinbutton");
   await fireEvent.input(distance, { target: { value: "30" } });
   expect(last(onchange).satin).toMatchObject({ distance: 30, mode: "multiply" });
+});
+
+test("Bevel and Emboss: its style, direction and each of its two colors", async () => {
+  const { onchange, onpickcolor, user } = open(withEffect(null, "bevel", true), "bevel");
+  const settings = screen.getByRole("region", { name: "Bevel & Emboss" });
+  await user.selectOptions(within(settings).getByRole("combobox", { name: "Style" }), "emboss");
+  expect(last(onchange).bevel?.style).toBe("emboss");
+  await user.selectOptions(within(settings).getByRole("combobox", { name: "Direction" }), "down");
+  expect(last(onchange).bevel?.up).toBe(false);
+  await user.click(within(settings).getByRole("button", { name: "Shadow Color" }));
+  expect(onpickcolor).toHaveBeenLastCalledWith("bevel", "shadowColor");
+  await user.click(within(settings).getByRole("button", { name: "Highlight Color" }));
+  expect(onpickcolor).toHaveBeenLastCalledWith("bevel", "highlightColor");
 });

@@ -25,8 +25,8 @@ use super::format::{
 };
 use super::manifest::{
     DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN,
-    NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
+    NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY,
+    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK,
     NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
     SCHEMA_MINOR_SOURCES,
 };
@@ -401,11 +401,11 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
-    let known_raster = (1..=NODE_VERSION_SATIN).contains(&node.version);
+    let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version);
     // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill = known_version
         || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version)
-        || (NODE_VERSION_GRADIENT_OVERLAY..=NODE_VERSION_SATIN).contains(&node.version);
+        || (NODE_VERSION_GRADIENT_OVERLAY..=NODE_VERSION_BEVEL).contains(&node.version);
     let content = match node.kind.as_str() {
         NODE_RASTER if known_raster => {
             let key = node

@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 28;
+pub(crate) const SCHEMA_MINOR: u32 = 29;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -77,9 +77,11 @@ pub(crate) const NODE_VERSION_PERSPECTIVE: u32 = 11;
 /// written only for those, so that older readers refuse them instead of dropping the effect.
 pub(crate) const NODE_VERSION_GRADIENT_OVERLAY: u32 = 12;
 /// Version of the raster, fill and group nodes whose style has a Satin (schema 0.28): written
-/// only for those, so that older readers refuse them instead of dropping the effect. The
-/// newest node version this code reads.
+/// only for those, so that older readers refuse them instead of dropping the effect.
 pub(crate) const NODE_VERSION_SATIN: u32 = 13;
+/// Version of the raster, fill and group nodes whose style has a Bevel and Emboss (schema
+/// 0.29): written only for those. The newest node version this code reads.
+pub(crate) const NODE_VERSION_BEVEL: u32 = 14;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

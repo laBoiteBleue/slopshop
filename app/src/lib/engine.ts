@@ -228,6 +228,8 @@ export type LayerStyle = {
   gradientOverlay?: StyleGradientOverlay | null;
   /** Absent: none. */
   satin?: StyleSatin | null;
+  /** Absent: none. */
+  bevel?: StyleBevel | null;
   stroke: {
     enabled: boolean;
     size: number;
@@ -236,6 +238,28 @@ export type LayerStyle = {
     mode: BlendModeId;
     opacity: number;
   } | null;
+};
+
+/** A layer style's Bevel and Emboss: the shape lit as if raised. */
+export type StyleBevel = {
+  enabled: boolean;
+  style: "innerBevel" | "outerBevel" | "emboss" | "pillowEmboss";
+  /** Percent, 1 to 1000. */
+  depth: number;
+  up: boolean;
+  size: number;
+  /** Pixels, 0 to 16. */
+  soften: number;
+  /** Degrees, where the light comes from. */
+  angle: number;
+  /** Degrees above the plane, 0 to 90. */
+  altitude: number;
+  highlightColor: [number, number, number];
+  highlightMode: BlendModeId;
+  highlightOpacity: number;
+  shadowColor: [number, number, number];
+  shadowMode: BlendModeId;
+  shadowOpacity: number;
 };
 
 /** A layer style's Satin: shading inside the shape that follows its edges. */

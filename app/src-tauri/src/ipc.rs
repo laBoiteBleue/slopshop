@@ -196,7 +196,40 @@ pub struct StyleDto {
     #[serde(default)]
     pub satin: Option<SatinDto>,
     pub stroke: Option<StrokeDto>,
+    /// Absent from requests of before: none.
+    #[serde(default)]
+    pub bevel: Option<BevelDto>,
 }
+
+/// A Bevel and Emboss: `style` `innerBevel`, `outerBevel`, `emboss` or `pillowEmboss`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BevelDto {
+    pub enabled: bool,
+    pub style: String,
+    pub depth: f64,
+    pub up: bool,
+    pub size: f64,
+    pub soften: f64,
+    pub angle: f64,
+    pub altitude: f64,
+    pub highlight_color: [f32; 3],
+    pub highlight_mode: String,
+    pub highlight_opacity: f32,
+    pub shadow_color: [f32; 3],
+    pub shadow_mode: String,
+    pub shadow_opacity: f32,
+}
+
+const BEVEL_STYLES: [(slopshop_core::style::BevelStyle, &str); 4] = [
+    (slopshop_core::style::BevelStyle::InnerBevel, "innerBevel"),
+    (slopshop_core::style::BevelStyle::OuterBevel, "outerBevel"),
+    (slopshop_core::style::BevelStyle::Emboss, "emboss"),
+    (
+        slopshop_core::style::BevelStyle::PillowEmboss,
+        "pillowEmboss",
+    ),
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -320,6 +353,26 @@ impl StyleDto {
                 mode: o.mode.id().to_owned(),
                 opacity: o.opacity,
             }),
+            bevel: style.bevel.map(|b| BevelDto {
+                enabled: b.enabled,
+                style: BEVEL_STYLES
+                    .iter()
+                    .find(|(s, _)| *s == b.style)
+                    .map_or("innerBevel", |(_, id)| id)
+                    .to_owned(),
+                depth: b.depth,
+                up: b.up,
+                size: b.size,
+                soften: b.soften,
+                angle: b.angle,
+                altitude: b.altitude,
+                highlight_color: srgb(b.highlight_color),
+                highlight_mode: b.highlight_mode.id().to_owned(),
+                highlight_opacity: b.highlight_opacity,
+                shadow_color: srgb(b.shadow_color),
+                shadow_mode: b.shadow_mode.id().to_owned(),
+                shadow_opacity: b.shadow_opacity,
+            }),
             satin: style.satin.map(|s| SatinDto {
                 enabled: s.enabled,
                 color: srgb(s.color),
@@ -365,7 +418,7 @@ impl StyleDto {
     pub fn style(&self) -> Result<slopshop_core::style::LayerStyle, String> {
         use slopshop_core::selection::StrokeLocation;
         use slopshop_core::style::{
-            ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
+            BevelEmboss, ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
         };
         let shadow = |s: &Option<DropShadowDto>| -> Result<Option<DropShadow>, String> {
             Ok(match s {
@@ -407,6 +460,29 @@ impl StyleDto {
                     color: working(o.color),
                     mode: mode(&o.mode)?,
                     opacity: o.opacity,
+                }),
+                None => None,
+            },
+            bevel: match &self.bevel {
+                Some(b) => Some(BevelEmboss {
+                    enabled: b.enabled,
+                    style: BEVEL_STYLES
+                        .iter()
+                        .find(|(_, id)| *id == b.style)
+                        .map(|(s, _)| *s)
+                        .ok_or(format!("unknown bevel style {}", b.style))?,
+                    depth: b.depth,
+                    up: b.up,
+                    size: b.size,
+                    soften: b.soften,
+                    angle: b.angle,
+                    altitude: b.altitude,
+                    highlight_color: working(b.highlight_color),
+                    highlight_mode: mode(&b.highlight_mode)?,
+                    highlight_opacity: b.highlight_opacity,
+                    shadow_color: working(b.shadow_color),
+                    shadow_mode: mode(&b.shadow_mode)?,
+                    shadow_opacity: b.shadow_opacity,
                 }),
                 None => None,
             },

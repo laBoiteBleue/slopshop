@@ -170,3 +170,28 @@ test("Satin comes black, Multiply, 50 %, 19°, 11 and 14 pixels, inverted, under
     ["innerGlow", "satin", "colorOverlay"],
   );
 });
+
+test("Bevel and Emboss comes first, Photoshop's Inner Bevel lit from 120° at 30°", () => {
+  assert.deepEqual(defaultEffect("bevel"), {
+    enabled: true,
+    style: "innerBevel",
+    depth: 100,
+    up: true,
+    size: 5,
+    soften: 0,
+    angle: 120,
+    altitude: 30,
+    highlightColor: [1, 1, 1],
+    highlightMode: "screen",
+    highlightOpacity: 0.75,
+    shadowColor: [0, 0, 0],
+    shadowMode: "multiply",
+    shadowOpacity: 0.75,
+  });
+  let style = withEffect(null, "stroke", true);
+  style = withEffect(style, "bevel", true);
+  assert.deepEqual(
+    effectsOf(style).map((e) => e.id),
+    ["bevel", "stroke"],
+  );
+});

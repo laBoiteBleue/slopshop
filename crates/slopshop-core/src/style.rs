@@ -51,6 +51,7 @@ pub struct LayerStyle {
     pub gradient_overlay: Option<GradientOverlay>,
     pub satin: Option<Satin>,
     pub stroke: Option<Stroke>,
+    pub bevel: Option<BevelEmboss>,
 }
 
 impl Default for LayerStyle {
@@ -65,6 +66,7 @@ impl Default for LayerStyle {
             gradient_overlay: None,
             satin: None,
             stroke: None,
+            bevel: None,
         }
     }
 }
@@ -347,9 +349,11 @@ enum Slot {
     InnerShadow,
     Stroke,
     Satin,
+    BevelHighlight,
+    BevelShadow,
 }
 
-const SLOTS: usize = 6;
+const SLOTS: usize = 8;
 
 /// What an effect's mask is made of: its geometry (not its color, mode or opacity).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -371,6 +375,17 @@ enum MaskKey {
         sigma: f64,
         offset: (f64, f64),
         invert: bool,
+    },
+    /// Bevel and Emboss's highlight (`highlight`) or shadow from its geometry and light.
+    Bevel {
+        style: BevelStyle,
+        size: f64,
+        /// The height's slope: the bevel's depth across its size, signed (down negative).
+        slope: f64,
+        soften: f64,
+        /// Toward the light, x and y (y down), and the light's height: a unit vector.
+        light: [f64; 3],
+        highlight: bool,
     },
 }
 
@@ -418,6 +433,25 @@ impl MaskKey {
                 offset: (dx, dy),
                 ..
             } => 3.0 * sigma + dx.abs().max(dy.abs()),
+            MaskKey::Bevel { size, soften, .. } => 1.5 * size + soften + 2.0,
+        }
+    }
+
+    /// Bevel and Emboss's highlight or shadow.
+    fn bevel(b: BevelEmboss, highlight: bool) -> Self {
+        let (angle, altitude) = (b.angle.to_radians(), b.altitude.to_radians());
+        let sign = if b.up { 1.0 } else { -1.0 };
+        MaskKey::Bevel {
+            style: b.style,
+            size: b.size.min(MAX_FEATHER),
+            slope: sign * b.depth / 100.0,
+            soften: b.soften,
+            light: [
+                altitude.cos() * angle.cos(),
+                -altitude.cos() * angle.sin(),
+                altitude.sin(),
+            ],
+            highlight,
         }
     }
 
@@ -479,6 +513,33 @@ impl MaskKey {
                 };
                 let satin = satin_mask(&blurred, offset, invert)?;
                 Some((Arc::new(satin), Projective::translation(x, y)))
+            }
+            MaskKey::Bevel {
+                style,
+                size: bevel,
+                slope,
+                soften,
+                light,
+                highlight,
+            } => {
+                let blurred = if bevel > 0.0 {
+                    Arc::new(selection::modify(size, shape, Modify::Feather(bevel / 2.0)).ok()??)
+                } else {
+                    Arc::clone(shape)
+                };
+                let mut shading = Arc::new(bevel_mask(
+                    &blurred,
+                    style,
+                    slope * bevel.max(1.0),
+                    light,
+                    highlight,
+                )?);
+                if soften > 0.0 {
+                    shading = Arc::new(
+                        selection::modify(size, &shading, Modify::Feather(soften / 2.0)).ok()??,
+                    );
+                }
+                Some((shading, Projective::translation(x, y)))
             }
         }
     }
@@ -762,6 +823,73 @@ impl Default for Satin {
     }
 }
 
+/// Bevel and Emboss's depth range in percent, soften range in pixels (Photoshop's).
+pub const MIN_BEVEL_DEPTH: f64 = 1.0;
+pub const MAX_BEVEL_DEPTH: f64 = 1000.0;
+pub const MAX_BEVEL_SOFTEN: f64 = 16.0;
+
+/// Where Bevel and Emboss raises the shape (Photoshop's styles but Stroke Emboss).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BevelStyle {
+    /// Inside the shape, from its edge inward.
+    InnerBevel,
+    /// Outside the shape, from its edge outward.
+    OuterBevel,
+    /// Across the edge, the shape raised above what is around it.
+    Emboss,
+    /// The edge pressed in, the shape and what is around it raised from it.
+    PillowEmboss,
+}
+
+/// The shape lit as if raised (Photoshop's Bevel and Emboss, Smooth technique): a height made
+/// from the shape blurred by `size`, steep by `depth`, lit from `angle` at `altitude`; where it
+/// faces the light, the highlight; where it faces away, the shadow. A linear gloss contour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BevelEmboss {
+    pub enabled: bool,
+    pub style: BevelStyle,
+    /// Percent (1 to 1000): 100 slopes about 45 degrees across the bevel.
+    pub depth: f64,
+    /// Raised (up) or sunk (down).
+    pub up: bool,
+    pub size: f64,
+    /// The shading blurred by this many pixels (0 to 16).
+    pub soften: f64,
+    /// Degrees, where the light comes from (counterclockwise from the right).
+    pub angle: f64,
+    /// Degrees above the plane (0 to 90).
+    pub altitude: f64,
+    pub highlight_color: LinearRgba,
+    pub highlight_mode: BlendMode,
+    pub highlight_opacity: f32,
+    pub shadow_color: LinearRgba,
+    pub shadow_mode: BlendMode,
+    pub shadow_opacity: f32,
+}
+
+impl Default for BevelEmboss {
+    /// Photoshop's: Inner Bevel, 100 % up, 5 pixels, lit from 120° at 30°, white Screen and
+    /// black Multiply at 75 %.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            style: BevelStyle::InnerBevel,
+            depth: 100.0,
+            up: true,
+            size: 5.0,
+            soften: 0.0,
+            angle: 120.0,
+            altitude: 30.0,
+            highlight_color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+            highlight_mode: BlendMode::Screen,
+            highlight_opacity: 0.75,
+            shadow_color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
+            shadow_mode: BlendMode::Multiply,
+            shadow_opacity: 0.75,
+        }
+    }
+}
+
 /// A band along the layer's outline (Photoshop's Stroke, a color fill).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stroke {
@@ -884,6 +1012,17 @@ impl LayerStyle {
             && self
                 .color_overlay
                 .is_none_or(|o| opacity_ok(o.opacity) && color_ok(o.color))
+            && self.bevel.is_none_or(|b| {
+                opacity_ok(b.highlight_opacity)
+                    && opacity_ok(b.shadow_opacity)
+                    && color_ok(b.highlight_color)
+                    && color_ok(b.shadow_color)
+                    && (MIN_BEVEL_DEPTH..=MAX_BEVEL_DEPTH).contains(&b.depth)
+                    && (0.0..=MAX_SIZE).contains(&b.size)
+                    && (0.0..=MAX_BEVEL_SOFTEN).contains(&b.soften)
+                    && b.angle.is_finite()
+                    && (0.0..=90.0).contains(&b.altitude)
+            })
             && self.satin.is_none_or(|s| {
                 opacity_ok(s.opacity)
                     && color_ok(s.color)
@@ -911,6 +1050,7 @@ impl LayerStyle {
             || self.color_overlay.is_some_and(|o| o.enabled)
             || self.gradient_overlay.is_some_and(|o| o.enabled)
             || self.satin.is_some_and(|s| s.enabled)
+            || self.bevel.is_some_and(|b| b.enabled)
             || self.stroke.is_some_and(|s| s.enabled)
     }
 
@@ -989,11 +1129,30 @@ impl LayerStyle {
             };
             add(Place::Above, Slot::Stroke, key, s.color, s.mode, s.opacity);
         }
+        // Above everything, as in Photoshop: the shading of the raised shape.
+        if let Some(b) = self.bevel.filter(|b| b.enabled) {
+            add(
+                Place::Above,
+                Slot::BevelShadow,
+                MaskKey::bevel(b, false),
+                b.shadow_color,
+                b.shadow_mode,
+                b.shadow_opacity,
+            );
+            add(
+                Place::Above,
+                Slot::BevelHighlight,
+                MaskKey::bevel(b, true),
+                b.highlight_color,
+                b.highlight_mode,
+                b.highlight_opacity,
+            );
+        }
         masked
     }
 
     /// Photoshop's order, bottom to top: Drop Shadow, Outer Glow, the content, Gradient Overlay,
-    /// Color Overlay, Satin, Inner Glow, Inner Shadow, Stroke. The masks `shape` does not know yet are computed (on
+    /// Color Overlay, Satin, Inner Glow, Inner Shadow, Stroke, Bevel and Emboss. The masks `shape` does not know yet are computed (on
     /// every core) from the layer's coverage, itself computed once for them all.
     fn draw(
         &self,
@@ -1303,6 +1462,65 @@ fn colored(
         original: None,
     });
     layer
+}
+
+/// Bevel and Emboss's highlight (`highlight`) or shadow from the shape blurred by its size
+/// (`blurred`, a gray coverage, 0.5 on the edge): the height `style` makes of it, `slope` steep
+/// (a full rise per pixel at 1, negative sunk), lit along `light`. Where the surface faces the
+/// light more than the flat plane does, the highlight, as much as it does up to facing it
+/// fully; where it faces it less, the shadow, down to facing away.
+fn bevel_mask(
+    blurred: &RasterImage,
+    style: BevelStyle,
+    slope: f64,
+    light: [f64; 3],
+    highlight: bool,
+) -> Option<RasterImage> {
+    let size = blurred.size();
+    let (w, h) = (size.width as usize, size.height as usize);
+    let a = selection::sample_grid(blurred, size.bounds(), w, h);
+    let height: Vec<f64> = a
+        .iter()
+        .map(|&v| {
+            let v = f64::from(v);
+            match style {
+                BevelStyle::InnerBevel => (2.0 * v - 1.0).clamp(0.0, 1.0),
+                BevelStyle::OuterBevel => (2.0 * v).clamp(0.0, 1.0),
+                BevelStyle::Emboss => v,
+                BevelStyle::PillowEmboss => (2.0 * v - 1.0).abs(),
+            }
+        })
+        .collect();
+    let at = |x: i64, y: i64| {
+        let x = x.clamp(0, w as i64 - 1) as usize;
+        let y = y.clamp(0, h as i64 - 1) as usize;
+        height[y * w + x]
+    };
+    let flat = light[2];
+    let full = f64::from(u16::MAX);
+    let mut bytes = Vec::with_capacity(w * h * 2);
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            // The surface's normal from the height's slope (central differences).
+            let gx = (at(x + 1, y) - at(x - 1, y)) / 2.0 * slope;
+            let gy = (at(x, y + 1) - at(x, y - 1)) / 2.0 * slope;
+            let norm = (gx * gx + gy * gy + 1.0).sqrt();
+            let lit = (-gx * light[0] - gy * light[1] + light[2]) / norm;
+            let v = if highlight {
+                if flat < 1.0 {
+                    ((lit - flat) / (1.0 - flat)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            } else if flat > 0.0 {
+                ((flat - lit) / flat).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            bytes.extend(((v * full).round() as u16).to_ne_bytes());
+        }
+    }
+    RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).ok()
 }
 
 /// Satin's mask from the blurred shape `blurred` (a gray coverage): at each pixel, the
@@ -1697,6 +1915,86 @@ mod tests {
             }
             .is_valid()
         );
+    }
+
+    #[test]
+    fn a_bevel_lights_the_edges_facing_the_light_and_shades_the_others() {
+        // A middle gray box of 40 pixels, from 10 to 50.
+        let mut doc = Document::new(Size::new(64, 64));
+        let image = RasterImage::from_placed(
+            doc.size(),
+            crate::color::PixelFormat::RGBA8_SRGB,
+            Rect::new(10, 10, 40, 40),
+            &[128, 128, 128, 255].repeat(40 * 40),
+            &[0; 4],
+        )
+        .unwrap();
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "box".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(Arc::new(image)),
+                mask: None,
+                clipped: false,
+                transform: crate::transform::Projective::IDENTITY,
+                style: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let plain = at(&doc, 30, 30)[0];
+        let bevel = |up| LayerStyle {
+            bevel: Some(BevelEmboss {
+                up,
+                size: 8.0,
+                ..BevelEmboss::default()
+            }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, bevel(true));
+        // Lit from 120° (above left): the top and left inner edges lighter, the bottom and
+        // right ones darker, the flat middle as it was, nothing outside an inner bevel.
+        let (top, left) = (at(&doc, 30, 12)[0], at(&doc, 12, 30)[0]);
+        let (bottom, right) = (at(&doc, 30, 47)[0], at(&doc, 47, 30)[0]);
+        assert!(
+            top > plain + 0.05 && left > plain + 0.02,
+            "{top} {left} {plain}"
+        );
+        assert!(
+            bottom < plain - 0.05 && right < plain - 0.02,
+            "{bottom} {right} {plain}"
+        );
+        assert!((at(&doc, 30, 30)[0] - plain).abs() < 0.01);
+        assert_eq!(at(&doc, 5, 30)[3], 0.0);
+        // Down: the other way round.
+        styled(&mut doc, id, bevel(false));
+        assert!(at(&doc, 30, 12)[0] < plain - 0.05);
+        assert!(at(&doc, 30, 47)[0] > plain + 0.05);
+        let out_of_range = |b: BevelEmboss| {
+            !LayerStyle {
+                bevel: Some(b),
+                ..LayerStyle::default()
+            }
+            .is_valid()
+        };
+        assert!(out_of_range(BevelEmboss {
+            depth: 0.5,
+            ..BevelEmboss::default()
+        }));
+        assert!(out_of_range(BevelEmboss {
+            altitude: 91.0,
+            ..BevelEmboss::default()
+        }));
+        assert!(out_of_range(BevelEmboss {
+            soften: 17.0,
+            ..BevelEmboss::default()
+        }));
     }
 
     #[test]

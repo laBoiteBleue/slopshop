@@ -19,11 +19,11 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_CLIPPED,
-    NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
-    NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK, NODE_VERSION_STYLED,
-    NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR,
-    SavedSelectionDto, Schema, SourceDto, Writer,
+    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VERSION, NODE_VERSION_BEVEL,
+    NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN,
+    NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR, SavedSelectionDto, Schema, SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -735,6 +735,12 @@ fn build_manifest(
             NodeDto {
                 kind: kind.to_owned(),
                 version: if layer
+                    .style
+                    .as_ref()
+                    .is_some_and(|s| s.settings().bevel.is_some())
+                {
+                    NODE_VERSION_BEVEL
+                } else if layer
                     .style
                     .as_ref()
                     .is_some_and(|s| s.settings().satin.is_some())
