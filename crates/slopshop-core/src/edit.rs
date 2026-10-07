@@ -1089,6 +1089,35 @@ impl Edit {
         }
     }
 
+    /// The edit that gives vector layer `id` shape `shape`, and every layer linked to it (showing
+    /// the same shape source, ADR 0040): one new source, shared as the old one was, named as
+    /// it.
+    pub fn reshape(
+        doc: &Document,
+        id: LayerId,
+        shape: crate::shape::Shape,
+    ) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let LayerContent::Vector { source, .. } = &layer.content else {
+            return Err(EditError::NotVector(id));
+        };
+        if !shape.is_valid() {
+            return Err(EditError::InvalidShape);
+        }
+        let new = crate::shape::ShapeSource::new(shape, source.name());
+        let edits = doc
+            .all_layers()
+            .filter(|l| {
+                matches!(&l.content, LayerContent::Vector { source: s, .. } if Arc::ptr_eq(s, source))
+            })
+            .map(|l| Edit::SetShape {
+                id: l.id,
+                source: Arc::clone(&new),
+            })
+            .collect();
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that gives each of `ids` showing a source other layers show too a source of its
     /// own, of the same pixels (Layer > Make Unique, ADR 0040): changing it then leaves the
     /// others. [`EditError::NoLayers`] when none of them shares its source.

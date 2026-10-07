@@ -220,7 +220,7 @@ Menu,Layer > Vector Mask,,open,waits for vector content (an ADR)
 Menu,Layer > Create Clipping Mask,,done,
 Menu,Layer > Release Clipping Mask,,done,
 Menu,Layer > Smart Objects > Convert to Smart Object,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
-Menu,Layer > Smart Objects > New Smart Object via Copy,,covered,"Duplicate shares a layer's source, Layer > Make Source Unique gives a copy its own (ADR 0040)"
+Menu,Layer > Smart Objects > New Smart Object via Copy,,done,"Layer > Duplicate as Independent Copy: a source of its own; Duplicate makes a linked copy (ADR 0040)"
 Menu,Layer > Smart Objects > Edit Contents,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
 Menu,Layer > Smart Objects > Relink to File,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
 Menu,Layer > Smart Objects > Relink to Library Graphic,,wont,Adobe service or account

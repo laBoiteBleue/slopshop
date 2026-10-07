@@ -182,6 +182,9 @@ pub struct LayerView {
     /// The source a pixel layer shows (ADR 0040), `SourceView::id`; none for a layer made empty
     /// and for the other kinds.
     pub source: Option<u64>,
+    /// How many other layers are linked to this one: showing the same source (pixels, a
+    /// pattern or a shape), changed with it (ADR 0040). 0: none.
+    pub linked: u32,
 }
 
 /// A layer's style as the UI reads and sends it (ADR 0032): colors sRGB-encoded RGB in `[0, 1]`
@@ -634,7 +637,7 @@ impl DocumentView {
             revision: doc.revision(),
             can_undo: session.can_undo(),
             can_redo: session.can_redo(),
-            layers: doc.layers().iter().map(LayerView::new).collect(),
+            layers: linked_views(doc),
             warnings,
             path: None,
             dirty: false,
@@ -685,6 +688,36 @@ pub struct PatternView {
     pub source: u64,
     pub scale: f64,
     pub angle: f64,
+}
+
+/// The layers' views, each with how many other layers show its source (linked copies).
+fn linked_views(doc: &slopshop_core::Document) -> Vec<LayerView> {
+    /// What a layer is linked by: its content's source, or its shape's.
+    fn key(layer: &Layer) -> Option<(bool, u64)> {
+        match &layer.content {
+            LayerContent::Vector { source, .. } => Some((true, source.id().get())),
+            content => content.source().map(|s| (false, s.id().get())),
+        }
+    }
+    let mut counts: HashMap<(bool, u64), u32> = HashMap::new();
+    for layer in doc.all_layers() {
+        if let Some(k) = key(layer) {
+            *counts.entry(k).or_default() += 1;
+        }
+    }
+    let others: HashMap<u64, u32> = doc
+        .all_layers()
+        .filter_map(|l| Some((l.id.get(), counts.get(&key(l)?)? - 1)))
+        .collect();
+    fn set(views: &mut [LayerView], others: &HashMap<u64, u32>) {
+        for view in views {
+            view.linked = others.get(&view.id).copied().unwrap_or(0);
+            set(&mut view.children, others);
+        }
+    }
+    let mut views: Vec<LayerView> = doc.layers().iter().map(LayerView::new).collect();
+    set(&mut views, &others);
+    views
 }
 
 impl LayerView {
@@ -841,6 +874,8 @@ impl LayerView {
             style: layer.style.as_ref().map(|s| StyleDto::new(s.settings())),
             baking: false,
             source: layer.content.source().map(|s| s.id().get()),
+            // Set for the whole document by `DocumentView::new`.
+            linked: 0,
         }
     }
 }
@@ -1162,6 +1197,10 @@ pub enum EditRequest {
     DuplicateLayers {
         ids: Vec<u64>,
         name_format: String,
+        /// Copies with sources of their own (Photoshop's New Smart Object via Copy), named by
+        /// `name_format` too; else linked copies (ADR 0040).
+        #[serde(default)]
+        independent: bool,
     },
     /// Copies of layers (as `DuplicateLayers`), then `matrix` applied to the copies (as
     /// `TransformLayers`): Photoshop's Duplicate and Transform Again (Alt+Shift+Ctrl+T), one
@@ -1519,17 +1558,10 @@ impl EditRequest {
                     },
                 }
             }
+            // On every linked copy (ADR 0040), the source's name kept.
             EditRequest::SetShape { id, shape } => {
-                let id = LayerId::from_raw(id);
-                // The new shape keeps the source's name.
-                let name = match &session.document().layer(id).ok_or("unknown layer")?.content {
-                    LayerContent::Vector { source, .. } => source.name().to_owned(),
-                    _ => return Err("not a vector layer".to_owned()),
-                };
-                Edit::SetShape {
-                    id,
-                    source: slopshop_core::shape::ShapeSource::new(shape.shape()?, name),
-                }
+                Edit::reshape(session.document(), LayerId::from_raw(id), shape.shape()?)
+                    .map_err(|e| e.to_string())?
             }
             EditRequest::SetFillColor { id, color } => {
                 let [r, g, b, a] = color;
@@ -1843,11 +1875,19 @@ impl EditRequest {
                 Edit::arrange_layers(session.document(), &ids, arrange)
                     .map_err(|e| e.to_string())?
             }
-            EditRequest::DuplicateLayers { ids, name_format } => {
+            EditRequest::DuplicateLayers {
+                ids,
+                name_format,
+                independent,
+            } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
-                session
-                    .duplicate_layers_edit(&ids, |name| name_format.replace("{name}", name))
-                    .map_err(|e| e.to_string())?
+                let name = |name: &str| name_format.replace("{name}", name);
+                if independent {
+                    session.independent_copies_edit(&ids, name)
+                } else {
+                    session.duplicate_layers_edit(&ids, name)
+                }
+                .map_err(|e| e.to_string())?
             }
             EditRequest::DuplicateTransformLayers {
                 ids,

@@ -4754,6 +4754,13 @@
     const several = selectedCount > 1;
     return {
       duplicate: item("duplicateLayers"),
+      // Copies with sources of their own: not linked (ADR 0040).
+      duplicateIndependent: command(
+        t("menu.layer.duplicateIndependent"),
+        () => layersPanel?.duplicateSelected(true),
+        undefined,
+        selectedCount === 0,
+      ),
       rename: item("renameLayer"),
       visibility: command(
         t(
@@ -5110,6 +5117,7 @@
           },
           separator,
           layerCommands.duplicate,
+          layerCommands.duplicateIndependent,
           layerCommands.delete,
           layerCommands.rename,
           layerCommands.visibility,
