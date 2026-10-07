@@ -228,3 +228,25 @@ test("Find Edges and Solarize have no settings: applied at once, nothing to edit
   }
   expect(hasSettings("emboss")).toBe(true);
 });
+
+test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's way, Offset's", () => {
+  expect(FILTERS.twirl.defaults).toEqual([50]);
+  expect(validValues("twirl", [-999])).toBe(true);
+  expect(validValues("twirl", [1000])).toBe(false);
+  for (const filter of ["pinch", "spherize"] as const) {
+    expect(validValues(filter, [-100])).toBe(true);
+    expect(validValues(filter, [101])).toBe(false);
+  }
+  expect(FILTERS.polarCoordinates.defaults).toEqual([1]);
+  expect(validValues("polarCoordinates", [2])).toBe(false);
+  expect(FILTERS.offset.defaults).toEqual([0, 0, 2]);
+  expect(validValues("offset", [-30000, 30000, 0])).toBe(true);
+  expect(validValues("offset", [0.5, 0, 0])).toBe(false);
+  expect(validValues("offset", [0, 0, 3])).toBe(false);
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.distort")?.filters).toEqual([
+    "pinch",
+    "polarCoordinates",
+    "spherize",
+    "twirl",
+  ]);
+});

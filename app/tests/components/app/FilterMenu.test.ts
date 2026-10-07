@@ -289,3 +289,16 @@ test("Stylize > Solarize applies at once; Pixelate > Mosaic opens its dialog", a
   await user.click(screen.getByRole("menuitem", { name: "Mosaic…" }));
   await screen.findByRole("dialog", { name: "Mosaic" });
 });
+
+test("Distort > Twirl: an angle sent with the filter", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Twirl…" }));
+  await screen.findByRole("dialog", { name: "Twirl" });
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "twirl", values: [50] }),
+  );
+});

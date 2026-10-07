@@ -544,7 +544,7 @@ impl FilterEntry {
         };
         let mut image = Arc::clone(&input);
         for step in &self.steps {
-            image = Arc::new(filtered(step, &image, true)?);
+            image = Arc::new(filtered(step, &image, Frame::whole(input.size()), true)?);
         }
         *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(FilterCache {
             below: below.clone(),
@@ -1035,9 +1035,15 @@ impl<'a> PremulPixels<'a> {
 fn filtered(
     step: &FilterStep,
     input: &RasterImage,
+    frame: Frame,
     pyramid: bool,
 ) -> Result<RasterImage, StackError> {
     let size = input.size();
+    // Where the filter's frame (a distortion's box) lies, in the layer's pixels.
+    let frame_box = step.filter.samples().then(|| frame_box(step, frame));
+    // The input's first pixel and size in its own pixels, from the layer's origin.
+    let offset = frame.origin.map(|v| (v / frame.factor).round() as i64);
+    let layer_pixels = frame.layer.map(|v| (v / frame.factor).ceil() as usize);
     let format = input.format();
     let pixels = PremulPixels::new(input, step.space);
     let bpp = pixels.codec.bytes_per_pixel;
@@ -1090,8 +1096,11 @@ fn filtered(
                         &mut region,
                         rw,
                         rh,
-                        [x0 as i64 - margin as i64, y0 as i64 - margin as i64],
-                        [size.width as usize, size.height as usize],
+                        [
+                            offset[0] + x0 as i64 - margin as i64,
+                            offset[1] + y0 as i64 - margin as i64,
+                        ],
+                        layer_pixels,
                     );
                     region
                 })
@@ -1120,6 +1129,20 @@ fn filtered(
                         (None, Some(small)) => small.at(x0 + x, y0 + y),
                         (None, None) => [0.0; 4],
                     };
+                }
+                // A distortion: the layer read where the filter says, between its pixels.
+                if let Some(area) = frame_box {
+                    let p = [
+                        frame.origin[0] + ((x0 + x) as f64 + 0.5) * frame.factor,
+                        frame.origin[1] + ((y0 + y) as f64 + 0.5) * frame.factor,
+                    ];
+                    blurs[0] = filter.source(p, area, frame.layer).map_or([0.0; 4], |q| {
+                        bilinear(
+                            &pixels,
+                            (q[0] - frame.origin[0]) / frame.factor - 0.5,
+                            (q[1] - frame.origin[1]) / frame.factor - 0.5,
+                        )
+                    });
                 }
                 let blurs = &blurs[..plans.len()];
                 let px = &mut bytes[(y * t + x) * bpp..][..bpp];
@@ -1153,6 +1176,91 @@ fn filtered(
         RasterImage::from_level0_tiles(size, format, tiles)?
     } else {
         RasterImage::from_level0_tiles_only(size, format, tiles)?
+    })
+}
+
+/// Where an image a filter reads lies on its layer (what frame-dependent filters need:
+/// Mosaic's cells start at the layer's origin, a distortion turns around the layer's center):
+/// its first pixel at `origin` (layer pixels), each of its pixels `factor` layer pixels, on a
+/// layer of `layer` pixels (width, height).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Frame {
+    pub(crate) origin: [f64; 2],
+    pub(crate) factor: f64,
+    pub(crate) layer: [f64; 2],
+}
+
+impl Frame {
+    /// An image that is the whole layer.
+    pub(crate) fn whole(size: Size) -> Self {
+        Self::reduced(size, 1.0)
+    }
+
+    /// The whole layer of `layer` pixels, reduced `factor` times (a pyramid level).
+    pub(crate) fn reduced(layer: Size, factor: f64) -> Self {
+        Self {
+            origin: [0.0, 0.0],
+            factor,
+            layer: [f64::from(layer.width), f64::from(layer.height)],
+        }
+    }
+}
+
+/// The box a distortion of `step` works in, in layer pixels: the selection's, within the layer,
+/// or the whole layer (as Photoshop's), from the image filtered, placed by `frame`.
+fn frame_box(step: &FilterStep, frame: Frame) -> [f64; 4] {
+    let whole = [0.0, 0.0, frame.layer[0], frame.layer[1]];
+    let Some(selection) = &step.selection else {
+        return whole;
+    };
+    let Some(inverse) = step.to_document.inverse() else {
+        return whole;
+    };
+    let Some(b) = crate::selection::bounds(selection.image()) else {
+        return whole;
+    };
+    // The selection's box from the document to the image's pixels, then the layer's.
+    let corners = [
+        (b.x, b.y),
+        (b.x + b.width, b.y),
+        (b.x, b.y + b.height),
+        (b.x + b.width, b.y + b.height),
+    ]
+    .map(|(x, y)| inverse.apply(f64::from(x), f64::from(y)));
+    let [mut left, mut top, mut right, mut bottom] = corners.iter().fold(
+        [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
+        |[l, t, r, b], &(x, y)| [l.min(x), t.min(y), r.max(x), b.max(y)],
+    );
+    let place = |v: f64, axis: usize| frame.origin[axis] + v * frame.factor;
+    (left, right) = (place(left, 0), place(right, 0));
+    (top, bottom) = (place(top, 1), place(bottom, 1));
+    let clipped = [
+        left.max(0.0),
+        top.max(0.0),
+        right.min(frame.layer[0]),
+        bottom.min(frame.layer[1]),
+    ];
+    if clipped[0] < clipped[2] && clipped[1] < clipped[3] {
+        clipped
+    } else {
+        whole
+    }
+}
+
+/// `pixels` at (`x`, `y`) between their centers (pixel coordinates, centers on whole numbers),
+/// bilinearly, the edges repeating outward.
+fn bilinear(pixels: &PremulPixels<'_>, x: f64, y: f64) -> [f64; 4] {
+    let (x0, y0) = (x.floor(), y.floor());
+    let (a, b) = (x - x0, y - y0);
+    let (x0, y0) = (x0 as i64, y0 as i64);
+    let (p00, p10, p01, p11) = (
+        pixels.tap(x0, y0),
+        pixels.tap(x0 + 1, y0),
+        pixels.tap(x0, y0 + 1),
+        pixels.tap(x0 + 1, y0 + 1),
+    );
+    std::array::from_fn(|c| {
+        (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
     })
 }
 
@@ -2338,6 +2446,9 @@ pub struct LookJob {
     pub steps: Vec<FilterStep>,
     pub factor: u32,
     pub origin: [u32; 2],
+    /// The layer's size (level 0): where the crop lies on it (Mosaic's cells, a distortion's
+    /// center).
+    pub layer: Size,
     pub above: Vec<Entry>,
     /// A Liquify entry's look: `steps` is empty, the tiles are what the field reads from.
     pub warp: Option<WarpJob>,
@@ -2369,8 +2480,15 @@ impl LookJob {
             self.format,
             self.tiles.clone(),
         )?);
+        // The crop's first pixel is `origin` pixels of the level, each `factor` of the layer.
+        let factor = f64::from(self.factor);
+        let frame = Frame {
+            origin: self.origin.map(|v| f64::from(v) * factor),
+            factor,
+            layer: [f64::from(self.layer.width), f64::from(self.layer.height)],
+        };
         for step in &self.steps {
-            image = Arc::new(filtered(step, &image, false)?);
+            image = Arc::new(filtered(step, &image, frame, false)?);
         }
         Ok(self.finished(image))
     }
@@ -3510,7 +3628,8 @@ impl LayerStack {
                 ..(*step).clone()
             };
             let last = n + 1 == run.len();
-            image = Arc::new(filtered(&coarse_step, &image, last)?);
+            let frame = Frame::reduced(input.size(), f64::from(factor));
+            image = Arc::new(filtered(&coarse_step, &image, frame, last)?);
         }
         Ok(Some(Preview {
             filter: filter.steps.last().map_or("", |step| step.filter.id()),
@@ -3646,6 +3765,7 @@ impl LayerStack {
             steps,
             factor: 1 << level,
             origin,
+            layer: whole,
             above: self.entries[index + 1..].to_vec(),
             warp: None,
         })
@@ -3759,6 +3879,7 @@ impl LayerStack {
             steps: Vec::new(),
             factor,
             origin,
+            layer: input.size(),
             above: self.entries[index + 1..].to_vec(),
             warp: Some(WarpJob {
                 field: Arc::clone(&liquify.field),
@@ -5555,7 +5676,13 @@ mod tests {
         let original = halves();
         let (w, h) = (W as usize, H as usize);
         for radius in [70.0, 150.0] {
-            let out = filtered(&blur(radius, None), &original, true).unwrap();
+            let out = filtered(
+                &blur(radius, None),
+                &original,
+                Frame::whole(original.size()),
+                true,
+            )
+            .unwrap();
             let reader = PremulPixels::new(&original, BlendSpace::Perceptual);
             let buffer: Vec<[f32; 4]> = (0..w * h)
                 .map(|i| reader.at((i % w) as i64, (i / w) as i64))
@@ -6365,5 +6492,101 @@ mod tests {
         assert_ne!(pixel(&mosaic, 249, 5), pixel(&mosaic, 250, 5));
         // The last column of cells, cut by the layer's edge at 300: whole too.
         assert_eq!(pixel(&mosaic, 290, 3), pixel(&mosaic, 299, 3));
+    }
+
+    fn applied(original: &Arc<RasterImage>, filter: Filter) -> LayerStack {
+        LayerStack::new(Arc::clone(original))
+            .with_filter(
+                FilterStep {
+                    filter,
+                    ..blur(1.0, None)
+                },
+                None,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn offset_wraps_the_layer_around_and_twirl_keeps_its_center_and_corners() {
+        let original = gradient(true);
+        let wrapped = applied(
+            &original,
+            Filter::Offset {
+                horizontal: 37.0,
+                vertical: -5.0,
+                edge: crate::filter::OffsetEdge::Wrap,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        for (x, y) in [(0, 0), (36, 10), (37, 255), (299, 259), (150, 3)] {
+            let from = ((x + W - 37) % W, (y + 5) % H);
+            assert_eq!(
+                pixel(&wrapped, x, y),
+                pixel(&original, from.0, from.1),
+                "({x}, {y})"
+            );
+        }
+        let twirled = applied(&original, Filter::Twirl { angle: 120.0 })
+            .evaluate()
+            .unwrap();
+        // The layer is 300 × 260: its center (150, 130) stays, and its corners, beyond the circle.
+        assert_eq!(pixel(&twirled, 0, 0), pixel(&original, 0, 0));
+        assert_eq!(pixel(&twirled, 299, 259), pixel(&original, 299, 259));
+        assert!(difference(&twirled, &original) > 10);
+    }
+
+    #[test]
+    fn a_looks_cells_and_centers_are_the_layers_whatever_its_crop() {
+        // A look of the second column of tiles: Mosaic's cells start at the layer's origin, as
+        // when the whole layer is evaluated.
+        let original = gradient(true);
+        let stack = applied(&original, Filter::Mosaic { cell: 30.0 });
+        let whole = stack.evaluate().unwrap();
+        let job = stack
+            .look_job([T as f64 + 34.0, 20.0, W as f64 - 1.0, 200.0], 0)
+            .expect("a look");
+        assert_eq!(
+            job.origin,
+            [T, 0],
+            "the look starts past the layer's origin"
+        );
+        let look = job.run().unwrap().image;
+        for (x, y) in [(291, 30), (295, 150), (298, 199)] {
+            let (lx, ly) = (x - job.origin[0], y - job.origin[1]);
+            assert_eq!(pixel(&look, lx, ly), pixel(&whole, x, y), "({x}, {y})");
+        }
+        // A distortion's look at half the size turns around the layer's center: its corners,
+        // beyond the circle, are the reduced layer's own.
+        let stack = applied(&original, Filter::Twirl { angle: 300.0 });
+        // A look is of an entry whose input is known.
+        stack.evaluate().unwrap();
+        let job = stack
+            .look_job([0.0, 0.0, W as f64, H as f64], 1)
+            .expect("a look");
+        let look = job.run().unwrap().image;
+        let reduced = RasterImage::from_level0_tiles_only(
+            original.levels()[1].size(),
+            original.format(),
+            original.levels()[1].tiles().to_vec(),
+        )
+        .unwrap();
+        let (w, h) = (reduced.size().width, reduced.size().height);
+        let at = |image: &RasterImage, x: u32, y: u32| {
+            let coord = TileCoord {
+                col: x / T,
+                row: y / T,
+            };
+            let tile = image.levels()[0].tile(coord).unwrap();
+            let i = ((y % T) * T + x % T) as usize * 4;
+            tile[i..i + 4].to_vec()
+        };
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(at(&look, x, y), at(&reduced, x, y), "({x}, {y})");
+        }
+        assert_ne!(
+            at(&look, w / 2 + 20, h / 2),
+            at(&reduced, w / 2 + 20, h / 2)
+        );
     }
 }

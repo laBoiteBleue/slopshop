@@ -95,7 +95,12 @@ export type FilterId =
   | "findEdges"
   | "emboss"
   | "solarize"
-  | "mosaic";
+  | "mosaic"
+  | "offset"
+  | "twirl"
+  | "pinch"
+  | "spherize"
+  | "polarCoordinates";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {
