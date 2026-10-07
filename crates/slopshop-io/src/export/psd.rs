@@ -362,11 +362,13 @@ impl Writer<'_, '_> {
                 continue;
             }
             let bounds = match &layer.content {
-                LayerContent::Raster { .. } => self.content_bounds(layer),
                 // Vector layers are written as their pixels (Photoshop's shape layers: later).
-                LayerContent::Fill { .. }
-                | LayerContent::GradientFill { .. }
-                | LayerContent::Vector { .. } => self.document.size().bounds(),
+                LayerContent::Raster { .. } | LayerContent::Vector { .. } => {
+                    self.content_bounds(layer)
+                }
+                LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => {
+                    self.document.size().bounds()
+                }
                 _ => Rect::new(0, 0, 0, 0),
             };
             let mut record = self.record(layer, layer.name.clone(), bounds);

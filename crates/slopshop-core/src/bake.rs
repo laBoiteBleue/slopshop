@@ -158,15 +158,19 @@ pub fn rasterize_in_place(doc: &Document, ids: &[LayerId]) -> Result<Vec<Edit>, 
     Ok(edits)
 }
 
-/// Rasterize, for the fills and the groups among `ids` (outermost): one composite each.
+/// Rasterize, for the fills, vector layers and groups among `ids` (outermost): one composite
+/// each.
 pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>, EditError> {
     let mut plans = Vec::new();
     for id in doc.outermost(ids) {
         let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
         let content: Vec<Layer> = match &layer.content {
             // The fill alone, plain: its opacity, mode, mask and clipping stay the layer's. (A
-            // gradient's place is in the layer's content space, where this is composited.)
-            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => vec![Layer {
+            // gradient's place is in the layer's content space, where this is composited; so is
+            // a shape's, drawn at one pixel per unit of its own space.)
+            LayerContent::Fill { .. }
+            | LayerContent::GradientFill { .. }
+            | LayerContent::Vector { .. } => vec![Layer {
                 visible: true,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
@@ -752,6 +756,46 @@ mod tests {
             .unwrap();
         assert_eq!(shown(&doc, 0, 0).as_deref(), Some("fill"));
         assert_eq!(shown(&doc, 99, 99).as_deref(), Some("fill"));
+    }
+
+    #[test]
+    fn rasterizing_a_vector_layer_gives_the_pixels_it_showed() {
+        use crate::shape::{Geometry, Paint, Shape, ShapeSource};
+        let mut doc = Document::new(Size::new(100, 100));
+        let source = ShapeSource::new(
+            Shape {
+                geometry: Geometry::Ellipse {
+                    center: [50.0, 40.0],
+                    radii: [20.0, 15.5],
+                },
+                fill: Some(Paint::Solid(LinearRgba::new(0.8, 0.2, 0.1, 1.0))),
+                stroke: None,
+            },
+            "Ellipse 1",
+        );
+        let mut layer = plain(&mut doc, "shape", LayerContent::vector(source));
+        layer.transform = Affine::translation(3.0, 4.0).into();
+        let id = push(&mut doc, layer);
+        let region = Rect::new(0, 0, 100, 100);
+        let mut before = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut before).unwrap();
+        assert!(can_rasterize(doc.layer(id).unwrap()));
+        let plans = rasterize_plans(&doc, &[id]).unwrap();
+        assert_eq!(plans.len(), 1);
+        bake(&mut doc, plans.into_iter().next().unwrap());
+        assert!(matches!(
+            doc.layer(id).unwrap().content,
+            LayerContent::Raster { .. }
+        ));
+        let mut after = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut after).unwrap();
+        let worst = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "differ by {worst}");
+        assert!(after.iter().any(|&v| v > 0.0));
     }
 
     #[test]

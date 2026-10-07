@@ -1652,6 +1652,11 @@ fn validate_new_layer(
         {
             return Err(EditError::InvalidAdjustment);
         }
+        if let LayerContent::Vector { source, .. } = &layer.content
+            && !source.shape().is_valid()
+        {
+            return Err(EditError::InvalidShape);
+        }
     }
     Ok(())
 }

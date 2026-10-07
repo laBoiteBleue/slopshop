@@ -50,7 +50,7 @@ test("Edit > Transform > Distort: a corner dragged sends a map of nine numbers, 
   await vi.waitFor(() => expect(sent("end_gesture")).toHaveLength(1));
 });
 
-test("Distort and Perspective are for pixel layers only", async () => {
+test("Distort and Perspective are for pixel and vector layers only", async () => {
   const fill: LayerView = { ...layer(1, "Color"), kind: "fill" };
   const user = open(documentView(1, "cat.jpg", [fill]));
   await vi.waitFor(() => expect(row("Color")).toBeInTheDocument());
@@ -61,4 +61,17 @@ test("Distort and Perspective are for pixel layers only", async () => {
     const item = screen.getByText(name, { selector: ".dropdown.nested .label" }).closest(".item");
     expect(item).toHaveAttribute("aria-disabled", "true");
   }
+});
+
+test("a vector layer goes in perspective", async () => {
+  const shape: LayerView = { ...layer(1, "Rectangle 1"), kind: "vector" };
+  const user = open(documentView(1, "cat.jpg", [shape]));
+  await vi.waitFor(() => expect(row("Rectangle 1")).toBeInTheDocument());
+  await user.click(row("Rectangle 1"));
+  await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+  await user.hover(screen.getByText("Transform", { selector: ".label" }));
+  const item = screen
+    .getByText("Perspective", { selector: ".dropdown.nested .label" })
+    .closest(".item");
+  expect(item).not.toHaveAttribute("aria-disabled", "true");
 });
