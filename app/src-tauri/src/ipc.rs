@@ -151,6 +151,8 @@ pub struct LayerView {
     pub gradient_fill: Option<crate::paint::GradientDto>,
     /// A vector layer's shape (ADR 0041), for the Properties panel.
     pub shape: Option<crate::shape::ShapeDto>,
+    /// A pattern fill layer's pattern (ADR 0042), for the Properties panel.
+    pub pattern: Option<PatternView>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
     pub children: Vec<LayerView>,
     /// A group whose layers blend through it.
@@ -627,11 +629,33 @@ pub struct SaveFailed {
     pub detail: String,
 }
 
+/// A pattern fill layer's pattern (ADR 0042): its source (a document source's id), its scale
+/// (layer pixels per pattern pixel) and its angle (degrees, counterclockwise).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternView {
+    pub source: u64,
+    pub scale: f64,
+    pub angle: f64,
+}
+
 impl LayerView {
     fn new(layer: &Layer) -> Self {
         let (kind, swatch, content_key, has_alpha) = match &layer.content {
             LayerContent::Fill { color } => ("fill", color.working_to_srgb_encoded(), 0, false),
             LayerContent::GradientFill { .. } => ("gradientFill", [0.0; 4], 0, false),
+            // Its pattern's average color, and its thumbnail (ADR 0042).
+            LayerContent::PatternFill { pattern } => {
+                let image = pattern.source.image();
+                (
+                    "patternFill",
+                    image
+                        .average_color(&WORKING_SPACE)
+                        .working_to_srgb_encoded(),
+                    image.id().get(),
+                    image.format().layout.has_alpha(),
+                )
+            }
             LayerContent::Group { .. } => ("group", [0.0; 4], 0, false),
             // The UI shows a shape's fill (or stroke) color, as a fill layer's.
             LayerContent::Vector { source, .. } => {
@@ -672,6 +696,14 @@ impl LayerView {
             swatch,
             adjustment: match &layer.content {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView::new(adjustment)),
+                _ => None,
+            },
+            pattern: match &layer.content {
+                LayerContent::PatternFill { pattern } => Some(PatternView {
+                    source: pattern.source.id().get(),
+                    scale: pattern.scale,
+                    angle: pattern.angle,
+                }),
                 _ => None,
             },
             shape: match &layer.content {

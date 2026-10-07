@@ -118,6 +118,11 @@ pub enum LayerContent {
     GradientFill {
         field: crate::gradient::GradientField,
     },
+    /// A pattern over the whole canvas (Layer > New Fill Layer > Pattern, ADR 0042): an image
+    /// source repeated, placed in the layer's own space as a gradient is.
+    PatternFill {
+        pattern: crate::pattern::PatternFill,
+    },
     /// Source pixels, placed at the document origin. The image is immutable and shared:
     /// cloning the layer (snapshots, undo) never copies pixels. `image` is what the layer shows:
     /// once painted or adjusted, the result of its stack (ADR 0029), which keeps the pixels it
@@ -193,6 +198,7 @@ impl PartialEq for LayerContent {
                 },
             ) => p == q && a == b,
             (Self::Adjustment { adjustment: a }, Self::Adjustment { adjustment: b }) => a == b,
+            (Self::PatternFill { pattern: a }, Self::PatternFill { pattern: b }) => a == b,
             // Immutable sources: the same allocation, the same shape.
             (Self::Vector { source: a, .. }, Self::Vector { source: b, .. }) => Arc::ptr_eq(a, b),
             _ => false,
@@ -260,6 +266,7 @@ impl LayerContent {
     pub fn source(&self) -> Option<&Arc<crate::source::Source>> {
         match self {
             Self::Raster { source, .. } => source.as_ref(),
+            Self::PatternFill { pattern } => Some(&pattern.source),
             _ => None,
         }
     }
@@ -967,6 +974,11 @@ fn validate_restored(
         {
             return Err(RestoreError::InvalidShape(id));
         }
+        if let LayerContent::PatternFill { pattern } = &layer.content
+            && !pattern.is_valid()
+        {
+            return Err(RestoreError::InvalidPattern(id));
+        }
         if let Some(mask) = &layer.mask
             && (!LayerMask::is_valid_image(&mask.image)
                 || mask.original.as_ref().is_some_and(|o| {
@@ -1013,6 +1025,8 @@ pub enum RestoreError {
     InvalidAdjustment(LayerId),
     /// A vector shape that is not valid (ADR 0041).
     InvalidShape(LayerId),
+    /// A pattern's scale or angle out of range (ADR 0042).
+    InvalidPattern(LayerId),
     /// A mask that is not a gray image.
     InvalidMask(LayerId),
     /// A group nested deeper than [`MAX_GROUP_DEPTH`].
@@ -1049,6 +1063,7 @@ impl fmt::Display for RestoreError {
                 write!(f, "{id} has adjustment parameters out of range")
             }
             RestoreError::InvalidShape(id) => write!(f, "{id} has an invalid shape"),
+            RestoreError::InvalidPattern(id) => write!(f, "{id} has an invalid pattern"),
             RestoreError::InvalidMask(id) => write!(f, "{id} has a mask that is not gray"),
             RestoreError::InvalidTransform(id) => {
                 write!(f, "{id} has a transform that is not finite and invertible")

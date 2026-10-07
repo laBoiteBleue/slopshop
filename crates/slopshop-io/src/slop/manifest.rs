@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 30;
+pub(crate) const SCHEMA_MINOR: u32 = 31;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -87,8 +87,15 @@ pub(crate) const NODE_VERSION_BEVEL: u32 = 14;
 /// [`NODE_VERSION_VECTOR`]; older readers refuse the unknown type rather than misread it.
 pub(crate) const NODE_VECTOR: &str = "slopshop.vector";
 /// Version of the vector nodes (schema 0.30), which read every parameter of the versions
-/// before it. The newest node version this code reads.
+/// before it.
 pub(crate) const NODE_VERSION_VECTOR: u32 = 15;
+/// A pattern fill layer (schema 0.31, ADR 0042): `params.source`, the index of its pattern in
+/// the document's `sources`; `params.scale` (layer pixels per pattern pixel, 0.01 to 10) and
+/// `params.angle` (degrees, counterclockwise), and the parameters every node has. Written at
+/// [`NODE_VERSION_PATTERN`]; older readers refuse the unknown type.
+pub(crate) const NODE_PATTERN_FILL: &str = "slopshop.patternFill";
+/// Version of the pattern fill nodes (schema 0.31). The newest node version this code reads.
+pub(crate) const NODE_VERSION_PATTERN: u32 = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

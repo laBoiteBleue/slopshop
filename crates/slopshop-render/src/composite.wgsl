@@ -316,7 +316,13 @@ fn load_texel(layer: Layer, texel: vec2<u32>, slot: u32) -> vec4<f32> {
 // Transparent outside the image or where no tile is resident. `unbounded` (export): see
 // `finite`; the non-finite values replaced are added to `count` (stored samples and decoded
 // values, like the CPU reference compositor). Display does not count.
-fn texel_color(layer: Layer, at: vec2<i32>, unbounded: bool, count: ptr<function, u32>) -> vec4<f32> {
+fn texel_color(layer: Layer, texel_at: vec2<i32>, unbounded: bool, count: ptr<function, u32>) -> vec4<f32> {
+    var at = texel_at;
+    // A pattern (ADR 0042): the level repeats across the plane.
+    if (layer.flags & FLAG_WRAP) != 0u {
+        let size = vec2<i32>(layer.level_size);
+        at = ((at % size) + size) % size;
+    }
     if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(layer.level_size)) {
         return vec4<f32>(0.0);
     }
@@ -449,10 +455,12 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
         extent = ellipse.extent;
     }
     let size = vec2<f32>(layer.level_size);
-    let reaches = all(uv + extent > vec2<f32>(0.0)) && all(uv - extent < size);
+    // A pattern is everywhere (ADR 0042).
+    let wraps = (layer.flags & FLAG_WRAP) != 0u;
+    let reaches = wraps || (all(uv + extent > vec2<f32>(0.0)) && all(uv - extent < size));
     if reaches && u32(layer.resample_q.w) == RESAMPLE_NEAREST {
         let at = vec2<i32>(floor(uv));
-        let inside = all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size));
+        let inside = wraps || (all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size)));
         result.color = texel_color(layer, at, unbounded, &count);
         result.inside = select(0.0, 1.0, inside);
     } else if reaches {
@@ -472,7 +480,7 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
                     let w = ewa_weight(r2);
                     let at = vec2<i32>(i, j);
                     let color = texel_color(layer, at, unbounded, &count);
-                    if all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size)) {
+                    if wraps || (all(at >= vec2<i32>(0)) && all(at < vec2<i32>(layer.level_size))) {
                         inside += w;
                     }
                     sum += color * w;

@@ -323,6 +323,7 @@ impl Writer<'_, '_> {
                     LayerContent::Raster { .. }
                     | LayerContent::Fill { .. }
                     | LayerContent::GradientFill { .. }
+                    | LayerContent::PatternFill { .. }
                     | LayerContent::Vector { .. } => height,
                     LayerContent::Adjustment { .. } => 0,
                 }
@@ -366,9 +367,10 @@ impl Writer<'_, '_> {
                 LayerContent::Raster { .. } | LayerContent::Vector { .. } => {
                     self.content_bounds(layer)
                 }
-                LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => {
-                    self.document.size().bounds()
-                }
+                // Pattern fills as their pixels (Photoshop's `PtFl` with an embedded pattern: later).
+                LayerContent::Fill { .. }
+                | LayerContent::GradientFill { .. }
+                | LayerContent::PatternFill { .. } => self.document.size().bounds(),
                 _ => Rect::new(0, 0, 0, 0),
             };
             let mut record = self.record(layer, layer.name.clone(), bounds);
@@ -376,6 +378,7 @@ impl Writer<'_, '_> {
                 LayerContent::Raster { .. }
                 | LayerContent::Fill { .. }
                 | LayerContent::GradientFill { .. }
+                | LayerContent::PatternFill { .. }
                 | LayerContent::Vector { .. } => {
                     let planes = if bounds.is_empty() {
                         None

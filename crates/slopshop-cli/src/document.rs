@@ -184,6 +184,16 @@ fn print_layers(layers: &[slopshop_core::Layer], depth: usize) {
                     }
                 )
             }
+            LayerContent::PatternFill { pattern } => {
+                let size = pattern.source.image().size();
+                format!(
+                    "pattern fill {}x{} at {}% {}°",
+                    size.width,
+                    size.height,
+                    pattern.scale * 100.0,
+                    pattern.angle
+                )
+            }
             LayerContent::GradientFill { field } => format!(
                 "gradient fill {:?} {} stops from {:?} to {:?}",
                 field.shape,

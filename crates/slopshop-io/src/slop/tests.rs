@@ -2389,3 +2389,61 @@ fn vector_layers_round_trip_with_their_shapes_shared_and_placed() {
     assert_eq!(before, after);
     fs::remove_file(&path).ok();
 }
+
+#[test]
+fn pattern_fills_round_trip_with_their_source_shared() {
+    use slopshop_core::LayerId;
+    use slopshop_core::pattern::PatternFill;
+    let size = Size::new(64, 48);
+    let tile = image(
+        Size::new(16, 8),
+        ChannelLayout::Rgba,
+        SampleType::U8,
+        noise(16 * 8 * 4, 3),
+    );
+    let source = slopshop_core::Source::new(tile, "Dots");
+    let mut doc = Document::new(size);
+    let mut turned = PatternFill::new(Arc::clone(&source));
+    turned.scale = 0.5;
+    turned.angle = 30.0;
+    let a = push(
+        &mut doc,
+        "a",
+        LayerContent::PatternFill {
+            pattern: PatternFill::new(Arc::clone(&source)),
+        },
+        1.0,
+    );
+    let b = push(
+        &mut doc,
+        "b",
+        LayerContent::PatternFill {
+            pattern: turned.clone(),
+        },
+        0.5,
+    );
+    let path = temp_path("patterns.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    let pattern = |id| match &loaded.layer(LayerId::from_raw(id)).unwrap().content {
+        LayerContent::PatternFill { pattern } => pattern.clone(),
+        _ => panic!("not a pattern fill"),
+    };
+    let (pa, pb) = (pattern(a), pattern(b));
+    assert!(
+        Arc::ptr_eq(&pa.source, &pb.source),
+        "one source, shared again"
+    );
+    assert_eq!(pa.source.name(), "Dots");
+    assert_same_image(pa.source.image(), source.image(), "the pattern");
+    assert_eq!((pb.scale, pb.angle), (turned.scale, turned.angle));
+    assert_eq!((pa.scale, pa.angle), (1.0, 0.0));
+    // The same pixels.
+    let region = slopshop_core::geom::Rect::new(0, 0, 64, 48);
+    let mut before = vec![0.0f32; 64 * 48 * 4];
+    let mut after = before.clone();
+    slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
+    slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();
+    assert_eq!(before, after);
+    fs::remove_file(&path).ok();
+}

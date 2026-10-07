@@ -1874,3 +1874,62 @@ fn vector_layers_match_the_cpu_reference_compositor() {
         assert_matches_cpu(&r, s.document(), Rect::new(181, 37, 110, 90), &what);
     }
 }
+
+#[test]
+fn pattern_fills_match_the_cpu_reference_compositor() {
+    use slopshop_core::pattern::PatternFill;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    // A 96 × 64 pattern (exact down to 3 × 2), and an odd one (its full size only), with
+    // transparency.
+    let tile = image(Size::new(96, 64), PixelFormat::RGBA8_SRGB, |x, y| {
+        vec![
+            (x * 9 % 256) as u8,
+            (y * 13 % 256) as u8,
+            ((x + y) * 5 % 256) as u8,
+            255,
+        ]
+    });
+    let odd = image(Size::new(37, 29), PixelFormat::RGBA8_SRGB, |x, y| {
+        vec![
+            200,
+            (x * 7 % 256) as u8,
+            (y * 11 % 256) as u8,
+            ((x * y) % 256) as u8,
+        ]
+    });
+    for (k, (source, scale, angle, moved)) in [
+        (&tile, 1.0, 0.0, false),
+        (&tile, 0.37, 30.0, true),
+        (&tile, 3.0, -15.0, false),
+        (&odd, 0.6, 0.0, true),
+        (&odd, 1.7, 45.0, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut s = Session::new(Document::new(size));
+        push_layer(
+            &mut s,
+            raster(&image(size, PixelFormat::RGBA8_SRGB, pattern)),
+            1.0,
+        );
+        let mut fill = PatternFill::new(slopshop_core::Source::new(Arc::clone(source), ""));
+        fill.scale = scale;
+        fill.angle = angle;
+        let id = push_layer(&mut s, LayerContent::PatternFill { pattern: fill }, 0.8);
+        if moved {
+            s.perform(Edit::SetLayerTransform {
+                id,
+                transform: Affine::translation(13.0, -7.5).into(),
+            })
+            .unwrap();
+        }
+        for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+            s.perform(Edit::SetBlendSpace { space }).unwrap();
+            let what = format!("pattern {k} {space:?}");
+            assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+            assert_matches_cpu(&r, s.document(), Rect::new(181, 37, 110, 90), &what);
+        }
+    }
+}

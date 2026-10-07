@@ -244,9 +244,9 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   origin, possibly fractional or outside the canvas; at most 10 000 guides. Absent: none. An
   unknown `axis` is refused as made by a newer SlopShop. A writer of an older schema keeps
   them as an unknown field, without moving them when the canvas changes.
-  `sources` (0.26, [ADR 0040](adr/0040-sources.md)): what raster nodes show, kept once, each
-  `{ "name": "photo.jpg", "image": "b3:…" }` (`name` absent when nothing names it) and named
-  by its index in this list. Absent: none. Before schema 0.26, a reader gives each raster
+  `sources` (0.26, [ADR 0040](adr/0040-sources.md)): what raster and pattern fill (0.31) nodes
+  show, kept once, each `{ "name": "photo.jpg", "image": "b3:…" }` (`name` absent when nothing
+  names it) and named by its index in this list. Absent: none. Before schema 0.26, a reader gives each raster
   node's original a source of its own, one per image (nodes of the same image share it),
   named after the first node. A writer of an older schema drops the references and keeps the
   list as an unknown field; a reader then ignores it, the file being of the older schema.
@@ -447,6 +447,15 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     to [0, 1]. Its color is the gradient's at `t` (sRGB-encoded), its opacity interpolated
     linearly between the two. It covers the whole canvas, like a fill. Older readers refuse the
     unknown type.
+  - `slopshop.patternFill` v16 (schema 0.31, [ADR 0042](adr/0042-patterns.md)): a pattern fill
+    layer, `params.source` the index of its pattern in `document.sources` (an image source,
+    as a raster node's), `params.scale` (layer pixels per pattern pixel, 0.01 to 10) and
+    `params.angle` (degrees, counterclockwise), with the parameters of the other nodes. The
+    pattern is scaled, then turned about the layer's origin, then placed by the transform; its
+    pixels repeat across the plane, sampled as a transformed raster is (EWA from the pyramid
+    level its scale needs, among the levels whose size divides the image's exactly, so that
+    each repeats with the same period), texel coordinates wrapping. It covers the whole canvas.
+    Older readers refuse the unknown type.
   - `slopshop.vector` v15 (schema 0.30, [ADR 0041](adr/0041-vector-content.md)): a vector layer,
     `params.shape` the index of its shape in `document.shapes`, with the parameters of the
     other nodes (blend mode, mask, clipping, transform, possibly in perspective, style). Its

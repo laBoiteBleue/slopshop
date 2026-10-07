@@ -25,11 +25,12 @@ use super::format::{
     SLOT_LEN, SLOT_OFFSETS, Slot, corrupt, decode_blob, decode_index, record_span,
 };
 use super::manifest::{
-    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER,
-    NODE_VECTOR, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
-    NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
-    NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
-    NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
+    DocumentDto, Manifest, NODE_ADJUSTMENT, NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP,
+    NODE_PATTERN_FILL, NODE_RASTER, NODE_VECTOR, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED,
+    NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
+    NODE_VERSION_PATTERN, NODE_VERSION_PERSPECTIVE, NODE_VERSION_STACK, NODE_VERSION_STYLED,
+    NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -368,6 +369,18 @@ impl Sources {
         })
     }
 
+    /// The source `params.source` of node `node` names in the document's list (a pattern's,
+    /// schema 0.31: always listed).
+    fn listed_of(&self, node: &NodeDto) -> Result<Arc<slopshop_core::Source>, FileError> {
+        node.params
+            .get("source")
+            .and_then(Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok())
+            .and_then(|i| self.listed.as_ref()?.get(i))
+            .cloned()
+            .ok_or_else(|| corrupt("a node with a missing source"))
+    }
+
     /// The shape of vector node `node`, the one its `params.shape` names.
     fn shape_of(&self, node: &NodeDto) -> Result<Arc<ShapeSource>, FileError> {
         node.params
@@ -489,6 +502,18 @@ pub(super) fn read_node(
             LayerContent::Adjustment {
                 adjustment: adjustment_of(&node.params)?,
             }
+        }
+        NODE_PATTERN_FILL if node.version == NODE_VERSION_PATTERN => {
+            let number = |key| node.params.get(key).and_then(Value::as_f64);
+            let pattern = slopshop_core::pattern::PatternFill {
+                source: sources.listed_of(node)?,
+                scale: number("scale").ok_or_else(|| corrupt("pattern node without a scale"))?,
+                angle: number("angle").ok_or_else(|| corrupt("pattern node without an angle"))?,
+            };
+            if !pattern.is_valid() {
+                return Err(corrupt("a pattern out of range"));
+            }
+            LayerContent::PatternFill { pattern }
         }
         NODE_VECTOR if node.version == NODE_VERSION_VECTOR => {
             LayerContent::vector(sources.shape_of(node)?)

@@ -487,9 +487,9 @@ fn chunk_plans<'a>(layers: &[Step<'a>], chunk: Rect) -> Vec<Option<RasterPlan<'a
         .flat_map(|step| {
             step_rasters(step).map(|raster| {
                 raster
-                    .filter(|&(image, transform)| covers(image, transform, chunk))
-                    .and_then(|(image, transform)| {
-                        RasterPlan::full_resolution(image, area, transform)
+                    .filter(|&(image, transform, wrap)| wrap || covers(image, transform, chunk))
+                    .and_then(|(image, transform, wrap)| {
+                        RasterPlan::full_resolution(image, area, transform, wrap)
                     })
             })
         })
@@ -519,11 +519,11 @@ fn raster_images(layers: &[Step<'_>], region: Rect, format: GpuTileFormat) -> Ha
     layers
         .iter()
         .flat_map(|step| step_rasters(step).into_iter().flatten())
-        .filter(|&(image, transform)| {
+        .filter(|&(image, transform, wrap)| {
             GpuTileFormat::for_sample(image.stored_format().sample) == format
-                && covers(image, transform, region)
+                && (wrap || covers(image, transform, region))
         })
-        .map(|(image, _)| image.id())
+        .map(|(image, _, _)| image.id())
         .collect()
 }
 
