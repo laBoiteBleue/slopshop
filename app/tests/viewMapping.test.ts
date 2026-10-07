@@ -68,16 +68,31 @@ test("the pixel grid shows from 800%, over the visible part of the canvas only",
   const view: View = { zoom: PIXEL_GRID_ZOOM, origin: [10, 5] };
   const grid = pixelGrid(view, 2, canvas, 300, 100);
   // The canvas starts 10 × 4 and 5 × 4 CSS pixels before the corner, and goes past the
-  // viewport's other sides.
+  // viewport's other sides: a line is at the corner.
   assert.deepEqual(grid, {
     left: 0,
     top: 0,
     width: 300,
     height: 100,
     cell: 4,
-    offsetX: -40,
-    offsetY: -20,
+    offsetX: 0,
+    offsetY: 0,
   });
+  // Inside the canvas, the first line is within one cell of the corner, where the document
+  // pixel edge is: the webview places backgrounds in fixed point, and a fractional cell
+  // repeated from the canvas's edge thousands of cells away drifted off the pixels.
+  const far = pixelGrid(
+    { zoom: 43, origin: [3000.25, 1999.5] },
+    1.5,
+    { width: 6000, height: 4000 },
+    300,
+    100,
+  );
+  assert.ok(far);
+  closeAll([far.offsetX, far.offsetY], [(-0.25 * 43) / 1.5, (-0.5 * 43) / 1.5]);
+  // The canvas's edge in sight: its line is the first.
+  const edge = pixelGrid({ zoom: 10, origin: [-3, -2] }, 1, canvas, 300, 100);
+  assert.deepEqual([edge?.left, edge?.top, edge?.offsetX, edge?.offsetY], [30, 20, 0, 0]);
   // Scrolled away from the canvas: nothing to draw.
   assert.equal(pixelGrid({ zoom: 8, origin: [500, 0] }, 1, canvas, 300, 100), null);
 });
