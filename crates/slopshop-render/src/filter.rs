@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::{ChannelLayout, PixelFormat};
 use slopshop_core::filter::{
-    BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, line_offsets,
+    BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, OffsetEdge, line_offsets,
 };
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
@@ -40,6 +40,7 @@ pub(crate) struct GpuFilter {
     stylize: wgpu::ComputePipeline,
     cells_rows: wgpu::ComputePipeline,
     cells_columns: wgpu::ComputePipeline,
+    sample: wgpu::ComputePipeline,
     /// Buffers of looks computed, kept for the next ones of the same size (a slider dragged
     /// over a filter asks for the same crop at each setting).
     kept: std::sync::Mutex<Vec<LookBuffers>>,
@@ -130,6 +131,7 @@ impl GpuFilter {
             stylize: pipeline("stylize_main"),
             cells_rows: pipeline("cells_rows_main"),
             cells_columns: pipeline("cells_columns_main"),
+            sample: pipeline("sample_main"),
             kept: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -340,6 +342,7 @@ impl GpuFilter {
                 Kind::Extreme => vec![&self.extreme_rows, &self.extreme_columns],
                 Kind::Stylize => vec![&self.stylize],
                 Kind::Cells => vec![&self.cells_rows, &self.cells_columns],
+                Kind::Sample => vec![&self.sample],
             };
             for pipeline in pipelines {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -384,6 +387,9 @@ enum Kind {
     Stylize,
     /// Mosaic's cells (`weights`: the cell, the crop's place on the layer), rows then columns.
     Cells,
+    /// A distortion: each pixel read where `Filter::source` says (`weights`: the filter, the
+    /// frame, the crop's place on the layer).
+    Sample,
 }
 
 /// The mode of a separable pass whose blur is kept for the next one (filter.wgsl).
@@ -534,6 +540,71 @@ impl Pass {
                         job.origin[1] as f32,
                         job.layer.width as f32 / factor,
                         job.layer.height as f32 / factor,
+                    ],
+                    ..none
+                }]);
+            }
+            Filter::Offset { .. }
+            | Filter::Twirl { .. }
+            | Filter::Pinch { .. }
+            | Filter::Spherize { .. }
+            | Filter::PolarCoordinates { .. } => {
+                // A layer without transparency can't take Offset's transparent edge: the CPU
+                // writes what it becomes there.
+                if matches!(
+                    filter,
+                    Filter::Offset {
+                        edge: OffsetEdge::Transparent,
+                        ..
+                    }
+                ) && !job.format.layout.has_alpha()
+                {
+                    return None;
+                }
+                let (kind, settings) = match filter {
+                    Filter::Offset {
+                        horizontal,
+                        vertical,
+                        edge,
+                    } => (
+                        0.0,
+                        [
+                            horizontal,
+                            vertical,
+                            match edge {
+                                OffsetEdge::Transparent => 0.0,
+                                OffsetEdge::Repeat => 1.0,
+                                OffsetEdge::Wrap => 2.0,
+                            },
+                        ],
+                    ),
+                    Filter::Twirl { angle } => (1.0, [angle, 0.0, 0.0]),
+                    Filter::Pinch { amount } => (2.0, [amount, 0.0, 0.0]),
+                    Filter::Spherize { amount } => (3.0, [amount, 0.0, 0.0]),
+                    Filter::PolarCoordinates { to_polar } => {
+                        (4.0, [f32::from(u8::from(to_polar)), 0.0, 0.0])
+                    }
+                    _ => return None,
+                };
+                // Without a selection, the frame is the whole layer (`stack::frame_box`).
+                let factor = job.factor as f32;
+                let (w, h) = (job.layer.width as f32, job.layer.height as f32);
+                return Some(vec![Self {
+                    kind: Kind::Sample,
+                    weights: vec![
+                        kind,
+                        settings[0],
+                        settings[1],
+                        settings[2],
+                        0.0,
+                        0.0,
+                        w,
+                        h,
+                        w,
+                        h,
+                        job.origin[0] as f32 * factor,
+                        job.origin[1] as f32 * factor,
+                        factor,
                     ],
                     ..none
                 }]);

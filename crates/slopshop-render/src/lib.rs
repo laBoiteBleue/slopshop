@@ -3014,6 +3014,27 @@ mod tests {
                 1,
             ),
             (Filter::Mosaic { cell: 17.0 }, 1),
+            (
+                Filter::Offset {
+                    horizontal: 37.0,
+                    vertical: -12.0,
+                    edge: slopshop_core::filter::OffsetEdge::Wrap,
+                },
+                0,
+            ),
+            (
+                Filter::Offset {
+                    horizontal: -50.0,
+                    vertical: 20.0,
+                    edge: slopshop_core::filter::OffsetEdge::Transparent,
+                },
+                0,
+            ),
+            (Filter::Twirl { angle: 200.0 }, 2),
+            (Filter::Pinch { amount: 60.0 }, 2),
+            (Filter::Spherize { amount: -70.0 }, 2),
+            (Filter::PolarCoordinates { to_polar: true }, 2),
+            (Filter::PolarCoordinates { to_polar: false }, 2),
             // The CPU's broad blur is three boxes: a little off the GPU's exact one.
             (
                 Filter::ClarityTexture {
@@ -3040,6 +3061,18 @@ mod tests {
                 )
                 .unwrap();
             let job = stack.look_job([200.0, 60.0, 400.0, 250.0], 0).unwrap();
+            // Offset's transparent edge on a layer without transparency: the CPU's.
+            let transparent = matches!(
+                filter,
+                Filter::Offset {
+                    edge: slopshop_core::filter::OffsetEdge::Transparent,
+                    ..
+                }
+            );
+            if transparent && !image.format().layout.has_alpha() {
+                assert!(r.gpu_filter.look(&job).is_none());
+                continue;
+            }
             let gpu = r.gpu_filter.look(&job).expect("taken by the GPU");
             let cpu = job.run().unwrap().image;
             assert_eq!((gpu.size(), gpu.format()), (cpu.size(), cpu.format()));
