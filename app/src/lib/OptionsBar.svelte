@@ -14,6 +14,15 @@
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./align";
   import { CROP_RATIOS, type CropAspect } from "./crop";
   import type { ToolGradient } from "./gradient";
+  import {
+    defaultShapeOptions,
+    MAX_RADIUS,
+    MAX_SIDES,
+    MAX_STROKE_WIDTH,
+    MIN_SIDES,
+    shapeKindOf,
+    type ShapeOptions,
+  } from "./shapes";
 
   let {
     tool,
@@ -89,6 +98,8 @@
     distributable = false,
     onalign,
     ondistribute,
+    shape = $bindable(defaultShapeOptions("#000000")),
+    onpickcolor,
   }: {
     tool: ToolId;
     /** Free Transform under way: its fields replace the tool's options, as in Photoshop. */
@@ -101,6 +112,10 @@
     /** Move tool's buttons: Layer > Align and Distribute on the selected layers. */
     onalign?: (align: AlignId) => void;
     ondistribute?: (distribute: DistributeId) => void;
+    /** Shape tools (ADR 0041): the fill and stroke of the next shape, and its geometry's. */
+    shape?: ShapeOptions;
+    /** Shape tools: a swatch was clicked; the color picker sets `shape.fill` or `shape.stroke`. */
+    onpickcolor?: (which: "fill" | "stroke") => void;
     /** Selection tools: how a new shape combines with the selection (keys override it). */
     selectionMode: SelectionMode;
     /** Selection tools: Gaussian softening of the edge, in pixels. */
@@ -359,6 +374,87 @@
       <input type="checkbox" bind:checked={gradient.reverse} />
       {t("options.gradient.reverse")}
     </label>
+  {:else if shapeKindOf(tool)}
+    {@const kind = shapeKindOf(tool)}
+    {#if kind !== "line"}
+      <label class="option">
+        <input type="checkbox" bind:checked={shape.filled} />
+        {t("options.shape.fill")}
+      </label>
+      <button
+        class="swatch"
+        style:background={shape.fill}
+        class:off={!shape.filled}
+        onmousedown={keepFocus}
+        title={t("options.shape.fillColor")}
+        aria-label={t("options.shape.fillColor")}
+        onclick={() => onpickcolor?.("fill")}
+      ></button>
+      <span class="divider"></span>
+      <label class="option">
+        <input type="checkbox" bind:checked={shape.stroked} />
+        {t("options.shape.stroke")}
+      </label>
+    {/if}
+    <button
+      class="swatch"
+      style:background={shape.stroke}
+      class:off={kind !== "line" && !shape.stroked}
+      onmousedown={keepFocus}
+      title={t("options.shape.strokeColor")}
+      aria-label={t("options.shape.strokeColor")}
+      onclick={() => onpickcolor?.("stroke")}
+    ></button>
+    <SliderField
+      label={t("options.shape.width")}
+      bind:value={shape.strokeWidth}
+      min={0.1}
+      max={MAX_STROKE_WIDTH}
+      step={0.1}
+      unit="px"
+      log
+    />
+    {#if kind !== "line"}
+      <select aria-label={t("options.shape.align")} bind:value={shape.strokeAlign}>
+        {#each ["inside", "center", "outside"] as const as align (align)}
+          <option value={align}>{t(`options.shape.align.${align}`)}</option>
+        {/each}
+      </select>
+    {/if}
+    {#if kind === "rectangle"}
+      <span class="divider"></span>
+      <SliderField
+        label={t("options.shape.radius")}
+        bind:value={shape.radius}
+        min={0}
+        max={MAX_RADIUS}
+        unit="px"
+      />
+    {:else if kind === "polygon"}
+      <span class="divider"></span>
+      <SliderField
+        label={t("options.shape.sides")}
+        bind:value={shape.sides}
+        min={MIN_SIDES}
+        max={MAX_SIDES}
+        width={40}
+      />
+      <label class="option">
+        <input type="checkbox" bind:checked={shape.star} />
+        {t("options.shape.star")}
+      </label>
+      {#if shape.star}
+        <SliderField
+          label={t("options.shape.starRatio")}
+          bind:value={shape.starRatio}
+          min={1}
+          max={100}
+          unit="%"
+          factor={100}
+          width={44}
+        />
+      {/if}
+    {/if}
   {:else if tool === "paintBucket"}
     <SliderField
       label={t("options.opacity")}
@@ -616,6 +712,20 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* A shape's fill or stroke color; faded while the shape has none. */
+  .swatch {
+    width: 22px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--border, #555);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .swatch.off {
+    opacity: 0.35;
   }
 
   .option input[type="checkbox"] {

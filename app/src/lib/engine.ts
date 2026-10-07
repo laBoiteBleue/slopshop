@@ -8,6 +8,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { GradientFill } from "./gradientFill";
 import type { Homography } from "./homography";
+import type { Shape } from "./shapes";
 
 /** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, a filter
  * (ADR 0034) or a Liquify field (ADR 0037). */
@@ -169,6 +170,8 @@ export type LayerView = {
   adjustment: AdjustmentView | null;
   /** A gradient fill layer's gradient. Absent: not one. */
   gradientFill?: GradientFill | null;
+  /** A vector layer's shape (ADR 0041); null for a path, not edited here yet. */
+  shape?: Shape | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
@@ -535,6 +538,16 @@ export type EditRequest =
     }
   /** A gradient fill layer's gradient. */
   | { kind: "setGradientFill"; id: number; gradient: GradientFill }
+  /** A vector layer showing `shape` (the shape tools), placed as `addFillLayer` places a fill. */
+  | {
+      kind: "addShape";
+      name: string;
+      shape: Shape;
+      parent?: number | null;
+      index?: number;
+    }
+  /** A vector layer's shape. */
+  | { kind: "setShape"; id: number; shape: Shape }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
   | { kind: "addEmptyLayer"; name: string; parent: number | null; index: number }
   /** Layer > Delete Paint: the layers' (and their masks') originals show again. */

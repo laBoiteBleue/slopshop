@@ -23,6 +23,7 @@ mod recent;
 mod refine;
 mod segment;
 mod selection;
+mod shape;
 mod update;
 mod vector;
 
@@ -4562,6 +4563,56 @@ mod tests {
         // A gradient going nowhere is refused.
         let flat = gradient.replace(r#""to":[0.0,0.0]"#, r#""to":[0.0,10.0]"#);
         let json = format!(r#"{{"kind":"addGradientFill","name":"Flat","gradient":{flat}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn a_shape_is_added_as_a_vector_layer_shown_and_changed() {
+        let mut s = blank_session();
+        let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[4.0,4.0,4.0,4.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
+        let json = format!(r#"{{"kind":"addShape","name":"Rectangle 1","shape":{shape}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(request.history_label().map(|l| l.kind), Some("newShape"));
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert_eq!((layer.kind, layer.name.as_str()), ("vector", "Rectangle 1"));
+        // Its color as the swatch, and its shape as sent.
+        for (a, b) in layer.swatch.iter().zip([1.0, 0.0, 0.0, 1.0]) {
+            assert!((a - b).abs() < 1e-5, "{:?}", layer.swatch);
+        }
+        let shown = serde_json::to_value(&layer.shape).unwrap();
+        assert_eq!(
+            shown["geometry"],
+            serde_json::json!({"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[4.0,4.0,4.0,4.0]})
+        );
+
+        // Changed: an ellipse now, outlined; its name kept.
+        let ellipse = r#"{"geometry":{"kind":"ellipse","center":[50.0,50.0],"radii":[20.0,10.0]},"fill":null,"stroke":{"color":[0.0,0.0,0.0,1.0],"width":2.0,"align":"center","cap":"butt","join":"miter"}}"#;
+        let json = format!(
+            r#"{{"kind":"setShape","id":{},"shape":{ellipse}}}"#,
+            layer.id
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let shown = view.layers[1].shape.as_ref().unwrap();
+        assert_eq!(shown.fill, None);
+        assert_eq!(shown.stroke.as_ref().unwrap().width, 2.0);
+        s.undo().unwrap();
+
+        // An empty rectangle the wrong way round is refused; so is a shape for another layer.
+        let bad = shape.replace("[10.0,20.0,110.0,70.0]", "[110.0,20.0,10.0,70.0]");
+        let json = format!(r#"{{"kind":"addShape","name":"Bad","shape":{bad}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+        let json = format!(
+            r#"{{"kind":"setShape","id":{},"shape":{shape}}}"#,
+            view.layers[0].id
+        );
         let request: EditRequest = serde_json::from_str(&json).unwrap();
         assert!(request.into_edit(&mut s).is_err());
     }

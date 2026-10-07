@@ -28,7 +28,11 @@ export type ToolId =
   | "burn"
   | "blur"
   | "sharpen"
-  | "smudge";
+  | "smudge"
+  | "shapeRectangle"
+  | "shapeEllipse"
+  | "shapePolygon"
+  | "shapeLine";
 
 export type Tool = {
   id: ToolId;
@@ -104,6 +108,16 @@ export const SLOTS: readonly ToolSlot[] = [
     tools: [
       { id: "dodge", icon: "dodge", name: "tools.dodge" },
       { id: "burn", icon: "burn", name: "tools.burn" },
+    ],
+  },
+  // Vector shapes (ADR 0041): each draws a vector layer.
+  {
+    key: "U",
+    tools: [
+      { id: "shapeRectangle", icon: "shapeRectangle", name: "tools.shapeRectangle" },
+      { id: "shapeEllipse", icon: "shapeEllipse", name: "tools.shapeEllipse" },
+      { id: "shapePolygon", icon: "shapePolygon", name: "tools.shapePolygon" },
+      { id: "shapeLine", icon: "shapeLine", name: "tools.shapeLine" },
     ],
   },
 ];

@@ -149,6 +149,8 @@ pub struct LayerView {
     pub adjustment: Option<AdjustmentView>,
     /// A gradient fill layer's gradient, for the Properties panel and its thumbnail.
     pub gradient_fill: Option<crate::paint::GradientDto>,
+    /// A vector layer's shape (ADR 0041), for the Properties panel.
+    pub shape: Option<crate::shape::ShapeDto>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
     pub children: Vec<LayerView>,
     /// A group whose layers blend through it.
@@ -672,6 +674,10 @@ impl LayerView {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView::new(adjustment)),
                 _ => None,
             },
+            shape: match &layer.content {
+                LayerContent::Vector { source, .. } => crate::shape::ShapeDto::of(source.shape()),
+                _ => None,
+            },
             gradient_fill: match &layer.content {
                 LayerContent::GradientFill { field } => {
                     Some(crate::paint::GradientDto::of_field(field))
@@ -861,6 +867,21 @@ pub enum EditRequest {
         id: u64,
         /// Boxed: much larger than the other requests.
         style: Option<Box<StyleDto>>,
+    },
+    /// Add a vector layer showing `shape` (the shape tools, ADR 0041), placed where it is
+    /// drawn: at `index` among the layers of `parent`, as `AddFillLayer`.
+    AddShape {
+        name: String,
+        shape: crate::shape::ShapeDto,
+        #[serde(default)]
+        parent: Option<u64>,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// A vector layer's shape (the Properties panel, the options bar).
+    SetShape {
+        id: u64,
+        shape: crate::shape::ShapeDto,
     },
     /// A fill layer's color, sRGB-encoded RGBA in `[0, 1]` as `AddFillLayer`'s.
     SetFillColor {
@@ -1208,6 +1229,7 @@ impl EditRequest {
                 HistoryLabel::new("newFillLayer")
             }
             Self::AddGroup { .. } => HistoryLabel::new("newGroup"),
+            Self::AddShape { .. } => HistoryLabel::new("newShape"),
             Self::AddAdjustmentLayer { adjustment: id, .. } => {
                 label("newAdjustmentLayer", adjustment(id))
             }
@@ -1337,6 +1359,51 @@ impl EditRequest {
                 id: LayerId::from_raw(id),
                 field: gradient.field()?,
             },
+            EditRequest::AddShape {
+                name,
+                shape,
+                parent,
+                index,
+            } => {
+                let source = slopshop_core::shape::ShapeSource::new(shape.shape()?, name.clone());
+                let parent = parent.map(LayerId::from_raw);
+                let index = match index {
+                    Some(index) => index,
+                    None => session
+                        .document()
+                        .children_of(parent)
+                        .ok_or("unknown parent")?
+                        .len(),
+                };
+                Edit::InsertLayer {
+                    parent,
+                    index,
+                    layer: Layer {
+                        style: None,
+                        transform: slopshop_core::Projective::IDENTITY,
+                        clipped: false,
+                        id: session.allocate_layer_id(),
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::vector(source),
+                    },
+                }
+            }
+            EditRequest::SetShape { id, shape } => {
+                let id = LayerId::from_raw(id);
+                // The new shape keeps the source's name.
+                let name = match &session.document().layer(id).ok_or("unknown layer")?.content {
+                    LayerContent::Vector { source, .. } => source.name().to_owned(),
+                    _ => return Err("not a vector layer".to_owned()),
+                };
+                Edit::SetShape {
+                    id,
+                    source: slopshop_core::shape::ShapeSource::new(shape.shape()?, name),
+                }
+            }
             EditRequest::SetFillColor { id, color } => {
                 let [r, g, b, a] = color;
                 Edit::SetFillColor {

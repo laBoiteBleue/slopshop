@@ -209,6 +209,14 @@
   import WandTool from "./lib/WandTool.svelte";
   import BucketTool from "./lib/BucketTool.svelte";
   import GradientTool from "./lib/GradientTool.svelte";
+  import ShapeTool from "./lib/ShapeTool.svelte";
+  import {
+    defaultShapeOptions,
+    shapeKindOf,
+    shapeOf,
+    type ShapeGeometry,
+    type ShapeOptions,
+  } from "./lib/shapes";
   import { toolGradient, type ToolGradient } from "./lib/gradient";
   import { newGradientFill } from "./lib/gradientFill";
   import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
@@ -1094,6 +1102,29 @@
         opacity,
       ),
     );
+  }
+
+  /** The shape tools' options (ADR 0041): the next shape's fill, stroke and geometry. */
+  let shapeOptions = $state<ShapeOptions>(defaultShapeOptions("#000000"));
+
+  /** A shape tool's swatch: its color picked, the fill or stroke turned on with it. */
+  function pickShapeColor(which: "fill" | "stroke") {
+    pickColor = {
+      title: t(which === "fill" ? "options.shape.fillColor" : "options.shape.strokeColor"),
+      color: shapeOptions[which],
+      apply: (hex) => {
+        if (which === "fill") shapeOptions = { ...shapeOptions, fill: hex, filled: true };
+        else shapeOptions = { ...shapeOptions, stroke: hex, stroked: true };
+      },
+    };
+  }
+
+  /** A shape tool's drag drawn: a vector layer of it above the active layer, selected. */
+  function addShape(geometry: ShapeGeometry) {
+    if (!active) return;
+    commitTransform();
+    const shape = shapeOf(geometry, shapeOptions);
+    if (shape) layersPanel?.addShape(shape);
   }
 
   /** The Paint Bucket's options: the fill's opacity, then the Magic Wand's region. */
@@ -5461,6 +5492,8 @@
       bind:eyedropper={eyedropperOptions}
       bind:bucket={bucketOptions}
       bind:gradient={gradientOptions}
+      bind:shape={shapeOptions}
+      onpickcolor={pickShapeColor}
       bind:crop={cropAspect}
       bind:straighten={straightening}
       canvasSize={active ?? undefined}
@@ -5724,6 +5757,13 @@
                   />
                 {:else if tool === "gradient"}
                   <GradientTool {mapping} ongradient={layGradient} />
+                {:else if shapeKindOf(tool)}
+                  <ShapeTool
+                    {mapping}
+                    kind={shapeKindOf(tool)!}
+                    options={shapeOptions}
+                    onshape={addShape}
+                  />
                 {:else if tool === "paintBucket"}
                   <BucketTool {mapping} onpick={paintBucket} />
                 {:else if tool === "wand"}

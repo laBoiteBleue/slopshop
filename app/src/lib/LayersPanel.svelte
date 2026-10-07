@@ -38,6 +38,7 @@
     typedOpacity,
     newFill,
     newGradientFillLayer,
+    newShapeLayer,
     ungrouping,
     visibilityToggle,
     type Arrangement,
@@ -55,6 +56,7 @@
   } from "./layerSelection";
   import { isTextField } from "./keymap";
   import type { SelectionMode } from "./engine";
+  import type { Shape } from "./shapes";
   import { modeFromKeys } from "./selection";
   import {
     effectsOf,
@@ -272,6 +274,22 @@
     const name = t("layers.defaultGradientFillName", { n });
     const before = new Set(allLayers.map((l) => l.id));
     void edit(newGradientFillLayer(tree, selected?.id ?? null, gradient, name)).then(() => {
+      const added = allLayers.find((l) => !before.has(l.id));
+      if (added) select([added.id], added.id);
+    });
+  }
+
+  /**
+   * A vector layer of `shape` above the active layer, selected (the shape tools), named after
+   * its kind: "Rectangle 1", "Ellipse 2"…
+   */
+  export function addShape(shape: Shape) {
+    const kind = shape.geometry.kind;
+    const n =
+      allLayers.filter((l) => l.kind === "vector" && l.shape?.geometry.kind === kind).length + 1;
+    const name = t(`layers.defaultShapeName.${kind}`, { n });
+    const before = new Set(allLayers.map((l) => l.id));
+    void edit(newShapeLayer(tree, selected?.id ?? null, shape, name)).then(() => {
       const added = allLayers.find((l) => !before.has(l.id));
       if (added) select([added.id], added.id);
     });

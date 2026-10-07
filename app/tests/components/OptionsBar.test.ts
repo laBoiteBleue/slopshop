@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import OptionsBar from "../../src/lib/OptionsBar.svelte";
 import type { ToolId } from "../../src/lib/tools";
+import { defaultShapeOptions } from "../../src/lib/shapes";
 
 function open(tool: ToolId, more: Record<string, unknown> = {}) {
   const paint = () => ({
@@ -251,4 +252,54 @@ test("the Move tool's align and distribute buttons, grayed until enough layers a
   expect(spacing).toBeDisabled();
   await user.click(spacing);
   expect(ondistribute).not.toHaveBeenCalled();
+});
+
+test("the shape tools' fill, stroke and geometry; a swatch asks for its color", async () => {
+  const shape = defaultShapeOptions("#000000");
+  const onpickcolor = vi.fn();
+  const { user } = open("shapePolygon", { shape, onpickcolor });
+  await user.click(check("Fill"));
+  await user.click(check("Stroke"));
+  await user.selectOptions(screen.getByRole("combobox", { name: "Stroke position" }), "Center");
+  expect(screen.queryByText("Indent:")).toBeNull();
+  await user.click(check("Star"));
+  expect(shape).toMatchObject({ filled: false, stroked: true, strokeAlign: "center", star: true });
+  await user.click(screen.getByRole("button", { name: "Stroke color" }));
+  expect(onpickcolor).toHaveBeenCalledWith("stroke");
+});
+
+test("a star's indent; the Line has a stroke only; the Rectangle its corners' radius", () => {
+  const { unmount } = render(OptionsBar, {
+    tool: "shapePolygon",
+    autoSelect: false,
+    selectionMode: "replace",
+    feather: 0,
+    antiAlias: true,
+    wand: { tolerance: 32, contiguous: true, sampleAll: false },
+    quick: { size: 30, sampleAll: false, objectRefine: false },
+    brush: {
+      size: 1,
+      hardness: 1,
+      opacity: 1,
+      flow: 1,
+      pressureSize: false,
+      pressureOpacity: false,
+    },
+    eraser: {
+      size: 1,
+      hardness: 1,
+      opacity: 1,
+      flow: 1,
+      pressureSize: false,
+      pressureOpacity: false,
+    },
+    shape: { ...defaultShapeOptions("#000000"), star: true },
+  });
+  expect(screen.getByText("Indent:")).toBeInTheDocument();
+  unmount();
+  open("shapeLine", { shape: defaultShapeOptions("#000000") });
+  expect(screen.queryByRole("checkbox", { name: "Fill" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Stroke position" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Stroke color" })).toBeInTheDocument();
+  expect(screen.queryByText("Radius:")).toBeNull();
 });
