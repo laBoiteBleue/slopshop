@@ -127,6 +127,11 @@ pub enum Edit {
         id: LayerId,
         field: crate::gradient::GradientField,
     },
+    /// A pattern fill layer's pattern, scale and angle (ADR 0042).
+    SetPatternFill {
+        id: LayerId,
+        pattern: crate::pattern::PatternFill,
+    },
     /// Replace an adjustment layer's adjustment (its kind or its parameters, ADR 0020).
     SetAdjustment {
         id: LayerId,
@@ -243,6 +248,8 @@ pub enum EditError {
     NoSource(LayerId),
     /// The layer is not a vector layer.
     NotVector(LayerId),
+    /// A pattern's scale or angle out of range (ADR 0042).
+    InvalidPattern,
     /// A shape that is not valid (`Shape::is_valid`).
     InvalidShape,
     /// A layer repointed to a source of other pixels than its own (ADR 0040).
@@ -298,6 +305,7 @@ impl fmt::Display for EditError {
             EditError::NoSource(id) => write!(f, "layer {id} shows no source"),
             EditError::NotVector(id) => write!(f, "layer {id} is not a vector layer"),
             EditError::InvalidShape => write!(f, "invalid shape"),
+            EditError::InvalidPattern => write!(f, "invalid pattern"),
             EditError::OtherPixels(id) => {
                 write!(f, "layer {id} can only show a source of its own pixels")
             }
@@ -510,12 +518,14 @@ impl Edit {
             }
             Edit::Repoint { id, source } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
-                let LayerContent::Raster {
-                    source: Some(current),
-                    ..
-                } = &mut layer.content
-                else {
-                    return Err(EditError::NoSource(id));
+                // A pixel layer's source, or a pattern's (ADR 0042).
+                let current = match &mut layer.content {
+                    LayerContent::Raster {
+                        source: Some(current),
+                        ..
+                    } => current,
+                    LayerContent::PatternFill { pattern } => &mut pattern.source,
+                    _ => return Err(EditError::NoSource(id)),
                 };
                 if !Arc::ptr_eq(current.image(), source.image()) {
                     return Err(EditError::OtherPixels(id));
@@ -633,6 +643,22 @@ impl Edit {
                 Edit::SetGradientFill {
                     id,
                     field: previous,
+                }
+            }
+            Edit::SetPatternFill { id, pattern } => {
+                if !pattern.is_valid() {
+                    return Err(EditError::InvalidPattern);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let LayerContent::PatternFill { pattern: current } = &mut layer.content else {
+                    return Err(EditError::NotAFill(id));
+                };
+                let previous = std::mem::replace(current, pattern);
+                // Its transparency shapes its style's effects.
+                layer.redraw_styles();
+                Edit::SetPatternFill {
+                    id,
+                    pattern: previous,
                 }
             }
             Edit::SetAdjustment { id, adjustment } => {
@@ -1656,6 +1682,11 @@ fn validate_new_layer(
             && !source.shape().is_valid()
         {
             return Err(EditError::InvalidShape);
+        }
+        if let LayerContent::PatternFill { pattern } = &layer.content
+            && !pattern.is_valid()
+        {
+            return Err(EditError::InvalidPattern);
         }
     }
     Ok(())

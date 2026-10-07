@@ -120,6 +120,10 @@ pub fn describe(doc: &Document, name: Option<String>) -> DocumentInfo {
                 }
             }
             LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => layers.fill += 1,
+            LayerContent::PatternFill { pattern } => {
+                layers.fill += 1;
+                count(pattern.source.image());
+            }
             LayerContent::Vector { .. } => layers.vector += 1,
             LayerContent::Adjustment { .. } => layers.adjustment += 1,
             LayerContent::Group { .. } => layers.group += 1,

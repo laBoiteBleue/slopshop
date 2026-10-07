@@ -51,6 +51,7 @@ pub mod liquify;
 mod maxflow;
 pub mod move_pixels;
 pub mod paint;
+pub mod pattern;
 pub mod pick;
 pub mod quick_select;
 pub mod raster;

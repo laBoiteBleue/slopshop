@@ -1620,7 +1620,9 @@ async fn add_mask_from_transparency(
             .ok_or("unknown layer")?;
         match &layer.content {
             LayerContent::Raster { image, .. } => image.clone(),
-            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => {
+            LayerContent::Fill { .. }
+            | LayerContent::GradientFill { .. }
+            | LayerContent::PatternFill { .. } => {
                 return Err("a fill layer has no transparency".to_owned());
             }
             LayerContent::Group { .. } => return Err("a group has no transparency".to_owned()),
@@ -1700,6 +1702,10 @@ async fn layer_thumbnail(
             (LayerContent::Raster { image, .. }, _, false) => image.clone(),
             (LayerContent::Fill { .. } | LayerContent::GradientFill { .. }, _, false) => {
                 return Err("fill layers have no thumbnail".to_owned());
+            }
+            // Its pattern, once (ADR 0042).
+            (LayerContent::PatternFill { pattern }, _, false) => {
+                slopshop_core::stack::Pixels::ready(std::sync::Arc::clone(pattern.source.image()))
             }
             (LayerContent::Group { .. }, _, false) => {
                 return Err("groups have no thumbnail".to_owned());

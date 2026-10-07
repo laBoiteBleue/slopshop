@@ -1439,7 +1439,9 @@ fn shows_fill(layers: &[Layer]) -> bool {
         .iter()
         .filter(|l| l.visible)
         .any(|l| match &l.content {
-            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => true,
+            LayerContent::Fill { .. }
+            | LayerContent::GradientFill { .. }
+            | LayerContent::PatternFill { .. } => true,
             LayerContent::Group { children, .. } => shows_fill(children),
             _ => false,
         })
@@ -1577,6 +1579,7 @@ fn content_box(layer: &Layer) -> Option<[f64; 4]> {
             }),
         LayerContent::Fill { .. }
         | LayerContent::GradientFill { .. }
+        | LayerContent::PatternFill { .. }
         | LayerContent::Adjustment { .. } => None,
     }
 }

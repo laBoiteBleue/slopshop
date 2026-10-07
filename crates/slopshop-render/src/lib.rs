@@ -366,6 +366,9 @@ const FLAG_ATOP: u32 = 64;
 const FLAG_STACK_END: u32 = 128;
 /// The layer's blend mode ([`BlendMode::index`]) is stored in the flags from this bit.
 const BLEND_SHIFT: u32 = 8;
+/// A pattern (ADR 0042): the raster's texel coordinates wrap around its level. Above the
+/// blend mode's bits.
+const FLAG_WRAP: u32 = 1 << 16;
 /// Filters of resampled rasters (`resample_q.w` in composite.wgsl; 0: a whole-pixel offset).
 const RESAMPLE_NEAREST: u32 = 1;
 const RESAMPLE_EWA: u32 = 2;
@@ -1154,7 +1157,13 @@ impl Renderer {
         let placed_by = pass.ants.map_or(Affine::IDENTITY, |ants| ants.transform);
         let plan = pass.selection.and_then(|selection| {
             visible_document_rect(doc_size, frame.view, frame.output).and_then(|visible| {
-                RasterPlan::new(selection, visible, placed_by.into(), frame.view.scale)
+                RasterPlan::new(
+                    selection,
+                    visible,
+                    placed_by.into(),
+                    frame.view.scale,
+                    false,
+                )
             })
         });
         let mut prepared = PreparedLayers {
@@ -1318,8 +1327,8 @@ impl Renderer {
             .iter()
             .flat_map(|step| {
                 step_rasters(step).map(|raster| {
-                    let (image, transform) = raster?;
-                    RasterPlan::new(image, visible_doc?, transform, view.scale)
+                    let (image, transform, wrap) = raster?;
+                    RasterPlan::new(image, visible_doc?, transform, view.scale, wrap)
                         .filter(|plan| !plan.range().is_empty())
                 })
             })
@@ -1507,7 +1516,7 @@ fn gather_looks(
 
 /// The rasters a step samples, with their transforms to the document: a raster layer's image,
 /// then its (or a group's) enabled mask.
-fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective)>; 2] {
+fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective, bool)>; 2] {
     match step {
         Step::Layer {
             layer,
@@ -1521,36 +1530,48 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective)>; 
                 LayerContent::Raster {
                     stack: Some(layer_stack),
                     ..
-                } if *stack => Some((layer_stack.original().as_ref(), *transform)),
+                } if *stack => Some((layer_stack.original().as_ref(), *transform, false)),
                 // Its pixels, or what the layer showed before while they are evaluated.
-                LayerContent::Raster { image, .. } => {
-                    image.shown().map(|image| (image.as_ref(), *transform))
-                }
+                LayerContent::Raster { image, .. } => image
+                    .shown()
+                    .map(|image| (image.as_ref(), *transform, false)),
+                // Repeated across the plane (ADR 0042), scaled and turned in the layer's space.
+                LayerContent::PatternFill { pattern } => Some((
+                    pattern.source.image().as_ref(),
+                    Projective::from(pattern.to_content()).then(*transform),
+                    true,
+                )),
                 _ => None,
             };
             [
                 content,
-                enabled_mask(layer).map(|image| (image, *transform)),
+                enabled_mask(layer).map(|image| (image, *transform, false)),
             ]
         }
         Step::Adjust {
             layer, transform, ..
-        } => [None, enabled_mask(layer).map(|image| (image, *transform))],
+        } => [
+            None,
+            enabled_mask(layer).map(|image| (image, *transform, false)),
+        ],
         Step::Begin { .. } => [None, None],
         Step::End {
             mask,
             mask_transform,
             ..
-        } => [None, mask.map(|m| (m.image.as_ref(), *mask_transform))],
+        } => [
+            None,
+            mask.map(|m| (m.image.as_ref(), *mask_transform, false)),
+        ],
         Step::StackOriginal {
             original,
             transform,
-        } => [Some((*original, *transform)), None],
+        } => [Some((*original, *transform, false)), None],
         // `P`, then `k` read as a mask: both in the layer's pixels.
         Step::StackPaint { paint, transform } => match paint.image_refs() {
             Some((color, keep)) => [
-                Some((color.as_ref(), *transform)),
-                Some((keep.as_ref(), *transform)),
+                Some((color.as_ref(), *transform, false)),
+                Some((keep.as_ref(), *transform, false)),
             ],
             None => [None, None],
         },
@@ -1560,7 +1581,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective)>; 
             None,
             effect.selection.as_ref().and_then(|selection| {
                 let placed = effect.to_document.inverse()?.then(*transform);
-                Some((selection.image().as_ref(), placed))
+                Some((selection.image().as_ref(), placed, false))
             }),
         ],
     }
@@ -1767,6 +1788,17 @@ fn encode_layers(
                     &mut prepared.tile_table,
                 );
                 fields.opacity = opacity;
+            }
+            // Sampled as a raster is, its texels wrapping (ADR 0042).
+            LayerContent::PatternFill { .. } => {
+                let Some(plan) = plan else { continue };
+                fields.kind = KIND_RASTER;
+                fields.opacity = opacity;
+                set_raster_fields(&mut fields, plan, &mut prepared.tile_table, table);
+                fields.flags |= FLAG_WRAP;
+                if replaces_alpha {
+                    fields.flags |= FLAG_IGNORE_ALPHA;
+                }
             }
             LayerContent::Raster { .. } => {
                 // Not visible in this view or region: nothing to sample.
@@ -2074,6 +2106,9 @@ struct RasterPlan<'a> {
     area: [f64; 4],
     place: Place,
     level: usize,
+    /// A pattern (ADR 0042): repeated across the plane, so every tile of its level is read and
+    /// only the levels that repeat exactly are planned.
+    wrap: bool,
 }
 
 /// Where a planned raster is in the document.
@@ -2097,9 +2132,17 @@ impl<'a> RasterPlan<'a> {
         area: [f64; 4],
         transform: Projective,
         scale: f64,
+        wrap: bool,
     ) -> Option<Self> {
         let coarsest = image.levels().len() - 1;
-        let (place, level) = match transform.integer_translation() {
+        // A pattern is always resampled: its texels wrap, which the whole-pixel path ignores.
+        let offset = transform.integer_translation().filter(|_| !wrap);
+        let levels = if wrap {
+            slopshop_core::pattern::exact_levels(image)
+        } else {
+            image.levels().len()
+        };
+        let (place, level) = match offset {
             Some((x, y)) => {
                 let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
                 let level = if scale > 1.0 {
@@ -2110,7 +2153,7 @@ impl<'a> RasterPlan<'a> {
                 (Place::Offset([clamp(x), clamp(y)]), level)
             }
             None => {
-                let r = Resampling::placed(transform, scale, image.levels().len(), image.size())?;
+                let r = Resampling::placed(transform, scale, levels, image.size())?;
                 (Place::Resampled(r), r.level)
             }
         };
@@ -2120,6 +2163,7 @@ impl<'a> RasterPlan<'a> {
             area,
             place,
             level,
+            wrap,
         })
     }
 
@@ -2128,8 +2172,9 @@ impl<'a> RasterPlan<'a> {
         image: &'a RasterImage,
         area: [f64; 4],
         transform: Projective,
+        wrap: bool,
     ) -> Option<Self> {
-        Self::new(image, area, transform, 1.0)
+        Self::new(image, area, transform, 1.0, wrap)
     }
 
     /// The whole-pixel offset; zero when resampled.
@@ -2154,7 +2199,12 @@ impl<'a> RasterPlan<'a> {
     }
 
     fn can_coarsen(&self) -> bool {
-        self.level + 1 < self.image.levels().len()
+        let levels = if self.wrap {
+            slopshop_core::pattern::exact_levels(self.image)
+        } else {
+            self.image.levels().len()
+        };
+        self.level + 1 < levels
     }
 
     /// Visible tiles of the planned level.
@@ -2166,6 +2216,10 @@ impl<'a> RasterPlan<'a> {
     /// aside): the placed image's, and for a resampled one its filter's support.
     fn range_over(&self, area: [f64; 4]) -> Rect {
         let grid = self.image.levels()[self.level].grid();
+        // A pattern reads its whole level wherever it shows.
+        if self.wrap {
+            return Rect::new(0, 0, grid.columns(), grid.rows());
+        }
         // The image's area (level-0 pixels) that the document area reads.
         let visible = match self.resampling() {
             Some(r) => r.source_area(area),
@@ -2330,6 +2384,7 @@ fn shader_source() -> String {
     constants += &format!("const KIND_SHOW_MASK: u32 = {KIND_SHOW_MASK}u;\n");
     constants += &format!("const KIND_GRADIENT: u32 = {KIND_GRADIENT}u;\n");
     constants += &format!("const FLAG_STACK_END: u32 = {FLAG_STACK_END}u;\n");
+    constants += &format!("const FLAG_WRAP: u32 = {FLAG_WRAP}u;\n");
     constants += &format!(
         "const CURVE_LUT: u32 = {}u;\n",
         slopshop_core::curve::CURVE_LUT

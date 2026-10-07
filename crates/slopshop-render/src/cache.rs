@@ -982,8 +982,8 @@ impl<'a, 's> LevelPlan<'a, 's> {
             .iter()
             .flat_map(|step| {
                 step_rasters(step).map(|raster| {
-                    let (image, transform) = raster?;
-                    RasterPlan::new(image, scene.visible?, transform, factor)
+                    let (image, transform, wrap) = raster?;
+                    RasterPlan::new(image, scene.visible?, transform, factor, wrap)
                 })
             })
             .collect();

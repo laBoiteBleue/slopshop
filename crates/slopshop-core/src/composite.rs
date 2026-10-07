@@ -697,6 +697,19 @@ fn placement(image: &RasterImage, transform: Projective) -> Option<(&RasterLevel
     }
 }
 
+/// How a pattern fill placed by `transform` is sampled (ADR 0042): always resampled (its
+/// texels wrap, which the whole-pixel path does not do), from the levels that repeat exactly.
+fn pattern_placement<'a>(
+    pattern: &crate::pattern::PatternFill,
+    image: &'a RasterImage,
+    transform: Projective,
+) -> Option<(&'a RasterLevel, Resampling)> {
+    let map = Projective::from(pattern.to_content()).then(transform);
+    let levels = crate::pattern::exact_levels(image);
+    let r = Resampling::placed(map, 1.0, levels, image.size())?;
+    Some((image.levels().get(r.level)?, r))
+}
+
 /// The stored bytes of texel (`i`, `j`) of `level`: `None` outside the level, `Some(None)` in a
 /// tile that is not stored (transparent).
 fn stored_texel(
@@ -747,6 +760,18 @@ fn source(
                 f64::from(color.b) * a,
                 a,
             ])
+        }
+        LayerContent::PatternFill { pattern } => {
+            let image = pattern.source.image().as_ref();
+            let matrix = image.matrix_to(&WORKING_SPACE);
+            let (level, r) = pattern_placement(pattern, image, transform)?;
+            SourceContent::Pattern {
+                level,
+                codec: Codec::new(image.stored_format()),
+                matrix: (matrix != IDENTITY).then_some(matrix),
+                opacity: f64::from(opacity),
+                r: Box::new(r),
+            }
         }
         LayerContent::GradientFill { field } => SourceContent::Gradient {
             luts: field.gradient.luts(),
@@ -883,6 +908,14 @@ enum SourceContent<'a> {
         opacity: f64,
         /// Where the image is in the document; `level` is level 0 unless resampled.
         placement: Placement,
+    },
+    /// A pattern (ADR 0042): `level` repeated across the plane, its texels wrapping.
+    Pattern {
+        level: &'a RasterLevel,
+        codec: Codec,
+        matrix: Option<Mat3>,
+        opacity: f64,
+        r: Box<Resampling>,
     },
 }
 
@@ -1201,6 +1234,41 @@ fn composite_row(
                     }
                     let (color, inside) = r.sample(table, p, |i, j| {
                         stored_texel(level, bytes, i, j).map(|px| {
+                            px.map_or([0.0; 4], |px| {
+                                texel(codec, px, matrix.as_ref(), 1.0, report)
+                            })
+                        })
+                    });
+                    let src = if source.replaces_alpha {
+                        opaque(color, *opacity).map(|c| c * inside)
+                    } else {
+                        color.map(|c| c * opacity)
+                    };
+                    let src = masked(src, x);
+                    if source.atop {
+                        blender.blend_atop(mode, &src, dst);
+                    } else {
+                        blender.blend(mode, &src, dst);
+                    }
+                }
+            }
+            SourceContent::Pattern {
+                level,
+                codec,
+                matrix,
+                opacity,
+                r,
+            } => {
+                let size = level.size();
+                let (w, h) = (i64::from(size.width), i64::from(size.height));
+                let bytes = codec.bytes_per_pixel;
+                for (i, dst) in acc.iter_mut().enumerate() {
+                    // Fits: the pixel is inside the region.
+                    let x = x0 + i as u32;
+                    let p = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    // Every texel exists: the pattern repeats.
+                    let (color, inside) = r.sample(table, p, |i, j| {
+                        stored_texel(level, bytes, i.rem_euclid(w), j.rem_euclid(h)).map(|px| {
                             px.map_or([0.0; 4], |px| {
                                 texel(codec, px, matrix.as_ref(), 1.0, report)
                             })

@@ -1051,6 +1051,7 @@ fn is_structurally_gray(document: &Document) -> bool {
             .stops()
             .iter()
             .all(|s| s.color[0] == s.color[1] && s.color[1] == s.color[2]),
+        LayerContent::PatternFill { pattern } => pattern.source.image().format().layout.is_gray(),
         // Adjustments keep gray gray (equal channels stay equal).
         LayerContent::Group { .. } | LayerContent::Adjustment { .. } => true,
         // Drawn as fills (the steps show those): never met here.
@@ -1117,6 +1118,7 @@ fn is_structurally_opaque(document: &Document) -> bool {
         }
         LayerContent::Group { .. }
         | LayerContent::Adjustment { .. }
+        | LayerContent::PatternFill { .. }
         | LayerContent::Vector { .. } => false,
     }
 }

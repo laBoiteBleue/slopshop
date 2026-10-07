@@ -61,6 +61,7 @@ impl HistoryLabel {
             Edit::SetShape { .. } => "shape",
             Edit::SetFillColor { .. } => "fillColor",
             Edit::SetGradientFill { .. } => "gradientFill",
+            Edit::SetPatternFill { .. } => "patternFill",
             Edit::SetAdjustment { adjustment, .. } => {
                 return Self::with("adjustmentSettings", adjustment.id());
             }

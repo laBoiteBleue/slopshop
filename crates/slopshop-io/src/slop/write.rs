@@ -19,12 +19,12 @@ use super::format::{
 };
 use super::manifest::{
     ColorSpaceDto, DocumentDto, FormatDto, GuideDto, ImageDto, LevelDto, Manifest, NODE_ADJUSTMENT,
-    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_RASTER, NODE_VECTOR, NODE_VERSION,
-    NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY,
-    NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN,
-    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
-    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto,
-    SourceDto, Writer,
+    NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_PATTERN_FILL, NODE_RASTER, NODE_VECTOR,
+    NODE_VERSION, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
+    NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
+    NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK, NODE_VERSION_STYLED,
+    NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -698,6 +698,11 @@ fn build_manifest(
             LayerContent::Adjustment { adjustment } => {
                 (NODE_ADJUSTMENT, adjustment_params(adjustment))
             }
+            // Its source is written below, as a raster's.
+            LayerContent::PatternFill { pattern } => (
+                NODE_PATTERN_FILL,
+                json!({ "scale": pattern.scale, "angle": pattern.angle }),
+            ),
             LayerContent::Vector { source, .. } => (
                 NODE_VECTOR,
                 json!({ "shape": shape_index.get(&source.id()).copied() }),
@@ -750,7 +755,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if matches!(layer.content, LayerContent::Vector { .. }) {
+                version: if matches!(layer.content, LayerContent::PatternFill { .. }) {
+                    NODE_VERSION_PATTERN
+                } else if matches!(layer.content, LayerContent::Vector { .. }) {
                     NODE_VERSION_VECTOR
                 } else if layer
                     .style

@@ -129,6 +129,7 @@ pub fn can_rasterize(layer: &Layer) -> bool {
     match &layer.content {
         LayerContent::Fill { .. }
         | LayerContent::GradientFill { .. }
+        | LayerContent::PatternFill { .. }
         | LayerContent::Group { .. }
         | LayerContent::Vector { .. } => true,
         LayerContent::Raster { .. } => layer.is_painted(),
@@ -170,6 +171,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
             // a shape's, drawn at one pixel per unit of its own space.)
             LayerContent::Fill { .. }
             | LayerContent::GradientFill { .. }
+            | LayerContent::PatternFill { .. }
             | LayerContent::Vector { .. } => vec![Layer {
                 visible: true,
                 opacity: 1.0,
@@ -393,7 +395,9 @@ fn shows_fill(layers: &[Layer]) -> bool {
         .iter()
         .filter(|l| l.visible)
         .any(|l| match &l.content {
-            LayerContent::Fill { .. } | LayerContent::GradientFill { .. } => true,
+            LayerContent::Fill { .. }
+            | LayerContent::GradientFill { .. }
+            | LayerContent::PatternFill { .. } => true,
             LayerContent::Group { children, .. } => shows_fill(children),
             _ => false,
         })

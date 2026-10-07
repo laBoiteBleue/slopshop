@@ -126,7 +126,7 @@ export type LayerView = {
   name: string;
   visible: boolean;
   opacity: number;
-  kind: "fill" | "gradientFill" | "raster" | "vector" | "group" | "adjustment";
+  kind: "fill" | "gradientFill" | "patternFill" | "raster" | "vector" | "group" | "adjustment";
   /** sRGB-encoded RGBA in [0, 1], for display swatches only. */
   swatch: [number, number, number, number];
   /** Translated with the `blendMode.<id>` keys. */
@@ -172,6 +172,8 @@ export type LayerView = {
   gradientFill?: GradientFill | null;
   /** A vector layer's shape (ADR 0041); null for a path, not edited here yet. */
   shape?: Shape | null;
+  /** A pattern fill layer's pattern (ADR 0042): its source, scale and angle (degrees). */
+  pattern?: { source: number; scale: number; angle: number } | null;
 };
 
 /** Adjustments of adjustment layers (Adjustment in crates/slopshop-core/src/adjust.rs). */
