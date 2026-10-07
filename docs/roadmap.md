@@ -334,7 +334,9 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       filter's frame (where a look's crop lies on its layer) given to every filter, so that
       Mosaic's looks align with the layer too: Distort > Pinch, Polar Coordinates, Spherize
       (Normal), Twirl, Other > Offset; on the CPU
-- [x] Maximum and Minimum, Find Edges, Emboss, Solarize and Mosaic on the GPU (looks)
+- [x] Maximum and Minimum, Find Edges, Emboss, Solarize and Mosaic on the GPU (looks); then the
+      distortions (Twirl, Pinch, Spherize, Polar Coordinates, Offset; Offset's transparent edge
+      on a layer without transparency stays on the CPU)
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze

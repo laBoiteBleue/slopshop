@@ -390,3 +390,100 @@ fn cells_columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     output[id.y * params.width + id.x] = encoded(sum / f32(span.y - span.x));
 }
+
+// The distortions (`Filter::source` on the CPU): where the pixel at layer point `p` (layer
+// pixels) is read from; `z` is 0 where nothing is (Offset's transparent edge). `weights`: the
+// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates), its three settings, the
+// frame's box (left, top, right, bottom), the layer's size, the crop's first pixel on the layer
+// and its pixels' size there (layer pixels).
+fn distortion_source(p: vec2<f32>) -> vec3<f32> {
+    let kind = u32(weights[0]);
+    let a = weights[1];
+    let b = weights[2];
+    let e = weights[3];
+    let left = weights[4];
+    let top = weights[5];
+    let right = weights[6];
+    let bottom = weights[7];
+    let layer = vec2<f32>(weights[8], weights[9]);
+    let w = right - left;
+    let h = bottom - top;
+    let c = vec2<f32>((left + right) * 0.5, (top + bottom) * 0.5);
+    let v = p - c;
+    let d = length(v);
+    let radius = min(w, h) * 0.5;
+    if kind == 0u {
+        let q = p - vec2<f32>(a, b);
+        if e == 2.0 {
+            return vec3<f32>(q - floor(q / layer) * layer, 1.0);
+        }
+        if e == 0.0 && (q.x < 0.0 || q.y < 0.0 || q.x >= layer.x || q.y >= layer.y) {
+            return vec3<f32>(q, 0.0);
+        }
+        return vec3<f32>(q, 1.0);
+    }
+    if kind == 1u {
+        if d >= radius || radius <= 0.0 {
+            return vec3<f32>(p, 1.0);
+        }
+        let turn = -radians(a) * (1.0 - d / radius);
+        let s = sin(turn);
+        let k = cos(turn);
+        return vec3<f32>(c.x + v.x * k - v.y * s, c.y + v.x * s + v.y * k, 1.0);
+    }
+    if kind == 2u {
+        if d >= radius || radius <= 0.0 || d == 0.0 {
+            return vec3<f32>(p, 1.0);
+        }
+        let k = pow(sin(1.5707963 * d / radius), -a / 100.0);
+        return vec3<f32>(c + v * k, 1.0);
+    }
+    if kind == 3u {
+        let half = vec2<f32>(w * 0.5, h * 0.5);
+        if half.x <= 0.0 || half.y <= 0.0 {
+            return vec3<f32>(p, 1.0);
+        }
+        let u = v / half;
+        let r = length(u);
+        if r >= 1.0 || r == 0.0 {
+            return vec3<f32>(p, 1.0);
+        }
+        let amount = a / 100.0;
+        var goal = sqrt(1.0 - (1.0 - r) * (1.0 - r));
+        if amount >= 0.0 {
+            goal = 1.0 - sqrt(1.0 - r * r);
+        }
+        let s = (r + abs(amount) * (goal - r)) / r;
+        return vec3<f32>(c + u * s * half, 1.0);
+    }
+    // Polar Coordinates.
+    let tau = 6.2831853;
+    if w <= 0.0 || h <= 0.0 || radius <= 0.0 {
+        return vec3<f32>(p, 1.0);
+    }
+    if a == 1.0 {
+        var phi = atan2(v.x, -v.y);
+        phi = phi - floor(phi / tau) * tau;
+        return vec3<f32>(left + phi / tau * w, top + d / radius * h, 1.0);
+    }
+    let phi = (p.x - left) / w * tau;
+    let rho = (p.y - top) / h * radius;
+    return vec3<f32>(c.x + rho * sin(phi), c.y - rho * cos(phi), 1.0);
+}
+
+@compute @workgroup_size(16, 16)
+fn sample_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let origin = vec2<f32>(weights[10], weights[11]);
+    let factor = weights[12];
+    let p = origin + (vec2<f32>(f32(id.x), f32(id.y)) + 0.5) * factor;
+    let q = distortion_source(p);
+    var result = vec4<f32>(0.0);
+    if q.z > 0.0 {
+        let at = (q.xy - origin) / factor - 0.5;
+        result = bilinear(at.x, at.y);
+    }
+    output[id.y * params.width + id.x] = encoded(result);
+}
