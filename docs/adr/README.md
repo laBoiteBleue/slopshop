@@ -44,6 +44,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0037 | [Liquify: a displacement field kept as an entry of the layer's stack](0037-liquify.md) | accepted |
 | 0038 | [Projective layer transforms: Distort and Perspective](0038-projective-transforms.md) | accepted |
 | 0039 | [In-app updates](0039-in-app-updates.md) | accepted |
-| 0040 | [Sources: what layers show, kept once and referenced](0040-sources.md) | proposed |
+| 0040 | [Sources: what layers show, kept once and referenced](0040-sources.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

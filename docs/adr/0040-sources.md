@@ -1,11 +1,11 @@
 # 0040 — Sources: what layers show, kept once and referenced
 
-Status: proposed (2026-10-07, from the maintainer's proposal: sources in a bin as in a video
-editor, layers referencing them; answers so far: Duplicate shares the source, sources are
-read-only and go away when nothing uses them, the bin is a panel, `.slop` may break while the
-model is designed, a vector layer has no stack: paint goes on a pixel layer above it, and
-Rasterize gives pixels when needed). Points marked
-*to confirm* are the author's proposals, not yet answered.
+Status: accepted (2026-10-07, from the maintainer's proposal: sources in a bin as in a video
+editor, layers referencing them; their answers: Duplicate shares the source, sources are
+read-only and go away when nothing uses them, the bin is a panel, every pixel layer
+references a source, `.slop` may break while the model is designed but files of v0.1 open
+once it is released, a vector layer has no stack: paint goes on a pixel layer above it, and
+Rasterize gives pixels when needed).
 
 ## Context
 
@@ -39,8 +39,8 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
      combined: median, mean… and panoramas), **AI result** (its parameters and inputs).
    A pixel layer becomes **a source reference + its transform + its own stack** (ADR 0029,
    0034): paint, adjustments, filters and Liquify stay per layer, as effects stay per clip in a
-   video editor. A new empty layer has no source, only its stack (*to confirm*: every pixel
-   layer is a reference, one kind of content rather than two).
+   video editor. A new empty layer has no source, only its stack: every pixel layer is a
+   reference, one kind of content rather than two.
 2. **Sources are read-only.** Nothing writes into a source. Changing what a source shows
    makes a new source and points layers at it: every layer that referenced the old one
    (Replace Contents, a text corrected, a document edited), or only the active layer (Make
@@ -87,7 +87,7 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
     reference a source id instead of holding their original image. Breaking compatibility is
     accepted while the model is designed (maintainer, 2026-10-07). Before it is released, a
     reader of the earlier schema turns each layer's original into a source, so that files
-    saved with v0.1 open (*to confirm*). PSD export writes each layer evaluated; PSD Smart
+    saved with v0.1 open. PSD export writes each layer evaluated; PSD Smart
     Objects come with document sources.
 
 ## Alternatives
