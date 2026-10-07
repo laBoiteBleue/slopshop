@@ -924,7 +924,11 @@ const fr: Messages = {
   "layers.defaultAdjustmentName": "{name} {n}",
   "properties.title": "Propriétés",
   "properties.empty":
-    "Sélectionnez un calque de réglage ou de remplissage pour voir ses propriétés.",
+    "Sélectionnez un calque de réglage, de remplissage ou vectoriel pour voir ses propriétés.",
+  "properties.shape.rectangle": "Rectangle",
+  "properties.shape.ellipse": "Ellipse",
+  "properties.shape.polygon": "Polygone",
+  "properties.shape.line": "Trait",
   "dock.label": "Panneaux",
   "dock.resize": "Redimensionner les panneaux sous Calques",
   "dock.fold": "Replier le panneau (cliquer de nouveau pour le déplier)",

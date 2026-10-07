@@ -211,7 +211,9 @@
   import GradientTool from "./lib/GradientTool.svelte";
   import ShapeTool from "./lib/ShapeTool.svelte";
   import {
+    changedShape,
     defaultShapeOptions,
+    hexOf,
     shapeKindOf,
     shapeOf,
     type ShapeGeometry,
@@ -327,6 +329,7 @@
     sync: (request) => sync(request),
     selectionCommand: (run) => selectionCommand(run),
     pickFillColor: (layer) => pickFillLayerColor(layer),
+    pickShapeColor: (layer, which) => pickShapeLayerColor(layer, which),
     saveSelection: () => openSaveSelection(),
     loadSelection: (id, mode) => void loadSavedSelection(id, mode),
     get combinedSelections() {
@@ -1765,6 +1768,22 @@
       apply: (hex) => {
         const request = fillColorEdit(layer, hex);
         if (request) void edit(doc.id, request);
+      },
+    };
+  }
+
+  /** A vector layer's fill or stroke color chosen, one undo entry (ADR 0041). */
+  function pickShapeLayerColor(layer: LayerView, which: "fill" | "stroke") {
+    const doc = active;
+    const shape = layer.shape;
+    if (!doc || !shape) return;
+    const current = which === "fill" ? shape.fill : shape.stroke?.color;
+    pickColor = {
+      title: t(which === "fill" ? "options.shape.fillColor" : "options.shape.strokeColor"),
+      color: current ? hexOf(current) : "#000000",
+      apply: (hex) => {
+        const change = which === "fill" ? { fill: hex } : { stroke: hex };
+        void edit(doc.id, { kind: "setShape", id: layer.id, shape: changedShape(shape, change) });
       },
     };
   }

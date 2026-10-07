@@ -1,6 +1,6 @@
 <script lang="ts">
   // The dock's Properties panel: the settings of the active layer when it has some (an
-  // adjustment or a fill layer, ADR 0020), else a hint.
+  // adjustment, a fill or a vector layer, ADR 0020, 0041), else a hint.
   import PropertiesPanel from "../PropertiesPanel.svelte";
   import { hasProperties } from "../layerEdits";
   import { t } from "../i18n/index.svelte";
@@ -16,6 +16,7 @@
     {layer}
     size={app.doc}
     onfillcolor={app.pickFillColor}
+    onshapecolor={app.pickShapeColor}
     onedit={app.edit}
     onlive={app.live}
     ongestureend={app.gestureEnd}

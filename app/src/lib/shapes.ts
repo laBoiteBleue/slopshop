@@ -1,6 +1,6 @@
 // The shape tools (U, ADR 0041): Rectangle, Ellipse, Polygon and Line draw a vector layer. What
 // a drag draws, the shape sent to the engine, and the outline shown while dragging.
-import { hexToSrgb } from "./color";
+import { hexToSrgb, srgbToHex } from "./color";
 
 export type ShapeKind = "rectangle" | "ellipse" | "polygon" | "line";
 
@@ -275,4 +275,72 @@ export function svgPath(
     })
     .join(" ");
   return open ? d : `${d} Z`;
+}
+
+/** What the Properties panel changes in a vector layer's shape. */
+export type ShapeChange = {
+  /** `#rrggbb`: the fill (turned on); null: none. */
+  fill?: string | null;
+  /** `#rrggbb`: the stroke's color (turned on); null: none. */
+  stroke?: string | null;
+  strokeWidth?: number;
+  strokeAlign?: StrokeAlign;
+  radius?: number;
+  sides?: number;
+  /** A star's indent, a share of the radius; null: a plain polygon. */
+  star?: number | null;
+};
+
+/** A stroke turned on without one before: Photoshop's first (3 pixels, inside). */
+const NEW_STROKE: Omit<ShapeStroke, "color"> = {
+  width: 3,
+  align: "inside",
+  cap: "butt",
+  join: "miter",
+  dashes: [],
+};
+
+/** `shape` with `change`; a line keeps its stroke (it has nothing else to show). */
+export function changedShape(shape: Shape, change: ShapeChange): Shape {
+  let { geometry, fill, stroke } = shape;
+  const line = geometry.kind === "line";
+  if (change.fill !== undefined && !line) {
+    fill = change.fill === null ? null : rgba(change.fill);
+  }
+  if (change.stroke !== undefined && !(line && change.stroke === null)) {
+    stroke =
+      change.stroke === null
+        ? null
+        : {
+            ...(stroke ?? { ...NEW_STROKE, align: line ? "center" : "inside" }),
+            color: rgba(change.stroke),
+          };
+  }
+  if (stroke && change.strokeWidth !== undefined) {
+    stroke = { ...stroke, width: Math.min(Math.max(change.strokeWidth, 0.1), MAX_STROKE_WIDTH) };
+  }
+  if (stroke && change.strokeAlign !== undefined && !line) {
+    stroke = { ...stroke, align: change.strokeAlign };
+  }
+  if (geometry.kind === "rectangle" && change.radius !== undefined) {
+    const [l, t, r, b] = geometry.rect;
+    const radius = Math.min(Math.max(change.radius, 0), (r - l) / 2, (b - t) / 2);
+    geometry = { ...geometry, radii: [radius, radius, radius, radius] };
+  }
+  if (geometry.kind === "polygon") {
+    if (change.sides !== undefined) {
+      const sides = Math.round(Math.min(Math.max(change.sides, MIN_SIDES), MAX_SIDES));
+      geometry = { ...geometry, sides };
+    }
+    if (change.star !== undefined) {
+      const star = change.star === null ? null : Math.min(Math.max(change.star, 0.01), 1);
+      geometry = { ...geometry, star };
+    }
+  }
+  return { geometry, fill, stroke };
+}
+
+/** `#rrggbb` of an sRGB-encoded RGBA color. */
+export function hexOf(color: [number, number, number, number]): string {
+  return srgbToHex(color.slice(0, 3));
 }

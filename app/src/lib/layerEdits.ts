@@ -141,9 +141,17 @@ export function newShapeLayer(
   return { kind: "addShape", name, shape, parent, index };
 }
 
-/** Whether `layer` has settings the Properties panel shows: an adjustment or a fill layer. */
+/**
+ * Whether `layer` has settings the Properties panel shows: an adjustment, a fill or a vector
+ * layer (a shape it can edit, not a path).
+ */
 export function hasProperties(layer: LayerView | null): layer is LayerView {
-  return layer?.kind === "adjustment" || layer?.kind === "fill" || layer?.kind === "gradientFill";
+  return (
+    layer?.kind === "adjustment" ||
+    layer?.kind === "fill" ||
+    layer?.kind === "gradientFill" ||
+    (layer?.kind === "vector" && layer.shape != null)
+  );
 }
 
 /** A fill layer's color as `#rrggbb`, from its display swatch. */
