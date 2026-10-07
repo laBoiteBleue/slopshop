@@ -246,3 +246,23 @@ test("a filter entry is edited again with its icon: its radius, live, then one u
   await vi.waitFor(() => expect(sent("end_gesture")).toEqual([{ documentId: 1 }]));
   expect(sent("replace_gesture")).toHaveLength(0);
 });
+
+test("Other > Maximum and Minimum, Noise > Median, Blur > Box Blur: a radius each", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Blur", { selector: ".label" }));
+  expect(screen.getByRole("menuitem", { name: "Box Blur…" })).toBeInTheDocument();
+  await user.hover(screen.getByText("Noise", { selector: ".label" }));
+  expect(screen.getByRole("menuitem", { name: "Median…" })).toBeInTheDocument();
+  await user.hover(screen.getByText("Other", { selector: ".label" }));
+  expect(screen.getByRole("menuitem", { name: "Minimum…" })).toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Maximum…" }));
+  await screen.findByRole("dialog", { name: "Maximum" });
+  await user.clear(radius());
+  await user.type(radius(), "4");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "maximum", values: [4] }),
+  );
+});

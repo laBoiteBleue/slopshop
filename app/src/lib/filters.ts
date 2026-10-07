@@ -47,6 +47,18 @@ const radius = (label: MessageKey): NumberParam => ({
   scale: "log",
 });
 
+/** A radius in whole pixels from 1 to `max` (a square of pixels around each), Photoshop's. */
+const squareRadius = (label: MessageKey, max: number): NumberParam => ({
+  kind: "number",
+  key: "radius",
+  label,
+  unit: "filter.pixels",
+  min: 1,
+  max,
+  decimals: 0,
+  scale: "log",
+});
+
 /** A strength from -100 to 100, Lightroom's: 0 does nothing, below it the opposite. */
 const strength = (key: string, label: MessageKey): NumberParam => ({
   kind: "number",
@@ -168,6 +180,10 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     defaults: [0, 0],
   },
   highPass: { params: [radius("filter.highPass.radius")], defaults: [10] },
+  boxBlur: { params: [squareRadius("filter.boxBlur.radius", 2000)], defaults: [10] },
+  median: { params: [squareRadius("filter.median.radius", 500)], defaults: [1] },
+  maximum: { params: [squareRadius("filter.maximum.radius", 500)], defaults: [1] },
+  minimum: { params: [squareRadius("filter.minimum.radius", 500)], defaults: [1] },
 };
 
 /** `values` of `filter` with each seed drawn anew: the filter applied again, another grain. */
@@ -200,10 +216,10 @@ export function sliderValue(param: NumberParam, p: number): number {
 
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
-  { label: "menu.filter.blur", filters: ["gaussianBlur", "motionBlur"] },
-  { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches"] },
+  { label: "menu.filter.blur", filters: ["boxBlur", "gaussianBlur", "motionBlur"] },
+  { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
-  { label: "menu.filter.other", filters: ["highPass"] },
+  { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum"] },
 ];
 
 /** Whether `values` are settings `filter` accepts. */

@@ -87,7 +87,11 @@ export type FilterId =
   | "addNoise"
   | "dustAndScratches"
   | "clarityTexture"
-  | "highPass";
+  | "highPass"
+  | "median"
+  | "boxBlur"
+  | "maximum"
+  | "minimum";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {

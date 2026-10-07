@@ -6277,4 +6277,63 @@ mod tests {
         assert!(Arc::ptr_eq(cleared.original(), twice.original()));
         assert_ne!(cleared, LayerStack::new(Arc::clone(twice.original())));
     }
+
+    #[test]
+    fn median_is_dust_and_scratches_without_a_threshold() {
+        let original = gradient(true);
+        let filtered = |filter| {
+            LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter,
+                        ..blur(1.0, None)
+                    },
+                    None,
+                )
+                .unwrap()
+                .evaluate()
+                .unwrap()
+        };
+        let median = filtered(Filter::Median { radius: 3.0 });
+        let dust = filtered(Filter::DustAndScratches {
+            radius: 3.0,
+            threshold: 0.0,
+        });
+        assert_eq!(difference(&median, &dust), 0);
+        assert!(difference(&median, &original) > 0);
+    }
+
+    #[test]
+    fn maximum_spreads_a_layers_light_and_minimum_its_dark() {
+        // A vertical edge, black then white at x = 150: Maximum moves it left, Minimum right.
+        let original = halves();
+        let filtered = |filter| {
+            LayerStack::new(Arc::clone(&original))
+                .with_filter(
+                    FilterStep {
+                        filter,
+                        ..blur(1.0, None)
+                    },
+                    None,
+                )
+                .unwrap()
+                .evaluate()
+                .unwrap()
+        };
+        let edge = |image: &RasterImage| (0..W).find(|&x| pixel(image, x, 100)[0] > 128);
+        let start = edge(&original).unwrap();
+        assert_eq!(
+            edge(&filtered(Filter::Maximum { radius: 4.0 })),
+            Some(start - 4)
+        );
+        assert_eq!(
+            edge(&filtered(Filter::Minimum { radius: 4.0 })),
+            Some(start + 4)
+        );
+        // Across tiles (the edge is in the first one): the same on every row.
+        let boxed = filtered(Filter::BoxBlur { radius: 5.0 });
+        for y in [0, 100, 259] {
+            assert_eq!(pixel(&boxed, start, y), pixel(&boxed, start, 100));
+        }
+    }
 }

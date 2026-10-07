@@ -2953,6 +2953,7 @@ mod tests {
                 },
                 1,
             ),
+            (Filter::Median { radius: 2.0 }, 1),
             // The CPU's broad blur is three boxes: a little off the GPU's exact one.
             (
                 Filter::ClarityTexture {

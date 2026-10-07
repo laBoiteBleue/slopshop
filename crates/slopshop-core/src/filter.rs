@@ -26,9 +26,23 @@ pub const MAX_NOISE_AMOUNT: f32 = 400.0;
 /// The seeds Add Noise takes: whole numbers below 2^24, exact in an `f32` parameter.
 pub const NOISE_SEEDS: u32 = 1 << 24;
 
-/// Dust & Scratches' radius range in pixels (Photoshop's).
+/// Dust & Scratches' and Median's radius range in pixels (Photoshop's).
 pub const MIN_MEDIAN_RADIUS: f32 = 1.0;
 pub const MAX_MEDIAN_RADIUS: f32 = 500.0;
+
+/// Box Blur's radius range in whole pixels (Photoshop's): each pixel the average of the square
+/// of `2 radius + 1` pixels around it.
+pub const MIN_BOX_RADIUS: f32 = 1.0;
+pub const MAX_BOX_RADIUS: f32 = 2000.0;
+
+/// Up to this radius, a Box Blur is computed on the layer itself; beyond, on the layer reduced
+/// so that the radius is at most that (a smooth result, read back interpolated).
+pub const BOX_UP_TO: f64 = 64.0;
+
+/// Maximum's and Minimum's radius range in whole pixels (Photoshop's, Squareness): each pixel
+/// the largest (smallest) value of the square of `2 radius + 1` pixels around it.
+pub const MIN_EXTREME_RADIUS: f32 = 1.0;
+pub const MAX_EXTREME_RADIUS: f32 = 500.0;
 
 /// Up to this radius, a median is taken on the layer itself; beyond, on the layer reduced (see
 /// [`Plan::median`]).
@@ -95,6 +109,17 @@ pub enum Filter {
     /// `radius` pixels around it by more than `threshold` levels (of 8 bits) on some channel
     /// becomes that median.
     DustAndScratches { radius: f32, threshold: f32 },
+    /// Photoshop's Median: each pixel the median of the square of `radius` pixels around it,
+    /// channel by channel (Dust & Scratches without a threshold).
+    Median { radius: f32 },
+    /// Photoshop's Box Blur: each pixel the average of the square of `radius` pixels around it.
+    BoxBlur { radius: f32 },
+    /// Photoshop's Maximum (Squareness): each pixel the largest value of the square of `radius`
+    /// pixels around it, channel by channel: light areas spread, dark ones shrink.
+    Maximum { radius: f32 },
+    /// Photoshop's Minimum (Squareness): each pixel the smallest value of the square of
+    /// `radius` pixels around it, channel by channel: dark areas spread, light ones shrink.
+    Minimum { radius: f32 },
     /// Lightroom's Texture and Clarity (-100 to 100): each color pushed away from (or, below 0,
     /// toward) its blur of a few pixels by `texture`, and from its blur of tens of pixels by
     /// `clarity`, in the midtones. `scale` is how many of the layer's pixels a pixel it is
@@ -108,14 +133,18 @@ pub enum Filter {
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 7] = [
+    pub const IDS: [&'static str; 11] = [
         "gaussianBlur",
         "motionBlur",
+        "boxBlur",
         "unsharpMask",
         "addNoise",
         "dustAndScratches",
+        "median",
         "clarityTexture",
         "highPass",
+        "maximum",
+        "minimum",
     ];
 
     /// The identifier the UI and files know it by.
@@ -128,13 +157,22 @@ impl Filter {
             Self::AddNoise { .. } => "addNoise",
             Self::DustAndScratches { .. } => "dustAndScratches",
             Self::ClarityTexture { .. } => "clarityTexture",
+            Self::Median { .. } => "median",
+            Self::BoxBlur { .. } => "boxBlur",
+            Self::Maximum { .. } => "maximum",
+            Self::Minimum { .. } => "minimum",
         }
     }
 
     /// Its parameters, in a fixed order per filter.
     pub fn params(&self) -> Vec<f32> {
         match *self {
-            Self::GaussianBlur { radius } | Self::HighPass { radius } => vec![radius],
+            Self::GaussianBlur { radius }
+            | Self::HighPass { radius }
+            | Self::Median { radius }
+            | Self::BoxBlur { radius }
+            | Self::Maximum { radius }
+            | Self::Minimum { radius } => vec![radius],
             Self::MotionBlur { angle, distance } => vec![angle, distance],
             Self::UnsharpMask {
                 amount,
@@ -171,6 +209,10 @@ impl Filter {
                 threshold,
             }),
             ("highPass", &[radius]) => Some(Self::HighPass { radius }),
+            ("median", &[radius]) => Some(Self::Median { radius }),
+            ("boxBlur", &[radius]) => Some(Self::BoxBlur { radius }),
+            ("maximum", &[radius]) => Some(Self::Maximum { radius }),
+            ("minimum", &[radius]) => Some(Self::Minimum { radius }),
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
@@ -224,6 +266,10 @@ impl Filter {
                 clarity: 0.0,
                 scale: 1.0,
             }),
+            "median" => Some(Self::Median { radius: 1.0 }),
+            "boxBlur" => Some(Self::BoxBlur { radius: 10.0 }),
+            "maximum" => Some(Self::Maximum { radius: 1.0 }),
+            "minimum" => Some(Self::Minimum { radius: 1.0 }),
             _ => None,
         }
     }
@@ -269,6 +315,15 @@ impl Filter {
                     && threshold.is_finite()
                     && (0.0..=MAX_THRESHOLD).contains(&threshold)
             }
+            Self::Median { radius } => {
+                radius.fract() == 0.0 && (MIN_MEDIAN_RADIUS..=MAX_MEDIAN_RADIUS).contains(&radius)
+            }
+            Self::BoxBlur { radius } => {
+                radius.fract() == 0.0 && (MIN_BOX_RADIUS..=MAX_BOX_RADIUS).contains(&radius)
+            }
+            Self::Maximum { radius } | Self::Minimum { radius } => {
+                radius.fract() == 0.0 && (MIN_EXTREME_RADIUS..=MAX_EXTREME_RADIUS).contains(&radius)
+            }
         }
     }
 
@@ -281,7 +336,11 @@ impl Filter {
             Self::MotionBlur { .. }
             | Self::AddNoise { .. }
             | Self::DustAndScratches { .. }
-            | Self::ClarityTexture { .. } => None,
+            | Self::ClarityTexture { .. }
+            | Self::Median { .. }
+            | Self::BoxBlur { .. }
+            | Self::Maximum { .. }
+            | Self::Minimum { .. } => None,
         }
     }
 
@@ -329,6 +388,18 @@ impl Filter {
                 radius: (radius / factor).round().max(MIN_MEDIAN_RADIUS),
                 threshold,
             },
+            Self::Median { radius } => Self::Median {
+                radius: (radius / factor).round().max(MIN_MEDIAN_RADIUS),
+            },
+            Self::BoxBlur { radius } => Self::BoxBlur {
+                radius: (radius / factor).round().max(MIN_BOX_RADIUS),
+            },
+            Self::Maximum { radius } => Self::Maximum {
+                radius: (radius / factor).round().max(MIN_EXTREME_RADIUS),
+            },
+            Self::Minimum { radius } => Self::Minimum {
+                radius: (radius / factor).round().max(MIN_EXTREME_RADIUS),
+            },
             Self::ClarityTexture {
                 texture,
                 clarity,
@@ -347,7 +418,11 @@ impl Filter {
         match *self {
             Self::MotionBlur { distance, .. } => f64::from(distance) / 2.0 + 2.0,
             Self::AddNoise { .. } => 0.0,
-            Self::DustAndScratches { radius, .. } => f64::from(radius) + 2.0,
+            Self::DustAndScratches { radius, .. }
+            | Self::Median { radius }
+            | Self::BoxBlur { radius }
+            | Self::Maximum { radius }
+            | Self::Minimum { radius } => f64::from(radius) + 2.0,
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
             }
@@ -377,7 +452,24 @@ impl Filter {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
-            Self::DustAndScratches { radius, .. } => Plan::median(f64::from(radius)),
+            Self::DustAndScratches { radius, .. } | Self::Median { radius } => {
+                Plan::median(f64::from(radius))
+            }
+            Self::BoxBlur { radius } => Plan::boxed(f64::from(radius)),
+            Self::Maximum { radius } => Plan {
+                factor: 1,
+                kernel: Kernel::Extreme {
+                    radius: radius as usize,
+                    largest: true,
+                },
+            },
+            Self::Minimum { radius } => Plan {
+                factor: 1,
+                kernel: Kernel::Extreme {
+                    radius: radius as usize,
+                    largest: false,
+                },
+            },
             Self::ClarityTexture { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
@@ -388,7 +480,15 @@ impl Filter {
 
     /// Whether a pixel's result depends on its own value besides its blur's.
     pub(crate) fn reads_original(&self) -> bool {
-        !matches!(self, Self::GaussianBlur { .. } | Self::MotionBlur { .. })
+        !matches!(
+            self,
+            Self::GaussianBlur { .. }
+                | Self::MotionBlur { .. }
+                | Self::Median { .. }
+                | Self::BoxBlur { .. }
+                | Self::Maximum { .. }
+                | Self::Minimum { .. }
+        )
     }
 
     /// A pixel's result from its premultiplied value `original` and its blurs' `blurs` (one per
@@ -411,7 +511,12 @@ impl Filter {
             [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
         };
         match *self {
-            Self::GaussianBlur { .. } | Self::MotionBlur { .. } => blurred,
+            Self::GaussianBlur { .. }
+            | Self::MotionBlur { .. }
+            | Self::Median { .. }
+            | Self::BoxBlur { .. }
+            | Self::Maximum { .. }
+            | Self::Minimum { .. } => blurred,
             Self::UnsharpMask {
                 amount, threshold, ..
             } => {
@@ -627,6 +732,21 @@ impl Plan {
         }
     }
 
+    /// A box of `radius` whole pixels: up to [`BOX_UP_TO`] directly; beyond, on the layer
+    /// reduced so that the radius is at most that.
+    pub(crate) fn boxed(radius: f64) -> Self {
+        let factor = if radius <= BOX_UP_TO {
+            1
+        } else {
+            1usize << (radius / BOX_UP_TO).log2().ceil() as u32
+        };
+        let reduced = (radius / factor as f64).round().max(1.0) as usize;
+        Self {
+            factor,
+            kernel: Kernel::Gaussian(Blur::Boxes([reduced, 0, 0])),
+        }
+    }
+
     /// A line of `distance` pixels at `angle` degrees: up to [`LINE_UP_TO`] directly; beyond,
     /// the layer reduced so that the line is at most that long (a few reduced pixels of
     /// softness across it, hidden by the length along it).
@@ -646,10 +766,17 @@ impl Plan {
 /// What a filter blurs a region or an image by; nothing for a filter of each pixel alone.
 #[derive(Debug, Clone)]
 pub(crate) enum Kernel {
+    /// A separable blur: a Gaussian, or boxes (Box Blur's one).
     Gaussian(Blur),
     Line(Line),
     /// The median of the square of this radius around each pixel, channel by channel.
     Median(usize),
+    /// The largest (or smallest) value of the square of `radius` around each pixel, channel by
+    /// channel.
+    Extreme {
+        radius: usize,
+        largest: bool,
+    },
     Identity,
 }
 
@@ -659,7 +786,7 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.reach(),
             Self::Line(line) => line.reach(),
-            Self::Median(radius) => *radius,
+            Self::Median(radius) | Self::Extreme { radius, .. } => *radius,
             Self::Identity => 0,
         }
     }
@@ -677,6 +804,7 @@ impl Kernel {
                 let source = region.to_vec();
                 median_rows(&source, width, height, *radius, 0, region);
             }
+            &Self::Extreme { radius, largest } => extreme(region, width, height, radius, largest),
             Self::Identity => {}
         }
     }
@@ -686,6 +814,12 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.image(image, width, height),
             Self::Identity => image,
+            // Never reduced (no plan of a factor above 1 takes it): one thread is enough.
+            &Self::Extreme { radius, largest } => {
+                let mut image = image;
+                extreme(&mut image, width, height, radius, largest);
+                image
+            }
             Self::Median(radius) => {
                 let mut out = vec![[0.0f32; 4]; image.len()];
                 if width == 0 {
@@ -710,6 +844,83 @@ impl Kernel {
                 });
                 out
             }
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: each pixel the largest (`largest`) or smallest value
+/// of the square of `radius` around it, channel by channel, its edges repeating outward. A row
+/// pass then a column pass, each exact in three comparisons a pixel whatever the radius (van
+/// Herk and Gil–Werman: running extremes forward and backward within windows of the square's
+/// side, each window then spanning at most two of them).
+fn extreme(region: &mut [[f32; 4]], width: usize, height: usize, radius: usize, largest: bool) {
+    if width == 0 || height == 0 || radius == 0 {
+        return;
+    }
+    let mut buffers = ExtremeLine::default();
+    for row in region.chunks_mut(width) {
+        buffers.line(row, radius, largest);
+    }
+    let mut column = vec![[0.0f32; 4]; height];
+    for x in 0..width {
+        for (y, px) in column.iter_mut().enumerate() {
+            *px = region[y * width + x];
+        }
+        buffers.line(&mut column, radius, largest);
+        for (y, px) in column.iter().enumerate() {
+            region[y * width + x] = *px;
+        }
+    }
+}
+
+/// The buffers of [`extreme`]'s passes, reused from line to line.
+#[derive(Default)]
+struct ExtremeLine {
+    forward: Vec<[f32; 4]>,
+    backward: Vec<[f32; 4]>,
+}
+
+impl ExtremeLine {
+    /// `line` replaced by the extreme of the `2 radius + 1` values around each, its ends
+    /// repeating outward.
+    fn line(&mut self, line: &mut [[f32; 4]], radius: usize, largest: bool) {
+        let n = line.len();
+        let side = 2 * radius + 1;
+        let padded = n + 2 * radius;
+        let pick = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+            std::array::from_fn(|c| {
+                if largest {
+                    a[c].max(b[c])
+                } else {
+                    a[c].min(b[c])
+                }
+            })
+        };
+        let at = |i: usize| line[i.saturating_sub(radius).min(n - 1)];
+        // Within each window of `side` values: the extreme from its start to each value…
+        self.forward.clear();
+        for i in 0..padded {
+            let v = at(i);
+            let v = match i % side {
+                0 => v,
+                _ => pick(self.forward[i - 1], v),
+            };
+            self.forward.push(v);
+        }
+        // …and from each value to its end.
+        self.backward.clear();
+        self.backward.resize(padded, [0.0; 4]);
+        for i in (0..padded).rev() {
+            let v = at(i);
+            self.backward[i] = if i % side == side - 1 || i == padded - 1 {
+                v
+            } else {
+                pick(self.backward[i + 1], v)
+            };
+        }
+        // The square around pixel `j` is padded values `j..j + side`.
+        for (j, out) in line.iter_mut().enumerate() {
+            *out = pick(self.backward[j], self.forward[j + side - 1]);
         }
     }
 }
@@ -1559,6 +1770,131 @@ mod tests {
             median_rows(&src, w, h, radius, 0, &mut out);
             let ms = start.elapsed().as_secs_f64() * 1000.0;
             println!("median radius {radius}: {ms:.1} ms ({:?})", out[w * h / 2]);
+        }
+    }
+
+    /// Deterministic values in [0, 1) for every channel of `n` pixels.
+    fn speckled(n: usize, seed: u32) -> Vec<[f32; 4]> {
+        (0..n as u32)
+            .map(|i| {
+                std::array::from_fn(|c| (hash(i * 4 + c as u32 + seed) >> 8) as f32 / 16_777_216.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn maximum_and_minimum_are_the_extremes_of_the_square_around() {
+        let (w, h) = (23, 17);
+        let source = speckled(w * h, 3);
+        let brute = |x: usize, y: usize, r: usize, largest: bool| -> [f32; 4] {
+            let mut best = [if largest { f32::MIN } else { f32::MAX }; 4];
+            for dy in -(r as i64)..=r as i64 {
+                for dx in -(r as i64)..=r as i64 {
+                    let sx = (x as i64 + dx).clamp(0, w as i64 - 1) as usize;
+                    let sy = (y as i64 + dy).clamp(0, h as i64 - 1) as usize;
+                    let px = source[sy * w + sx];
+                    for c in 0..4 {
+                        best[c] = if largest {
+                            best[c].max(px[c])
+                        } else {
+                            best[c].min(px[c])
+                        };
+                    }
+                }
+            }
+            best
+        };
+        // Radii within the region, as wide as it, and wider.
+        for r in [1, 2, 5, 11, 30] {
+            for largest in [true, false] {
+                let mut region = source.clone();
+                Kernel::Extreme { radius: r, largest }.region(&mut region, w, h);
+                for y in 0..h {
+                    for x in 0..w {
+                        assert_eq!(
+                            region[y * w + x],
+                            brute(x, y, r, largest),
+                            "{r} {largest} ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bright_point_grows_into_a_square_under_maximum_and_goes_under_minimum() {
+        let (w, h) = (15, 15);
+        let mut point = vec![[0.0f32; 4]; w * h];
+        point[7 * w + 7] = [1.0; 4];
+        let mut grown = point.clone();
+        Kernel::Extreme {
+            radius: 2,
+            largest: true,
+        }
+        .region(&mut grown, w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let inside = (5..=9).contains(&x) && (5..=9).contains(&y);
+                assert_eq!(
+                    grown[y * w + x][0],
+                    if inside { 1.0 } else { 0.0 },
+                    "({x}, {y})"
+                );
+            }
+        }
+        let mut gone = point;
+        Kernel::Extreme {
+            radius: 1,
+            largest: false,
+        }
+        .region(&mut gone, w, h);
+        assert!(gone.iter().all(|px| *px == [0.0; 4]));
+    }
+
+    #[test]
+    fn a_box_blur_spreads_a_point_evenly_over_its_square() {
+        let filter = Filter::BoxBlur { radius: 3.0 };
+        let plans = filter.plans();
+        assert_eq!(plans[0].factor, 1);
+        let (w, h) = (21, 21);
+        let mut region = vec![[0.0f32; 4]; w * h];
+        region[10 * w + 10] = [49.0; 4];
+        plans[0].kernel.region(&mut region, w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let inside = (7..=13).contains(&x) && (7..=13).contains(&y);
+                let v = region[y * w + x][0];
+                assert!(
+                    (v - if inside { 1.0 } else { 0.0 }).abs() < 1e-5,
+                    "({x}, {y}) {v}"
+                );
+            }
+        }
+        // A large radius: on the layer reduced, the radius at most 64 there.
+        let large = Filter::BoxBlur { radius: 2000.0 }.plans().remove(0);
+        assert_eq!(large.factor, 32);
+        assert_eq!(large.kernel.reach(), 63);
+    }
+
+    #[test]
+    fn the_filters_of_a_square_take_whole_radii_in_their_ranges() {
+        for (filter, max) in [
+            (Filter::Median { radius: 1.0 }, 500.0),
+            (Filter::BoxBlur { radius: 1.0 }, 2000.0),
+            (Filter::Maximum { radius: 1.0 }, 500.0),
+            (Filter::Minimum { radius: 1.0 }, 500.0),
+        ] {
+            let id = filter.id();
+            let with = |radius: f32| Filter::from_params(id, &[radius]).unwrap();
+            assert!(with(1.0).is_valid() && with(max).is_valid(), "{id}");
+            for wrong in [0.0, 1.5, max + 1.0, f32::NAN] {
+                assert!(!with(wrong).is_valid(), "{id} {wrong}");
+            }
+            assert!(!filter.reads_original(), "{id}");
+            // Reduced: the radius too, whole, at least 1.
+            assert_eq!(with(40.0).scaled(4.0), with(10.0), "{id}");
+            assert_eq!(with(1.0).scaled(4.0), with(1.0), "{id}");
         }
     }
 }
