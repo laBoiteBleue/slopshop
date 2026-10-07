@@ -3,7 +3,8 @@
 Status: proposed (2026-10-07, from the maintainer's proposal: sources in a bin as in a video
 editor, layers referencing them; answers so far: Duplicate shares the source, sources are
 read-only and go away when nothing uses them, the bin is a panel, `.slop` may break while the
-model is designed, painting on a vector layer goes on a pixel layer above it). Points marked
+model is designed, a vector layer has no stack: paint goes on a pixel layer above it, and
+Rasterize gives pixels when needed). Points marked
 *to confirm* are the author's proposals, not yet answered.
 
 ## Context
@@ -68,12 +69,15 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
    drag a source onto the canvas (a new layer referencing it), rename, Replace Contents.
    Sources nested in a document source show under it. A pixel layer with no source (a new
    empty layer) adds nothing to the panel.
-8. **Painting needs a pixel layer.** A layer whose source has no pixel grid (vector, later)
-   has no paint in its stack: the Brush and the other painting tools on such a layer ask
-   "Paint on a new layer above?", which creates a pixel layer clipped to it (ADR 0016), so the
-   paint stays within the shape and the vector stays sharp at any scale. Filters on such a
-   layer: through a filter layer clipped to it once filter layers exist (ADR 0034, point 8),
-   *to confirm*.
+8. **Vector is a domain of its own; pixels go on a layer above** (maintainer, 2026-10-07). A
+   layer whose source has no pixel grid (vector, later) has no stack: no paint, adjustment,
+   filter nor Liquify entries, so it stays sharp at any scale and its stack never needs a
+   resolution. The Brush and the other painting tools on such a layer ask "Paint on a new
+   layer above?", which creates a pixel layer clipped to it (ADR 0016): the paint stays within
+   the shape. Filters reach it through a filter layer clipped to it once filter layers exist
+   (ADR 0034, point 8); layer styles (ADR 0032) apply to it as to any layer. To go further,
+   Layer > Bake to Pixels > Rasterize turns it into an image source (point 6), with a stack
+   of its own.
 9. **Rendering and caches.** An image source is drawn as a raster original is today. A source
    whose content is computed (document, stack, vector) is evaluated into tiles keyed by
    (source, region, pyramid level), in a bounded cache as the stack's pixels (ADR 0029); every
@@ -102,6 +106,10 @@ Phase 2: "Stack-to-DAG evolution"). References are where the graph comes from.
 - **A bin keeping unused sources until purged** (video editors): lets content wait in the
   bin, but grows files with what no layer shows and adds a purge command; declined by the
   maintainer.
+- **A stack on vector layers** (paint and filters on the vector itself, resampled to the
+  scale it is drawn at): one model for every layer, but the stack would have to be evaluated at
+  any scale, paint and Liquify resampled from their grid, CPU and GPU kept equal at every
+  scale; declined by the maintainer, vector and pixels kept apart.
 - **A node graph exposed to the user**: the most general, but far from the layer stack users
   expect; references give the graph where it is needed without showing it.
 
