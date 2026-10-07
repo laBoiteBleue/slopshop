@@ -1,7 +1,6 @@
 # 0043 — Panoramas, aligned layers and image stacks
 
-Status: proposed (2026-10-07, drafted for the maintainer, who approved panoramas and stacking as
-a track the same day; the questions at the end are theirs).
+Status: accepted (2026-10-07, the maintainer's answers below).
 
 ## Context
 
@@ -33,7 +32,7 @@ measures) is a few thousand lines following published methods (Brown and Lowe 20
 Adelson 1983, Pertuz et al. 2013) and OpenCV's stitching module (Apache-2.0) as a reference;
 Hugin and enblend are GPL, ideas only.
 
-## Decision (proposed)
+## Decision
 
 1. **Alignment is layer transforms.** Auto-Align (and Photomerge's first step) finds features on
    a reduced level of each layer (2 to 4 megapixels), matches them, estimates each pair's map
@@ -42,8 +41,8 @@ Hugin and enblend are GPL, ideas only.
    ADR 0038). Nothing is resampled: the transforms stay editable with Free Transform, one undo
    entry for all.
 2. **Cylindrical and Spherical** (wide panoramas, which no homography can hold) and lens
-   distortion are not projective: *question 1* (a new kind of layer transform, or only inside
-   a panorama source).
+   distortion are not projective: they exist only inside a panorama source (a stack source
+   placing each image through its projection), not as a new kind of layer transform.
 3. **Blending is layer masks**, as Photoshop's: Auto-Blend Panorama computes seams between
    overlapping layers (a minimum cut on the reduced overlap, refined in a band at full
    resolution) and gives each layer a mask; Stack Images gives each layer a mask where it is
@@ -51,8 +50,8 @@ Hugin and enblend are GPL, ideas only.
    entry to each layer's stack; Vignette Removal a radial gain entry. Every result stays
    editable: masks are painted, entries edited.
 4. **Multi-band blending** (seams invisible across exposure and detail differences) cannot be
-   expressed as alpha: *question 2* (a stack source blending the layers by their masks, tile by
-   tile, or masks only at first).
+   expressed as alpha: hard and feathered masks first; later, a stack source blending the
+   layers by their masks, tile by tile.
 5. **Stack Modes are a stack source** (ADR 0040, point 1): a source reading several image
    sources through their transforms and computing a per-pixel statistic, tile by tile, cached
    like the other computed sources, CPU first then GPU. Layer > Smart Objects > Stack Mode
@@ -62,7 +61,8 @@ Hugin and enblend are GPL, ideas only.
    them (point 1), blends them (point 3), and groups the layers.
 7. **The code** lives in a new crate, `slopshop-align` (features, matching, estimation),
    depending on core; seams, masks and stack sources live in core, tested against references.
-   Feature detection: *question 3*.
+   Feature detection: SIFT written in-house (no dependency), following Lowe's paper with
+   OpenCV's (Apache-2.0) and `lowe-sift`'s (MIT) as references.
 8. **Failure is a message, not garbage**: too few matches, a degenerate map (scale or shear out
    of bounds) or parallax leave the layers as they were and say which ones could not be aligned.
 
@@ -81,14 +81,12 @@ Hugin and enblend are GPL, ideas only.
 - A stack source kind in the model, `.slop` and the renderer (ADR 0040's caches).
 - Content-Aware Fill of the transparent corners waits for the generative and content-aware work.
 
-## Questions for the maintainer
+## Answers (the maintainer, 2026-10-07)
 
-1. Cylindrical, Spherical and lens correction: a new kind of layer transform (editable, drawn
-   by the renderer), or only inside a panorama source?
-2. Multi-band blending in the first version (a stack source), or hard and feathered masks first?
-3. Feature detection: `kornia-imgproc` (fast, active, Apache-2.0, but `unsafe` and pre-1.0) in
-   `slopshop-align`, or SIFT written in-house (1 000 to 1 500 lines, no dependency)?
-4. Which first: Auto-Align and Auto-Blend on layers (then Photomerge on top), or Stack Modes
-   (simpler, Median and Mean first)?
-5. Content-Aware Fill of the transparent corners: with the content-aware or AI work later?
-6. Photomerge's result grouped, as proposed?
+1. Cylindrical, Spherical and lens correction: only inside a panorama source, not a new kind of
+   layer transform.
+2. Hard and feathered masks first; multi-band blending later.
+3. SIFT written in-house, no dependency.
+4. Order: Stack Modes (Median and Mean first), then Auto-Align and Auto-Blend, then Photomerge.
+5. Content-Aware Fill of the transparent corners: later, with the content-aware or AI work.
+6. Photomerge's result grouped.
