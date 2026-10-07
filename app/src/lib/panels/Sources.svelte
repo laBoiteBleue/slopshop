@@ -14,4 +14,5 @@
   active={app.activeLayer?.source ?? null}
   onselect={app.selectLayers}
   onnewlayer={(source) => app.newLayerFromSource(source.id, sourceName(source, app.doc.layers))}
+  ondelete={(source) => app.deleteSource(source.id, sourceName(source, app.doc.layers))}
 />

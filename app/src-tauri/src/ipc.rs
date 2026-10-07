@@ -1106,6 +1106,11 @@ pub enum EditRequest {
     },
     /// A new layer showing source `source` (`SourceView::id`; the Sources panel), at `index`
     /// among the layers of `parent` (absent: the top level).
+    /// Delete source `source` (the Sources panel): the layers showing it go, a Pattern Overlay
+    /// using it leaves its style (ADR 0040 amended). One undo entry.
+    DeleteSource {
+        source: u64,
+    },
     AddSourceLayer {
         source: u64,
         name: String,
@@ -1364,6 +1369,7 @@ impl EditRequest {
             Self::DeletePaint { .. } => HistoryLabel::new("deletePaint"),
             Self::MakeUnique { .. } => HistoryLabel::new("makeUnique"),
             Self::AddSourceLayer { .. } => HistoryLabel::new("newLayer"),
+            Self::DeleteSource { .. } => HistoryLabel::new("deleteSource"),
             Self::DeleteStackEntry { .. } => HistoryLabel::new("deleteEntry"),
             Self::SetStackEntry {
                 steps: None,
@@ -1725,6 +1731,16 @@ impl EditRequest {
             EditRequest::MakeUnique { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::make_unique(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::DeleteSource { source } => {
+                let document = session.document();
+                let id = document
+                    .sources()
+                    .into_iter()
+                    .map(|(s, _)| s.id())
+                    .find(|id| id.get() == source)
+                    .ok_or("the source is no longer in the document")?;
+                Edit::delete_source(document, id).map_err(|e| e.to_string())?
             }
             EditRequest::AddSourceLayer {
                 source,

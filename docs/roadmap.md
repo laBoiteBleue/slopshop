@@ -389,8 +389,9 @@ Raised on 2026-10-05, to schedule:
         showing a source, a new layer from it)
   - [x] Linked copies (Duplicate, shapes changed on every copy, a link mark) and Duplicate as
         Independent Copy (ADR 0040 amendment)
-  - [ ] Named bin entries for Rasterize, Merge, Flatten and independent copies; shapes in the
-        bin; deleting a source and the layers showing it
+  - [x] Bin entries named (their own name, else their first layer's; independent copies
+        "… copy"); deleting a source and the layers showing it, after a confirmation
+  - [ ] Shapes in the bin
   - [ ] A source dragged onto the canvas, a source renamed
   - [ ] Replace Contents
 - [ ] 🔶 Vector content (Pen, Type, Shapes, vector masks): one model, an ADR, as a source

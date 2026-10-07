@@ -4764,6 +4764,58 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_source_deletes_the_layers_showing_it() {
+        let mut s = blank_session();
+        // A photo layer, which shows a source (the blank one does not).
+        let photo = s.allocate_layer_id();
+        s.perform(Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: slopshop_core::Layer {
+                style: None,
+                transform: slopshop_core::Projective::IDENTITY,
+                clipped: false,
+                id: photo,
+                name: "Photo".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: slopshop_core::BlendMode::Normal,
+                mask: None,
+                content: LayerContent::raster(slopshop_io::patterns::built_in("dots").unwrap()),
+            },
+        })
+        .unwrap();
+        let base = photo.get();
+        let request = |json: String| -> EditRequest { serde_json::from_str(&json).unwrap() };
+        let edit = request(format!(
+            r#"{{"kind":"duplicateLayers","ids":[{base}],"nameFormat":"{{name}} copy"}}"#
+        ))
+        .into_edit(&mut s)
+        .unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let source = view.sources[0].id;
+        assert_eq!(view.sources[0].layers.len(), 2);
+        let label =
+            request(format!(r#"{{"kind":"deleteSource","source":{source}}}"#)).history_label();
+        assert_eq!(label.map(|l| l.kind), Some("deleteSource"));
+        let edit = request(format!(r#"{{"kind":"deleteSource","source":{source}}}"#))
+            .into_edit(&mut s)
+            .unwrap();
+        s.perform(edit).unwrap();
+        // The blank layer stays.
+        assert_eq!(s.document().layers().len(), 1);
+        s.undo().unwrap();
+        assert_eq!(s.document().layers().len(), 3);
+        // A source gone: refused.
+        assert!(
+            request(r#"{"kind":"deleteSource","source":999999}"#.to_owned())
+                .into_edit(&mut s)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn view_requests_deserialize_and_apply() {
         let doc = Size::new(4000, 3000);
         let mut viewport = Viewport::new(doc, Size::new(800, 600));

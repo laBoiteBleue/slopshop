@@ -118,6 +118,7 @@
   import StrokeDialog, { type StrokeSettings } from "./lib/StrokeDialog.svelte";
   import PatternPicker from "./lib/PatternPicker.svelte";
   import DefinePatternDialog from "./lib/DefinePatternDialog.svelte";
+  import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import { nextPatternName } from "./lib/patterns";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
@@ -336,6 +337,7 @@
     pickFillColor: (layer) => pickFillLayerColor(layer),
     pickShapeColor: (layer, which) => pickShapeLayerColor(layer, which),
     pickPattern: (layer) => (patternPicker = { kind: "replace", layer: layer.id }),
+    deleteSource: (source, name) => askDeleteSource(source, name),
     saveSelection: () => openSaveSelection(),
     loadSelection: (id, mode) => void loadSavedSelection(id, mode),
     get combinedSelections() {
@@ -1186,6 +1188,28 @@
     if (!styleDialog) return;
     styleDialog.picking = true;
     patternPicker = { kind: "overlay" };
+  }
+
+  /** Deleting a source asks first: the layers showing it go with it (ADR 0040). */
+  let deletingSource = $state<{
+    documentId: number;
+    source: number;
+    name: string;
+    layers: string[];
+  } | null>(null);
+
+  function askDeleteSource(source: number, name: string) {
+    const doc = active;
+    const view = doc?.sources?.find((s) => s.id === source);
+    if (!doc || !view) return;
+    const layers = view.layers.map((id) => findLayer(doc.layers, id)?.name ?? "");
+    deletingSource = { documentId: doc.id, source, name, layers };
+  }
+
+  function deleteSource() {
+    const target = deletingSource;
+    deletingSource = null;
+    if (target) void edit(target.documentId, { kind: "deleteSource", source: target.source });
   }
 
   /** Edit > Define Pattern: a name proposed after the library's patterns. */
@@ -6234,6 +6258,21 @@
       patternPicker = null;
       if (styleDialog) styleDialog.picking = false;
     }}
+  />
+{/if}
+{#if deletingSource}
+  <ConfirmDialog
+    title={t("sources.delete.title")}
+    message={t(
+      deletingSource.layers.length === 1
+        ? "sources.delete.message.one"
+        : "sources.delete.message.other",
+      { name: deletingSource.name, count: deletingSource.layers.length },
+    )}
+    items={deletingSource.layers}
+    action={t("sources.delete.action")}
+    onconfirm={deleteSource}
+    onclose={() => (deletingSource = null)}
   />
 {/if}
 {#if definingPattern}

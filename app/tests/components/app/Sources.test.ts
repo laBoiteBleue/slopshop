@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/svelte";
+import { screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { DocumentView, LayerView } from "../../../src/lib/engine";
 import { documentView, layer, layerNames, open, row, sent } from "./harness";
@@ -65,5 +65,33 @@ test("Layer > Make Source Unique: on layers sharing their source, grayed otherwi
   await user.click(makeUnique());
   await vi.waitFor(() =>
     expect(sent("perform").at(-1)?.edit).toEqual({ kind: "makeUnique", ids: [2] }),
+  );
+});
+
+test("deleting a source asks first, listing the layers that go with it", async () => {
+  localStorage.clear();
+  const user = open(photos());
+  await vi.waitFor(() => expect(layerNames()).toContain("Pasted"));
+  await user.click(screen.getByRole("tab", { name: /Sources/ }));
+  const source = screen.getByRole("option", { name: /photo\.jpg/ });
+  // Cancel: nothing sent.
+  await user.pointer({ keys: "[MouseRight]", target: source });
+  await user.click(screen.getByRole("menuitem", { name: "Delete Source…" }));
+  let dialog = await screen.findByRole("dialog", { name: "Delete Source" });
+  expect(dialog).toHaveTextContent('2 layers show "photo.jpg"');
+  expect(
+    within(dialog)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent),
+  ).toEqual(["Photo", "Photo copy"]);
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(sent("perform")).toEqual([]);
+  // Delete: one edit.
+  await user.pointer({ keys: "[MouseRight]", target: source });
+  await user.click(screen.getByRole("menuitem", { name: "Delete Source…" }));
+  dialog = await screen.findByRole("dialog", { name: "Delete Source" });
+  await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({ kind: "deleteSource", source: 7 }),
   );
 });

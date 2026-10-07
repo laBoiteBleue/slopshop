@@ -583,6 +583,8 @@ export type EditRequest =
   | { kind: "deletePaint"; ids: number[] }
   /** Layer > Make Unique: each of `ids` sharing its source gets one of its own (ADR 0040). */
   | { kind: "makeUnique"; ids: number[] }
+  /** Delete source `source` and the layers showing it (the Sources panel, ADR 0040). */
+  | { kind: "deleteSource"; source: number }
   /** A new layer showing source `source` (the Sources panel), at `index` in `parent`. */
   | { kind: "addSourceLayer"; source: number; name: string; parent: number | null; index: number }
   /** Delete entry `index` (bottom to top) of a raster layer's stack (ADR 0029). */
