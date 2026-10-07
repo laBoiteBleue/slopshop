@@ -336,6 +336,15 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     ellipse from the map's Jacobian there). Affine maps are still written with six numbers.
     Only those nodes are written at v11, so that older readers refuse them rather than misplace
     them; nine numbers on a node of an earlier version are refused.
+  - v12 (schema 0.27) is a raster, fill or group node whose style has a Gradient Overlay:
+    `params.style.gradient_overlay` holds `enabled`, `gradient` (stops as Gradient Map's,
+    `[location 0–4096, r, g, b]` sRGB-encoded), `reverse`, `shape` (`linear` or `radial`),
+    `angle` (degrees, counterclockwise from the right: at 90 the gradient starts at the bottom),
+    `scale` (10 to 150, percent), `align` (across the box of the layer's pixels, else the
+    canvas), `mode` and `opacity`. Linear, the gradient runs through the box's center along the
+    angle from edge to edge (`(w·|cos| + h·|sin|) × scale`); radial, from the center out to half
+    the box's longer side × scale. It fills the layer's shape, under a Color Overlay. Only those
+    nodes are written at v12, so that older readers refuse them rather than drop the effect.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier

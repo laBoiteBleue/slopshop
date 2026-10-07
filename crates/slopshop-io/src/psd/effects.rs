@@ -9,8 +9,12 @@
 
 use slopshop_core::blend::BlendMode;
 use slopshop_core::color::LinearRgba;
+use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
-use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, MAX_SIZE, Stroke};
+use slopshop_core::style::{
+    ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, MAX_GRADIENT_SCALE, MAX_SIZE,
+    MIN_GRADIENT_SCALE, Stroke,
+};
 
 use super::descriptor::{self, Descriptor, Value};
 
@@ -194,6 +198,74 @@ impl Read {
         }
     }
 
+    /// A Gradient Overlay (`GrFl`): its gradient's color stops (`Grad` > `Clrs`, locations on
+    /// 0–4096 as ours); what SlopShop does not draw (transparency stops, midpoints off the
+    /// middle, the Angle, Reflected and Diamond styles, an offset, a noise gradient) is
+    /// approximated.
+    fn gradient_overlay(&mut self, d: &Descriptor) -> GradientOverlay {
+        let mut overlay = GradientOverlay {
+            enabled: self.enabled(d),
+            mode: self.mode(d),
+            opacity: Self::opacity(d),
+            reverse: d.bool(b"Rvrs").unwrap_or(false),
+            angle: d.number(b"Angl").unwrap_or(90.0),
+            scale: d
+                .number(b"Scl ")
+                .unwrap_or(100.0)
+                .clamp(MIN_GRADIENT_SCALE, MAX_GRADIENT_SCALE),
+            align_with_layer: d.bool(b"Algn").unwrap_or(true),
+            ..GradientOverlay::default()
+        };
+        overlay.shape = match d.enumerated(b"Type") {
+            Some(b"Rdl ") => GradientShape::Radial,
+            Some(b"Lnr ") | None => GradientShape::Linear,
+            Some(_) => {
+                self.approximated = true;
+                GradientShape::Linear
+            }
+        };
+        if d.object(b"Ofst").is_some_and(|o| {
+            [b"Hrzn", b"Vrtc"]
+                .iter()
+                .any(|k| o.number(*k).unwrap_or(0.0) != 0.0)
+        }) {
+            self.approximated = true;
+        }
+        let gradient = d.object(b"Grad");
+        let stops: Option<Vec<GradientStop>> = gradient.and_then(|g| g.list(b"Clrs")).map(|list| {
+            list.iter()
+                .filter_map(|v| match v {
+                    Value::Object(stop) => Some(stop),
+                    _ => None,
+                })
+                .map(|stop| {
+                    if stop.number(b"Mdpn").is_some_and(|m| m != 50.0) {
+                        self.approximated = true;
+                    }
+                    let [r, g, b, _] = self.color(stop).working_to_srgb_encoded();
+                    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    GradientStop {
+                        location: stop.number(b"Lctn").unwrap_or(0.0).clamp(0.0, 4096.0) as u16,
+                        color: [byte(r), byte(g), byte(b)],
+                    }
+                })
+                .collect()
+        });
+        let transparent = gradient.and_then(|g| g.list(b"Trns")).is_some_and(|list| {
+            list.iter().any(
+                |v| matches!(v, Value::Object(t) if t.number(b"Opct").is_some_and(|o| o < 100.0)),
+            )
+        });
+        if transparent {
+            self.approximated = true;
+        }
+        match stops.as_deref().and_then(Gradient::new) {
+            Some(g) => overlay.gradient = g,
+            None => self.approximated = true,
+        }
+        overlay
+    }
+
     fn overlay(&mut self, d: &Descriptor) -> ColorOverlay {
         ColorOverlay {
             enabled: self.enabled(d),
@@ -259,17 +331,14 @@ pub(crate) fn read(block: &[u8], global_angle: f64) -> Option<ImportedStyle> {
     if let Some(e) = effect(&d, b"SoFi", b"solidFillMulti", &mut read) {
         style.color_overlay = Some(read.overlay(e));
     }
+    if let Some(e) = effect(&d, b"GrFl", b"gradientFillMulti", &mut read) {
+        style.gradient_overlay = Some(read.gradient_overlay(e));
+    }
     if let Some(e) = effect(&d, b"FrFX", b"frameFXMulti", &mut read) {
         style.stroke = Some(read.stroke(e));
     }
     // What SlopShop does not draw, when enabled.
-    for key in [
-        &b"ebbl"[..],
-        b"ChFX",
-        b"GrFl",
-        b"gradientFillMulti",
-        b"patternFill",
-    ] {
+    for key in [&b"ebbl"[..], b"ChFX", b"patternFill"] {
         let on = match d.get(key) {
             Some(Value::Object(o)) => o.bool(b"enab").unwrap_or(true),
             Some(Value::List(list)) => !list.is_empty(),
@@ -383,6 +452,82 @@ fn glow(g: Glow, inner: bool) -> Vec<Item> {
     items
 }
 
+/// A Gradient Overlay's items: Photoshop's own gradient object (`Grdn`, its color stops at
+/// their locations, opaque, midpoints in the middle).
+fn gradient_overlay(o: GradientOverlay) -> Vec<Item> {
+    let long = |v: i32| v.to_be_bytes().to_vec();
+    let list = |objects: Vec<Vec<u8>>| {
+        let mut out = (objects.len() as u32).to_be_bytes().to_vec();
+        for object in objects {
+            out.extend(b"Objc");
+            out.extend(object);
+        }
+        out
+    };
+    let colors = o
+        .gradient
+        .stops()
+        .iter()
+        .map(|s| {
+            let [r, g, b] = s.color.map(|c| f32::from(c) / 255.0);
+            let c = LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0);
+            object(
+                b"Clrt",
+                &[
+                    (b"Clr ", b"Objc", color(c)),
+                    (b"Type", b"enum", enumerated(b"Clry", b"UsrS")),
+                    (b"Lctn", b"long", long(i32::from(s.location))),
+                    (b"Mdpn", b"long", long(50)),
+                ],
+            )
+        })
+        .collect();
+    let opaque = |location: i32| {
+        object(
+            b"TrnS",
+            &[
+                (b"Opct", b"UntF", unit(b"#Prc", 100.0)),
+                (b"Lctn", b"long", long(location)),
+                (b"Mdpn", b"long", long(50)),
+            ],
+        )
+    };
+    let mut name = 1u32.to_be_bytes().to_vec();
+    name.extend([0, 0]);
+    let gradient = object(
+        b"Grdn",
+        &[
+            (b"Nm  ", b"TEXT", name),
+            (b"GrdF", b"enum", enumerated(b"GrdF", b"CstS")),
+            (b"Intr", b"doub", 4096.0f64.to_be_bytes().to_vec()),
+            (b"Clrs", b"VlLs", list(colors)),
+            (b"Trns", b"VlLs", list(vec![opaque(0), opaque(4096)])),
+        ],
+    );
+    let shape: &[u8] = match o.shape {
+        GradientShape::Linear => b"Lnr ",
+        GradientShape::Radial => b"Rdl ",
+    };
+    vec![
+        (b"enab", b"bool", vec![u8::from(o.enabled)]),
+        (b"present", b"bool", vec![1]),
+        (b"showInDialog", b"bool", vec![1]),
+        (b"Md  ", b"enum", enumerated(b"BlnM", mode_id(o.mode))),
+        (
+            b"Opct",
+            b"UntF",
+            unit(b"#Prc", f64::from(o.opacity) * 100.0),
+        ),
+        (b"Grad", b"Objc", gradient),
+        (b"Angl", b"UntF", unit(b"#Ang", o.angle)),
+        (b"Type", b"enum", enumerated(b"GrdT", shape)),
+        (b"Rvrs", b"bool", vec![u8::from(o.reverse)]),
+        (b"Dthr", b"bool", vec![0]),
+        (b"Algn", b"bool", vec![u8::from(o.align_with_layer)]),
+        (b"Scl ", b"UntF", unit(b"#Prc", o.scale)),
+    ]
+}
+
 /// `style` as the data of an `lfx2` block (`None` when it has no effect).
 pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
     let mut items: Vec<Item> = vec![
@@ -407,6 +552,9 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
             b"Objc",
             object(b"SoFi", &common(o.enabled, o.mode, o.color, o.opacity)),
         ));
+    }
+    if let Some(o) = style.gradient_overlay {
+        items.push((b"GrFl", b"Objc", object(b"GrFl", &gradient_overlay(o))));
     }
     if let Some(s) = style.stroke {
         let mut stroke = common(s.enabled, s.mode, s.color, s.opacity);
@@ -461,6 +609,31 @@ mod tests {
                 ..Glow::default()
             }),
             color_overlay: Some(ColorOverlay::default()),
+            gradient_overlay: Some(GradientOverlay {
+                gradient: Gradient::new(&[
+                    GradientStop {
+                        location: 0,
+                        color: [200, 30, 10],
+                    },
+                    GradientStop {
+                        location: 1500,
+                        color: [255, 255, 0],
+                    },
+                    GradientStop {
+                        location: 4096,
+                        color: [0, 40, 255],
+                    },
+                ])
+                .unwrap(),
+                reverse: true,
+                shape: GradientShape::Radial,
+                angle: -30.0,
+                scale: 80.0,
+                align_with_layer: false,
+                mode: BlendMode::Multiply,
+                opacity: 0.6,
+                enabled: true,
+            }),
             stroke: Some(Stroke {
                 position: StrokeLocation::Center,
                 size: 7.0,
@@ -491,6 +664,31 @@ mod tests {
         assert_eq!(back.stroke.unwrap().position, StrokeLocation::Center);
         assert_eq!(back.stroke.unwrap().mode, BlendMode::LinearDodge);
         assert!(back.color_overlay.is_some());
+        // The gradient's stops come back exactly (sRGB-encoded bytes through Photoshop's 0–255).
+        let (g, h) = (
+            style.gradient_overlay.unwrap(),
+            back.gradient_overlay.unwrap(),
+        );
+        assert_eq!(g.gradient, h.gradient);
+        assert_eq!(
+            (
+                g.reverse,
+                g.shape,
+                g.angle,
+                g.scale,
+                g.align_with_layer,
+                g.mode
+            ),
+            (
+                h.reverse,
+                h.shape,
+                h.angle,
+                h.scale,
+                h.align_with_layer,
+                h.mode
+            )
+        );
+        assert!((g.opacity - h.opacity).abs() < 1e-6);
         assert_eq!(write(&LayerStyle::default()), None);
     }
 

@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 26;
+pub(crate) const SCHEMA_MINOR: u32 = 27;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -71,9 +71,12 @@ pub(crate) const NODE_VERSION_GLOWS: u32 = 9;
 pub(crate) const NODE_VERSION_HIDDEN: u32 = 10;
 /// Version of the raster nodes placed in perspective (schema 0.25, ADR 0038): their
 /// `transform`, or a stack step's, has nine numbers (a projective map). Written only for those,
-/// so that older readers refuse them instead of misplacing them. The newest node version this
-/// code reads.
+/// so that older readers refuse them instead of misplacing them.
 pub(crate) const NODE_VERSION_PERSPECTIVE: u32 = 11;
+/// Version of the raster, fill and group nodes whose style has a Gradient Overlay (schema 0.27):
+/// written only for those, so that older readers refuse them instead of dropping the effect.
+/// The newest node version this code reads.
+pub(crate) const NODE_VERSION_GRADIENT_OVERLAY: u32 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

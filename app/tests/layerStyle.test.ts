@@ -126,3 +126,27 @@ test("Fill means something with an effect, even off, or once set", () => {
   assert.equal(usesFill(withEffect(null, "stroke", false)), true);
   assert.equal(usesFill({ ...PLAIN, fillOpacity: 0.3 }), true);
 });
+
+test("Gradient Overlay comes black to white upward, aligned, between Color Overlay and Outer Glow", () => {
+  assert.deepEqual(defaultEffect("gradientOverlay"), {
+    enabled: true,
+    stops: [
+      [0, 0, 0, 0],
+      [4096, 255, 255, 255],
+    ],
+    reverse: false,
+    shape: "linear",
+    angle: 90,
+    scale: 100,
+    align: true,
+    mode: "normal",
+    opacity: 1,
+  });
+  let style = withEffect(null, "outerGlow", true);
+  style = withEffect(style, "gradientOverlay", true);
+  style = withEffect(style, "colorOverlay", true);
+  assert.deepEqual(
+    effectsOf(style).map((e) => e.id),
+    ["colorOverlay", "gradientOverlay", "outerGlow"],
+  );
+});

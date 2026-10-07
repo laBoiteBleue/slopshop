@@ -10,6 +10,7 @@
   import { EFFECTS, PLAIN, withEffect, type EffectId } from "./layerStyle";
   import SliderField from "./SliderField.svelte";
   import StyleEffectFields from "./StyleEffectFields.svelte";
+  import GradientEditor from "./GradientEditor.svelte";
   import { t } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
 
@@ -220,6 +221,63 @@
             max={100}
             unit="%"
             factor={100}
+          />
+        {:else}
+          <p class="empty">{t("style.off")}</p>
+        {/if}
+      {:else if page === "gradientOverlay"}
+        <h3>{t("style.gradientOverlay")}</h3>
+        {#if draft.gradientOverlay}
+          {@render modes(
+            draft.gradientOverlay.mode,
+            (m) => (draft.gradientOverlay!.mode = m as never),
+            t("style.mode"),
+          )}
+          <SliderField
+            label={t("style.opacity")}
+            bind:value={draft.gradientOverlay.opacity}
+            min={0}
+            max={100}
+            unit="%"
+            factor={100}
+          />
+          <div class="field gradient">
+            <span>{t("style.gradient")}</span>
+            <GradientEditor
+              stops={draft.gradientOverlay.stops}
+              onlive={(stops) => (draft.gradientOverlay!.stops = stops)}
+              onend={() => {}}
+              onapply={(stops) => (draft.gradientOverlay!.stops = stops)}
+            />
+          </div>
+          <label class="check">
+            <input type="checkbox" bind:checked={draft.gradientOverlay.reverse} />
+            {t("style.reverse")}
+          </label>
+          <label class="field">
+            <span>{t("style.gradientShape")}</span>
+            <select bind:value={draft.gradientOverlay.shape}>
+              <option value="linear">{t("options.gradient.linear")}</option>
+              <option value="radial">{t("options.gradient.radial")}</option>
+            </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" bind:checked={draft.gradientOverlay.align} />
+            {t("style.alignWithLayer")}
+          </label>
+          <SliderField
+            label={t("style.angle")}
+            bind:value={draft.gradientOverlay.angle}
+            min={-180}
+            max={180}
+            unit="°"
+          />
+          <SliderField
+            label={t("style.scale")}
+            bind:value={draft.gradientOverlay.scale}
+            min={10}
+            max={150}
+            unit="%"
           />
         {:else}
           <p class="empty">{t("style.off")}</p>

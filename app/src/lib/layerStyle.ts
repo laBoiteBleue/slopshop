@@ -7,7 +7,13 @@ import type { MessageKey } from "./i18n/en";
 
 /** An effect a style can hold. */
 export type EffectId =
-  "stroke" | "innerShadow" | "innerGlow" | "colorOverlay" | "outerGlow" | "dropShadow";
+  | "stroke"
+  | "innerShadow"
+  | "innerGlow"
+  | "colorOverlay"
+  | "gradientOverlay"
+  | "outerGlow"
+  | "dropShadow";
 
 /** In the order of Photoshop's Layer Style dialog and layers panel (topmost drawn first). */
 export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
@@ -15,6 +21,7 @@ export const EFFECTS: { id: EffectId; label: MessageKey }[] = [
   { id: "innerShadow", label: "style.innerShadow" },
   { id: "innerGlow", label: "style.innerGlow" },
   { id: "colorOverlay", label: "style.colorOverlay" },
+  { id: "gradientOverlay", label: "style.gradientOverlay" },
   { id: "outerGlow", label: "style.outerGlow" },
   { id: "dropShadow", label: "style.dropShadow" },
 ];
@@ -27,6 +34,7 @@ export const PLAIN: LayerStyle = {
   innerShadow: null,
   innerGlow: null,
   colorOverlay: null,
+  gradientOverlay: null,
   stroke: null,
 };
 
@@ -57,6 +65,21 @@ export function defaultEffect<E extends EffectId>(id: E): NonNullable<LayerStyle
     outerGlow: { ...glow, color: [1, 1, 190 / 255] },
     innerGlow: { ...glow, color: [1, 1, 190 / 255] },
     colorOverlay: { enabled: true, color: [1, 0, 0], mode: "normal", opacity: 1 },
+    // Black to white from bottom to top, aligned with the layer.
+    gradientOverlay: {
+      enabled: true,
+      stops: [
+        [0, 0, 0, 0],
+        [4096, 255, 255, 255],
+      ],
+      reverse: false,
+      shape: "linear",
+      angle: 90,
+      scale: 100,
+      align: true,
+      mode: "normal",
+      opacity: 1,
+    },
     stroke: {
       enabled: true,
       size: 3,

@@ -133,3 +133,29 @@ test("a slider's arrow drops its slider down without applying the dialog", async
   expect(onok).not.toHaveBeenCalled();
   expect(within(blending).getAllByRole("slider").length).toBeGreaterThan(1);
 });
+
+test("Gradient Overlay: reverse, its style, align, angle and scale sent as they change", async () => {
+  const { onchange, onpickcolor, user } = open(
+    withEffect(null, "gradientOverlay", true),
+    "gradientOverlay",
+  );
+  const settings = screen.getByRole("region", { name: "Gradient Overlay" });
+  await user.click(within(settings).getByRole("checkbox", { name: "Reverse" }));
+  expect(last(onchange).gradientOverlay?.reverse).toBe(true);
+  await user.selectOptions(within(settings).getByRole("combobox", { name: "Style" }), "radial");
+  expect(last(onchange).gradientOverlay?.shape).toBe("radial");
+  await user.click(within(settings).getByRole("checkbox", { name: "Align with Layer" }));
+  expect(last(onchange).gradientOverlay?.align).toBe(false);
+  // Angle and Scale, the page's last two fields.
+  const [angle, scale] = within(settings).getAllByRole("spinbutton").slice(-2);
+  await user.clear(angle);
+  await user.type(angle, "-45");
+  await user.tab();
+  expect(last(onchange).gradientOverlay?.angle).toBe(-45);
+  // Typed digit by digit, 6 would be below the range: the value at once.
+  await fireEvent.input(scale, { target: { value: "60" } });
+  expect(last(onchange).gradientOverlay).toMatchObject({ scale: 60, mode: "normal" });
+  // Its colors are its gradient's: no single color to pick.
+  expect(within(settings).queryByRole("button", { name: "Color" })).not.toBeInTheDocument();
+  expect(onpickcolor).not.toHaveBeenCalled();
+});
