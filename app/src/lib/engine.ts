@@ -91,7 +91,11 @@ export type FilterId =
   | "median"
   | "boxBlur"
   | "maximum"
-  | "minimum";
+  | "minimum"
+  | "findEdges"
+  | "emboss"
+  | "solarize"
+  | "mosaic";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {

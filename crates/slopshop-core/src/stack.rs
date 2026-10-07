@@ -1086,7 +1086,13 @@ fn filtered(
             .map(|(plan, reduced)| {
                 reduced.is_none().then(|| {
                     let mut region = source.clone();
-                    plan.kernel.region(&mut region, rw, rh);
+                    plan.kernel.region_at(
+                        &mut region,
+                        rw,
+                        rh,
+                        [x0 as i64 - margin as i64, y0 as i64 - margin as i64],
+                        [size.width as usize, size.height as usize],
+                    );
                     region
                 })
             })
@@ -6335,5 +6341,29 @@ mod tests {
         for y in [0, 100, 259] {
             assert_eq!(pixel(&boxed, start, y), pixel(&boxed, start, 100));
         }
+    }
+
+    #[test]
+    fn mosaic_cells_cross_tiles_whole() {
+        // Cells of 10 pixels: the one from 250 to 260 lies across the first tiles' edge (256).
+        let original = gradient(true);
+        let mosaic = LayerStack::new(Arc::clone(&original))
+            .with_filter(
+                FilterStep {
+                    filter: Filter::Mosaic { cell: 10.0 },
+                    ..blur(1.0, None)
+                },
+                None,
+            )
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        for y in [0, 9, 255, 256, 259] {
+            assert_eq!(pixel(&mosaic, 250, y), pixel(&mosaic, 259, y), "{y}");
+            assert_eq!(pixel(&mosaic, 255, y), pixel(&mosaic, 256, y), "{y}");
+        }
+        assert_ne!(pixel(&mosaic, 249, 5), pixel(&mosaic, 250, 5));
+        // The last column of cells, cut by the layer's edge at 300: whole too.
+        assert_eq!(pixel(&mosaic, 290, 3), pixel(&mosaic, 299, 3));
     }
 }

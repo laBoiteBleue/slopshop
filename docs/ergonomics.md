@@ -168,7 +168,10 @@ built. Contributors: propose here first.
   Gaussian, Monochromatic; each application draws another grain, an entry edited again keeps
   its own), Noise > Dust & Scratches… (Radius 1 to 500 whole pixels, Threshold 0 to 255
   levels), Noise > Median… (Radius 1 to 500 whole pixels), Blur > Box Blur… (Radius 1 to 2000
-  whole pixels), Other > Maximum… and Minimum… (Radius 1 to 500 whole pixels); Sharpen > Clarity and Texture… (Lightroom's two strengths, -100 to 100, nothing at
+  whole pixels), Other > Maximum… and Minimum… (Radius 1 to 500 whole pixels); Pixelate >
+  Mosaic… (Cell Size 2 to 200 pixels); Stylize > Emboss… (Angle, Height 1 to 10 pixels, Amount
+  1 to 500 %), Stylize > Find Edges and Solarize (no settings: applied at once, without an
+  ellipsis, as in Photoshop; their entries have nothing to edit again); Sharpen > Clarity and Texture… (Lightroom's two strengths, -100 to 100, nothing at
   first: Texture the fine details, Clarity the broad local contrast of the midtones; not in
   Photoshop's Filter menu, placed with the sharpening filters), Sharpen > Unsharp Mask… (Amount 1 to 500 %,
   Radius, Threshold 0 to 255 levels: linear sliders but the radius) and Other > High Pass…

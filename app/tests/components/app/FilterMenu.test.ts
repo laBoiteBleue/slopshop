@@ -266,3 +266,26 @@ test("Other > Maximum and Minimum, Noise > Median, Blur > Box Blur: a radius eac
     expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "maximum", values: [4] }),
   );
 });
+
+test("Stylize > Solarize applies at once; Pixelate > Mosaic opens its dialog", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Stylize", { selector: ".label" }));
+  expect(screen.getByRole("menuitem", { name: "Emboss…" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Find Edges" })).toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Solarize" }));
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "solarize",
+      values: [],
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Pixelate", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Mosaic…" }));
+  await screen.findByRole("dialog", { name: "Mosaic" });
+});

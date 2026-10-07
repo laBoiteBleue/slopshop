@@ -7,6 +7,7 @@ import {
   filterEntryEdit,
   filterSteps,
   filterable,
+  hasSettings,
   sliderPosition,
   sliderValue,
   validValues,
@@ -191,4 +192,39 @@ test("Box Blur, Median, Maximum and Minimum: a whole radius, up to 2000 or 500 p
       expect(validValues(filter, values)).toBe(false);
     }
   }
+});
+
+test("Emboss: an angle, a height of 1 to 10 pixels, an amount; Mosaic: cells of 2 to 200", () => {
+  expect(FILTERS.emboss.defaults).toEqual([135, 3, 100]);
+  expect(validValues("emboss", [-180, 10, 500])).toBe(true);
+  for (const values of [
+    [181, 3, 100],
+    [0, 2.5, 100],
+    [0, 11, 100],
+    [0, 3, 0],
+  ]) {
+    expect(validValues("emboss", values)).toBe(false);
+  }
+  expect(FILTERS.mosaic.defaults).toEqual([10]);
+  expect(validValues("mosaic", [2])).toBe(true);
+  expect(validValues("mosaic", [1])).toBe(false);
+  expect(validValues("mosaic", [201])).toBe(false);
+});
+
+test("Find Edges and Solarize have no settings: applied at once, nothing to edit again", () => {
+  for (const filter of ["findEdges", "solarize"] as const) {
+    expect(hasSettings(filter)).toBe(false);
+    expect(validValues(filter, [])).toBe(true);
+    const entry: StackEntryView = {
+      kind: "filter",
+      adjustment: null,
+      count: 1,
+      hidden: false,
+      steps: [],
+      filter,
+      filterSteps: [{ id: filter, values: [] }],
+    };
+    expect(editableEntry(entry)).toBe(false);
+  }
+  expect(hasSettings("emboss")).toBe(true);
 });

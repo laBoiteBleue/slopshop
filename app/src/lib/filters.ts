@@ -47,13 +47,13 @@ const radius = (label: MessageKey): NumberParam => ({
   scale: "log",
 });
 
-/** A radius in whole pixels from 1 to `max` (a square of pixels around each), Photoshop's. */
-const squareRadius = (label: MessageKey, max: number): NumberParam => ({
+/** A radius in whole pixels from `min` to `max` (a square of pixels around each), Photoshop's. */
+const squareRadius = (label: MessageKey, max: number, min = 1): NumberParam => ({
   kind: "number",
   key: "radius",
   label,
   unit: "filter.pixels",
-  min: 1,
+  min,
   max,
   decimals: 0,
   scale: "log",
@@ -184,7 +184,51 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
   median: { params: [squareRadius("filter.median.radius", 500)], defaults: [1] },
   maximum: { params: [squareRadius("filter.maximum.radius", 500)], defaults: [1] },
   minimum: { params: [squareRadius("filter.minimum.radius", 500)], defaults: [1] },
+  findEdges: { params: [], defaults: [] },
+  solarize: { params: [], defaults: [] },
+  emboss: {
+    params: [
+      {
+        kind: "number",
+        key: "angle",
+        label: "filter.emboss.angle",
+        unit: "filter.degrees",
+        min: -180,
+        max: 180,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        kind: "number",
+        key: "height",
+        label: "filter.emboss.height",
+        unit: "filter.pixels",
+        min: 1,
+        max: 10,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        kind: "number",
+        key: "amount",
+        label: "filter.emboss.amount",
+        unit: "filter.percent",
+        min: 1,
+        max: 500,
+        decimals: 0,
+        scale: "linear",
+      },
+    ],
+    defaults: [135, 3, 100],
+  },
+  mosaic: { params: [squareRadius("filter.mosaic.cell", 200, 2)], defaults: [10] },
 };
+
+/** Whether `filter` has settings: those without (Find Edges, Solarize) apply at once, as in
+ * Photoshop, with no dialog and nothing to edit again. */
+export function hasSettings(filter: FilterId): boolean {
+  return FILTERS[filter].params.length > 0;
+}
 
 /** `values` of `filter` with each seed drawn anew: the filter applied again, another grain. */
 export function withNewSeeds(
@@ -218,7 +262,9 @@ export function sliderValue(param: NumberParam, p: number): number {
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.blur", filters: ["boxBlur", "gaussianBlur", "motionBlur"] },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
+  { label: "menu.filter.pixelate", filters: ["mosaic"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
+  { label: "menu.filter.stylize", filters: ["emboss", "findEdges", "solarize"] },
   { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum"] },
 ];
 

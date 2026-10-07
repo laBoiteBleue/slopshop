@@ -39,6 +39,16 @@ pub const MAX_BOX_RADIUS: f32 = 2000.0;
 /// so that the radius is at most that (a smooth result, read back interpolated).
 pub const BOX_UP_TO: f64 = 64.0;
 
+/// Emboss's height range in whole pixels, and amount range in percent (Photoshop's).
+pub const MIN_EMBOSS_HEIGHT: f32 = 1.0;
+pub const MAX_EMBOSS_HEIGHT: f32 = 10.0;
+pub const MIN_EMBOSS_AMOUNT: f32 = 1.0;
+pub const MAX_EMBOSS_AMOUNT: f32 = 500.0;
+
+/// Mosaic's cell size range in whole pixels (Photoshop's).
+pub const MIN_MOSAIC_CELL: f32 = 2.0;
+pub const MAX_MOSAIC_CELL: f32 = 200.0;
+
 /// Maximum's and Minimum's radius range in whole pixels (Photoshop's, Squareness): each pixel
 /// the largest (smallest) value of the square of `2 radius + 1` pixels around it.
 pub const MIN_EXTREME_RADIUS: f32 = 1.0;
@@ -120,6 +130,23 @@ pub enum Filter {
     /// Photoshop's Minimum (Squareness): each pixel the smallest value of the square of
     /// `radius` pixels around it, channel by channel: dark areas spread, light ones shrink.
     Minimum { radius: f32 },
+    /// Photoshop's Solarize: each color above the middle inverted, a negative and a positive
+    /// blended (nothing lighter than middle gray).
+    Solarize,
+    /// Photoshop's Find Edges: each channel's edges dark lines on white, the stronger the change
+    /// across them the darker (a Sobel gradient).
+    FindEdges,
+    /// Photoshop's Emboss: middle gray where the layer is flat, lighter or darker where it
+    /// changes along the light coming from `angle` degrees, by the difference of the pixels
+    /// `height` pixels before and after, `amount` percent of it.
+    Emboss {
+        angle: f32,
+        height: f32,
+        amount: f32,
+    },
+    /// Photoshop's Mosaic: square cells of `cell` pixels, from the layer's origin, each the
+    /// average of its pixels.
+    Mosaic { cell: f32 },
     /// Lightroom's Texture and Clarity (-100 to 100): each color pushed away from (or, below 0,
     /// toward) its blur of a few pixels by `texture`, and from its blur of tens of pixels by
     /// `clarity`, in the midtones. `scale` is how many of the layer's pixels a pixel it is
@@ -133,7 +160,7 @@ pub enum Filter {
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 11] = [
+    pub const IDS: [&'static str; 15] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -145,6 +172,10 @@ impl Filter {
         "highPass",
         "maximum",
         "minimum",
+        "findEdges",
+        "emboss",
+        "solarize",
+        "mosaic",
     ];
 
     /// The identifier the UI and files know it by.
@@ -161,6 +192,10 @@ impl Filter {
             Self::BoxBlur { .. } => "boxBlur",
             Self::Maximum { .. } => "maximum",
             Self::Minimum { .. } => "minimum",
+            Self::Solarize => "solarize",
+            Self::FindEdges => "findEdges",
+            Self::Emboss { .. } => "emboss",
+            Self::Mosaic { .. } => "mosaic",
         }
     }
 
@@ -194,6 +229,13 @@ impl Filter {
             Self::ClarityTexture {
                 texture, clarity, ..
             } => vec![texture, clarity],
+            Self::Solarize | Self::FindEdges => Vec::new(),
+            Self::Emboss {
+                angle,
+                height,
+                amount,
+            } => vec![angle, height, amount],
+            Self::Mosaic { cell } => vec![cell],
         }
     }
 
@@ -213,6 +255,14 @@ impl Filter {
             ("boxBlur", &[radius]) => Some(Self::BoxBlur { radius }),
             ("maximum", &[radius]) => Some(Self::Maximum { radius }),
             ("minimum", &[radius]) => Some(Self::Minimum { radius }),
+            ("solarize", &[]) => Some(Self::Solarize),
+            ("findEdges", &[]) => Some(Self::FindEdges),
+            ("emboss", &[angle, height, amount]) => Some(Self::Emboss {
+                angle,
+                height,
+                amount,
+            }),
+            ("mosaic", &[cell]) => Some(Self::Mosaic { cell }),
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
@@ -270,6 +320,14 @@ impl Filter {
             "boxBlur" => Some(Self::BoxBlur { radius: 10.0 }),
             "maximum" => Some(Self::Maximum { radius: 1.0 }),
             "minimum" => Some(Self::Minimum { radius: 1.0 }),
+            "solarize" => Some(Self::Solarize),
+            "findEdges" => Some(Self::FindEdges),
+            "emboss" => Some(Self::Emboss {
+                angle: 135.0,
+                height: 3.0,
+                amount: 100.0,
+            }),
+            "mosaic" => Some(Self::Mosaic { cell: 10.0 }),
             _ => None,
         }
     }
@@ -324,6 +382,21 @@ impl Filter {
             Self::Maximum { radius } | Self::Minimum { radius } => {
                 radius.fract() == 0.0 && (MIN_EXTREME_RADIUS..=MAX_EXTREME_RADIUS).contains(&radius)
             }
+            Self::Solarize | Self::FindEdges => true,
+            Self::Emboss {
+                angle,
+                height,
+                amount,
+            } => {
+                angle.is_finite()
+                    && (-180.0..=180.0).contains(&angle)
+                    && height.fract() == 0.0
+                    && (MIN_EMBOSS_HEIGHT..=MAX_EMBOSS_HEIGHT).contains(&height)
+                    && (MIN_EMBOSS_AMOUNT..=MAX_EMBOSS_AMOUNT).contains(&amount)
+            }
+            Self::Mosaic { cell } => {
+                cell.fract() == 0.0 && (MIN_MOSAIC_CELL..=MAX_MOSAIC_CELL).contains(&cell)
+            }
         }
     }
 
@@ -340,7 +413,11 @@ impl Filter {
             | Self::Median { .. }
             | Self::BoxBlur { .. }
             | Self::Maximum { .. }
-            | Self::Minimum { .. } => None,
+            | Self::Minimum { .. }
+            | Self::Solarize
+            | Self::FindEdges
+            | Self::Emboss { .. }
+            | Self::Mosaic { .. } => None,
         }
     }
 
@@ -400,6 +477,22 @@ impl Filter {
             Self::Minimum { radius } => Self::Minimum {
                 radius: (radius / factor).round().max(MIN_EXTREME_RADIUS),
             },
+            Self::Solarize => Self::Solarize,
+            // Lines of a pixel: as thin on a reduced layer.
+            Self::FindEdges => Self::FindEdges,
+            Self::Emboss {
+                angle,
+                height,
+                amount,
+            } => Self::Emboss {
+                angle,
+                height: (height / factor).round().max(MIN_EMBOSS_HEIGHT),
+                amount,
+            },
+            // Cells of at least a pixel on a reduced layer (a look), from the same origin.
+            Self::Mosaic { cell } => Self::Mosaic {
+                cell: (cell / factor).max(1.0),
+            },
             Self::ClarityTexture {
                 texture,
                 clarity,
@@ -423,6 +516,10 @@ impl Filter {
             | Self::BoxBlur { radius }
             | Self::Maximum { radius }
             | Self::Minimum { radius } => f64::from(radius) + 2.0,
+            Self::Solarize => 0.0,
+            Self::FindEdges => 2.0,
+            Self::Emboss { height, .. } => f64::from(height) + 2.0,
+            Self::Mosaic { cell } => f64::from(cell) + 2.0,
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
             }
@@ -470,6 +567,29 @@ impl Filter {
                     largest: false,
                 },
             },
+            Self::Solarize => Plan {
+                factor: 1,
+                kernel: Kernel::Identity,
+            },
+            Self::FindEdges => Plan {
+                factor: 1,
+                kernel: Kernel::Sobel,
+            },
+            Self::Emboss { angle, height, .. } => {
+                let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+                let h = f64::from(height);
+                Plan {
+                    factor: 1,
+                    // Toward the light (up is negative y).
+                    kernel: Kernel::Relief {
+                        offset: [cos * h, -sin * h],
+                    },
+                }
+            }
+            Self::Mosaic { cell } => Plan {
+                factor: 1,
+                kernel: Kernel::Cells(f64::from(cell)),
+            },
             Self::ClarityTexture { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
@@ -488,6 +608,7 @@ impl Filter {
                 | Self::BoxBlur { .. }
                 | Self::Maximum { .. }
                 | Self::Minimum { .. }
+                | Self::Mosaic { .. }
         )
     }
 
@@ -516,7 +637,27 @@ impl Filter {
             | Self::Median { .. }
             | Self::BoxBlur { .. }
             | Self::Maximum { .. }
-            | Self::Minimum { .. } => blurred,
+            | Self::Minimum { .. }
+            | Self::Mosaic { .. } => blurred,
+            Self::Solarize => color(&|o, _| if o > 0.5 { 1.0 - o } else { o }),
+            // The kernel's gradient magnitude, per channel: dark lines on white, alpha kept.
+            Self::FindEdges => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let c: [f64; 3] =
+                    std::array::from_fn(|i| 1.0 - (blurred[i] / alpha).clamp(0.0, 1.0));
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
+            // Middle gray, moved by the kernel's difference across the pixel.
+            Self::Emboss { amount, .. } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let k = f64::from(amount) / 100.0;
+                let c: [f64; 3] = std::array::from_fn(|i| 0.5 + k * blurred[i] / alpha);
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
             Self::UnsharpMask {
                 amount, threshold, ..
             } => {
@@ -777,6 +918,15 @@ pub(crate) enum Kernel {
         radius: usize,
         largest: bool,
     },
+    /// The magnitude of the Sobel gradient of each channel, a full step 1.
+    Sobel,
+    /// The difference of the pixels `offset` after and before each one (read bilinearly).
+    Relief {
+        offset: [f64; 2],
+    },
+    /// The average of the square cell of this side each pixel lies in, cells from the layer's
+    /// origin (see [`Kernel::region_at`]).
+    Cells(f64),
     Identity,
 }
 
@@ -787,7 +937,27 @@ impl Kernel {
             Self::Gaussian(blur) => blur.reach(),
             Self::Line(line) => line.reach(),
             Self::Median(radius) | Self::Extreme { radius, .. } => *radius,
+            Self::Sobel => 1,
+            Self::Relief { offset } => offset[0].abs().max(offset[1].abs()).ceil() as usize + 1,
+            Self::Cells(cell) => cell.ceil() as usize,
             Self::Identity => 0,
+        }
+    }
+
+    /// [`Self::region`] for a region whose first pixel is pixel `origin` of a layer of
+    /// `layer` pixels (width, height): what a kernel placed on the layer needs (Mosaic's
+    /// cells start at its origin and stop at its edges).
+    pub(crate) fn region_at(
+        &self,
+        region: &mut [[f32; 4]],
+        width: usize,
+        height: usize,
+        origin: [i64; 2],
+        layer: [usize; 2],
+    ) {
+        match self {
+            &Self::Cells(cell) => cells(region, width, height, cell, origin, layer),
+            _ => self.region(region, width, height),
         }
     }
 
@@ -805,6 +975,9 @@ impl Kernel {
                 median_rows(&source, width, height, *radius, 0, region);
             }
             &Self::Extreme { radius, largest } => extreme(region, width, height, radius, largest),
+            Self::Sobel => sobel(region, width, height),
+            &Self::Relief { offset } => relief(region, width, height, offset),
+            &Self::Cells(cell) => cells(region, width, height, cell, [0, 0], [width, height]),
             Self::Identity => {}
         }
     }
@@ -814,10 +987,10 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.image(image, width, height),
             Self::Identity => image,
-            // Never reduced (no plan of a factor above 1 takes it): one thread is enough.
-            &Self::Extreme { radius, largest } => {
+            // Never reduced (no plan of a factor above 1 takes them): one thread is enough.
+            Self::Extreme { .. } | Self::Sobel | Self::Relief { .. } | Self::Cells(_) => {
                 let mut image = image;
-                extreme(&mut image, width, height, radius, largest);
+                self.region(&mut image, width, height);
                 image
             }
             Self::Median(radius) => {
@@ -869,6 +1042,103 @@ fn extreme(region: &mut [[f32; 4]], width: usize, height: usize, radius: usize, 
         buffers.line(&mut column, radius, largest);
         for (y, px) in column.iter().enumerate() {
             region[y * width + x] = *px;
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: each channel's Sobel gradient magnitude, a step of 1
+/// across the pixel giving 1, the edges repeating outward.
+fn sobel(region: &mut [[f32; 4]], width: usize, height: usize) {
+    let source = region.to_vec();
+    let at = |x: i64, y: i64| {
+        let x = x.clamp(0, width as i64 - 1) as usize;
+        let y = y.clamp(0, height as i64 - 1) as usize;
+        source[y * width + x]
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            region[y as usize * width + x as usize] = std::array::from_fn(|c| {
+                let p = |dx: i64, dy: i64| f64::from(at(x + dx, y + dy)[c]);
+                let gx =
+                    (p(1, -1) + 2.0 * p(1, 0) + p(1, 1)) - (p(-1, -1) + 2.0 * p(-1, 0) + p(-1, 1));
+                let gy =
+                    (p(-1, 1) + 2.0 * p(0, 1) + p(1, 1)) - (p(-1, -1) + 2.0 * p(0, -1) + p(1, -1));
+                ((gx * gx + gy * gy).sqrt() / 4.0) as f32
+            });
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: the pixel at `offset` after each one minus the one
+/// as far before it, read bilinearly, the edges repeating outward.
+fn relief(region: &mut [[f32; 4]], width: usize, height: usize, offset: [f64; 2]) {
+    let source = region.to_vec();
+    let at = |x: f64, y: f64| -> [f64; 4] {
+        let x = x.clamp(0.0, (width - 1) as f64);
+        let y = y.clamp(0.0, (height - 1) as f64);
+        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+        let (a, b) = (x - x0 as f64, y - y0 as f64);
+        let px = |x: usize, y: usize| source[y * width + x].map(f64::from);
+        let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+        std::array::from_fn(|c| {
+            (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
+        })
+    };
+    let [dx, dy] = offset;
+    for y in 0..height {
+        for x in 0..width {
+            let (fx, fy) = (x as f64, y as f64);
+            let (after, before) = (at(fx + dx, fy + dy), at(fx - dx, fy - dy));
+            region[y * width + x] = std::array::from_fn(|c| (after[c] - before[c]) as f32);
+        }
+    }
+}
+
+/// `region` (`width` × `height`, its first pixel pixel `origin` of a layer of `layer` pixels) in
+/// place: each pixel the average of the cell of `cell` pixels it lies in, cells from the
+/// layer's origin, only the layer's pixels counting (a cell cut by its edge averages what is
+/// in it). The cells of the region's pixels must lie within it (a margin of a cell).
+fn cells(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    cell: f64,
+    origin: [i64; 2],
+    layer: [usize; 2],
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    // The cell of layer coordinate `v` along an axis: its first and last layer pixels, within
+    // the layer.
+    let span = |v: i64, size: usize| {
+        let index = (v as f64 / cell).floor();
+        let start = (index * cell).ceil() as i64;
+        let end = (((index + 1.0) * cell).ceil() as i64).min(size as i64);
+        (start.max(0), end.max(start + 1))
+    };
+    for y in 0..height {
+        let ly = origin[1] + y as i64;
+        let (y0, y1) = span(ly.clamp(0, layer[1] as i64 - 1), layer[1]);
+        for x in 0..width {
+            let lx = origin[0] + x as i64;
+            let (x0, x1) = span(lx.clamp(0, layer[0] as i64 - 1), layer[0]);
+            let mut sum = [0.0f64; 4];
+            let mut count = 0.0;
+            for sy in y0..y1 {
+                let ry = (sy - origin[1]).clamp(0, height as i64 - 1) as usize;
+                for sx in x0..x1 {
+                    let rx = (sx - origin[0]).clamp(0, width as i64 - 1) as usize;
+                    let px = source[ry * width + rx];
+                    for c in 0..4 {
+                        sum[c] += f64::from(px[c]);
+                    }
+                    count += 1.0;
+                }
+            }
+            region[y * width + x] = sum.map(|v| (v / count) as f32);
         }
     }
 }
@@ -1895,6 +2165,144 @@ mod tests {
             // Reduced: the radius too, whole, at least 1.
             assert_eq!(with(40.0).scaled(4.0), with(10.0), "{id}");
             assert_eq!(with(1.0).scaled(4.0), with(1.0), "{id}");
+        }
+    }
+
+    #[test]
+    fn solarize_inverts_what_is_above_the_middle() {
+        let s = Filter::Solarize;
+        let gray = |v: f64| [v, v, v, 1.0];
+        let out = |v: f64| s.finish(gray(v), &[gray(v)], [0, 0])[0];
+        assert!((out(0.2) - 0.2).abs() < 1e-12);
+        assert!((out(0.8) - 0.2).abs() < 1e-12);
+        assert!((out(0.5) - 0.5).abs() < 1e-12);
+        // Half transparent: on the color, alpha kept.
+        let half = s.finish([0.4, 0.4, 0.4, 0.5], &[[0.0; 4]], [0, 0]);
+        assert!((half[0] - 0.1).abs() < 1e-12 && half[3] == 0.5, "{half:?}");
+        assert!(Filter::from_params("solarize", &[]).is_some_and(|f| f.is_valid()));
+        assert_eq!(Filter::from_params("solarize", &[1.0]), None);
+    }
+
+    #[test]
+    fn find_edges_draws_a_steps_edge_dark_on_white() {
+        // Black then white at x = 5, 10 × 4.
+        let (w, h) = (10, 4);
+        let mut region: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                if i % w < 5 {
+                    [0.0, 0.0, 0.0, 1.0]
+                } else {
+                    [1.0; 4]
+                }
+            })
+            .collect();
+        Kernel::Sobel.region(&mut region, w, h);
+        let edges = Filter::FindEdges;
+        let shown = |x: usize, region: &[[f32; 4]]| {
+            let original = if x < 5 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0; 4]
+            };
+            edges.finish(original, &[region[w + x].map(f64::from)], [0, 0])[0]
+        };
+        // Flat: white; on either side of the step: dark.
+        assert!((shown(1, &region) - 1.0).abs() < 1e-6);
+        assert!((shown(8, &region) - 1.0).abs() < 1e-6);
+        assert!(shown(4, &region) < 0.01 && shown(5, &region) < 0.01);
+    }
+
+    #[test]
+    fn emboss_is_middle_gray_where_flat_and_moves_along_its_light() {
+        let (w, h) = (12, 3);
+        // A ramp rising to the right.
+        let ramp: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let v = (i % w) as f32 / 20.0;
+                [v, v, v, 1.0]
+            })
+            .collect();
+        let emboss = |angle: f32| {
+            let filter = Filter::Emboss {
+                angle,
+                height: 2.0,
+                amount: 100.0,
+            };
+            let mut region = ramp.clone();
+            filter.plans()[0].kernel.region(&mut region, w, h);
+            filter.finish(
+                ramp[w + 6].map(f64::from),
+                &[region[w + 6].map(f64::from)],
+                [0, 0],
+            )[0]
+        };
+        // Lit from the right: lighter (the pixel after is lighter); from the left: darker; across
+        // the ramp: middle gray.
+        assert!(emboss(0.0) > 0.6, "{}", emboss(0.0));
+        assert!(emboss(180.0) < 0.4, "{}", emboss(180.0));
+        assert!((emboss(90.0) - 0.5).abs() < 1e-6, "{}", emboss(90.0));
+        assert!(
+            Filter::Emboss {
+                angle: 135.0,
+                height: 3.0,
+                amount: 100.0
+            }
+            .is_valid()
+        );
+        for wrong in [
+            (181.0, 3.0, 100.0),
+            (0.0, 2.5, 100.0),
+            (0.0, 11.0, 100.0),
+            (0.0, 3.0, 501.0),
+        ] {
+            let (angle, height, amount) = wrong;
+            assert!(
+                !Filter::Emboss {
+                    angle,
+                    height,
+                    amount
+                }
+                .is_valid(),
+                "{wrong:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mosaic_cells_start_at_the_layers_origin_whatever_the_region() {
+        let (w, h) = (23, 9);
+        let image = speckled(w * h, 5);
+        let cell = 4.0;
+        let mut whole = image.clone();
+        Kernel::Cells(cell).region(&mut whole, w, h);
+        // Every pixel of a cell is its average; the last cells, cut by the edge, average what
+        // is in them.
+        let average = |x0: usize, x1: usize, y0: usize, y1: usize, c: usize| {
+            let mut sum = 0.0f64;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    sum += f64::from(image[y * w + x][c]);
+                }
+            }
+            sum / ((x1 - x0) * (y1 - y0)) as f64
+        };
+        assert!((f64::from(whole[0][0]) - average(0, 4, 0, 4, 0)).abs() < 1e-5);
+        assert!((f64::from(whole[8 * w + 22][1]) - average(20, 23, 8, 9, 1)).abs() < 1e-5);
+        assert_eq!(whole[w + 5], whole[3 * w + 7]);
+        // A region placed within the layer (with a margin of a cell) gives the same pixels.
+        let (ox, oy, rw, rh) = (6usize, 2usize, 13usize, 7usize);
+        let mut region: Vec<[f32; 4]> = (0..rw * rh)
+            .map(|i| image[(oy + i / rw) * w + ox + i % rw])
+            .collect();
+        Kernel::Cells(cell).region_at(&mut region, rw, rh, [ox as i64, oy as i64], [w, h]);
+        for y in 4..rh - 1 {
+            for x in 4..rw - 4 {
+                assert_eq!(
+                    region[y * rw + x],
+                    whole[(oy + y) * w + ox + x],
+                    "({x}, {y})"
+                );
+            }
         }
     }
 }
