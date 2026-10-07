@@ -394,7 +394,7 @@ Raised on 2026-10-05, to schedule:
         placed (affine or in perspective), on the CPU and the GPU alike; `.slop` 0.30
   - [x] Shape tools (U): Rectangle, Ellipse, Polygon (and stars), Line; fill and stroke in the
         options bar
-  - [ ] A vector layer's shape edited in the Properties panel
+  - [x] A vector layer's fill, stroke, corner radius, sides and star in the Properties panel
   - [ ] Pen and paths, vector masks
   - [ ] Type
 - [ ] History memory limits

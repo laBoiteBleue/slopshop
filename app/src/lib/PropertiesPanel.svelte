@@ -3,11 +3,13 @@
   // (ADR 0020), as sliders with a number field each, checkboxes and color swatches. Dragging
   // applies live, one undo entry per drag; Reset puts the neutral values back. For a fill
   // layer, its color: a swatch that opens the color picker. For a gradient fill layer, its
-  // gradient, style, angle and scale (`gradientFill.ts`), and Reverse.
+  // gradient, style, angle and scale (`gradientFill.ts`), and Reverse. For a vector layer, its
+  // shape's fill and stroke (`ShapeProperties`).
   import type { EditRequest, LayerView } from "./engine";
   import { fillHex } from "./layerEdits";
   import AdjustmentFields from "./AdjustmentFields.svelte";
   import GradientEditor from "./GradientEditor.svelte";
+  import ShapeProperties from "./ShapeProperties.svelte";
   import {
     fillPlacement,
     placed,
@@ -25,6 +27,7 @@
     onlive,
     ongestureend,
     onfillcolor,
+    onshapecolor,
   }: {
     documentId: number;
     /** An adjustment or a fill layer. */
@@ -33,6 +36,8 @@
     size?: { width: number; height: number };
     /** The fill layer's swatch was clicked: the app lets its color be chosen. */
     onfillcolor?: (layer: LayerView) => void;
+    /** A vector layer's fill or stroke swatch was clicked (ADR 0041). */
+    onshapecolor?: (layer: LayerView, which: "fill" | "stroke") => void;
     onedit: (documentId: number, edit: EditRequest) => void;
     onlive: (documentId: number, edit: EditRequest) => void;
     ongestureend: (documentId: number) => void;
@@ -115,6 +120,8 @@
       ></button>
     </label>
   </section>
+{:else if layer.kind === "vector" && layer.shape}
+  <ShapeProperties {documentId} {layer} shape={layer.shape} {onedit} onpickcolor={onshapecolor} />
 {:else if layer.kind === "gradientFill" && fill && placement}
   <section class="panel" aria-label={t("properties.title")}>
     <div class="title">

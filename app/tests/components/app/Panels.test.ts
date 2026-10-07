@@ -17,7 +17,7 @@ test("the dock below Layers: tabs unfold their panel, the open one folds it, its
   // Properties at first, empty without an adjustment or fill layer.
   expect(tab("Properties")).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("tabpanel", { name: "Properties" })).toHaveTextContent(
-    "Select an adjustment or fill layer",
+    "Select an adjustment, fill or vector layer",
   );
   await user.click(screen.getByRole("tab", { name: /Selections/ }));
   expect(screen.getByRole("tabpanel", { name: "Selections" })).toHaveTextContent(

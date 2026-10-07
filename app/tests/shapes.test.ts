@@ -1,9 +1,11 @@
 import { expect, test } from "vitest";
 import {
   boxGeometry,
+  changedShape,
   defaultShapeOptions,
   dragBox,
   hasExtent,
+  hexOf,
   outlinePoints,
   shapeKindOf,
   shapeOf,
@@ -159,4 +161,60 @@ test("the outline shown while dragging follows the shape", () => {
 test("the shape tools are told apart from the others", () => {
   expect(shapeKindOf("shapePolygon")).toBe("polygon");
   expect(shapeKindOf("ellipse")).toBeNull();
+});
+
+test("the Properties panel's changes keep the rest of the shape", () => {
+  const rect = {
+    geometry: {
+      kind: "rectangle" as const,
+      rect: [0, 0, 10, 10] as [number, number, number, number],
+      radii: [0, 0, 0, 0] as [number, number, number, number],
+    },
+    fill: [1, 0, 0, 1] as [number, number, number, number],
+    stroke: null,
+  };
+  // A stroke's width or position without a stroke changes nothing.
+  expect(changedShape(rect, { strokeWidth: 5, strokeAlign: "outside" })).toEqual(rect);
+  const stroked = changedShape(rect, { stroke: "#00ff00" });
+  expect(stroked.stroke).toMatchObject({ color: [0, 1, 0, 1], width: 3, align: "inside" });
+  expect(changedShape(stroked, { strokeWidth: 0 }).stroke?.width).toBe(0.1);
+  expect(changedShape(stroked, { fill: null }).fill).toBeNull();
+  // A line keeps its stroke and has no fill; its stroke stays centered.
+  const line = {
+    geometry: {
+      kind: "line" as const,
+      from: [0, 0] as [number, number],
+      to: [1, 1] as [number, number],
+    },
+    fill: null,
+    stroke: {
+      color: [0, 0, 0, 1] as [number, number, number, number],
+      width: 1,
+      align: "center" as const,
+      cap: "butt" as const,
+      join: "miter" as const,
+      dashes: [],
+    },
+  };
+  expect(changedShape(line, { stroke: null, fill: "#ffffff", strokeAlign: "inside" })).toEqual(
+    line,
+  );
+  // A polygon's sides within bounds, a star's indent.
+  const polygon = {
+    geometry: {
+      kind: "polygon" as const,
+      center: [0, 0] as [number, number],
+      radius: 5,
+      sides: 5,
+      star: null,
+      rotation: 90,
+    },
+    fill: null,
+    stroke: null,
+  };
+  expect(changedShape(polygon, { sides: 2, star: 0.3 }).geometry).toMatchObject({
+    sides: 3,
+    star: 0.3,
+  });
+  expect(hexOf([1, 0.5, 0, 1])).toBe("#ff8000");
 });

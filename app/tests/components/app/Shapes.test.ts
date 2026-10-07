@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/svelte";
 import { expect, test } from "vitest";
-import { documentView, layer, open, sent } from "./harness";
+import type { LayerView } from "../../../src/lib/engine";
+import { documentView, layer, open, row, sent } from "./harness";
 
 // The shape tools (U, ADR 0041): a drag on the image adds a vector layer of the shape.
 
@@ -80,4 +81,39 @@ test("a swatch opens the color picker; the color chosen fills the next shape", a
   await drag(user, [0, 0], [30, 30]);
   await waitFor(() => expect(sent("perform")).toHaveLength(1));
   expect(sent("perform")[0]).toMatchObject({ edit: { shape: { fill: [1, 0, 0, 1] } } });
+});
+
+test("a vector layer's colors are changed in Properties, its shape kept", async () => {
+  const shape = {
+    ...layer(2, "Ellipse 1"),
+    kind: "vector" as const,
+    shape: {
+      geometry: { kind: "ellipse", center: [20, 10], radii: [20, 10] },
+      fill: [0, 0, 0, 1],
+      stroke: null,
+    },
+  } as LayerView;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), shape]));
+  await waitFor(() => expect(row("Ellipse 1")).toBeInTheDocument());
+  await user.click(row("Ellipse 1"));
+  const panel = screen.getByRole("tabpanel", { name: "Properties" });
+  await user.click(within(panel).getByRole("button", { name: "Fill color" }));
+  const dialog = await screen.findByRole("dialog");
+  const hex = within(dialog).getByRole("textbox");
+  await user.clear(hex);
+  await user.type(hex, "0000ff");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await waitFor(() => expect(sent("perform")).toHaveLength(1));
+  expect(sent("perform")[0]).toMatchObject({
+    documentId: 1,
+    edit: {
+      kind: "setShape",
+      id: 2,
+      shape: {
+        geometry: { kind: "ellipse", center: [20, 10], radii: [20, 10] },
+        fill: [0, 0, 1, 1],
+        stroke: null,
+      },
+    },
+  });
 });

@@ -23,6 +23,8 @@ export type PanelContext = {
   selectionCommand(run: (documentId: number) => Promise<DocumentView>): void;
   /** A fill layer's color, chosen in the color picker. */
   pickFillColor(layer: LayerView): void;
+  /** A vector layer's fill or stroke color chosen (ADR 0041). */
+  pickShapeColor(layer: LayerView, which: "fill" | "stroke"): void;
   /** Select > Save Selection… (it asks a name). */
   saveSelection(): void;
   /** A saved selection loaded into the image (Shift adds, Alt subtracts, both intersect). */
