@@ -35,6 +35,11 @@ pub(crate) struct GpuFilter {
     line: wgpu::ComputePipeline,
     noise: wgpu::ComputePipeline,
     median: wgpu::ComputePipeline,
+    extreme_rows: wgpu::ComputePipeline,
+    extreme_columns: wgpu::ComputePipeline,
+    stylize: wgpu::ComputePipeline,
+    cells_rows: wgpu::ComputePipeline,
+    cells_columns: wgpu::ComputePipeline,
     /// Buffers of looks computed, kept for the next ones of the same size (a slider dragged
     /// over a filter asks for the same crop at each setting).
     kept: std::sync::Mutex<Vec<LookBuffers>>,
@@ -120,6 +125,11 @@ impl GpuFilter {
             line: pipeline("line_main"),
             noise: pipeline("noise_main"),
             median: pipeline("median_main"),
+            extreme_rows: pipeline("extreme_rows_main"),
+            extreme_columns: pipeline("extreme_columns_main"),
+            stylize: pipeline("stylize_main"),
+            cells_rows: pipeline("cells_rows_main"),
+            cells_columns: pipeline("cells_columns_main"),
             kept: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -149,7 +159,7 @@ impl GpuFilter {
                 if step.selection.is_some() || step.space != BlendSpace::Perceptual {
                     return None;
                 }
-                Pass::of(step)
+                Pass::of(step, job)
             })
             .collect::<Option<Vec<_>>>()?
             .into_iter()
@@ -327,6 +337,9 @@ impl GpuFilter {
                 Kind::Line => vec![&self.line],
                 Kind::Noise => vec![&self.noise],
                 Kind::Median => vec![&self.median],
+                Kind::Extreme => vec![&self.extreme_rows, &self.extreme_columns],
+                Kind::Stylize => vec![&self.stylize],
+                Kind::Cells => vec![&self.cells_rows, &self.cells_columns],
             };
             for pipeline in pipelines {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -365,6 +378,12 @@ enum Kind {
     Noise,
     /// Dust & Scratches' median of the square of `reach`.
     Median,
+    /// Maximum (flag 1) or Minimum of the square of `reach`, rows then columns.
+    Extreme,
+    /// Solarize, Find Edges or Emboss (`mode` 0, 1, 2), each pixel from those around it.
+    Stylize,
+    /// Mosaic's cells (`weights`: the cell, the crop's place on the layer), rows then columns.
+    Cells,
 }
 
 /// The mode of a separable pass whose blur is kept for the next one (filter.wgsl).
@@ -399,8 +418,9 @@ impl Pass {
         })
     }
 
-    /// `step`'s passes, or `None` when it reaches too far (the CPU reduces the layer then).
-    fn of(step: &FilterStep) -> Option<Vec<Self>> {
+    /// `step`'s passes in `job`, or `None` when it reaches too far (the CPU reduces the layer
+    /// then) or is not taken.
+    fn of(step: &FilterStep, job: &LookJob) -> Option<Vec<Self>> {
         let none = Self {
             kind: Kind::Separable,
             weights: vec![0.0],
@@ -458,6 +478,63 @@ impl Pass {
                     kind: Kind::Separable,
                     reach: radius as u32,
                     weights: vec![1.0 / side as f32; side],
+                    ..none
+                }]);
+            }
+            Filter::Maximum { radius } | Filter::Minimum { radius } => {
+                if radius as u32 > MAX_REACH {
+                    return None;
+                }
+                return Some(vec![Self {
+                    kind: Kind::Extreme,
+                    reach: radius as u32,
+                    flags: u32::from(matches!(filter, Filter::Maximum { .. })),
+                    ..none
+                }]);
+            }
+            Filter::Solarize => {
+                return Some(vec![Self {
+                    kind: Kind::Stylize,
+                    mode: 0,
+                    ..none
+                }]);
+            }
+            Filter::FindEdges => {
+                return Some(vec![Self {
+                    kind: Kind::Stylize,
+                    mode: 1,
+                    ..none
+                }]);
+            }
+            Filter::Emboss {
+                angle,
+                height,
+                amount,
+            } => {
+                let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+                let h = f64::from(height);
+                return Some(vec![Self {
+                    kind: Kind::Stylize,
+                    mode: 2,
+                    // Toward the light (up is negative y), as the CPU's `Kernel::Relief`.
+                    weights: vec![(cos * h) as f32, (-sin * h) as f32],
+                    amount,
+                    ..none
+                }]);
+            }
+            Filter::Mosaic { cell } => {
+                // The crop's first pixel from the layer's origin, and the layer, in pixels of
+                // the crop (the look's level).
+                let factor = job.factor as f32;
+                return Some(vec![Self {
+                    kind: Kind::Cells,
+                    weights: vec![
+                        cell,
+                        job.origin[0] as f32,
+                        job.origin[1] as f32,
+                        job.layer.width as f32 / factor,
+                        job.layer.height as f32 / factor,
+                    ],
                     ..none
                 }]);
             }

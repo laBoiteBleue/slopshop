@@ -259,3 +259,134 @@ fn median_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let differs = any(abs(original - median) > vec4<f32>(level));
     output[id.y * params.width + id.x] = encoded(select(original, median, differs));
 }
+
+// Maximum and Minimum (`Kernel::Extreme` on the CPU, exact): each channel's largest (flag 1) or
+// smallest value of the row's `2 reach + 1` pixels, then of the column's, the edges repeating
+// outward.
+fn extreme(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    if (params.flags & 1u) != 0u {
+        return max(a, b);
+    }
+    return min(a, b);
+}
+
+@compute @workgroup_size(16, 16)
+fn extreme_rows_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let r = i32(params.reach);
+    var best = input(i32(id.x), i32(id.y));
+    for (var k = -r; k <= r; k++) {
+        best = extreme(best, input(i32(id.x) + k, i32(id.y)));
+    }
+    rows[id.y * params.width + id.x] = best;
+}
+
+@compute @workgroup_size(16, 16)
+fn extreme_columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let r = i32(params.reach);
+    let last = i32(params.height) - 1;
+    var best = rows[id.y * params.width + id.x];
+    for (var k = -r; k <= r; k++) {
+        let y = u32(clamp(i32(id.y) + k, 0, last));
+        best = extreme(best, rows[y * params.width + id.x]);
+    }
+    output[id.y * params.width + id.x] = encoded(best);
+}
+
+// Bilinear between the input's pixel centers (`relief` on the CPU), the edges repeating.
+fn bilinear(x: f32, y: f32) -> vec4<f32> {
+    let x0 = floor(x);
+    let y0 = floor(y);
+    let a = x - x0;
+    let b = y - y0;
+    let i = i32(x0);
+    let j = i32(y0);
+    let top = input(i, j) * (1.0 - a) + input(i + 1, j) * a;
+    let bottom = input(i, j + 1) * (1.0 - a) + input(i + 1, j + 1) * a;
+    return top * (1.0 - b) + bottom * b;
+}
+
+// Stylize (`Filter::finish` on the CPU), by `mode`: 0 Solarize (colors above the middle
+// inverted), 1 Find Edges (each channel's Sobel gradient, dark lines on white), 2 Emboss (middle
+// gray moved by the difference of the pixels `weights[0..2]` after and before, `amount`
+// percent); the pixel's alpha kept.
+@compute @workgroup_size(16, 16)
+fn stylize_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let x = i32(id.x);
+    let y = i32(id.y);
+    let original = input(x, y);
+    let alpha = original.a;
+    var result = original;
+    if alpha > 0.0 {
+        if params.mode == 0u {
+            let o = straight(original);
+            let c = select(o, vec3<f32>(1.0) - o, o > vec3<f32>(0.5));
+            result = vec4<f32>(c * alpha, alpha);
+        } else if params.mode == 1u {
+            let gx = (input(x + 1, y - 1) + 2.0 * input(x + 1, y) + input(x + 1, y + 1))
+                - (input(x - 1, y - 1) + 2.0 * input(x - 1, y) + input(x - 1, y + 1));
+            let gy = (input(x - 1, y + 1) + 2.0 * input(x, y + 1) + input(x + 1, y + 1))
+                - (input(x - 1, y - 1) + 2.0 * input(x, y - 1) + input(x + 1, y - 1));
+            let g = sqrt(gx * gx + gy * gy) / 4.0;
+            let c = vec3<f32>(1.0) - clamp(g.rgb / alpha, vec3<f32>(0.0), vec3<f32>(1.0));
+            result = vec4<f32>(c * alpha, alpha);
+        } else {
+            let fx = f32(x);
+            let fy = f32(y);
+            let d = bilinear(fx + weights[0], fy + weights[1]) - bilinear(fx - weights[0], fy - weights[1]);
+            let c = vec3<f32>(0.5) + params.amount / 100.0 * d.rgb / alpha;
+            result = vec4<f32>(c * alpha, alpha);
+        }
+    }
+    output[id.y * params.width + id.x] = encoded(result);
+}
+
+// Mosaic (`Kernel::Cells` on the CPU): the cell of side `weights[0]` (pixels of the crop) each
+// pixel lies in, cells from the layer's origin (`weights[1..3]`: the crop's first pixel from it,
+// `weights[3..5]`: the layer's size in pixels of the crop), cut by the layer's edges; averaged
+// along the row, then along the column.
+fn cell_span(v: i32, axis: u32) -> vec2<i32> {
+    let cell = weights[0];
+    let origin = i32(weights[1u + axis]);
+    let size = i32(ceil(weights[3u + axis]));
+    let at = clamp(origin + v, 0, size - 1);
+    let index = floor(f32(at) / cell);
+    let start = max(i32(ceil(index * cell)), 0);
+    let end = max(min(i32(ceil((index + 1.0) * cell)), size), start + 1);
+    return vec2<i32>(start - origin, end - origin);
+}
+
+@compute @workgroup_size(16, 16)
+fn cells_rows_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let span = cell_span(i32(id.x), 0u);
+    var sum = vec4<f32>(0.0);
+    for (var x = span.x; x < span.y; x++) {
+        sum += input(x, i32(id.y));
+    }
+    rows[id.y * params.width + id.x] = sum / f32(span.y - span.x);
+}
+
+@compute @workgroup_size(16, 16)
+fn cells_columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.width || id.y >= params.height {
+        return;
+    }
+    let span = cell_span(i32(id.y), 1u);
+    let last = i32(params.height) - 1;
+    var sum = vec4<f32>(0.0);
+    for (var y = span.x; y < span.y; y++) {
+        sum += rows[u32(clamp(y, 0, last)) * params.width + id.x];
+    }
+    output[id.y * params.width + id.x] = encoded(sum / f32(span.y - span.x));
+}

@@ -2856,6 +2856,48 @@ mod tests {
     }
 
     #[test]
+    fn the_gpu_places_mosaic_cells_from_the_layers_origin_in_a_crop() {
+        use slopshop_core::BlendSpace;
+        use slopshop_core::filter::Filter;
+        use slopshop_core::stack::{FilterStep, LayerStack};
+        let Some(r) = renderer() else { return };
+        let size = Size::new(600, 120);
+        let bytes: Vec<u8> = (0..size.height)
+            .flat_map(|y| {
+                (0..size.width).flat_map(move |x| [(x % 251) as u8, (y * 2) as u8, 90, 255])
+            })
+            .collect();
+        let image = Arc::new(
+            RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &bytes)
+                .unwrap(),
+        );
+        let stack = LayerStack::new(Arc::clone(&image))
+            .with_filter(
+                FilterStep {
+                    filter: Filter::Mosaic { cell: 30.0 },
+                    selection: None,
+                    to_document: Affine::IDENTITY.into(),
+                    space: BlendSpace::Perceptual,
+                },
+                Some(Arc::clone(&image)),
+            )
+            .unwrap();
+        // The right part only: the crop starts at the second column of tiles.
+        let job = stack.look_job([300.0, 10.0, 590.0, 110.0], 0).unwrap();
+        assert_eq!(job.origin, [256, 0]);
+        let gpu = r.gpu_filter.look(&job).expect("taken by the GPU");
+        let cpu = job.run().unwrap().image;
+        let (a, b) = (gpu.levels()[0].tiles(), cpu.levels()[0].tiles());
+        let worst = a
+            .iter()
+            .zip(b)
+            .flat_map(|(s, t)| s.iter().zip(t.iter()).map(|(x, y)| x.abs_diff(*y)))
+            .max()
+            .unwrap_or(0);
+        assert!(worst <= 1, "{worst}");
+    }
+
+    #[test]
     fn the_gpu_filters_a_look_as_the_cpu_does() {
         use slopshop_core::BlendSpace;
         use slopshop_core::filter::Filter;
@@ -2956,6 +2998,19 @@ mod tests {
             (Filter::Median { radius: 2.0 }, 1),
             (Filter::BoxBlur { radius: 6.0 }, 1),
             (Filter::BoxBlur { radius: 40.0 }, 1),
+            (Filter::Maximum { radius: 3.0 }, 0),
+            (Filter::Minimum { radius: 9.0 }, 0),
+            (Filter::Solarize, 1),
+            (Filter::FindEdges, 1),
+            (
+                Filter::Emboss {
+                    angle: 135.0,
+                    height: 3.0,
+                    amount: 150.0,
+                },
+                1,
+            ),
+            (Filter::Mosaic { cell: 17.0 }, 1),
             // The CPU's broad blur is three boxes: a little off the GPU's exact one.
             (
                 Filter::ClarityTexture {
