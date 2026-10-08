@@ -8,6 +8,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataType {
     F32 = 1,
+    U8 = 2,
+    I8 = 3,
     I64 = 7,
     F16 = 10,
 }
@@ -16,6 +18,7 @@ impl DataType {
     pub fn size(self) -> usize {
         match self {
             DataType::F32 => 4,
+            DataType::U8 | DataType::I8 => 1,
             DataType::I64 => 8,
             DataType::F16 => 2,
         }
@@ -46,6 +49,8 @@ pub struct Graph {
     inputs: Vec<u8>,
     outputs: Vec<u8>,
     next: usize,
+    /// Whether a `com.microsoft` operator is used (its opset is then imported).
+    microsoft: bool,
 }
 
 impl Graph {
@@ -91,6 +96,17 @@ impl Graph {
         let names: Vec<&str> = outs.iter().map(String::as_str).collect();
         self.node_named(op, inputs, &names, attrs);
         outs
+    }
+
+    /// Adds a node of the `com.microsoft` domain (ONNX Runtime's contrib operators).
+    pub fn node_microsoft(&mut self, op: &str, inputs: &[&str], attrs: &[Attr]) -> String {
+        self.microsoft = true;
+        let out = self.fresh();
+        let mut node = Vec::new();
+        node_body(&mut node, op, inputs, &[&out], attrs);
+        bytes(&mut node, 7, b"com.microsoft");
+        bytes(&mut self.nodes, 1, &node);
+        out
     }
 
     fn node_named(&mut self, op: &str, inputs: &[&str], outputs: &[&str], attrs: &[Attr]) {
@@ -162,10 +178,16 @@ impl Graph {
         let mut model = Vec::new();
         int(&mut model, 1, 8); // ir_version
         bytes(&mut model, 2, b"slopshop");
-        let mut set = Vec::new();
-        bytes(&mut set, 1, b"");
-        int(&mut set, 2, opset);
-        bytes(&mut model, 8, &set);
+        let mut domains = vec![("", opset)];
+        if self.microsoft {
+            domains.push(("com.microsoft", 1));
+        }
+        for (domain, version) in domains {
+            let mut set = Vec::new();
+            bytes(&mut set, 1, domain.as_bytes());
+            int(&mut set, 2, version);
+            bytes(&mut model, 8, &set);
+        }
         bytes(&mut model, 7, &graph);
         model
     }
@@ -294,6 +316,18 @@ mod tests {
         assert!(!has(b"com.microsoft"));
         // ir_version 8 first.
         assert_eq!(&model[..2], &[0x08, 0x08]);
+    }
+
+    #[test]
+    fn a_contrib_operator_imports_its_domain() {
+        let mut g = Graph::new();
+        let x = g.input("x", DataType::F16, &[Dim::Fixed(1), Dim::Fixed(32)]);
+        let w = g.constant(DataType::U8, &[2, 1, 32], &[128; 64]);
+        let y = g.node_microsoft("MatMulNBits", &[&x, &w], &[Attr::Int("bits", 8)]);
+        g.output(&y, "y", DataType::F16, &[Dim::Fixed(1), Dim::Fixed(2)]);
+        let model = g.model("test", 18);
+        let has = |needle: &[u8]| model.windows(needle.len()).any(|w| w == needle);
+        assert!(has(b"MatMulNBits") && has(b"com.microsoft"));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! ```sh
 //! cargo run --release -p slopshop-ai --features helper --example erase_spike -- \
 //!     --integration <folder with erase/> --models <folder with black-forest-labs/> \
-//!     --runtime <onnxruntime.dll> [--chunks 16] [--steps 4] [--profile] [--out <folder>] [case…]
+//!     --runtime <onnxruntime.dll> [--chunks 16] [--weights half|channels|<block>] [--steps 4] [--profile] [--out <folder>] [case…]
 //! ```
 
 use std::borrow::Cow;
@@ -17,7 +17,7 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::session::{OutputSelector, RunOptions, Session, SessionInputValue};
 use ort::value::Tensor;
 use slopshop_ai::erase::{self, LatentStats, pil};
-use slopshop_ai::flux2::{self, Built, Lora};
+use slopshop_ai::flux2::{self, Built, Lora, Storage};
 use slopshop_ai::safetensors::SafeTensors;
 
 type Error = Box<dyn std::error::Error>;
@@ -27,6 +27,7 @@ struct Options {
     models: PathBuf,
     runtime: PathBuf,
     chunks: usize,
+    storage: Storage,
     out: Option<PathBuf>,
     cases: Vec<String>,
     level: GraphOptimizationLevel,
@@ -42,6 +43,7 @@ fn options() -> Result<Options, Error> {
         models: ai.join("models"),
         runtime: ai.join("runtime").join("directml").join("onnxruntime.dll"),
         chunks: 16,
+        storage: Storage::Half,
         out: None,
         cases: Vec::new(),
         level: GraphOptimizationLevel::Level3,
@@ -56,6 +58,13 @@ fn options() -> Result<Options, Error> {
             "--models" => o.models = value()?.into(),
             "--runtime" => o.runtime = value()?.into(),
             "--chunks" => o.chunks = value()?.parse()?,
+            "--weights" => {
+                o.storage = match value()?.as_str() {
+                    "half" => Storage::Half,
+                    "channels" => Storage::Channels,
+                    block => Storage::Blocks(block.parse()?),
+                }
+            }
             "--profile" => o.profile = true,
             "--steps" => o.steps = value()?.parse()?,
             "--out" => o.out = Some(value()?.into()),
@@ -210,7 +219,8 @@ fn main() -> Result<(), Error> {
             .join("erase_v1_diffusers.safetensors"),
     )?;
     let targeted = lora.modules().len();
-    let (built, merged) = flux2::pipeline(&mut weights, Some(&mut lora), &mut vae, o.chunks)?;
+    let (built, merged) =
+        flux2::pipeline(&mut weights, Some(&mut lora), &mut vae, o.chunks, o.storage)?;
     if merged != targeted {
         return Err(format!("LoRA: {merged} of {targeted} modules merged").into());
     }
