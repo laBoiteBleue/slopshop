@@ -49,6 +49,6 @@ Statuses: *proposed* (current direction, open to change), *accepted*, *supersede
 | 0042 | [Patterns: image sources repeated across a plane](0042-patterns.md) | accepted |
 | 0043 | [Panoramas, aligned layers and image stacks](0043-panorama-and-stacks.md) | accepted |
 | 0044 | [Warps: a deformation mesh placing a layer](0044-mesh-warps.md) | accepted |
-| 0045 | [Erase: FLUX.2 [klein] on ONNX graphs written by SlopShop](0045-erase-flux2-onnx.md) | proposed |
+| 0045 | [Erase: FLUX.2 [klein] on ONNX graphs written by SlopShop](0045-erase-flux2-onnx.md) | accepted |
 
 New ADR: copy the structure of an existing one, next number, add it to this table.

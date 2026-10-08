@@ -1,6 +1,8 @@
 # 0045 — Erase: FLUX.2 [klein] on ONNX graphs written by SlopShop
 
-Status: proposed (2026-10-08, spike measured; awaiting the maintainer's answers below).
+Status: accepted (2026-10-08). The maintainer delegated the open questions ("fais au mieux"),
+asked to work around the selection rather than on the whole image, and placed the tool on
+Delete (points 6 to 10).
 
 ## Context
 
@@ -58,6 +60,46 @@ chose (2026-10-08) to **write the graphs ourselves**, then to measure a spike be
    - Pillow's Lanczos and nearest-neighbour resampling, reproduced exactly.
 
    Each is unit-tested, against `case.json` where the vectors give values.
+6. **8-bit weights everywhere** (blocks of 64 through `MatMulNBits`, modulations included; see
+   the measurements). It conforms as half precision does, takes 3 GB less at the peak (room for
+   12 GB cards, and for the other AI models), and is 15 % slower. One path for every card: the
+   app has no way to know the VRAM without a new native dependency. Half precision stays in the
+   code for measurements.
+7. **Around the selection, not the whole image.**
+   - **Work region:** the selection's box plus half its larger side of context on each side,
+     at least 512 px a side, within the image, its sides multiples of 16
+     (`erase::work_region`).
+   - **Resolution:** a region under 1 Mpx is worked on at full resolution; a larger one is
+     reduced to 1 Mpx as the protocol does.
+   - **Speed:** a small object is fast. A 300 × 200 object gives a 608 × 512 region, about a
+     tenth of the tokens of 1 Mpx.
+8. **The selection is grown by 2 %** of the work region's larger side before the model sees it,
+   as the protocol recommends. Measured on vector 01 (a tight selection), this removes the dark
+   remnant the model otherwise leaves where the object touched the ground; the reference output
+   has the same remnant. The result is applied through that grown selection, its soft edge kept
+   (the selection's coverage); no pixel beyond it changes.
+9. **Delete with a selection offers four choices:**
+   - transparent: today's Delete;
+   - the background color;
+   - the foreground color;
+   - generative fill (this tool).
+
+   On a layer mask or in Quick Mask, Delete keeps painting the background gray, without the
+   choice.
+10. **The result is baked into paint**, as ADR 0034 point 6 (amended 2026-10-05) does for
+    every tool that reads the pixels below (Clone, Healing, Patch, Remove).
+    - It is a paint entry on the layer's stack: deleting the entry restores the original.
+    - It is not replayed and never goes stale.
+    - The seed is drawn per run.
+
+    The model sees the layer's own pixels in the region, in sRGB 8 bits: the protocol's input,
+    an explicit conversion. The result returns to the layer's working space.
+11. **Download** (the AI consent dialog, ADR 0025):
+    - FLUX.2 [klein] 4B's transformer and VAE, from BFL's repository at the pinned revision;
+    - `erase_v1`'s LoRA and embedding, from the project's Hugging Face repository
+      `laBoiteBleue/slopshop-erase`, Apache-2.0.
+
+    Every file is pinned by SHA-256.
 
 ## Measurements (RTX 5070 Ti 16 GB, ONNX Runtime 1.24.4 DirectML)
 
@@ -141,28 +183,26 @@ Reviewed with the maintainer on 2026-10-08, before the spike:
     1024×768 and 10.4 GB at 1168×880.
   - A 12 GB card should run up to 1024×768, but is tight at the 1 Mpx maximum; reducing the
     steps' activations (about 6 GB) is the next lever.
-  - Proposed: the precision is a hardware choice made automatically, not a user setting. Half
-    precision from 16 GB of VRAM, 8 bits below.
   - Nothing was measured on a smaller card.
 - **Platforms:** Windows only for now. Core ML (macOS) and the CPU (Linux) are not candidates at
   this size without further work. Nothing here was tested on them.
-- **Large photos:** the tool works at about 1 Mpx then upscales the result, so on a 24 Mpx photo
-  the erased area is soft. The protocol recommends working on a crop around the selection; the
-  steps are the same.
+- **Large photos:** a small selection on a large photo is worked on at full resolution (point
+  7). A selection larger than about 1 Mpx is still generated at 1 Mpx and upscaled, so its fill
+  is soft; tiled upscaling is the planned remedy.
+- **Load time:** the first fill of a session builds the graph and quantizes the weights (about
+  13 s of CPU) and creates the session (about 7 s). The helper then keeps the model loaded,
+  unloading the selection models.
+- **The LoRA's own limits:** with a tight selection the fill shows a fine regular texture.
+  This texture is also in the integration's reference output, so it belongs to `erase_v1`, not
+  to the port.
 - **Other tools** (inpaint, outpaint, tiled upscale) reuse the same graph with another LoRA, an
   embedding, and possibly other reference ids.
 
-## Open questions for the maintainer
+## Questions answered (2026-10-08)
 
-1. **Hosting** of `erase_v1` (LoRA, embedding): a Hugging Face repository of the project (for
-   example `laBoiteBleue/slopshop-erase`), pinned by SHA-256 in the AI manifest like the other
-   models?
-2. **Product:** Erase as a non-destructive entry in the layer stack, as decided on 2026-10-05
-   (model, seed, selection, cached result, marked stale and never recomputed silently)? Should
-   the selection be dilated by about 2 % automatically, as the protocol recommends, or should
-   the dilation be a visible option?
-3. **Large photos:** work on a crop around the selection (for example its box enlarged ×2, at
-   most 1 Mpx at the model)? This departs from the test vectors only for photos above 1 Mpx.
-4. **Smaller GPUs:** 8-bit weights evaluated (above): conforming, 15 % slower, 3 GB less.
-   Choose automatically, with half precision from 16 GB and 8 bits below? Or 8 bits everywhere,
-   for one code path at the cost of 15 %?
+| Question | Answer |
+|---|---|
+| Hosting of the LoRA and embedding | Hugging Face, `laBoiteBleue/slopshop-erase` (point 11) |
+| Stack entry or paint, dilation | Delegated: paint, as ADR 0034 rules (point 10); 2 % dilation, automatic (point 8) |
+| Large photos | Work around the selection (point 7) |
+| Smaller GPUs | Delegated: 8 bits everywhere (point 6) |
