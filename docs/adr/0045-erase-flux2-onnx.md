@@ -78,6 +78,18 @@ chose (2026-10-08) to **write the graphs ourselves**, then to measure a spike be
    remnant the model otherwise leaves where the object touched the ground; the reference output
    has the same remnant. The result is applied through that grown selection, its soft edge kept
    (the selection's coverage); no pixel beyond it changes.
+   - **Colors matched at the edge** (the maintainer's test: the fill's outline showed, its colors
+     shifted).
+     - **The drift:** the model reproduces the photo about 10 levels (of 255) off, varying
+       across the image. Measured outside the selection on the three vectors, the reference's
+       output included.
+     - **The correction:** `erase::edges` measures the difference between the photo and the
+       output on a 6 px ring just outside the selection, spreads it smoothly inside (a
+       membrane, solved coarse to fine), and adds it to the output.
+     - **The result:** at the edge the output meets the photo; inside it keeps its texture and
+       takes the surroundings' tone. The mean gap measured near the edge falls from −7 to about
+       0 on vectors 01 and 03, and the outline is gone (vector 02).
+   - The protocol's test vectors are checked without it, being compared to the reference.
 9. **Delete with a selection offers four choices:**
    - transparent: today's Delete;
    - the background color;
@@ -97,7 +109,7 @@ chose (2026-10-08) to **write the graphs ourselves**, then to measure a spike be
 11. **Download** (the AI consent dialog, ADR 0025):
     - FLUX.2 [klein] 4B's transformer and VAE, from BFL's repository at the pinned revision;
     - `erase_v1`'s LoRA and embedding, from the project's Hugging Face repository
-      `laBoiteBleue/slopshop-erase`, Apache-2.0.
+      `slopshop/erase-v1`, Apache-2.0.
 
     Every file is pinned by SHA-256.
 
@@ -202,7 +214,7 @@ Reviewed with the maintainer on 2026-10-08, before the spike:
 
 | Question | Answer |
 |---|---|
-| Hosting of the LoRA and embedding | Hugging Face, `laBoiteBleue/slopshop-erase` (point 11) |
+| Hosting of the LoRA and embedding | Hugging Face, `slopshop/erase-v1` (point 11) |
 | Stack entry or paint, dilation | Delegated: paint, as ADR 0034 rules (point 10); 2 % dilation, automatic (point 8) |
 | Large photos | Work around the selection (point 7) |
 | Smaller GPUs | Delegated: 8 bits everywhere (point 6) |

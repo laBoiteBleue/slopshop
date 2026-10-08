@@ -989,6 +989,33 @@ pub(crate) fn patch_edit(
     Ok(Some(paint_edit(request.target(), painted, growth.as_ref())))
 }
 
+/// Delete's generative fill (ADR 0045): the selection of `doc` painted on layer `layer_id` with
+/// the pixels of `source` where they lie (no offset), through the selection's coverage, as a
+/// paint entry the Patch's way. `None`: nothing to paint.
+pub(crate) fn source_fill_edit(
+    doc: &Document,
+    layer_id: u64,
+    source: slopshop_core::clone::CloneSource,
+) -> Result<Option<Edit>, String> {
+    let mut request = fill_request(layer_id, PaintTarget::Layer, None, 1.0);
+    request.clone = Some(CloneRequest {
+        offset: [0.0; 2],
+        source_layer: None,
+        heal: false,
+        tone: None,
+        filter: None,
+        smudge: None,
+    });
+    let (painting, growth) = start(doc, &request, true, None)?;
+    let mut painting = painting.cloning(Arc::new(source));
+    painting.fill();
+    if !painting.has_paint() {
+        return Ok(None);
+    }
+    let painted = painted_so_far(request.target(), &mut painting)?;
+    Ok(Some(paint_edit(request.target(), painted, growth.as_ref())))
+}
+
 /// The Paint Bucket (G): the pixels of a color similar to the one at (`x`, `y`) (the Magic
 /// Wand's region: `tolerance`, `contiguous`, `anti_alias`; sampled from every visible layer, or
 /// `sample_layer` alone), within the selection if there is one, filled with `color` at

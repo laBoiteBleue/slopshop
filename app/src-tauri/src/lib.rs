@@ -13,6 +13,7 @@ mod ai;
 mod bake;
 mod clipboard;
 mod export;
+mod generative;
 mod info;
 mod ipc;
 mod liquify;
@@ -2376,6 +2377,7 @@ pub fn run() {
             segment::ai_object_hover,
             segment::ai_object_select,
             segment::ai_select_subject,
+            generative::ai_generative_fill,
             segment::ai_cancel,
             layer_thumbnail,
             source_thumbnail,

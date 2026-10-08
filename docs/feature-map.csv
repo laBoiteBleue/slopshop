@@ -66,12 +66,12 @@ Menu,Edit > Paste,,done,
 Menu,Edit > Paste in Place,,done,
 Menu,Edit > Paste Into,,done,a group masked by the selection
 Menu,Edit > Paste Outside,,open,Paste Into exists; the inverted mask is a good first issue
-Menu,Edit > Clear,,done,"Delete with a selection: erased as paint, the original kept"
+Menu,Edit > Clear,,done,"Delete with a selection: transparency, the background or foreground color, or generative fill (ADR 0045), as paint, the original kept"
 Menu,Edit > Search,,open,a command palette
 Menu,Edit > Check Spelling,,open,text layers are not started
 Menu,Edit > Find and Replace Text,,open,text layers are not started
 Menu,Edit > Fill,,done,"Shift+F5: colors, black, 50% gray or white at an opacity, as paint in the layer's stack; Pattern and History contents are open"
-Menu,Edit > Content-Aware Fill,,planned,"object removal is the likely first AI feature; AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
+Menu,Edit > Content-Aware Fill,,partial,"Delete's Generative Fill rebuilds the selection from its surroundings with a local model (ADR 0045, Windows); no sampling-area dialog"
 Menu,Edit > Generative Fill,,planned,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
 Menu,Edit > Stroke,,done,"inside, centered or outside the selection; width, color, opacity; as paint in the layer's stack"
 Menu,Edit > Content-Aware Scale,,open,proposed as an option of Free Transform's scaling; an ADR first (roadmap: advanced transforms)

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use slopshop_ai::EraseModel;
 use slopshop_ai::install::{self, COMPONENTS, Component, InstallError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -51,8 +52,9 @@ impl Runtime {
         }
     }
 
-    /// The components a feature needs on this runtime (the runtime first).
-    pub(crate) fn components(self, feature: Feature) -> [&'static str; 3] {
+    /// The components a feature needs on this runtime (the runtime first); none where the
+    /// feature is not offered (the Erase tool runs on DirectML only, ADR 0045).
+    pub(crate) fn components(self, feature: Feature) -> Vec<&'static str> {
         // Every feature includes ViTMatte: selections are refined at full resolution.
         let (runtime, sam, birefnet) = match self {
             Self::DirectMl => ("runtime-directml", "sam2.1-base-plus", "birefnet"),
@@ -69,6 +71,10 @@ impl Runtime {
         let model = match feature {
             Feature::Segmentation => sam,
             Feature::Subject => birefnet,
+            Feature::Erase if self == Self::DirectMl => {
+                return erase_components(runtime, erase_model());
+            }
+            Feature::Erase => return Vec::new(),
         };
         // Refine Edge: ViTMatte-B on a GPU; the small model on the CPU, where the base one
         // takes about 2 s a window.
@@ -76,7 +82,32 @@ impl Runtime {
             Self::Cpu => "vitmatte-small",
             _ => "vitmatte-base",
         };
-        [runtime, model, matte]
+        vec![runtime, model, matte]
+    }
+}
+
+/// The components the Erase tool's `model` needs, after `runtime`.
+fn erase_components(runtime: &'static str, model: EraseModel) -> Vec<&'static str> {
+    match model {
+        EraseModel::Turbo => vec![runtime, "flux2-vae", "flux2-klein-4b", "erase-v1"],
+        // Its prompt embeddings are not a component until they are published: the helper
+        // reads them from `models/slopshop/erase-base`, put there by hand.
+        EraseModel::Base => vec![
+            runtime,
+            "flux2-vae",
+            "flux2-klein-base-4b",
+            "fal-object-remove",
+        ],
+    }
+}
+
+/// The Erase tool's model (ADR 0045): the turbo one, or the base one with
+/// `SLOPSHOP_ERASE_MODEL=base` while it is evaluated (its prompt embeddings are not published
+/// yet).
+pub(crate) fn erase_model() -> EraseModel {
+    match std::env::var("SLOPSHOP_ERASE_MODEL").as_deref() {
+        Ok("base") => EraseModel::Base,
+        _ => EraseModel::Turbo,
     }
 }
 
@@ -95,9 +126,11 @@ pub(crate) enum Feature {
     Segmentation,
     /// The main subject of the image (BiRefNet): Select > Subject.
     Subject,
+    /// Generative fill of a selection (FLUX.2 [klein] with `erase_v1`): Delete's choice.
+    Erase,
 }
 
-const FEATURES: [Feature; 2] = [Feature::Segmentation, Feature::Subject];
+const FEATURES: [Feature; 3] = [Feature::Segmentation, Feature::Subject, Feature::Erase];
 
 /// Installs running, one at a time, and their cancellation.
 #[derive(Default)]
@@ -201,7 +234,10 @@ pub(crate) async fn ai_components(
             return Ok(None);
         };
         let wanted: Vec<&str> = match feature {
-            Some(feature) => runtime.components(feature).to_vec(),
+            Some(feature) => match runtime.components(feature) {
+                ids if ids.is_empty() => return Ok(None),
+                ids => ids,
+            },
             None => {
                 let mut all: Vec<&str> = FEATURES
                     .iter()
@@ -331,6 +367,17 @@ mod tests {
                 for id in runtime.components(feature) {
                     assert!(install::component(id).is_some(), "{id}");
                 }
+            }
+        }
+    }
+
+    /// Both Erase variants, whatever `SLOPSHOP_ERASE_MODEL` says: the base one named a
+    /// component missing from the manifest, and failed before starting the helper.
+    #[test]
+    fn both_erase_models_need_components_of_the_manifest() {
+        for model in [EraseModel::Turbo, EraseModel::Base] {
+            for id in erase_components("runtime-directml", model) {
+                assert!(install::component(id).is_some(), "{model:?}: {id}");
             }
         }
     }

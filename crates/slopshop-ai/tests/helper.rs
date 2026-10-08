@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use slopshop_ai::{Client, Launch, MASK_SIDE, Point};
+use slopshop_ai::{Client, EraseModel, Launch, MASK_SIDE, Point, Request, Stage};
 
 #[test]
 fn sam_selects_the_clicked_shape() {
@@ -146,4 +146,103 @@ fn sam_selects_the_clicked_shape() {
     }
     // Another key than the encoded image's is refused.
     assert!(client.sam_decode(2, vec![click], None).is_err());
+}
+
+/// The Erase tool (ADR 0045) through the helper: a red square on a smooth background is replaced
+/// by that background. Also needs the Erase files in the models folder (skipped without them).
+#[test]
+fn erase_replaces_the_selection_by_its_surroundings() {
+    let (Some(runtime), Some(models)) = (
+        std::env::var_os("SLOPSHOP_AI_RUNTIME"),
+        std::env::var_os("SLOPSHOP_AI_MODELS"),
+    ) else {
+        eprintln!("SLOPSHOP_AI_RUNTIME / SLOPSHOP_AI_MODELS not set: skipped");
+        return;
+    };
+    let models = PathBuf::from(models);
+    if !models
+        .join("slopshop/erase-v1/erase_v1_diffusers.safetensors")
+        .is_file()
+    {
+        eprintln!("the Erase files are not installed: skipped");
+        return;
+    }
+    let library_paths: Vec<PathBuf> = std::env::var_os("SLOPSHOP_AI_LIBRARY_PATHS")
+        .map(|paths| std::env::split_paths(&paths).collect())
+        .unwrap_or_default();
+    let library_paths: Vec<&Path> = library_paths.iter().map(PathBuf::as_path).collect();
+    let mut client = Client::start(&Launch {
+        executable: Path::new(env!("CARGO_BIN_EXE_slopshop-ai")),
+        runtime: Path::new(&runtime),
+        models: &models,
+        provider: "directml",
+        library_paths: &library_paths,
+    })
+    .expect("the helper starts");
+
+    // A sky-blue to grass-green gradient, a red square in the middle, its mask a little larger.
+    let (w, h) = (512usize, 512usize);
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    let mut mask = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let t = y as f32 / h as f32;
+            let background = [
+                (120.0 - 60.0 * t) as u8,
+                (170.0 + 30.0 * t) as u8,
+                (230.0 - 170.0 * t) as u8,
+            ];
+            let square = (192..320).contains(&x) && (192..320).contains(&y);
+            rgb.extend_from_slice(if square { &[220, 20, 20] } else { &background });
+            mask.push(if (176..336).contains(&x) && (176..336).contains(&y) {
+                255
+            } else {
+                0
+            });
+        }
+    }
+    let mut stages = Vec::new();
+    let start = std::time::Instant::now();
+    let result = client
+        .erase(
+            &Request::Erase {
+                width: w as u32,
+                height: h as u32,
+                rgb,
+                mask,
+                seed: 7,
+                model: EraseModel::Turbo,
+            },
+            &mut |stage, done, total| {
+                stages.push((stage, done, total));
+                true
+            },
+        )
+        .expect("Erase runs");
+    eprintln!(
+        "erase (with loading): {:?}, {} progress reports",
+        start.elapsed(),
+        stages.len()
+    );
+    assert_eq!(result.len(), w * h * 3);
+    assert_eq!(stages.first(), Some(&(Stage::Loading, 0, 1000)));
+    // Loading reports its way (at most every 1 %, a large tensor at a time), up to its end.
+    let loading = stages.iter().filter(|s| s.0 == Stage::Loading).count();
+    assert!(loading > 20, "{loading} loading reports");
+    assert!(stages.contains(&(Stage::Loading, 1000, 1000)));
+    assert!(stages.contains(&(Stage::Denoising, 4, 4)));
+    assert_eq!(stages.last(), Some(&(Stage::Decoding, 1, 1)));
+    // Inside the square: no red left, the background's colors instead.
+    let (mut red, mut blue, mut count) = (0f64, 0f64, 0f64);
+    for y in 200..312 {
+        for x in 200..312 {
+            let p = &result[(y * w + x) * 3..][..3];
+            red += f64::from(p[0]);
+            blue += f64::from(p[2]);
+            count += 1.0;
+        }
+    }
+    let (red, blue) = (red / count, blue / count);
+    eprintln!("inside the square: mean red {red:.0}, blue {blue:.0}");
+    assert!(red < 150.0 && blue > 80.0, "red {red}, blue {blue}");
 }
