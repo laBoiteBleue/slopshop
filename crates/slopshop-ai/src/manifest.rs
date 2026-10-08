@@ -316,14 +316,14 @@ pub const COMPONENTS: &[Component] = &[
         files: &[
             Download {
                 path: "models/slopshop/erase-v1/erase_v1_diffusers.safetensors",
-                url: "https://huggingface.co/slopshop/erase-v1/resolve/main/erase_v1_diffusers.safetensors",
+                url: "https://huggingface.co/slopshop/erase-v1/resolve/0bb45298a0f4dde0affed10c73f8ad05ad26de48/erase_v1_diffusers.safetensors",
                 source: Source::File,
                 size: 192703480,
                 sha256: "9e368402d994d0b62ee4f2c85aded2d7c26288db95c46456f1aeeb105e06455f",
             },
             Download {
                 path: "models/slopshop/erase-v1/prompt_embeds.safetensors",
-                url: "https://huggingface.co/slopshop/erase-v1/resolve/main/prompt_embeds.safetensors",
+                url: "https://huggingface.co/slopshop/erase-v1/resolve/0bb45298a0f4dde0affed10c73f8ad05ad26de48/prompt_embeds.safetensors",
                 source: Source::File,
                 size: 7880872,
                 sha256: "71be1eb20caac35c8e8f3f176316b052b2fc0ccc27b254ba921068cdd00d21bc",

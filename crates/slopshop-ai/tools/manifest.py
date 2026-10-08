@@ -93,8 +93,7 @@ LICENSES = {
 
 # The Erase tool (ADR 0045): FLUX.2 [klein] 4B turbo as BFL publishes it, and erase_v1.
 FLUX2_KLEIN = ("black-forest-labs/FLUX.2-klein-4B", "e7b7dc27f91deacad38e78976d1f2b499d76a294")
-# HACK(the files are being uploaded): their commit replaces "main" here.
-ERASE_V1 = ("slopshop/erase-v1", "main")
+ERASE_V1 = ("slopshop/erase-v1", "0bb45298a0f4dde0affed10c73f8ad05ad26de48")
 
 
 def request(url, start=None, end=None):
