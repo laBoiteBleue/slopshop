@@ -374,8 +374,9 @@
       <input type="checkbox" bind:checked={gradient.reverse} />
       {t("options.gradient.reverse")}
     </label>
-  {:else if shapeKindOf(tool)}
-    {@const kind = shapeKindOf(tool)}
+  {:else if shapeKindOf(tool) || tool === "pen"}
+    <!-- The Pen draws a shape of a path, filled and stroked as the shape tools' (ADR 0041). -->
+    {@const kind = shapeKindOf(tool) ?? "path"}
     {#if kind !== "line"}
       <label class="option">
         <input type="checkbox" bind:checked={shape.filled} />

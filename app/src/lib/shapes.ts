@@ -4,6 +4,14 @@ import { hexToSrgb, srgbToHex } from "./color";
 
 export type ShapeKind = "rectangle" | "ellipse" | "polygon" | "line";
 
+/** A straight segment, or a cubic Bézier through its two control points (`SegmentDto`). */
+export type PathSegment =
+  | { kind: "line"; to: [number, number] }
+  | { kind: "cubic"; c1: [number, number]; c2: [number, number]; to: [number, number] };
+
+/** One connected run of a path (`SubpathDto`), back to `start` when `closed`. */
+export type PathSubpath = { start: [number, number]; segments: PathSegment[]; closed: boolean };
+
 export type StrokeAlign = "inside" | "center" | "outside";
 
 /** Where a shape's outline lies, in its layer's space (`crate::shape::GeometryDto`). */
@@ -24,7 +32,9 @@ export type ShapeGeometry =
       /** Of the first corner, degrees counterclockwise from the right (90: straight up). */
       rotation: number;
     }
-  | { kind: "line"; from: [number, number]; to: [number, number] };
+  | { kind: "line"; from: [number, number]; to: [number, number] }
+  /** The Pen's paths; `evenOdd` where they cross themselves, else nonzero. */
+  | { kind: "path"; subpaths: PathSubpath[]; evenOdd: boolean };
 
 export type ShapeStroke = {
   /** sRGB-encoded RGBA in [0, 1]. */
@@ -201,12 +211,20 @@ export function hasExtent(geometry: ShapeGeometry): boolean {
       return geometry.radius > 0;
     case "line":
       return Math.hypot(geometry.to[0] - geometry.from[0], geometry.to[1] - geometry.from[1]) > 0;
+    case "path": {
+      const points = geometry.subpaths.flatMap((s) => [
+        s.start,
+        ...s.segments.flatMap((g) => (g.kind === "line" ? [g.to] : [g.c1, g.c2, g.to])),
+      ]);
+      return points.some((p) => p[0] !== points[0][0] || p[1] !== points[0][1]);
+    }
   }
 }
 
 /** Points on a quarter turn of a rounded corner and on an ellipse, for the drawn outline. */
 const ARC_STEPS = 8;
 const ELLIPSE_STEPS = 64;
+const CUBIC_STEPS = 16;
 
 /**
  * The outline of `geometry` as points (its layer's space), closed unless it is a line: what
@@ -214,6 +232,29 @@ const ELLIPSE_STEPS = 64;
  */
 export function outlinePoints(geometry: ShapeGeometry): [number, number][] {
   switch (geometry.kind) {
+    case "path":
+      // Each cubic as a few points; subpaths one after the other (for a rough outline only).
+      return geometry.subpaths.flatMap((s) => {
+        const points: [number, number][] = [s.start];
+        for (const g of s.segments) {
+          if (g.kind === "line") {
+            points.push(g.to);
+            continue;
+          }
+          const p0 = points[points.length - 1];
+          for (let i = 1; i <= CUBIC_STEPS; i++) {
+            const t = i / CUBIC_STEPS;
+            const u = 1 - t;
+            const at = (k: 0 | 1) =>
+              u * u * u * p0[k] +
+              3 * u * u * t * g.c1[k] +
+              3 * u * t * t * g.c2[k] +
+              t * t * t * g.to[k];
+            points.push([at(0), at(1)]);
+          }
+        }
+        return points;
+      });
     case "line":
       return [geometry.from, geometry.to];
     case "ellipse": {

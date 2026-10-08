@@ -403,6 +403,12 @@ Raised on 2026-10-05, to schedule:
         options bar
   - [x] A vector layer's fill, stroke, corner radius, sides and star in the Properties panel
   - [ ] Pen and paths, vector masks
+    - [x] The Pen (P) in Shape mode: corners and smooth anchors, closed or ended paths drawn as
+          a vector layer; Direct Selection (A): anchors and handles dragged again, live shapes
+          turned into paths after a question
+    - [ ] Vector masks; Path Selection; the Paths panel and Path mode (a work path); Freeform
+          and Curvature Pen, Add, Delete and Convert Anchor Point; Ctrl for Direct Selection
+          while the Pen is active; dragging a segment
   - [ ] Type
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,

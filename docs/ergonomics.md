@@ -430,6 +430,21 @@ built. Contributors: propose here first.
   the active layer). Layer > Make Source Unique (and the layers' right-click menu) gives the
   selected layers that share their source one of their own, grayed when none does. Not yet: a
   source dragged onto the canvas, renaming a source.
+- The Pen (P, [ADR 0041](adr/0041-vector-content.md)), as Photoshop's in Shape mode, with the
+  shape tools' fill and stroke in the options bar: a click places a corner, a press and drag a
+  smooth anchor (its handles opposite; Alt while dragging moves the handle after it alone,
+  Shift keeps it at 45°), Shift keeps a new anchor at 45° from the last; the first anchor is
+  drawn hollow, and a click on it closes the path. Enter or Esc ends an open path, Backspace
+  (or Delete) takes back the last anchor, changing tool ends the path too; a path becomes a
+  vector layer named "Shape 1", "Shape 2"… Choices made without Photoshop to copy: Backspace
+  removes one anchor rather than the whole path, and Esc keeps the path rather than dropping
+  it.
+- Direct Selection (A): the active vector layer's anchors shown hollow; a press takes an
+  anchor, filled and its handles shown, or one of the selected anchor's handles; a drag moves
+  it, the other handle turning to stay opposite unless Alt; Shift keeps the move at 45°; Esc
+  during a drag puts it back; one undo entry a drag. On a rectangle, an ellipse, a polygon or a
+  line, a press first asks "Turn into a Path" (Photoshop's question for live shapes), and
+  Continue gives the same outline as anchors.
 
 ## Proposed
 

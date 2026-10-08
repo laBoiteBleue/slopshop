@@ -216,6 +216,9 @@
   import BucketTool from "./lib/BucketTool.svelte";
   import GradientTool from "./lib/GradientTool.svelte";
   import ShapeTool from "./lib/ShapeTool.svelte";
+  import PenTool from "./lib/PenTool.svelte";
+  import DirectSelectionTool from "./lib/DirectSelectionTool.svelte";
+  import { anchorsOf, contentToDocument, geometryOf, type PenPath } from "./lib/pen";
   import {
     changedShape,
     defaultShapeOptions,
@@ -1128,6 +1131,49 @@
         else shapeOptions = { ...shapeOptions, stroke: hex, stroked: true };
       },
     };
+  }
+
+  /**
+   * What Direct Selection edits (ADR 0041): the active vector layer's anchors, where its content
+   * lies, and whether it is still a live shape (turned into a path before its first edit).
+   */
+  const directTarget = $derived.by(() => {
+    if (!active || activeLayer?.kind !== "vector" || !activeLayer.shape) return null;
+    const matrix = contentToDocument(active.layers, activeLayer.id);
+    if (!matrix) return null;
+    return {
+      documentId: active.id,
+      layer: activeLayer.id,
+      shape: activeLayer.shape,
+      paths: anchorsOf(activeLayer.shape.geometry),
+      matrix,
+      live: activeLayer.shape.geometry.kind !== "path",
+    };
+  });
+
+  /** Direct Selection asked to turn a live shape into a path: the question shown. */
+  let convertingShape = $state(false);
+
+  /** Direct Selection moved anchors: the layer's path, live during the drag, then kept. */
+  function editAnchors(paths: PenPath[], done: boolean) {
+    const target = directTarget;
+    if (!target) return;
+    const evenOdd = target.shape.geometry.kind === "path" && target.shape.geometry.evenOdd;
+    const shape = { ...target.shape, geometry: geometryOf(paths, evenOdd) };
+    const request: EditRequest = { kind: "setShape", id: target.layer, shape };
+    commitTransform();
+    void sync(engine.performLive(target.documentId, request, true)).then(() => {
+      if (done) void endGesture(target.documentId);
+    });
+  }
+
+  /** The live shape turned into a path of the same outline (Photoshop's question answered). */
+  function convertShape() {
+    convertingShape = false;
+    const target = directTarget;
+    if (!target || !target.live) return;
+    const shape = { ...target.shape, geometry: geometryOf(target.paths) };
+    void edit(target.documentId, { kind: "setShape", id: target.layer, shape });
   }
 
   /** A shape tool's drag drawn: a vector layer of it above the active layer, selected. */
@@ -5894,6 +5940,18 @@
                   />
                 {:else if tool === "gradient"}
                   <GradientTool {mapping} ongradient={layGradient} />
+                {:else if tool === "pen"}
+                  <PenTool {mapping} onpath={addShape} />
+                {:else if tool === "directSelection" && directTarget}
+                  <DirectSelectionTool
+                    {mapping}
+                    paths={directTarget.paths}
+                    matrix={directTarget.matrix}
+                    live={directTarget.live}
+                    onedit={editAnchors}
+                    oncancel={() => directTarget && void cancelGesture(directTarget.documentId)}
+                    onconvert={() => (convertingShape = true)}
+                  />
                 {:else if shapeKindOf(tool)}
                   <ShapeTool
                     {mapping}
@@ -6258,6 +6316,15 @@
       patternPicker = null;
       if (styleDialog) styleDialog.picking = false;
     }}
+  />
+{/if}
+{#if convertingShape}
+  <ConfirmDialog
+    title={t("pen.convert.title")}
+    message={t("pen.convert.message")}
+    action={t("pen.convert.action")}
+    onconfirm={convertShape}
+    onclose={() => (convertingShape = false)}
   />
 {/if}
 {#if deletingSource}

@@ -81,6 +81,10 @@
     shapeEllipse: "M12 5c4.7 0 8.5 3.1 8.5 7s-3.8 7-8.5 7-8.5-3.1-8.5-7S7.3 5 12 5Z",
     shapePolygon: "M12 3l8.5 6.2-3.3 10H6.8L3.5 9.2Z",
     shapeLine: "M4 20L20 4",
+    // A pen nib on its anchor (the Pen, ADR 0041).
+    pen: "M12 21l-6-6 3-9 3-3 3 3 3 9z M12 3v8 M12 11a1.5 1.5 0 1 0 0 3a1.5 1.5 0 1 0 0-3Z M6 21h12",
+    // A hollow arrow by an anchor square (Direct Selection, ADR 0041).
+    directSelection: "M5 3v14l3.6-3.4 2.4 5.6 2.4-1-2.4-5.6H16Z M17 17h4v4h-4Z",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:

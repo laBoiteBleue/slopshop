@@ -29,6 +29,8 @@ export type ToolId =
   | "blur"
   | "sharpen"
   | "smudge"
+  | "pen"
+  | "directSelection"
   | "shapeRectangle"
   | "shapeEllipse"
   | "shapePolygon"
@@ -109,6 +111,12 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "dodge", icon: "dodge", name: "tools.dodge" },
       { id: "burn", icon: "burn", name: "tools.burn" },
     ],
+  },
+  // Paths (ADR 0041): the Pen draws a vector layer, Direct Selection moves its anchors.
+  { key: "P", tools: [{ id: "pen", icon: "pen", name: "tools.pen" }] },
+  {
+    key: "A",
+    tools: [{ id: "directSelection", icon: "directSelection", name: "tools.directSelection" }],
   },
   // Vector shapes (ADR 0041): each draws a vector layer.
   {

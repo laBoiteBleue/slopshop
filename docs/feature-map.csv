@@ -644,9 +644,9 @@ Tool,Tools panel > Blur > Smudge,,done,"as paint in the layer's stack, the origi
 Tool,Tools panel > Dodge/Burn > Dodge,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Burn,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Sponge,,open,Dodge and Burn exist; good next tone tool
-Tool,Tools panel > Pen > Pen,,open,paths are not started
-Tool,Tools panel > Pen > Freeform Pen,,open,paths are not started
-Tool,Tools panel > Pen > Curvature Pen,,open,paths are not started
+Tool,Tools panel > Pen > Pen,,partial,"Shape mode: corners, smooth anchors (Alt breaks the handles, Shift 45°), closed or ended paths become a vector layer; no Path mode, no Paths panel yet"
+Tool,Tools panel > Pen > Freeform Pen,,open,the Pen exists (Shape mode)
+Tool,Tools panel > Pen > Curvature Pen,,open,the Pen exists (Shape mode)
 Tool,Tools panel > Pen > Add Anchor Point,,open,paths are not started
 Tool,Tools panel > Pen > Delete Anchor Point,,open,paths are not started
 Tool,Tools panel > Pen > Convert Point,,open,paths are not started
@@ -655,7 +655,7 @@ Tool,Tools panel > Type > Vertical Type,,open,text layers are not started
 Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started
 Tool,Tools panel > Path > Path Selection,,open,paths are not started
-Tool,Tools panel > Path > Direct Selection,,open,paths are not started
+Tool,Tools panel > Path > Direct Selection,,partial,"the active vector layer's anchors and the selected anchor's handles dragged (Alt alone, Shift 45°), live shapes turned into paths after a question; not yet: several anchors, segments, other layers' paths"
 Tool,Tools panel > Shape > Rectangle,,done,"U: a vector layer (ADR 0041); fill, stroke (inside, center, outside), corner radius"
 Tool,Tools panel > Shape > Ellipse,,done,U: a vector layer (ADR 0041)
 Tool,Tools panel > Shape > Triangle,,partial,the Polygon tool with three sides

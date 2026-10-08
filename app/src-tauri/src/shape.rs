@@ -5,10 +5,11 @@
 use serde::{Deserialize, Serialize};
 use slopshop_core::LinearRgba;
 use slopshop_core::shape::{
-    Geometry, Paint, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
+    FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
+    Subpath,
 };
 
-/// Where a shape's outline lies. Paths (the Pen's) are not drawn from the UI yet.
+/// Where a shape's outline lies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GeometryDto {
@@ -31,6 +32,38 @@ pub enum GeometryDto {
     },
     Line {
         from: [f64; 2],
+        to: [f64; 2],
+    },
+    /// Paths of lines and cubic Béziers (the Pen's); `evenOdd` where they cross themselves,
+    /// else nonzero.
+    #[serde(rename_all = "camelCase")]
+    Path {
+        subpaths: Vec<SubpathDto>,
+        #[serde(default)]
+        even_odd: bool,
+    },
+}
+
+/// One connected run of a path: from `start`, its segments in turn, back to `start` when
+/// `closed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubpathDto {
+    pub start: [f64; 2],
+    pub segments: Vec<SegmentDto>,
+    pub closed: bool,
+}
+
+/// A straight segment to `to`, or a cubic Bézier through its two control points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SegmentDto {
+    Line {
+        to: [f64; 2],
+    },
+    Cubic {
+        c1: [f64; 2],
+        c2: [f64; 2],
         to: [f64; 2],
     },
 }
@@ -115,6 +148,31 @@ impl ShapeDto {
                 rotation,
             },
             GeometryDto::Line { from, to } => Geometry::Line { from, to },
+            GeometryDto::Path {
+                ref subpaths,
+                even_odd,
+            } => Geometry::Path {
+                subpaths: subpaths
+                    .iter()
+                    .map(|s| Subpath {
+                        start: s.start,
+                        segments: s
+                            .segments
+                            .iter()
+                            .map(|segment| match *segment {
+                                SegmentDto::Line { to } => Segment::Line(to),
+                                SegmentDto::Cubic { c1, c2, to } => Segment::Cubic(c1, c2, to),
+                            })
+                            .collect(),
+                        closed: s.closed,
+                    })
+                    .collect(),
+                rule: if even_odd {
+                    FillRule::EvenOdd
+                } else {
+                    FillRule::NonZero
+                },
+            },
         };
         let shape = Shape {
             geometry,
@@ -149,7 +207,7 @@ impl ShapeDto {
         }
     }
 
-    /// `shape` as the UI sees it; `None` for a path (not edited from the UI yet).
+    /// `shape` as the UI sees it.
     pub fn of(shape: &Shape) -> Option<Self> {
         let geometry = match shape.geometry {
             Geometry::Rectangle { rect, radii } => GeometryDto::Rectangle { rect, radii },
@@ -168,7 +226,24 @@ impl ShapeDto {
                 rotation,
             },
             Geometry::Line { from, to } => GeometryDto::Line { from, to },
-            Geometry::Path { .. } => return None,
+            Geometry::Path { ref subpaths, rule } => GeometryDto::Path {
+                subpaths: subpaths
+                    .iter()
+                    .map(|s| SubpathDto {
+                        start: s.start,
+                        segments: s
+                            .segments
+                            .iter()
+                            .map(|segment| match *segment {
+                                Segment::Line(to) => SegmentDto::Line { to },
+                                Segment::Cubic(c1, c2, to) => SegmentDto::Cubic { c1, c2, to },
+                            })
+                            .collect(),
+                        closed: s.closed,
+                    })
+                    .collect(),
+                even_odd: rule == FillRule::EvenOdd,
+            },
         };
         Some(Self {
             geometry,
@@ -243,5 +318,54 @@ mod tests {
             }),
         };
         assert!(line.shape().is_err());
+    }
+
+    #[test]
+    fn the_pens_paths_cross_the_ipc_both_ways() {
+        let json = r#"{
+            "geometry": { "kind": "path", "evenOdd": true, "subpaths": [
+                { "start": [10, 10], "closed": true, "segments": [
+                    { "kind": "line", "to": [90, 10] },
+                    { "kind": "cubic", "c1": [120, 40], "c2": [60, 90], "to": [10, 80] }
+                ] }
+            ] },
+            "fill": [0, 0, 1, 1],
+            "stroke": null
+        }"#;
+        let dto: ShapeDto = serde_json::from_str(json).unwrap();
+        let shape = dto.shape().unwrap();
+        let Geometry::Path { subpaths, rule } = &shape.geometry else {
+            panic!("a path");
+        };
+        assert_eq!(rule, &FillRule::EvenOdd);
+        assert_eq!(
+            subpaths[0].segments,
+            vec![
+                Segment::Line([90.0, 10.0]),
+                Segment::Cubic([120.0, 40.0], [60.0, 90.0], [10.0, 80.0]),
+            ]
+        );
+        assert!(subpaths[0].closed);
+        // Back to the UI, the same; nonzero by default.
+        assert_eq!(ShapeDto::of(&shape).unwrap().geometry, dto.geometry);
+        let open: ShapeDto = serde_json::from_str(
+            r#"{ "geometry": { "kind": "path", "subpaths": [{ "start": [0, 0], "closed": false,
+                 "segments": [{ "kind": "line", "to": [5, 5] }] }] }, "fill": [0, 0, 0, 1] }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            open.shape().unwrap().geometry,
+            Geometry::Path {
+                rule: FillRule::NonZero,
+                ..
+            }
+        ));
+        // A point out of range is refused.
+        let far: ShapeDto = serde_json::from_str(
+            r#"{ "geometry": { "kind": "path", "subpaths": [{ "start": [0, 0], "closed": false,
+                 "segments": [{ "kind": "line", "to": [1e9, 5] }] }] }, "fill": [0, 0, 0, 1] }"#,
+        )
+        .unwrap();
+        assert!(far.shape().is_err());
     }
 }
