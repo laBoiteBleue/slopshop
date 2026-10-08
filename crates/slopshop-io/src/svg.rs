@@ -18,13 +18,20 @@ use crate::{Decoded, ImportError, Imported, check_budget, finish};
 /// CSS pixels per inch: an SVG rendered at this resolution has its intrinsic size.
 pub const SVG_DPI: f32 = 96.0;
 
-/// Whether the file looks like an SVG: its extension, or an `<svg` element near the start.
+/// Whether the file looks like an SVG: its extension, or markup (a tag first, after a byte
+/// order mark and white space) with an `<svg` element near the start. Binary files can hold
+/// `<svg` too, in their metadata (a PNG's XMP or Content Credentials).
 pub(crate) fn is_svg(head: &[u8], path: &Path) -> bool {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
-    matches!(extension.as_deref(), Some("svg" | "svgz")) || head.windows(4).any(|w| w == b"<svg")
+    if matches!(extension.as_deref(), Some("svg" | "svgz")) {
+        return true;
+    }
+    let text = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
+    let markup = text.trim_ascii_start().starts_with(b"<");
+    markup && head.windows(4).any(|w| w == b"<svg")
 }
 
 /// The system's fonts, loaded once (it takes a moment) for every SVG with text.
@@ -176,6 +183,51 @@ mod tests {
         let head = std::fs::read(fixture("shapes.svg")).unwrap();
         assert!(is_svg(&head, Path::new("noextension")));
         assert!(!is_svg(b"\x89PNG", Path::new("a.png")));
+        // A byte order mark and white space before the markup.
+        let bom = [b"\xEF\xBB\xBF\n  ".as_slice(), &head].concat();
+        assert!(is_svg(&bom, Path::new("noextension")));
+    }
+
+    #[test]
+    fn binary_files_mentioning_svg_are_not_svg() {
+        // A PNG whose metadata (here an iTXt chunk) holds `<svg`, as some generated images'
+        // Content Credentials do: it was handed to the SVG parser, which refused it.
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let text = b"XML:com.adobe.xmp\0\0\0\0\0<x><svg xmlns='http://www.w3.org/2000/svg'/></x>";
+        let mut chunk = (text.len() as u32).to_be_bytes().to_vec();
+        chunk.extend(b"iTXt");
+        chunk.extend(text);
+        let crc = crc32(&chunk[4..]);
+        chunk.extend(crc.to_be_bytes());
+        // After the signature and the header chunk (8 + 25 bytes).
+        png.splice(33..33, chunk);
+        assert!(!is_svg(&png, Path::new("Image ChatGPT.png")));
+
+        let path =
+            std::env::temp_dir().join(format!("slopshop-svg-{}-meta.png", std::process::id()));
+        std::fs::write(&path, &png).unwrap();
+        let imported = crate::open_image(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(imported.unwrap().image.size(), Size::new(3, 2));
+    }
+
+    /// PNG's chunk checksum (CRC-32 of ISO 3309).
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
     }
 
     #[test]
