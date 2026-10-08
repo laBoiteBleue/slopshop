@@ -257,6 +257,43 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
   ]);
 });
 
+test("Stylize, Pixelate and HSB/HSL: their settings and the filters without", () => {
+  expect(FILTERS.wind.defaults).toEqual([0, 0, 0]);
+  expect(validValues("wind", [2, 1, 9])).toBe(true);
+  expect(validValues("wind", [3, 0, 0])).toBe(false);
+  expect(validValues("diffuse", [3, 0])).toBe(true);
+  expect(validValues("diffuse", [4, 0])).toBe(false);
+  expect(FILTERS.traceContour.defaults).toEqual([128, 1]);
+  expect(validValues("traceContour", [256, 1])).toBe(false);
+  expect(FILTERS.crystallize.defaults).toEqual([10, 0]);
+  expect(validValues("crystallize", [2, 0])).toBe(false);
+  expect(validValues("crystallize", [300, 0])).toBe(true);
+  expect(validValues("mezzotint", [9, 0])).toBe(true);
+  expect(validValues("mezzotint", [10, 0])).toBe(false);
+  expect(FILTERS.colorHalftone.defaults).toEqual([8, 108, 162, 90, 45]);
+  expect(validValues("colorHalftone", [127, -360, 360, 0, 0])).toBe(true);
+  expect(validValues("colorHalftone", [3, 0, 0, 0, 0])).toBe(false);
+  expect(FILTERS.hsbHsl.defaults).toEqual([0, 1]);
+  expect(hasSettings("facet")).toBe(false);
+  expect(hasSettings("fragment")).toBe(false);
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.pixelate")?.filters).toEqual([
+    "colorHalftone",
+    "crystallize",
+    "facet",
+    "fragment",
+    "mezzotint",
+    "mosaic",
+  ]);
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.stylize")?.filters).toEqual([
+    "diffuse",
+    "emboss",
+    "findEdges",
+    "solarize",
+    "traceContour",
+    "wind",
+  ]);
+});
+
 test("Ripple, ZigZag and Wave: Photoshop's ranges and defaults", () => {
   expect(FILTERS.ripple.defaults).toEqual([100, 1]);
   expect(validValues("ripple", [-999, 0])).toBe(true);

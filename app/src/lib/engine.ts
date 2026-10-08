@@ -104,7 +104,16 @@ export type FilterId =
   | "polarCoordinates"
   | "ripple"
   | "wave"
-  | "zigZag";
+  | "zigZag"
+  | "wind"
+  | "diffuse"
+  | "traceContour"
+  | "crystallize"
+  | "facet"
+  | "fragment"
+  | "mezzotint"
+  | "colorHalftone"
+  | "hsbHsl";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {

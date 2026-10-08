@@ -173,6 +173,186 @@ pub struct WaveGenerator {
     pub phase: [f64; 2],
 }
 
+/// Wind's Method: thin streaks, longer and denser ones (Blast), or rows broken and shifted
+/// (Stagger).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindMethod {
+    Wind,
+    Blast,
+    Stagger,
+}
+
+impl Choice for WindMethod {
+    const ALL: &'static [Self] = &[Self::Wind, Self::Blast, Self::Stagger];
+}
+
+impl WindMethod {
+    /// Its longest streak, or its largest shift, in pixels.
+    pub fn reach(self) -> usize {
+        match self {
+            Self::Wind => 16,
+            Self::Blast => 40,
+            Self::Stagger => 12,
+        }
+    }
+}
+
+/// Diffuse's Mode: which neighbor a pixel takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffuseMode {
+    /// Any of them.
+    Normal,
+    /// A darker one only.
+    DarkenOnly,
+    /// A lighter one only.
+    LightenOnly,
+    /// The one closest to it in lightness: colors shuffled along their edges, not across.
+    Anisotropic,
+}
+
+impl Choice for DiffuseMode {
+    const ALL: &'static [Self] = &[
+        Self::Normal,
+        Self::DarkenOnly,
+        Self::LightenOnly,
+        Self::Anisotropic,
+    ];
+}
+
+/// Mezzotint's Type: the pattern each channel is thresholded against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MezzotintKind {
+    FineDots,
+    MediumDots,
+    GrainyDots,
+    CoarseDots,
+    ShortLines,
+    MediumLines,
+    LongLines,
+    ShortStrokes,
+    MediumStrokes,
+    LongStrokes,
+}
+
+impl Choice for MezzotintKind {
+    const ALL: &'static [Self] = &[
+        Self::FineDots,
+        Self::MediumDots,
+        Self::GrainyDots,
+        Self::CoarseDots,
+        Self::ShortLines,
+        Self::MediumLines,
+        Self::LongLines,
+        Self::ShortStrokes,
+        Self::MediumStrokes,
+        Self::LongStrokes,
+    ];
+}
+
+impl MezzotintKind {
+    /// The threshold of channel `channel` at pixel `[x, y]` for `seed`, from 0 to 1: dots of one
+    /// to four pixels, horizontal lines, or diagonal strokes, each a random level.
+    pub fn threshold(self, [x, y]: [i64; 2], channel: u32, seed: u32) -> f64 {
+        let at = |x: i64, y: i64| unit(x, y, 70 + channel, seed);
+        let run = |length: i64| at(x.div_euclid(length), y);
+        let stroke = |length: i64| at((x + y).div_euclid(length), x - y);
+        match self {
+            Self::FineDots => at(x, y),
+            Self::MediumDots => at(x.div_euclid(2), y.div_euclid(2)),
+            Self::GrainyDots => (at(x, y) + at(x.div_euclid(3), y.div_euclid(3))) / 2.0,
+            Self::CoarseDots => at(x.div_euclid(4), y.div_euclid(4)),
+            Self::ShortLines => run(4),
+            Self::MediumLines => run(8),
+            Self::LongLines => run(16),
+            Self::ShortStrokes => stroke(4),
+            Self::MediumStrokes => stroke(8),
+            Self::LongStrokes => stroke(16),
+        }
+    }
+}
+
+/// HSB/HSL's color models: what a pixel's three channels hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorModel {
+    Rgb,
+    Hsb,
+    Hsl,
+}
+
+impl Choice for ColorModel {
+    const ALL: &'static [Self] = &[Self::Rgb, Self::Hsb, Self::Hsl];
+}
+
+impl ColorModel {
+    /// The red, green and blue of `c`, read as this model's three values (each 0 to 1, a hue
+    /// as a fraction of a turn).
+    pub fn to_rgb(self, c: [f64; 3]) -> [f64; 3] {
+        let c = c.map(|v| v.clamp(0.0, 1.0));
+        // The color of hue `h` with its largest and smallest channels.
+        let hue = |h: f64, high: f64, low: f64| {
+            let h = h.rem_euclid(1.0) * 6.0;
+            let channel = |shift: f64| {
+                let k = (h + shift).rem_euclid(6.0);
+                let ramp = (k.min(4.0 - k)).clamp(0.0, 1.0);
+                high - (high - low) * ramp
+            };
+            [channel(5.0), channel(3.0), channel(1.0)]
+        };
+        match self {
+            Self::Rgb => c,
+            Self::Hsb => hue(c[0], c[2], c[2] * (1.0 - c[1])),
+            Self::Hsl => {
+                let chroma = (1.0 - (2.0 * c[2] - 1.0).abs()) * c[1];
+                hue(c[0], c[2] + chroma / 2.0, c[2] - chroma / 2.0)
+            }
+        }
+    }
+
+    /// `rgb` as this model's three values.
+    pub fn from_rgb(self, rgb: [f64; 3]) -> [f64; 3] {
+        let [r, g, b] = rgb.map(|v| v.clamp(0.0, 1.0));
+        let (high, low) = (r.max(g).max(b), r.min(g).min(b));
+        let chroma = high - low;
+        let hue = if chroma <= 0.0 {
+            0.0
+        } else if high == r {
+            ((g - b) / chroma).rem_euclid(6.0) / 6.0
+        } else if high == g {
+            ((b - r) / chroma + 2.0) / 6.0
+        } else {
+            ((r - g) / chroma + 4.0) / 6.0
+        };
+        match self {
+            Self::Rgb => [r, g, b],
+            Self::Hsb => [hue, if high > 0.0 { chroma / high } else { 0.0 }, high],
+            Self::Hsl => {
+                let lightness = (high + low) / 2.0;
+                let spread = 1.0 - (2.0 * lightness - 1.0).abs();
+                [
+                    hue,
+                    if spread > 0.0 { chroma / spread } else { 0.0 },
+                    lightness,
+                ]
+            }
+        }
+    }
+}
+
+/// Color Halftone's radius range, in pixels (Photoshop's Max. Radius, 4 to 127).
+pub const MIN_HALFTONE_RADIUS: f32 = 4.0;
+pub const MAX_HALFTONE_RADIUS: f32 = 127.0;
+
+/// Crystallize's cells, in pixels (Photoshop's 3 to 300).
+pub const MIN_CRYSTAL_CELL: f32 = 3.0;
+pub const MAX_CRYSTAL_CELL: f32 = 300.0;
+
+/// A number from 0 to 1 for pixel `[x, y]`, draw `k` and `seed`: the same everywhere it is
+/// computed (tiles, threads, the CPU and the GPU).
+pub fn unit(x: i64, y: i64, k: u32, seed: u32) -> f64 {
+    let h = hash(x as i32 as u32 ^ hash(y as i32 as u32 ^ hash(seed ^ hash(k))));
+    f64::from(h >> 8) / f64::from(1u32 << 24)
+}
+
 /// What Offset brings in where the layer moved away (Photoshop's Undefined Areas).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetEdge {
@@ -325,6 +505,39 @@ pub enum Filter {
         wrap: bool,
         seed: u32,
     },
+    /// Photoshop's Wind: streaks blown from the edges of the layer's content (`method`), from
+    /// the left or the right, their lengths drawn from `seed`.
+    Wind {
+        method: WindMethod,
+        from_left: bool,
+        seed: u32,
+    },
+    /// Photoshop's Diffuse: each pixel one of the eight around it or itself, drawn from `seed`
+    /// (`mode`: which ones it may take).
+    Diffuse { mode: DiffuseMode, seed: u32 },
+    /// Photoshop's Trace Contour: on white, each channel's outline where it crosses `level`
+    /// (of 255), drawn on its pixels above it (`upper`) or below.
+    TraceContour { level: f32, upper: bool },
+    /// Photoshop's Crystallize: polygons around points scattered one per square `cell`
+    /// pixels wide (from `seed`), each the average of its pixels.
+    Crystallize { cell: f32, seed: u32 },
+    /// Photoshop's Facet: each pixel the average of the most even of the four squares of three
+    /// pixels at its corners (a Kuwahara filter): flat facets, sharp edges.
+    Facet,
+    /// Photoshop's Fragment: four copies of the layer, four pixels away diagonally, averaged.
+    Fragment,
+    /// Photoshop's Mezzotint: each channel all or nothing against a random pattern (`kind`),
+    /// drawn from `seed`.
+    Mezzotint { kind: MezzotintKind, seed: u32 },
+    /// Photoshop's Color Halftone: each channel's dots on a screen at its angle (degrees, the
+    /// first three for red, green and blue), as wide as the channel is light, `radius` pixels
+    /// at most.
+    ColorHalftone { radius: f32, angles: [f32; 4] },
+    /// Photoshop's HSB/HSL: the channels read as `input`'s values and written as `output`'s.
+    HsbHsl {
+        input: ColorModel,
+        output: ColorModel,
+    },
     /// Lightroom's Texture and Clarity (-100 to 100): each color pushed away from (or, below 0,
     /// toward) its blur of a few pixels by `texture`, and from its blur of tens of pixels by
     /// `clarity`, in the midtones. `scale` is how many of the layer's pixels a pixel it is
@@ -338,7 +551,7 @@ pub enum Filter {
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 23] = [
+    pub const IDS: [&'static str; 32] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -362,6 +575,15 @@ impl Filter {
         "ripple",
         "wave",
         "zigZag",
+        "wind",
+        "diffuse",
+        "traceContour",
+        "crystallize",
+        "facet",
+        "fragment",
+        "mezzotint",
+        "colorHalftone",
+        "hsbHsl",
     ];
 
     /// The identifier the UI and files know it by.
@@ -390,6 +612,15 @@ impl Filter {
             Self::Ripple { .. } => "ripple",
             Self::ZigZag { .. } => "zigZag",
             Self::Wave { .. } => "wave",
+            Self::Wind { .. } => "wind",
+            Self::Diffuse { .. } => "diffuse",
+            Self::TraceContour { .. } => "traceContour",
+            Self::Crystallize { .. } => "crystallize",
+            Self::Facet => "facet",
+            Self::Fragment => "fragment",
+            Self::Mezzotint { .. } => "mezzotint",
+            Self::ColorHalftone { .. } => "colorHalftone",
+            Self::HsbHsl { .. } => "hsbHsl",
         }
     }
 
@@ -474,12 +705,33 @@ impl Filter {
                 f32::from(u8::from(!wrap)),
                 seed as f32,
             ],
+            // Photoshop's order: From the Right, then From the Left.
+            Self::Wind {
+                method,
+                from_left,
+                seed,
+            } => vec![method.value(), f32::from(u8::from(from_left)), seed as f32],
+            Self::Diffuse { mode, seed } => vec![mode.value(), seed as f32],
+            // Photoshop's order: Lower, then Upper.
+            Self::TraceContour { level, upper } => vec![level, f32::from(u8::from(upper))],
+            Self::Crystallize { cell, seed } => vec![cell, seed as f32],
+            Self::Facet | Self::Fragment => Vec::new(),
+            Self::Mezzotint { kind, seed } => vec![kind.value(), seed as f32],
+            Self::ColorHalftone { radius, angles } => {
+                vec![radius, angles[0], angles[1], angles[2], angles[3]]
+            }
+            Self::HsbHsl { input, output } => vec![input.value(), output.value()],
         }
     }
 
     /// The filter `id` with `values` (in [`Self::params`] order); `None` for an unknown
     /// identifier or a wrong number of values. Not validated: see [`Self::is_valid`].
     pub fn from_params(id: &str, values: &[f32]) -> Option<Self> {
+        // A flag is 0 or 1, a seed a whole number in range: anything else is not this filter's.
+        let flag = |v: f32| (v == 0.0 || v == 1.0).then_some(v == 1.0);
+        let seed_of = |v: f32| {
+            (v.fract() == 0.0 && (0.0..NOISE_SEEDS as f32).contains(&v)).then_some(v as u32)
+        };
         match (id, values) {
             ("gaussianBlur", &[radius]) => Some(Self::GaussianBlur { radius }),
             ("motionBlur", &[angle, distance]) => Some(Self::MotionBlur { angle, distance }),
@@ -566,6 +818,37 @@ impl Filter {
                 1.0 => Some(Self::PolarCoordinates { to_polar: true }),
                 _ => None,
             },
+            ("wind", &[method, side, seed]) => Some(Self::Wind {
+                method: WindMethod::from_value(method)?,
+                from_left: flag(side)?,
+                seed: seed_of(seed)?,
+            }),
+            ("diffuse", &[mode, seed]) => Some(Self::Diffuse {
+                mode: DiffuseMode::from_value(mode)?,
+                seed: seed_of(seed)?,
+            }),
+            ("traceContour", &[level, edge]) => Some(Self::TraceContour {
+                level,
+                upper: flag(edge)?,
+            }),
+            ("crystallize", &[cell, seed]) => Some(Self::Crystallize {
+                cell,
+                seed: seed_of(seed)?,
+            }),
+            ("facet", &[]) => Some(Self::Facet),
+            ("fragment", &[]) => Some(Self::Fragment),
+            ("mezzotint", &[kind, seed]) => Some(Self::Mezzotint {
+                kind: MezzotintKind::from_value(kind)?,
+                seed: seed_of(seed)?,
+            }),
+            ("colorHalftone", &[radius, a, b, c, d]) => Some(Self::ColorHalftone {
+                radius,
+                angles: [a, b, c, d],
+            }),
+            ("hsbHsl", &[input, output]) => Some(Self::HsbHsl {
+                input: ColorModel::from_value(input)?,
+                output: ColorModel::from_value(output)?,
+            }),
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
@@ -650,6 +933,37 @@ impl Filter {
                 amount: 10.0,
                 ridges: 5.0,
                 style: ZigZagStyle::PondRipples,
+            }),
+            "wind" => Some(Self::Wind {
+                method: WindMethod::Wind,
+                from_left: false,
+                seed: 0,
+            }),
+            "diffuse" => Some(Self::Diffuse {
+                mode: DiffuseMode::Normal,
+                seed: 0,
+            }),
+            "traceContour" => Some(Self::TraceContour {
+                level: 128.0,
+                upper: true,
+            }),
+            "crystallize" => Some(Self::Crystallize {
+                cell: 10.0,
+                seed: 0,
+            }),
+            "facet" => Some(Self::Facet),
+            "fragment" => Some(Self::Fragment),
+            "mezzotint" => Some(Self::Mezzotint {
+                kind: MezzotintKind::FineDots,
+                seed: 0,
+            }),
+            "colorHalftone" => Some(Self::ColorHalftone {
+                radius: 8.0,
+                angles: [108.0, 162.0, 90.0, 45.0],
+            }),
+            "hsbHsl" => Some(Self::HsbHsl {
+                input: ColorModel::Rgb,
+                output: ColorModel::Hsb,
             }),
             "wave" => Some(Self::Wave {
                 generators: 5.0,
@@ -768,6 +1082,23 @@ impl Filter {
                         .all(|v| v.is_finite() && (1.0..=100.0).contains(v))
                     && seed < NOISE_SEEDS
             }
+            Self::Wind { seed, .. } | Self::Diffuse { seed, .. } | Self::Mezzotint { seed, .. } => {
+                seed < NOISE_SEEDS
+            }
+            Self::TraceContour { level, .. } => level.is_finite() && (0.0..=255.0).contains(&level),
+            Self::Crystallize { cell, seed } => {
+                cell.fract() == 0.0
+                    && (MIN_CRYSTAL_CELL..=MAX_CRYSTAL_CELL).contains(&cell)
+                    && seed < NOISE_SEEDS
+            }
+            Self::Facet | Self::Fragment | Self::HsbHsl { .. } => true,
+            Self::ColorHalftone { radius, angles } => {
+                radius.fract() == 0.0
+                    && (MIN_HALFTONE_RADIUS..=MAX_HALFTONE_RADIUS).contains(&radius)
+                    && angles
+                        .iter()
+                        .all(|a| a.fract() == 0.0 && (-360.0..=360.0).contains(a))
+            }
         }
     }
 
@@ -796,7 +1127,16 @@ impl Filter {
             | Self::PolarCoordinates { .. }
             | Self::Ripple { .. }
             | Self::ZigZag { .. }
-            | Self::Wave { .. } => None,
+            | Self::Wave { .. }
+            | Self::Wind { .. }
+            | Self::Diffuse { .. }
+            | Self::TraceContour { .. }
+            | Self::Crystallize { .. }
+            | Self::Facet
+            | Self::Fragment
+            | Self::Mezzotint { .. }
+            | Self::ColorHalftone { .. }
+            | Self::HsbHsl { .. } => None,
         }
     }
 
@@ -881,6 +1221,21 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::ZigZag { .. }
             | Self::Wave { .. } => *self,
+            Self::Crystallize { cell, seed } => Self::Crystallize {
+                cell: (cell / factor).max(1.0),
+                seed,
+            },
+            Self::ColorHalftone { radius, angles } => Self::ColorHalftone {
+                radius: (radius / factor).max(1.0),
+                angles,
+            },
+            Self::Wind { .. }
+            | Self::Diffuse { .. }
+            | Self::TraceContour { .. }
+            | Self::Facet
+            | Self::Fragment
+            | Self::Mezzotint { .. }
+            | Self::HsbHsl { .. } => *self,
             Self::ClarityTexture {
                 texture,
                 clarity,
@@ -917,6 +1272,17 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::ZigZag { .. }
             | Self::Wave { .. } => f64::INFINITY,
+            Self::Wind { method, .. } => method.reach() as f64 + 2.0,
+            Self::Diffuse { .. } | Self::TraceContour { .. } => 3.0,
+            // A pixel's polygon reaches up to three cells away (see `crystals`).
+            Self::Crystallize { cell, .. } => 3.0 * f64::from(cell) + 2.0,
+            Self::Facet => 4.0,
+            Self::Fragment => 6.0,
+            Self::Mezzotint { .. } | Self::HsbHsl { .. } => 0.0,
+            // Its dot's center, at most half a cell's diagonal away.
+            Self::ColorHalftone { radius, .. } => {
+                f64::from(radius) * std::f64::consts::SQRT_2 + 3.0
+            }
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
             }
@@ -995,9 +1361,56 @@ impl Filter {
             | Self::PolarCoordinates { .. }
             | Self::Ripple { .. }
             | Self::ZigZag { .. }
-            | Self::Wave { .. } => Plan {
+            | Self::Wave { .. }
+            | Self::Mezzotint { .. }
+            | Self::HsbHsl { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
+            },
+            Self::Wind {
+                method,
+                from_left,
+                seed,
+            } => Plan {
+                factor: 1,
+                kernel: Kernel::Wind {
+                    method,
+                    from_left,
+                    seed,
+                },
+            },
+            Self::Diffuse { mode, seed } => Plan {
+                factor: 1,
+                kernel: Kernel::Diffuse { mode, seed },
+            },
+            Self::TraceContour { level, upper } => Plan {
+                factor: 1,
+                kernel: Kernel::Contour {
+                    level: f64::from(level) / 255.0,
+                    upper,
+                },
+            },
+            Self::Crystallize { cell, seed } => Plan {
+                factor: 1,
+                kernel: Kernel::Crystals {
+                    cell: f64::from(cell),
+                    seed,
+                },
+            },
+            Self::Facet => Plan {
+                factor: 1,
+                kernel: Kernel::Facet,
+            },
+            Self::Fragment => Plan {
+                factor: 1,
+                kernel: Kernel::Fragment,
+            },
+            Self::ColorHalftone { radius, angles } => Plan {
+                factor: 1,
+                kernel: Kernel::Halftone {
+                    radius: f64::from(radius),
+                    angles: angles.map(|a| f64::from(a).to_radians()),
+                },
             },
             Self::ClarityTexture { .. } => Plan {
                 factor: 1,
@@ -1271,6 +1684,13 @@ impl Filter {
                 | Self::Ripple { .. }
                 | Self::ZigZag { .. }
                 | Self::Wave { .. }
+                | Self::Wind { .. }
+                | Self::Diffuse { .. }
+                | Self::TraceContour { .. }
+                | Self::Crystallize { .. }
+                | Self::Facet
+                | Self::Fragment
+                | Self::ColorHalftone { .. }
         )
     }
 
@@ -1308,7 +1728,35 @@ impl Filter {
             | Self::PolarCoordinates { .. }
             | Self::Ripple { .. }
             | Self::ZigZag { .. }
-            | Self::Wave { .. } => blurred,
+            | Self::Wave { .. }
+            | Self::Wind { .. }
+            | Self::Diffuse { .. }
+            | Self::TraceContour { .. }
+            | Self::Crystallize { .. }
+            | Self::Facet
+            | Self::Fragment
+            | Self::ColorHalftone { .. } => blurred,
+            // Each channel all or nothing against its pattern.
+            Self::Mezzotint { kind, seed } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let c: [f64; 3] = std::array::from_fn(|i| {
+                    if o[i] > kind.threshold(at, i as u32, seed) {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                });
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
+            Self::HsbHsl { input, output } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let c = output.from_rgb(input.to_rgb(o));
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
             Self::Solarize => color(&|o, _| if o > 0.5 { 1.0 - o } else { o }),
             // The kernel's gradient magnitude, per channel: dark lines on white, alpha kept.
             Self::FindEdges => {
@@ -1597,6 +2045,36 @@ pub(crate) enum Kernel {
     /// The average of the square cell of this side each pixel lies in, cells from the layer's
     /// origin (see [`Kernel::region_at`]).
     Cells(f64),
+    /// Wind's streaks (see [`wind`]).
+    Wind {
+        method: WindMethod,
+        from_left: bool,
+        seed: u32,
+    },
+    /// Diffuse's neighbors (see [`diffuse`]).
+    Diffuse {
+        mode: DiffuseMode,
+        seed: u32,
+    },
+    /// Trace Contour's outlines at `level` (0 to 1).
+    Contour {
+        level: f64,
+        upper: bool,
+    },
+    /// Crystallize's polygons (see [`crystals`]).
+    Crystals {
+        cell: f64,
+        seed: u32,
+    },
+    /// Facet's most even corner square.
+    Facet,
+    /// Fragment's four copies.
+    Fragment,
+    /// Color Halftone's dots, `angles` in radians.
+    Halftone {
+        radius: f64,
+        angles: [f64; 4],
+    },
     Identity,
 }
 
@@ -1610,6 +2088,14 @@ impl Kernel {
             Self::Sobel => 1,
             Self::Relief { offset } => offset[0].abs().max(offset[1].abs()).ceil() as usize + 1,
             Self::Cells(cell) => cell.ceil() as usize,
+            Self::Wind { method, .. } => method.reach() + 1,
+            Self::Diffuse { .. } | Self::Contour { .. } => 1,
+            Self::Crystals { cell, .. } => (3.0 * cell).ceil() as usize + 1,
+            Self::Facet => 2,
+            Self::Fragment => 4,
+            Self::Halftone { radius, .. } => {
+                (radius * std::f64::consts::SQRT_2).ceil() as usize + 2
+            }
             Self::Identity => 0,
         }
     }
@@ -1625,8 +2111,20 @@ impl Kernel {
         origin: [i64; 2],
         layer: [usize; 2],
     ) {
-        match self {
-            &Self::Cells(cell) => cells(region, width, height, cell, origin, layer),
+        match *self {
+            Self::Cells(cell) => cells(region, width, height, cell, origin, layer),
+            Self::Wind {
+                method,
+                from_left,
+                seed,
+            } => wind(region, width, method, from_left, seed, origin),
+            Self::Diffuse { mode, seed } => diffuse(region, width, height, mode, seed, origin),
+            Self::Crystals { cell, seed } => {
+                crystals(region, width, height, cell, seed, origin, layer)
+            }
+            Self::Halftone { radius, angles } => {
+                halftone(region, width, height, radius, angles, origin)
+            }
             _ => self.region(region, width, height),
         }
     }
@@ -1648,6 +2146,15 @@ impl Kernel {
             Self::Sobel => sobel(region, width, height),
             &Self::Relief { offset } => relief(region, width, height, offset),
             &Self::Cells(cell) => cells(region, width, height, cell, [0, 0], [width, height]),
+            Self::Wind { .. }
+            | Self::Diffuse { .. }
+            | Self::Crystals { .. }
+            | Self::Halftone { .. } => {
+                self.region_at(region, width, height, [0, 0], [width, height])
+            }
+            &Self::Contour { level, upper } => contour(region, width, height, level, upper),
+            Self::Facet => facet(region, width, height),
+            Self::Fragment => fragment(region, width, height),
             Self::Identity => {}
         }
     }
@@ -1658,7 +2165,17 @@ impl Kernel {
             Self::Gaussian(blur) => blur.image(image, width, height),
             Self::Identity => image,
             // Never reduced (no plan of a factor above 1 takes them): one thread is enough.
-            Self::Extreme { .. } | Self::Sobel | Self::Relief { .. } | Self::Cells(_) => {
+            Self::Extreme { .. }
+            | Self::Sobel
+            | Self::Relief { .. }
+            | Self::Cells(_)
+            | Self::Wind { .. }
+            | Self::Diffuse { .. }
+            | Self::Contour { .. }
+            | Self::Crystals { .. }
+            | Self::Facet
+            | Self::Fragment
+            | Self::Halftone { .. } => {
                 let mut image = image;
                 self.region(&mut image, width, height);
                 image
@@ -1769,6 +2286,364 @@ fn relief(region: &mut [[f32; 4]], width: usize, height: usize, offset: [f64; 2]
 /// place: each pixel the average of the cell of `cell` pixels it lies in, cells from the
 /// layer's origin, only the layer's pixels counting (a cell cut by its edge averages what is
 /// in it). The cells of the region's pixels must lie within it (a margin of a cell).
+/// A premultiplied pixel's lightness (Rec. 709 luma of its values).
+fn luma(p: [f32; 4]) -> f64 {
+    0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2])
+}
+
+/// Wind on `region` (`width` pixels a row, its first pixel at `origin` on the layer): streaks
+/// start on the edges the wind meets (where lightness changes along a row), each of a length
+/// drawn from its starting pixel and `seed`, fading downwind; each pixel takes the strongest
+/// streak passing over it. Stagger breaks each row into runs of 8 to 40 pixels, each shifted
+/// downwind by up to the method's reach.
+fn wind(
+    region: &mut [[f32; 4]],
+    width: usize,
+    method: WindMethod,
+    from_left: bool,
+    seed: u32,
+    origin: [i64; 2],
+) {
+    if width == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    // Downwind: from the left, streaks go right.
+    let d: i64 = if from_left { 1 } else { -1 };
+    let longest = method.reach() as i64;
+    let last = width as i64 - 1;
+    for (y, row) in region.chunks_mut(width).enumerate() {
+        let line = &source[y * width..][..width];
+        let at = |x: i64| line[x.clamp(0, last) as usize];
+        let ly = origin[1] + y as i64;
+        for (x, px) in row.iter_mut().enumerate() {
+            let x = x as i64;
+            let lx = origin[0] + x;
+            if method == WindMethod::Stagger {
+                let run = 8 + (unit(0, ly, 41, seed) * 32.0) as i64;
+                let phase = (unit(1, ly, 42, seed) * run as f64) as i64;
+                let piece = (lx * d + phase).div_euclid(run);
+                let shift = (unit(piece, ly, 43, seed).powi(2) * longest as f64) as i64;
+                *px = at(x - d * shift);
+                continue;
+            }
+            let strength = if method == WindMethod::Blast {
+                8.0
+            } else {
+                4.0
+            };
+            let mut best = (0.0f64, x);
+            for k in 1..=longest {
+                let s = x - d * k;
+                let length = (unit(lx - d * k, ly, 44, seed).powi(2) * longest as f64).max(1.0);
+                if k as f64 > length {
+                    continue;
+                }
+                let edge = ((luma(at(s)) - luma(at(s - d))).abs() * strength).min(1.0);
+                let weight = edge * (1.0 - k as f64 / (length + 1.0));
+                if weight > best.0 {
+                    best = (weight, s);
+                }
+            }
+            if best.0 > 0.0 {
+                let streak = at(best.1);
+                let w = best.0 as f32;
+                *px = std::array::from_fn(|c| px[c] + (streak[c] - px[c]) * w);
+            }
+        }
+    }
+}
+
+/// Diffuse on `region`: each pixel one of the nine of the square around it, drawn from its
+/// place on the layer and `seed`; Darken Only and Lighten Only keep the pixel where the one
+/// drawn is not darker (lighter); Anisotropic takes the neighbor closest to it in lightness.
+fn diffuse(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    mode: DiffuseMode,
+    seed: u32,
+    origin: [i64; 2],
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let at = |x: i64, y: i64| {
+        source
+            [y.clamp(0, height as i64 - 1) as usize * width + x.clamp(0, width as i64 - 1) as usize]
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let (lx, ly) = (origin[0] + x, origin[1] + y);
+            let own = at(x, y);
+            let draw = (unit(lx, ly, 51, seed) * 9.0) as i64;
+            let drawn = at(x + draw % 3 - 1, y + draw / 3 - 1);
+            region[y as usize * width + x as usize] = match mode {
+                DiffuseMode::Normal => drawn,
+                DiffuseMode::DarkenOnly if luma(drawn) < luma(own) => drawn,
+                DiffuseMode::LightenOnly if luma(drawn) > luma(own) => drawn,
+                DiffuseMode::DarkenOnly | DiffuseMode::LightenOnly => own,
+                DiffuseMode::Anisotropic => {
+                    // The eight neighbors from a drawn start, the closest in lightness first.
+                    let start = (unit(lx, ly, 52, seed) * 8.0) as usize;
+                    let ring = [
+                        (-1, -1),
+                        (0, -1),
+                        (1, -1),
+                        (1, 0),
+                        (1, 1),
+                        (0, 1),
+                        (-1, 1),
+                        (-1, 0),
+                    ];
+                    let mut best = (f64::INFINITY, own);
+                    for i in 0..8 {
+                        let (dx, dy) = ring[(start + i) % 8];
+                        let p = at(x + dx, y + dy);
+                        let difference = (luma(p) - luma(own)).abs();
+                        if difference < best.0 {
+                            best = (difference, p);
+                        }
+                    }
+                    best.1
+                }
+            };
+        }
+    }
+}
+
+/// Trace Contour on `region`: each channel white, or black where it is an outline: its value
+/// (straight) above `level` (`upper`) or not, and a pixel beside it on the other side. Alpha is
+/// kept.
+fn contour(region: &mut [[f32; 4]], width: usize, height: usize, level: f64, upper: bool) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let above = |x: i64, y: i64, c: usize| {
+        let p = source[y.clamp(0, height as i64 - 1) as usize * width
+            + x.clamp(0, width as i64 - 1) as usize];
+        p[3] > 0.0 && f64::from(p[c] / p[3]) > level
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let i = y as usize * width + x as usize;
+            let alpha = source[i][3];
+            let mut out = [alpha; 4];
+            for (c, v) in out.iter_mut().take(3).enumerate() {
+                let side = above(x, y, c);
+                let outline = side == upper
+                    && [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                        .iter()
+                        .any(|&(dx, dy)| above(x + dx, y + dy, c) != side);
+                if outline {
+                    *v = 0.0;
+                }
+            }
+            region[i] = out;
+        }
+    }
+}
+
+/// Crystallize on `region` (its first pixel at `origin` on a layer of `layer` pixels): a point
+/// in each square cell of side `cell` from the layer's origin, placed from `seed` within the
+/// middle three fifths of the cell, so that a pixel's nearest point is in its cell or one beside
+/// it; each pixel the average of the layer's pixels nearest the same point.
+fn crystals(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    cell: f64,
+    seed: u32,
+    origin: [i64; 2],
+    layer: [usize; 2],
+) {
+    if width == 0 || height == 0 || cell <= 0.0 {
+        return;
+    }
+    let point = |i: i64, j: i64| {
+        [
+            (i as f64 + 0.2 + 0.6 * unit(i, j, 61, seed)) * cell,
+            (j as f64 + 0.2 + 0.6 * unit(i, j, 62, seed)) * cell,
+        ]
+    };
+    let nearest = |x: f64, y: f64| {
+        let (i, j) = ((x / cell).floor() as i64, (y / cell).floor() as i64);
+        let mut best = (f64::INFINITY, (i, j));
+        for dj in -1..=1 {
+            for di in -1..=1 {
+                let p = point(i + di, j + dj);
+                let d = (p[0] - x).powi(2) + (p[1] - y).powi(2);
+                if d < best.0 {
+                    best = (d, (i + di, j + dj));
+                }
+            }
+        }
+        best.1
+    };
+    // The cells around the region, and each one's sum of the layer's pixels in the region.
+    let first = [
+        (origin[0] as f64 / cell).floor() as i64 - 1,
+        (origin[1] as f64 / cell).floor() as i64 - 1,
+    ];
+    let last = [
+        ((origin[0] + width as i64) as f64 / cell).floor() as i64 + 1,
+        ((origin[1] + height as i64) as f64 / cell).floor() as i64 + 1,
+    ];
+    let columns = (last[0] - first[0] + 1) as usize;
+    let rows = (last[1] - first[1] + 1) as usize;
+    let mut sums = vec![[0.0f64; 5]; columns * rows];
+    let mut owners = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let ly = origin[1] + y as i64;
+        for x in 0..width {
+            let lx = origin[0] + x as i64;
+            let (i, j) = nearest(lx as f64 + 0.5, ly as f64 + 0.5);
+            let k = (j - first[1]) as usize * columns + (i - first[0]) as usize;
+            owners.push(k);
+            // Beyond the layer's edges, the region repeats them: not the layer's pixels.
+            if lx < 0 || ly < 0 || lx >= layer[0] as i64 || ly >= layer[1] as i64 {
+                continue;
+            }
+            let px = region[y * width + x];
+            let sum = &mut sums[k];
+            for c in 0..4 {
+                sum[c] += f64::from(px[c]);
+            }
+            sum[4] += 1.0;
+        }
+    }
+    for (px, &k) in region.iter_mut().zip(&owners) {
+        let sum = sums[k];
+        if sum[4] > 0.0 {
+            *px = std::array::from_fn(|c| (sum[c] / sum[4]) as f32);
+        }
+    }
+}
+
+/// Facet on `region`: each pixel the average of whichever of the four squares of three pixels
+/// at its corners varies least in lightness (Kuwahara, radius 2).
+fn facet(region: &mut [[f32; 4]], width: usize, height: usize) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let at = |x: i64, y: i64| {
+        source
+            [y.clamp(0, height as i64 - 1) as usize * width + x.clamp(0, width as i64 - 1) as usize]
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let mut best = (f64::INFINITY, [0.0f64; 4]);
+            for (qx, qy) in [(-2, -2), (0, -2), (-2, 0), (0, 0)] {
+                let mut sum = [0.0f64; 4];
+                let (mut l, mut l2) = (0.0, 0.0);
+                for dy in 0..3 {
+                    for dx in 0..3 {
+                        let p = at(x + qx + dx, y + qy + dy);
+                        for c in 0..4 {
+                            sum[c] += f64::from(p[c]);
+                        }
+                        let v = luma(p);
+                        l += v;
+                        l2 += v * v;
+                    }
+                }
+                let variance = l2 / 9.0 - (l / 9.0).powi(2);
+                if variance < best.0 - 1e-12 {
+                    best = (variance, sum.map(|v| v / 9.0));
+                }
+            }
+            region[y as usize * width + x as usize] = best.1.map(|v| v as f32);
+        }
+    }
+}
+
+/// Fragment on `region`: the average of the pixels four away diagonally each way.
+fn fragment(region: &mut [[f32; 4]], width: usize, height: usize) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let at = |x: i64, y: i64| {
+        source
+            [y.clamp(0, height as i64 - 1) as usize * width + x.clamp(0, width as i64 - 1) as usize]
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let mut sum = [0.0f32; 4];
+            for (dx, dy) in [(-4, -4), (4, -4), (-4, 4), (4, 4)] {
+                let p = at(x + dx, y + dy);
+                for c in 0..4 {
+                    sum[c] += p[c];
+                }
+            }
+            region[y as usize * width + x as usize] = sum.map(|v| v / 4.0);
+        }
+    }
+}
+
+/// Color Halftone on `region` (its first pixel at `origin` on the layer): for red, green and
+/// blue, a screen of square cells of side `2 radius` turned by its angle, from the layer's
+/// origin; in each cell a dot, its radius from none to the cell's half diagonal as the channel
+/// at the cell's center goes from black to white; the channel full inside the dots, empty
+/// outside (anti-aliased over a pixel). Alpha is kept.
+fn halftone(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    radius: f64,
+    angles: [f64; 4],
+    origin: [i64; 2],
+) {
+    if width == 0 || height == 0 || radius <= 0.0 {
+        return;
+    }
+    let source = region.to_vec();
+    let side = 2.0 * radius;
+    let at = |x: f64, y: f64| {
+        let (x, y) = (
+            (x - origin[0] as f64).floor() as i64,
+            (y - origin[1] as f64).floor() as i64,
+        );
+        source
+            [y.clamp(0, height as i64 - 1) as usize * width + x.clamp(0, width as i64 - 1) as usize]
+    };
+    let turns = angles.map(f64::sin_cos);
+    for y in 0..height {
+        for x in 0..width {
+            let p = [
+                origin[0] as f64 + x as f64 + 0.5,
+                origin[1] as f64 + y as f64 + 0.5,
+            ];
+            let alpha = source[y * width + x][3];
+            let mut out = [alpha; 4];
+            for (c, v) in out.iter_mut().take(3).enumerate() {
+                let (sin, cos) = turns[c];
+                // On the screen: turned back by its angle.
+                let q = [p[0] * cos + p[1] * sin, -p[0] * sin + p[1] * cos];
+                let center = q.map(|v| ((v / side).floor() + 0.5) * side);
+                let back = [
+                    center[0] * cos - center[1] * sin,
+                    center[0] * sin + center[1] * cos,
+                ];
+                let there = at(back[0], back[1]);
+                let value = if there[3] > 0.0 {
+                    f64::from(there[c] / there[3]).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let dot = radius * std::f64::consts::SQRT_2 * value.sqrt();
+                let distance = ((q[0] - center[0]).powi(2) + (q[1] - center[1]).powi(2)).sqrt();
+                // Anti-aliased over a pixel; a dot smaller than a pixel covers no more than its size.
+                *v = (dot - distance + 0.5).clamp(0.0, 1.0).min(2.0 * dot) as f32 * alpha;
+            }
+            region[y * width + x] = out;
+        }
+    }
+}
+
 fn cells(
     region: &mut [[f32; 4]],
     width: usize,
@@ -3059,6 +3934,255 @@ mod tests {
         assert_eq!(Filter::from_params("polarCoordinates", &[0.5]), None);
         assert!(twirl.samples() && !Filter::Mosaic { cell: 4.0 }.samples());
         assert_eq!(twirl.scaled(4.0), twirl, "mapped in the layer's own pixels");
+    }
+
+    /// A region of `width` × `height` opaque pixels of the colors `f` gives.
+    fn opaque(width: usize, height: usize, f: impl Fn(usize, usize) -> f32) -> Vec<[f32; 4]> {
+        (0..width * height)
+            .map(|i| {
+                let v = f(i % width, i / width);
+                [v, v, v, 1.0]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hsb_and_hsl_go_there_and_back() {
+        let red = [1.0, 0.0, 0.0];
+        assert_eq!(ColorModel::Hsb.from_rgb(red), [0.0, 1.0, 1.0]);
+        assert_eq!(ColorModel::Hsl.from_rgb(red), [0.0, 1.0, 0.5]);
+        let close = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
+        for rgb in [
+            [0.2, 0.5, 0.9],
+            [0.9, 0.1, 0.4],
+            [0.3, 0.3, 0.3],
+            [0.0, 1.0, 0.5],
+        ] {
+            for model in ColorModel::ALL {
+                let back = model.to_rgb(model.from_rgb(rgb));
+                assert!(close(back, rgb), "{model:?} {rgb:?} {back:?}");
+            }
+        }
+        // RGB read, HSB written: green's hue a third of a turn, in the red channel; half
+        // transparent, the straight colors converted and the alpha kept.
+        let filter = Filter::HsbHsl {
+            input: ColorModel::Rgb,
+            output: ColorModel::Hsb,
+        };
+        let out = filter.finish([0.0, 0.5, 0.0, 0.5], &[[0.0; 4]], [0, 0]);
+        let expected = [0.5 / 3.0, 0.5, 0.5, 0.5];
+        assert!(
+            (0..4).all(|i| (out[i] - expected[i]).abs() < 1e-9),
+            "{out:?}"
+        );
+        assert!(filter.reads_original() && !filter.samples());
+        assert_eq!(Filter::from_params("hsbHsl", &[0.0, 3.0]), None);
+    }
+
+    #[test]
+    fn trace_contour_outlines_one_side_of_its_level() {
+        let step = |x: usize, _| if x >= 4 { 0.8 } else { 0.2 };
+        let outline = |upper| {
+            let mut region = opaque(8, 3, step);
+            Kernel::Contour { level: 0.5, upper }.region(&mut region, 8, 3);
+            region[8..16].iter().map(|p| p[0]).collect::<Vec<_>>()
+        };
+        let mut expected = vec![1.0; 8];
+        expected[4] = 0.0;
+        assert_eq!(outline(true), expected, "the upper side's first pixel");
+        expected.swap(3, 4);
+        assert_eq!(outline(false), expected, "the lower side's last pixel");
+        assert!(
+            Filter::TraceContour {
+                level: 255.0,
+                upper: false
+            }
+            .is_valid()
+        );
+        assert!(
+            !Filter::TraceContour {
+                level: 256.0,
+                upper: false
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
+    fn facet_flattens_without_blurring_edges() {
+        let mut region = opaque(10, 5, |x, _| if x >= 5 { 1.0 } else { 0.0 });
+        Kernel::Facet.region(&mut region, 10, 5);
+        assert!(
+            region.iter().all(|p| p[0] == 0.0 || p[0] == 1.0),
+            "{region:?}"
+        );
+        assert_eq!(region[2 * 10 + 4][0], 0.0);
+        assert_eq!(region[2 * 10 + 5][0], 1.0);
+        let mut flat = opaque(6, 6, |_, _| 0.4);
+        Kernel::Facet.region(&mut flat, 6, 6);
+        assert!(flat.iter().all(|p| (p[0] - 0.4).abs() < 1e-6));
+    }
+
+    #[test]
+    fn fragment_averages_four_diagonal_copies() {
+        let mut region = opaque(17, 17, |x, y| if (x, y) == (8, 8) { 1.0 } else { 0.0 });
+        Kernel::Fragment.region(&mut region, 17, 17);
+        for (x, y) in [(4, 4), (12, 4), (4, 12), (12, 12)] {
+            assert_eq!(region[y * 17 + x][0], 0.25);
+        }
+        assert_eq!(region[8 * 17 + 8][0], 0.0);
+        assert_eq!(region.iter().map(|p| p[0]).sum::<f32>(), 1.0);
+    }
+
+    #[test]
+    fn diffuse_takes_a_neighbor_by_its_mode_and_the_same_on_every_tile() {
+        let value = |x: usize, y: usize| unit(x as i64, y as i64, 9, 1) as f32;
+        let (w, h) = (24, 20);
+        let run = |mode, origin: [i64; 2], width, height| {
+            let mut region = opaque(width, height, |x, y| {
+                value(x + origin[0] as usize, y + origin[1] as usize)
+            });
+            Kernel::Diffuse { mode, seed: 5 }.region_at(&mut region, width, height, origin, [w, h]);
+            region
+        };
+        let whole = run(DiffuseMode::Normal, [0, 0], w, h);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let got = whole[y * w + x][0];
+                let around = (0..9).any(|k| value(x + k % 3 - 1, y + k / 3 - 1) == got);
+                assert!(around, "{x} {y}");
+            }
+        }
+        // A part of the layer elsewhere: its pixels take what they took in the whole.
+        let part = run(DiffuseMode::Normal, [6, 5], 12, 10);
+        for y in 1..9 {
+            for x in 1..11 {
+                assert_eq!(part[y * 12 + x], whole[(y + 5) * w + x + 6]);
+            }
+        }
+        let darker = run(DiffuseMode::DarkenOnly, [0, 0], w, h);
+        let lighter = run(DiffuseMode::LightenOnly, [0, 0], w, h);
+        for i in 0..w * h {
+            let own = value(i % w, i / w);
+            assert!(darker[i][0] <= own && lighter[i][0] >= own);
+        }
+        assert_ne!(whole, run(DiffuseMode::Anisotropic, [0, 0], w, h));
+    }
+
+    #[test]
+    fn wind_blows_streaks_downwind_of_edges_only() {
+        let bar = |x: usize, _| if (10..13).contains(&x) { 1.0 } else { 0.0 };
+        let (w, h) = (60, 30);
+        let blow = |method, from_left| {
+            let mut region = opaque(w, h, bar);
+            Kernel::Wind {
+                method,
+                from_left,
+                seed: 3,
+            }
+            .region_at(&mut region, w, h, [0, 0], [w, h]);
+            region
+        };
+        let light = |region: &[[f32; 4]], xs: std::ops::Range<usize>| {
+            (0..h)
+                .flat_map(|y| xs.clone().map(move |x| (x, y)))
+                .map(|(x, y)| region[y * w + x][0])
+                .sum::<f32>()
+        };
+        let right = blow(WindMethod::Wind, true);
+        assert!(light(&right, 13..40) > 0.0, "streaks to the right");
+        assert_eq!(light(&right, 0..10), 0.0, "nothing upwind");
+        let left = blow(WindMethod::Blast, false);
+        assert!(light(&left, 0..10) > 0.0 && light(&left, 13..60) == 0.0);
+        // A flat layer stays as it is.
+        let mut flat = opaque(w, h, |_, _| 0.3);
+        Kernel::Wind {
+            method: WindMethod::Stagger,
+            from_left: true,
+            seed: 3,
+        }
+        .region_at(&mut flat, w, h, [0, 0], [w, h]);
+        assert!(flat.iter().all(|p| p[0] == 0.3));
+    }
+
+    #[test]
+    fn crystals_are_the_averages_of_polygons_the_same_on_every_tile() {
+        let (w, h) = (60, 60);
+        let value = |x: usize, y: usize| (x * 7 + y * 3) as f32 / 600.0;
+        let kernel = Kernel::Crystals { cell: 4.0, seed: 8 };
+        let mut whole = opaque(w, h, value);
+        kernel.region_at(&mut whole, w, h, [0, 0], [w, h]);
+        // A part 40 pixels wide from (10, 10): far enough from its edges, the same pixels.
+        let reach = kernel.reach();
+        let mut part = opaque(40, 40, |x, y| value(x + 10, y + 10));
+        kernel.region_at(&mut part, 40, 40, [10, 10], [w, h]);
+        for y in reach..40 - reach {
+            for x in reach..40 - reach {
+                let (a, b) = (part[y * 40 + x][0], whole[(y + 10) * w + x + 10][0]);
+                assert!((a - b).abs() < 1e-6, "{x} {y}");
+            }
+        }
+        // Polygons: far fewer colors than pixels, each about a cell's worth of pixels.
+        let mut colors: Vec<u32> = whole.iter().map(|p| p[0].to_bits()).collect();
+        colors.sort_unstable();
+        colors.dedup();
+        assert!(
+            colors.len() < w * h / 8 && colors.len() > w * h / 40,
+            "{}",
+            colors.len()
+        );
+        assert!(
+            Filter::Crystallize {
+                cell: 300.0,
+                seed: 0
+            }
+            .is_valid()
+        );
+        assert!(!Filter::Crystallize { cell: 2.0, seed: 0 }.is_valid());
+    }
+
+    #[test]
+    fn halftone_dots_grow_with_the_light() {
+        let mean = |v: f32| {
+            let mut region = opaque(64, 64, |_, _| v);
+            Kernel::Halftone {
+                radius: 4.0,
+                angles: [108.0f64, 162.0, 90.0, 45.0].map(f64::to_radians),
+            }
+            .region_at(&mut region, 64, 64, [0, 0], [64, 64]);
+            region.iter().map(|p| f64::from(p[0])).sum::<f64>() / 4096.0
+        };
+        assert!(mean(1.0) > 0.95);
+        assert_eq!(mean(0.0), 0.0);
+        let (dark, light) = (mean(0.25), mean(0.6));
+        assert!(0.0 < dark && dark < light && light < 1.0, "{dark} {light}");
+        assert!(
+            !Filter::ColorHalftone {
+                radius: 3.0,
+                angles: [0.0; 4]
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
+    fn mezzotint_is_all_or_nothing_and_keeps_the_lightness() {
+        let filter = Filter::Mezzotint {
+            kind: MezzotintKind::FineDots,
+            seed: 2,
+        };
+        let mut sum = 0.0;
+        for i in 0..10_000i64 {
+            let out = filter.finish([0.3, 0.3, 0.3, 1.0], &[[0.0; 4]], [i % 100, i / 100]);
+            assert!(out[0] == 0.0 || out[0] == 1.0);
+            sum += out[0];
+        }
+        assert!((sum / 10_000.0 - 0.3).abs() < 0.03, "{sum}");
+        // Lines: one level along a run of a row.
+        let long = MezzotintKind::LongLines;
+        assert_eq!(long.threshold([0, 5], 0, 1), long.threshold([15, 5], 0, 1));
+        assert_ne!(long.threshold([0, 5], 0, 1), long.threshold([0, 6], 0, 1));
+        assert_eq!(Filter::from_params("mezzotint", &[10.0, 0.0]), None);
     }
 
     #[test]

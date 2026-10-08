@@ -353,6 +353,59 @@ test("Distort > Wave and ZigZag: their settings, and a seed for Wave", async () 
   );
 });
 
+test("Pixelate > Facet applies at once; Crystallize and Stylize > Wind send their settings", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Pixelate", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Facet" }));
+  await vi.waitFor(() =>
+    expect(applied() ?? sent("perform").at(-1)?.edit).toMatchObject({
+      kind: "applyFilter",
+      filter: "facet",
+      values: [],
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Pixelate", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Crystallize…" }));
+  const crystallize = await screen.findByRole("dialog", { name: "Crystallize" });
+  expect(within(crystallize).getByRole("spinbutton", { name: "Cell Size" })).toHaveValue(10);
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toMatchObject({ kind: "applyFilter", filter: "crystallize" }),
+  );
+  expect((applied() as { values: number[] }).values[0]).toBe(10);
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Stylize", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Wind…" }));
+  const wind = await screen.findByRole("dialog", { name: "Wind" });
+  await user.click(within(wind).getByRole("radio", { name: "Blast" }));
+  await user.click(within(wind).getByRole("radio", { name: "From the Left" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ kind: "applyFilter", filter: "wind" }));
+  expect((applied() as { values: number[] }).values.slice(0, 2)).toEqual([1, 1]);
+});
+
+test("Other > HSB/HSL: the input and the row order sent with the filter", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Other", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "HSB/HSL…" }));
+  const dialog = await screen.findByRole("dialog", { name: "HSB/HSL" });
+  const input = within(dialog).getByRole("group", { name: "Input Mode" });
+  const output = within(dialog).getByRole("group", { name: "Row Order" });
+  expect(within(output).getByRole("radio", { name: "HSB" })).toBeChecked();
+  await user.click(within(input).getByRole("radio", { name: "HSL" }));
+  await user.click(within(output).getByRole("radio", { name: "RGB" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "hsbHsl", values: [2, 0] }),
+  );
+});
+
 test("Distort > Twirl: an angle sent with the filter", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });

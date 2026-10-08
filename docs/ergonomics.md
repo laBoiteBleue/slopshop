@@ -168,8 +168,14 @@ built. Contributors: propose here first.
   Gaussian, Monochromatic; each application draws another grain, an entry edited again keeps
   its own), Noise > Dust & Scratches… (Radius 1 to 500 whole pixels, Threshold 0 to 255
   levels), Noise > Median… (Radius 1 to 500 whole pixels), Blur > Box Blur… (Radius 1 to 2000
-  whole pixels), Other > Maximum… and Minimum… (Radius 1 to 500 whole pixels); Pixelate >
-  Mosaic… (Cell Size 2 to 200 pixels); Stylize > Emboss… (Angle, Height 1 to 10 pixels, Amount
+  whole pixels), Other > Maximum… and Minimum… (Radius 1 to 500 whole pixels), Other > HSB/HSL…
+  (Input Mode and Row Order: RGB, HSB or HSL); Pixelate > Mosaic… (Cell Size 2 to 200 pixels),
+  Color Halftone… (Max. Radius 4 to 127 pixels, the screens' angles of channels 1 to 4, −360 to
+  360°), Crystallize… (Cell Size 3 to 300 pixels), Mezzotint… (its ten types), Facet and
+  Fragment (no settings, applied at once); Stylize > Wind… (Wind, Blast or Stagger, From the
+  Right or From the Left), Diffuse… (Normal, Darken Only, Lighten Only, Anisotropic), Trace
+  Contour… (Level 0 to 255, Edge Lower or Upper); the random ones (Wind, Diffuse, Crystallize,
+  Mezzotint) draw anew at each application, as Add Noise; Stylize > Emboss… (Angle, Height 1 to 10 pixels, Amount
   1 to 500 %), Stylize > Find Edges and Solarize (no settings: applied at once, without an
   ellipsis, as in Photoshop; their entries have nothing to edit again); Distort > Pinch… and
   Spherize… (Amount −100 to 100 %, Mode Normal, Horizontal only or Vertical only), Polar

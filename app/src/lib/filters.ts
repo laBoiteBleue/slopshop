@@ -107,6 +107,18 @@ const waveScale = (key: string, label: MessageKey): NumberParam => ({
   scale: "linear",
 });
 
+/** A screen's angle of Color Halftone's, -360 to 360 degrees (Photoshop's). */
+const screenAngle = (key: string, label: MessageKey): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  unit: "filter.degrees",
+  min: -360,
+  max: 360,
+  decimals: 0,
+  scale: "linear",
+});
+
 /** A strength from -100 to 100, Lightroom's: 0 does nothing, below it the opposite. */
 const strength = (key: string, label: MessageKey): NumberParam => ({
   kind: "number",
@@ -348,6 +360,126 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     ],
     defaults: [10, 5, 2],
   },
+  wind: {
+    params: [
+      {
+        kind: "choice",
+        key: "method",
+        label: "filter.wind.method",
+        options: ["filter.wind.wind", "filter.wind.blast", "filter.wind.stagger"],
+      },
+      {
+        kind: "choice",
+        key: "direction",
+        label: "filter.wind.direction",
+        options: ["filter.wind.fromRight", "filter.wind.fromLeft"],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [0, 0, 0],
+  },
+  diffuse: {
+    params: [
+      {
+        kind: "choice",
+        key: "mode",
+        label: "filter.diffuse.mode",
+        options: [
+          "filter.diffuse.normal",
+          "filter.diffuse.darkenOnly",
+          "filter.diffuse.lightenOnly",
+          "filter.diffuse.anisotropic",
+        ],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [0, 0],
+  },
+  traceContour: {
+    params: [
+      {
+        kind: "number",
+        key: "level",
+        label: "filter.traceContour.level",
+        min: 0,
+        max: 255,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.traceContour.edge",
+        options: ["filter.traceContour.lower", "filter.traceContour.upper"],
+      },
+    ],
+    defaults: [128, 1],
+  },
+  crystallize: {
+    params: [squareRadius("filter.crystallize.cell", 300, 3), { kind: "seed", key: "seed" }],
+    defaults: [10, 0],
+  },
+  facet: { params: [], defaults: [] },
+  fragment: { params: [], defaults: [] },
+  mezzotint: {
+    params: [
+      {
+        kind: "choice",
+        key: "type",
+        label: "filter.mezzotint.type",
+        options: [
+          "filter.mezzotint.fineDots",
+          "filter.mezzotint.mediumDots",
+          "filter.mezzotint.grainyDots",
+          "filter.mezzotint.coarseDots",
+          "filter.mezzotint.shortLines",
+          "filter.mezzotint.mediumLines",
+          "filter.mezzotint.longLines",
+          "filter.mezzotint.shortStrokes",
+          "filter.mezzotint.mediumStrokes",
+          "filter.mezzotint.longStrokes",
+        ],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [0, 0],
+  },
+  colorHalftone: {
+    params: [
+      {
+        kind: "number",
+        key: "radius",
+        label: "filter.colorHalftone.radius",
+        unit: "filter.pixels",
+        min: 4,
+        max: 127,
+        decimals: 0,
+        scale: "log",
+      },
+      screenAngle("channel1", "filter.colorHalftone.channel1"),
+      screenAngle("channel2", "filter.colorHalftone.channel2"),
+      screenAngle("channel3", "filter.colorHalftone.channel3"),
+      screenAngle("channel4", "filter.colorHalftone.channel4"),
+    ],
+    defaults: [8, 108, 162, 90, 45],
+  },
+  hsbHsl: {
+    params: [
+      {
+        kind: "choice",
+        key: "input",
+        label: "filter.hsbHsl.input",
+        options: ["filter.hsbHsl.rgb", "filter.hsbHsl.hsb", "filter.hsbHsl.hsl"],
+      },
+      {
+        kind: "choice",
+        key: "output",
+        label: "filter.hsbHsl.output",
+        options: ["filter.hsbHsl.rgb", "filter.hsbHsl.hsb", "filter.hsbHsl.hsl"],
+      },
+    ],
+    defaults: [0, 1],
+  },
   wave: {
     params: [
       {
@@ -449,10 +581,16 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
     filters: ["pinch", "polarCoordinates", "ripple", "spherize", "twirl", "wave", "zigZag"],
   },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
-  { label: "menu.filter.pixelate", filters: ["mosaic"] },
+  {
+    label: "menu.filter.pixelate",
+    filters: ["colorHalftone", "crystallize", "facet", "fragment", "mezzotint", "mosaic"],
+  },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
-  { label: "menu.filter.stylize", filters: ["emboss", "findEdges", "solarize"] },
-  { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum", "offset"] },
+  {
+    label: "menu.filter.stylize",
+    filters: ["diffuse", "emboss", "findEdges", "solarize", "traceContour", "wind"],
+  },
+  { label: "menu.filter.other", filters: ["highPass", "hsbHsl", "maximum", "minimum", "offset"] },
 ];
 
 /** Whether `values` are settings `filter` accepts. */

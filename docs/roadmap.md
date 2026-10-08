@@ -340,6 +340,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Distort > Ripple (Amount, Size), Wave (generators, wavelengths, amplitudes, scales, type,
       undefined areas, a seed drawn at each application), ZigZag (Amount, Ridges, Style) and
       Spherize's Horizontal and Vertical modes; CPU and GPU (looks)
+- [x] Stylize > Wind, Diffuse and Trace Contour; Pixelate > Color Halftone, Crystallize, Facet,
+      Fragment and Mezzotint; Other > HSB/HSL; on the CPU
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
