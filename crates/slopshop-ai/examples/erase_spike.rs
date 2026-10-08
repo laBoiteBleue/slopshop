@@ -28,6 +28,8 @@ struct Options {
     storage: Storage,
     crop: bool,
     dilate: f64,
+    /// The colors matched to the photo at the selection's edge (`--match`).
+    edges: bool,
     out: Option<PathBuf>,
     cases: Vec<String>,
 }
@@ -42,6 +44,7 @@ fn options() -> Result<Options, Error> {
         storage: Storage::Blocks(64),
         crop: false,
         dilate: 0.0,
+        edges: false,
         out: None,
         cases: Vec::new(),
     };
@@ -61,6 +64,7 @@ fn options() -> Result<Options, Error> {
             }
             "--crop" => o.crop = true,
             "--dilate" => o.dilate = value()?.parse()?,
+            "--match" => o.edges = true,
             "--out" => o.out = Some(value()?.into()),
             case => o.cases.push(case.to_string()),
         }
@@ -160,9 +164,40 @@ fn main() -> Result<(), Error> {
             let at = t.elapsed().as_secs_f64();
             stages.push(format!("{stage:?} {done}/{total} at {at:.2} s"));
         };
-        let out_s = eraser.run((w, h), &photo_s, &selection_s, &noise, &mut report)?;
+        let mut out_s = eraser.run((w, h), &photo_s, &selection_s, &noise, &mut report)?;
+        if o.edges {
+            erase::edges::match_edges(&mut out_s, &photo_s, &selection_s, w, h);
+        }
         let total = t.elapsed().as_secs_f64();
         let out = pil::resize_lanczos(&out_s, 3, (w, h), (rw, rh));
+        // The model's output against the photo where it should reproduce it: everywhere
+        // outside the selection, and in a ring of 24 px around it (the seam).
+        {
+            let near = dilate(&selection_s, w, h, 24);
+            let (mut all, mut ring, mut na, mut nr) = ([0f64; 3], [0f64; 3], 0f64, 0f64);
+            for i in 0..w * h {
+                if selection_s[i] > 127 {
+                    continue;
+                }
+                for c in 0..3 {
+                    let d = f64::from(out_s[3 * i + c]) - f64::from(photo_s[3 * i + c]);
+                    all[c] += d;
+                    if near[i] > 127 {
+                        ring[c] += d;
+                    }
+                }
+                na += 1.0;
+                if near[i] > 127 {
+                    nr += 1.0;
+                }
+            }
+            let mean = |s: [f64; 3], n: f64| s.map(|v| format!("{:+.1}", v / n.max(1.0)));
+            println!(
+                "  output − input (RGB): outside {:?}, ring {:?}",
+                mean(all, na),
+                mean(ring, nr)
+            );
+        }
         let fill = erase::composite(&region_photo, &region_selection, &out);
         let result = paste(&photo, width, &fill, region);
 

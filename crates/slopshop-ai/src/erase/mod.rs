@@ -5,6 +5,7 @@
 //! reference images, position ids, the sigma schedule, the Euler update, latent (un)packing and
 //! the strict composite (no pixel outside the selection changes).
 
+pub mod edges;
 pub mod pil;
 
 use crate::numeric::round_bf16;

@@ -2,7 +2,9 @@
 //! tool (FLUX.2 [klein] with `erase_v1`, in the `slopshop-ai` helper), then baked into the
 //! layer's paint like the Patch. The model works on the region around the selection (its box
 //! plus context, at most 1 Mpx at the model); the selection, grown by 2 % of that region and
-//! kept within it, decides what changes, its soft edge included. Nothing else changes.
+//! kept within it, decides what changes, its soft edge included. Nothing else changes. The
+//! model's colors drift from the photo's by several levels: they are matched to the photo's at
+//! the selection's edge before the result is painted (`erase::edges`), so that no outline shows.
 
 use std::sync::Arc;
 
@@ -239,7 +241,7 @@ pub(crate) async fn ai_generative_fill(
                 }
                 !cancel.is_cancelled()
             };
-            match client.erase(w, h, rgb, plan.mask.clone(), seed, &mut progress) {
+            match client.erase(w, h, rgb.clone(), plan.mask.clone(), seed, &mut progress) {
                 Ok(result) => result,
                 // The helper is still at work: it is stopped (started again next time).
                 Err(ProtocolError::Cancelled) => {
@@ -252,6 +254,9 @@ pub(crate) async fn ai_generative_fill(
         if cancel.is_cancelled() {
             return Err(AiFailure::new("cancelled", ""));
         }
+        // The model's colors drift from the photo's: matched at the selection's edge.
+        let mut result = result;
+        erase::edges::match_edges(&mut result, &rgb, &plan.mask, w as usize, h as usize);
         let mut documents = state.documents().map_err(internal)?;
         let document = documents.get_mut(document_id).map_err(internal)?;
         // On the document as it is now (the result applies to its current pixels).
