@@ -16,7 +16,7 @@ use std::time::Instant;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::{OutputSelector, RunOptions, Session, SessionInputValue};
 use ort::value::Tensor;
-use slopshop_ai::erase::{self, LatentStats, pil};
+use slopshop_ai::erase::{self, LatentStats, Region, pil};
 use slopshop_ai::flux2::{self, Built, Lora, Storage};
 use slopshop_ai::safetensors::SafeTensors;
 
@@ -33,6 +33,8 @@ struct Options {
     level: GraphOptimizationLevel,
     profile: bool,
     steps: usize,
+    crop: bool,
+    dilate: f64,
 }
 
 fn options() -> Result<Options, Error> {
@@ -49,6 +51,8 @@ fn options() -> Result<Options, Error> {
         level: GraphOptimizationLevel::Level3,
         profile: false,
         steps: erase::STEPS,
+        crop: false,
+        dilate: 0.0,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -66,6 +70,8 @@ fn options() -> Result<Options, Error> {
                 }
             }
             "--profile" => o.profile = true,
+            "--crop" => o.crop = true,
+            "--dilate" => o.dilate = value()?.parse()?,
             "--steps" => o.steps = value()?.parse()?,
             "--out" => o.out = Some(value()?.into()),
             "--level" => {
@@ -258,12 +264,34 @@ fn main() -> Result<(), Error> {
     for case in cases {
         let dir = erase_dir.join("test_vectors").join(&case);
         println!("\n== {case}");
-        let (photo, width, height, _) = load_png(&dir.join("input.png"))?;
-        let (selection, ..) = load_png(&dir.join("selection.png"))?;
-        let selection: Vec<u8> = selection
+        let (full_photo, full_width, full_height, _) = load_png(&dir.join("input.png"))?;
+        let (full_selection, ..) = load_png(&dir.join("selection.png"))?;
+        let full_selection: Vec<u8> = full_selection
             .iter()
             .map(|&s| if s > 127 { 255 } else { 0 })
             .collect();
+        // `--dilate f`: the selection grown by a disk of f × the image's larger side.
+        let full_selection = if o.dilate > 0.0 {
+            let radius = (o.dilate * full_width.max(full_height) as f64).round() as i64;
+            dilate(&full_selection, full_width, full_height, radius)
+        } else {
+            full_selection
+        };
+        // With `--crop`, the model works on the region around the selection only.
+        let region = if o.crop {
+            let bbox = bounding_box(&full_selection, full_width, full_height);
+            erase::work_region(full_width as u32, full_height as u32, bbox)
+        } else {
+            Region {
+                x: 0,
+                y: 0,
+                width: full_width as u32,
+                height: full_height as u32,
+            }
+        };
+        let photo = crop(&full_photo, 3, full_width, region);
+        let selection = crop(&full_selection, 1, full_width, region);
+        let (width, height) = (region.width as usize, region.height as usize);
         let (w, h) = erase::working_size(width as u32, height as u32);
         let (w, h) = (w as usize, h as usize);
         let (lh, lw) = (h / 16, w / 16);
@@ -286,7 +314,12 @@ fn main() -> Result<(), Error> {
         let encode = t.elapsed().as_secs_f64();
 
         let mut vectors = SafeTensors::open(&dir.join("tensors.safetensors"))?;
-        let mut x = erase::pack_noise(&vectors.f32s("noise")?, lh, lw);
+        let noise = if o.crop {
+            erase::noise(0, 128 * n)
+        } else {
+            vectors.f32s("noise")?
+        };
+        let mut x = erase::pack_noise(&noise, lh, lw);
         let expected = vectors.f32s("final_latent")?;
         let sigmas = erase::sigmas(n);
         let (mut cos, mut sin) = erase::rope_tables(text, lh, lw);
@@ -338,7 +371,7 @@ fn main() -> Result<(), Error> {
             .map(|(a, b)| f64::from(a - b).powi(2))
             .sum();
         let den: f64 = expected.iter().map(|b| f64::from(*b).powi(2)).sum();
-        let latent_error = (num / den).sqrt();
+        let latent_error = if o.crop { 0.0 } else { (num / den).sqrt() };
 
         let t = Instant::now();
         let latent =
@@ -349,6 +382,16 @@ fn main() -> Result<(), Error> {
         let out_s = erase::vae_output(&image, w, h);
         let out = pil::resize_lanczos(&out_s, 3, (w, h), (width, height));
         let result = erase::composite(&photo, &selection, &out);
+        let (result, photo, selection, width) = (
+            paste(&full_photo, full_width, &result, region),
+            full_photo,
+            full_selection,
+            full_width,
+        );
+        let height = full_height;
+        if o.crop {
+            println!("  work region {region:?}");
+        }
 
         let (expected_png, ..) = load_png(&dir.join("expected_output.png"))?;
         let (mut se, mut count) = (0.0f64, 0usize);
@@ -397,4 +440,79 @@ fn main() -> Result<(), Error> {
         }
     );
     Ok(())
+}
+
+/// The bounding box of a mask's set pixels (the whole image when none is set).
+fn bounding_box(mask: &[u8], width: usize, height: usize) -> Region {
+    let (mut x0, mut y0, mut x1, mut y1) = (width, height, 0, 0);
+    for (i, &m) in mask.iter().enumerate() {
+        if m > 127 {
+            let (x, y) = (i % width, i / width);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    if x1 == 0 {
+        return Region {
+            x: 0,
+            y: 0,
+            width: width as u32,
+            height: height as u32,
+        };
+    }
+    Region {
+        x: x0 as u32,
+        y: y0 as u32,
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+    }
+}
+
+fn crop(pixels: &[u8], channels: usize, width: usize, r: Region) -> Vec<u8> {
+    let (x, w) = (r.x as usize * channels, r.width as usize * channels);
+    (r.y as usize..(r.y + r.height) as usize)
+        .flat_map(|y| &pixels[y * width * channels + x..][..w])
+        .copied()
+        .collect()
+}
+
+fn paste(full: &[u8], width: usize, part: &[u8], r: Region) -> Vec<u8> {
+    let mut out = full.to_vec();
+    let (x, w) = (r.x as usize * 3, r.width as usize * 3);
+    for (row, y) in (r.y as usize..(r.y + r.height) as usize).enumerate() {
+        out[y * width * 3 + x..][..w].copy_from_slice(&part[row * w..][..w]);
+    }
+    out
+}
+
+/// The mask grown by a disk of `radius` pixels (stamped on its boundary pixels).
+fn dilate(mask: &[u8], width: usize, height: usize, radius: i64) -> Vec<u8> {
+    let mut out = mask.to_vec();
+    let set = |x: i64, y: i64| {
+        x >= 0
+            && y >= 0
+            && (x as usize) < width
+            && (y as usize) < height
+            && mask[y as usize * width + x as usize] > 127
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            if !set(x, y) || (set(x - 1, y) && set(x + 1, y) && set(x, y - 1) && set(x, y + 1)) {
+                continue;
+            }
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let (px, py) = (x + dx, y + dy);
+                    if dx * dx + dy * dy <= radius * radius
+                        && px >= 0
+                        && py >= 0
+                        && (px as usize) < width
+                        && (py as usize) < height
+                    {
+                        out[py as usize * width + px as usize] = 255;
+                    }
+                }
+            }
+        }
+    }
+    out
 }
