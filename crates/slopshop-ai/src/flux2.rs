@@ -29,6 +29,18 @@ const EPS: f32 = 1e-6;
 /// Alignment of each weight in the buffer.
 const ALIGN: usize = 4096;
 
+/// How the transformer's large projections (99 % of its weights) store their weights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Storage {
+    /// Half precision: exact for the published bfloat16 weights (7.4 GB).
+    Half,
+    /// 8 bits with one scale per block of this many inputs, through ONNX Runtime's
+    /// `com.microsoft.MatMulNBits`.
+    Blocks(usize),
+    /// 8 bits with one scale per output, dequantized (`DequantizeLinear`) before a `MatMul`.
+    Channels,
+}
+
 /// Extra dimensions of each attention head that mask the padding tokens.
 const KEY_BIAS: i64 = 8;
 /// The score given to a padding token: its weight after the softmax is exactly zero.
@@ -94,6 +106,7 @@ struct Builder<'a> {
     file: &'a mut SafeTensors,
     lora: Option<&'a mut Lora>,
     merged: usize,
+    storage: Storage,
 }
 
 impl Builder<'_> {
@@ -106,16 +119,12 @@ impl Builder<'_> {
     }
 
     /// A linear layer's weight `[out, in]` as the `[in, out]` right operand of a `MatMul`, the
-    /// LoRA merged, in `dtype`.
-    fn matrix(&mut self, module: &str, dtype: DataType) -> io::Result<String> {
+    /// LoRA merged, in single precision.
+    fn matrix(&mut self, module: &str) -> io::Result<String> {
         let (w, out, inp) = self.merged_weight(module)?;
-        let data = transpose_to(&w, out, inp, dtype);
-        Ok(self.place(
-            &format!("{module}.weight"),
-            dtype,
-            &[inp as i64, out as i64],
-            &data,
-        ))
+        let data = transpose_to(&w, out, inp, DataType::F32);
+        let dims = [inp as i64, out as i64];
+        Ok(self.place(&format!("{module}.weight"), DataType::F32, &dims, &data))
     }
 
     /// The weight `[out, in]` of a linear layer in single precision, the LoRA merged.
@@ -138,51 +147,102 @@ impl Builder<'_> {
         Ok((w, out, inp))
     }
 
-    /// A fused projection's weight cut along its outputs into `sizes` (e.g. q, k, v and the
-    /// MLP's halves): one `MatMul` each, so no large output is split afterwards.
-    fn matrix_rows(
+    /// `x16 · Wᵀ` in half precision for a weight `w` `[out, in]`, stored as [`Storage`] says.
+    fn project(&mut self, x16: &str, w: &[f32], out: usize, inp: usize, name: &str) -> String {
+        match self.storage {
+            Storage::Half => {
+                let data = transpose_to(w, out, inp, DataType::F16);
+                let dims = [inp as i64, out as i64];
+                let w = self.place(name, DataType::F16, &dims, &data);
+                self.op("MatMul", &[x16, &w])
+            }
+            Storage::Blocks(block) => {
+                let (q, scales) = quantize_blocks(w, out, inp, block);
+                let blocks = inp.div_ceil(block);
+                let dims = [out as i64, blocks as i64, block as i64];
+                let q = self.place(name, DataType::U8, &dims, &q);
+                let scales = f16_bytes(&scales);
+                let scales = self.place(
+                    &format!("{name}.scales"),
+                    DataType::F16,
+                    &[(out * blocks) as i64],
+                    &scales,
+                );
+                self.g.node_microsoft(
+                    "MatMulNBits",
+                    &[x16, &q, &scales],
+                    &[
+                        Attr::Int("K", inp as i64),
+                        Attr::Int("N", out as i64),
+                        Attr::Int("bits", 8),
+                        Attr::Int("block_size", block as i64),
+                    ],
+                )
+            }
+            Storage::Channels => {
+                let (q, scales) = quantize_channels(w, out, inp);
+                let dims = [inp as i64, out as i64];
+                let q = self.place(name, DataType::I8, &dims, &q);
+                // Opset 18 scales are single precision: the weight is dequantized to it, then
+                // cast for the half-precision product.
+                let scales: Vec<u8> = scales.iter().flat_map(|s| s.to_le_bytes()).collect();
+                let scales = self.place(
+                    &format!("{name}.scales"),
+                    DataType::F32,
+                    &[out as i64],
+                    &scales,
+                );
+                let w = self
+                    .g
+                    .node("DequantizeLinear", &[&q, &scales], &[Attr::Int("axis", 1)]);
+                let w = self.cast(&w, DataType::F16);
+                self.op("MatMul", &[x16, &w])
+            }
+        }
+    }
+
+    /// A fused projection cut along its outputs into `sizes` (e.g. q, k, v and the MLP's
+    /// halves): one product each, so no large output is split afterwards.
+    fn project_rows(
         &mut self,
+        x16: &str,
         module: &str,
         sizes: &[usize],
-        dtype: DataType,
     ) -> io::Result<Vec<String>> {
         let (w, out, inp) = self.merged_weight(module)?;
         debug_assert_eq!(sizes.iter().sum::<usize>(), out);
-        let mut names = Vec::new();
+        let mut outs = Vec::new();
         let mut first = 0;
         for (i, &rows) in sizes.iter().enumerate() {
-            let data = transpose_to(&w[first * inp..(first + rows) * inp], rows, inp, dtype);
-            let dims = [inp as i64, rows as i64];
-            names.push(self.place(&format!("{module}.weight.{i}"), dtype, &dims, &data));
+            let part = &w[first * inp..(first + rows) * inp];
+            outs.push(self.project(x16, part, rows, inp, &format!("{module}.weight.{i}")));
             first += rows;
         }
-        Ok(names)
+        Ok(outs)
     }
 
-    /// A projection's weight cut along its inputs into `sizes`: the projection of a
-    /// concatenation is the sum of the parts' projections.
-    fn matrix_columns(
+    /// A projection of a concatenation, cut along its inputs into `sizes`: the projections of
+    /// the parts `xs`, summed by the caller.
+    fn project_columns(
         &mut self,
+        xs: &[&str],
         module: &str,
         sizes: &[usize],
-        dtype: DataType,
     ) -> io::Result<Vec<String>> {
         let (w, out, inp) = self.merged_weight(module)?;
         debug_assert_eq!(sizes.iter().sum::<usize>(), inp);
-        let mut names = Vec::new();
+        let mut outs = Vec::new();
         let mut first = 0;
-        for (i, &cols) in sizes.iter().enumerate() {
+        for (i, (&cols, x)) in sizes.iter().zip(xs).enumerate() {
             let part: Vec<f32> = w
                 .chunks_exact(inp)
                 .flat_map(|row| &row[first..first + cols])
                 .copied()
                 .collect();
-            let data = transpose_to(&part, out, cols, dtype);
-            let dims = [cols as i64, out as i64];
-            names.push(self.place(&format!("{module}.weight.{i}"), dtype, &dims, &data));
+            outs.push(self.project(x, &part, out, cols, &format!("{module}.weight.{i}")));
             first += cols;
         }
-        Ok(names)
+        Ok(outs)
     }
 
     /// A vector (norm weight, bias) in single precision, reshaped to `dims`.
@@ -248,11 +308,27 @@ impl Builder<'_> {
         self.g.node("Concat", xs, &[Attr::Int("axis", axis)])
     }
 
+    /// A projection: in single precision (`dtype` F32), or of a half-precision value stored as
+    /// [`Storage`] says (F16).
     fn linear(&mut self, x: &str, module: &str, dtype: DataType) -> io::Result<String> {
-        let w = self.matrix(module, dtype)?;
+        if dtype == DataType::F16 {
+            let (w, out, inp) = self.merged_weight(module)?;
+            return Ok(self.project(x, &w, out, inp, &format!("{module}.weight")));
+        }
+        let w = self.matrix(module)?;
         Ok(self.op("MatMul", &[x, &w]))
     }
 
+    /// A large projection of a single-precision value applied to few rows (modulations, the
+    /// prompt's embedder): in single precision, or through the 8-bit storage when the weights
+    /// are quantized (its input cast to half precision, its output back).
+    fn linear_small_input(&mut self, x: &str, module: &str) -> io::Result<String> {
+        if self.storage == Storage::Half {
+            return self.linear(x, module, DataType::F32);
+        }
+        let x16 = self.cast(x, DataType::F16);
+        self.linear16(&x16, module)
+    }
     /// A projection in half precision of a single-precision value, back in single precision.
     fn linear16(&mut self, x16: &str, module: &str) -> io::Result<String> {
         let y = self.linear(x16, module, DataType::F16)?;
@@ -350,11 +426,9 @@ impl Builder<'_> {
     /// SwiGLU in half precision: `silu(x·W_gate) · (x·W_up)`, the fused projection's two halves
     /// computed apart.
     fn swiglu(&mut self, x16: &str, module: &str) -> io::Result<String> {
-        let w = self.matrix_rows(module, &[MLP as usize; 2], DataType::F16)?;
-        let gate = self.op("MatMul", &[x16, &w[0]]);
-        let up = self.op("MatMul", &[x16, &w[1]]);
-        let gate = self.silu(&gate);
-        Ok(self.op("Mul", &[&gate, &up]))
+        let halves = self.project_rows(x16, module, &[MLP as usize; 2])?;
+        let gate = self.silu(&halves[0]);
+        Ok(self.op("Mul", &[&gate, &halves[1]]))
     }
 }
 
@@ -371,6 +445,69 @@ pub fn key_bias(tokens: usize, padding: usize) -> Vec<f32> {
     bias
 }
 
+/// Symmetric 8-bit quantization of `w` `[out, in]` by blocks of `block` inputs, as ONNX
+/// Runtime's `MatMulNBits` stores it: per output, the blocks' values `round(w / scale) + 128`
+/// (the last block padded with 128, that is zero) and one scale per block, `max |w| / 127`.
+fn quantize_blocks(w: &[f32], out: usize, inp: usize, block: usize) -> (Vec<u8>, Vec<f32>) {
+    let blocks = inp.div_ceil(block);
+    let mut q = vec![128u8; out * blocks * block];
+    let mut scales = vec![0.0f32; out * blocks];
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let rows = out.div_ceil(threads).max(1);
+    std::thread::scope(|s| {
+        let parts = q
+            .chunks_mut(rows * blocks * block)
+            .zip(scales.chunks_mut(rows * blocks))
+            .zip(w.chunks(rows * inp));
+        for ((q, scales), w) in parts {
+            s.spawn(move || {
+                for (row, w) in w.chunks_exact(inp).enumerate() {
+                    for (b, values) in w.chunks(block).enumerate() {
+                        let max = values.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+                        let scale = max / 127.0;
+                        scales[row * blocks + b] = scale;
+                        let inv = if scale > 0.0 { 1.0 / scale } else { 0.0 };
+                        let out = &mut q[(row * blocks + b) * block..][..values.len()];
+                        for (o, v) in out.iter_mut().zip(values) {
+                            *o = ((v * inv).round().clamp(-127.0, 127.0) + 128.0) as u8;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (q, scales)
+}
+
+/// Symmetric 8-bit quantization of `w` `[out, in]` with one scale per output, `max |w| / 127`:
+/// the values `[in, out]` (signed bytes, the right operand of a `MatMul` once dequantized) and
+/// the scales.
+fn quantize_channels(w: &[f32], out: usize, inp: usize) -> (Vec<u8>, Vec<f32>) {
+    let scales: Vec<f32> = w
+        .chunks_exact(inp)
+        .map(|row| row.iter().fold(0.0f32, |m, v| m.max(v.abs())) / 127.0)
+        .collect();
+    let mut q = vec![0u8; out * inp];
+    for (o, row) in w.chunks_exact(inp).enumerate() {
+        let inv = if scales[o] > 0.0 {
+            1.0 / scales[o]
+        } else {
+            0.0
+        };
+        for (i, v) in row.iter().enumerate() {
+            q[i * out + o] = ((v * inv).round().clamp(-127.0, 127.0) as i8) as u8;
+        }
+    }
+    (q, scales)
+}
+
+/// Half-precision little-endian bytes of `values`.
+fn f16_bytes(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|v| f32_to_f16(*v).to_le_bytes())
+        .collect()
+}
 /// `w [out, in] += b [out, r] · a [r, in]`, rows split across threads.
 fn merge_lora(w: &mut [f32], out: usize, inp: usize, a: &[f32], b: &[f32], rank: usize) {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -480,7 +617,7 @@ fn transformer_graph(b: &mut Builder, chunks: usize) -> io::Result<()> {
     let temb = b.linear(&t, "time_guidance_embed.timestep_embedder.linear_2", f32_)?;
     let act = b.silu(&temb);
     let mods = |b: &mut Builder, module: &str, sets: usize| -> io::Result<Vec<[String; 3]>> {
-        let m = b.linear(&act, module, f32_)?;
+        let m = b.linear_small_input(&act, module)?;
         let parts = b.split(&m, -1, &vec![DIM; 3 * sets]);
         Ok(parts
             .chunks(3)
@@ -493,12 +630,12 @@ fn transformer_graph(b: &mut Builder, chunks: usize) -> io::Result<()> {
     let mod_img = mods(b, "double_stream_modulation_img.linear", 2)?;
     let mod_txt = mods(b, "double_stream_modulation_txt.linear", 2)?;
     let mod_single = mods(b, "single_stream_modulation.linear", 1)?;
-    let out_mod = b.linear(&act, "norm_out.linear", f32_)?;
+    let out_mod = b.linear_small_input(&act, "norm_out.linear")?;
     let out_parts = b.split(&out_mod, -1, &[DIM, DIM]); // scale, then shift
     let out_scale1 = b.op("Add", &[&out_parts[0], &one]);
 
     let mut x = b.linear(&img, "x_embedder", f32_)?;
-    let mut c = b.linear(&txt, "context_embedder", f32_)?;
+    let mut c = b.linear_small_input(&txt, "context_embedder")?;
 
     for i in 0..DOUBLE_BLOCKS {
         let p = format!("transformer_blocks.{i}");
@@ -560,8 +697,7 @@ fn transformer_graph(b: &mut Builder, chunks: usize) -> io::Result<()> {
         let n = b.cast(&n, f16_);
         // The fused input projection, cut by its outputs: q, k, v, the MLP's gate and up halves.
         let (d, m) = (DIM as usize, MLP as usize);
-        let w = b.matrix_rows(&format!("{p}.attn.to_qkv_mlp_proj"), &[d, d, d, m, m], f16_)?;
-        let proj: Vec<String> = w.iter().map(|w| b.op("MatMul", &[&n, w])).collect();
+        let proj = b.project_rows(&n, &format!("{p}.attn.to_qkv_mlp_proj"), &[d, d, d, m, m])?;
         let head = |b: &mut Builder, y16: &str, norm: &str| -> io::Result<String> {
             let y = b.cast(y16, f32_);
             let y = b.reshape(&y, &[-1, HEADS, HEAD_DIM]);
@@ -574,11 +710,9 @@ fn transformer_graph(b: &mut Builder, chunks: usize) -> io::Result<()> {
         let gate_mlp = b.silu(&proj[3]);
         let mlp = b.op("Mul", &[&gate_mlp, &proj[4]]);
         // The fused output projection, cut by its inputs: attention part + MLP part.
-        let w = b.matrix_columns(&format!("{p}.attn.to_out"), &[d, m], f16_)?;
-        let oa = b.op("MatMul", &[&att, &w[0]]);
-        let om = b.op("MatMul", &[&mlp, &w[1]]);
-        let oa = b.cast(&oa, f32_);
-        let om = b.cast(&om, f32_);
+        let o = b.project_columns(&[&att, &mlp], &format!("{p}.attn.to_out"), &[d, m])?;
+        let oa = b.cast(&o[0], f32_);
+        let om = b.cast(&o[1], f32_);
         let o = b.op("Add", &[&oa, &om]);
         let o = b.op("Mul", &[&o, gate]);
         h = b.op("Add", &[&h, &o]);
@@ -795,6 +929,7 @@ pub fn pipeline(
     lora: Option<&mut Lora>,
     vae: &mut SafeTensors,
     chunks: usize,
+    storage: Storage,
 ) -> io::Result<(Built, usize)> {
     let total: usize = [&*transformer, &*vae]
         .iter()
@@ -807,6 +942,7 @@ pub fn pipeline(
         file: transformer,
         lora,
         merged: 0,
+        storage,
     };
     transformer_graph(&mut b, chunks)?;
     b.file = vae;
@@ -848,6 +984,30 @@ mod tests {
         let mut w = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         merge_lora(&mut w, 2, 3, &[1.0, 0.0, -1.0], &[2.0, 0.5], 1);
         assert_eq!(w, vec![3.0, 2.0, 1.0, 4.5, 5.0, 5.5]);
+    }
+
+    #[test]
+    fn blocks_quantize_symmetrically_around_128() {
+        // w [2, 5], blocks of 4: the second block of each row is padded with 128 (zero).
+        let w = [1.0, -0.5, 0.25, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let (q, scales) = quantize_blocks(&w, 2, 5, 4);
+        assert_eq!(scales, vec![1.0 / 127.0, 2.0 / 127.0, 0.0, 0.0]);
+        assert_eq!(&q[..8], &[255, 128 - 64, 128 + 32, 128, 255, 128, 128, 128]);
+        assert!(q[8..].iter().all(|&v| v == 128));
+        // Dequantized, each value is within half a step of the weight.
+        for (i, &v) in w[..4].iter().enumerate() {
+            assert!((f32::from(q[i]) - 128.0) * scales[0] - v <= scales[0] / 2.0);
+        }
+    }
+
+    #[test]
+    fn channels_quantize_into_the_matmul_layout() {
+        // w [2, 3] → q [3, 2], one scale per output.
+        let w = [1.0, -1.0, 0.5, 0.0, 0.3, -0.6];
+        let (q, scales) = quantize_channels(&w, 2, 3);
+        assert_eq!(scales, vec![1.0 / 127.0, 0.6 / 127.0]);
+        let q: Vec<i8> = q.into_iter().map(|v| v as i8).collect();
+        assert_eq!(q, vec![127, 0, -127, 64, 64, -127]);
     }
 
     #[test]
