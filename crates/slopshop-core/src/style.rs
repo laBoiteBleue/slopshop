@@ -470,10 +470,20 @@ impl MaskKey {
         }
     }
 
-    /// The mask drawn from `coverage`, which reaches far enough.
-    fn mask(self, coverage: &Coverage) -> Option<Placed> {
+    /// The mask drawn from `coverage`, which reaches far enough. `blurred` keeps the shape's
+    /// blurs made for the other effects drawn with this one (a bevel's highlight and shadow
+    /// share theirs).
+    fn mask(self, coverage: &Coverage, blurred: &mut Blurs) -> Option<Placed> {
         let (area, shape) = coverage.shape.as_ref()?;
         let size = area.size();
+        let mut feathered = |sigma: f64| -> Option<Arc<RasterImage>> {
+            if let Some((_, image)) = blurred.iter().find(|(s, _)| *s == sigma) {
+                return Some(Arc::clone(image));
+            }
+            let image = Arc::new(selection::modify(size, shape, Modify::Feather(sigma)).ok()??);
+            blurred.push((sigma, Arc::clone(&image)));
+            Some(image)
+        };
         let m = f64::from(coverage.margin);
         let (x, y) = (f64::from(area.x) - m, f64::from(area.y) - m);
         match self {
@@ -483,6 +493,10 @@ impl MaskKey {
                 offset: (dx, dy),
                 inside,
             } => {
+                // Blurred as it is: the blur may be another effect's.
+                if !inside && hard == 0.0 && sigma > 0.0 {
+                    return Some((feathered(sigma)?, Projective::translation(x + dx, y + dy)));
+                }
                 let mut shape = Arc::clone(shape);
                 if inside {
                     shape = Arc::new(selection::invert(size, Some(&shape)).ok()??);
@@ -509,7 +523,7 @@ impl MaskKey {
                 invert,
             } => {
                 let blurred = if sigma > 0.0 {
-                    Arc::new(selection::modify(size, shape, Modify::Feather(sigma)).ok()??)
+                    feathered(sigma)?
                 } else {
                     Arc::clone(shape)
                 };
@@ -525,7 +539,7 @@ impl MaskKey {
                 highlight,
             } => {
                 let blurred = if bevel > 0.0 {
-                    Arc::new(selection::modify(size, shape, Modify::Feather(bevel / 2.0)).ok()??)
+                    feathered(bevel / 2.0)?
                 } else {
                     Arc::clone(shape)
                 };
@@ -1212,9 +1226,13 @@ impl LayerStyle {
                     ..Shaped::default()
                 };
             }
+            let mut blurred = Blurs::new();
             for m in &masked {
                 if shaped.known(m.slot, m.key).is_none() {
-                    let mask = shaped.coverage.as_ref().and_then(|c| m.key.mask(c));
+                    let mask = shaped
+                        .coverage
+                        .as_ref()
+                        .and_then(|c| m.key.mask(c, &mut blurred));
                     shaped.masks[m.slot as usize] = Some((m.key, mask));
                 }
             }
@@ -1313,6 +1331,9 @@ impl LayerStyle {
         Some(drawn)
     }
 }
+
+/// The shape's blurs made while drawing a style's effects, by standard deviation.
+type Blurs = Vec<(f64, Arc<RasterImage>)>;
 
 /// An effect drawn from a mask, as a style sets it.
 struct Masked {
@@ -1526,82 +1547,71 @@ fn bevel_mask(
     light: [f64; 3],
     highlight: bool,
 ) -> Option<RasterImage> {
-    let size = blurred.size();
-    let (w, h) = (size.width as usize, size.height as usize);
-    let a = selection::sample_grid(blurred, size.bounds(), w, h);
-    let height: Vec<f64> = a
-        .iter()
-        .map(|&v| {
-            let v = f64::from(v);
-            match style {
-                BevelStyle::InnerBevel => (2.0 * v - 1.0).clamp(0.0, 1.0),
-                BevelStyle::OuterBevel => (2.0 * v).clamp(0.0, 1.0),
-                BevelStyle::Emboss => v,
-                BevelStyle::PillowEmboss => (2.0 * v - 1.0).abs(),
-            }
-        })
-        .collect();
-    let at = |x: i64, y: i64| {
-        let x = x.clamp(0, w as i64 - 1) as usize;
-        let y = y.clamp(0, h as i64 - 1) as usize;
-        height[y * w + x]
+    let height = |v: f32| {
+        let v = f64::from(v);
+        match style {
+            BevelStyle::InnerBevel => (2.0 * v - 1.0).clamp(0.0, 1.0),
+            BevelStyle::OuterBevel => (2.0 * v).clamp(0.0, 1.0),
+            BevelStyle::Emboss => v,
+            BevelStyle::PillowEmboss => (2.0 * v - 1.0).abs(),
+        }
     };
     let flat = light[2];
     let full = f64::from(u16::MAX);
-    let mut bytes = Vec::with_capacity(w * h * 2);
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
+    // How much of the light the surface turns away (`lit` against the flat plane's).
+    let shade = move |lit: f64| {
+        let v = if highlight {
+            if flat < 1.0 {
+                ((lit - flat) / (1.0 - flat)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        } else if flat > 0.0 {
+            ((flat - lit) / flat).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (v * full).round() as u16
+    };
+    // Flat where the coverage is uniform: no slope, lit as the plane.
+    selection::neighbourhood_map(
+        blurred,
+        1,
+        None,
+        |_| shade(flat),
+        |read, x, y| {
+            let at = |x, y| height(read(x, y));
             // The surface's normal from the height's slope (central differences).
             let gx = (at(x + 1, y) - at(x - 1, y)) / 2.0 * slope;
             let gy = (at(x, y + 1) - at(x, y - 1)) / 2.0 * slope;
             let norm = (gx * gx + gy * gy + 1.0).sqrt();
-            let lit = (-gx * light[0] - gy * light[1] + light[2]) / norm;
-            let v = if highlight {
-                if flat < 1.0 {
-                    ((lit - flat) / (1.0 - flat)).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            } else if flat > 0.0 {
-                ((flat - lit) / flat).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            bytes.extend(((v * full).round() as u16).to_ne_bytes());
-        }
-    }
-    RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).ok()
+            shade((-gx * light[0] - gy * light[1] + light[2]) / norm)
+        },
+    )
 }
 
 /// Satin's mask from the blurred shape `blurred` (a gray coverage): at each pixel, the
 /// difference of the shape half `offset` before and after it, inverted with `invert`; nothing
 /// where the shape is not (the effect is drawn within it).
 fn satin_mask(blurred: &RasterImage, offset: (f64, f64), invert: bool) -> Option<RasterImage> {
-    let size = blurred.size();
-    let (w, h) = (size.width as usize, size.height as usize);
-    let values = selection::sample_grid(blurred, size.bounds(), w, h);
     // Half the distance either way, in whole pixels.
     let (hx, hy) = (
         (offset.0 / 2.0).round() as i64,
         (offset.1 / 2.0).round() as i64,
     );
-    let at = |x: i64, y: i64| {
-        if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
-            0.0
-        } else {
-            values[y as usize * w + x as usize]
-        }
-    };
     let full = f32::from(u16::MAX);
-    let mut bytes = Vec::with_capacity(w * h * 2);
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            let d = (at(x - hx, y - hy) - at(x + hx, y + hy)).abs().min(1.0);
-            let v = if invert { 1.0 - d } else { d };
-            bytes.extend(((v * full).round() as u16).to_ne_bytes());
-        }
-    }
-    RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).ok()
+    let value = move |d: f32| {
+        let v = if invert { 1.0 - d } else { d };
+        (v * full).round() as u16
+    };
+    // No difference where the coverage is uniform.
+    selection::neighbourhood_map(
+        blurred,
+        hx.unsigned_abs().max(hy.unsigned_abs()) as usize,
+        Some(0.0),
+        |_| value(0.0),
+        |read, x, y| value((read(x - hx, y - hy) - read(x + hx, y + hy)).abs().min(1.0)),
+    )
 }
 
 /// The box of `layer`'s pixels in its own space, its hidden children aside (a group: theirs
@@ -2517,5 +2527,103 @@ mod tests {
             }
             .shows()
         );
+    }
+
+    /// The pixels of a gray mask, row-major.
+    fn gray(image: &RasterImage) -> Vec<u16> {
+        let size = image.size();
+        selection::sample_grid(
+            image,
+            size.bounds(),
+            size.width as usize,
+            size.height as usize,
+        )
+        .iter()
+        .map(|v| (v * 65535.0).round() as u16)
+        .collect()
+    }
+
+    #[test]
+    fn satin_and_bevel_skip_uniform_tiles_and_give_the_same_pixels() {
+        // Uniform tiles (inside and outside a soft disc), mixed ones, a noisy patch, a shape
+        // against the right edge: 600 × 520.
+        let size = Size::new(600, 520);
+        let mut bytes = Vec::new();
+        for y in 0..520u32 {
+            for x in 0..600u32 {
+                let d = ((f64::from(x) - 300.0).powi(2) + (f64::from(y) - 260.0).powi(2)).sqrt();
+                let mut v = ((200.0 - d) * 3000.0).clamp(0.0, 65535.0) as u16;
+                if (40..90).contains(&x) && (400..470).contains(&y) {
+                    v = (((x * 7919) ^ (y * 104_729)) % 65536) as u16;
+                }
+                if x > 560 && (100..200).contains(&y) {
+                    v = 65535;
+                }
+                bytes.extend(v.to_ne_bytes());
+            }
+        }
+        let blurred = RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).unwrap();
+        let values = gray(&blurred);
+        let (w, h) = (600i64, 520i64);
+        let raw = |x: i64, y: i64| f32::from(values[(y * w + x) as usize]) / 65535.0;
+        // Satin as it was computed pixel by pixel.
+        for (offset, invert) in [((10.0, -7.0), false), ((-30.0, 4.0), true)] {
+            let (hx, hy) = (
+                (offset.0 / 2.0_f64).round() as i64,
+                (offset.1 / 2.0_f64).round() as i64,
+            );
+            let at = |x: i64, y: i64| {
+                if x < 0 || y < 0 || x >= w || y >= h {
+                    0.0
+                } else {
+                    raw(x, y)
+                }
+            };
+            let expected: Vec<u16> = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| {
+                    let d = (at(x - hx, y - hy) - at(x + hx, y + hy)).abs().min(1.0);
+                    let v = if invert { 1.0 - d } else { d };
+                    (v * 65535.0).round() as u16
+                })
+                .collect();
+            assert_eq!(
+                gray(&satin_mask(&blurred, offset, invert).unwrap()),
+                expected
+            );
+        }
+        // Bevel likewise.
+        let light = [0.43, -0.36, 0.5];
+        for style in [BevelStyle::InnerBevel, BevelStyle::PillowEmboss] {
+            for highlight in [true, false] {
+                let height = |x: i64, y: i64| {
+                    let v = f64::from(raw(x.clamp(0, w - 1), y.clamp(0, h - 1)));
+                    match style {
+                        BevelStyle::InnerBevel => (2.0 * v - 1.0).clamp(0.0, 1.0),
+                        BevelStyle::OuterBevel => (2.0 * v).clamp(0.0, 1.0),
+                        BevelStyle::Emboss => v,
+                        BevelStyle::PillowEmboss => (2.0 * v - 1.0).abs(),
+                    }
+                };
+                let flat = light[2];
+                let expected: Vec<u16> = (0..h)
+                    .flat_map(|y| (0..w).map(move |x| (x, y)))
+                    .map(|(x, y)| {
+                        let gx = (height(x + 1, y) - height(x - 1, y)) / 2.0 * 12.0;
+                        let gy = (height(x, y + 1) - height(x, y - 1)) / 2.0 * 12.0;
+                        let norm = (gx * gx + gy * gy + 1.0).sqrt();
+                        let lit = (-gx * light[0] - gy * light[1] + light[2]) / norm;
+                        let v = if highlight {
+                            ((lit - flat) / (1.0 - flat)).clamp(0.0, 1.0)
+                        } else {
+                            ((flat - lit) / flat).clamp(0.0, 1.0)
+                        };
+                        (v * 65535.0).round() as u16
+                    })
+                    .collect();
+                let mask = bevel_mask(&blurred, style, 12.0, light, highlight).unwrap();
+                assert_eq!(gray(&mask), expected, "{style:?} {highlight}");
+            }
+        }
     }
 }
