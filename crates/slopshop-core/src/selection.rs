@@ -977,6 +977,100 @@ impl Mask {
     }
 }
 
+/// A gray mask the size of `selection` whose pixel (x, y) is `pixel(read, x, y)`, `read(x, y)`
+/// being `selection`'s coverage in [0, 1] (`outside` off the canvas, else its edge repeating).
+/// Computed on every core, and only for the tiles where `selection` within `reach` pixels is
+/// not one value: those take `uniform(v)`, `pixel` of a neighbourhood all `v` (a layer style's
+/// Satin and Bevel, which only change near the outline).
+pub(crate) fn neighbourhood_map(
+    selection: &RasterImage,
+    reach: usize,
+    outside: Option<f32>,
+    uniform: impl Fn(f32) -> u16 + Sync,
+    pixel: impl Fn(&dyn Fn(i64, i64) -> f32, i64, i64) -> u16 + Sync,
+) -> Option<RasterImage> {
+    let size = selection.size();
+    let mask = Mask::from_image(size, selection).ok()?;
+    let tiles_reach = reach.div_ceil(T);
+    let (width, height) = (size.width as usize, size.height as usize);
+    let mut out = mask.clone();
+    let mut todo = Vec::new();
+    for index in 0..mask.tiles.len() {
+        let (col, row) = (index % mask.columns, index / mask.columns);
+        // Reading off the canvas gives `outside`: the tiles that reach it are computed.
+        let reaches_out = outside.is_some()
+            && (col * T < reach
+                || row * T < reach
+                || (col + 1) * T + reach > width
+                || (row + 1) * T + reach > height);
+        let mut seen: Option<u16> = None;
+        let mut mixed = reaches_out;
+        'scan: for r in row.saturating_sub(tiles_reach)..=(row + tiles_reach).min(mask.rows - 1) {
+            for c in col.saturating_sub(tiles_reach)..=(col + tiles_reach).min(mask.columns - 1) {
+                if mixed {
+                    break 'scan;
+                }
+                match (mask.tiles[r * mask.columns + c].constant(), seen) {
+                    (None, _) => mixed = true,
+                    (Some(v), None) => seen = Some(v),
+                    (Some(v), Some(s)) if v != s => mixed = true,
+                    _ => {}
+                }
+            }
+        }
+        if mixed {
+            todo.push(index);
+        } else {
+            let v = f32::from(seen.unwrap_or(0)) / f32::from(FULL);
+            out.tiles[index] = Tile::Const(uniform(v));
+        }
+    }
+    let read = |x: i64, y: i64| -> f32 {
+        let inside = (0..size.width as i64).contains(&x) && (0..size.height as i64).contains(&y);
+        match outside {
+            Some(v) if !inside => v,
+            _ => f32::from(mask.at(x as isize, y as isize)) / f32::from(FULL),
+        }
+    };
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = todo.len().div_ceil(threads).max(1);
+    let (read, pixel, mask) = (&read, &pixel, &mask);
+    let mut computed: Vec<(usize, Vec<u16>)> = Vec::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = todo
+            .chunks(per_thread)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&index| {
+                            let (col, row) = (index % mask.columns, index / mask.columns);
+                            let (w, h) = mask.valid(col, row);
+                            let mut values = vec![0u16; T * T];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    values[y * T + x] =
+                                        pixel(read, (col * T + x) as i64, (row * T + y) as i64);
+                                }
+                            }
+                            pad(&mut values, w, h);
+                            (index, values)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for worker in workers {
+            // Invariant: `pixel` reads through `read`, which is clamped.
+            computed.extend(worker.join().expect("neighbourhood worker panicked"));
+        }
+    });
+    for (index, values) in computed {
+        out.tiles[index] = Tile::Data(values);
+    }
+    out.build(true)
+}
+
 /// Repeat the last valid row and column over the padding, as raster tiles are padded.
 fn pad(values: &mut [u16], w: usize, h: usize) {
     if w == 0 || h == 0 {
