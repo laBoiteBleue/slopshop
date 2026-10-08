@@ -1390,7 +1390,12 @@ const fr: Messages = {
   "ai.component.vitmatte": "ViTMatte-S : contours en pleine définition (cheveux, poils)",
   "ai.component.vitmatteBase": "ViTMatte-B : contours en pleine définition (cheveux, poils)",
   "ai.component.birefnet": "BiRefNet : sélection du sujet",
+  "ai.component.flux2Vae": "VAE FLUX.2 : images des modèles génératifs",
   "ai.component.flux2Klein": "FLUX.2 [klein] 4B : remplissage génératif",
+  "ai.component.flux2KleinBase":
+    "FLUX.2 [klein] base 4B : remplissage génératif, meilleure qualité",
+  "ai.component.falObjectRemove": "Object remove (fal) : efface ce qui est sélectionné",
+  "ai.component.eraseBase": "Prompts du remplissage génératif",
   "ai.component.eraseV1": "erase_v1 : efface ce qui est sélectionné",
   "ai.error.start": "Le moteur d’IA n’a pas pu démarrer : {detail}",
   "ai.error.model": "Le modèle d’IA a échoué : {detail}",

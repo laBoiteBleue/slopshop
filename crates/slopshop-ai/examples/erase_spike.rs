@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use slopshop_ai::EraseModel;
 use slopshop_ai::erase::{self, Region, pil};
 use slopshop_ai::eraser::{Eraser, Files};
 use slopshop_ai::flux2::Storage;
@@ -26,6 +27,7 @@ struct Options {
     models: PathBuf,
     runtime: PathBuf,
     storage: Storage,
+    model: EraseModel,
     crop: bool,
     dilate: f64,
     /// The colors matched to the photo at the selection's edge (`--match`).
@@ -42,6 +44,7 @@ fn options() -> Result<Options, Error> {
         models: ai.join("models"),
         runtime: ai.join("runtime").join("directml").join("onnxruntime.dll"),
         storage: Storage::Blocks(64),
+        model: EraseModel::Turbo,
         crop: false,
         dilate: 0.0,
         edges: false,
@@ -60,6 +63,12 @@ fn options() -> Result<Options, Error> {
                     "half" => Storage::Half,
                     "channels" => Storage::Channels,
                     block => Storage::Blocks(block.parse()?),
+                }
+            }
+            "--model" => {
+                o.model = match value()?.as_str() {
+                    "base" => EraseModel::Base,
+                    _ => EraseModel::Turbo,
                 }
             }
             "--crop" => o.crop = true,
@@ -84,21 +93,43 @@ fn main() -> Result<(), Error> {
     let o = options()?;
     ort::init_from(&o.runtime)?.commit();
     let erase_dir = o.integration.join("erase");
-    let klein = o.models.join("black-forest-labs").join("FLUX.2-klein-4B");
+    // The model's files: the turbo variant's from the integration folder, the base's from the
+    // models folder (as the app installs them).
+    let m = |p: &str| o.models.join(p);
+    let weights = |repo: &str, part: &str| {
+        m(&format!(
+            "black-forest-labs/{repo}/{part}/diffusion_pytorch_model.safetensors"
+        ))
+    };
+    let paths: Vec<PathBuf> = match o.model {
+        EraseModel::Turbo => vec![
+            weights("FLUX.2-klein-4B", "transformer"),
+            weights("FLUX.2-klein-4B", "vae"),
+            erase_dir
+                .join("lora")
+                .join("erase_v1_diffusers.safetensors"),
+            erase_dir.join("prompt_embeds.safetensors"),
+        ],
+        EraseModel::Base => vec![
+            weights("FLUX.2-klein-base-4B", "transformer"),
+            weights("FLUX.2-klein-4B", "vae"), // the same VAE
+            m(
+                "fal/flux-2-klein-4B-object-remove-lora/kDEkt5q7tDLKOpQJIVMPx_pytorch_lora_weights_comfy_converted.safetensors",
+            ),
+            m("slopshop/erase-base/prompt_embeds.safetensors"),
+            m("slopshop/erase-base/negative_embeds.safetensors"),
+        ],
+    };
     let t = Instant::now();
     let mut eraser = Eraser::load(
         Files {
-            transformer: &klein
-                .join("transformer")
-                .join("diffusion_pytorch_model.safetensors"),
-            vae: &klein
-                .join("vae")
-                .join("diffusion_pytorch_model.safetensors"),
-            lora: &erase_dir
-                .join("lora")
-                .join("erase_v1_diffusers.safetensors"),
-            embedding: &erase_dir.join("prompt_embeds.safetensors"),
+            transformer: &paths[0],
+            vae: &paths[1],
+            lora: &paths[2],
+            embedding: &paths[3],
+            negative: paths.get(4).map(PathBuf::as_path),
         },
+        o.model,
         o.storage,
         &mut |_, _, _| {},
     )?;
@@ -151,7 +182,7 @@ fn main() -> Result<(), Error> {
         let n = (h / 16) * (w / 16);
         let photo_s = pil::resize_lanczos(&region_photo, 3, (rw, rh), (w, h));
         let selection_s = pil::resize_nearest(&region_selection, 1, (rw, rh), (w, h));
-        let given = !o.crop && o.dilate == 0.0;
+        let given = o.model == EraseModel::Turbo && !o.crop && o.dilate == 0.0;
         let noise = if given {
             SafeTensors::open(&dir.join("tensors.safetensors"))?.f32s("noise")?
         } else {

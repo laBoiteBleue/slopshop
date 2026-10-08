@@ -81,6 +81,18 @@ LICENSES = {
         True,
         False,
     ),
+    "flux2_klein_base": (
+        "Apache-2.0",
+        "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B",
+        True,
+        False,
+    ),
+    "fal_object_remove": (
+        "Apache-2.0",
+        "https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora",
+        True,
+        False,
+    ),
     # The Erase tool's LoRA, distilled from Klein base 4B and fal's object-remove LoRA (both
     # Apache-2.0), on images of the CORNE set (Apache-2.0).
     "erase_v1": (
@@ -93,6 +105,12 @@ LICENSES = {
 
 # The Erase tool (ADR 0045): FLUX.2 [klein] 4B turbo as BFL publishes it, and erase_v1.
 FLUX2_KLEIN = ("black-forest-labs/FLUX.2-klein-4B", "e7b7dc27f91deacad38e78976d1f2b499d76a294")
+FLUX2_KLEIN_BASE = (
+    "black-forest-labs/FLUX.2-klein-base-4B",
+    "a3b4f4849157f664bdbc776fd7453c2783562f4d",
+)
+# fal's object-remove LoRA (trained on the base model), for the base variant.
+FAL_OBJECT_REMOVE = ("fal/flux-2-klein-4B-object-remove-lora", "0e3f58790356bf1319b263fc56b333c294b42ff7")
 ERASE_V1 = ("slopshop/erase-v1", "0bb45298a0f4dde0affed10c73f8ad05ad26de48")
 
 
@@ -328,14 +346,19 @@ def main():
         ["onnx/model.onnx"],
         "models",
     )
-    print("FLUX.2 [klein] 4B, erase_v1")
+    print("FLUX.2 [klein] 4B turbo and base, erase_v1, fal's object-remove LoRA")
+    # The base model's VAE is the same file as the turbo's: one component for both.
+    flux2_vae = hugging_face(*FLUX2_KLEIN, ["vae/diffusion_pytorch_model.safetensors"], "models")
     flux2_klein = hugging_face(
-        *FLUX2_KLEIN,
-        [
-            "transformer/diffusion_pytorch_model.safetensors",
-            "vae/diffusion_pytorch_model.safetensors",
-        ],
-        "models",
+        *FLUX2_KLEIN, ["transformer/diffusion_pytorch_model.safetensors"], "models"
+    )
+    flux2_klein_base = hugging_face(
+        *FLUX2_KLEIN_BASE, ["transformer/diffusion_pytorch_model.safetensors"], "models"
+    )
+    fal_object_remove = hugging_face(
+        # The repository's plain file is truncated (its header names 76 MB, it holds 58): the
+        # ComfyUI conversion, complete, has the same weights (BFL keys).
+        *FAL_OBJECT_REMOVE, ["kDEkt5q7tDLKOpQJIVMPx_pytorch_lora_weights_comfy_converted.safetensors"], "models"
     )
     erase_v1 = hugging_face(
         *ERASE_V1,
@@ -361,7 +384,10 @@ def main():
         component("vitmatte-small", ["vitmatte"], vitmatte),
         component("vitmatte-base", ["vitmatte_base"], vitmatte_base),
         # The Erase tool, on DirectML (ADR 0045).
+        component("flux2-vae", ["flux2_klein"], flux2_vae),
         component("flux2-klein-4b", ["flux2_klein"], flux2_klein),
+        component("flux2-klein-base-4b", ["flux2_klein_base"], flux2_klein_base),
+        component("fal-object-remove", ["fal_object_remove"], fal_object_remove),
         component("erase-v1", ["erase_v1"], erase_v1),
     ]
 

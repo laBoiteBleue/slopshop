@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use slopshop_ai::EraseModel;
 use slopshop_ai::install::{self, COMPONENTS, Component, InstallError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -71,7 +72,16 @@ impl Runtime {
             Feature::Segmentation => sam,
             Feature::Subject => birefnet,
             Feature::Erase if self == Self::DirectMl => {
-                return vec![runtime, "flux2-klein-4b", "erase-v1"];
+                return match erase_model() {
+                    EraseModel::Turbo => vec![runtime, "flux2-vae", "flux2-klein-4b", "erase-v1"],
+                    EraseModel::Base => vec![
+                        runtime,
+                        "flux2-vae",
+                        "flux2-klein-base-4b",
+                        "fal-object-remove",
+                        "erase-base",
+                    ],
+                };
             }
             Feature::Erase => return Vec::new(),
         };
@@ -82,6 +92,16 @@ impl Runtime {
             _ => "vitmatte-base",
         };
         vec![runtime, model, matte]
+    }
+}
+
+/// The Erase tool's model (ADR 0045): the turbo one, or the base one with
+/// `SLOPSHOP_ERASE_MODEL=base` while it is evaluated (its prompt embeddings are not published
+/// yet).
+pub(crate) fn erase_model() -> EraseModel {
+    match std::env::var("SLOPSHOP_ERASE_MODEL").as_deref() {
+        Ok("base") => EraseModel::Base,
+        _ => EraseModel::Turbo,
     }
 }
 

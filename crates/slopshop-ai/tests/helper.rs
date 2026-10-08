@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use slopshop_ai::{Client, Launch, MASK_SIDE, Point, Stage};
+use slopshop_ai::{Client, EraseModel, Launch, MASK_SIDE, Point, Request, Stage};
 
 #[test]
 fn sam_selects_the_clicked_shape() {
@@ -205,11 +205,14 @@ fn erase_replaces_the_selection_by_its_surroundings() {
     let start = std::time::Instant::now();
     let result = client
         .erase(
-            w as u32,
-            h as u32,
-            rgb,
-            mask,
-            7,
+            &Request::Erase {
+                width: w as u32,
+                height: h as u32,
+                rgb,
+                mask,
+                seed: 7,
+                model: EraseModel::Turbo,
+            },
             &mut |stage, done, total| {
                 stages.push((stage, done, total));
                 true

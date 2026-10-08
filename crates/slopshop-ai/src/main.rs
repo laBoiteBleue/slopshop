@@ -13,8 +13,8 @@ use ort::value::Tensor;
 use slopshop_ai::eraser::{Eraser, Files};
 use slopshop_ai::flux2::Storage;
 use slopshop_ai::{
-    MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SUBJECT_SIDE, Stage, read_frame,
-    write_frame,
+    EraseModel, MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SUBJECT_SIDE, Stage,
+    read_frame, write_frame,
 };
 
 /// SAM 2.1's input side.
@@ -47,6 +47,14 @@ const FLUX_TRANSFORMER: &str =
 const FLUX_VAE: &str = "black-forest-labs/FLUX.2-klein-4B/vae/diffusion_pytorch_model.safetensors";
 const ERASE_LORA: &str = "slopshop/erase-v1/erase_v1_diffusers.safetensors";
 const ERASE_EMBEDDING: &str = "slopshop/erase-v1/prompt_embeds.safetensors";
+/// The base variant's: FLUX.2 [klein] base 4B (its VAE is the turbo's, the same file), fal's
+/// object-remove LoRA, the prompt's and the empty prompt's embeddings.
+const BASE_TRANSFORMER: &str =
+    "black-forest-labs/FLUX.2-klein-base-4B/transformer/diffusion_pytorch_model.safetensors";
+const BASE_VAE: &str = FLUX_VAE;
+const BASE_LORA: &str = "fal/flux-2-klein-4B-object-remove-lora/kDEkt5q7tDLKOpQJIVMPx_pytorch_lora_weights_comfy_converted.safetensors";
+const BASE_EMBEDDING: &str = "slopshop/erase-base/prompt_embeds.safetensors";
+const BASE_NEGATIVE: &str = "slopshop/erase-base/negative_embeds.safetensors";
 
 /// ViTMatte's base and small models, in the models folder.
 const VITMATTE_BASE: &str = "Xenova/vitmatte-base-composition-1k/onnx/model.onnx";
@@ -511,9 +519,14 @@ fn main() {
                 rgb,
                 mask,
                 seed,
+                model,
             }) => {
                 matte = None;
                 subject = None;
+                // Another model than the one loaded: it is unloaded first (one in memory).
+                if eraser.as_ref().is_some_and(|e| e.variant() != model) {
+                    eraser = None;
+                }
                 let mut report = |stage: Stage, done: u32, total: u32| {
                     let progress = Response::Progress { stage, done, total };
                     let _ = write_frame(&mut output, &progress.encode());
@@ -525,15 +538,32 @@ fn main() {
                     }
                     None => {
                         let models = &options.models;
-                        let files = Files {
-                            transformer: &models.join(FLUX_TRANSFORMER),
-                            vae: &models.join(FLUX_VAE),
-                            lora: &models.join(ERASE_LORA),
-                            embedding: &models.join(ERASE_EMBEDDING),
+                        let paths: Vec<PathBuf> = match model {
+                            EraseModel::Turbo => {
+                                [FLUX_TRANSFORMER, FLUX_VAE, ERASE_LORA, ERASE_EMBEDDING]
+                                    .map(|p| models.join(p))
+                                    .to_vec()
+                            }
+                            EraseModel::Base => [
+                                BASE_TRANSFORMER,
+                                BASE_VAE,
+                                BASE_LORA,
+                                BASE_EMBEDDING,
+                                BASE_NEGATIVE,
+                            ]
+                            .map(|p| models.join(p))
+                            .to_vec(),
                         };
-                        let loaded = Eraser::load(files, Storage::Blocks(64), &mut report);
+                        let files = Files {
+                            transformer: &paths[0],
+                            vae: &paths[1],
+                            lora: &paths[2],
+                            embedding: &paths[3],
+                            negative: paths.get(4).map(PathBuf::as_path),
+                        };
+                        let loaded = Eraser::load(files, model, Storage::Blocks(64), &mut report);
                         loaded.map(|e| {
-                            eprintln!("slopshop-ai: FLUX.2 klein (Erase) on directml");
+                            eprintln!("slopshop-ai: FLUX.2 klein (Erase, {model:?}) on directml");
                             eraser.insert(e)
                         })
                     }

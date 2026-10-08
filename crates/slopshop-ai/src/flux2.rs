@@ -59,44 +59,174 @@ pub struct Built {
 /// A LoRA's factors for one layer: `A` `[r, in]`, `B` `[out, r]` and the rank `r`.
 type Factors = (Vec<f32>, Vec<f32>, usize);
 
-/// A LoRA in diffusers keys (`transformer.<module>.lora_A.weight`, `…lora_B.weight`).
+/// A LoRA, in diffusers keys (`transformer.<module>.lora_A.weight`, `…lora_B.weight`) or in
+/// BFL's (`[base_model.model.|diffusion_model.]double_blocks.N.img_attn.qkv.lora_A.weight`…, as
+/// fal's object-remove LoRA), applied at `scale` (`W + scale · B·A`).
 #[derive(Debug)]
 pub struct Lora {
     file: SafeTensors,
-    prefix: &'static str,
+    /// `None`: diffusers keys; else BFL keys after this prefix.
+    bfl: Option<String>,
+    scale: f32,
+}
+
+/// Where a diffusers module's LoRA lies in BFL's keys: its module, and for a fused projection
+/// split in diffusers (q, k, v) the rows of `B` that are its.
+fn bfl_source(module: &str) -> Option<(String, Option<std::ops::Range<usize>>)> {
+    let d = DIM as usize;
+    let qkv = |n: &str, stream: &str, i: usize| {
+        Some((
+            format!("double_blocks.{n}.{stream}.qkv"),
+            Some(i * d..(i + 1) * d),
+        ))
+    };
+    let whole = |name: String| Some((name, None));
+    if let Some(rest) = module.strip_prefix("transformer_blocks.") {
+        let (n, tail) = rest.split_once('.')?;
+        return match tail {
+            "attn.to_q" => qkv(n, "img_attn", 0),
+            "attn.to_k" => qkv(n, "img_attn", 1),
+            "attn.to_v" => qkv(n, "img_attn", 2),
+            "attn.add_q_proj" => qkv(n, "txt_attn", 0),
+            "attn.add_k_proj" => qkv(n, "txt_attn", 1),
+            "attn.add_v_proj" => qkv(n, "txt_attn", 2),
+            "attn.to_out.0" => whole(format!("double_blocks.{n}.img_attn.proj")),
+            "attn.to_add_out" => whole(format!("double_blocks.{n}.txt_attn.proj")),
+            "ff.linear_in" => whole(format!("double_blocks.{n}.img_mlp.0")),
+            "ff.linear_out" => whole(format!("double_blocks.{n}.img_mlp.2")),
+            "ff_context.linear_in" => whole(format!("double_blocks.{n}.txt_mlp.0")),
+            "ff_context.linear_out" => whole(format!("double_blocks.{n}.txt_mlp.2")),
+            _ => None,
+        };
+    }
+    if let Some(rest) = module.strip_prefix("single_transformer_blocks.") {
+        let (n, tail) = rest.split_once('.')?;
+        return match tail {
+            "attn.to_qkv_mlp_proj" => whole(format!("single_blocks.{n}.linear1")),
+            "attn.to_out" => whole(format!("single_blocks.{n}.linear2")),
+            _ => None,
+        };
+    }
+    let name = match module {
+        "x_embedder" => "img_in",
+        "context_embedder" => "txt_in",
+        "proj_out" => "final_layer.linear",
+        "time_guidance_embed.timestep_embedder.linear_1" => "time_in.in_layer",
+        "time_guidance_embed.timestep_embedder.linear_2" => "time_in.out_layer",
+        "double_stream_modulation_img.linear" => "double_stream_modulation_img.lin",
+        "double_stream_modulation_txt.linear" => "double_stream_modulation_txt.lin",
+        "single_stream_modulation.linear" => "single_stream_modulation.lin",
+        _ => return None,
+    };
+    whole(name.to_string())
+}
+
+/// Every linear module of the transformer, in diffusers names.
+fn transformer_modules() -> Vec<String> {
+    let mut out: Vec<String> = [
+        "x_embedder",
+        "context_embedder",
+        "proj_out",
+        "norm_out.linear",
+        "time_guidance_embed.timestep_embedder.linear_1",
+        "time_guidance_embed.timestep_embedder.linear_2",
+        "double_stream_modulation_img.linear",
+        "double_stream_modulation_txt.linear",
+        "single_stream_modulation.linear",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    for n in 0..DOUBLE_BLOCKS {
+        for tail in [
+            "attn.to_q",
+            "attn.to_k",
+            "attn.to_v",
+            "attn.add_q_proj",
+            "attn.add_k_proj",
+            "attn.add_v_proj",
+            "attn.to_out.0",
+            "attn.to_add_out",
+            "ff.linear_in",
+            "ff.linear_out",
+            "ff_context.linear_in",
+            "ff_context.linear_out",
+        ] {
+            out.push(format!("transformer_blocks.{n}.{tail}"));
+        }
+    }
+    for n in 0..SINGLE_BLOCKS {
+        for tail in ["attn.to_qkv_mlp_proj", "attn.to_out"] {
+            out.push(format!("single_transformer_blocks.{n}.{tail}"));
+        }
+    }
+    out
 }
 
 impl Lora {
-    pub fn open(path: &Path) -> io::Result<Self> {
-        Ok(Self {
-            file: SafeTensors::open(path)?,
-            prefix: "transformer.",
-        })
+    /// Opens a LoRA in either key set (see [`Lora`]), applied at `scale`.
+    pub fn open(path: &Path, scale: f32) -> io::Result<Self> {
+        let file = SafeTensors::open(path)?;
+        let diffusers = file.tensors.keys().any(|k| k.starts_with("transformer."));
+        let bfl = if diffusers {
+            None
+        } else {
+            let key = file
+                .tensors
+                .keys()
+                .find(|k| k.contains("blocks.") && k.ends_with(".lora_A.weight"))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not a FLUX.2 LoRA"))?;
+            let at = key
+                .find("double_blocks.")
+                .or_else(|| key.find("single_blocks."))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unknown LoRA keys"))?;
+            Some(key[..at].to_string())
+        };
+        Ok(Self { file, bfl, scale })
     }
 
-    /// `(A [r, in], B [out, r], r)` for the module `name` (without `.weight`), if targeted.
-    fn factors(&mut self, module: &str) -> io::Result<Option<Factors>> {
-        let a = format!("{}{module}.lora_A.weight", self.prefix);
-        let b = format!("{}{module}.lora_B.weight", self.prefix);
-        if !self.file.tensors.contains_key(&a) {
-            return Ok(None);
-        }
-        let rank = self.file.info(&a)?.shape[0];
-        Ok(Some((self.file.f32s(&a)?, self.file.f32s(&b)?, rank)))
+    /// The keys of `A` and `B` for a module in the file's own names.
+    fn keys(&self, name: &str) -> (String, String) {
+        let prefix = self.bfl.as_deref().unwrap_or("transformer.");
+        (
+            format!("{prefix}{name}.lora_A.weight"),
+            format!("{prefix}{name}.lora_B.weight"),
+        )
     }
 
-    /// Every module the LoRA targets.
-    pub fn modules(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .file
+    /// The file's module and `B`'s rows for the diffusers module `module`, if the LoRA has it.
+    fn source(&self, module: &str) -> Option<(String, Option<std::ops::Range<usize>>)> {
+        let (name, rows) = match &self.bfl {
+            None => (module.to_string(), None),
+            Some(_) => bfl_source(module)?,
+        };
+        self.file
             .tensors
-            .keys()
-            .filter_map(|k| k.strip_suffix(".lora_A.weight"))
-            .filter_map(|k| k.strip_prefix(self.prefix))
-            .map(str::to_string)
-            .collect();
-        out.sort();
-        out
+            .contains_key(&self.keys(&name).0)
+            .then_some((name, rows))
+    }
+
+    /// `(A [r, in], B·scale [out, r], r)` for the module `name` (without `.weight`), if targeted.
+    fn factors(&mut self, module: &str) -> io::Result<Option<Factors>> {
+        let Some((name, rows)) = self.source(module) else {
+            return Ok(None);
+        };
+        let (a, b) = self.keys(&name);
+        let rank = self.file.info(&a)?.shape[0];
+        let a = self.file.f32s(&a)?;
+        let mut b = self.file.f32s(&b)?;
+        if let Some(rows) = rows {
+            b = b[rows.start * rank..rows.end * rank].to_vec();
+        }
+        b.iter_mut().for_each(|v| *v *= self.scale);
+        Ok(Some((a, b, rank)))
+    }
+
+    /// Every module (diffusers names) the LoRA targets.
+    pub fn modules(&self) -> Vec<String> {
+        transformer_modules()
+            .into_iter()
+            .filter(|m| self.source(m).is_some())
+            .collect()
     }
 }
 

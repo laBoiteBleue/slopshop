@@ -86,6 +86,7 @@ pub enum Request {
         rgb: Vec<u8>,
         mask: Vec<u8>,
         seed: u64,
+        model: EraseModel,
     },
     /// Stop.
     Quit,
@@ -126,6 +127,26 @@ pub enum Response {
     /// An 8-bit RGB image (the Erase tool's result, at the size it was given).
     Image(Vec<u8>),
     Failed(String),
+}
+
+/// Which model the Erase tool runs (ADR 0045).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EraseModel {
+    /// FLUX.2 [klein] 4B turbo with `erase_v1`: the photo and the mask as references, 4 steps,
+    /// no guidance (the integration's protocol).
+    Turbo = 0,
+    /// FLUX.2 [klein] base 4B with fal's object-remove LoRA at 1.1: the photo with a red
+    /// rectangle around the selection as the reference, 20 steps, guidance 5 against an empty
+    /// prompt (the bench of 2026-10-06).
+    Base = 1,
+}
+
+impl EraseModel {
+    fn from_byte(b: u8) -> Option<Self> {
+        [EraseModel::Turbo, EraseModel::Base]
+            .into_iter()
+            .find(|m| *m as u8 == b)
+    }
 }
 
 /// The stages of the Erase tool, reported by [`Response::Progress`].
@@ -306,11 +327,13 @@ impl Request {
                 rgb,
                 mask,
                 seed,
+                model,
             } => {
                 out.push(OP_ERASE);
                 out.extend_from_slice(&width.to_le_bytes());
                 out.extend_from_slice(&height.to_le_bytes());
                 out.extend_from_slice(&seed.to_le_bytes());
+                out.push(*model as u8);
                 out.extend_from_slice(rgb);
                 out.extend_from_slice(mask);
             }
@@ -393,6 +416,8 @@ impl Request {
                     return Err(ProtocolError::Malformed("image size"));
                 }
                 let seed = f.u64()?;
+                let model =
+                    EraseModel::from_byte(f.u8()?).ok_or(ProtocolError::Malformed("model"))?;
                 let rgb = f.take(pixels as usize * 3)?.to_vec();
                 let mask = f.take(pixels as usize)?.to_vec();
                 Request::Erase {
@@ -401,6 +426,7 @@ impl Request {
                     rgb,
                     mask,
                     seed,
+                    model,
                 }
             }
             OP_QUIT => Request::Quit,
@@ -689,27 +715,19 @@ impl Client {
         }
     }
 
-    /// The Erase tool (see [`Request::Erase`]): the image with the selection replaced by its
-    /// background, at the same size. `progress` is told how far it is; returning false stops
-    /// waiting.
+    /// The Erase tool (`request` is a [`Request::Erase`]): the image with the selection replaced
+    /// by its background, at the same size. `progress` is told how far it is; returning false
+    /// stops waiting.
     pub fn erase(
         &mut self,
-        width: u32,
-        height: u32,
-        rgb: Vec<u8>,
-        mask: Vec<u8>,
-        seed: u64,
+        request: &Request,
         progress: &mut dyn FnMut(Stage, u32, u32) -> bool,
     ) -> Result<Vec<u8>, ProtocolError> {
-        let pixels = width as usize * height as usize;
-        let request = Request::Erase {
-            width,
-            height,
-            rgb,
-            mask,
-            seed,
+        let &Request::Erase { width, height, .. } = request else {
+            return Err(ProtocolError::Malformed("not an Erase request"));
         };
-        match self.call_with(&request, progress)? {
+        let pixels = width as usize * height as usize;
+        match self.call_with(request, progress)? {
             Response::Image(rgb) if rgb.len() == pixels * 3 => Ok(rgb),
             _ => Err(ProtocolError::Unexpected),
         }
@@ -849,6 +867,7 @@ mod tests {
                 rgb: (0..16 * 32 * 3).map(|i| i as u8).collect(),
                 mask: (0..16 * 32).map(|i| (i % 2 * 255) as u8).collect(),
                 seed: u64::MAX - 3,
+                model: EraseModel::Base,
             },
             Request::Quit,
         ];
@@ -925,6 +944,7 @@ mod tests {
             frame.extend_from_slice(&width.to_le_bytes());
             frame.extend_from_slice(&height.to_le_bytes());
             frame.extend_from_slice(&0u64.to_le_bytes());
+            frame.push(EraseModel::Base as u8);
             frame.resize(frame.len() + width as usize * height as usize * 4, 0);
             frame
         };

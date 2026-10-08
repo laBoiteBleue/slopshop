@@ -109,9 +109,9 @@ pub fn noise(seed: u64, count: usize) -> Vec<f32> {
     out
 }
 
-/// The 4 sampling sigmas, then 0, for `tokens` latent tokens (the target's, `(h/16)·(w/16)`):
-/// FLUX.2's resolution-dependent exponential time shift.
-pub fn sigmas(tokens: usize) -> [f64; STEPS + 1] {
+/// The `steps` sampling sigmas, then 0, for `tokens` latent tokens (the target's,
+/// `(h/16)·(w/16)`): FLUX.2's resolution-dependent exponential time shift (its scheduler).
+pub fn sigmas(tokens: usize, steps: usize) -> Vec<f64> {
     let (a1, b1, a2, b2) = (8.73809524e-05, 1.89833333, 0.00016927, 0.45666666);
     let n = tokens as f64;
     let mu = if tokens > 4300 {
@@ -119,11 +119,11 @@ pub fn sigmas(tokens: usize) -> [f64; STEPS + 1] {
     } else {
         let (m200, m10) = (a2 * n + b2, a1 * n + b1);
         let a = (m200 - m10) / 190.0;
-        a * STEPS as f64 + (m200 - 200.0 * a)
+        a * steps as f64 + (m200 - 200.0 * a)
     };
-    let mut out = [0.0; STEPS + 1];
-    for (i, sigma) in out.iter_mut().take(STEPS).enumerate() {
-        let base = 1.0 - i as f64 / STEPS as f64; // 1, 0.75, 0.5, 0.25
+    let mut out = vec![0.0; steps + 1];
+    for (i, sigma) in out.iter_mut().take(steps).enumerate() {
+        let base = 1.0 - i as f64 / steps as f64; // 4 steps: 1, 0.75, 0.5, 0.25
         *sigma = mu.exp() / (mu.exp() + (1.0 / base - 1.0));
     }
     out
@@ -145,13 +145,13 @@ pub fn timestep_projection(sigma: f64) -> [f32; 256] {
 }
 
 /// Rotary tables for the transformer's joint sequence: `text` prompt tokens (ids `(0, 0, 0, l)`),
-/// then the target, the photo and the mask, each `lh × lw` tokens in row order (ids
-/// `(T, y, x, 0)`). Returns `cos` and `sin` of `sequence × 128`, the sine signed for a rotation
+/// then the target (T = 0) and the reference images (T = `references`: 10 and 20 for the Erase
+/// protocol's photo and mask), each `lh × lw` tokens in row order (ids `(T, y, x, 0)`). Returns `cos` and `sin` of `sequence × 128`, the sine signed for a rotation
 /// written `x·cos + swap(x)·sin` where `swap` exchanges each pair of dimensions: the model's
 /// `(x₀, x₁) → (x₀cos − x₁sin, x₁cos + x₀sin)`.
-pub fn rope_tables(text: usize, lh: usize, lw: usize) -> (Vec<f32>, Vec<f32>) {
+pub fn rope_tables(text: usize, lh: usize, lw: usize, references: &[u32]) -> (Vec<f32>, Vec<f32>) {
     let mut ids: Vec<[u32; 4]> = (0..text as u32).map(|l| [0, 0, 0, l]).collect();
-    for t in [0].into_iter().chain(REFERENCE_TIMES) {
+    for &t in [0].iter().chain(references) {
         for y in 0..lh as u32 {
             ids.extend((0..lw as u32).map(|x| [t, y, x, 0]));
         }
@@ -282,6 +282,36 @@ pub fn mask_rgb(selection: &[u8]) -> Vec<u8> {
     selection.iter().flat_map(|&s| [s; 3]).collect()
 }
 
+/// The photo with a red rectangle around the selection (`mask` above 127), as fal's
+/// object-remove LoRA expects the object marked: pure red, about 0.5 % of the larger side thick
+/// (at least 2 px), just outside the selection's box, within the image.
+pub fn highlight(rgb: &[u8], mask: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut out = rgb.to_vec();
+    let (mut x0, mut y0, mut x1, mut y1) = (width, height, 0, 0);
+    for (i, &m) in mask.iter().enumerate() {
+        if m > 127 {
+            let (x, y) = (i % width, i / width);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    if x1 == 0 {
+        return out;
+    }
+    let t = ((width.max(height) as f64 * 0.005).round() as usize).max(2);
+    // The rectangle's outer box, clamped to the image; its band is `t` wide inside it.
+    let (ox0, oy0) = (x0.saturating_sub(t), y0.saturating_sub(t));
+    let (ox1, oy1) = ((x1 + t).min(width), (y1 + t).min(height));
+    for y in oy0..oy1 {
+        for x in ox0..ox1 {
+            let inside = x >= x0 && x < x1 && y >= y0 && y < y1;
+            if !inside {
+                out[3 * (y * width + x)..][..3].copy_from_slice(&[255, 0, 0]);
+            }
+        }
+    }
+    out
+}
+
 /// The strict composite: the model's output inside the selection (`selection[i] > 127`), the
 /// photo's own pixels everywhere else.
 pub fn composite(photo: &[u8], selection: &[u8], output: &[u8]) -> Vec<u8> {
@@ -389,6 +419,27 @@ mod tests {
     }
 
     #[test]
+    fn the_highlight_frames_the_selection_in_red() {
+        // 400 × 300, a selection from (100, 50) to (200, 150): a 2 px band (0.5 % of 400).
+        let (w, h) = (400, 300);
+        let rgb = vec![90u8; w * h * 3];
+        let mut mask = vec![0u8; w * h];
+        for y in 50..150 {
+            for x in 100..200 {
+                mask[y * w + x] = 255;
+            }
+        }
+        let out = highlight(&rgb, &mask, w, h);
+        let at = |x: usize, y: usize| &out[3 * (y * w + x)..][..3];
+        assert_eq!(at(98, 100), &[255, 0, 0]);
+        assert_eq!(at(150, 151), &[255, 0, 0]);
+        assert_eq!(at(97, 100), &[90, 90, 90]); // beyond the band
+        assert_eq!(at(150, 100), &[90, 90, 90]); // the selection itself is untouched
+        // Without a selection, the photo as it is.
+        assert_eq!(highlight(&rgb, &vec![0; w * h], w, h), rgb);
+    }
+
+    #[test]
     fn noise_is_standard_normal_and_reproducible() {
         let n = noise(42, 200_001);
         assert_eq!(n.len(), 200_001);
@@ -435,13 +486,13 @@ mod tests {
             ),
         ];
         for (tokens, want) in expected {
-            for (got, want) in sigmas(tokens).iter().zip(want) {
+            for (got, want) in sigmas(tokens, STEPS).iter().zip(want) {
                 assert!((got - want).abs() < 1e-6, "{tokens}: {got} vs {want}");
             }
         }
         // Above 4300 tokens, mu is linear in the token count.
         let mu = (0.00016927f64 * 4500.0 + 0.45666666).exp();
-        assert_eq!(sigmas(4500)[1], mu / (mu + 1.0 / 3.0));
+        assert_eq!(sigmas(4500, STEPS)[1], mu / (mu + 1.0 / 3.0));
     }
 
     #[test]
@@ -461,7 +512,7 @@ mod tests {
     #[test]
     fn rope_tables_follow_the_ids() {
         let (lh, lw) = (2, 3);
-        let (cos, sin) = rope_tables(4, lh, lw);
+        let (cos, sin) = rope_tables(4, lh, lw, &REFERENCE_TIMES);
         let seq = 4 + 3 * lh * lw;
         assert_eq!((cos.len(), sin.len()), (seq * 128, seq * 128));
         let at = |s: usize, d: usize| (cos[s * 128 + d], sin[s * 128 + d]);

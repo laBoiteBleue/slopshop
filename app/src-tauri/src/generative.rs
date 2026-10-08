@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use slopshop_ai::erase::{self, Region, pil};
-use slopshop_ai::{ProtocolError, Stage};
+use slopshop_ai::{ProtocolError, Request, Stage};
 use slopshop_core::clone::CloneSource;
 use slopshop_core::color::PixelFormat;
 use slopshop_core::selection::{
@@ -241,7 +241,15 @@ pub(crate) async fn ai_generative_fill(
                 }
                 !cancel.is_cancelled()
             };
-            match client.erase(w, h, rgb.clone(), plan.mask.clone(), seed, &mut progress) {
+            let request = Request::Erase {
+                width: w,
+                height: h,
+                rgb: rgb.clone(),
+                mask: plan.mask.clone(),
+                seed,
+                model: crate::ai::erase_model(),
+            };
+            match client.erase(&request, &mut progress) {
                 Ok(result) => result,
                 // The helper is still at work: it is stopped (started again next time).
                 Err(ProtocolError::Cancelled) => {

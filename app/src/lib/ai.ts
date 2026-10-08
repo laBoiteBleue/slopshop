@@ -17,7 +17,11 @@ const NAMES: Record<string, MessageKey> = {
   "vitmatte-small": "ai.component.vitmatte",
   "vitmatte-base": "ai.component.vitmatteBase",
   birefnet: "ai.component.birefnet",
+  "flux2-vae": "ai.component.flux2Vae",
   "flux2-klein-4b": "ai.component.flux2Klein",
+  "flux2-klein-base-4b": "ai.component.flux2KleinBase",
+  "fal-object-remove": "ai.component.falObjectRemove",
+  "erase-base": "ai.component.eraseBase",
   "erase-v1": "ai.component.eraseV1",
 };
 

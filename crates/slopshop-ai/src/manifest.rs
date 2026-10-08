@@ -46,6 +46,18 @@ const FLUX2_KLEIN: License = License {
     commercial: true,
     accept: false,
 };
+const FLUX2_KLEIN_BASE: License = License {
+    name: "Apache-2.0",
+    url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B",
+    commercial: true,
+    accept: false,
+};
+const FAL_OBJECT_REMOVE: License = License {
+    name: "Apache-2.0",
+    url: "https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora",
+    commercial: true,
+    accept: false,
+};
 const ERASE_V1: License = License {
     name: "Apache-2.0",
     url: "https://huggingface.co/slopshop/erase-v1",
@@ -291,24 +303,48 @@ pub const COMPONENTS: &[Component] = &[
         }],
     },
     Component {
+        id: "flux2-vae",
+        licenses: &[FLUX2_KLEIN],
+        files: &[Download {
+            path: "models/black-forest-labs/FLUX.2-klein-4B/vae/diffusion_pytorch_model.safetensors",
+            url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/e7b7dc27f91deacad38e78976d1f2b499d76a294/vae/diffusion_pytorch_model.safetensors",
+            source: Source::File,
+            size: 168120878,
+            sha256: "ca70d2202afe6415bdbcb8793ba8cd99fd159cfe6192381504d6c4d3036e0f04",
+        }],
+    },
+    Component {
         id: "flux2-klein-4b",
         licenses: &[FLUX2_KLEIN],
-        files: &[
-            Download {
-                path: "models/black-forest-labs/FLUX.2-klein-4B/transformer/diffusion_pytorch_model.safetensors",
-                url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/e7b7dc27f91deacad38e78976d1f2b499d76a294/transformer/diffusion_pytorch_model.safetensors",
-                source: Source::File,
-                size: 7751109744,
-                sha256: "9f29f9edcfdae452a653ffb51a534ca4decd389952c225724ff3b94042612a6e",
-            },
-            Download {
-                path: "models/black-forest-labs/FLUX.2-klein-4B/vae/diffusion_pytorch_model.safetensors",
-                url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/e7b7dc27f91deacad38e78976d1f2b499d76a294/vae/diffusion_pytorch_model.safetensors",
-                source: Source::File,
-                size: 168120878,
-                sha256: "ca70d2202afe6415bdbcb8793ba8cd99fd159cfe6192381504d6c4d3036e0f04",
-            },
-        ],
+        files: &[Download {
+            path: "models/black-forest-labs/FLUX.2-klein-4B/transformer/diffusion_pytorch_model.safetensors",
+            url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/e7b7dc27f91deacad38e78976d1f2b499d76a294/transformer/diffusion_pytorch_model.safetensors",
+            source: Source::File,
+            size: 7751109744,
+            sha256: "9f29f9edcfdae452a653ffb51a534ca4decd389952c225724ff3b94042612a6e",
+        }],
+    },
+    Component {
+        id: "flux2-klein-base-4b",
+        licenses: &[FLUX2_KLEIN_BASE],
+        files: &[Download {
+            path: "models/black-forest-labs/FLUX.2-klein-base-4B/transformer/diffusion_pytorch_model.safetensors",
+            url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B/resolve/a3b4f4849157f664bdbc776fd7453c2783562f4d/transformer/diffusion_pytorch_model.safetensors",
+            source: Source::File,
+            size: 7751109744,
+            sha256: "e109674697ffa1a3983126e32512f5428a9442bd8df59f9c95566ee90a473bb6",
+        }],
+    },
+    Component {
+        id: "fal-object-remove",
+        licenses: &[FAL_OBJECT_REMOVE],
+        files: &[Download {
+            path: "models/fal/flux-2-klein-4B-object-remove-lora/kDEkt5q7tDLKOpQJIVMPx_pytorch_lora_weights_comfy_converted.safetensors",
+            url: "https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora/resolve/0e3f58790356bf1319b263fc56b333c294b42ff7/kDEkt5q7tDLKOpQJIVMPx_pytorch_lora_weights_comfy_converted.safetensors",
+            source: Source::File,
+            size: 76038936,
+            sha256: "dc197de62e174863f83fc4052465603f4389de7c3a78e17f3d41a1f6f11488ec",
+        }],
     },
     Component {
         id: "erase-v1",
