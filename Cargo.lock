@@ -5609,6 +5609,8 @@ name = "slopshop-app"
 version = "0.1.2"
 dependencies = [
  "arboard",
+ "objc2",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "slopshop-ai",
@@ -5622,6 +5624,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "wgpu",
 ]
 
 [[package]]

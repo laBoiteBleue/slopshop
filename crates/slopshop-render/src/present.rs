@@ -49,6 +49,17 @@ impl Renderer {
             .instance
             .create_surface(window)
             .map_err(|e| RenderError::Surface(e.to_string()))?;
+        self.presenter_for(surface)
+    }
+
+    /// The GPU instance, for a surface made from raw window handles (an AppKit view on macOS)
+    /// and handed to [`Self::presenter_for`].
+    pub fn instance(&self) -> &wgpu::Instance {
+        &self.instance
+    }
+
+    /// A presenter for `surface`, made from [`Self::instance`].
+    pub fn presenter_for(&self, surface: wgpu::Surface<'static>) -> Result<Presenter, RenderError> {
         let caps = surface.get_capabilities(&self.adapter);
         if !caps.formats.contains(&SURFACE_FORMAT) {
             return Err(RenderError::Surface(format!(

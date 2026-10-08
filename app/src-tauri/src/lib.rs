@@ -16,6 +16,8 @@ mod export;
 mod info;
 mod ipc;
 mod liquify;
+#[cfg(target_os = "macos")]
+mod macos;
 mod move_pixels;
 mod paint;
 mod patterns;
@@ -56,9 +58,10 @@ use crate::ipc::{
 };
 
 /// How the viewport reaches the screen (ADR 0002):
-/// - `window` (default on Windows): the engine presents to the window surface, drawn under a
-///   transparent webview; the UI leaves the canvas area transparent;
-/// - `frames` (default elsewhere, and the fallback): frames over IPC, drawn by the UI in a
+/// - `window` (default on Windows and macOS): the engine presents to the window surface (on
+///   macOS, a view under the webview), drawn under a transparent webview; the UI leaves the
+///   canvas area transparent;
+/// - `frames` (default on Linux, and the fallback): frames over IPC, drawn by the UI in a
 ///   canvas.
 ///
 /// `SLOPSHOP_PRESENTER=frames|window` overrides the default.
@@ -77,7 +80,7 @@ impl PresenterMode {
         match value {
             Some("frames") => Self::Frames,
             Some("window") => Self::Window,
-            _ if cfg!(windows) => Self::Window,
+            _ if cfg!(any(windows, target_os = "macos")) => Self::Window,
             _ => Self::Frames,
         }
     }
@@ -2189,6 +2192,11 @@ impl AppState {
         let window = app
             .get_webview_window(MAIN_WINDOW)
             .ok_or("main window not found")?;
+        // On macOS, wgpu would put its layer over the webview: the engine gets a view of its own
+        // under it.
+        #[cfg(target_os = "macos")]
+        let presenter = macos::create_presenter(app, &window)?;
+        #[cfg(not(target_os = "macos"))]
         let presenter = self
             .renderer()?
             .create_presenter(window)
@@ -3988,7 +3996,7 @@ mod tests {
     }
 
     #[test]
-    fn presenter_mode_defaults_to_the_native_surface_on_windows_only() {
+    fn presenter_mode_defaults_to_the_native_surface_on_windows_and_macos() {
         assert_eq!(
             PresenterMode::requested(Some("frames")),
             PresenterMode::Frames
@@ -3997,7 +4005,7 @@ mod tests {
             PresenterMode::requested(Some("window")),
             PresenterMode::Window
         );
-        let default = if cfg!(windows) {
+        let default = if cfg!(any(windows, target_os = "macos")) {
             PresenterMode::Window
         } else {
             PresenterMode::Frames

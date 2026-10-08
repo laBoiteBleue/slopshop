@@ -2,7 +2,9 @@
 
 Status: **accepted** (2026-09-29), amended 2026-09-30 after the Windows spike: performance
 first. The engine presents natively where the platform allows it; frames over IPC remain the
-fallback. Windows presents natively; macOS and Linux still use frames.
+fallback. Windows presents natively; Linux still uses frames. Amended 2026-10-08: macOS
+presents natively too, the Windows way (a transparent webview over the engine's view), by the
+maintainer's choice; see "macOS" below.
 
 ## Context
 
@@ -76,6 +78,34 @@ would allow independent flip / hardware overlay planes (DWM must compose the web
 swapchain in the current layout), at the cost of native input, OLE drag-and-drop and focus
 handling written in `unsafe` Win32 code.
 
+## macOS (amendment of 2026-10-08)
+
+The maintainer chose the Windows layout over the opaque slot planned in point 2 ("on peut faire
+comme pour Windows, ça marche pas mal"): menus, dialogs, handles and every other DOM overlay
+keep working over the canvas with no native code, where the slot would have made each of them
+an engine concern.
+
+- `app/src-tauri/src/macos.rs` adds an `NSView` to the window's content view (wry's parent of
+  the WKWebView), **under** the WKWebView, filling it and following its size. wgpu attaches its
+  `CAMetalLayer` to that view (through `raw-window-metal`, which keeps the layer's size and
+  scale in step). A surface made directly on the window, as on Windows, would put the layer
+  over the webview, hiding the whole UI.
+- The view and the surface are made on the main thread (`with_webview`), the caller waiting;
+  presenting then happens off it, as on Windows. The page stays in front and receives every
+  event: input, file drops, IME and focus are unchanged.
+- The webview is made transparent as on Windows (`set_background_color` with a zero alpha);
+  wry does it through WebKit's private `drawsBackground` key, which excludes the Mac App Store
+  (not a distribution channel for SlopShop).
+- `unsafe`: two blocks in that module (a pointer from Tauri turned into its view, a surface from
+  raw handles) and one call the bindings mark unsafe, each with its `SAFETY:` comment, accepted
+  by the maintainer with this choice.
+- **Untested**: nobody working on SlopShop has a Mac. The module is type-checked for
+  `aarch64-apple-darwin` and CI builds it; whether the canvas shows, and what it costs, is not
+  known. `SLOPSHOP_PRESENTER=frames` brings the frame path back, and a failure to create the
+  surface falls back to it by itself. To measure on a Mac: the criteria below, the idle GPU
+  power (an upstream report gives about 8× for a transparent window, Tauri #15471), and the black
+  base reported on macOS 15.7 (wry #1867).
+
 ## Spike pass/fail criteria (native surface; kept for macOS and later re-checks)
 
 - Resize: at most one frame of lag between the DOM layout and the native slot, no flicker.
@@ -90,8 +120,9 @@ handling written in `unsafe` Win32 code.
 
 ## Alternatives
 
-- **Transparent webview over a native surface**: chosen on Windows (see above). Rejected on
-  Linux (fragile) and macOS (private API, ~8× GPU power).
+- **Transparent webview over a native surface**: chosen on Windows (see above), and on macOS
+  since 2026-10-08 despite its private API and reported power cost (see "macOS"). Rejected on
+  Linux (fragile).
 - **Opaque native child window over the canvas on Windows** (the original target): best
   presentation path (hardware overlay planes), but input, file drops and focus must be
   reimplemented natively, and DOM overlays cannot cover it. Kept in reserve.
@@ -104,10 +135,9 @@ handling written in `unsafe` Win32 code.
 
 ## Consequences
 
-- Linux keeps the frame path until Tauri/GTK4 offers a sound embedding; macOS keeps it until
-  the Metal view is built and tested on a Mac.
-- On Windows, UI overlays stay in the DOM. On macOS (opaque view), overlays on top of the canvas
-  become an engine concern (drawn in wgpu).
+- Linux keeps the frame path until Tauri/GTK4 offers a sound embedding. macOS presents
+  natively from 2026-10-08, untested until someone runs it on a Mac.
+- On Windows and macOS, UI overlays stay in the DOM.
 - Two presentation paths must be maintained and tested (CI runs the frames path; the native path
   needs a Windows desktop session).
 - The view API (document view → pixels) does not change, so rendering work is not wasted.

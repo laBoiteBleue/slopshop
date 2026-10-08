@@ -25,7 +25,9 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
 - [x] Viewport presentation direction: native GPU surface, frames as fallback
       ([ADR 0002](adr/0002-viewport-frame-transport.md))
 - [x] Native surface on Windows: the engine presents under a transparent webview (ADR 0002)
-- [ ] Native surface on macOS (Metal view; needs a Mac)
+- [ ] Native surface on macOS: written 2026-10-08 the Windows way (a Metal view under the
+      transparent webview, ADR 0002 amended), type-checked and built by CI; never run, nobody
+      has a Mac
 - [x] Multi-document tabs; open into a new tab; drop on the canvas adds a layer, drop elsewhere
       opens new tabs; Ctrl+N / Ctrl+W / Ctrl+Tab
 - [x] Universal import strategy decided ([ADR 0006](adr/0006-universal-import-and-licensing.md),

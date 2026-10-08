@@ -51,5 +51,19 @@ tauri-plugin-updater = "2.13.1"
 # requests with it, the way Tauri does.
 serde_json = "1"
 
+# The canvas on macOS (ADR 0002, `src/macos.rs`): a view under the webview that wgpu draws into.
+# AppKit through objc2, and wgpu for a surface from that view's raw handle; all three are in the
+# tree already, through tao, wry and slopshop-render.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSGraphics",
+    "NSResponder",
+    "NSView",
+] }
+wgpu.workspace = true
+
 [lints]
 workspace = true
