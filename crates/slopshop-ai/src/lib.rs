@@ -7,6 +7,12 @@
 //! an operation code; a response with a status (0: done, 1: failed, then a UTF-8 message).
 //! Images and masks travel as raw samples, never as text.
 
+pub mod erase;
+pub mod flux2;
+pub mod numeric;
+pub mod onnx;
+pub mod safetensors;
+
 #[cfg(feature = "install")]
 pub mod install;
 #[cfg(feature = "install")]
