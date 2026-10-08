@@ -35,6 +35,79 @@ pub fn working_size(width: u32, height: u32) -> (u32, u32) {
     (side(width), side(height))
 }
 
+/// A rectangle of the image, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Context kept around the selection's box, on each side: this fraction of its larger side.
+const CONTEXT: f64 = 0.5;
+/// The region's smaller sides are raised to this (when the image allows): below about 512 px,
+/// the model sees too little of the scene.
+const MIN_SIDE: u32 = 512;
+
+/// The part of an image of `width` × `height` the model works on to erase a selection whose
+/// bounding box is `selection`: the box, plus context on each side (half its larger side), at
+/// least 512 px a side, within the image and centred on the box where the edges allow. Its sides
+/// are multiples of 16 when that keeps the box inside, so that a region under 1 Mpx is worked on
+/// unscaled. A region over 1 Mpx is reduced to it (see [`working_size`]), as the whole image was.
+pub fn work_region(width: u32, height: u32, selection: Region) -> Region {
+    let margin = (f64::from(selection.width.max(selection.height)) * CONTEXT).ceil() as u32;
+    let side = |extent: u32, image: u32| -> u32 {
+        let wanted = (extent + 2 * margin).max(MIN_SIDE).min(image);
+        let snapped = wanted.next_multiple_of(SIZE_MULTIPLE);
+        if snapped <= image {
+            snapped
+        } else if wanted / SIZE_MULTIPLE * SIZE_MULTIPLE >= extent {
+            wanted / SIZE_MULTIPLE * SIZE_MULTIPLE
+        } else {
+            wanted
+        }
+    };
+    let place = |start: u32, extent: u32, size: u32, image: u32| -> u32 {
+        let centre = f64::from(start) + f64::from(extent) / 2.0;
+        let origin = (centre - f64::from(size) / 2.0).round().max(0.0) as u32;
+        origin.min(image - size)
+    };
+    let w = side(selection.width, width);
+    let h = side(selection.height, height);
+    Region {
+        x: place(selection.x, selection.width, w, width),
+        y: place(selection.y, selection.height, h, height),
+        width: w,
+        height: h,
+    }
+}
+
+/// Standard normal noise, `count` values from `seed` (SplitMix64 then Box–Muller): the starting
+/// latent, reproducible from the seed a result keeps.
+pub fn noise(seed: u64, count: usize) -> Vec<f32> {
+    let mut state = seed;
+    let mut next = move || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    // A uniform in (0, 1]: never 0, whose logarithm is infinite.
+    let mut uniform = move || ((next() >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
+    let mut out = Vec::with_capacity(count + 1);
+    while out.len() < count {
+        let (u, v) = (uniform(), uniform());
+        let r = (-2.0 * u.ln()).sqrt();
+        let a = std::f64::consts::TAU * v;
+        out.push((r * a.cos()) as f32);
+        out.push((r * a.sin()) as f32);
+    }
+    out.truncate(count);
+    out
+}
+
 /// The 4 sampling sigmas, then 0, for `tokens` latent tokens (the target's, `(h/16)·(w/16)`):
 /// FLUX.2's resolution-dependent exponential time shift.
 pub fn sigmas(tokens: usize) -> [f64; STEPS + 1] {
@@ -231,6 +304,108 @@ mod tests {
         assert_eq!(working_size(500, 333), (496, 320)); // never upscaled
         let (w, h) = working_size(8000, 1000);
         assert!(w * h <= 1_048_576 && w % 16 == 0 && h % 16 == 0);
+    }
+
+    fn contains(outer: Region, inner: Region) -> bool {
+        inner.x >= outer.x
+            && inner.y >= outer.y
+            && inner.x + inner.width <= outer.x + outer.width
+            && inner.y + inner.height <= outer.y + outer.height
+    }
+
+    #[test]
+    fn the_work_region_frames_the_selection_with_context() {
+        // A 300 × 200 object in a 6000 × 4000 photo: 150 px of context each side → 600 × 500,
+        // snapped to 608 × 512, centred on the object.
+        let object = Region {
+            x: 3000,
+            y: 2000,
+            width: 300,
+            height: 200,
+        };
+        let r = work_region(6000, 4000, object);
+        assert_eq!((r.width, r.height), (608, 512));
+        assert_eq!((r.x, r.y), (3150 - 304, 2100 - 256));
+        assert!(contains(r, object));
+        // Under 1 Mpx and in multiples of 16: worked on unscaled.
+        assert_eq!(working_size(r.width, r.height), (r.width, r.height));
+    }
+
+    #[test]
+    fn the_work_region_stays_in_the_image() {
+        // A small object in a corner: the region is pushed inside, the object still in it.
+        let object = Region {
+            x: 5,
+            y: 3990,
+            width: 40,
+            height: 10,
+        };
+        let r = work_region(6000, 4000, object);
+        assert_eq!((r.x, r.y, r.width, r.height), (0, 4000 - 512, 512, 512));
+        assert!(contains(r, object));
+        // A large selection: the region is the whole image, reduced to 1 Mpx by working_size.
+        let large = Region {
+            x: 100,
+            y: 100,
+            width: 1800,
+            height: 1300,
+        };
+        let r = work_region(2048, 1536, large);
+        assert_eq!(
+            r,
+            Region {
+                x: 0,
+                y: 0,
+                width: 2048,
+                height: 1536
+            }
+        );
+        // An image smaller than the minimum side, and of a side that is not a multiple of 16.
+        let tiny = Region {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        };
+        assert_eq!(
+            work_region(300, 250, tiny),
+            Region {
+                x: 0,
+                y: 0,
+                width: 288,
+                height: 240
+            }
+        );
+        let wide = Region {
+            x: 0,
+            y: 0,
+            width: 1001,
+            height: 20,
+        };
+        let r = work_region(1001, 700, wide);
+        assert_eq!((r.x, r.width), (0, 1001)); // 992 would cut the selection: kept unsnapped
+        assert!(contains(r, wide));
+    }
+
+    #[test]
+    fn noise_is_standard_normal_and_reproducible() {
+        let n = noise(42, 200_001);
+        assert_eq!(n.len(), 200_001);
+        assert_eq!(n, noise(42, 200_001));
+        assert_ne!(n[..8], noise(43, 8)[..]);
+        let mean = n.iter().map(|&v| f64::from(v)).sum::<f64>() / n.len() as f64;
+        let var = n
+            .iter()
+            .map(|&v| (f64::from(v) - mean).powi(2))
+            .sum::<f64>()
+            / n.len() as f64;
+        assert!(
+            mean.abs() < 0.01 && (var - 1.0).abs() < 0.01,
+            "{mean} {var}"
+        );
+        // About 4.6 % of a normal distribution lies beyond two standard deviations.
+        let tails = n.iter().filter(|v| v.abs() > 2.0).count() as f64 / n.len() as f64;
+        assert!((tails - 0.0455).abs() < 0.003, "{tails}");
     }
 
     #[test]
