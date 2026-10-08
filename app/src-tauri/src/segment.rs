@@ -176,7 +176,7 @@ pub(crate) struct SegmentState {
 }
 
 #[derive(Default)]
-struct Session {
+pub(crate) struct Session {
     helper: Option<Client>,
     encoded: Option<Encoded>,
     next_key: u64,
@@ -262,15 +262,20 @@ fn start_helper(root: &Path) -> Result<Client, AiFailure> {
 }
 
 /// Fails with `notInstalled` (naming the feature, for the UI to offer the download) unless
-/// every component `feature` needs is installed.
-fn require(root: &Path, feature: Feature) -> Result<(), AiFailure> {
+/// every component `feature` needs is installed; `unsupported` where it is not offered.
+pub(crate) fn require(root: &Path, feature: Feature) -> Result<(), AiFailure> {
     let runtime = Runtime::detect().ok_or_else(|| AiFailure::new("unsupported", ""))?;
-    for id in runtime.components(feature) {
+    let ids = runtime.components(feature);
+    if ids.is_empty() {
+        return Err(AiFailure::new("unsupported", ""));
+    }
+    for id in ids {
         let component = slopshop_ai::install::component(id).ok_or_else(|| internal(id))?;
         if !component.is_installed(root) {
             let name = match feature {
                 Feature::Segmentation => "segmentation",
                 Feature::Subject => "subject",
+                Feature::Erase => "erase",
             };
             return Err(AiFailure::new("notInstalled", name));
         }
@@ -285,7 +290,7 @@ pub(crate) fn stop(state: &AppState) {
     }
 }
 
-fn lock(state: &AppState) -> Result<MutexGuard<'_, Session>, AiFailure> {
+pub(crate) fn lock(state: &AppState) -> Result<MutexGuard<'_, Session>, AiFailure> {
     state.segment.session.lock().map_err(internal)
 }
 
@@ -306,7 +311,7 @@ const MODEL_BACKGROUND: u8 = 128;
 
 /// `source` seen through `view` as `output`-sized 8-bit sRGB pixels for a model, without alpha:
 /// transparent parts over [`MODEL_BACKGROUND`].
-fn model_rgb(
+pub(crate) fn model_rgb(
     state: &AppState,
     source: &Document,
     view: ViewTransform,
@@ -372,7 +377,7 @@ fn clamp_region(region: [u32; 4], canvas: Size) -> Result<Rect, AiFailure> {
 
 impl Session {
     /// The helper, started if needed.
-    fn client(&mut self, root: &Path) -> Result<&mut Client, AiFailure> {
+    pub(crate) fn client(&mut self, root: &Path) -> Result<&mut Client, AiFailure> {
         self.last_used = Some(std::time::Instant::now());
         match self.helper {
             Some(ref mut client) => Ok(client),
@@ -381,7 +386,7 @@ impl Session {
     }
 
     /// A failed call leaves the helper in doubt: it is started again next time.
-    fn failed(&mut self, e: impl ToString) -> AiFailure {
+    pub(crate) fn failed(&mut self, e: impl ToString) -> AiFailure {
         *self = Session {
             next_key: self.next_key,
             ..Session::default()
@@ -561,7 +566,7 @@ impl Session {
 }
 
 /// The AI folder, and the document.
-fn prepare(app: &AppHandle, document_id: u64) -> Result<(PathBuf, Document), AiFailure> {
+pub(crate) fn prepare(app: &AppHandle, document_id: u64) -> Result<(PathBuf, Document), AiFailure> {
     let state = app.state::<AppState>();
     Ok((ai::folder(app)?, document(&state, document_id)?))
 }

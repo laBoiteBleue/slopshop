@@ -51,8 +51,9 @@ impl Runtime {
         }
     }
 
-    /// The components a feature needs on this runtime (the runtime first).
-    pub(crate) fn components(self, feature: Feature) -> [&'static str; 3] {
+    /// The components a feature needs on this runtime (the runtime first); none where the
+    /// feature is not offered (the Erase tool runs on DirectML only, ADR 0045).
+    pub(crate) fn components(self, feature: Feature) -> Vec<&'static str> {
         // Every feature includes ViTMatte: selections are refined at full resolution.
         let (runtime, sam, birefnet) = match self {
             Self::DirectMl => ("runtime-directml", "sam2.1-base-plus", "birefnet"),
@@ -69,6 +70,10 @@ impl Runtime {
         let model = match feature {
             Feature::Segmentation => sam,
             Feature::Subject => birefnet,
+            Feature::Erase if self == Self::DirectMl => {
+                return vec![runtime, "flux2-klein-4b", "erase-v1"];
+            }
+            Feature::Erase => return Vec::new(),
         };
         // Refine Edge: ViTMatte-B on a GPU; the small model on the CPU, where the base one
         // takes about 2 s a window.
@@ -76,7 +81,7 @@ impl Runtime {
             Self::Cpu => "vitmatte-small",
             _ => "vitmatte-base",
         };
-        [runtime, model, matte]
+        vec![runtime, model, matte]
     }
 }
 
@@ -95,9 +100,11 @@ pub(crate) enum Feature {
     Segmentation,
     /// The main subject of the image (BiRefNet): Select > Subject.
     Subject,
+    /// Generative fill of a selection (FLUX.2 [klein] with `erase_v1`): Delete's choice.
+    Erase,
 }
 
-const FEATURES: [Feature; 2] = [Feature::Segmentation, Feature::Subject];
+const FEATURES: [Feature; 3] = [Feature::Segmentation, Feature::Subject, Feature::Erase];
 
 /// Installs running, one at a time, and their cancellation.
 #[derive(Default)]
@@ -201,7 +208,10 @@ pub(crate) async fn ai_components(
             return Ok(None);
         };
         let wanted: Vec<&str> = match feature {
-            Some(feature) => runtime.components(feature).to_vec(),
+            Some(feature) => match runtime.components(feature) {
+                ids if ids.is_empty() => return Ok(None),
+                ids => ids,
+            },
             None => {
                 let mut all: Vec<&str> = FEATURES
                     .iter()
