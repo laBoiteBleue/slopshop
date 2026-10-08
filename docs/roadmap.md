@@ -337,6 +337,9 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Maximum and Minimum, Find Edges, Emboss, Solarize and Mosaic on the GPU (looks); then the
       distortions (Twirl, Pinch, Spherize, Polar Coordinates, Offset; Offset's transparent edge
       on a layer without transparency stays on the CPU)
+- [x] Distort > Ripple (Amount, Size), Wave (generators, wavelengths, amplitudes, scales, type,
+      undefined areas, a seed drawn at each application), ZigZag (Amount, Ridges, Style) and
+      Spherize's Horizontal and Vertical modes; CPU and GPU (looks)
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze

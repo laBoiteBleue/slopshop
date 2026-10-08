@@ -290,6 +290,69 @@ test("Stylize > Solarize applies at once; Pixelate > Mosaic opens its dialog", a
   await screen.findByRole("dialog", { name: "Mosaic" });
 });
 
+test("Distort > Ripple and Spherize: their choices sent with the filter", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Ripple…" }));
+  const ripple = await screen.findByRole("dialog", { name: "Ripple" });
+  expect(within(ripple).getByRole("radio", { name: "Medium" })).toBeChecked();
+  await user.click(within(ripple).getByRole("radio", { name: "Large" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "ripple", values: [100, 2] }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Spherize…" }));
+  const spherize = await screen.findByRole("dialog", { name: "Spherize" });
+  expect(within(spherize).getByRole("radio", { name: "Normal" })).toBeChecked();
+  await user.click(within(spherize).getByRole("radio", { name: "Horizontal only" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "spherize",
+      values: [100, 1],
+    }),
+  );
+});
+
+test("Distort > Wave and ZigZag: their settings, and a seed for Wave", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Wave…" }));
+  const wave = await screen.findByRole("dialog", { name: "Wave" });
+  expect(within(wave).getByRole("spinbutton", { name: "Number of Generators" })).toHaveValue(5);
+  expect(within(wave).getByRole("radio", { name: "Repeat Edge Pixels" })).toBeChecked();
+  await user.click(within(wave).getByRole("radio", { name: "Triangle" }));
+  await user.click(within(wave).getByRole("radio", { name: "Wrap Around" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ kind: "applyFilter", filter: "wave" }));
+  const values = (applied() as { values: number[] }).values;
+  expect(values.slice(0, 9)).toEqual([5, 10, 120, 5, 35, 100, 100, 1, 0]);
+  expect(Number.isInteger(values[9])).toBe(true);
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "ZigZag…" }));
+  const zigzag = await screen.findByRole("dialog", { name: "ZigZag" });
+  expect(within(zigzag).getByRole("radio", { name: "Pond Ripples" })).toBeChecked();
+  await user.click(within(zigzag).getByRole("radio", { name: "Around Center" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "zigZag",
+      values: [10, 5, 0],
+    }),
+  );
+});
+
 test("Distort > Twirl: an angle sent with the filter", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });

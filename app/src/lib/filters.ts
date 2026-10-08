@@ -83,6 +83,30 @@ const shift = (key: string, label: MessageKey): NumberParam => ({
   scale: "linear",
 });
 
+/** A wavelength or an amplitude of Wave's, 1 to 999 pixels (Photoshop's). */
+const waveSize = (key: string, label: MessageKey): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  unit: "filter.pixels",
+  min: 1,
+  max: 999,
+  decimals: 0,
+  scale: "log",
+});
+
+/** How much of Wave's move goes one way, 1 to 100 % (Photoshop's Scale). */
+const waveScale = (key: string, label: MessageKey): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  unit: "filter.percent",
+  min: 1,
+  max: 100,
+  decimals: 0,
+  scale: "linear",
+});
+
 /** A strength from -100 to 100, Lightroom's: 0 does nothing, below it the opposite. */
 const strength = (key: string, label: MessageKey): NumberParam => ({
   kind: "number",
@@ -262,7 +286,101 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     defaults: [50],
   },
   pinch: { params: [percent("filter.pinch.amount")], defaults: [50] },
-  spherize: { params: [percent("filter.spherize.amount")], defaults: [100] },
+  spherize: {
+    params: [
+      percent("filter.spherize.amount"),
+      {
+        kind: "choice",
+        key: "mode",
+        label: "filter.spherize.mode",
+        options: [
+          "filter.spherize.normal",
+          "filter.spherize.horizontal",
+          "filter.spherize.vertical",
+        ],
+      },
+    ],
+    defaults: [100, 0],
+  },
+  ripple: {
+    params: [
+      {
+        kind: "number",
+        key: "amount",
+        label: "filter.ripple.amount",
+        unit: "filter.percent",
+        min: -999,
+        max: 999,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        kind: "choice",
+        key: "size",
+        label: "filter.ripple.size",
+        options: ["filter.ripple.small", "filter.ripple.medium", "filter.ripple.large"],
+      },
+    ],
+    defaults: [100, 1],
+  },
+  zigZag: {
+    params: [
+      percent("filter.zigZag.amount"),
+      {
+        kind: "number",
+        key: "ridges",
+        label: "filter.zigZag.ridges",
+        min: 1,
+        max: 20,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        kind: "choice",
+        key: "style",
+        label: "filter.zigZag.style",
+        options: [
+          "filter.zigZag.aroundCenter",
+          "filter.zigZag.outFromCenter",
+          "filter.zigZag.pondRipples",
+        ],
+      },
+    ],
+    defaults: [10, 5, 2],
+  },
+  wave: {
+    params: [
+      {
+        kind: "number",
+        key: "generators",
+        label: "filter.wave.generators",
+        min: 1,
+        max: 999,
+        decimals: 0,
+        scale: "log",
+      },
+      waveSize("shortest", "filter.wave.wavelengthMin"),
+      waveSize("longest", "filter.wave.wavelengthMax"),
+      waveSize("lowest", "filter.wave.amplitudeMin"),
+      waveSize("highest", "filter.wave.amplitudeMax"),
+      waveScale("horizontal", "filter.wave.scaleHorizontal"),
+      waveScale("vertical", "filter.wave.scaleVertical"),
+      {
+        kind: "choice",
+        key: "type",
+        label: "filter.wave.type",
+        options: ["filter.wave.sine", "filter.wave.triangle", "filter.wave.square"],
+      },
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.wave.edge",
+        options: ["filter.offset.wrap", "filter.offset.repeat"],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [5, 10, 120, 5, 35, 100, 100, 0, 1, 0],
+  },
   polarCoordinates: {
     params: [
       {
@@ -326,7 +444,10 @@ export function sliderValue(param: NumberParam, p: number): number {
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.blur", filters: ["boxBlur", "gaussianBlur", "motionBlur"] },
-  { label: "menu.filter.distort", filters: ["pinch", "polarCoordinates", "spherize", "twirl"] },
+  {
+    label: "menu.filter.distort",
+    filters: ["pinch", "polarCoordinates", "ripple", "spherize", "twirl", "wave", "zigZag"],
+  },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
   { label: "menu.filter.pixelate", filters: ["mosaic"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },

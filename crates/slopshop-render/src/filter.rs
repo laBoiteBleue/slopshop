@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::{ChannelLayout, PixelFormat};
 use slopshop_core::filter::{
-    BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, OffsetEdge, line_offsets,
+    BOX_UP_TO, CLARITY_STRENGTH, Choice, Filter, LINE_UP_TO, MEDIAN_UP_TO, OffsetEdge, line_offsets,
 };
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
@@ -548,7 +548,10 @@ impl Pass {
             | Filter::Twirl { .. }
             | Filter::Pinch { .. }
             | Filter::Spherize { .. }
-            | Filter::PolarCoordinates { .. } => {
+            | Filter::PolarCoordinates { .. }
+            | Filter::Ripple { .. }
+            | Filter::ZigZag { .. }
+            | Filter::Wave { .. } => {
                 // A layer without transparency can't take Offset's transparent edge: the CPU
                 // writes what it becomes there.
                 if matches!(
@@ -580,32 +583,61 @@ impl Pass {
                     ),
                     Filter::Twirl { angle } => (1.0, [angle, 0.0, 0.0]),
                     Filter::Pinch { amount } => (2.0, [amount, 0.0, 0.0]),
-                    Filter::Spherize { amount } => (3.0, [amount, 0.0, 0.0]),
+                    Filter::Spherize { amount, mode } => (3.0, [amount, mode.value(), 0.0]),
                     Filter::PolarCoordinates { to_polar } => {
                         (4.0, [f32::from(u8::from(to_polar)), 0.0, 0.0])
                     }
+                    Filter::Ripple { amount, size } => {
+                        (5.0, [amount, size.wavelength() as f32, 0.0])
+                    }
+                    Filter::ZigZag {
+                        amount,
+                        ridges,
+                        style,
+                    } => (6.0, [amount, ridges, style.value()]),
+                    // The shape, 4 more where the frame wraps around.
+                    Filter::Wave {
+                        scale, shape, wrap, ..
+                    } => (
+                        7.0,
+                        [
+                            scale[0],
+                            scale[1],
+                            shape.value() + if wrap { 4.0 } else { 0.0 },
+                        ],
+                    ),
                     _ => return None,
                 };
                 // Without a selection, the frame is the whole layer (`stack::frame_box`).
                 let factor = job.factor as f32;
                 let (w, h) = (job.layer.width as f32, job.layer.height as f32);
+                let mut weights = vec![
+                    kind,
+                    settings[0],
+                    settings[1],
+                    settings[2],
+                    0.0,
+                    0.0,
+                    w,
+                    h,
+                    w,
+                    h,
+                    job.origin[0] as f32 * factor,
+                    job.origin[1] as f32 * factor,
+                    factor,
+                ];
+                // Wave's generators, as the CPU draws them: their number, then each one's
+                // wavelength, amplitude and two phases.
+                let waves = filter.wave_generators();
+                if !waves.is_empty() {
+                    weights.push(waves.len() as f32);
+                    weights.extend(waves.iter().flat_map(|g| {
+                        [g.length, g.amplitude, g.phase[0], g.phase[1]].map(|v| v as f32)
+                    }));
+                }
                 return Some(vec![Self {
                     kind: Kind::Sample,
-                    weights: vec![
-                        kind,
-                        settings[0],
-                        settings[1],
-                        settings[2],
-                        0.0,
-                        0.0,
-                        w,
-                        h,
-                        w,
-                        h,
-                        job.origin[0] as f32 * factor,
-                        job.origin[1] as f32 * factor,
-                        factor,
-                    ],
+                    weights,
                     ..none
                 }]);
             }

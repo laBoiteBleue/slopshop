@@ -1041,6 +1041,8 @@ fn filtered(
     let size = input.size();
     // Where the filter's frame (a distortion's box) lies, in the layer's pixels.
     let frame_box = step.filter.samples().then(|| frame_box(step, frame));
+    // What a distortion needs for every pixel, prepared once (Wave's generators).
+    let sampler = step.filter.samples().then(|| step.filter.sampler());
     // The input's first pixel and size in its own pixels, from the layer's origin.
     let offset = frame.origin.map(|v| (v / frame.factor).round() as i64);
     let layer_pixels = frame.layer.map(|v| (v / frame.factor).ceil() as usize);
@@ -1131,12 +1133,12 @@ fn filtered(
                     };
                 }
                 // A distortion: the layer read where the filter says, between its pixels.
-                if let Some(area) = frame_box {
+                if let (Some(area), Some(sampler)) = (frame_box, &sampler) {
                     let p = [
                         frame.origin[0] + ((x0 + x) as f64 + 0.5) * frame.factor,
                         frame.origin[1] + ((y0 + y) as f64 + 0.5) * frame.factor,
                     ];
-                    blurs[0] = filter.source(p, area, frame.layer).map_or([0.0; 4], |q| {
+                    blurs[0] = sampler.source(p, area, frame.layer).map_or([0.0; 4], |q| {
                         bilinear(
                             &pixels,
                             (q[0] - frame.origin[0]) / frame.factor - 0.5,

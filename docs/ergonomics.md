@@ -172,8 +172,14 @@ built. Contributors: propose here first.
   Mosaic… (Cell Size 2 to 200 pixels); Stylize > Emboss… (Angle, Height 1 to 10 pixels, Amount
   1 to 500 %), Stylize > Find Edges and Solarize (no settings: applied at once, without an
   ellipsis, as in Photoshop; their entries have nothing to edit again); Distort > Pinch… and
-  Spherize… (Amount −100 to 100 %), Polar Coordinates… (Rectangular to Polar, or back), Twirl…
-  (Angle −999 to 999°), around the selection's box or the whole layer; Other > Offset…
+  Spherize… (Amount −100 to 100 %, Mode Normal, Horizontal only or Vertical only), Polar
+  Coordinates… (Rectangular to Polar, or back), Twirl… (Angle −999 to 999°), ZigZag… (Amount −100
+  to 100, Ridges 1 to 20, Style Around Center, Out From Center or Pond Ripples), around the
+  selection's box or the whole layer; Ripple… (Amount −999 to 999 %, Size Small, Medium or
+  Large) and Wave… (Number of Generators 1 to 999, Wavelength and Amplitude Min. and Max. 1 to
+  999 pixels, Scale Horiz. and Vert. 1 to 100 %, Type Sine, Triangle or Square, Undefined Areas
+  Wrap Around or Repeat Edge Pixels; each application draws other waves, as Add Noise draws
+  another grain, rather than a Randomize button), from the frame's corner; Other > Offset…
   (Horizontal and Vertical −30000 to 30000 pixels, Undefined Areas: transparent, repeated edge
   pixels or wrapped around); Sharpen > Clarity and Texture… (Lightroom's two strengths, -100 to 100, nothing at
   first: Texture the fine details, Clarity the broad local contrast of the midtones; not in

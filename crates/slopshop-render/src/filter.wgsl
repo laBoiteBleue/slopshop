@@ -391,11 +391,24 @@ fn cells_columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
     output[id.y * params.width + id.x] = encoded(sum / f32(span.y - span.x));
 }
 
-// The distortions (`Filter::source` on the CPU): where the pixel at layer point `p` (layer
+// A Wave's shape (`WaveShape::at`) at phase `t`: 0 sine, 1 triangle, 2 square.
+fn wave_shape(shape: f32, t: f32) -> f32 {
+    let turn = fract(t / 6.2831853);
+    if shape == 1.0 {
+        return 1.0 - 4.0 * abs(turn - 0.5);
+    }
+    if shape == 2.0 {
+        return select(-1.0, 1.0, turn < 0.5);
+    }
+    return sin(t);
+}
+
+// The distortions (`Sampler::source` on the CPU): where the pixel at layer point `p` (layer
 // pixels) is read from; `z` is 0 where nothing is (Offset's transparent edge). `weights`: the
-// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates), its three settings, the
-// frame's box (left, top, right, bottom), the layer's size, the crop's first pixel on the layer
-// and its pixels' size there (layer pixels).
+// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates, 5 Ripple, 6 ZigZag,
+// 7 Wave), its three settings, the frame's box (left, top, right, bottom), the layer's size,
+// the crop's first pixel on the layer and its pixels' size there (layer pixels); for Wave, then
+// its generators' number and each one's wavelength, amplitude and two phases.
 fn distortion_source(p: vec2<f32>) -> vec3<f32> {
     let kind = u32(weights[0]);
     let a = weights[1];
@@ -443,7 +456,13 @@ fn distortion_source(p: vec2<f32>) -> vec3<f32> {
         if half.x <= 0.0 || half.y <= 0.0 {
             return vec3<f32>(p, 1.0);
         }
-        let u = v / half;
+        // Mode `b`: 0 Normal, 1 across only, 2 down only.
+        var u = v / half;
+        if b == 1.0 {
+            u.y = 0.0;
+        } else if b == 2.0 {
+            u.x = 0.0;
+        }
         let r = length(u);
         if r >= 1.0 || r == 0.0 {
             return vec3<f32>(p, 1.0);
@@ -454,10 +473,68 @@ fn distortion_source(p: vec2<f32>) -> vec3<f32> {
             goal = 1.0 - sqrt(1.0 - r * r);
         }
         let s = (r + abs(amount) * (goal - r)) / r;
-        return vec3<f32>(c + u * s * half, 1.0);
+        var q = c + u * s * half;
+        if b == 1.0 {
+            q.y = p.y;
+        } else if b == 2.0 {
+            q.x = p.x;
+        }
+        return vec3<f32>(q, 1.0);
+    }
+    let tau = 6.2831853;
+    let corner = p - vec2<f32>(left, top);
+    if kind == 5u {
+        // Ripple (`filter::ripple`): `a` the amount, `b` the wavelength.
+        let reach = a / 100.0 * b / 8.0;
+        let bend = 0.8 * sin(tau * corner / (4.3 * b));
+        let moved = reach * sin(tau * corner.yx / b + bend);
+        return vec3<f32>(p + moved, 1.0);
+    }
+    if kind == 6u {
+        // ZigZag (`filter::zigzag`): `a` the amount, `b` the ridges, `e` the style.
+        if d >= radius || radius <= 0.0 || d == 0.0 {
+            return vec3<f32>(p, 1.0);
+        }
+        let r = d / radius;
+        let wave = sin(tau * b * r) * (1.0 - r);
+        var out = a / 100.0 * wave / (2.0 * b);
+        var turn = a / 100.0 * wave * 3.1415927 / b;
+        if e == 0.0 {
+            out = 0.0;
+        } else if e == 1.0 {
+            turn = 0.0;
+        } else {
+            out = out * 0.5;
+            turn = turn * 0.5;
+        }
+        let along = atan2(v.y, v.x) + turn;
+        let at = max(d + out * radius, 0.0);
+        return vec3<f32>(c + at * vec2<f32>(cos(along), sin(along)), 1.0);
+    }
+    if kind == 7u {
+        // Wave: `a` and `b` the horizontal and vertical scales, `e` the shape (0 sine,
+        // 1 triangle, 2 square), 4 more where the frame wraps around.
+        let count = u32(weights[13]);
+        let wraps = e >= 4.0;
+        let shape = e - select(0.0, 4.0, wraps);
+        var moved = vec2<f32>(0.0);
+        for (var i = 0u; i < count; i++) {
+            let g = 14u + i * 4u;
+            let wavelength = weights[g];
+            let amplitude = weights[g + 1u];
+            moved.x += amplitude * wave_shape(shape, tau * corner.y / wavelength + weights[g + 2u]);
+            moved.y += amplitude * wave_shape(shape, tau * corner.x / wavelength + weights[g + 3u]);
+        }
+        let k = 1.0 / sqrt(f32(max(count, 1u)));
+        var q = p + moved * k * vec2<f32>(a, b) / 100.0;
+        if wraps && w > 0.0 && h > 0.0 {
+            let size = vec2<f32>(w, h);
+            let inside = q - vec2<f32>(left, top);
+            q = vec2<f32>(left, top) + inside - floor(inside / size) * size;
+        }
+        return vec3<f32>(q, 1.0);
     }
     // Polar Coordinates.
-    let tau = 6.2831853;
     if w <= 0.0 || h <= 0.0 || radius <= 0.0 {
         return vec3<f32>(p, 1.0);
     }

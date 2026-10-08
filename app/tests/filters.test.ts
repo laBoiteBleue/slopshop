@@ -233,10 +233,13 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
   expect(FILTERS.twirl.defaults).toEqual([50]);
   expect(validValues("twirl", [-999])).toBe(true);
   expect(validValues("twirl", [1000])).toBe(false);
-  for (const filter of ["pinch", "spherize"] as const) {
-    expect(validValues(filter, [-100])).toBe(true);
-    expect(validValues(filter, [101])).toBe(false);
-  }
+  expect(validValues("pinch", [-100])).toBe(true);
+  expect(validValues("pinch", [101])).toBe(false);
+  // Spherize's amount, then its mode: Normal, Horizontal only, Vertical only.
+  expect(FILTERS.spherize.defaults).toEqual([100, 0]);
+  expect(validValues("spherize", [-100, 2])).toBe(true);
+  expect(validValues("spherize", [101, 0])).toBe(false);
+  expect(validValues("spherize", [50, 3])).toBe(false);
   expect(FILTERS.polarCoordinates.defaults).toEqual([1]);
   expect(validValues("polarCoordinates", [2])).toBe(false);
   expect(FILTERS.offset.defaults).toEqual([0, 0, 2]);
@@ -246,7 +249,31 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
   expect(FILTER_MENU.find((m) => m.label === "menu.filter.distort")?.filters).toEqual([
     "pinch",
     "polarCoordinates",
+    "ripple",
     "spherize",
     "twirl",
+    "wave",
+    "zigZag",
   ]);
+});
+
+test("Ripple, ZigZag and Wave: Photoshop's ranges and defaults", () => {
+  expect(FILTERS.ripple.defaults).toEqual([100, 1]);
+  expect(validValues("ripple", [-999, 0])).toBe(true);
+  expect(validValues("ripple", [1000, 0])).toBe(false);
+  expect(validValues("ripple", [100, 3])).toBe(false);
+  expect(FILTERS.zigZag.defaults).toEqual([10, 5, 2]);
+  expect(validValues("zigZag", [-100, 20, 0])).toBe(true);
+  expect(validValues("zigZag", [10, 0, 0])).toBe(false);
+  expect(validValues("zigZag", [10, 2.5, 0])).toBe(false);
+  // Generators, wavelengths, amplitudes, scales, type, undefined areas, seed.
+  expect(FILTERS.wave.defaults).toEqual([5, 10, 120, 5, 35, 100, 100, 0, 1, 0]);
+  expect(validValues("wave", FILTERS.wave.defaults)).toBe(true);
+  expect(validValues("wave", [999, 1, 999, 1, 999, 1, 1, 2, 0, 7])).toBe(true);
+  expect(validValues("wave", [0, 10, 120, 5, 35, 100, 100, 0, 1, 0])).toBe(false);
+  expect(validValues("wave", [5, 10, 120, 5, 35, 101, 100, 0, 1, 0])).toBe(false);
+  expect(validValues("wave", [5, 10, 120, 5, 35, 100, 100, 0, 2, 0])).toBe(false);
+  // Each application draws another seed, the other settings kept.
+  const again = withNewSeeds("wave", FILTERS.wave.defaults, () => 0.5);
+  expect(again).toEqual([5, 10, 120, 5, 35, 100, 100, 0, 1, 2 ** 23]);
 });
