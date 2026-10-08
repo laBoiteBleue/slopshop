@@ -77,6 +77,44 @@ For comparison, the integration measured diffusers against the reference at 0.9 
 - Loading takes about 25 s once: the graph and the LoRA merge on the CPU, then the session.
 - VRAM after a run: 13.6 to 15.3 GB of 16 GB (weights 8.5 GB).
 
+### 8-bit weights (asked by the maintainer, 2026-10-08)
+
+`--weights` selects how the transformer stores its projections.
+
+- **8-bit blocks:**
+  - symmetric quantization when the model loads, the LoRA merged first;
+  - one half-precision scale per block of inputs of each output;
+  - run by ONNX Runtime's `com.microsoft.MatMulNBits`, which DirectML executes.
+- **Per channel:** one scale per output, then `DequantizeLinear` and `MatMul`.
+
+All variants pass the three vectors. Latent error, then PSNR inside the selection, for vectors
+01 / 02 / 03:
+
+| Storage | Weights | Latent error | PSNR | Step 01 / 03 | Total 01 / 03 | Peak VRAM 01 / 03 |
+|---|---|---|---|---|---|---|
+| half (above) | 8.48 GB | 1.29 / 1.52 / 1.54 % | 50.8 / 45.8 / 48.2 dB | 1.79 / 2.85 s | 8.3 / 12.4 s | 13.7 / 15.3 GB |
+| 8-bit, blocks of 32 | 5.03 GB | 1.40 / 1.61 / 1.63 % | 50.4 / 45.5 / 48.0 dB | 2.05 / 3.08 s | 9.5 / 13.5 s | 10.4 / 12.1 GB |
+| 8-bit, blocks of 64 | 4.91 GB | 1.41 / 1.63 / 1.65 % | 50.1 / 45.4 / 47.7 dB | 2.05 / 3.08 s | 9.5 / 13.5 s | 10.3 / 12.0 GB |
+| 8-bit, blocks of 128 | 4.86 GB | 1.45 / 1.66 / 1.73 % | 49.0 / 44.9 / 47.3 dB | 2.07 / 3.08 s | 9.5 / 13.5 s | 10.2 / 11.9 GB |
+| 8-bit per channel | 4.80 GB | 1.59 / 1.87 / 1.92 % | 47.6 / 44.1 / 45.6 dB | 1.88 / 2.95 s | 8.9 / 13.1 s | 12.8 / 14.5 GB |
+| 8-bit, blocks of 64, modulations too | **4.37 GB** | 1.41 / 1.64 / 1.66 % | 49.9 / 45.2 / 47.7 dB | 2.05 / 3.08 s | 9.5 / 13.6 s | **9.8 / 11.4 GB** |
+
+How to read these numbers:
+
+- **Quality.** The quantization costs about 0.1 point of latent error and under 1 dB of PSNR
+  against the bfloat16 reference, far within the protocol's thresholds. It is small next to the
+  gap between the half-precision port and the reference.
+- **Speed.** MatMulNBits is about 15 % slower per step than half precision.
+- **Per channel** is the fastest of the 8-bit variants, but each weight is dequantized whole
+  before its product. That transient memory brings its peak back near half precision's, and
+  its quality is the lowest of the variants.
+- **The last row** also stores the modulations and the prompt's embedder in 8 bits: 1.6 to
+  3.0 GB less at the peak than half precision.
+- **Peak VRAM** is the whole card as `nvidia-smi` reports it, about 1 GB of it taken by the
+  desktop and other applications. So the tool itself peaks at about 8.8 GB at 1024×768 and
+  10.4 GB at 1168×880. Of that, the activations of the steps (cached by DirectML's allocator)
+  account for about 6 GB at the larger size.
+
 Tried and dropped:
 
 - ONNX Runtime's fused `MultiHeadAttention`: in one kernel the GPU stopped responding (device
@@ -97,10 +135,15 @@ Reviewed with the maintainer on 2026-10-08, before the spike:
 
 - **Download:** the transformer (7.75 GB) and the VAE (0.17 GB) from BFL's repository, pinned
   by revision and SHA-256, plus the LoRA (0.19 GB) and the embedding (8 MB).
-- **VRAM:** about 14 to 15 GB used on a 16 GB card. Cards with 12 GB or less do not fit as is.
-  DirectML runs ONNX Runtime's 8-bit and 4-bit weight-only `MatMulNBits` (used for LLMs), which
-  would halve the weights. Its quality with the LoRA is untested, and the protocol lists FP8 +
-  LoRA as an open point too.
+- **VRAM:**
+  - Half precision takes 14 to 15 GB of a 16 GB card.
+  - 8-bit weights (blocks of 64, modulations included) bring the tool to about 9 GB at
+    1024×768 and 10.4 GB at 1168×880.
+  - A 12 GB card should run up to 1024×768, but is tight at the 1 Mpx maximum; reducing the
+    steps' activations (about 6 GB) is the next lever.
+  - Proposed: the precision is a hardware choice made automatically, not a user setting. Half
+    precision from 16 GB of VRAM, 8 bits below.
+  - Nothing was measured on a smaller card.
 - **Platforms:** Windows only for now. Core ML (macOS) and the CPU (Linux) are not candidates at
   this size without further work. Nothing here was tested on them.
 - **Large photos:** the tool works at about 1 Mpx then upscales the result, so on a 24 Mpx photo
@@ -120,4 +163,6 @@ Reviewed with the maintainer on 2026-10-08, before the spike:
    the dilation be a visible option?
 3. **Large photos:** work on a crop around the selection (for example its box enlarged ×2, at
    most 1 Mpx at the model)? This departs from the test vectors only for photos above 1 Mpx.
-4. **Smaller GPUs:** require 16 GB for the first version, or evaluate 8-bit weights first?
+4. **Smaller GPUs:** 8-bit weights evaluated (above): conforming, 15 % slower, 3 GB less.
+   Choose automatically, with half precision from 16 GB and 8 bits below? Or 8 bits everywhere,
+   for one code path at the cost of 15 %?
