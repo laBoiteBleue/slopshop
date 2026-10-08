@@ -51,3 +51,11 @@ required-features = ["helper"]
 [[test]]
 name = "install"
 required-features = ["install"]
+
+[[example]]
+name = "erase_spike"
+required-features = ["helper"]
+
+[dev-dependencies]
+# PNG decoding and encoding of the Erase test vectors in the spike (already in the workspace).
+png.workspace = true

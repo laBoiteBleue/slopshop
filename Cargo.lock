@@ -5599,6 +5599,7 @@ version = "0.1.2"
 dependencies = [
  "flate2",
  "ort",
+ "png 0.18.1",
  "sha2 0.11.0",
  "ureq",
 ]
