@@ -75,7 +75,26 @@ LICENSES = {
         True,
         False,
     ),
+    "flux2_klein": (
+        "Apache-2.0",
+        "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
+        True,
+        False,
+    ),
+    # The Erase tool's LoRA, distilled from Klein base 4B and fal's object-remove LoRA (both
+    # Apache-2.0), on images of the CORNE set (Apache-2.0).
+    "erase_v1": (
+        "Apache-2.0",
+        "https://huggingface.co/slopshop/erase-v1",
+        True,
+        False,
+    ),
 }
+
+# The Erase tool (ADR 0045): FLUX.2 [klein] 4B turbo as BFL publishes it, and erase_v1.
+FLUX2_KLEIN = ("black-forest-labs/FLUX.2-klein-4B", "e7b7dc27f91deacad38e78976d1f2b499d76a294")
+# HACK(the files are being uploaded): their commit replaces "main" here.
+ERASE_V1 = ("slopshop/erase-v1", "main")
 
 
 def request(url, start=None, end=None):
@@ -179,10 +198,12 @@ def tgz_file(url, suffix, path):
 
 
 def hugging_face(repo, revision, names, folder):
-    tree = json.load(
-        request(f"https://huggingface.co/api/models/{repo}/tree/{revision}/onnx?expand=true")
-    )
-    by_path = {f["path"]: f for f in tree}
+    by_path = {}
+    for directory in sorted({os.path.dirname(name) for name in names}):
+        tree = f"https://huggingface.co/api/models/{repo}/tree/{revision}"
+        if directory:
+            tree += f"/{directory}"
+        by_path.update({f["path"]: f for f in json.load(request(tree + "?expand=true"))})
     files = []
     for name in names:
         f = by_path[name]
@@ -308,6 +329,20 @@ def main():
         ["onnx/model.onnx"],
         "models",
     )
+    print("FLUX.2 [klein] 4B, erase_v1")
+    flux2_klein = hugging_face(
+        *FLUX2_KLEIN,
+        [
+            "transformer/diffusion_pytorch_model.safetensors",
+            "vae/diffusion_pytorch_model.safetensors",
+        ],
+        "models",
+    )
+    erase_v1 = hugging_face(
+        *ERASE_V1,
+        ["erase_v1_diffusers.safetensors", "prompt_embeds.safetensors"],
+        "models",
+    )
     components = [
         # Windows: DirectML, the models in half precision.
         component("runtime-directml", ["onnxruntime", "directml"], directml),
@@ -326,6 +361,9 @@ def main():
         # the base model there).
         component("vitmatte-small", ["vitmatte"], vitmatte),
         component("vitmatte-base", ["vitmatte_base"], vitmatte_base),
+        # The Erase tool, on DirectML (ADR 0045).
+        component("flux2-klein-4b", ["flux2_klein"], flux2_klein),
+        component("erase-v1", ["erase_v1"], erase_v1),
     ]
 
     out = [

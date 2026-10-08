@@ -97,7 +97,7 @@ chose (2026-10-08) to **write the graphs ourselves**, then to measure a spike be
 11. **Download** (the AI consent dialog, ADR 0025):
     - FLUX.2 [klein] 4B's transformer and VAE, from BFL's repository at the pinned revision;
     - `erase_v1`'s LoRA and embedding, from the project's Hugging Face repository
-      `laBoiteBleue/slopshop-erase`, Apache-2.0.
+      `slopshop/erase-v1`, Apache-2.0.
 
     Every file is pinned by SHA-256.
 
@@ -202,7 +202,7 @@ Reviewed with the maintainer on 2026-10-08, before the spike:
 
 | Question | Answer |
 |---|---|
-| Hosting of the LoRA and embedding | Hugging Face, `laBoiteBleue/slopshop-erase` (point 11) |
+| Hosting of the LoRA and embedding | Hugging Face, `slopshop/erase-v1` (point 11) |
 | Stack entry or paint, dilation | Delegated: paint, as ADR 0034 rules (point 10); 2 % dilation, automatic (point 8) |
 | Large photos | Work around the selection (point 7) |
 | Smaller GPUs | Delegated: 8 bits everywhere (point 6) |
