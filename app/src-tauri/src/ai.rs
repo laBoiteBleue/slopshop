@@ -72,16 +72,7 @@ impl Runtime {
             Feature::Segmentation => sam,
             Feature::Subject => birefnet,
             Feature::Erase if self == Self::DirectMl => {
-                return match erase_model() {
-                    EraseModel::Turbo => vec![runtime, "flux2-vae", "flux2-klein-4b", "erase-v1"],
-                    EraseModel::Base => vec![
-                        runtime,
-                        "flux2-vae",
-                        "flux2-klein-base-4b",
-                        "fal-object-remove",
-                        "erase-base",
-                    ],
-                };
+                return erase_components(runtime, erase_model());
             }
             Feature::Erase => return Vec::new(),
         };
@@ -92,6 +83,21 @@ impl Runtime {
             _ => "vitmatte-base",
         };
         vec![runtime, model, matte]
+    }
+}
+
+/// The components the Erase tool's `model` needs, after `runtime`.
+fn erase_components(runtime: &'static str, model: EraseModel) -> Vec<&'static str> {
+    match model {
+        EraseModel::Turbo => vec![runtime, "flux2-vae", "flux2-klein-4b", "erase-v1"],
+        // Its prompt embeddings are not a component until they are published: the helper
+        // reads them from `models/slopshop/erase-base`, put there by hand.
+        EraseModel::Base => vec![
+            runtime,
+            "flux2-vae",
+            "flux2-klein-base-4b",
+            "fal-object-remove",
+        ],
     }
 }
 
@@ -361,6 +367,17 @@ mod tests {
                 for id in runtime.components(feature) {
                     assert!(install::component(id).is_some(), "{id}");
                 }
+            }
+        }
+    }
+
+    /// Both Erase variants, whatever `SLOPSHOP_ERASE_MODEL` says: the base one named a
+    /// component missing from the manifest, and failed before starting the helper.
+    #[test]
+    fn both_erase_models_need_components_of_the_manifest() {
+        for model in [EraseModel::Turbo, EraseModel::Base] {
+            for id in erase_components("runtime-directml", model) {
+                assert!(install::component(id).is_some(), "{model:?}: {id}");
             }
         }
     }
