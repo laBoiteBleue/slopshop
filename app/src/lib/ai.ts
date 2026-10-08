@@ -17,6 +17,8 @@ const NAMES: Record<string, MessageKey> = {
   "vitmatte-small": "ai.component.vitmatte",
   "vitmatte-base": "ai.component.vitmatteBase",
   birefnet: "ai.component.birefnet",
+  "flux2-klein-4b": "ai.component.flux2Klein",
+  "erase-v1": "ai.component.eraseV1",
 };
 
 /** A component's name; its id if this version of the UI does not know it. */

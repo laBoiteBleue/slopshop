@@ -1331,7 +1331,7 @@ export const DOCUMENT_CLOSED = "document-closed";
 
 /** Every document request names its document (one per tab). */
 /** What the user asks AI for (mirrors `ai::Feature`). */
-export type AiFeature = "segmentation" | "subject";
+export type AiFeature = "segmentation" | "subject" | "erase";
 
 /** A license an AI component comes under. */
 export type AiLicense = {
@@ -2026,6 +2026,13 @@ export const engine = {
     },
   ) => serial(() => invoke<DocumentView>("ai_object_select", { documentId, request })),
   /** Select > Subject: the image's main subject (BiRefNet), as one undo entry. */
+  /**
+   * Delete's generative fill (ADR 0045): the selection of raster layer `layerId` replaced by
+   * its background, baked into the layer's paint; one undo entry. Seconds (more on first use,
+   * to load the model): AI task `task` reports its progress and can be cancelled.
+   */
+  aiGenerativeFill: (documentId: number, layerId: number, task: number) =>
+    serial(() => invoke<DocumentView>("ai_generative_fill", { documentId, layerId, task })),
   aiSelectSubject: (
     documentId: number,
     layerId: number | null,
@@ -2292,8 +2299,8 @@ export async function onOpenEvents(handlers: {
 /** The steps an AI request has done, of those it knows of (`AiProgress` in segment.rs). */
 export type AiTaskProgress = {
   task: number;
-  /** `select` (the model), then `refine` (Refine Edge's windows). */
-  stage: "select" | "refine";
+  /** `select` (the model), then `refine` (Refine Edge's windows); `load` then `erase` for generative fill. */
+  stage: "select" | "refine" | "load" | "erase";
   done: number;
   total: number;
 };

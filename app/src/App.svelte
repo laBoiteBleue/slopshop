@@ -103,6 +103,7 @@
   } from "./lib/tools";
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
+  import ClearDialog, { type ClearContents } from "./lib/ClearDialog.svelte";
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
   import {
     EFFECTS,
@@ -1287,12 +1288,6 @@
     void sync(engine.fill(target.documentId, target.layerId, kind, color, opacity, stroke));
   }
 
-  /** Delete with a selection: the selected pixels erased, as Photoshop's Clear. */
-  function clearPixels() {
-    const target = paintedLayer();
-    if (target) paintPixels(target, null);
-  }
-
   /** Photoshop's fixed fill colors: Black, 50% Gray and White (sRGB). */
   const FILL_COLORS = { black: "#000000", gray: "#808080", white: "#ffffff" };
 
@@ -1780,6 +1775,10 @@
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
   let fillDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
+  /** Delete's choice is open (ADR 0045): on this layer's selection. */
+  let clearDialog = $state<PaintedLayer | null>(null);
+  /** Generative fill runs on this machine (DirectML, Windows: ADR 0045). */
+  let generativeOffered = $state(false);
   /** Edit > Stroke is open, for this layer, with its color; hidden while the color is picked. */
   let strokeDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
   /** A color picked for Fill or Stroke. */
@@ -1908,6 +1907,20 @@
     paintPixels(target, hex, opacity);
   }
 
+  /** Delete's choice: the selection made transparent, painted, or filled generatively. */
+  function applyClear(contents: ClearContents) {
+    const target = clearDialog;
+    clearDialog = null;
+    if (!target) return;
+    if (contents === "generative") {
+      void runAi("ai.task.erase", (id) =>
+        engine.aiGenerativeFill(target.documentId, target.layerId, id),
+      );
+      return;
+    }
+    paintPixels(target, contents === "transparent" ? null : paintColors()[contents]);
+  }
+
   function openFill() {
     const target = paintedLayer();
     if (target) fillDialog = { ...target, color: paintColors().foreground, picking: false };
@@ -2025,6 +2038,7 @@
   let subjectRefine = true;
   // On the processor, Select Subject does not refine (see above).
   void engine.aiRuntime().then((runtime) => {
+    generativeOffered = runtime === "directml";
     if (runtime === "cpu") subjectRefine = false;
   });
   let aiBusy = $state(false);
@@ -2120,7 +2134,10 @@
       const failure = e as Partial<AiFailure> | null;
       if (failure?.code === "notInstalled") {
         // The detail names the feature whose components are missing.
-        const feature: AiFeature = failure.detail === "subject" ? "subject" : "segmentation";
+        const feature: AiFeature =
+          failure.detail === "subject" || failure.detail === "erase"
+            ? failure.detail
+            : "segmentation";
         const components = await engine.aiComponents(feature);
         if (components) {
           return await new Promise((resolve) => {
@@ -2148,6 +2165,9 @@
     task.total = progress.total;
     // Refine Edge's windows take most of the time: say so.
     if (progress.stage === "refine") task.label = t("ai.task.refine");
+    // Generative fill: the model loading (first use), then its steps.
+    if (progress.stage === "load") task.label = t("ai.task.eraseLoad");
+    if (progress.stage === "erase") task.label = t("ai.task.erase");
   }
 
   /** Object Selection's hover: the object under document point (`x`, `y`), or null. */
@@ -4331,11 +4351,21 @@
     repeats?: boolean;
   };
 
-  /** The Delete key: the selected pixels with a selection (Photoshop's Clear), else the layers. */
+  /**
+   * The Delete key: with a selection, on a pixel layer, the choice of what replaces the
+   * selection (ADR 0045); on a mask or in Quick Mask, the background gray (Photoshop's Clear);
+   * without a selection, the selected layers.
+   */
   function deleteKey() {
     if (layersPanel?.busy()) return;
-    if (active?.selectionKey != null) clearPixels();
-    else layersPanel?.deleteSelected();
+    if (active?.selectionKey == null) {
+      layersPanel?.deleteSelected();
+      return;
+    }
+    const target = paintedLayer();
+    if (!target) return;
+    if (target.mask || target.target) paintPixels(target, null);
+    else clearDialog = target;
   }
 
   /**
@@ -6236,6 +6266,14 @@
   />
 {/if}
 
+{#if clearDialog}
+  <ClearDialog
+    colors={paintColors()}
+    generative={generativeOffered}
+    onchoose={applyClear}
+    onclose={() => (clearDialog = null)}
+  />
+{/if}
 {#if fillDialog && !fillDialog.picking}
   <FillDialog
     color={fillDialog.color}
