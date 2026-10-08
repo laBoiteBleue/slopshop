@@ -96,6 +96,7 @@ fn main() -> Result<(), Error> {
             embedding: &erase_dir.join("prompt_embeds.safetensors"),
         },
         o.storage,
+        &mut |_, _, _| {},
     )?;
     println!(
         "loaded in {:.1} s ({:?}), VRAM {}",

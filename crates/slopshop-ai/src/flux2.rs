@@ -107,9 +107,19 @@ struct Builder<'a> {
     lora: Option<&'a mut Lora>,
     merged: usize,
     storage: Storage,
+    /// Told the bytes of weights read so far, and their total.
+    progress: &'a mut dyn FnMut(u64, u64),
+    read: u64,
+    total: u64,
 }
 
 impl Builder<'_> {
+    /// `bytes` more of the published (16-bit) weights read.
+    fn advance(&mut self, bytes: usize) {
+        self.read = (self.read + bytes as u64).min(self.total);
+        (self.progress)(self.read, self.total);
+    }
+
     fn place(&mut self, name: &str, dtype: DataType, dims: &[i64], data: &[u8]) -> String {
         let offset = self.weights.len().div_ceil(ALIGN) * ALIGN;
         self.weights.resize(offset, 0);
@@ -138,6 +148,7 @@ impl Builder<'_> {
             ));
         };
         let mut w = self.file.f32s(&name)?;
+        self.advance(w.len() * 2);
         if let Some(lora) = self.lora.as_deref_mut()
             && let Some((a, b, rank)) = lora.factors(module)?
         {
@@ -248,6 +259,7 @@ impl Builder<'_> {
     /// A vector (norm weight, bias) in single precision, reshaped to `dims`.
     fn vector(&mut self, name: &str, dims: &[i64]) -> io::Result<String> {
         let v = self.file.f32s(name)?;
+        self.advance(v.len() * 2);
         let data: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
         Ok(self.place(name, DataType::F32, dims, &data))
     }
@@ -920,29 +932,41 @@ fn decoder_graph(b: &mut Builder) -> io::Result<()> {
 
 /// The whole model in one graph: the VAE's encoder (`pixels` → `mean`), the transformer (`img`,
 /// `txt`, `tproj`, `rope_cos`, `rope_sin` → `velocity`) and the VAE's decoder (`latent` →
-/// `image`). Each run asks for one output and computes only what it needs; in one session, the
-/// three share their memory (the decoder reuses what the transformer's steps freed).
+/// `image`). Each run asks for one output (ONNX Runtime still runs the whole graph: the caller
+/// gives the other parts tiny inputs); in one session, the three share their memory (the decoder
+/// reuses what the transformer's steps freed).
 ///
-/// Returns the model and how many layers the LoRA was merged into.
+/// Returns the model and how many layers the LoRA was merged into. `progress` is told the bytes
+/// of weights read so far and their total (building takes seconds: reading, merging, storing).
 pub fn pipeline(
     transformer: &mut SafeTensors,
     lora: Option<&mut Lora>,
     vae: &mut SafeTensors,
     chunks: usize,
     storage: Storage,
+    progress: &mut dyn FnMut(u64, u64),
 ) -> io::Result<(Built, usize)> {
     let total: usize = [&*transformer, &*vae]
         .iter()
         .flat_map(|f| f.tensors.values())
         .map(|t| t.end - t.start)
         .sum();
+    // The published weights are 16-bit: stored in half precision they take as much (plus the
+    // few kept in single precision), in 8 bits about half.
+    let capacity = match storage {
+        Storage::Half => total + total / 8,
+        Storage::Blocks(_) | Storage::Channels => total / 2 + total / 8,
+    };
     let mut b = Builder {
         g: Graph::new(),
-        weights: Vec::with_capacity(total + total / 8),
+        weights: Vec::with_capacity(capacity),
         file: transformer,
         lora,
         merged: 0,
         storage,
+        progress,
+        read: 0,
+        total: total as u64,
     };
     transformer_graph(&mut b, chunks)?;
     b.file = vae;

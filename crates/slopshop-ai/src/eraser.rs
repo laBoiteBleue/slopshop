@@ -27,6 +27,9 @@ pub struct Files<'a> {
 
 /// Query chunks of the attention (ADR 0045).
 const CHUNKS: usize = 16;
+/// Loading's progress, in thousandths: the weights read up to [`READ`], then the session.
+const LOADING: u32 = 1000;
+const READ: u32 = 950;
 
 /// The loaded model.
 #[derive(Debug)]
@@ -62,8 +65,15 @@ pub fn session(
 }
 
 impl Eraser {
-    /// Builds the graph (the LoRA merged, the weights stored as `storage` says) and its session.
-    pub fn load(files: Files<'_>, storage: Storage) -> Result<Self, String> {
+    /// Builds the graph (the LoRA merged, the weights stored as `storage` says) and its session,
+    /// telling `progress` how far it is ([`Stage::Loading`], in thousandths: the weights read
+    /// up to 950, then the session, about a third of the time, at once).
+    pub fn load(
+        files: Files<'_>,
+        storage: Storage,
+        progress: &mut dyn FnMut(Stage, u32, u32),
+    ) -> Result<Self, String> {
+        progress(Stage::Loading, 0, LOADING);
         let mut vae = SafeTensors::open(files.vae).map_err(error)?;
         let stats = LatentStats::new(
             vae.f32s("bn.running_mean").map_err(error)?,
@@ -73,9 +83,25 @@ impl Eraser {
         let mut transformer = SafeTensors::open(files.transformer).map_err(error)?;
         let mut lora = Lora::open(files.lora).map_err(error)?;
         let targeted = lora.modules().len();
-        let (built, merged) =
-            flux2::pipeline(&mut transformer, Some(&mut lora), &mut vae, CHUNKS, storage)
-                .map_err(error)?;
+        let mut reported = 0;
+        let mut read = |done: u64, total: u64| {
+            let at = (done * u64::from(READ) / total.max(1)) as u32;
+            // Every 1 % at most: one frame each to the editor.
+            if at >= reported + LOADING / 100 {
+                reported = at;
+                progress(Stage::Loading, at, LOADING);
+            }
+        };
+        let (built, merged) = flux2::pipeline(
+            &mut transformer,
+            Some(&mut lora),
+            &mut vae,
+            CHUNKS,
+            storage,
+            &mut read,
+        )
+        .map_err(error)?;
+        progress(Stage::Loading, READ, LOADING);
         if merged != targeted || merged == 0 {
             return Err(format!("LoRA: {merged} of {targeted} layers merged"));
         }
@@ -86,6 +112,7 @@ impl Eraser {
             return Err("unexpected prompt embedding".into());
         }
         let session = session(built, GraphOptimizationLevel::Level3, None).map_err(error)?;
+        progress(Stage::Loading, LOADING, LOADING);
         Ok(Self {
             session,
             stats,

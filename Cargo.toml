@@ -68,6 +68,11 @@ opt-level = 2
 [profile.dev.package.slopshop-render]
 opt-level = 2
 
+# And for the AI helper's weight loops (the Erase tool merges and quantizes 4 billion weights
+# as it loads: about 110 s unoptimized against 20 s, ADR 0045).
+[profile.dev.package.slopshop-ai]
+opt-level = 2
+
 [workspace.lints.rust]
 # `unsafe` must be isolated and justified: opt in locally with `#[allow(unsafe_code)]`.
 unsafe_code = "deny"

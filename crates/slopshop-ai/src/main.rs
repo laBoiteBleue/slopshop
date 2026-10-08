@@ -524,7 +524,6 @@ fn main() {
                         Err("the Erase tool runs on DirectML only".to_owned())
                     }
                     None => {
-                        report(Stage::Loading, 0, 1);
                         let models = &options.models;
                         let files = Files {
                             transformer: &models.join(FLUX_TRANSFORMER),
@@ -532,8 +531,7 @@ fn main() {
                             lora: &models.join(ERASE_LORA),
                             embedding: &models.join(ERASE_EMBEDDING),
                         };
-                        let loaded = Eraser::load(files, Storage::Blocks(64));
-                        report(Stage::Loading, 1, 1);
+                        let loaded = Eraser::load(files, Storage::Blocks(64), &mut report);
                         loaded.map(|e| {
                             eprintln!("slopshop-ai: FLUX.2 klein (Erase) on directml");
                             eraser.insert(e)

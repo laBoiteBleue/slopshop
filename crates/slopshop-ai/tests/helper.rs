@@ -222,7 +222,11 @@ fn erase_replaces_the_selection_by_its_surroundings() {
         stages.len()
     );
     assert_eq!(result.len(), w * h * 3);
-    assert_eq!(stages.first(), Some(&(Stage::Loading, 0, 1)));
+    assert_eq!(stages.first(), Some(&(Stage::Loading, 0, 1000)));
+    // Loading reports its way (at most every 1 %, a large tensor at a time), up to its end.
+    let loading = stages.iter().filter(|s| s.0 == Stage::Loading).count();
+    assert!(loading > 20, "{loading} loading reports");
+    assert!(stages.contains(&(Stage::Loading, 1000, 1000)));
     assert!(stages.contains(&(Stage::Denoising, 4, 4)));
     assert_eq!(stages.last(), Some(&(Stage::Decoding, 1, 1)));
     // Inside the square: no red left, the background's colors instead.
