@@ -373,7 +373,9 @@ for Windows, macOS and Linux, a bilingual README with screenshots, the
       fills and masks through the map). The rest is left to contributors (maintainer,
       2026-10-05): see "Open to contributors: advanced transforms" below
 - [ ] **AI** (the large one): Remove (J) and generative fill, on the AI track below (its ADR
-      before the first feature, local models first)
+      before the first feature, local models first). Generative fill of a selection is done:
+      Delete's choice, FLUX.2 [klein] with erase_v1 on our own ONNX graphs (ADR 0045,
+      Windows)
 - [ ] 🔶 **Cloud monetization**: what is offered, accounts, billing (to define; an ADR)
 
 Raised on 2026-10-05, to schedule:
@@ -428,12 +430,13 @@ Raised on 2026-10-05, to schedule:
 - [ ] Benchmark set and experiment harness
       ([research notes](research/hd-generative-ai.md))
 - [ ] Compare HD strategies (baseline, ROI, coarse-to-fine, tiled diffusion, HF re-injection)
-- [ ] 🔶 Inference runtime inside the app (ONNX Runtime, candle, burn, sidecar)
+- [x] 🔶 Inference runtime inside the app: ONNX Runtime in the helper, the generative graphs
+      written by SlopShop (ADR 0025, ADR 0045)
 - [ ] 🔶 Chosen HD pipeline, recorded with evidence
 - [ ] AI node model: prompt, model + version, seed, mask, ROI, dependencies, cached result,
       stale/invalidated state, preview vs. full-definition render
-- [ ] First AI feature (likely object removal / generative fill in a region), optional and
-      local
+- [x] First AI feature: object removal / generative fill in a region, optional and local
+      (Delete's Generative Fill, ADR 0045)
 - [ ] AI upscaling for enlargements (Photoshop's Preserve Details 2.0, Super Resolution), as a
       node: the classical detail pass was dropped for too small a gain (Phase 2)
 

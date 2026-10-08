@@ -17,8 +17,9 @@ Le nom est une blague. L'ingénierie, non.
 
 > **Remarque : SlopShop en est à ses débuts (pré-alpha).** Il permet déjà de vraies retouches : calques,
 > sélections, peinture et retouche, réglages, filtres, transformations, et fichiers PSD avec
-> leurs calques. Il n'a pas encore de texte, de formes ni d'IA générative, et a quelques
-> défauts de jeunesse : gardez une copie des fichiers qui comptent pour vous, et
+> leurs calques. Il n'a pas encore de texte ni de formes, son IA générative ne fait que remplir
+> une sélection (sous Windows), et il a quelques défauts de jeunesse : gardez une copie des
+> fichiers qui comptent pour vous, et
 > [signalez ce qui ne marche pas](https://github.com/laBoiteBleue/slopshop/issues/new/choose)
 > (en anglais ou en français).
 
@@ -96,9 +97,9 @@ son emplacement sur chaque système), et peut être supprimé depuis le même pa
 - **Sans interface** : une commande `slopshop` fait des rendus et des conversions sans
   l'interface ([docs/cli.md](docs/cli.md), en anglais).
 
-Pas encore : texte, formes, tracés et masques vectoriels ; IA générative (suppression,
-remplissage génératif) ; modules et scripts ; enregistrement de l'historique d'annulation dans
-les documents ; la vue native sur macOS. La [carte des fonctionnalités](docs/feature-map.md)
+Pas encore : texte, formes, tracés et masques vectoriels ; IA générative au-delà du remplissage
+d'une sélection (outil Suppression, remplissage génératif guidé par un texte) ; modules et
+scripts ; enregistrement de l'historique d'annulation dans les documents ; la vue native sur macOS. La [carte des fonctionnalités](docs/feature-map.md)
 (en anglais) les recense toutes, faites ou non, et la [feuille de route](docs/roadmap.md) dit
 ce qui vient ensuite.
 
@@ -218,7 +219,8 @@ Adobe et Photoshop sont des marques déposées ou des marques commerciales d'Ado
 > [!NOTE]
 > **SlopShop is at an early stage (pre-alpha).** It already does real editing: layers,
 > selections, painting and retouching, adjustments, filters, transforms, and layered PSD files.
-> It has no text, shapes or generative AI yet, and some rough edges: keep copies of the files
+> It has no text or shapes yet, its generative AI only fills a selection (on Windows), and
+> some rough edges: keep copies of the files
 > that matter to you, and please [report what breaks](https://github.com/laBoiteBleue/slopshop/issues/new/choose).
 
 ## Download
@@ -291,7 +293,8 @@ system), and can be removed from the same panel.
 - **Headless**: a `slopshop` command renders and converts without the interface
   ([docs/cli.md](docs/cli.md)).
 
-Not yet: text, shapes, paths and vector masks; generative AI (Remove, Generative Fill);
+Not yet: text, shapes, paths and vector masks; generative AI beyond filling a selection
+(the Remove tool, Generative Fill from a prompt);
 plugins and scripting; saving the undo history in documents; the native viewport on macOS.
 The [feature map](docs/feature-map.md) lists every feature, done or not, and the
 [roadmap](docs/roadmap.md) what comes next.
