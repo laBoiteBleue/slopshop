@@ -10,8 +10,11 @@ use std::path::PathBuf;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
+use slopshop_ai::eraser::{Eraser, Files};
+use slopshop_ai::flux2::Storage;
 use slopshop_ai::{
-    MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SUBJECT_SIDE, read_frame, write_frame,
+    MASK_SIDE, PROTOCOL_VERSION, Point, Request, Response, SUBJECT_SIDE, Stage, read_frame,
+    write_frame,
 };
 
 /// SAM 2.1's input side.
@@ -37,6 +40,14 @@ fn models_for(provider: &str) -> (&'static str, &'static str, String) {
         _ => (SAM_TINY, "", format!("{BIREFNET_LITE}/model.onnx")),
     }
 }
+/// The Erase tool's files in the models folder (ADR 0045): FLUX.2 [klein] 4B's transformer and
+/// VAE as BFL publishes them, and the `erase_v1` LoRA and prompt embedding.
+const FLUX_TRANSFORMER: &str =
+    "black-forest-labs/FLUX.2-klein-4B/transformer/diffusion_pytorch_model.safetensors";
+const FLUX_VAE: &str = "black-forest-labs/FLUX.2-klein-4B/vae/diffusion_pytorch_model.safetensors";
+const ERASE_LORA: &str = "slopshop/erase-v1/erase_v1_diffusers.safetensors";
+const ERASE_EMBEDDING: &str = "slopshop/erase-v1/prompt_embeds.safetensors";
+
 /// ViTMatte's base and small models, in the models folder.
 const VITMATTE_BASE: &str = "Xenova/vitmatte-base-composition-1k/onnx/model.onnx";
 const VITMATTE_SMALL: &str = "Xenova/vitmatte-small-composition-1k/onnx/model.onnx";
@@ -424,6 +435,9 @@ fn main() {
     let mut sam: Option<Sam> = None;
     let mut matte: Option<Matte> = None;
     let mut subject: Option<Subject> = None;
+    // The Erase tool (about 4 GB of weights and 6 GB of work on DirectML) unloads BiRefNet and
+    // ViTMatte, and they unload it.
+    let mut eraser: Option<Eraser> = None;
     let mut provider = "none";
     let mut input = BufReader::new(io::stdin().lock());
     let mut output = BufWriter::new(io::stdout().lock());
@@ -469,6 +483,7 @@ fn main() {
                 trimap,
             }) => {
                 subject = None;
+                eraser = None;
                 let loaded = match matte.as_mut() {
                     Some(matte) => Ok(matte),
                     None => Matte::load(&options.models, &choices).map(|m| matte.insert(m)),
@@ -480,12 +495,55 @@ fn main() {
             }
             Ok(Request::Subject { width, height, rgb }) => {
                 matte = None;
+                eraser = None;
                 let loaded = match subject.as_mut() {
                     Some(subject) => Ok(subject),
                     None => Subject::load(&options.models, &choices).map(|s| subject.insert(s)),
                 };
                 match loaded.and_then(|s| s.run(width, height, &rgb)) {
                     Ok(logits) => Response::SubjectMask(logits),
+                    Err(e) => Response::Failed(e),
+                }
+            }
+            Ok(Request::Erase {
+                width,
+                height,
+                rgb,
+                mask,
+                seed,
+            }) => {
+                matte = None;
+                subject = None;
+                let mut report = |stage: Stage, done: u32, total: u32| {
+                    let progress = Response::Progress { stage, done, total };
+                    let _ = write_frame(&mut output, &progress.encode());
+                };
+                let loaded = match eraser.as_mut() {
+                    Some(eraser) => Ok(eraser),
+                    None if !choices.contains(&"directml") => {
+                        Err("the Erase tool runs on DirectML only".to_owned())
+                    }
+                    None => {
+                        report(Stage::Loading, 0, 1);
+                        let models = &options.models;
+                        let files = Files {
+                            transformer: &models.join(FLUX_TRANSFORMER),
+                            vae: &models.join(FLUX_VAE),
+                            lora: &models.join(ERASE_LORA),
+                            embedding: &models.join(ERASE_EMBEDDING),
+                        };
+                        let loaded = Eraser::load(files, Storage::Blocks(64));
+                        report(Stage::Loading, 1, 1);
+                        loaded.map(|e| {
+                            eprintln!("slopshop-ai: FLUX.2 klein (Erase) on directml");
+                            eraser.insert(e)
+                        })
+                    }
+                };
+                let (w, h) = (width as usize, height as usize);
+                let noise = slopshop_ai::erase::noise(seed, w / 16 * (h / 16) * 128);
+                match loaded.and_then(|e| e.run((w, h), &rgb, &mask, &noise, &mut report)) {
+                    Ok(image) => Response::Image(image),
                     Err(e) => Response::Failed(e),
                 }
             }

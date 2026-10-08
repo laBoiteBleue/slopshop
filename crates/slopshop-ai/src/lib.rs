@@ -8,6 +8,8 @@
 //! Images and masks travel as raw samples, never as text.
 
 pub mod erase;
+#[cfg(feature = "helper")]
+pub mod eraser;
 pub mod flux2;
 pub mod numeric;
 pub mod onnx;
@@ -23,7 +25,7 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 /// The helper's protocol version, checked by [`Request::Hello`].
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Largest frame accepted (an RGB image of 2048² is 12 MB).
 pub const MAX_FRAME: usize = 64 << 20;
@@ -74,6 +76,17 @@ pub enum Request {
         height: u32,
         rgb: Vec<u8>,
     },
+    /// Erase the selection (Erase tool, ADR 0045) at the model's working size: 8-bit sRGB RGB
+    /// and the selection (one byte per pixel, above 127 to erase), `width × height`, both
+    /// multiples of 16 and at most [`erase::MAX_PIXELS`] pixels; the starting noise from `seed`.
+    /// [`Response::Progress`] frames come first, then [`Response::Image`] at the same size.
+    Erase {
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+        mask: Vec<u8>,
+        seed: u64,
+    },
     /// Stop.
     Quit,
 }
@@ -104,7 +117,41 @@ pub enum Response {
     Alpha(Vec<u16>),
     /// The subject: [`SUBJECT_SIDE`]² logits over the whole image (positive: inside).
     SubjectMask(Vec<f32>),
+    /// How far a long request is, before its answer: `done` of `total` in `stage`.
+    Progress {
+        stage: Stage,
+        done: u32,
+        total: u32,
+    },
+    /// An 8-bit RGB image (the Erase tool's result, at the size it was given).
+    Image(Vec<u8>),
     Failed(String),
+}
+
+/// The stages of the Erase tool, reported by [`Response::Progress`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Building the model and loading its weights (first use only).
+    Loading = 0,
+    /// The VAE encoding the photo and the selection.
+    Encoding = 1,
+    /// The transformer's steps.
+    Denoising = 2,
+    /// The VAE decoding the result.
+    Decoding = 3,
+}
+
+impl Stage {
+    fn from_byte(b: u8) -> Option<Self> {
+        [
+            Stage::Loading,
+            Stage::Encoding,
+            Stage::Denoising,
+            Stage::Decoding,
+        ]
+        .into_iter()
+        .find(|s| *s as u8 == b)
+    }
 }
 
 #[derive(Debug)]
@@ -116,6 +163,8 @@ pub enum ProtocolError {
     Unexpected,
     /// The helper reported an error.
     Failed(String),
+    /// The caller stopped waiting (the helper is still working and must be stopped).
+    Cancelled,
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -125,6 +174,7 @@ impl std::fmt::Display for ProtocolError {
             ProtocolError::Malformed(what) => write!(f, "AI helper: malformed {what}"),
             ProtocolError::Unexpected => write!(f, "AI helper: unexpected answer"),
             ProtocolError::Failed(message) => write!(f, "AI helper: {message}"),
+            ProtocolError::Cancelled => write!(f, "AI helper: cancelled"),
         }
     }
 }
@@ -143,12 +193,15 @@ const OP_SAM_DECODE: u8 = 3;
 const OP_QUIT: u8 = 4;
 const OP_MATTE: u8 = 5;
 const OP_SUBJECT: u8 = 6;
+const OP_ERASE: u8 = 7;
 
 const RESPONSE_HELLO: u8 = 0x81;
 const RESPONSE_DONE: u8 = 0x82;
 const RESPONSE_SAM_MASK: u8 = 0x83;
 const RESPONSE_ALPHA: u8 = 0x84;
 const RESPONSE_SUBJECT_MASK: u8 = 0x85;
+const RESPONSE_PROGRESS: u8 = 0x86;
+const RESPONSE_IMAGE: u8 = 0x87;
 const RESPONSE_FAILED: u8 = 0xff;
 
 /// Reads little-endian fields from a frame.
@@ -247,6 +300,20 @@ impl Request {
                 out.extend_from_slice(&height.to_le_bytes());
                 out.extend_from_slice(rgb);
             }
+            Request::Erase {
+                width,
+                height,
+                rgb,
+                mask,
+                seed,
+            } => {
+                out.push(OP_ERASE);
+                out.extend_from_slice(&width.to_le_bytes());
+                out.extend_from_slice(&height.to_le_bytes());
+                out.extend_from_slice(&seed.to_le_bytes());
+                out.extend_from_slice(rgb);
+                out.extend_from_slice(mask);
+            }
             Request::Quit => out.push(OP_QUIT),
         }
         out
@@ -314,6 +381,28 @@ impl Request {
                 let rgb = f.take(width as usize * height as usize * 3)?.to_vec();
                 Request::Subject { width, height, rgb }
             }
+            OP_ERASE => {
+                let (width, height) = (f.u32()?, f.u32()?);
+                let pixels = width as u64 * height as u64;
+                if width == 0
+                    || height == 0
+                    || width % erase::SIZE_MULTIPLE != 0
+                    || height % erase::SIZE_MULTIPLE != 0
+                    || pixels as f64 > erase::MAX_PIXELS
+                {
+                    return Err(ProtocolError::Malformed("image size"));
+                }
+                let seed = f.u64()?;
+                let rgb = f.take(pixels as usize * 3)?.to_vec();
+                let mask = f.take(pixels as usize)?.to_vec();
+                Request::Erase {
+                    width,
+                    height,
+                    rgb,
+                    mask,
+                    seed,
+                }
+            }
             OP_QUIT => Request::Quit,
             _ => return Err(ProtocolError::Malformed("operation")),
         };
@@ -350,6 +439,16 @@ impl Response {
                 for v in logits {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
+            }
+            Response::Progress { stage, done, total } => {
+                out.push(RESPONSE_PROGRESS);
+                out.push(*stage as u8);
+                out.extend_from_slice(&done.to_le_bytes());
+                out.extend_from_slice(&total.to_le_bytes());
+            }
+            Response::Image(rgb) => {
+                out.push(RESPONSE_IMAGE);
+                out.extend_from_slice(rgb);
             }
             Response::Failed(message) => {
                 out.push(RESPONSE_FAILED);
@@ -397,6 +496,12 @@ impl Response {
                     .map(|_| f.f32())
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            RESPONSE_PROGRESS => Response::Progress {
+                stage: Stage::from_byte(f.u8()?).ok_or(ProtocolError::Malformed("stage"))?,
+                done: f.u32()?,
+                total: f.u32()?,
+            },
+            RESPONSE_IMAGE => Response::Image(f.take(f.0.len())?.to_vec()),
             RESPONSE_FAILED => Response::Failed(text(f.take(f.0.len())?)),
             _ => return Err(ProtocolError::Malformed("response")),
         };
@@ -557,12 +662,56 @@ impl Client {
     }
 
     fn call(&mut self, request: &Request) -> Result<Response, ProtocolError> {
+        self.call_with(request, &mut |_, _, _| true)
+    }
+
+    /// Sends `request` and waits for its answer, passing on the progress reported before it.
+    /// When `progress` returns false the wait stops ([`ProtocolError::Cancelled`]): the helper
+    /// is still busy, so the caller drops this client (which stops it).
+    fn call_with(
+        &mut self,
+        request: &Request,
+        progress: &mut dyn FnMut(Stage, u32, u32) -> bool,
+    ) -> Result<Response, ProtocolError> {
         write_frame(&mut self.stdin, &request.encode())?;
-        let frame = read_frame(&mut self.stdout)?
-            .ok_or(ProtocolError::Io(io::ErrorKind::UnexpectedEof.into()))?;
-        match Response::decode(&frame)? {
-            Response::Failed(message) => Err(ProtocolError::Failed(message)),
-            response => Ok(response),
+        loop {
+            let frame = read_frame(&mut self.stdout)?
+                .ok_or(ProtocolError::Io(io::ErrorKind::UnexpectedEof.into()))?;
+            match Response::decode(&frame)? {
+                Response::Progress { stage, done, total } => {
+                    if !progress(stage, done, total) {
+                        return Err(ProtocolError::Cancelled);
+                    }
+                }
+                Response::Failed(message) => return Err(ProtocolError::Failed(message)),
+                response => return Ok(response),
+            }
+        }
+    }
+
+    /// The Erase tool (see [`Request::Erase`]): the image with the selection replaced by its
+    /// background, at the same size. `progress` is told how far it is; returning false stops
+    /// waiting.
+    pub fn erase(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgb: Vec<u8>,
+        mask: Vec<u8>,
+        seed: u64,
+        progress: &mut dyn FnMut(Stage, u32, u32) -> bool,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let pixels = width as usize * height as usize;
+        let request = Request::Erase {
+            width,
+            height,
+            rgb,
+            mask,
+            seed,
+        };
+        match self.call_with(&request, progress)? {
+            Response::Image(rgb) if rgb.len() == pixels * 3 => Ok(rgb),
+            _ => Err(ProtocolError::Unexpected),
         }
     }
 
@@ -694,6 +843,13 @@ mod tests {
                 height: 1,
                 rgb: vec![9, 8, 7],
             },
+            Request::Erase {
+                width: 16,
+                height: 32,
+                rgb: (0..16 * 32 * 3).map(|i| i as u8).collect(),
+                mask: (0..16 * 32).map(|i| (i % 2 * 255) as u8).collect(),
+                seed: u64::MAX - 3,
+            },
             Request::Quit,
         ];
         for request in requests {
@@ -715,6 +871,12 @@ mod tests {
             },
             Response::Alpha(vec![0, 32768, u16::MAX]),
             Response::SubjectMask((0..SUBJECT_SIDE * SUBJECT_SIDE).map(|i| i as f32).collect()),
+            Response::Progress {
+                stage: Stage::Denoising,
+                done: 2,
+                total: 4,
+            },
+            Response::Image(vec![1, 2, 3, 4, 5, 6]),
             Response::Failed("no model".into()),
         ];
         for response in responses {
@@ -757,6 +919,19 @@ mod tests {
         long.push(0);
         assert!(Request::decode(&long).is_err());
         assert!(Response::decode(&[RESPONSE_SAM_MASK, 0, 0, 0, 0]).is_err());
+        // Erase: sides multiples of 16, at most a megapixel; a known stage.
+        let erase = |width: u32, height: u32| {
+            let mut frame = vec![OP_ERASE];
+            frame.extend_from_slice(&width.to_le_bytes());
+            frame.extend_from_slice(&height.to_le_bytes());
+            frame.extend_from_slice(&0u64.to_le_bytes());
+            frame.resize(frame.len() + width as usize * height as usize * 4, 0);
+            frame
+        };
+        assert!(Request::decode(&erase(16, 16)).is_ok());
+        assert!(Request::decode(&erase(16, 24)).is_err());
+        assert!(Request::decode(&erase(1024, 1040)).is_err());
+        assert!(Response::decode(&[RESPONSE_PROGRESS, 9, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
     }
 
     #[test]
