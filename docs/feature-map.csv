@@ -650,13 +650,6 @@ Tool,Tools panel > Pen > Curvature Pen,,open,the Pen exists (one simplified Pen:
 Tool,Tools panel > Pen > Add Anchor Point,,done,"a Pen gesture, as Photoshop's auto add: a click on the active vector layer's path (ADR 0041)"
 Tool,Tools panel > Pen > Delete Anchor Point,,done,"a Pen gesture, as Photoshop's auto delete: a click on an anchor (ADR 0041)"
 Tool,Tools panel > Pen > Convert Point,,done,"a Pen gesture: Alt+click makes a corner, Alt-drag pulls smooth handles or moves one handle alone (ADR 0041)"
-Tool,Tools panel > Type > Horizontal Type,,open,text layers are not started
-Tool,Tools panel > Pen > Pen,,open,paths are not started
-Tool,Tools panel > Pen > Freeform Pen,,open,paths are not started
-Tool,Tools panel > Pen > Curvature Pen,,open,paths are not started
-Tool,Tools panel > Pen > Add Anchor Point,,open,paths are not started
-Tool,Tools panel > Pen > Delete Anchor Point,,open,paths are not started
-Tool,Tools panel > Pen > Convert Point,,open,paths are not started
 Tool,Tools panel > Type > Horizontal Type,,partial,"T: a click places point text or edits the text layer clicked (by the box around its letters, the caret where clicked), typed live with a caret, Enter for a new line, committed by Escape, Ctrl+Enter, the keypad's Enter, a click or another tool, one undo entry; family, style, size in points, color and alignment in the options bar; text layers are vector layers (ADR 0041) laid out by parley, styles apply, linked copies share the text, .slop keeps text and outlines; not yet: selecting characters, per-character styles, box text, tracking and leading in the UI"
 Tool,Tools panel > Type > Vertical Type,,open,text layers are not started
 Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started

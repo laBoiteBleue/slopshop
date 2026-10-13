@@ -190,7 +190,7 @@ Status: accepted (2026-10-13, under the maintainer's delegation; to review).
    by construction and styles, linked copies and Bake to Pixels work unchanged. Only editing
    lays text out again; the outlines are the layout cache (typing lays out the text once per
    keystroke, well under a millisecond for a title).
-2. **`.slop` 0.33** keeps both, in the `shapes` table: `text` (the description) beside
+2. **`.slop` 0.34** keeps both, in the `shapes` table: `text` (the description) beside
    `shape` (the outlines), instead of a separate `text` kind (point 6). A reader without the
    fonts, or of an older schema, still draws the text exactly.
 3. **The text model of part 1**: one style for the whole text (family, weight 1–1000, italic,

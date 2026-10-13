@@ -422,7 +422,7 @@ Raised on 2026-10-05, to schedule:
   - [ ] Selecting several anchors or paths (marquee, Shift), Path Selection (A); vector masks
   - [ ] Type
     - [x] Part 1: text layers (a vector source laid out by parley into glyph outlines, drawn
-          as shapes; `.slop` 0.33 keeps the text and its outlines; Inter bundled), the Type
+          as shapes; `.slop` 0.34 keeps the text and its outlines; Inter bundled), the Type
           tool (T): point text placed or edited on the canvas, typed live with a caret, one
           undo entry, font family, style, size in points, color and alignment in the options
           bar

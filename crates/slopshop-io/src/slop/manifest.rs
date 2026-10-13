@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 33;
+pub(crate) const SCHEMA_MINOR: u32 = 34;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -192,7 +192,7 @@ pub(crate) struct ShapeDto {
     pub name: String,
     /// The shape, as `slop::shape` describes it.
     pub shape: Value,
-    /// What a text source says (schema 0.33): `shape` is then its glyph outlines. Absent: a
+    /// What a text source says (schema 0.34): `shape` is then its glyph outlines. Absent: a
     /// shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Value>,
