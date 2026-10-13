@@ -25,6 +25,7 @@ fn print_size(size: Size) -> (Size, f64) {
 fn on_paper(doc: &Document) -> Result<Document, String> {
     let mut doc = doc.clone();
     let paper = Layer {
+        locks: Default::default(),
         style: None,
         transform: slopshop_core::Projective::IDENTITY,
         clipped: false,

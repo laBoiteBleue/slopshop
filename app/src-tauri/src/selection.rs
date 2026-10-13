@@ -1602,6 +1602,7 @@ mod tests {
         let mut s = Session::new(Document::new(size));
         let id = s.allocate_layer_id();
         let layer = slopshop_core::Layer {
+            locks: Default::default(),
             style: None,
             transform: slopshop_core::Affine::IDENTITY.into(),
             clipped: false,
@@ -1675,6 +1676,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "shape".into(),
                 visible: true,

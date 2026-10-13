@@ -198,6 +198,7 @@ mod tests {
 
     fn layer(id: u64, content: LayerContent, mask: Option<LayerMask>) -> Layer {
         Layer {
+            locks: Default::default(),
             style: None,
             transform: Affine::IDENTITY.into(),
             clipped: false,

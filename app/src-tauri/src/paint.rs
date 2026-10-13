@@ -21,8 +21,8 @@ use slopshop_core::paint::{Brush, Paint, PointerSample, Stroke, canvas_growth, g
 use slopshop_core::selection::{Selection, sample_region};
 use slopshop_core::stack::LayerStack;
 use slopshop_core::{
-    Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, Projective, RasterImage,
-    Size,
+    Affine, Document, Edit, LayerContent, LayerId, LayerMask, LinearRgba, Lock, Projective,
+    RasterImage, Size,
 };
 use tauri::Manager;
 use tauri::ipc::Response;
@@ -488,8 +488,18 @@ fn start(
     let selection = doc.selection().map(|s| Arc::clone(s.image()));
     let (image, to_document, growth, paint, selection) = match request.target() {
         Target::Layer(id) => {
-            // Restoring only reaches paint: no need to grow.
-            let (image, growth) = grow(doc, id, grow_layer && !request.restore)?;
+            // Refused before the first dab (ADR 0046), the edit would be at the end.
+            let locks = doc.effective_locks(id);
+            if locks.locks_pixels() {
+                return Err(locked(id, Lock::Pixels));
+            }
+            // Restoring only reaches paint: no need to grow; nor where the layer may not move
+            // (growing moves its origin) or keeps its transparency (nothing to paint beyond it).
+            let grow_layer = grow_layer
+                && !request.restore
+                && !locks.locks_position()
+                && !locks.locks_transparency();
+            let (image, growth) = grow(doc, id, grow_layer)?;
             let paint = match (request.color, gradient) {
                 _ if request.restore => Paint::Restore,
                 (_, Some(field)) => Paint::Gradient { field, gray: false },
@@ -515,6 +525,11 @@ fn start(
                 paint,
             )
             .map_err(|e| e.to_string())?;
+            let stroke = if locks.locks_transparency() {
+                stroke.keeping_alpha().map_err(|e| e.to_string())?
+            } else {
+                stroke
+            };
             return Ok((cloning(stroke), Some(growth)));
         }
         _ if request.restore => {
@@ -523,6 +538,9 @@ fn start(
         // A mask lies in its layer's pixel grid and covers what the layer can show: it does not
         // grow.
         Target::Mask(id) => {
+            if doc.effective_locks(id).all {
+                return Err(locked(id, Lock::All));
+            }
             let layer = doc.layer(id).ok_or("the painted layer is gone")?;
             let mask = layer.mask.as_ref().ok_or("the layer has no mask")?;
             let to_document = layer.transform.then(doc.parent_transform(id));
@@ -550,6 +568,11 @@ fn start(
     )
     .map_err(|e| e.to_string())?;
     Ok((cloning(stroke), growth))
+}
+
+/// The message of an edit refused by `lock` on layer `id` (ADR 0046), which the UI translates.
+fn locked(id: LayerId, lock: Lock) -> String {
+    slopshop_core::EditError::Locked { id, lock }.to_string()
 }
 
 /// Paint a batch of a stroke (see the module documentation). Returns the document once the
@@ -1309,6 +1332,7 @@ mod tests {
         )
         .unwrap();
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id: LayerId::from_raw(1),
             name: "layer".into(),
@@ -1389,6 +1413,47 @@ mod tests {
             panic!("a raster layer");
         };
         image.get()
+    }
+
+    #[test]
+    fn locks_refuse_paint_or_keep_the_layers_transparency() {
+        let locked = |locks: slopshop_core::LayerLocks| {
+            let mut doc = document(Some([10.0, 10.0, 20.0, 20.0]));
+            Edit::SetLayerLocks {
+                id: LayerId::from_raw(1),
+                locks,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            doc
+        };
+        let none = slopshop_core::LayerLocks::NONE;
+        // Lock Image Pixels: refused before anything is painted, with a message the UI knows.
+        let doc = locked(slopshop_core::LayerLocks {
+            pixels: true,
+            ..none
+        });
+        let refused = fill_edit(&doc, &request(1.0), None).unwrap_err();
+        assert!(refused.contains("is locked: pixels"), "{refused}");
+        // Lock Transparent Pixels: the transparent layer stays transparent.
+        let doc = locked(slopshop_core::LayerLocks {
+            transparency: true,
+            ..none
+        });
+        let image = filled(&doc, &request(1.0), None);
+        assert_eq!(image.alpha_at(15, 15), 0.0);
+        // The Eraser would lower alpha: refused.
+        let mut eraser = request(1.0);
+        eraser.color = None;
+        let refused = fill_edit(&doc, &eraser, None).unwrap_err();
+        assert!(refused.contains("is locked: transparency"), "{refused}");
+        // Lock Position alone: painted, the layer not grown (its place unchanged).
+        let doc = locked(slopshop_core::LayerLocks {
+            position: true,
+            ..none
+        });
+        let image = filled(&doc, &request(1.0), None);
+        assert_eq!(image.alpha_at(15, 15), 1.0);
     }
 
     #[test]

@@ -492,6 +492,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
