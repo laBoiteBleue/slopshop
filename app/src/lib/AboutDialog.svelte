@@ -41,6 +41,15 @@
       <dl>
         <dt>{t("about.license")}</dt>
         <dd>{info.license}</dd>
+        {#if info.fontLicense}
+          <dt>{t("about.fonts")}</dt>
+          <dd>
+            <details>
+              <summary>{t("about.interFont")}</summary>
+              <pre class="notice">{info.fontLicense}</pre>
+            </details>
+          </dd>
+        {/if}
         <dt>{t("about.project")}</dt>
         <dd>
           <button type="button" class="link" onclick={() => void engine.openProjectPage("home")}>
@@ -57,6 +66,14 @@
 </dialog>
 
 <style>
+  .notice {
+    max-height: 160px;
+    overflow: auto;
+    font-size: 11px;
+    white-space: pre-wrap;
+    user-select: text;
+  }
+
   dialog {
     width: 380px;
     padding: 0;
