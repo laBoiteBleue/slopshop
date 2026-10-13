@@ -172,7 +172,7 @@ test("a path drawn with the Pen: its fill and stroke, its geometry kept", async 
 test("W, H, X and Y: the shape's bounds in the document, a typed value reshapes it", async () => {
   const { onedit, user } = open({
     ...RECTANGLE,
-    geometry: { ...RECTANGLE.geometry, radii: [4, 4, 4, 4] },
+    geometry: { kind: "rectangle", rect: [0, 0, 100, 40], radii: [4, 4, 4, 4] },
   });
   const field = (name: string) => screen.getByRole("spinbutton", { name });
   expect(field("W")).toHaveValue(100);
@@ -256,7 +256,7 @@ test("a rectangle's corners unlinked, each its own radius, linked again", async 
 test("corners rounded differently show each radius; linking gives them the first one's", async () => {
   const { onedit, user } = open({
     ...RECTANGLE,
-    geometry: { ...RECTANGLE.geometry, radii: [6, 2, 3, 4] },
+    geometry: { kind: "rectangle", rect: [0, 0, 100, 40], radii: [6, 2, 3, 4] },
   });
   expect(screen.getByRole("spinbutton", { name: "Top left radius" })).toHaveValue(6);
   expect(screen.getByRole("spinbutton", { name: "Top right radius" })).toHaveValue(2);
