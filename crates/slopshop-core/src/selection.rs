@@ -58,6 +58,12 @@ pub enum Shape {
     /// A closed polygon (the lasso): the last point joins the first. Self-intersections are
     /// filled with the nonzero rule, so every loop of a figure eight is selected.
     Polygon { points: Vec<[f64; 2]> },
+    /// Closed polygons filled together (a path's subpaths, flattened: Make Selection), by the
+    /// nonzero rule or, with `even_odd`, the even-odd rule.
+    Rings {
+        rings: Vec<Vec<[f64; 2]>>,
+        even_odd: bool,
+    },
 }
 
 /// How a new shape combines with the current selection.
@@ -158,7 +164,8 @@ pub fn select_shape(
         return Err(SelectionError::InvalidShape);
     }
     let contour = shape.contour()?;
-    let mut new = rasterize(canvas, &contour, edges.anti_alias)?;
+    let even_odd = matches!(shape, Shape::Rings { even_odd: true, .. });
+    let mut new = rasterize(canvas, &contour, edges.anti_alias, even_odd)?;
     if edges.feather > 0.0 {
         new = feather(&new, edges.feather);
     }
@@ -264,6 +271,33 @@ pub fn from_layer(
     }
     let bytes: Vec<u8> = coverage.iter().flat_map(|v| v.to_ne_bytes()).collect();
     RasterImage::from_pixels(size, SELECTION_FORMAT, &bytes).ok()
+}
+
+/// What a vector layer's path selects (Photoshop's Make Selection, Ctrl+Enter): the area its
+/// geometry encloses, placed by its transform and its groups', whatever its fill and stroke.
+/// `None` when it is no vector layer.
+pub fn layer_path(
+    document: &crate::document::Document,
+    id: crate::document::LayerId,
+) -> Option<Shape> {
+    let layer = document.layer(id)?;
+    let crate::document::LayerContent::Vector { source, .. } = &layer.content else {
+        return None;
+    };
+    let transform = layer.transform.then(document.parent_transform(id));
+    Some(path_shape(&source.shape().geometry, transform))
+}
+
+/// The selection shape of `geometry` placed by `transform` (Make Selection).
+pub fn path_shape(
+    geometry: &crate::shape::Geometry,
+    transform: crate::transform::Projective,
+) -> Shape {
+    let (rings, rule) = crate::shape::selection_rings(geometry, transform);
+    Shape::Rings {
+        rings,
+        even_odd: rule == crate::shape::FillRule::EvenOdd,
+    }
 }
 
 /// Everything `current` leaves out (Select > Inverse); `None` selects everything.
@@ -742,7 +776,7 @@ fn simplify(line: &mut Vec<[u32; 2]>) {
 
 impl Shape {
     /// The shape as one or more closed polygons.
-    fn contour(&self) -> Result<Vec<[f64; 2]>, SelectionError> {
+    fn contour(&self) -> Result<Vec<Vec<[f64; 2]>>, SelectionError> {
         let finite = |values: &[f64]| values.iter().all(|v| v.is_finite());
         match self {
             Shape::Rectangle {
@@ -754,12 +788,12 @@ impl Shape {
                 if !finite(&[*left, *top, *right, *bottom]) {
                     return Err(SelectionError::InvalidShape);
                 }
-                Ok(vec![
+                Ok(vec![vec![
                     [*left, *top],
                     [*right, *top],
                     [*right, *bottom],
                     [*left, *bottom],
-                ])
+                ]])
             }
             Shape::Ellipse {
                 left,
@@ -776,18 +810,26 @@ impl Shape {
                 let r = rx.max(ry).max(1.0);
                 let step = (0.08 / r).sqrt();
                 let n = ((std::f64::consts::TAU / step).ceil() as usize).clamp(16, 200_000);
-                Ok((0..n)
-                    .map(|i| {
-                        let a = std::f64::consts::TAU * i as f64 / n as f64;
-                        [cx + rx * a.cos(), cy + ry * a.sin()]
-                    })
-                    .collect())
+                Ok(vec![
+                    (0..n)
+                        .map(|i| {
+                            let a = std::f64::consts::TAU * i as f64 / n as f64;
+                            [cx + rx * a.cos(), cy + ry * a.sin()]
+                        })
+                        .collect(),
+                ])
             }
             Shape::Polygon { points } => {
                 if !points.iter().all(|p| finite(p)) {
                     return Err(SelectionError::InvalidShape);
                 }
-                Ok(points.clone())
+                Ok(vec![points.clone()])
+            }
+            Shape::Rings { rings, .. } => {
+                if !rings.iter().flatten().all(|p| finite(p)) {
+                    return Err(SelectionError::InvalidShape);
+                }
+                Ok(rings.clone())
             }
         }
     }
@@ -3262,16 +3304,23 @@ impl EdgeRefinement {
 
 // --- Rasterization -----------------------------------------------------------------------------
 
-/// The coverage of a closed polygon on a canvas: each pixel gets the exact fraction of its area
-/// inside (nonzero rule), or 0 or 1 by that fraction without anti-aliasing. Computed one band of
-/// tile rows at a time, only over the polygon's bounds, on every core.
-fn rasterize(canvas: Size, polygon: &[[f64; 2]], anti_alias: bool) -> Result<Mask, SelectionError> {
+/// The coverage of closed polygons on a canvas: each pixel gets the exact fraction of its area
+/// inside (nonzero rule, or even-odd with `even_odd`), or 0 or 1 by that fraction without
+/// anti-aliasing. Computed one band of tile rows at a time, only over the polygons' bounds, on
+/// every core.
+fn rasterize(
+    canvas: Size,
+    rings: &[Vec<[f64; 2]>],
+    anti_alias: bool,
+    even_odd: bool,
+) -> Result<Mask, SelectionError> {
     let mut mask = Mask::new(canvas)?;
-    if polygon.len() < 3 {
+    let rings: Vec<&Vec<[f64; 2]>> = rings.iter().filter(|r| r.len() >= 3).collect();
+    if rings.is_empty() {
         return Ok(mask);
     }
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for p in polygon {
+    for p in rings.iter().copied().flatten() {
         min_x = min_x.min(p[0]);
         min_y = min_y.min(p[1]);
         max_x = max_x.max(p[0]);
@@ -3285,8 +3334,11 @@ fn rasterize(canvas: Size, polygon: &[[f64; 2]], anti_alias: bool) -> Result<Mas
     if cx0 >= cx1 || cy0 >= cy1 {
         return Ok(mask);
     }
-    let segments: Vec<([f64; 2], [f64; 2])> = (0..polygon.len())
-        .map(|i| (polygon[i], polygon[(i + 1) % polygon.len()]))
+    let segments: Vec<([f64; 2], [f64; 2])> = rings
+        .iter()
+        .flat_map(|polygon| {
+            (0..polygon.len()).map(|i| (polygon[i], polygon[(i + 1) % polygon.len()]))
+        })
         .filter(|(a, b)| a[1] != b[1])
         .collect();
     let bands: Vec<usize> = (cy0 / T..cy1.div_ceil(T)).collect();
@@ -3305,7 +3357,8 @@ fn rasterize(canvas: Size, polygon: &[[f64; 2]], anti_alias: bool) -> Result<Mas
                     let mut acc = Vec::new();
                     for &row in chunk {
                         let tiles = rasterize_band(
-                            mask_ref, row, cx0, cx1, cy0, cy1, segments, anti_alias, &mut acc,
+                            mask_ref, row, cx0, cx1, cy0, cy1, segments, anti_alias, even_odd,
+                            &mut acc,
                         );
                         out.push((row, tiles));
                     }
@@ -3337,6 +3390,7 @@ fn rasterize_band(
     cy1: usize,
     segments: &[([f64; 2], [f64; 2])],
     anti_alias: bool,
+    even_odd: bool,
     acc: &mut Vec<f32>,
 ) -> Vec<Tile> {
     let band_y0 = (row * T).max(cy0);
@@ -3370,7 +3424,13 @@ fn rasterize_band(
         let ty = band_y0 + y - row * T;
         for (x, value) in line.iter().take(bw).enumerate() {
             sum += value;
-            let coverage = sum.abs().min(1.0);
+            // The winding number, fractional along edges; even-odd folds it every two turns.
+            let winding = if even_odd {
+                sum - 2.0 * (sum / 2.0).round()
+            } else {
+                sum
+            };
+            let coverage = winding.abs().min(1.0);
             let coverage = if anti_alias {
                 coverage
             } else if coverage >= 0.5 {
@@ -3774,6 +3834,73 @@ mod tests {
         let expected = 0.5 * 900.0 * 600.0;
         assert!((coverage(&clockwise) - expected).abs() < 1.0);
         assert!((coverage(&counter) - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_vector_layers_path_selects_the_area_it_encloses_where_it_is_placed() {
+        use crate::shape::{FillRule, Geometry, Segment, ShapeSource, Subpath};
+        use crate::{Document, Edit, Layer, LayerContent, LayerId};
+        // A right triangle drawn open (two sides), stroked only, in a moved layer: Make
+        // Selection joins its ends and ignores fill and stroke.
+        let shape = crate::shape::Shape {
+            geometry: Geometry::Path {
+                subpaths: vec![Subpath {
+                    start: [0.0, 0.0],
+                    segments: vec![Segment::Line([300.0, 0.0]), Segment::Line([0.0, 200.0])],
+                    closed: false,
+                }],
+                rule: FillRule::NonZero,
+            },
+            fill: None,
+            stroke: None,
+        };
+        let mut doc = Document::new(Size::new(600, 400));
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                id,
+                name: "Shape 1".to_owned(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: crate::blend::BlendMode::Normal,
+                content: LayerContent::vector(ShapeSource::new(shape, "Shape 1")),
+                mask: None,
+                clipped: false,
+                transform: crate::transform::Projective::translation(100.5, 50.0),
+                style: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let path = layer_path(&doc, id).unwrap();
+        let image = select(doc.size(), &path);
+        assert!((coverage(&image) - 0.5 * 300.0 * 200.0).abs() < 1.0);
+        assert_eq!(image.gray_at(150, 80), 1.0);
+        assert_eq!(image.gray_at(99, 80), 0.0);
+        // Its left side at 100.5: half pixels, anti-aliased.
+        assert!((image.gray_at(100, 80) - 0.5).abs() < 1e-3);
+        assert!(layer_path(&doc, LayerId::from_raw(999)).is_none());
+        // Even-odd: a square inside a square is a hole.
+        let square = |l: f64, r: f64| vec![[l, l], [r, l], [r, r], [l, r]];
+        let rings = vec![square(0.0, 100.0), square(25.0, 75.0)];
+        let even_odd = select(
+            Size::new(200, 200),
+            &Shape::Rings {
+                rings: rings.clone(),
+                even_odd: true,
+            },
+        );
+        assert!((coverage(&even_odd) - (10_000.0 - 2_500.0)).abs() < 1e-2);
+        let nonzero = select(
+            Size::new(200, 200),
+            &Shape::Rings {
+                rings,
+                even_odd: false,
+            },
+        );
+        assert!((coverage(&nonzero) - 10_000.0).abs() < 1e-2);
     }
 
     #[test]

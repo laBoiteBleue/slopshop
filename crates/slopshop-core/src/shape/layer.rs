@@ -12,7 +12,7 @@ use kurbo::Shape as _;
 
 use super::draw::{coverage, cut};
 use super::model::{FillRule, Geometry, Paint, ShapeSource, StrokeAlign};
-use super::path::{outline, placed, stroke_outline, tolerance_for};
+use super::path::{fill_outline, outline, placed, stroke_outline, tolerance_for};
 use crate::blend::BlendMode;
 use crate::document::Layer;
 use crate::geom::{Rect, Size};
@@ -101,7 +101,12 @@ fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
         _ => FillRule::NonZero,
     };
     let closed = shape.geometry.is_closed();
-    let fill_path = placed(&own, to_document, tolerance);
+    // An open path is filled as if its ends were joined.
+    let fill_path = placed(
+        &fill_outline(&shape.geometry, tolerance),
+        to_document,
+        tolerance,
+    );
     // The stroke's outline, twice as wide when it is cut to one side of the outline.
     let stroke = shape.stroke.as_ref().map(|s| {
         let widen = if s.align == StrokeAlign::Center || !closed {
@@ -125,9 +130,9 @@ fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
     let Some(area) = area_of(bounds, canvas) else {
         return drawn;
     };
-    let needs_fill = closed
-        && (shape.fill.is_some()
-            || stroke
+    let needs_fill = (shape.fill.is_some() && shape.geometry.is_fillable())
+        || (closed
+            && stroke
                 .as_ref()
                 .is_some_and(|(s, _)| s.align != StrokeAlign::Center));
     let fill = needs_fill
@@ -140,9 +145,10 @@ fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
     if let Some((s, path)) = stroke
         && let Ok(band) = coverage(&path, FillRule::NonZero, area)
     {
+        // An open outline has no sides: its stroke is centered.
         let band = match (s.align, &fill) {
-            (StrokeAlign::Inside, Some(fill)) => cut(&band, fill, true).ok(),
-            (StrokeAlign::Outside, Some(fill)) => cut(&band, fill, false).ok(),
+            (StrokeAlign::Inside, Some(fill)) if closed => cut(&band, fill, true).ok(),
+            (StrokeAlign::Outside, Some(fill)) if closed => cut(&band, fill, false).ok(),
             _ => Some(band),
         };
         if let Some(band) = band {
@@ -315,6 +321,48 @@ mod tests {
             "{:?}",
             at(&doc, 44, 20)
         );
+    }
+
+    #[test]
+    fn an_open_path_is_filled_as_if_closed_and_stroked_along_its_open_outline() {
+        use crate::shape::model::{Segment, Subpath};
+        let mut doc = document();
+        // Three sides of a square, open at the left: the fill closes it, the stroke does not.
+        let open = Shape {
+            geometry: Geometry::Path {
+                subpaths: vec![Subpath {
+                    start: [8.0, 8.0],
+                    segments: vec![
+                        Segment::Line([40.0, 8.0]),
+                        Segment::Line([40.0, 40.0]),
+                        Segment::Line([8.0, 40.0]),
+                    ],
+                    closed: false,
+                }],
+                rule: FillRule::NonZero,
+            },
+            fill: Some(RED),
+            stroke: Some(ShapeStroke {
+                // Inside asked; an open outline has no sides: centered.
+                align: StrokeAlign::Inside,
+                ..centered(BLUE, 4.0)
+            }),
+        };
+        add_vector(&mut doc, ShapeSource::new(open, ""), Projective::IDENTITY);
+        assert!(close(at(&doc, 24, 24), [1.0, 0.0, 0.0, 1.0]));
+        // The right side stroked on both sides of the outline; the joined left side not at all.
+        assert!(
+            close(at(&doc, 41, 24), [0.0, 0.0, 1.0, 1.0]),
+            "{:?}",
+            at(&doc, 41, 24)
+        );
+        assert!(close(at(&doc, 38, 24), [0.0, 0.0, 1.0, 1.0]));
+        assert!(
+            close(at(&doc, 9, 24), [1.0, 0.0, 0.0, 1.0]),
+            "{:?}",
+            at(&doc, 9, 24)
+        );
+        assert!(close(at(&doc, 6, 24), [0.0; 4]));
     }
 
     #[test]
