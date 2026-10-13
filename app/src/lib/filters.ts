@@ -1,5 +1,7 @@
 // The Filter menu's filters (ADR 0034): their settings, which layer they apply to, and the
 // edits that apply them and edit them again. Filters are entries of the active layer's stack.
+// Image > Adjustments > Shadows/Highlights is one too (it reads neighbours), on every pixel
+// layer shown as the other adjustments are.
 
 import type { EditRequest, FilterId, LayerView, StackEntryView } from "./engine";
 import type { MessageKey } from "./i18n/en";
@@ -20,6 +22,10 @@ export type NumberParam = {
   decimals: number;
   /** How its slider moves: evenly, or by ratios (a radius from 0.1 to 1000 pixels). */
   scale: "linear" | "log";
+  /** The heading it is under, Photoshop's (Shadows/Highlights' Shadows, Highlights…). */
+  group?: MessageKey;
+  /** Shown only with Show More Options (for a filter that has it, `FilterSpec.more`). */
+  more?: boolean;
 };
 
 /**
@@ -97,8 +103,35 @@ const strength = (key: string, label: MessageKey): NumberParam => ({
   scale: "linear",
 });
 
+/** A Shadows/Highlights setting, under heading `group`: `more` for Show More Options only. */
+const shadowsParam = (
+  key: string,
+  group: MessageKey,
+  label: MessageKey,
+  range: [number, number],
+  unit: MessageKey | undefined,
+  more: boolean,
+): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  unit,
+  min: range[0],
+  max: range[1],
+  decimals: 0,
+  scale: "linear",
+  group,
+  more,
+});
+
+/**
+ * A filter's settings (the engine's `Filter::params` order), Photoshop's ranges and defaults;
+ * `more`: its dialog has Show More Options, the settings marked `more` shown with it only.
+ */
+export type FilterSpec = { params: FilterParam[]; defaults: number[]; more?: boolean };
+
 /** Each filter's settings (the engine's `Filter::params` order), Photoshop's ranges and defaults. */
-export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number[] }> = {
+export const FILTERS: Record<FilterId, FilterSpec> = {
   gaussianBlur: { params: [radius("filter.gaussianBlur.radius")], defaults: [1] },
   motionBlur: {
     params: [
@@ -375,7 +408,92 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     ],
     defaults: [0, 0, 2],
   },
+  shadowsHighlights: {
+    params: [
+      shadowsParam(
+        "shadowsAmount",
+        "filter.shadowsHighlights.shadows",
+        "filter.shadowsHighlights.amount",
+        [0, 100],
+        "filter.percent",
+        false,
+      ),
+      shadowsParam(
+        "shadowsTone",
+        "filter.shadowsHighlights.shadows",
+        "filter.shadowsHighlights.tone",
+        [0, 100],
+        "filter.percent",
+        true,
+      ),
+      shadowsParam(
+        "shadowsRadius",
+        "filter.shadowsHighlights.shadows",
+        "filter.shadowsHighlights.radius",
+        [0, 2500],
+        "filter.pixels",
+        true,
+      ),
+      shadowsParam(
+        "highlightsAmount",
+        "filter.shadowsHighlights.highlights",
+        "filter.shadowsHighlights.amount",
+        [0, 100],
+        "filter.percent",
+        false,
+      ),
+      shadowsParam(
+        "highlightsTone",
+        "filter.shadowsHighlights.highlights",
+        "filter.shadowsHighlights.tone",
+        [0, 100],
+        "filter.percent",
+        true,
+      ),
+      shadowsParam(
+        "highlightsRadius",
+        "filter.shadowsHighlights.highlights",
+        "filter.shadowsHighlights.radius",
+        [0, 2500],
+        "filter.pixels",
+        true,
+      ),
+      shadowsParam(
+        "color",
+        "filter.shadowsHighlights.adjustments",
+        "filter.shadowsHighlights.color",
+        [-100, 100],
+        undefined,
+        true,
+      ),
+      shadowsParam(
+        "midtone",
+        "filter.shadowsHighlights.adjustments",
+        "filter.shadowsHighlights.midtone",
+        [-100, 100],
+        undefined,
+        true,
+      ),
+    ],
+    defaults: [35, 50, 30, 0, 50, 30, 20, 0],
+    more: true,
+  },
 };
+
+/** The filters of Image > Adjustments (on every pixel layer shown, not repeated by Ctrl+F). */
+export const ADJUSTMENT_FILTERS: FilterId[] = ["shadowsHighlights"];
+
+/** Whether `filter` is one of Image > Adjustments' (see `ADJUSTMENT_FILTERS`). */
+export function isAdjustmentFilter(filter: FilterId): boolean {
+  return ADJUSTMENT_FILTERS.includes(filter);
+}
+
+/** The settings a dialog shows: all of them with Show More Options, else those not `more`. */
+export function shownParams(filter: FilterId, more: boolean): number[] {
+  return FILTERS[filter].params.flatMap((param, i) =>
+    more || !(param.kind === "number" && param.more) ? [i] : [],
+  );
+}
 
 /** Whether `filter` has settings: those without (Average, Find Edges, Solarize) apply at once,
  * as in Photoshop, with no dialog and nothing to edit again. */
@@ -510,6 +628,15 @@ export function filterable(
 /** Filter > …: `settings` applied to layer `id`, an entry on top of its stack. */
 export function applyFilterEdit(id: number, settings: FilterSettings): EditRequest {
   return { kind: "applyFilter", id, filter: settings.filter, values: settings.values };
+}
+
+/**
+ * `settings` applied to each layer of `ids` (an adjustment filter on every pixel layer shown):
+ * one edit, a batch when there are several.
+ */
+export function applyFiltersEdit(ids: number[], settings: FilterSettings): EditRequest {
+  const edits = ids.map((id) => applyFilterEdit(id, settings));
+  return edits.length === 1 ? edits[0] : { kind: "batch", edits };
 }
 
 /** The settings of each step of a filter entry, bottom to top. */

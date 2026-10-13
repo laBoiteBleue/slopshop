@@ -88,6 +88,7 @@ export type FilterId =
   | "addNoise"
   | "dustAndScratches"
   | "clarityTexture"
+  | "shadowsHighlights"
   | "highPass"
   | "median"
   | "boxBlur"

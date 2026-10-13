@@ -395,3 +395,39 @@ test("Blur > Smart Blur: High quality, Edge Only", async () => {
     }),
   );
 });
+
+test("Image > Adjustments > Shadows/Highlights: on every pixel layer shown, More Options, not repeated", async () => {
+  const hidden = { ...layer(3, "Hidden"), visible: false };
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo"), layer(2, "Sky"), hidden]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Image" }));
+  await user.hover(screen.getByText("Adjustments", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Shadows/Highlights…" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Shadows/Highlights" }));
+  const settings = (values: number[]) => ({
+    kind: "batch",
+    edits: [1, 2].map((id) => ({ kind: "applyFilter", id, filter: "shadowsHighlights", values })),
+  });
+  // Shown live on both layers shown (not the hidden one), Photoshop's defaults.
+  await vi.waitFor(() =>
+    expect(sent("perform_live").at(-1)?.edit).toEqual(settings([35, 50, 30, 0, 50, 30, 20, 0])),
+  );
+  // The two Amounts at first; Show More Options adds Tone, Radius, Color and Midtone.
+  expect(dialog.getAllByRole("spinbutton")).toHaveLength(2);
+  expect(dialog.queryByRole("spinbutton", { name: "Midtone" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: "Show More Options" }));
+  expect(dialog.getAllByRole("spinbutton")).toHaveLength(8);
+  const midtone = dialog.getByRole("spinbutton", { name: "Midtone" });
+  await user.clear(midtone);
+  await user.type(midtone, "40");
+  const chosen = settings([35, 50, 30, 0, 50, 30, 20, 40]);
+  await vi.waitFor(() => expect(sent("perform_live").at(-1)?.edit).toEqual(chosen));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toEqual(chosen));
+  // Not a filter of the Filter menu: Repeat stays grayed.
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  expect(screen.getByRole("menuitem", { name: /Repeat Last Filter/ })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});

@@ -115,3 +115,31 @@ test("its title bar moves it, and it opens again where it was left", async () =>
   expect(screen.getByRole("dialog").style.translate).toBe("-120px 40px");
   vi.restoreAllMocks();
 });
+
+test("Shadows/Highlights: its Amounts under Shadows and Highlights, the rest with Show More Options", async () => {
+  const values = [35, 50, 30, 0, 50, 30, 20, 0];
+  const { onlive, onok, user } = open(values, { filter: "shadowsHighlights" });
+  expect(screen.getByRole("dialog", { name: "Shadows/Highlights" })).toBeInTheDocument();
+  const amounts = screen.getAllByRole("spinbutton", { name: "Amount" });
+  expect(amounts.map((a) => (a as HTMLInputElement).valueAsNumber)).toEqual([35, 0]);
+  expect(screen.getByText("Shadows")).toBeInTheDocument();
+  expect(screen.getByText("Highlights")).toBeInTheDocument();
+  expect(screen.queryByText("Adjustments")).not.toBeInTheDocument();
+  expect(screen.queryByRole("spinbutton", { name: "Tone" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: "Show More Options" }));
+  expect(screen.getAllByRole("spinbutton", { name: "Tone" })).toHaveLength(2);
+  expect(screen.getAllByRole("spinbutton", { name: "Radius" })).toHaveLength(2);
+  expect(screen.getByRole("spinbutton", { name: "Color" })).toHaveValue(20);
+  expect(screen.getByText("Adjustments")).toBeInTheDocument();
+  // Hidden settings keep their values: all eight are sent.
+  await user.clear(amounts[1]);
+  await user.type(amounts[1], "25");
+  expect(onlive).toHaveBeenLastCalledWith([35, 50, 30, 25, 50, 30, 20, 0]);
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  expect(onok).toHaveBeenCalledWith([35, 50, 30, 25, 50, 30, 20, 0]);
+});
+
+test("filters without More Options have no such box", () => {
+  open([1]);
+  expect(screen.queryByRole("checkbox", { name: "Show More Options" })).not.toBeInTheDocument();
+});
