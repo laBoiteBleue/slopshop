@@ -70,7 +70,7 @@ Menu,Edit > Clear,,done,"Delete with a selection: erased as paint, the original 
 Menu,Edit > Search,,open,a command palette
 Menu,Edit > Check Spelling,,open,text layers are not started
 Menu,Edit > Find and Replace Text,,open,text layers are not started
-Menu,Edit > Fill,,done,"Shift+F5: colors, black, 50% gray or white at an opacity, as paint in the layer's stack; Pattern and History contents are open"
+Menu,Edit > Fill,,done,"Shift+F5: colors, black, 50% gray or white, or a library pattern (from the document's origin, ADR 0042) at an opacity, as paint in the layer's stack; History contents and Script patterns are open"
 Menu,Edit > Content-Aware Fill,,planned,"object removal is the likely first AI feature; AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
 Menu,Edit > Generative Fill,,planned,"AI track: local and optional, as a non-destructive AI node (see docs/research/hd-generative-ai.md)"
 Menu,Edit > Stroke,,done,"inside, centered or outside the selection; width, color, opacity; as paint in the layer's stack"
@@ -629,7 +629,7 @@ Tool,Tools panel > Paint > Pencil,,done,an option of the Brush and the Eraser
 Tool,Tools panel > Paint > Color Replacement,,open,the brush engine exists (ADR 0027)
 Tool,Tools panel > Paint > Mixer Brush,,open,later (toolbar audit of 2026-10-05); the brush engine exists
 Tool,Tools panel > Clone > Clone Stamp,,done,Aligned option; as paint in the layer's stack
-Tool,Tools panel > Clone > Pattern Stamp,,open,needs patterns; the Clone Stamp exists
+Tool,Tools panel > Clone > Pattern Stamp,,done,"S with the Clone Stamp: a library pattern painted with the brush (size, hardness, opacity, flow, pressure), Aligned at the document's origin or from each stroke's start; Impressionist is open"
 Tool,Tools panel > History > History Brush,,open,the Restore Eraser paints back the original pixels; painting from a history state is open
 Tool,Tools panel > History > Art History Brush,,wont,dated
 Tool,Tools panel > Eraser > Eraser,,done,"erases as paint, the original kept; hides on masks; the Restore Eraser brings pixels back"

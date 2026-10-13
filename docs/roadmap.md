@@ -427,7 +427,9 @@ Raised on 2026-10-05, to schedule:
   - [x] The library (a folder of PNG files with an index, four generated patterns), Edit >
         Define Pattern, Layer > New Fill Layer > Pattern, the pattern picker, Properties
   - [x] Pattern Overlay (layer style)
-  - [ ] Edit > Fill > Pattern, Pattern Stamp, the Patterns panel
+  - [x] Edit > Fill > Pattern, the Pattern Stamp (S, with the Clone Stamp): paint in the
+        layer's stack, the pattern from the document's origin (Aligned) or the stroke's start
+  - [ ] The Patterns panel
 - [x] Layer locks (ADR 0046, 2026-10-13): Lock Transparent Pixels, Image Pixels, Position and
       All, enforced by the engine (a group's on its layers), the Layers panel's buttons and
       padlocks, Layer > Lock Layers, `.slop` 0.33 and PSD
