@@ -118,3 +118,24 @@ test("Ctrl+Enter selects the path being drawn, else the active vector layer's", 
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(sent("make_selection")).toHaveLength(2);
 });
+
+test("changing tool finishes the open path into a layer", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("p");
+  await click(user, [10, 10], [60, 40]);
+  await user.keyboard("v");
+  await waitFor(() => expect(sent("perform")).toHaveLength(1));
+  expect(sent("perform")[0]).toMatchObject({
+    edit: {
+      kind: "addShape",
+      name: "Shape 1",
+      shape: {
+        geometry: {
+          kind: "path",
+          subpaths: [{ start: [10, 10], segments: [[60, 40]], closed: false }],
+        },
+      },
+    },
+  });
+});

@@ -6,6 +6,8 @@
   // and Enter finishes an open one: either adds a vector layer, filled and stroked as the
   // options bar says. Backspace removes the last anchor, Esc drops the path. Ctrl+Enter makes
   // a selection of the path being drawn (dropping it), or else of the active vector layer's.
+  // Changing tool finishes the path being drawn, as Enter does.
+  import { onDestroy, untrack } from "svelte";
   import {
     closed,
     corner,
@@ -26,12 +28,16 @@
 
   let {
     mapping,
+    documentId,
     onpath,
     onmakeselection,
   }: {
     mapping: ViewMapping;
-    /** A path was finished (closed, or Enter), in document pixels. */
-    onpath: (geometry: PathGeometry) => void;
+    /** The document drawn on (the tool lives as long as its view). */
+    documentId: number;
+    /** A path was finished (closed, Enter, or the tool left) on `documentId`, in document
+     *  pixels. */
+    onpath: (geometry: PathGeometry, documentId: number) => void;
     /** Ctrl+Enter: a selection of `geometry` (the path being drawn), or with `null` of the
      *  active layer's path. */
     onmakeselection: (geometry: PathGeometry | null) => void;
@@ -86,10 +92,13 @@
     );
   }
 
+  /** The document of the view, kept: when another tab is shown, the path finishes on its own. */
+  const drawnOn = untrack(() => documentId);
+
   function finish(done: PenPath | null) {
     path = null;
     drag = null;
-    if (isDrawable(done)) onpath(geometryOf(done));
+    if (isDrawable(done)) onpath(geometryOf(done), drawnOn);
   }
 
   function begin(e: PointerEvent) {
@@ -138,6 +147,8 @@
     drag = null;
     if (current.closing && path) finish(closed(path, current.moved ? current.anchor : undefined));
   }
+
+  onDestroy(() => finish(path));
 
   // The Pen's keys, before the app's own shortcuts see them.
   $effect(() => {
