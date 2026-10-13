@@ -2681,6 +2681,7 @@ mod tests {
             samples,
             end,
             clone: None,
+            pattern: None,
         };
         // While painted: shown in the view, not in the document.
         let live = paint::paint(&state, doc.id, batch(vec![[50.0, 50.0, 1.0]], false)).unwrap();
@@ -2753,6 +2754,7 @@ mod tests {
             samples,
             end,
             clone: None,
+            pattern: None,
         };
         let style = |doc: &slopshop_core::Document| doc.layers()[0].style.clone().unwrap();
         paint::paint(&state, doc.id, batch(vec![[50.0, 50.0, 1.0]], false)).unwrap();
@@ -2835,6 +2837,7 @@ mod tests {
             samples: vec![[100.0, 100.0, 1.0]],
             end: true,
             clone: None,
+            pattern: None,
         };
         let view = paint::paint(&state, doc.id, request).unwrap().unwrap();
         assert!(view.layers.last().unwrap().painted);
@@ -2898,6 +2901,7 @@ mod tests {
             samples: vec![[50.5, 50.5, 1.0]],
             end: true,
             clone: None,
+            pattern: None,
         }
     }
 

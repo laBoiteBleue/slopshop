@@ -56,6 +56,36 @@ pub struct PaintRequest {
     /// The Clone Stamp: where its colors come from (see [`CloneRequest`]).
     #[serde(default)]
     pub clone: Option<CloneRequest>,
+    /// The Pattern Stamp, and Edit > Fill > Pattern: a pattern painted instead of a color (see
+    /// [`PatternRequest`]).
+    #[serde(default)]
+    pub pattern: Option<PatternRequest>,
+}
+
+/// A pattern painted (ADR 0042): pattern `source` (a library pattern loaded for the document,
+/// `load_pattern`) repeated across the canvas, its texel (0, 0) at
+/// document point `origin`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternRequest {
+    pub source: u64,
+    #[serde(default)]
+    pub origin: [f64; 2],
+    /// The source found for `source` (see [`PatternRequest::resolve`]).
+    #[serde(skip)]
+    pub resolved: Option<Arc<slopshop_core::Source>>,
+}
+
+impl PatternRequest {
+    /// Find this request's source among the patterns loaded for the document (`loaded`).
+    pub(crate) fn resolve(
+        &mut self,
+        loaded: &std::collections::HashMap<u64, Arc<slopshop_core::Source>>,
+    ) -> Result<(), String> {
+        let source = loaded.get(&self.source).cloned().ok_or("unknown pattern")?;
+        self.resolved = Some(source);
+        Ok(())
+    }
 }
 
 /// The Clone Stamp's source: the pixels `offset` (document pixels) away from where it paints,
@@ -461,6 +491,11 @@ fn start(
     // In gray, a color paints its luminance and the Eraser hides (ADR 0027).
     let gray = match (gradient, request.clone) {
         (Some(field), _) => Paint::Gradient { field, gray: true },
+        _ if request.pattern.is_some() => Paint::Clone {
+            offset: [0.0; 2],
+            gray: true,
+            tone: None,
+        },
         (None, Some(clone)) => Paint::Clone {
             offset: clone.offset,
             gray: true,
@@ -468,9 +503,22 @@ fn start(
         },
         (None, None) => Paint::Gray(request.color.map_or(0.0, gray_of_srgb)),
     };
-    // The Clone Stamp's source, as the document is now (its pixels shared).
-    let source = match request.clone {
-        Some(clone) => {
+    // The Clone Stamp's source, as the document is now (its pixels shared); the pattern
+    // repeated across the canvas.
+    let source = match (&request.pattern, request.clone) {
+        (Some(pattern), _) => {
+            let source = pattern.resolved.clone().ok_or("unknown pattern")?;
+            Some(Arc::new(
+                slopshop_core::clone::CloneSource::pattern(
+                    doc.size(),
+                    doc.blend_space(),
+                    source,
+                    pattern.origin,
+                )
+                .map_err(|e| format!("{e:?}"))?,
+            ))
+        }
+        (None, Some(clone)) => {
             let source = slopshop_core::clone::CloneSource::new(
                 crate::selection::sampled_document(doc, clone.source_layer)?,
             );
@@ -479,7 +527,7 @@ fn start(
                 None => source,
             }))
         }
-        None => None,
+        (None, None) => None,
     };
     let cloning = |stroke: Stroke| match &source {
         Some(source) => stroke.cloning(Arc::clone(source)),
@@ -503,6 +551,11 @@ fn start(
             let paint = match (request.color, gradient) {
                 _ if request.restore => Paint::Restore,
                 (_, Some(field)) => Paint::Gradient { field, gray: false },
+                _ if request.pattern.is_some() => Paint::Clone {
+                    offset: [0.0; 2],
+                    gray: false,
+                    tone: None,
+                },
                 _ if request.clone.is_some() => Paint::Clone {
                     offset: request.clone.map_or([0.0; 2], |c| c.offset),
                     gray: false,
@@ -590,7 +643,7 @@ pub async fn paint_stroke(
 pub(crate) fn paint(
     state: &AppState,
     document_id: u64,
-    request: PaintRequest,
+    mut request: PaintRequest,
 ) -> Result<Option<DocumentView>, String> {
     if let Some(strength) = request.clone.and_then(|c| c.smudge) {
         return smudge(state, document_id, request, strength);
@@ -612,7 +665,11 @@ pub(crate) fn paint(
                 // just applied) is waited for without holding the documents meanwhile.
                 let doc = {
                     let mut documents = state.documents()?;
-                    documents.get_mut(document_id)?.session.document().clone()
+                    let document = documents.get_mut(document_id)?;
+                    if let Some(pattern) = &mut request.pattern {
+                        pattern.resolve(&document.loaded_patterns)?;
+                    }
+                    document.session.document().clone()
                 };
                 let (stroke, growth) = start(&doc, &request, true, None)?;
                 ActiveStroke {
@@ -654,6 +711,8 @@ pub(crate) fn paint(
                     if tone.burn { "burn" } else { "dodge" }
                 } else if request.clone.is_some_and(|c| c.heal) {
                     "healingBrush"
+                } else if request.pattern.is_some() {
+                    "patternStamp"
                 } else if request.clone.is_some() {
                     "cloneStamp"
                 } else if request.color.is_none() {
@@ -808,9 +867,12 @@ pub struct StrokeRequest {
 /// changes) or painted with `color` (sRGB-encoded RGB in `[0, 1]`) at `opacity`, within the
 /// selection, or the band `stroke` draws along its outline. Without a selection, Fill paints the
 /// whole layer, as in Photoshop. Painting grows the layer to the canvas if needed, as strokes
-/// do. With `target` the mask, the mask is hidden or painted with the color's gray. One undo
-/// entry; nothing to paint, nothing changes.
+/// do. With `target` the mask, the mask is hidden or painted with the color's gray. With
+/// `pattern` (a library pattern loaded for the document, `load_pattern`), Fill paints that
+/// pattern instead, repeated from the document's origin (Photoshop's Fill > Pattern, ADR 0042).
+/// One undo entry; nothing to paint, nothing changes.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn fill(
     app: tauri::AppHandle,
     document_id: u64,
@@ -819,6 +881,7 @@ pub async fn fill(
     color: Option<[f32; 3]>,
     opacity: f32,
     stroke: Option<StrokeRequest>,
+    pattern: Option<u64>,
 ) -> Result<DocumentView, String> {
     on_worker(move || {
         let state = app.state::<AppState>();
@@ -827,11 +890,20 @@ pub async fn fill(
         if !(0.0..=1.0).contains(&opacity) {
             return Err("the opacity is between 0 and 1".to_owned());
         }
-        let request = fill_request(layer_id, target, color, opacity);
-        let label = HistoryLabel::new(match (&stroke, request.color) {
-            (Some(_), _) => "stroke",
-            (None, Some(_)) => "fill",
-            (None, None) => "clear",
+        let mut request = fill_request(layer_id, target, color, opacity);
+        if let Some(source) = pattern {
+            let mut pattern = PatternRequest {
+                source,
+                origin: [0.0; 2],
+                resolved: None,
+            };
+            pattern.resolve(&document.loaded_patterns)?;
+            request.pattern = Some(pattern);
+        }
+        let label = HistoryLabel::new(match (&stroke, request.color, &request.pattern) {
+            (Some(_), _, _) => "stroke",
+            (None, None, None) => "clear",
+            (None, _, _) => "fill",
         });
         if let Some(edit) = fill_edit(document.session.document(), &request, stroke)? {
             document
@@ -1134,6 +1206,7 @@ pub(crate) fn fill_request(
         samples: Vec::new(),
         end: true,
         clone: None,
+        pattern: None,
     }
 }
 
@@ -1155,7 +1228,7 @@ fn fill_edit_with(
     gradient: Option<GradientField>,
 ) -> Result<Option<Edit>, String> {
     // Erasing only removes: no need to grow.
-    let grow_layer = request.color.is_some() || gradient.is_some();
+    let grow_layer = request.color.is_some() || request.pattern.is_some() || gradient.is_some();
     let (mut painting, growth) = match stroke {
         None => start(doc, request, grow_layer, gradient)?,
         Some(stroke) => match banded(doc, stroke)? {
@@ -1396,6 +1469,7 @@ mod tests {
             samples: Vec::new(),
             end: true,
             clone: None,
+            pattern: None,
         }
     }
 
@@ -1465,6 +1539,41 @@ mod tests {
         let everywhere = filled(&document(None), &request(0.5), None);
         assert!((everywhere.alpha_at(0, 0) - 0.5).abs() < 0.01);
         assert!((everywhere.alpha_at(63, 47) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn fill_paints_a_pattern_repeated_from_the_documents_origin() {
+        // 2 × 1: opaque red, then transparent.
+        let pattern = RasterImage::from_pixels(
+            Size::new(2, 1),
+            PixelFormat::RGBA8_SRGB,
+            &[255, 0, 0, 255, 0, 0, 0, 0],
+        )
+        .unwrap();
+        let source = slopshop_core::Source::new(Arc::new(pattern), "stripes");
+        let loaded = std::collections::HashMap::from([(source.id().get(), source.clone())]);
+        let mut request = request(1.0);
+        let mut pattern = PatternRequest {
+            source: source.id().get(),
+            origin: [0.0; 2],
+            resolved: None,
+        };
+        pattern.resolve(&loaded).unwrap();
+        request.pattern = Some(pattern);
+        let image = filled(&document(Some([10.0, 10.0, 20.0, 20.0])), &request, None);
+        // Within the selection, one column in two, from the document's origin.
+        assert_eq!(image.alpha_at(10, 12), 1.0);
+        assert_eq!(image.alpha_at(11, 12), 0.0);
+        assert_eq!(image.alpha_at(18, 19), 1.0);
+        // Outside: untouched.
+        assert_eq!(image.alpha_at(8, 12), 0.0);
+        // A pattern the document does not know is refused.
+        let mut unknown = PatternRequest {
+            source: source.id().get() + 1,
+            origin: [0.0; 2],
+            resolved: None,
+        };
+        assert!(unknown.resolve(&loaded).is_err());
     }
 
     #[test]
