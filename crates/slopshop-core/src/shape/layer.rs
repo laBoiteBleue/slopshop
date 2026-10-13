@@ -640,4 +640,54 @@ world"
             Some(crate::edit::EditError::InvalidShape)
         );
     }
+    #[test]
+    fn a_text_is_picked_by_the_box_around_its_letters() {
+        let mut doc = document();
+        let text = crate::shape::Text {
+            content: "I I".to_owned(),
+            family: "Inter".to_owned(),
+            weight: 400.0,
+            italic: false,
+            size: 20.0,
+            color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+            tracking: 0.0,
+            leading: None,
+            align: crate::shape::TextAlign::Left,
+            position: [0.0, 30.0],
+        };
+        // Two letters' outlines, with a gap between them.
+        let mut outlines = rectangle([10.0, 10.0, 14.0, 30.0], Some(RED), None);
+        outlines.geometry = Geometry::Path {
+            subpaths: [[10.0, 14.0], [40.0, 44.0]]
+                .iter()
+                .map(|&[l, r]| crate::shape::Subpath {
+                    start: [l, 10.0],
+                    segments: vec![
+                        crate::shape::Segment::Line([r, 10.0]),
+                        crate::shape::Segment::Line([r, 30.0]),
+                        crate::shape::Segment::Line([l, 30.0]),
+                    ],
+                    closed: true,
+                })
+                .collect(),
+            rule: crate::shape::FillRule::NonZero,
+        };
+        let id = add_vector(
+            &mut doc,
+            ShapeSource::text(text, outlines.clone(), ""),
+            Projective::IDENTITY,
+        );
+        // In the gap, and just beside the letters: the text; well away from them: nothing.
+        assert_eq!(crate::pick::layer_at(&doc, 25, 20), Some(id));
+        assert_eq!(crate::pick::layer_at(&doc, 45, 31), Some(id));
+        assert_eq!(crate::pick::layer_at(&doc, 50, 20), None);
+        // A shape of the same outlines is picked by them only.
+        let shape = add_vector(
+            &mut doc,
+            ShapeSource::new(outlines, ""),
+            Projective::IDENTITY,
+        );
+        assert_eq!(crate::pick::layer_at(&doc, 11, 20), Some(shape));
+        assert_eq!(crate::pick::layer_at(&doc, 25, 20), Some(id));
+    }
 }
