@@ -228,6 +228,8 @@ pub struct ShapeSource {
     /// What the user knows it by; empty when nothing names it.
     name: String,
     shape: Shape,
+    /// What a text layer says (ADR 0041): `shape` is then its glyph outlines, laid out from it.
+    text: Option<super::text::Text>,
 }
 
 /// Sources are immutable: the same source is the same allocation, told by its id.
@@ -244,6 +246,18 @@ impl ShapeSource {
             id: SourceId::next(),
             name: name.into(),
             shape,
+            text: None,
+        })
+    }
+
+    /// A new source of text `text`, laid out into `outlines` (a path filled by the text's
+    /// color).
+    pub fn text(text: super::text::Text, outlines: Shape, name: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            id: SourceId::next(),
+            name: name.into(),
+            shape: outlines,
+            text: Some(text),
         })
     }
 
@@ -259,9 +273,29 @@ impl ShapeSource {
         &self.shape
     }
 
+    /// What it says when it is text.
+    pub fn text_of(&self) -> Option<&super::text::Text> {
+        self.text.as_ref()
+    }
+
+    /// Whether its shape and text are valid.
+    pub fn is_valid(&self) -> bool {
+        self.shape.is_valid() && self.text.as_ref().is_none_or(super::text::Text::is_valid)
+    }
+
     /// Another source of the same shape (Make Unique).
     pub fn unique(&self) -> Arc<Self> {
-        Self::new(self.shape.clone(), self.name.clone())
+        self.unique_named(self.name.clone())
+    }
+
+    /// Another source of the same shape named `name` (an independent copy).
+    pub fn unique_named(&self, name: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            id: SourceId::next(),
+            name: name.into(),
+            shape: self.shape.clone(),
+            text: self.text.clone(),
+        })
     }
 }
 

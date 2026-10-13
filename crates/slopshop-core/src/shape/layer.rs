@@ -560,4 +560,84 @@ mod tests {
         assert_eq!(shape_of(&doc, b).shape().fill, Some(RED));
         assert!(Arc::ptr_eq(&shape_of(&doc, a), &shape_of(&doc, b)));
     }
+    #[test]
+    fn a_linked_text_changes_on_every_copy_and_names_its_layers() {
+        let mut doc = document();
+        let text = |content: &str| crate::shape::Text {
+            content: content.to_owned(),
+            family: "Inter".to_owned(),
+            weight: 400.0,
+            italic: false,
+            size: 12.0,
+            color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+            tracking: 0.0,
+            leading: None,
+            align: crate::shape::TextAlign::Left,
+            position: [0.0, 10.0],
+        };
+        let outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
+        let source = ShapeSource::text(text("Hi"), outlines.clone(), "");
+        let a = add_vector(&mut doc, Arc::clone(&source), Projective::IDENTITY);
+        let b = add_vector(&mut doc, source, Projective::IDENTITY);
+        // One layer named after its text, the other renamed by the user.
+        Edit::RenameLayer {
+            id: a,
+            name: "Hi".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::RenameLayer {
+            id: b,
+            name: "Mine".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let undo = Edit::retext(
+            &doc,
+            a,
+            text(
+                "Hello
+world",
+            ),
+            outlines.clone(),
+        )
+        .unwrap()
+        .apply(&mut doc)
+        .unwrap();
+        let source_of = |doc: &Document, id| match &doc.layer(id).unwrap().content {
+            LayerContent::Vector { source, .. } => Arc::clone(source),
+            _ => unreachable!("a vector layer"),
+        };
+        assert_eq!(
+            source_of(&doc, b).text_of().unwrap().content,
+            "Hello
+world"
+        );
+        assert!(Arc::ptr_eq(&source_of(&doc, a), &source_of(&doc, b)));
+        assert_eq!(doc.layer(a).unwrap().name, "Hello world");
+        assert_eq!(doc.layer(b).unwrap().name, "Mine");
+        // Make Unique keeps the text.
+        assert_eq!(
+            source_of(&doc, a).unique().text_of(),
+            source_of(&doc, a).text_of()
+        );
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(source_of(&doc, a).text_of().unwrap().content, "Hi");
+        assert_eq!(doc.layer(a).unwrap().name, "Hi");
+        // Not a text layer; an invalid text.
+        let shape = ShapeSource::new(outlines.clone(), "Box");
+        let c = add_vector(&mut doc, shape, Projective::IDENTITY);
+        assert_eq!(
+            Edit::retext(&doc, c, text("x"), outlines.clone()).err(),
+            Some(crate::edit::EditError::NotText(c))
+        );
+        let bad = crate::shape::Text {
+            size: 0.0,
+            ..text("x")
+        };
+        assert_eq!(
+            Edit::retext(&doc, a, bad, outlines).err(),
+            Some(crate::edit::EditError::InvalidShape)
+        );
+    }
 }

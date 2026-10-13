@@ -1,0 +1,23 @@
+[package]
+name = "slopshop-text"
+description = "SlopShop text layout: text sources laid out into glyph outlines (ADR 0041)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Text layout (ADR 0041, accepted "with the text step"): parley (MIT OR Apache-2.0) lays text
+# out (bidi, line breaking, shaping through harfrust, font fallback and system fonts through
+# fontique), skrifa (MIT OR Apache-2.0, `forbid(unsafe)`) reads the glyph outlines. harfrust,
+# skrifa and read-fonts were in the tree already (SVG import) at the versions parley uses.
+# fontique reads Linux's fonts through fontconfig, loaded at run time (no link-time library).
+[dependencies]
+slopshop-core.workspace = true
+parley = { version = "0.12.0", default-features = false, features = ["std", "system"] }
+fontique = { version = "0.12.0", default-features = false, features = ["std", "system", "fontconfig-dlopen"] }
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
