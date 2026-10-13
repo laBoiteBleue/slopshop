@@ -89,6 +89,11 @@
     shapeLine: "M4 20L20 4",
     // A pen nib: its point at the bottom left, its slit and breather hole.
     pen: "M4 20l3.5-10L14 6.5l3.5 3.5L14 16.5Z M4 20l6-6 M11.5 12.5h0.01 M14 6.5l2-2 3.5 3.5-2 2",
+    // A capital T, as Photoshop's Type tool.
+    type: "M5 7V4h14v3M12 4v16M9 20h6",
+    textLeft: "M4 6h16 M4 10h10 M4 14h16 M4 18h10",
+    textCenter: "M4 6h16 M7 10h10 M4 14h16 M7 18h10",
+    textRight: "M4 6h16 M10 10h10 M4 14h16 M10 18h10",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:
