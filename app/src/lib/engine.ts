@@ -176,8 +176,10 @@ export type LayerView = {
   adjustment: AdjustmentView | null;
   /** A gradient fill layer's gradient. Absent: not one. */
   gradientFill?: GradientFill | null;
-  /** A vector layer's shape (ADR 0041); null for a path, not edited here yet. */
+  /** A vector layer's shape (ADR 0041). */
   shape?: Shape | null;
+  /** A live shape's outline as a regular path (the Pen shows and edits its anchors). */
+  livePath?: ShapeGeometry | null;
   /** How many other layers are linked to this one (the same source or shape, ADR 0040). */
   linked?: number;
   /** A pattern fill layer's pattern (ADR 0042): its source, scale and angle (degrees). */

@@ -219,6 +219,7 @@
   import GradientTool from "./lib/GradientTool.svelte";
   import ShapeTool from "./lib/ShapeTool.svelte";
   import PenTool from "./lib/PenTool.svelte";
+  import { editablePath } from "./lib/pathEdit";
   import {
     changedShape,
     defaultShapeOptions,
@@ -1151,6 +1152,34 @@
     selectionCommand((id) =>
       engine.makeSelection(id, path, path === null ? (layer?.id ?? null) : null),
     );
+  }
+
+  /** The path the Pen edits: the active vector layer's (ADR 0041). */
+  let penEditable = $derived(active ? editablePath(active.layers, activeLayer) : null);
+
+  /** A live shape the Pen was about to edit, turned into a regular path once confirmed. */
+  let turningIntoPath = $state<{ documentId: number; layerId: number } | null>(null);
+
+  /** The Pen edited a vector layer's path: its new shape, one undo entry (linked copies too). */
+  function reshapePath(layerId: number, geometry: ShapeGeometry) {
+    const doc = active;
+    const shape = doc ? findLayer(doc.layers, layerId)?.shape : null;
+    if (!doc || !shape) return;
+    void edit(doc.id, { kind: "setShape", id: layerId, shape: { ...shape, geometry } });
+  }
+
+  /** Photoshop's "turn a live shape into a regular path", confirmed: its anchors then edit. */
+  function turnIntoPath() {
+    const target = turningIntoPath;
+    turningIntoPath = null;
+    const doc = tabs.find((d) => d.id === target?.documentId);
+    const layer = target && doc ? findLayer(doc.layers, target.layerId) : null;
+    if (!target || !layer?.shape || !layer.livePath) return;
+    void edit(target.documentId, {
+      kind: "setShape",
+      id: layer.id,
+      shape: { ...layer.shape, geometry: layer.livePath },
+    });
   }
 
   /**
@@ -5949,6 +5978,12 @@
                       if (active?.id === documentId) addShape(geometry);
                     }}
                     onmakeselection={makeSelection}
+                    editable={penEditable}
+                    onreshape={reshapePath}
+                    onlive={(layerId) => {
+                      if (active) turningIntoPath = { documentId: active.id, layerId };
+                    }}
+                    onrefused={() => showError(t("pen.edit.perspective"))}
                   />
                 {:else if shapeKindOf(tool)}
                   <ShapeTool
@@ -6329,6 +6364,15 @@
     action={t("sources.delete.action")}
     onconfirm={deleteSource}
     onclose={() => (deletingSource = null)}
+  />
+{/if}
+{#if turningIntoPath}
+  <ConfirmDialog
+    title={t("pen.livePath.title")}
+    message={t("pen.livePath.message")}
+    action={t("pen.livePath.action")}
+    onconfirm={turnIntoPath}
+    onclose={() => (turningIntoPath = null)}
   />
 {/if}
 {#if definingPattern}

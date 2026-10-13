@@ -990,6 +990,11 @@ const fr: Messages = {
   "sources.delete.message.other":
     "{count} calques montrent « {name} » : ils seront supprimés avec la source.",
   "sources.delete.action": "Supprimer",
+  "pen.livePath.title": "Convertir en tracé",
+  "pen.livePath.message":
+    "Cette opération va convertir la forme dynamique en tracé normal : ses points d’ancrage pourront être modifiés, mais plus ses propriétés.",
+  "pen.livePath.action": "Convertir en tracé",
+  "pen.edit.perspective": "Le tracé d’un calque en perspective ne peut pas être modifié.",
   "histogram.title": "Histogramme",
   "histogram.channel": "Couche",
   "histogram.colors": "Couleurs",
