@@ -17,11 +17,17 @@ type Point = [number, number];
 function open() {
   const onpath = vi.fn();
   const onmakeselection = vi.fn();
-  const { container } = render(PenTool, { mapping: MAPPING, onpath, onmakeselection });
+  const { container, unmount } = render(PenTool, {
+    mapping: MAPPING,
+    documentId: 4,
+    onpath,
+    onmakeselection,
+  });
   const svg = container.querySelector("svg") as SVGSVGElement;
   const user = userEvent.setup();
   const at = ([x, y]: Point) => ({ target: svg, coords: { clientX: x, clientY: y } });
   return {
+    unmount,
     onpath,
     onmakeselection,
     user,
@@ -49,21 +55,24 @@ test("clicks add corner anchors; a click on the first one closes the path into a
   expect(onpath).not.toHaveBeenCalled();
   // Within a few pixels of the first anchor.
   await click([12, 11]);
-  expect(onpath).toHaveBeenCalledExactlyOnceWith({
-    kind: "path",
-    rule: "nonzero",
-    subpaths: [
-      {
-        start: [10, 10],
-        segments: [
-          [100, 10],
-          [100, 80],
-          [10, 10],
-        ],
-        closed: true,
-      },
-    ],
-  });
+  expect(onpath).toHaveBeenCalledExactlyOnceWith(
+    {
+      kind: "path",
+      rule: "nonzero",
+      subpaths: [
+        {
+          start: [10, 10],
+          segments: [
+            [100, 10],
+            [100, 80],
+            [10, 10],
+          ],
+          closed: true,
+        },
+      ],
+    },
+    4,
+  );
   // Done: nothing drawn any more.
   expect(anchors()).toHaveLength(0);
 });
@@ -73,11 +82,14 @@ test("a drag makes a smooth anchor; Enter finishes the open path", async () => {
   await click([0, 0]);
   await drag([50, 0], [60, 10]);
   await user.keyboard("{Enter}");
-  expect(onpath).toHaveBeenCalledExactlyOnceWith({
-    kind: "path",
-    rule: "nonzero",
-    subpaths: [{ start: [0, 0], segments: [[0, 0, 40, -10, 50, 0]], closed: false }],
-  });
+  expect(onpath).toHaveBeenCalledExactlyOnceWith(
+    {
+      kind: "path",
+      rule: "nonzero",
+      subpaths: [{ start: [0, 0], segments: [[0, 0, 40, -10, 50, 0]], closed: false }],
+    },
+    4,
+  );
 });
 
 test("Alt during the drag moves the outgoing handle alone", async () => {
@@ -152,4 +164,18 @@ test("Ctrl+Enter makes a selection of the path being drawn, or of the layer's wi
   expect(anchors()).toHaveLength(0);
   await user.keyboard("{Control>}{Enter}{/Control}");
   expect(onmakeselection).toHaveBeenLastCalledWith(null);
+});
+
+test("changing tool finishes the path being drawn", async () => {
+  const { click, unmount, onpath } = open();
+  await click([0, 0], [10, 0]);
+  unmount();
+  expect(onpath).toHaveBeenCalledExactlyOnceWith(
+    {
+      kind: "path",
+      rule: "nonzero",
+      subpaths: [{ start: [0, 0], segments: [[10, 0]], closed: false }],
+    },
+    4,
+  );
 });

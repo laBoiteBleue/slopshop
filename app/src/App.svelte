@@ -5908,7 +5908,15 @@
                 {:else if tool === "gradient"}
                   <GradientTool {mapping} ongradient={layGradient} />
                 {:else if tool === "pen"}
-                  <PenTool {mapping} onpath={addShape} onmakeselection={makeSelection} />
+                  <PenTool
+                    {mapping}
+                    documentId={active.id}
+                    onpath={(geometry, documentId) => {
+                      // Another tab shown meanwhile: the path is not added there.
+                      if (active?.id === documentId) addShape(geometry);
+                    }}
+                    onmakeselection={makeSelection}
+                  />
                 {:else if shapeKindOf(tool)}
                   <ShapeTool
                     {mapping}

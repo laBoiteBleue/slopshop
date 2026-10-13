@@ -132,7 +132,7 @@ Photoshop's six tools. Its first step:
    opposite handles (Alt during the drag moves the outgoing handle alone), Shift keeps the next
    anchor or the handle on 45° steps, a line follows the pointer to the next anchor. A click on
    the first anchor closes the path (a drag there shapes its handles); Enter finishes an open
-   path; Backspace removes the last anchor; Esc drops the path.
+   path, and so does changing tool; Backspace removes the last anchor; Esc drops the path.
 2. **A finished path is a vector layer** (the shape tools' `AddShape`, one undo entry, named
    "Shape n" as Photoshop's), filled and stroked as the options bar says. There is no Path
    mode, work path or Paths panel yet: a path lives in a vector layer.
