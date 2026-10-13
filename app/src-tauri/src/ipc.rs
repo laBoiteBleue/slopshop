@@ -805,7 +805,9 @@ impl LayerView {
                 _ => None,
             },
             shape: match &layer.content {
-                LayerContent::Vector { source, .. } => crate::shape::ShapeDto::of(source.shape()),
+                LayerContent::Vector { source, .. } => {
+                    Some(crate::shape::ShapeDto::of(source.shape()))
+                }
                 _ => None,
             },
             gradient_fill: match &layer.content {

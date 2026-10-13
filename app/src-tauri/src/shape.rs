@@ -5,10 +5,11 @@
 use serde::{Deserialize, Serialize};
 use slopshop_core::LinearRgba;
 use slopshop_core::shape::{
-    Geometry, Paint, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
+    FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
+    Subpath,
 };
 
-/// Where a shape's outline lies. Paths (the Pen's) are not drawn from the UI yet.
+/// Where a shape's outline lies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GeometryDto {
@@ -33,6 +34,96 @@ pub enum GeometryDto {
         from: [f64; 2],
         to: [f64; 2],
     },
+    /// Paths of lines and cubic Béziers (the Pen's), as `.slop` writes them.
+    Path {
+        subpaths: Vec<SubpathDto>,
+        rule: RuleDto,
+    },
+}
+
+/// One connected run of a path: each segment `[x, y]` (a line to there) or
+/// `[ax, ay, bx, by, x, y]` (a cubic Bézier: two control points, then the end).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubpathDto {
+    pub start: [f64; 2],
+    pub segments: Vec<Vec<f64>>,
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleDto {
+    Nonzero,
+    Evenodd,
+}
+
+impl SubpathDto {
+    fn subpath(&self) -> Result<Subpath, String> {
+        let segments = self
+            .segments
+            .iter()
+            .map(|s| match s.as_slice() {
+                &[x, y] => Ok(Segment::Line([x, y])),
+                &[ax, ay, bx, by, x, y] => Ok(Segment::Cubic([ax, ay], [bx, by], [x, y])),
+                _ => Err("a path segment has 2 or 6 coordinates".to_owned()),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Subpath {
+            start: self.start,
+            segments,
+            closed: self.closed,
+        })
+    }
+
+    fn of(subpath: &Subpath) -> Self {
+        Self {
+            start: subpath.start,
+            segments: subpath
+                .segments
+                .iter()
+                .map(|s| match *s {
+                    Segment::Line(p) => p.to_vec(),
+                    Segment::Cubic(a, b, p) => vec![a[0], a[1], b[0], b[1], p[0], p[1]],
+                })
+                .collect(),
+            closed: subpath.closed,
+        }
+    }
+}
+
+impl GeometryDto {
+    /// The geometry it describes (not validated: see [`ShapeDto::shape`]).
+    pub fn geometry(&self) -> Result<Geometry, String> {
+        Ok(match self {
+            &GeometryDto::Rectangle { rect, radii } => Geometry::Rectangle { rect, radii },
+            &GeometryDto::Ellipse { center, radii } => Geometry::Ellipse { center, radii },
+            &GeometryDto::Polygon {
+                center,
+                radius,
+                sides,
+                star,
+                rotation,
+            } => Geometry::Polygon {
+                center,
+                radius,
+                sides,
+                star,
+                rotation,
+            },
+            &GeometryDto::Line { from, to } => Geometry::Line { from, to },
+            GeometryDto::Path { subpaths, rule } => Geometry::Path {
+                subpaths: subpaths
+                    .iter()
+                    .map(SubpathDto::subpath)
+                    .collect::<Result<_, _>>()?,
+                rule: match rule {
+                    RuleDto::Nonzero => FillRule::NonZero,
+                    RuleDto::Evenodd => FillRule::EvenOdd,
+                },
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,24 +189,7 @@ fn color(paint: Paint) -> [f32; 4] {
 impl ShapeDto {
     /// The shape it describes, validated.
     pub fn shape(&self) -> Result<Shape, String> {
-        let geometry = match self.geometry {
-            GeometryDto::Rectangle { rect, radii } => Geometry::Rectangle { rect, radii },
-            GeometryDto::Ellipse { center, radii } => Geometry::Ellipse { center, radii },
-            GeometryDto::Polygon {
-                center,
-                radius,
-                sides,
-                star,
-                rotation,
-            } => Geometry::Polygon {
-                center,
-                radius,
-                sides,
-                star,
-                rotation,
-            },
-            GeometryDto::Line { from, to } => Geometry::Line { from, to },
-        };
+        let geometry = self.geometry.geometry()?;
         let shape = Shape {
             geometry,
             fill: self.fill.map(paint),
@@ -149,12 +223,12 @@ impl ShapeDto {
         }
     }
 
-    /// `shape` as the UI sees it; `None` for a path (not edited from the UI yet).
-    pub fn of(shape: &Shape) -> Option<Self> {
-        let geometry = match shape.geometry {
-            Geometry::Rectangle { rect, radii } => GeometryDto::Rectangle { rect, radii },
-            Geometry::Ellipse { center, radii } => GeometryDto::Ellipse { center, radii },
-            Geometry::Polygon {
+    /// `shape` as the UI sees it.
+    pub fn of(shape: &Shape) -> Self {
+        let geometry = match &shape.geometry {
+            &Geometry::Rectangle { rect, radii } => GeometryDto::Rectangle { rect, radii },
+            &Geometry::Ellipse { center, radii } => GeometryDto::Ellipse { center, radii },
+            &Geometry::Polygon {
                 center,
                 radius,
                 sides,
@@ -167,10 +241,16 @@ impl ShapeDto {
                 star,
                 rotation,
             },
-            Geometry::Line { from, to } => GeometryDto::Line { from, to },
-            Geometry::Path { .. } => return None,
+            &Geometry::Line { from, to } => GeometryDto::Line { from, to },
+            Geometry::Path { subpaths, rule } => GeometryDto::Path {
+                subpaths: subpaths.iter().map(SubpathDto::of).collect(),
+                rule: match rule {
+                    FillRule::NonZero => RuleDto::Nonzero,
+                    FillRule::EvenOdd => RuleDto::Evenodd,
+                },
+            },
         };
-        Some(Self {
+        Self {
             geometry,
             fill: shape.fill.map(color),
             stroke: shape.stroke.as_ref().map(|s| StrokeDto {
@@ -193,7 +273,7 @@ impl ShapeDto {
                 },
                 dashes: s.dashes.clone(),
             }),
-        })
+        }
     }
 }
 
@@ -226,7 +306,7 @@ mod tests {
             (StrokeAlign::Outside, StrokeCap::Round, StrokeJoin::Bevel)
         );
         // Back to the UI: the same, colors within rounding.
-        let back = ShapeDto::of(&shape).unwrap();
+        let back = ShapeDto::of(&shape);
         assert_eq!(back.geometry, dto.geometry);
         for (a, b) in back.fill.unwrap().iter().zip(dto.fill.unwrap()) {
             assert!((a - b).abs() < 1e-5, "{a} vs {b}");
@@ -243,5 +323,31 @@ mod tests {
             }),
         };
         assert!(line.shape().is_err());
+        // The Pen's paths, both ways; a segment of 4 coordinates is refused.
+        let json = r#"{
+            "geometry": { "kind": "path", "rule": "nonzero", "subpaths": [
+                { "start": [0, 0], "segments": [[10, 0], [10, 5, 5, 10, 0, 10]], "closed": false }
+            ] },
+            "fill": [1, 0, 0, 1],
+            "stroke": null
+        }"#;
+        let dto: ShapeDto = serde_json::from_str(json).unwrap();
+        let shape = dto.shape().unwrap();
+        let Geometry::Path { subpaths, rule } = &shape.geometry else {
+            panic!("a path: {:?}", shape.geometry);
+        };
+        assert_eq!(*rule, FillRule::NonZero);
+        assert_eq!(
+            subpaths[0].segments,
+            vec![
+                Segment::Line([10.0, 0.0]),
+                Segment::Cubic([10.0, 5.0], [5.0, 10.0], [0.0, 10.0])
+            ]
+        );
+        assert!(!subpaths[0].closed);
+        assert_eq!(ShapeDto::of(&shape).geometry, dto.geometry);
+        let wrong = json.replace("[10, 0],", "[10, 0, 1, 1],");
+        let dto: ShapeDto = serde_json::from_str(&wrong).unwrap();
+        assert!(dto.shape().is_err());
     }
 }
