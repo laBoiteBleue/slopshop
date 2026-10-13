@@ -419,6 +419,10 @@ Raised on 2026-10-05, to schedule:
   - [x] Shape tools (U): Rectangle, Ellipse, Polygon (and stars), Line; fill and stroke in the
         options bar
   - [x] A vector layer's fill, stroke, corner radius, sides and star in the Properties panel
+  - [x] W, H, X and Y of a vector layer's shape in Properties (document pixels), a rectangle's
+        corner radii linked or each its own; Free Transform reshapes a vector layer so that
+        its stroke keeps its width (rotated live rectangles and ellipses, Distort and
+        Perspective, linked copies still take a transform)
   - [x] The Pen (P): a vector layer whose geometry is a path (corner and smooth anchors, Alt
         frees a handle, Shift at 45°, Enter, Esc, Backspace; an open path filled as if
         closed); Ctrl+Enter makes a selection of the path drawn or of the active vector layer

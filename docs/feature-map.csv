@@ -77,7 +77,7 @@ Menu,Edit > Stroke,,done,"inside, centered or outside the selection; width, colo
 Menu,Edit > Content-Aware Scale,,open,proposed as an option of Free Transform's scaling; an ADR first (roadmap: advanced transforms)
 Menu,Edit > Puppet Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
 Menu,Edit > Perspective Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
-Menu,Edit > Free Transform,,done,
+Menu,Edit > Free Transform,,done,"a vector layer's shape is reshaped, its stroke keeping its width, when it stays a live shape or is a path (ADR 0041)"
 Menu,Edit > Transform > Again,,done,with Duplicate and Transform Again
 Menu,Edit > Transform > Scale,,done,"Free Transform (Ctrl+T), non-destructive"
 Menu,Edit > Transform > Rotate,,done,"Free Transform (Ctrl+T), non-destructive"
@@ -656,7 +656,7 @@ Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started
 Tool,Tools panel > Path > Path Selection,,open,"Ctrl-drag on a segment with the Pen moves the whole path; selecting several paths, aligning and combining them are open"
 Tool,Tools panel > Path > Direct Selection,,done,"Ctrl with the Pen, no tool of its own: drag an anchor or a handle of the active vector layer, a live shape turned into a path first (ADR 0041)"
-Tool,Tools panel > Shape > Rectangle,,done,"U: a vector layer (ADR 0041); fill, stroke (inside, center, outside), corner radius"
+Tool,Tools panel > Shape > Rectangle,,done,"U: a vector layer (ADR 0041); fill, stroke (inside, center, outside), corner radii linked or each its own; W, H, X, Y in Properties"
 Tool,Tools panel > Shape > Ellipse,,done,U: a vector layer (ADR 0041)
 Tool,Tools panel > Shape > Triangle,,partial,the Polygon tool with three sides
 Tool,Tools panel > Shape > Polygon,,done,"U: sides, star with its indent"
