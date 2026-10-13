@@ -295,6 +295,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     faded by its opacity and mask; else they are composited on their own and blended as one
     layer with `blend_mode`), `params.blend_mode` and the optional `params.mask`. Groups nest at
     most 16 deep.
+  - From schema 0.33 ([ADR 0046](adr/0046-layer-locks.md)), a node of any type and version
+    may have `params.locks`: the identifiers of the layer's locks, among `transparency`,
+    `pixels`, `position` and `all` (absent or empty: none). A group's locks apply to the
+    layers inside it. A reader that does not know them opens the layer unlocked, which loses
+    nothing it shows; unknown identifiers are ignored.
   - v4 (schema 0.5, [ADR 0016](adr/0016-clipping-masks.md)) adds `params.clipped`: the node is
     clipped to the nearest sibling below it that is not clipped. Only clipped nodes are written
     at v4 (others stay at v3), so that readers without clipping refuse them.

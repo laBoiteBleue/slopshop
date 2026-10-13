@@ -411,6 +411,9 @@ Raised on 2026-10-05, to schedule:
         Define Pattern, Layer > New Fill Layer > Pattern, the pattern picker, Properties
   - [x] Pattern Overlay (layer style)
   - [ ] Edit > Fill > Pattern, Pattern Stamp, the Patterns panel
+- [x] Layer locks (ADR 0046, 2026-10-13): Lock Transparent Pixels, Image Pixels, Position and
+      All, enforced by the engine (a group's on its layers), the Layers panel's buttons and
+      padlocks, Layer > Lock Layers, `.slop` 0.33 and PSD
 - [ ] History memory limits
 - [ ] Very large images (Phase 4)
 - [ ] Distribution (Phase 5): installers built by CI on a version tag (done 2026-10-06, not
