@@ -90,6 +90,9 @@
     // A pen nib: its point at the bottom left, its slit and breather hole.
     pen: "M4 20l3.5-10L14 6.5l3.5 3.5L14 16.5Z M4 20l6-6 M11.5 12.5h0.01 M14 6.5l2-2 3.5 3.5-2 2",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
+    // The stamp over a row of tiles: the pattern it paints.
+    patternStamp:
+      "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 19h3v2H4Z M10.5 19h3v2h-3Z M17 19h3v2h-3Z",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:
       "M4 4h16v16H4Z M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M12 12m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0",

@@ -1,7 +1,7 @@
 <script lang="ts">
   // The options bar (ADR 0013): the settings of the active tool, under the menu bar. Only what
   // belongs to the tool: view and apply/cancel commands live in the menus and on the keys.
-  import type { SelectionMode, ToneRange } from "./engine";
+  import type { PatternEntry, SelectionMode, ToneRange } from "./engine";
   import Icon, { type IconName } from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";
   import type { MessageKey } from "./i18n/en";
@@ -10,6 +10,7 @@
   import { keepFocus } from "./platform";
   import SliderField from "./SliderField.svelte";
   import BrushPicker from "./BrushPicker.svelte";
+  import PatternThumbnail from "./PatternThumbnail.svelte";
   import type { Snippet } from "svelte";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./align";
   import { CROP_RATIOS, type CropAspect } from "./crop";
@@ -74,6 +75,18 @@
       aligned: true,
       sample: "layer",
     }),
+    patternStamp = $bindable({
+      size: 30,
+      hardness: 0.5,
+      opacity: 1,
+      flow: 1,
+      pressureSize: true,
+      pressureOpacity: false,
+      aligned: true,
+      pattern: { id: "builtin:checkers", name: "" },
+    }),
+    patternName = "",
+    onpickpattern,
     eyedropper = $bindable({ sample: "all", size: 1 }),
     gradient = $bindable({
       preset: "foregroundToBackground",
@@ -131,6 +144,12 @@
     eraser: PaintOptions;
     /** Clone Stamp: its brush, Aligned, and what it samples (Photoshop's Current Layer first). */
     clone?: PaintOptions & { aligned: boolean; sample: "all" | "layer" };
+    /** Pattern Stamp (ADR 0042): its brush, Aligned, and the library pattern it paints (id). */
+    patternStamp?: PaintOptions & { aligned: boolean; pattern: PatternEntry };
+    /** Pattern Stamp: what the user knows its pattern by. */
+    patternName?: string;
+    /** Pattern Stamp: its pattern's swatch was clicked; the pattern picker sets it. */
+    onpickpattern?: () => void;
     /** Blur and Sharpen: their brush and strength. */
     focus?: PaintOptions & { strength: number };
     /** Dodge and Burn: their brush, the range of tones and the exposure. */
@@ -185,13 +204,15 @@
         ? brush
         : tool === "cloneStamp"
           ? clone
-          : tool === "healingBrush"
-            ? heal
-            : tool === "dodge" || tool === "burn"
-              ? tone
-              : tool === "blur" || tool === "sharpen" || tool === "smudge"
-                ? focus
-                : null,
+          : tool === "patternStamp"
+            ? patternStamp
+            : tool === "healingBrush"
+              ? heal
+              : tool === "dodge" || tool === "burn"
+                ? tone
+                : tool === "blur" || tool === "sharpen" || tool === "smudge"
+                  ? focus
+                  : null,
   );
 
   const current = $derived(toolInfo(tool));
@@ -592,6 +613,26 @@
         {t("options.pencil")}
       </label>
     {/if}
+    {#if tool === "patternStamp"}
+      <span class="divider"></span>
+      <span class="option">
+        {t("options.patternStamp.pattern")}
+        <button
+          type="button"
+          class="pattern"
+          onmousedown={keepFocus}
+          title={t("options.patternStamp.patternTitle", { name: patternName })}
+          aria-label={t("options.patternStamp.patternTitle", { name: patternName })}
+          onclick={() => onpickpattern?.()}
+        >
+          <PatternThumbnail pattern={patternStamp.pattern.id} size={18} />
+        </button>
+      </span>
+      <label class="option" title={t("options.patternStamp.aligned.hint")}>
+        <input type="checkbox" bind:checked={patternStamp.aligned} />
+        {t("options.clone.aligned")}
+      </label>
+    {/if}
     {#if tool === "cloneStamp" || tool === "healingBrush"}
       {@const source = tool === "cloneStamp" ? clone : heal}
       <span class="divider"></span>
@@ -706,6 +747,16 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+
+  /* The Pattern Stamp's pattern: its thumbnail, a click opens the picker. */
+  .pattern {
+    padding: 1px;
+    border: 1px solid var(--border-dark);
+    border-radius: 2px;
+    background: transparent;
+    cursor: pointer;
+    line-height: 0;
   }
 
   .hint {

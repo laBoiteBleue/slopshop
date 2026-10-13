@@ -1,8 +1,12 @@
 <script lang="ts" module>
   import type { MessageKey } from "./i18n/en";
 
-  /** What Edit > Fill paints: a color (`color`: chosen in the color picker next). */
-  export type FillContents = "foreground" | "background" | "color" | "black" | "gray" | "white";
+  /**
+   * What Edit > Fill paints: a color (`color`: chosen in the color picker next), or a pattern
+   * of the library (ADR 0042).
+   */
+  export type FillContents =
+    "foreground" | "background" | "color" | "pattern" | "black" | "gray" | "white";
 
   /** The contents and the opacity, in `[0, 1]`. */
   export type FillSettings = { contents: FillContents; opacity: number };
@@ -11,6 +15,7 @@
     { value: "foreground", label: "fillChoice.foreground" },
     { value: "background", label: "fillChoice.background" },
     { value: "color", label: "fillChoice.color" },
+    { value: "pattern", label: "fillChoice.pattern" },
     { value: "black", label: "fillChoice.black" },
     { value: "gray", label: "fillChoice.gray" },
     { value: "white", label: "fillChoice.white" },
@@ -24,22 +29,33 @@
   // Edit > Fill (Shift+F5), laid out as Photoshop's Fill dialog (Contents, then Opacity; OK and
   // Cancel on the right): the selection of the active layer, or the whole layer without one,
   // painted with a color (paint, ADR 0027 and 0029). Choosing Color… opens the color picker at
-  // once, as in Photoshop; its color then shows next to the list. Enter applies, Esc cancels.
+  // once, as in Photoshop; its color then shows next to the list. Pattern shows the pattern
+  // painted (from the document's origin), which a click changes in the pattern picker.
+  // Enter applies, Esc cancels.
   import { onMount } from "svelte";
   import { t } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
   import SliderField from "./SliderField.svelte";
+  import PatternThumbnail from "./PatternThumbnail.svelte";
 
   let {
     color,
+    pattern,
+    patternName,
     onpickcolor,
+    onpickpattern,
     onchoose,
     onclose,
   }: {
     /** The color of Color…, `#rrggbb` sRGB. */
     color: string;
+    /** The library pattern of Pattern (its id), and what the user knows it by. */
+    pattern: string;
+    patternName: string;
     /** Color… chosen, or its swatch clicked: the app shows the picker, then this dialog again. */
     onpickcolor: (settings: FillSettings) => void;
+    /** Pattern's swatch clicked: the app shows the pattern picker, then this dialog again. */
+    onpickpattern: (settings: FillSettings) => void;
     onchoose: (settings: FillSettings) => void;
     onclose: () => void;
   } = $props();
@@ -67,6 +83,11 @@
   function pickColor() {
     last = { contents: "color", opacity };
     onpickcolor(last);
+  }
+
+  function pickPattern() {
+    last = { contents: "pattern", opacity };
+    onpickpattern(last);
   }
 
   function submit(e: SubmitEvent) {
@@ -109,6 +130,17 @@
           aria-label={t("fillChoice.colorTitle")}
           onclick={pickColor}
         ></button>
+      {:else if contents === "pattern"}
+        <span class="label">{t("fillChoice.customPattern")}</span>
+        <button
+          type="button"
+          class="pattern"
+          title={patternName}
+          aria-label={t("fillChoice.patternTitle", { name: patternName })}
+          onclick={pickPattern}
+        >
+          <PatternThumbnail {pattern} size={32} />
+        </button>
       {/if}
       <div class="row">
         <SliderField
@@ -167,8 +199,19 @@
     gap: 8px;
   }
 
-  label {
+  label,
+  .label {
     color: var(--text-muted);
+  }
+
+  .pattern {
+    justify-self: start;
+    padding: 1px;
+    border: 1px solid var(--border-dark);
+    border-radius: 2px;
+    background: var(--input-bg, transparent);
+    cursor: pointer;
+    line-height: 0;
   }
 
   .swatch {

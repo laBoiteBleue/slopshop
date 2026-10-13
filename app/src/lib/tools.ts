@@ -19,6 +19,7 @@ export type ToolId =
   | "eyedropper"
   | "brush"
   | "cloneStamp"
+  | "patternStamp"
   | "healingBrush"
   | "eraser"
   | "restoreEraser"
@@ -77,8 +78,14 @@ export const SLOTS: readonly ToolSlot[] = [
   // Retouching by intention: Healing (Remove, an AI tool, joins it later).
   { key: "J", tools: [{ id: "healingBrush", icon: "healing", name: "tools.healingBrush" }] },
   { key: "B", tools: [{ id: "brush", icon: "brush", name: "tools.brush" }] },
-  // Paints pixels taken elsewhere (Alt+click sets where).
-  { key: "S", tools: [{ id: "cloneStamp", icon: "stamp", name: "tools.cloneStamp" }] },
+  // Paints pixels taken elsewhere (Alt+click sets where), or a pattern (ADR 0042).
+  {
+    key: "S",
+    tools: [
+      { id: "cloneStamp", icon: "stamp", name: "tools.cloneStamp" },
+      { id: "patternStamp", icon: "patternStamp", name: "tools.patternStamp" },
+    ],
+  },
   {
     key: "E",
     tools: [
@@ -157,6 +164,7 @@ export function isPaintTool(
 ): id is
   | "brush"
   | "cloneStamp"
+  | "patternStamp"
   | "healingBrush"
   | "dodge"
   | "burn"
@@ -165,7 +173,14 @@ export function isPaintTool(
   | "smudge"
   | "eraser"
   | "restoreEraser" {
-  return id === "brush" || isCloneTool(id) || isToneTool(id) || isFocusTool(id) || isEraser(id);
+  return (
+    id === "brush" ||
+    id === "patternStamp" ||
+    isCloneTool(id) ||
+    isToneTool(id) ||
+    isFocusTool(id) ||
+    isEraser(id)
+  );
 }
 
 /** Blur, Sharpen and Smudge: they soften, sharpen or smear what the layer shows. */
