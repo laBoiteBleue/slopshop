@@ -8,7 +8,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { GradientFill } from "./gradientFill";
 import type { Homography } from "./homography";
-import type { Shape } from "./shapes";
+import type { Shape, ShapeGeometry } from "./shapes";
 
 /** An entry of a raster layer's stack (ADR 0029): paint, an applied adjustment, a filter
  * (ADR 0034) or a Liquify field (ADR 0037). */
@@ -1802,6 +1802,12 @@ export const engine = {
    */
   selectLayerPixels: (documentId: number, layerId: number, mask: boolean, mode: SelectionMode) =>
     serial(() => invoke<DocumentView>("select_layer_pixels", { documentId, layerId, mask, mode })),
+  /**
+   * Make Selection (Ctrl+Enter with the Pen): the area `path` encloses (document pixels), or
+   * with `path` null vector layer `layerId`'s path, anti-aliased, replacing the selection.
+   */
+  makeSelection: (documentId: number, path: ShapeGeometry | null, layerId: number | null) =>
+    serial(() => invoke<DocumentView>("make_selection", { documentId, path, layerId })),
   /**
    * The Healing Brush's Patch: the selection healed from the pixels `offset` away (every layer,
    * or `sourceLayer` alone), on `target` (one undo entry).

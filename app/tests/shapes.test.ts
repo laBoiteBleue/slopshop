@@ -109,6 +109,24 @@ test("only a shape with an extent makes a layer", () => {
   expect(hasExtent({ kind: "line", from: [1, 1], to: [1, 1] })).toBe(false);
   expect(hasExtent({ kind: "ellipse", center: [0, 0], radii: [3, 0] })).toBe(false);
   expect(hasExtent({ kind: "rectangle", rect: [0, 0, 1, 1], radii: [0, 0, 0, 0] })).toBe(true);
+  const path = (segments: number[][]) => ({
+    kind: "path" as const,
+    rule: "nonzero" as const,
+    subpaths: [{ start: [0, 0] as [number, number], segments, closed: false }],
+  });
+  expect(hasExtent(path([]))).toBe(false);
+  expect(hasExtent(path([[1, 1]]))).toBe(true);
+  // A path's outline: its ends, and points along its curves.
+  const points = outlinePoints(
+    path([
+      [4, 0],
+      [4, 2, 2, 4, 0, 4],
+    ]),
+  );
+  expect(points[0]).toEqual([0, 0]);
+  expect(points[1]).toEqual([4, 0]);
+  expect(points.at(-1)).toEqual([0, 4]);
+  expect(points).toHaveLength(2 + 16);
 });
 
 test("the outline shown while dragging follows the shape", () => {

@@ -143,3 +143,27 @@ test("a line shows its stroke's color and width, nothing to fill", () => {
   expect(screen.getByRole("button", { name: "Stroke color" })).toBeInTheDocument();
   expect(screen.getByRole("spinbutton", { name: "Width:" })).toHaveValue(1);
 });
+
+test("a path drawn with the Pen: its fill and stroke, its geometry kept", async () => {
+  const geometry = {
+    kind: "path" as const,
+    rule: "nonzero" as const,
+    subpaths: [
+      {
+        start: [0, 0] as [number, number],
+        segments: [
+          [10, 0],
+          [10, 5, 5, 10, 0, 10],
+        ],
+        closed: false,
+      },
+    ],
+  };
+  const { onedit, user } = open({ geometry, fill: [1, 0, 0, 1], stroke: null });
+  expect(screen.getByText("Path")).toBeInTheDocument();
+  // No live parameters: no radius nor sides.
+  expect(screen.queryByRole("spinbutton", { name: "Radius:" })).toBeNull();
+  expect(screen.queryByRole("spinbutton", { name: "Sides:" })).toBeNull();
+  await user.click(screen.getByRole("checkbox", { name: "Fill" }));
+  expect(sentShape(onedit)).toEqual({ geometry, fill: null, stroke: null });
+});

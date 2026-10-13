@@ -24,7 +24,18 @@ export type ShapeGeometry =
       /** Of the first corner, degrees counterclockwise from the right (90: straight up). */
       rotation: number;
     }
-  | { kind: "line"; from: [number, number]; to: [number, number] };
+  | { kind: "line"; from: [number, number]; to: [number, number] }
+  | {
+      /** Paths of lines and cubic Béziers (the Pen's). */
+      kind: "path";
+      rule: "nonzero" | "evenodd";
+      subpaths: {
+        start: [number, number];
+        /** `[x, y]`: a line to there; `[ax, ay, bx, by, x, y]`: a cubic Bézier. */
+        segments: number[][];
+        closed: boolean;
+      }[];
+    };
 
 export type ShapeStroke = {
   /** sRGB-encoded RGBA in [0, 1]. */
@@ -201,21 +212,49 @@ export function hasExtent(geometry: ShapeGeometry): boolean {
       return geometry.radius > 0;
     case "line":
       return Math.hypot(geometry.to[0] - geometry.from[0], geometry.to[1] - geometry.from[1]) > 0;
+    case "path":
+      return geometry.subpaths.some((s) => s.segments.length > 0);
   }
 }
 
 /** Points on a quarter turn of a rounded corner and on an ellipse, for the drawn outline. */
 const ARC_STEPS = 8;
 const ELLIPSE_STEPS = 64;
+/** Points on each cubic Bézier of a path. */
+const CUBIC_STEPS = 16;
 
 /**
- * The outline of `geometry` as points (its layer's space), closed unless it is a line: what
- * the tool shows while dragging, mapped to the screen point by point.
+ * The outline of `geometry` as points (its layer's space), closed unless it is a line or an
+ * open path: what the tool shows while dragging, mapped to the screen point by point.
  */
 export function outlinePoints(geometry: ShapeGeometry): [number, number][] {
   switch (geometry.kind) {
     case "line":
       return [geometry.from, geometry.to];
+    case "path": {
+      // Its first subpath (the Pen draws one).
+      const subpath = geometry.subpaths[0];
+      if (!subpath) return [];
+      const points: [number, number][] = [subpath.start];
+      let [x0, y0] = subpath.start;
+      for (const s of subpath.segments) {
+        const [x, y] = s.length === 2 ? [s[0], s[1]] : [s[4], s[5]];
+        if (s.length === 6) {
+          for (let i = 1; i < CUBIC_STEPS; i++) {
+            const t = i / CUBIC_STEPS;
+            const u = 1 - t;
+            const [a, b, c] = [u * u * u, 3 * u * u * t, 3 * u * t * t];
+            points.push([
+              a * x0 + b * s[0] + c * s[2] + t * t * t * x,
+              a * y0 + b * s[1] + c * s[3] + t * t * t * y,
+            ]);
+          }
+        }
+        points.push([x, y]);
+        [x0, y0] = [x, y];
+      }
+      return points;
+    }
     case "ellipse": {
       const [cx, cy] = geometry.center;
       const [rx, ry] = geometry.radii;

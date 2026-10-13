@@ -216,6 +216,7 @@
   import BucketTool from "./lib/BucketTool.svelte";
   import GradientTool from "./lib/GradientTool.svelte";
   import ShapeTool from "./lib/ShapeTool.svelte";
+  import PenTool from "./lib/PenTool.svelte";
   import {
     changedShape,
     defaultShapeOptions,
@@ -1136,6 +1137,18 @@
     commitTransform();
     const shape = shapeOf(geometry, shapeOptions);
     if (shape) layersPanel?.addShape(shape);
+  }
+
+  /**
+   * The Pen's Ctrl+Enter (Photoshop's Make Selection): the path being drawn as the selection,
+   * or with `path` null the active vector layer's; anti-aliased, replacing the selection.
+   */
+  function makeSelection(path: ShapeGeometry | null) {
+    const layer = activeLayer;
+    if (path === null && layer?.kind !== "vector") return;
+    selectionCommand((id) =>
+      engine.makeSelection(id, path, path === null ? (layer?.id ?? null) : null),
+    );
   }
 
   /**
@@ -5894,6 +5907,8 @@
                   />
                 {:else if tool === "gradient"}
                   <GradientTool {mapping} ongradient={layGradient} />
+                {:else if tool === "pen"}
+                  <PenTool {mapping} onpath={addShape} onmakeselection={makeSelection} />
                 {:else if shapeKindOf(tool)}
                   <ShapeTool
                     {mapping}

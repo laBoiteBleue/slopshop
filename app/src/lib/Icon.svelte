@@ -81,6 +81,8 @@
     shapeEllipse: "M12 5c4.7 0 8.5 3.1 8.5 7s-3.8 7-8.5 7-8.5-3.1-8.5-7S7.3 5 12 5Z",
     shapePolygon: "M12 3l8.5 6.2-3.3 10H6.8L3.5 9.2Z",
     shapeLine: "M4 20L20 4",
+    // A pen nib: its point at the bottom left, its slit and breather hole.
+    pen: "M4 20l3.5-10L14 6.5l3.5 3.5L14 16.5Z M4 20l6-6 M11.5 12.5h0.01 M14 6.5l2-2 3.5 3.5-2 2",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:

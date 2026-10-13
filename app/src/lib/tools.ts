@@ -29,6 +29,7 @@ export type ToolId =
   | "blur"
   | "sharpen"
   | "smudge"
+  | "pen"
   | "shapeRectangle"
   | "shapeEllipse"
   | "shapePolygon"
@@ -110,7 +111,8 @@ export const SLOTS: readonly ToolSlot[] = [
       { id: "burn", icon: "burn", name: "tools.burn" },
     ],
   },
-  // Vector shapes (ADR 0041): each draws a vector layer.
+  // Vector shapes (ADR 0041): each draws a vector layer. One Pen, not Photoshop's six tools.
+  { key: "P", tools: [{ id: "pen", icon: "pen", name: "tools.pen" }] },
   {
     key: "U",
     tools: [
