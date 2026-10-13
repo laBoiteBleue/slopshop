@@ -3870,6 +3870,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::translation(100.5, 50.0),
                 style: None,
+                locks: Default::default(),
             },
         }
         .apply(&mut doc)
