@@ -337,6 +337,13 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
 - [x] Maximum and Minimum, Find Edges, Emboss, Solarize and Mosaic on the GPU (looks); then the
       distortions (Twirl, Pinch, Spherize, Polar Coordinates, Offset; Offset's transparent edge
       on a layer without transparency stays on the CPU)
+- [x] Blur > Radial Blur (Spin or Zoom, Amount 1 to 100, Draft/Good/Best, the center picked in the
+      dialog's square, in the selection's box or the layer: sampled along its arc or its ray as
+      the distortions are), Surface Blur (Radius 1 to 100, Threshold 2 to 255: each value weighted
+      by its closeness, beyond 8 pixels a side every few pixels of the square), Smart Blur
+      (Radius and Threshold 0.1 to 100, Quality Low/Medium/High, Mode Normal, Edge Only or Overlay
+      Edge) and Average (no dialog: the layer or the selection filled with its average color, each
+      pixel keeping its opacity); on the CPU (their looks too)
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze

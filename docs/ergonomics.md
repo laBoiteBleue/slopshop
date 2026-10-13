@@ -168,7 +168,13 @@ built. Contributors: propose here first.
   Gaussian, Monochromatic; each application draws another grain, an entry edited again keeps
   its own), Noise > Dust & Scratches… (Radius 1 to 500 whole pixels, Threshold 0 to 255
   levels), Noise > Median… (Radius 1 to 500 whole pixels), Blur > Box Blur… (Radius 1 to 2000
-  whole pixels), Other > Maximum… and Minimum… (Radius 1 to 500 whole pixels); Pixelate >
+  whole pixels), Blur > Radial Blur… (Amount 1 to 100, Blur Method Spin or Zoom, Quality Draft,
+  Good or Best, the Blur Center picked in a square of the selection's box or the layer: clicked,
+  dragged, or moved with the arrow keys, Shift by 10 %; circles or rays drawn around it as in
+  Photoshop), Blur > Surface Blur… (Radius 1 to 100 whole pixels, Threshold 2 to 255 levels),
+  Blur > Smart Blur… (Radius and Threshold 0.1 to 100, Quality Low, Medium or High, Mode
+  Normal, Edge Only or Overlay Edge), Blur > Average (no settings: the layer, or the selection,
+  filled with its average color at once, each pixel keeping its opacity), Other > Maximum… and Minimum… (Radius 1 to 500 whole pixels); Pixelate >
   Mosaic… (Cell Size 2 to 200 pixels); Stylize > Emboss… (Angle, Height 1 to 10 pixels, Amount
   1 to 500 %), Stylize > Find Edges and Solarize (no settings: applied at once, without an
   ellipsis, as in Photoshop; their entries have nothing to edit again); Distort > Pinch… and
