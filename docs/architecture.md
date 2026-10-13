@@ -26,8 +26,8 @@ design must keep satisfiable. Anything not implemented is marked as such.
                              └──────────────────────┘
 ```
 
-Dependency direction is strict: `core` ← (`render`, `io`) ← (`cli`, `app`). `render` and `io`
-do not depend on each other: export receives its pixel source as a closure (see
+Dependency direction is strict: `core` ← (`render`, `io`, `text`) ← (`cli`, `app`). `render`
+and `io` do not depend on each other: export receives its pixel source as a closure (see
 [Export data flow](#export-data-flow)).
 
 ## Crates
@@ -140,6 +140,17 @@ A separate executable the importer runs for each camera RAW file
 decodes and demosaics, our steps apply the as-shot white balance and the camera matrix to
 linear Rec.2020, and the image goes to the importer through a pipe. Keeps rawler replaceable
 and a decoder crash out of the editor.
+
+### `slopshop-text` (in progress)
+
+Text layout for text layers ([ADR 0041](adr/0041-vector-content.md)): a text (string, family,
+weight, size, tracking, leading, alignment, anchor) laid out by `parley` (bidi, line breaks,
+shaping through `harfrust`, font fallback and the system's fonts through `fontique`) into
+glyph outlines read by `skrifa`, unhinted. The outlines are a filled path kept in the text's
+source beside the text, so that core, the renderer, export and `.slop` draw text as a shape,
+the same everywhere, without fonts; only editing a text lays it out again (the app, through
+`text.rs`). Inter (OFL-1.1) is bundled as the default family and the fallback for a missing
+one; tests use only it.
 
 ### `slopshop-ai` (in progress)
 

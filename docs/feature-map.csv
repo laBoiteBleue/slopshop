@@ -254,7 +254,7 @@ Menu,Layer > Video Layers > Restore Frame,,wont,video editing is out of scope fo
 Menu,Layer > Video Layers > Restore All Frames,,wont,video editing is out of scope for now
 Menu,Layer > Video Layers > Reload Frame,,wont,video editing is out of scope for now
 Menu,Layer > Video Layers > Rasterize,,wont,video editing is out of scope for now
-Menu,Layer > Rasterize > Type,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Type,,done,Layer > Bake to Pixels > Rasterize (ADR 0031) bakes a text layer as any vector layer
 Menu,Layer > Rasterize > Shape,,done,Layer > Bake to Pixels > Rasterize on a vector layer (ADR 0031)
 Menu,Layer > Rasterize > Fill Content,,done,Layer > Bake to Pixels > Rasterize (ADR 0031)
 Menu,Layer > Rasterize > Vector Mask,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
@@ -301,7 +301,7 @@ Menu,Type > OpenType,,open,text layers are not started
 Menu,Type > Extrude to 3D,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
 Menu,Type > Create Work Path,,open,text layers are not started
 Menu,Type > Convert to Shape,,open,text layers are not started
-Menu,Type > Rasterize Type Layer,,open,text layers are not started
+Menu,Type > Rasterize Type Layer,,done,Layer > Bake to Pixels > Rasterize (no Type menu yet)
 Menu,Type > Convert to Paragraph Text,,open,text layers are not started
 Menu,Type > Warp Text,,open,text layers are not started
 Menu,Type > Match Font,,open,text layers are not started
@@ -651,6 +651,13 @@ Tool,Tools panel > Pen > Add Anchor Point,,done,"a Pen gesture, as Photoshop's a
 Tool,Tools panel > Pen > Delete Anchor Point,,done,"a Pen gesture, as Photoshop's auto delete: a click on an anchor (ADR 0041)"
 Tool,Tools panel > Pen > Convert Point,,done,"a Pen gesture: Alt+click makes a corner, Alt-drag pulls smooth handles or moves one handle alone (ADR 0041)"
 Tool,Tools panel > Type > Horizontal Type,,open,text layers are not started
+Tool,Tools panel > Pen > Pen,,open,paths are not started
+Tool,Tools panel > Pen > Freeform Pen,,open,paths are not started
+Tool,Tools panel > Pen > Curvature Pen,,open,paths are not started
+Tool,Tools panel > Pen > Add Anchor Point,,open,paths are not started
+Tool,Tools panel > Pen > Delete Anchor Point,,open,paths are not started
+Tool,Tools panel > Pen > Convert Point,,open,paths are not started
+Tool,Tools panel > Type > Horizontal Type,,partial,"T: a click places point text or edits the text layer clicked, typed live with a caret, Enter for a new line, committed by Escape, Ctrl+Enter, the keypad's Enter, a click or another tool, one undo entry; family, style, size in points, color and alignment in the options bar; text layers are vector layers (ADR 0041) laid out by parley, styles apply, linked copies share the text, .slop keeps text and outlines; not yet: selecting characters, per-character styles, box text, tracking and leading in the UI"
 Tool,Tools panel > Type > Vertical Type,,open,text layers are not started
 Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started

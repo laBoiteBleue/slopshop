@@ -268,6 +268,17 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   "bevel"), "miter_limit" (≥ 1, in widths), "dashes" (dashes and gaps in turn, in widths;
   empty: solid), "dash_offset" }`, absent without one. Coordinates are finite, within 1e7. A
   shape that is not valid makes the file invalid.
+  A text source (0.33, ADR 0041) is an entry of `shapes` with a `text` besides its `shape`,
+  which then holds the text's glyph outlines as a `path` filled with its color, so that a
+  reader without its fonts, or of an older schema, still draws it:
+  `{ "content" (`\n` breaks lines), "family" (the font family's name; no font is embedded),
+  "weight" (1 to 1000), "italic", "size" (the em, in pixels, 0.01 to 10 000), "color"
+  ([r, g, b, a], linear working-space RGB), "tracking" (thousandths of an em, −1000 to 1000),
+  "leading" (pixels between baselines; absent: automatic, 120 % of the size), "align"
+  ("left", "center", "right"), "position" (the anchor, the first baseline at the alignment
+  point, in the layer's own space) }`. A text that is not valid makes the file invalid. A
+  reader that lays text out again (to edit it) uses the outlines until then, and the default
+  family when `family` is not installed.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
   function with `kind` one of `linear`, `srgb`, `gamma` (`gamma`), `rec709`, `parametric`
   (ICC parametric curve `g a b c d e f`), `pq`, `hlg`. `id_hint` is informative only.
