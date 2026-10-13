@@ -4019,14 +4019,13 @@
     if (toast.kind !== "notice") setTimeout(() => dismissToast(key), TOAST_MS[toast.kind]);
   }
 
-  function showError(title: string) {
+  function showError(message: string) {
     // A lock's refusal (ADR 0046) said in the interface's language.
-    const refusal = lockRefusalKey(title);
-    showToast(null, {
-      title: refusal ? t(refusal as MessageKey) : title,
-      lines: [],
-      kind: "error",
-    });
+    const refusal = lockRefusalKey(message);
+    const title = refusal ? t(refusal as MessageKey) : message;
+    // Once: a drag refused at every step (a locked layer) shows one message, not one per step.
+    toasts = toasts.filter((r) => !(r.kind === "error" && r.title === title));
+    showToast(null, { title, lines: [], kind: "error" });
   }
 
   function dismissToast(key: string) {
