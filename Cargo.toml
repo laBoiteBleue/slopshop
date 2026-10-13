@@ -7,6 +7,7 @@ members = [
     "crates/slopshop-cli",
     "crates/slopshop-raw",
     "crates/slopshop-ai",
+    "crates/slopshop-text",
     "app/src-tauri",
 ]
 
@@ -26,6 +27,7 @@ slopshop-core = { path = "crates/slopshop-core" }
 slopshop-render = { path = "crates/slopshop-render" }
 slopshop-io = { path = "crates/slopshop-io" }
 slopshop-ai = { path = "crates/slopshop-ai" }
+slopshop-text = { path = "crates/slopshop-text" }
 # static-dxc: DXC built in (ADR 0019), used by default on Windows x64 instead of FXC.
 wgpu = { version = "30.0.1", features = ["static-dxc"] }
 pollster = "1.0.1"

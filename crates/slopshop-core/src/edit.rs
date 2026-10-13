@@ -282,6 +282,8 @@ pub enum EditError {
     NoSource(LayerId),
     /// The layer is not a vector layer.
     NotVector(LayerId),
+    /// The layer is not a text layer.
+    NotText(LayerId),
     /// A pattern's scale or angle out of range (ADR 0042).
     InvalidPattern,
     /// A shape that is not valid (`Shape::is_valid`).
@@ -344,6 +346,7 @@ impl fmt::Display for EditError {
             EditError::InvalidGuides => write!(f, "invalid guides"),
             EditError::NoSource(id) => write!(f, "layer {id} shows no source"),
             EditError::NotVector(id) => write!(f, "layer {id} is not a vector layer"),
+            EditError::NotText(id) => write!(f, "layer {id} is not a text layer"),
             EditError::InvalidShape => write!(f, "invalid shape"),
             EditError::InvalidPattern => write!(f, "invalid pattern"),
             EditError::OtherPixels(id) => {
@@ -588,7 +591,7 @@ impl Edit {
                 }
             }
             Edit::SetShape { id, source } => {
-                if !source.shape().is_valid() {
+                if !source.is_valid() {
                     return Err(EditError::InvalidShape);
                 }
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
@@ -1282,6 +1285,49 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The edit that makes text layer `id` say `text`, laid out into `outlines`, and every layer
+    /// linked to it (ADR 0040): one new source, shared as the old one was. A layer still named
+    /// after its old text, as Photoshop names type layers, is named after the new one (an empty
+    /// text keeps the old name).
+    pub fn retext(
+        doc: &Document,
+        id: LayerId,
+        text: crate::shape::Text,
+        outlines: crate::shape::Shape,
+    ) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let LayerContent::Vector { source, .. } = &layer.content else {
+            return Err(EditError::NotVector(id));
+        };
+        let Some(old) = source.text_of() else {
+            return Err(EditError::NotText(id));
+        };
+        if !text.is_valid() || !outlines.is_valid() {
+            return Err(EditError::InvalidShape);
+        }
+        let old_name = crate::shape::text::layer_name(&old.content);
+        let new_name = crate::shape::text::layer_name(&text.content);
+        let new = crate::shape::ShapeSource::text(text, outlines, source.name());
+        let mut edits = Vec::new();
+        for l in doc.all_layers() {
+            if !matches!(&l.content, LayerContent::Vector { source: s, .. } if Arc::ptr_eq(s, source))
+            {
+                continue;
+            }
+            edits.push(Edit::SetShape {
+                id: l.id,
+                source: Arc::clone(&new),
+            });
+            if l.name == old_name && !new_name.is_empty() && new_name != old_name {
+                edits.push(Edit::RenameLayer {
+                    id: l.id,
+                    name: new_name.clone(),
+                });
+            }
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that gives each of `ids` showing a source other layers show too a source of its
     /// own, of the same pixels (Layer > Make Unique, ADR 0040): changing it then leaves the
     /// others. [`EditError::NoLayers`] when none of them shares its source.
@@ -1873,7 +1919,7 @@ fn validate_new_layer(
             return Err(EditError::InvalidAdjustment);
         }
         if let LayerContent::Vector { source, .. } = &layer.content
-            && !source.shape().is_valid()
+            && !source.is_valid()
         {
             return Err(EditError::InvalidShape);
         }

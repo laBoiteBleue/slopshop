@@ -1069,7 +1069,7 @@ fn validate_restored(
             return Err(RestoreError::InvalidAdjustment(id));
         }
         if let LayerContent::Vector { source, .. } = &layer.content
-            && !source.shape().is_valid()
+            && !source.is_valid()
         {
             return Err(RestoreError::InvalidShape(id));
         }

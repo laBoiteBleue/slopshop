@@ -548,7 +548,7 @@ fn make_independent(layer: &mut Layer, name: &impl Fn(&str) -> String) {
             );
         }
         LayerContent::Vector { source, drawing } => {
-            *source = crate::shape::ShapeSource::new(source.shape().clone(), name(source.name()));
+            *source = source.unique_named(name(source.name()));
             *drawing = Arc::default();
         }
         LayerContent::Group { children, .. } => {
