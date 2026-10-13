@@ -283,7 +283,7 @@ Menu,Layer > Align > Distribute Horizontally,,done,Layer > Distribute: centers o
 Menu,Layer > Align > Distribute Vertically,,done,Layer > Distribute: centers or spacing
 Menu,Layer > Align > Align to Selection,,done,"with a selection, the layers align on its box"
 Menu,Layer > Align > Align to Canvas,,partial,a single layer aligns on the canvas; several layers align on each other
-Menu,Layer > Lock Layers,,open,
+Menu,Layer > Lock Layers,,done,"ADR 0046: the Layers panel's Lock buttons, Ctrl+/ dialog, / for transparency; enforced by the engine; a group's apply to its layers; .slop and PSD (lspf)"
 Menu,Layer > Link Layers,,open,
 Menu,Layer > Select Linked Layers,,open,
 Menu,Layer > Merge Layers,,done,Layer > Bake to Pixels (ADR 0031): explicit and opt-in
