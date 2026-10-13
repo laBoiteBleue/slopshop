@@ -160,6 +160,8 @@ pub struct LayerView {
     /// A live shape's outline as a regular path (`shape::path::as_path`): the anchors the Pen
     /// shows and edits once the shape is turned into a path. None for a path and other layers.
     pub live_path: Option<crate::shape::GeometryDto>,
+    /// A text layer's text (a vector layer, ADR 0041), for the Type tool.
+    pub text: Option<crate::text::TextDto>,
     /// A pattern fill layer's pattern (ADR 0042), for the Properties panel.
     pub pattern: Option<PatternView>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
@@ -828,6 +830,12 @@ impl LayerView {
                 }
                 _ => None,
             },
+            text: match &layer.content {
+                LayerContent::Vector { source, .. } => {
+                    source.text_of().map(crate::text::TextDto::of)
+                }
+                _ => None,
+            },
             gradient_fill: match &layer.content {
                 LayerContent::GradientFill { field } => {
                     Some(crate::paint::GradientDto::of_field(field))
@@ -1055,6 +1063,21 @@ pub enum EditRequest {
         parent: Option<u64>,
         #[serde(default)]
         index: Option<usize>,
+    },
+    /// Add a text layer saying `text` (the Type tool, ADR 0041), named after it, where
+    /// `AddFillLayer` adds a fill layer.
+    AddText {
+        text: crate::text::TextDto,
+        #[serde(default)]
+        parent: Option<u64>,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// A text layer's text, on every linked copy; a layer still named after its text is named
+    /// after the new one.
+    SetText {
+        id: u64,
+        text: crate::text::TextDto,
     },
     /// A pattern fill layer's scale (layer pixels per pattern pixel) and angle (degrees,
     /// counterclockwise), its pattern kept (ADR 0042).
@@ -1438,6 +1461,8 @@ impl EditRequest {
             }
             Self::AddGroup { .. } => HistoryLabel::new("newGroup"),
             Self::AddShape { .. } => HistoryLabel::new("newShape"),
+            Self::AddText { .. } => HistoryLabel::new("newText"),
+            Self::SetText { .. } => HistoryLabel::new("editText"),
             Self::AddAdjustmentLayer { adjustment: id, .. } => {
                 label("newAdjustmentLayer", adjustment(id))
             }
@@ -1627,6 +1652,47 @@ impl EditRequest {
                         content: LayerContent::vector(source),
                     },
                 }
+            }
+            EditRequest::AddText {
+                text,
+                parent,
+                index,
+            } => {
+                let text = text.text()?;
+                let outlines = crate::text::lay_out(&text)?;
+                let name = slopshop_core::shape::text::layer_name(&text.content);
+                let source = slopshop_core::shape::ShapeSource::text(text, outlines, "");
+                let parent = parent.map(LayerId::from_raw);
+                let index = match index {
+                    Some(index) => index,
+                    None => session
+                        .document()
+                        .children_of(parent)
+                        .ok_or("unknown parent")?
+                        .len(),
+                };
+                Edit::InsertLayer {
+                    parent,
+                    index,
+                    layer: Layer {
+                        style: None,
+                        transform: slopshop_core::Projective::IDENTITY,
+                        clipped: false,
+                        id: session.allocate_layer_id(),
+                        name,
+                        visible: true,
+                        opacity: 1.0,
+                        blend_mode: BlendMode::Normal,
+                        mask: None,
+                        content: LayerContent::vector(source),
+                    },
+                }
+            }
+            EditRequest::SetText { id, text } => {
+                let text = text.text()?;
+                let outlines = crate::text::lay_out(&text)?;
+                Edit::retext(session.document(), LayerId::from_raw(id), text, outlines)
+                    .map_err(|e| e.to_string())?
             }
             EditRequest::SetPatternFill { id, scale, angle } => {
                 let id = LayerId::from_raw(id);

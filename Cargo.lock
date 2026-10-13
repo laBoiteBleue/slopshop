@@ -5740,6 +5740,7 @@ dependencies = [
  "slopshop-core",
  "slopshop-io",
  "slopshop-render",
+ "slopshop-text",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

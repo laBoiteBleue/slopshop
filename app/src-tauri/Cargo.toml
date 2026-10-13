@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 slopshop-core.workspace = true
 slopshop-render.workspace = true
 slopshop-io.workspace = true
+slopshop-text.workspace = true
 # The AI components' installer (ADR 0025); the models run in the separate helper.
 slopshop-ai = { workspace = true, features = ["install"] }
 # Desktop shell (webview window, IPC).
