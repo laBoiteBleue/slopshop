@@ -101,7 +101,11 @@ export type FilterId =
   | "twirl"
   | "pinch"
   | "spherize"
-  | "polarCoordinates";
+  | "polarCoordinates"
+  | "radialBlur"
+  | "surfaceBlur"
+  | "smartBlur"
+  | "average";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {

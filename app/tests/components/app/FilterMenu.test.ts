@@ -302,3 +302,96 @@ test("Distort > Twirl: an angle sent with the filter", async () => {
     expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "twirl", values: [50] }),
   );
 });
+
+test("Blur > Average applies at once, without a dialog", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Blur", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Average" }));
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "average",
+      values: [],
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("Blur > Radial Blur: Zoom, Best, and its center picked in the square", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Blur", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Radial Blur…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Radial Blur" });
+  expect(within(dialog).getByRole("radio", { name: "Spin" })).toBeChecked();
+  expect(within(dialog).getByRole("radio", { name: "Good" })).toBeChecked();
+  await user.click(within(dialog).getByRole("radio", { name: "Zoom" }));
+  await user.click(within(dialog).getByRole("radio", { name: "Best" }));
+  const amount = within(dialog).getByRole("spinbutton", { name: "Amount" });
+  await user.clear(amount);
+  await user.type(amount, "40");
+  // The square is 120 pixels at (0, 0) here: a click a quarter across and three quarters down.
+  const square = within(dialog).getByRole("slider", { name: "Blur Center" });
+  square.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: 120, height: 120, right: 120, bottom: 120 }) as DOMRect;
+  await user.pointer({ keys: "[MouseLeft]", target: square, coords: { clientX: 30, clientY: 90 } });
+  // Then a nudge to the right with the keyboard.
+  square.focus();
+  await user.keyboard("{ArrowRight}");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "radialBlur",
+      values: [40, 1, 2, 26, 75],
+    }),
+  );
+});
+
+test("Blur > Surface Blur: a radius and a threshold", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Blur", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Surface Blur…" }));
+  await screen.findByRole("dialog", { name: "Surface Blur" });
+  const threshold = screen.getByRole("spinbutton", { name: "Threshold" });
+  await user.clear(threshold);
+  await user.type(threshold, "30");
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "surfaceBlur",
+      values: [5, 30],
+    }),
+  );
+});
+
+test("Blur > Smart Blur: High quality, Edge Only", async () => {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Blur", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Smart Blur…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Smart Blur" });
+  expect(within(dialog).getByRole("radio", { name: "Low" })).toBeChecked();
+  expect(within(dialog).getByRole("radio", { name: "Normal" })).toBeChecked();
+  await user.click(within(dialog).getByRole("radio", { name: "High" }));
+  await user.click(within(dialog).getByRole("radio", { name: "Edge Only" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "smartBlur",
+      values: [3, 25, 2, 1],
+    }),
+  );
+});
