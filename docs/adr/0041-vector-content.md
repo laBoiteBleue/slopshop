@@ -219,3 +219,37 @@ Status: accepted (2026-10-13, under the maintainer's delegation; to review).
    session is one gesture, so one undo entry;
    a text left empty removes its layer. A type layer is named after its text, and renamed as
    it changes until the user renames it (Photoshop's behavior).
+
+## Amendment: a shape's bounds, corners, and Free Transform (2026-10-13)
+
+Status: accepted (2026-10-13, under the maintainer's delegation; to review).
+
+The maintainer's order of 2026-10-08: W, H, X, Y and per-corner radii in the Properties panel,
+then Free Transform changing a vector layer's geometry so that its stroke keeps its width.
+
+1. **W, H, X and Y** are the bounds of the shape's outline (its stroke left out; a path's
+   curves, not its handles) in document pixels, through the layer's and its groups'
+   transforms, as Photoshop's Properties show them. A typed value moves the geometry (X, Y) or
+   scales it from its top left corner (W, H) with one `SetShape` (linked copies follow, ADR
+   0040); a rectangle keeps its corner radii, a polygon stays regular (its other side
+   follows). The fields show only where those transforms neither rotate nor skew (nor are in
+   perspective): elsewhere a box of the layer's space is not one of the document's.
+2. **Corner radii**: a link toggle, on while the four radii are equal. Off, four fields (top
+   left, top right, bottom right, bottom left) round each corner; linking again gives them the
+   first corner's radius. Each radius stays within half the shorter side. No format change:
+   `.slop` already stores four radii.
+3. **Free Transform reshapes a vector layer** instead of changing its transform, as Photoshop
+   transforms a shape's path: the stroke keeps its width, dashes their lengths. In the engine
+   (`Edit::transform_layers`, so the live preview, Transform Again's copies and flips go the
+   same way), when the geometry stays what it is (`Geometry::transformed`): a line and a path
+   always (every point and handle mapped); a rectangle and an ellipse when the map neither
+   rotates nor skews (mirroring swaps a rectangle's corners; its radii scale as its shorter
+   side does); a polygon under rotations and uniform scales.
+4. **Otherwise the layer takes the transform, as before**: a live rectangle or ellipse
+   rotated or skewed, a polygon scaled unevenly (they stay live; Photoshop keeps a live
+   shape's own transform too), **Distort and Perspective** (projective maps: a Bézier is no
+   longer a Bézier under them, ADR 0038), a layer with a mask (the mask lives in the layer's
+   space and must follow it), a layer whose pixels or position are locked (ADR 0046), and
+   **linked copies**: each copy is placed by its own transform, as Photoshop's instances, so
+   that transforming one does not move the others.
+
