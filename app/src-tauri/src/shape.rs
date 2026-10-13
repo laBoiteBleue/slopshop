@@ -63,9 +63,9 @@ impl SubpathDto {
         let segments = self
             .segments
             .iter()
-            .map(|s| match s.as_slice() {
-                &[x, y] => Ok(Segment::Line([x, y])),
-                &[ax, ay, bx, by, x, y] => Ok(Segment::Cubic([ax, ay], [bx, by], [x, y])),
+            .map(|s| match *s.as_slice() {
+                [x, y] => Ok(Segment::Line([x, y])),
+                [ax, ay, bx, by, x, y] => Ok(Segment::Cubic([ax, ay], [bx, by], [x, y])),
                 _ => Err("a path segment has 2 or 6 coordinates".to_owned()),
             })
             .collect::<Result<_, _>>()?;
