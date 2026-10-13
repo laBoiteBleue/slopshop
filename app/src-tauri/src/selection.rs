@@ -1556,7 +1556,6 @@ mod tests {
             layer: slopshop_core::Layer {
                 locks: Default::default(),
                 style: None,
-                locks: Default::default(),
                 transform: slopshop_core::Affine::translation(50.0, 0.0).into(),
                 clipped: false,
                 id,
@@ -1569,7 +1568,6 @@ mod tests {
                     dto.shape().unwrap(),
                     "Shape 1",
                 )),
-                locks: Default::default(),
             },
         })
         .unwrap();
