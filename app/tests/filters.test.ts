@@ -4,10 +4,12 @@ import {
   FILTERS,
   FILTER_MENU,
   applyFilterEdit,
+  centerAt,
   filterEntryEdit,
   filterSteps,
   filterable,
   hasSettings,
+  nudgedCenter,
   sliderPosition,
   sliderValue,
   validValues,
@@ -249,4 +251,87 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
     "spherize",
     "twirl",
   ]);
+});
+
+test("the Blur menu: Photoshop's order, Average applied at once", () => {
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.blur")?.filters).toEqual([
+    "average",
+    "boxBlur",
+    "gaussianBlur",
+    "motionBlur",
+    "radialBlur",
+    "smartBlur",
+    "surfaceBlur",
+  ]);
+  expect(hasSettings("average")).toBe(false);
+  expect(validValues("average", [])).toBe(true);
+});
+
+test("Radial Blur: amount 1 to 100, Spin or Zoom, Draft to Best, a center in percent", () => {
+  expect(FILTERS.radialBlur.defaults).toEqual([10, 0, 1, 50, 50]);
+  expect(FILTERS.radialBlur.params.map((p) => p.key)).toEqual([
+    "amount",
+    "method",
+    "quality",
+    "centerX",
+    "centerY",
+  ]);
+  expect(validValues("radialBlur", [1, 1, 2, 0, 100])).toBe(true);
+  for (const values of [
+    [0, 0, 1, 50, 50],
+    [101, 0, 1, 50, 50],
+    [10.5, 0, 1, 50, 50],
+    [10, 2, 1, 50, 50],
+    [10, 0, 3, 50, 50],
+    [10, 0, 1, -1, 50],
+    [10, 0, 1, 50, 101],
+    [10, 0, 1, 50],
+  ]) {
+    expect(validValues("radialBlur", values)).toBe(false);
+  }
+});
+
+test("Surface Blur: a radius of 1 to 100 whole pixels, a threshold of 2 to 255 levels", () => {
+  expect(FILTERS.surfaceBlur.defaults).toEqual([5, 15]);
+  expect(validValues("surfaceBlur", [1, 2])).toBe(true);
+  expect(validValues("surfaceBlur", [100, 255])).toBe(true);
+  for (const values of [
+    [0, 15],
+    [101, 15],
+    [2.5, 15],
+    [5, 1],
+    [5, 256],
+  ]) {
+    expect(validValues("surfaceBlur", values)).toBe(false);
+  }
+});
+
+test("a center picked in its square: in whole percents, within it; arrows nudge it", () => {
+  const box = { left: 100, top: 50, width: 120, height: 120 };
+  expect(centerAt(box, 160, 110)).toEqual([50, 50]);
+  expect(centerAt(box, 100, 170)).toEqual([0, 100]);
+  expect(centerAt(box, 0, 500)).toEqual([0, 100]);
+  expect(centerAt(box, 130, 80)).toEqual([25, 25]);
+  expect(centerAt({ left: 0, top: 0, width: 0, height: 0 }, 5, 5)).toEqual([50, 50]);
+  expect(nudgedCenter([50, 50], "ArrowLeft", false)).toEqual([49, 50]);
+  expect(nudgedCenter([50, 50], "ArrowDown", true)).toEqual([50, 60]);
+  expect(nudgedCenter([95, 3], "ArrowRight", true)).toEqual([100, 3]);
+  expect(nudgedCenter([95, 3], "ArrowUp", true)).toEqual([95, 0]);
+  expect(nudgedCenter([50, 50], "Enter", false)).toBeNull();
+});
+
+test("Smart Blur: radius and threshold of 0.1 to 100, Low to High, Normal or its edges", () => {
+  expect(FILTERS.smartBlur.defaults).toEqual([3, 25, 0, 0]);
+  expect(validValues("smartBlur", [0.1, 0.1, 2, 2])).toBe(true);
+  expect(validValues("smartBlur", [100, 100, 0, 1])).toBe(true);
+  for (const values of [
+    [0, 25, 0, 0],
+    [101, 25, 0, 0],
+    [3, 0, 0, 0],
+    [3, 101, 0, 0],
+    [3, 25, 3, 0],
+    [3, 25, 0, 3],
+  ]) {
+    expect(validValues("smartBlur", values)).toBe(false);
+  }
 });

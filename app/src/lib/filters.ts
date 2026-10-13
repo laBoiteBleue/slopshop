@@ -24,13 +24,16 @@ export type NumberParam = {
 
 /**
  * One setting of a filter's dialog: a number; one of `options` (their index); a check box (0 or
- * 1); or a seed, not shown, drawn anew each time the filter is applied (`withNewSeeds`).
+ * 1); a seed, not shown, drawn anew each time the filter is applied (`withNewSeeds`); or a
+ * coordinate of a center in percent of the frame (0 to 100), picked in a square: the `x` one
+ * shows the square for itself and the `y` one that follows it.
  */
 export type FilterParam =
   | NumberParam
   | { kind: "choice"; key: string; label: MessageKey; options: MessageKey[] }
   | { kind: "check"; key: string; label: MessageKey }
-  | { kind: "seed"; key: string };
+  | { kind: "seed"; key: string }
+  | { kind: "center"; key: string; label: MessageKey; axis: "x" | "y" };
 
 /** The seeds a filter takes: whole numbers below 2^24 (the engine's `NOISE_SEEDS`). */
 export const SEEDS = 2 ** 24;
@@ -261,6 +264,91 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
     ],
     defaults: [50],
   },
+  radialBlur: {
+    params: [
+      {
+        kind: "number",
+        key: "amount",
+        label: "filter.radialBlur.amount",
+        min: 1,
+        max: 100,
+        decimals: 0,
+        scale: "linear",
+      },
+      {
+        kind: "choice",
+        key: "method",
+        label: "filter.radialBlur.method",
+        options: ["filter.radialBlur.spin", "filter.radialBlur.zoom"],
+      },
+      {
+        kind: "choice",
+        key: "quality",
+        label: "filter.radialBlur.quality",
+        options: ["filter.radialBlur.draft", "filter.radialBlur.good", "filter.radialBlur.best"],
+      },
+      { kind: "center", key: "centerX", label: "filter.radialBlur.center", axis: "x" },
+      { kind: "center", key: "centerY", label: "filter.radialBlur.center", axis: "y" },
+    ],
+    defaults: [10, 0, 1, 50, 50],
+  },
+  surfaceBlur: {
+    params: [
+      squareRadius("filter.surfaceBlur.radius", 100),
+      {
+        kind: "number",
+        key: "threshold",
+        label: "filter.surfaceBlur.threshold",
+        unit: "filter.levels",
+        min: 2,
+        max: 255,
+        decimals: 0,
+        scale: "linear",
+      },
+    ],
+    defaults: [5, 15],
+  },
+  smartBlur: {
+    params: [
+      {
+        kind: "number",
+        key: "radius",
+        label: "filter.smartBlur.radius",
+        unit: "filter.pixels",
+        min: 0.1,
+        max: 100,
+        decimals: 1,
+        scale: "log",
+      },
+      {
+        kind: "number",
+        key: "threshold",
+        label: "filter.smartBlur.threshold",
+        min: 0.1,
+        max: 100,
+        decimals: 1,
+        scale: "linear",
+      },
+      {
+        kind: "choice",
+        key: "quality",
+        label: "filter.smartBlur.quality",
+        options: ["filter.smartBlur.low", "filter.smartBlur.medium", "filter.smartBlur.high"],
+      },
+      {
+        kind: "choice",
+        key: "mode",
+        label: "filter.smartBlur.mode",
+        options: [
+          "filter.smartBlur.normal",
+          "filter.smartBlur.edgeOnly",
+          "filter.smartBlur.overlayEdge",
+        ],
+      },
+    ],
+    defaults: [3, 25, 0, 0],
+  },
+  average: { params: [], defaults: [] },
   pinch: { params: [percent("filter.pinch.amount")], defaults: [50] },
   spherize: { params: [percent("filter.spherize.amount")], defaults: [100] },
   polarCoordinates: {
@@ -289,8 +377,8 @@ export const FILTERS: Record<FilterId, { params: FilterParam[]; defaults: number
   },
 };
 
-/** Whether `filter` has settings: those without (Find Edges, Solarize) apply at once, as in
- * Photoshop, with no dialog and nothing to edit again. */
+/** Whether `filter` has settings: those without (Average, Find Edges, Solarize) apply at once,
+ * as in Photoshop, with no dialog and nothing to edit again. */
 export function hasSettings(filter: FilterId): boolean {
   return FILTERS[filter].params.length > 0;
 }
@@ -325,7 +413,18 @@ export function sliderValue(param: NumberParam, p: number): number {
 
 /** The Filter menu's submenus, Photoshop's, and the filters in each. */
 export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
-  { label: "menu.filter.blur", filters: ["boxBlur", "gaussianBlur", "motionBlur"] },
+  {
+    label: "menu.filter.blur",
+    filters: [
+      "average",
+      "boxBlur",
+      "gaussianBlur",
+      "motionBlur",
+      "radialBlur",
+      "smartBlur",
+      "surfaceBlur",
+    ],
+  },
   { label: "menu.filter.distort", filters: ["pinch", "polarCoordinates", "spherize", "twirl"] },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
   { label: "menu.filter.pixelate", filters: ["mosaic"] },
@@ -356,7 +455,44 @@ function validValue(param: FilterParam, v: number): boolean {
       return v === 0 || v === 1;
     case "seed":
       return Number.isInteger(v) && v >= 0 && v < SEEDS;
+    case "center":
+      return Number.isFinite(v) && v >= 0 && v <= 100;
   }
+}
+
+/** A center in percent of the frame (`[x, y]`, whole numbers). */
+export type Center = [number, number];
+
+/**
+ * The center picked at client point (`x`, `y`) in a square shown at `box` (its client
+ * rectangle): in percent of it, whole, within it.
+ */
+export function centerAt(
+  box: { left: number; top: number; width: number; height: number },
+  x: number,
+  y: number,
+): Center {
+  const along = (v: number, start: number, size: number) =>
+    size > 0 ? Math.round(Math.min(Math.max((v - start) / size, 0), 1) * 100) : 50;
+  return [along(x, box.left, box.width), along(y, box.top, box.height)];
+}
+
+/**
+ * The center moved by an arrow key (`key` as `KeyboardEvent.key`), by 1 % or 10 % with Shift;
+ * `null` for another key.
+ */
+export function nudgedCenter(center: Center, key: string, shift: boolean): Center | null {
+  const step = shift ? 10 : 1;
+  const move: Record<string, Center> = {
+    ArrowLeft: [-step, 0],
+    ArrowRight: [step, 0],
+    ArrowUp: [0, -step],
+    ArrowDown: [0, step],
+  };
+  const d = move[key];
+  if (!d) return null;
+  const clamp = (v: number) => Math.min(Math.max(v, 0), 100);
+  return [clamp(center[0] + d[0]), clamp(center[1] + d[1])];
 }
 
 /**

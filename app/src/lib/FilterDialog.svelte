@@ -7,7 +7,14 @@
   import { onMount, untrack } from "svelte";
   import { movable } from "./dialogDrag";
   import type { FilterId } from "./engine";
-  import { FILTERS, sliderPosition, sliderValue, validValues } from "./filters";
+  import {
+    FILTERS,
+    centerAt,
+    nudgedCenter,
+    sliderPosition,
+    sliderValue,
+    validValues,
+  } from "./filters";
   import { t } from "./i18n/index.svelte";
 
   let {
@@ -45,10 +52,33 @@
   onMount(() => {
     dialog.showModal();
     // Modal: the app's shortcuts must not act behind the dialog.
-    const isolate = (e: KeyboardEvent) => e.stopPropagation();
+    // Stopped before it reaches the dialog's own handlers: a center's square takes its arrows
+    // here.
+    const isolate = (e: KeyboardEvent) => {
+      e.stopPropagation();
+      const square = e.target instanceof HTMLElement ? e.target.closest("[data-center]") : null;
+      if (square instanceof HTMLElement) nudgeCenter(e, Number(square.dataset.center));
+    };
     window.addEventListener("keydown", isolate, true);
     return () => window.removeEventListener("keydown", isolate, true);
   });
+
+  // A center picked in its square (Radial Blur's Blur Center): values `i` and `i + 1`.
+  function pickCenter(e: PointerEvent, i: number) {
+    const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    [current[i], current[i + 1]] = centerAt(box, e.clientX, e.clientY);
+  }
+
+  function nudgeCenter(e: KeyboardEvent, i: number) {
+    const moved = nudgedCenter([current[i], current[i + 1]], e.key, e.shiftKey);
+    if (!moved) return;
+    e.preventDefault();
+    [current[i], current[i + 1]] = moved;
+  }
+
+  // The square's lines: circles around the center for a spin, rays from it for a zoom (as
+  // Photoshop draws them), by the filter's "method" setting.
+  const zooms = $derived(current[params.findIndex((p) => p.key === "method")] === 1);
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -92,6 +122,47 @@
             />
             {t(param.label)}
           </label>
+        {:else if param.kind === "center"}
+          {#if param.axis === "x"}
+            <div class="center-setting">
+              <span id="filter-{param.key}">{t(param.label)}</span>
+              <div
+                class="center"
+                role="slider"
+                tabindex="0"
+                aria-labelledby="filter-{param.key}"
+                aria-valuetext="{current[i]}, {current[i + 1]}"
+                aria-valuenow={current[i]}
+                aria-valuemin="0"
+                aria-valuemax="100"
+                onpointerdown={(e) => {
+                  (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                  pickCenter(e, i);
+                }}
+                onpointermove={(e) => {
+                  if (e.buttons & 1) pickCenter(e, i);
+                }}
+                data-center={i}
+              >
+                <svg viewBox="0 0 100 100" aria-hidden="true">
+                  {#if zooms}
+                    {#each Array.from({ length: 16 }, (_, n) => (n * Math.PI) / 8) as a (a)}
+                      <line
+                        x1={current[i]}
+                        y1={current[i + 1]}
+                        x2={current[i] + Math.cos(a) * 150}
+                        y2={current[i + 1] + Math.sin(a) * 150}
+                      />
+                    {/each}
+                  {:else}
+                    {#each [12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132] as r (r)}
+                      <circle cx={current[i]} cy={current[i + 1]} {r} />
+                    {/each}
+                  {/if}
+                </svg>
+              </div>
+            </div>
+          {/if}
         {:else if param.kind === "number"}
           <div class="row">
             <label for="filter-{param.key}">{t(param.label)}</label>
@@ -204,6 +275,34 @@
 
   .buttons .btn {
     min-width: 80px;
+  }
+
+  .center-setting {
+    display: grid;
+    gap: 4px;
+    justify-items: start;
+  }
+
+  /* Photoshop's Blur Center: a square of the frame, the center picked in it. */
+  .center {
+    width: 120px;
+    height: 120px;
+    border: 1px solid var(--border-dark);
+    background: var(--field);
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .center svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    fill: none;
+    stroke: var(--text);
+    stroke-opacity: 0.6;
+    stroke-width: 0.8;
+    pointer-events: none;
   }
 
   .check {
