@@ -192,6 +192,10 @@ pub(crate) struct ShapeDto {
     pub name: String,
     /// The shape, as `slop::shape` describes it.
     pub shape: Value,
+    /// What a text source says (schema 0.33): `shape` is then its glyph outlines. Absent: a
+    /// shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<Value>,
 }
 
 /// A guide (schema 0.22): `axis` is `vertical` (at a distance from the left edge) or

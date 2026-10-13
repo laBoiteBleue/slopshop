@@ -16,13 +16,77 @@
 //! [ax, ay, bx, by, x, y]], "closed": true }] } }` (a segment of two numbers is a line, of six a
 //! cubic Bézier). Coordinates are in the layer's own space; colors are linear working-space RGBA,
 //! as a fill node's. No fill or no stroke: absent. A shape that is not valid is a corrupt file.
+//!
+//! A text source (schema 0.33) is a shape entry with a `text` besides its `shape`, which then
+//! holds its glyph outlines (a path), so that a reader without the fonts, or an older one, still
+//! draws it:
+//!
+//! ```json
+//! { "content": "Hello\nworld", "family": "Inter Variable", "weight": 400, "italic": false,
+//!   "size": 50, "color": [r, g, b, a], "tracking": 0, "leading": 60, "align": "left",
+//!   "position": [x, y] }
+//! ```
+//!
+//! `size` and `leading` in pixels (`leading` absent: automatic), `tracking` in thousandths of an
+//! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
+//! alignment point) in the layer's own space.
 
 use serde_json::{Value, json};
 use slopshop_core::color::LinearRgba;
 use slopshop_core::shape::{
     FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
-    Subpath,
+    Subpath, Text, TextAlign,
 };
+
+/// A text source's description.
+pub(super) fn text_to_json(text: &Text) -> Value {
+    let c = text.color;
+    let mut value = json!({
+        "content": text.content,
+        "family": text.family,
+        "weight": text.weight,
+        "italic": text.italic,
+        "size": text.size,
+        "color": [c.r, c.g, c.b, c.a],
+        "tracking": text.tracking,
+        "align": match text.align {
+            TextAlign::Left => "left",
+            TextAlign::Center => "center",
+            TextAlign::Right => "right",
+        },
+        "position": text.position,
+    });
+    if let Some(leading) = text.leading {
+        value["leading"] = json!(leading);
+    }
+    value
+}
+
+/// A text source's description, `None` when it is not one or not valid.
+pub(super) fn text_from_json(value: &Value) -> Option<Text> {
+    let [r, g, b, a] = numbers::<4>(value.get("color"))?;
+    let text = Text {
+        content: value.get("content")?.as_str()?.to_owned(),
+        family: value.get("family")?.as_str()?.to_owned(),
+        weight: number(value, "weight")? as f32,
+        italic: value.get("italic")?.as_bool()?,
+        size: number(value, "size")?,
+        color: LinearRgba::new(r as f32, g as f32, b as f32, a as f32),
+        tracking: number(value, "tracking")?,
+        leading: match value.get("leading") {
+            None => None,
+            Some(v) => Some(v.as_f64()?),
+        },
+        align: match value.get("align")?.as_str()? {
+            "left" => TextAlign::Left,
+            "center" => TextAlign::Center,
+            "right" => TextAlign::Right,
+            _ => return None,
+        },
+        position: numbers::<2>(value.get("position"))?,
+    };
+    text.is_valid().then_some(text)
+}
 
 fn paint(paint: Paint) -> Value {
     let Paint::Solid(c) = paint;

@@ -906,6 +906,7 @@ fn build_manifest(
                 .map(|source| ShapeDto {
                     name: source.name().to_owned(),
                     shape: super::shape::to_json(source.shape()),
+                    text: source.text_of().map(super::shape::text_to_json),
                 })
                 .collect(),
             extra: residue.document.clone(),
