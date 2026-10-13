@@ -158,6 +158,17 @@ const CLARITY_RADIUS: f32 = 25.0;
 /// How strongly Clarity pushes the midtones at 100 (Texture pushes by its whole difference).
 pub const CLARITY_STRENGTH: f64 = 0.6;
 
+/// Shadows/Highlights' radius range in pixels (Photoshop's): the size of the neighbourhood whose
+/// tone decides how much a pixel is corrected, a Gaussian's standard deviation.
+pub const MAX_SHADOWS_RADIUS: f32 = 2500.0;
+
+/// Shadows/Highlights' Color and Midtone range (Photoshop's), in percent either way.
+pub const MAX_SHADOWS_COLOR: f32 = 100.0;
+
+/// How far Shadows/Highlights moves a neighbourhood at 100 %, in parts of its Tone: black lifted
+/// to half the Tone (white lowered by as much).
+const SHADOWS_LIFT: f64 = 0.5;
+
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
 pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
@@ -293,11 +304,25 @@ pub enum Filter {
         clarity: f32,
         scale: f32,
     },
+    /// Photoshop's Shadows/Highlights (Image > Adjustments): each pixel lightened by up to
+    /// `shadows[0]` percent where its neighbourhood (a blur of `shadows[2]` pixels) is among the
+    /// darkest `shadows[1]` percent of tones, darkened likewise by `highlights` where it is among
+    /// the lightest; the pixel's detail kept (the correction moves it with its neighbourhood).
+    /// `color` changes the saturation of what was corrected, `midtone` the contrast of the
+    /// midtones (both -100 to 100). `scale`: as Clarity's, the radii shrink by it.
+    ShadowsHighlights {
+        shadows: [f32; 3],
+        highlights: [f32; 3],
+        color: f32,
+        midtone: f32,
+        scale: f32,
+    },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 24] = [
+    /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
+    pub const IDS: [&'static str; 25] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -322,6 +347,7 @@ impl Filter {
         "pinch",
         "spherize",
         "polarCoordinates",
+        "shadowsHighlights",
     ];
 
     /// The identifier the UI and files know it by.
@@ -351,6 +377,7 @@ impl Filter {
             Self::SurfaceBlur { .. } => "surfaceBlur",
             Self::SmartBlur { .. } => "smartBlur",
             Self::Average => "average",
+            Self::ShadowsHighlights { .. } => "shadowsHighlights",
         }
     }
 
@@ -444,6 +471,13 @@ impl Filter {
                 },
             ],
             Self::Average => Vec::new(),
+            Self::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                ..
+            } => [shadows.as_slice(), &highlights, &[color, midtone]].concat(),
         }
     }
 
@@ -522,6 +556,15 @@ impl Filter {
                 },
             }),
             ("average", &[]) => Some(Self::Average),
+            ("shadowsHighlights", &[sa, st, sr, ha, ht, hr, color, midtone]) => {
+                Some(Self::ShadowsHighlights {
+                    shadows: [sa, st, sr],
+                    highlights: [ha, ht, hr],
+                    color,
+                    midtone,
+                    scale: 1.0,
+                })
+            }
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
@@ -613,6 +656,13 @@ impl Filter {
                 mode: SmartMode::Normal,
             }),
             "average" => Some(Self::Average),
+            "shadowsHighlights" => Some(Self::ShadowsHighlights {
+                shadows: [35.0, 50.0, 30.0],
+                highlights: [0.0, 50.0, 30.0],
+                color: 20.0,
+                midtone: 0.0,
+                scale: 1.0,
+            }),
             _ => None,
         }
     }
@@ -650,6 +700,28 @@ impl Filter {
             } => {
                 let amount = |v: f32| v.is_finite() && (-MAX_CLARITY..=MAX_CLARITY).contains(&v);
                 amount(texture) && amount(clarity) && scale.is_finite() && scale >= 1.0
+            }
+            Self::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                scale,
+            } => {
+                let percent = |v: f32| v.is_finite() && (0.0..=100.0).contains(&v);
+                let side = |[amount, tone, radius]: [f32; 3]| {
+                    percent(amount)
+                        && percent(tone)
+                        && radius.fract() == 0.0
+                        && (0.0..=MAX_SHADOWS_RADIUS).contains(&radius)
+                };
+                let either = |v: f32| v.fract() == 0.0 && v.abs() <= MAX_SHADOWS_COLOR;
+                side(shadows)
+                    && side(highlights)
+                    && either(color)
+                    && either(midtone)
+                    && scale.is_finite()
+                    && scale >= 1.0
             }
             // Whole pixels: a square of them.
             Self::DustAndScratches { radius, threshold } => {
@@ -728,6 +800,7 @@ impl Filter {
             | Self::AddNoise { .. }
             | Self::DustAndScratches { .. }
             | Self::ClarityTexture { .. }
+            | Self::ShadowsHighlights { .. }
             | Self::Median { .. }
             | Self::BoxBlur { .. }
             | Self::Maximum { .. }
@@ -754,6 +827,20 @@ impl Filter {
             Self::ClarityTexture { scale, .. } => {
                 Some([TEXTURE_RADIUS, CLARITY_RADIUS].map(|r| (r / scale).max(MIN_BLUR_RADIUS)))
             }
+            _ => None,
+        }
+    }
+
+    /// Shadows/Highlights' blurs' radii, the shadows' then the highlights' (see
+    /// [`Self::plans`]): no less than the smallest blur.
+    pub fn shadows_radii(&self) -> Option<[f32; 2]> {
+        match *self {
+            Self::ShadowsHighlights {
+                shadows,
+                highlights,
+                scale,
+                ..
+            } => Some([shadows[2], highlights[2]].map(|r| (r / scale).max(MIN_BLUR_RADIUS))),
             _ => None,
         }
     }
@@ -854,6 +941,19 @@ impl Filter {
                 clarity,
                 scale: scale * factor,
             },
+            Self::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                scale,
+            } => Self::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                scale: scale * factor,
+            },
         }
     }
 
@@ -886,6 +986,10 @@ impl Filter {
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
             }
+            Self::ShadowsHighlights { .. } => {
+                let [s, h] = self.shadows_radii().unwrap_or_default();
+                3.5 * f64::from(s.max(h)) + 2.0
+            }
             _ => 3.5 * f64::from(self.blur_radius().unwrap_or(0.0)) + 2.0,
         }
     }
@@ -896,6 +1000,11 @@ impl Filter {
         match *self {
             Self::ClarityTexture { .. } => self
                 .clarity_radii()
+                .unwrap_or_default()
+                .map(|r| Plan::gaussian(f64::from(r)))
+                .to_vec(),
+            Self::ShadowsHighlights { .. } => self
+                .shadows_radii()
                 .unwrap_or_default()
                 .map(|r| Plan::gaussian(f64::from(r)))
                 .to_vec(),
@@ -986,7 +1095,7 @@ impl Filter {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
-            Self::ClarityTexture { .. } => Plan {
+            Self::ClarityTexture { .. } | Self::ShadowsHighlights { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
@@ -1295,8 +1404,70 @@ impl Filter {
                     std::array::from_fn(|i| o[i] + kt * (o[i] - b[i]) + kc * (o[i] - broad[i]));
                 [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
             }
+            Self::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                ..
+            } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let c = shadows_highlights(
+                    o,
+                    [straight(blurs[0]), straight(blurs[1])].map(luma),
+                    [shadows[0], shadows[1], highlights[0], highlights[1]]
+                        .map(|v| f64::from(v) / 100.0),
+                    f64::from(color) / 100.0,
+                    f64::from(midtone) / 100.0,
+                );
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
         }
     }
+}
+
+/// Rec. 709 luma of a straight color.
+fn luma(c: [f64; 3]) -> f64 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+/// Shadows/Highlights on straight color `o`, whose neighbourhoods' lumas are `around` (the
+/// shadows' blur, the highlights'): `[shadow amount, shadow tone, highlight amount, highlight
+/// tone]` in parts of 1, `color` and `midtone` in -1 to 1.
+///
+/// A neighbourhood among the darkest `tone` of tones weighs from 1 (black) down to 0 (at
+/// `tone`), smoothly; the pixel's luma moves by `amount × weight × tone ×` [`SHADOWS_LIFT`], up
+/// for the shadows, down for the highlights: the pixel and its neighbours by as much, so its
+/// detail stays. Midtone then steepens (or flattens) the luma around middle gray, the midtones
+/// most; Color scales the color's distance to its luma by how much the luma moved.
+fn shadows_highlights(
+    o: [f64; 3],
+    around: [f64; 2],
+    [sa, st, ha, ht]: [f64; 4],
+    color: f64,
+    midtone: f64,
+) -> [f64; 3] {
+    let smooth = |x: f64| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let weight = |distance: f64, tone: f64| {
+        if tone <= 0.0 {
+            0.0
+        } else {
+            smooth(1.0 - distance / tone)
+        }
+    };
+    let y = luma(o);
+    let lift = sa * weight(around[0].max(0.0), st) * st * SHADOWS_LIFT;
+    let lower = ha * weight((1.0 - around[1]).max(0.0), ht) * ht * SHADOWS_LIFT;
+    let moved = (y + lift - lower).clamp(0.0, 1.0);
+    // Monotonic for -1 to 1: the slope 1 + midtone (6 y (1 - y) - 1) is never negative.
+    let target = moved + midtone * (moved - 0.5) * 2.0 * moved * (1.0 - moved);
+    let gain = (1.0 + 4.0 * color * (target - y).abs()).max(0.0);
+    std::array::from_fn(|i| target + (o[i] - y) * gain)
 }
 
 /// Add Noise's noise at document pixel `at` for `seed`, per channel: uniform within ±0.5, or
@@ -2492,6 +2663,82 @@ mod tests {
         );
         assert!(look.reach() < filter(30.0, 40.0).reach());
         assert_eq!(filter(1.0, 1.0).plans().len(), 2);
+    }
+
+    #[test]
+    fn shadows_highlights_moves_dark_and_light_neighbourhoods_keeping_detail() {
+        let filter =
+            |shadows: [f32; 3], highlights: [f32; 3], color, midtone| Filter::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                scale: 1.0,
+            };
+        let gray = |v: f64| [v, v, v, 1.0];
+        let plain = |f: Filter, o: f64, around: f64| f.finish(gray(o), &[gray(around); 2], [0, 0]);
+        let off = filter([0.0, 50.0, 30.0], [0.0, 50.0, 30.0], 0.0, 0.0);
+        assert_eq!(plain(off, 0.3, 0.2), gray(0.3), "nothing at 0");
+        // Shadows: black in a black neighbourhood lifted to half the Tone at 100 %.
+        let shadows = filter([100.0, 50.0, 30.0], [0.0, 50.0, 30.0], 0.0, 0.0);
+        assert!((plain(shadows, 0.0, 0.0)[0] - 0.25).abs() < 1e-12);
+        // Less and less up to the Tone; beyond, nothing.
+        let (dark, darker) = (plain(shadows, 0.3, 0.3)[0], plain(shadows, 0.3, 0.1)[0]);
+        assert!(0.3 < dark && dark < darker, "{dark} {darker}");
+        assert_eq!(plain(shadows, 0.6, 0.6), gray(0.6));
+        // The pixel moves with its neighbourhood: its difference with it stays.
+        let (a, b) = (plain(shadows, 0.05, 0.1)[0], plain(shadows, 0.15, 0.1)[0]);
+        assert!((b - a - 0.1).abs() < 1e-12, "{a} {b}");
+        // Highlights: white lowered as much, the shadows' blur not read for it.
+        let highlights = filter([0.0, 50.0, 30.0], [100.0, 50.0, 30.0], 0.0, 0.0);
+        let lowered = highlights.finish(gray(1.0), &[gray(0.0), gray(1.0)], [0, 0]);
+        assert!((lowered[0] - 0.75).abs() < 1e-12, "{lowered:?}");
+        // Midtone: more contrast around middle gray, middle gray and the ends left.
+        let contrast = filter([0.0, 50.0, 30.0], [0.0, 50.0, 30.0], 0.0, 100.0);
+        assert!(plain(contrast, 0.7, 0.7)[0] > 0.7 && plain(contrast, 0.3, 0.3)[0] < 0.3);
+        for v in [0.0, 0.5, 1.0] {
+            assert!((plain(contrast, v, v)[0] - v).abs() < 1e-12);
+        }
+        // Color: the corrected color more saturated (its luma the same), less below 0.
+        let red = [0.2, 0.05, 0.05, 1.0];
+        let saturation = |color| {
+            let f = filter([100.0, 50.0, 30.0], [0.0, 50.0, 30.0], color, 0.0);
+            let c = f.finish(red, &[gray(0.1); 2], [0, 0]);
+            (c[0] - c[1], luma([c[0], c[1], c[2]]))
+        };
+        let ((low, y0), (mid, y1), (high, y2)) =
+            (saturation(-100.0), saturation(0.0), saturation(100.0));
+        assert!(low < mid && mid < high, "{low} {mid} {high}");
+        assert!((y0 - y1).abs() < 1e-12 && (y1 - y2).abs() < 1e-12);
+        // Transparent pixels stay; alpha is kept.
+        assert_eq!(shadows.finish([0.0; 4], &[[0.0; 4]; 2], [0, 0]), [0.0; 4]);
+        let half = shadows.finish([0.0, 0.0, 0.0, 0.5], &[[0.0, 0.0, 0.0, 0.5]; 2], [0, 0]);
+        assert!(
+            (half[0] - 0.125).abs() < 1e-12 && half[3] == 0.5,
+            "{half:?}"
+        );
+        // Ranges (Photoshop's); the scale is no setting: looks shrink the radii.
+        assert!(filter([100.0, 100.0, 2500.0], [0.0, 0.0, 0.0], -100.0, 100.0).is_valid());
+        for wrong in [
+            filter([101.0, 50.0, 30.0], [0.0, 50.0, 30.0], 0.0, 0.0),
+            filter([0.0, 50.0, 2501.0], [0.0, 50.0, 30.0], 0.0, 0.0),
+            filter([0.0, 50.0, 30.5], [0.0, 50.0, 30.0], 0.0, 0.0),
+            filter([0.0, 50.0, 30.0], [0.0, -1.0, 30.0], 0.0, 0.0),
+            filter([0.0, 50.0, 30.0], [0.0, 50.0, 30.0], 101.0, 0.0),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        let look = shadows.scaled(4.0);
+        assert_eq!(
+            Filter::from_params("shadowsHighlights", &look.params()),
+            Some(shadows)
+        );
+        assert_eq!(look.shadows_radii(), Some([7.5, 7.5]));
+        assert!(look.reach() < shadows.reach());
+        assert_eq!(shadows.plans().len(), 2);
+        // A radius of 0: the pixel's own tone, no less than the smallest blur.
+        let zero = filter([50.0, 50.0, 0.0], [0.0, 50.0, 30.0], 0.0, 0.0);
+        assert_eq!(zero.shadows_radii(), Some([MIN_BLUR_RADIUS, 30.0]));
     }
 
     #[test]
