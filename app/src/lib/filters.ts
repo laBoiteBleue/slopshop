@@ -30,15 +30,16 @@ export type NumberParam = {
 
 /**
  * One setting of a filter's dialog: a number; one of `options` (their index); a check box (0 or
- * 1); a seed, not shown, drawn anew each time the filter is applied (`withNewSeeds`); or a
- * coordinate of a center in percent of the frame (0 to 100), picked in a square: the `x` one
- * shows the square for itself and the `y` one that follows it.
+ * 1); a seed, drawn anew each time the filter is applied (`withNewSeeds`), not shown or, with
+ * `randomize`, a button drawing another (Wave's Randomize); or a coordinate of a center in
+ * percent of the frame (0 to 100), picked in a square: the `x` one shows the square for itself
+ * and the `y` one that follows it.
  */
 export type FilterParam =
   | NumberParam
   | { kind: "choice"; key: string; label: MessageKey; options: MessageKey[] }
   | { kind: "check"; key: string; label: MessageKey }
-  | { kind: "seed"; key: string }
+  | { kind: "seed"; key: string; randomize?: MessageKey }
   | { kind: "center"; key: string; label: MessageKey; axis: "x" | "y" };
 
 /** The seeds a filter takes: whole numbers below 2^24 (the engine's `NOISE_SEEDS`). */
@@ -78,6 +79,25 @@ const percent = (label: MessageKey): NumberParam => ({
   max: 100,
   decimals: 0,
   scale: "linear",
+});
+
+/** A whole number from `min` to `max`, evenly on its slider (Wave's, ZigZag's settings). */
+const whole = (
+  key: string,
+  label: MessageKey,
+  [min, max]: [number, number],
+  unit?: MessageKey,
+  group?: MessageKey,
+): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  unit,
+  min,
+  max,
+  decimals: 0,
+  scale: "linear",
+  group,
 });
 
 /** A shift in whole pixels either way, Offset's (Photoshop's -30000 to 30000). */
@@ -383,7 +403,76 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
   },
   average: { params: [], defaults: [] },
   pinch: { params: [percent("filter.pinch.amount")], defaults: [50] },
-  spherize: { params: [percent("filter.spherize.amount")], defaults: [100] },
+  spherize: {
+    params: [
+      percent("filter.spherize.amount"),
+      {
+        kind: "choice",
+        key: "mode",
+        label: "filter.spherize.mode",
+        options: [
+          "filter.spherize.normal",
+          "filter.spherize.horizontalOnly",
+          "filter.spherize.verticalOnly",
+        ],
+      },
+    ],
+    defaults: [100, 0],
+  },
+  ripple: {
+    params: [
+      whole("amount", "filter.ripple.amount", [-999, 999], "filter.percent"),
+      {
+        kind: "choice",
+        key: "size",
+        label: "filter.ripple.size",
+        options: ["filter.ripple.small", "filter.ripple.medium", "filter.ripple.large"],
+      },
+    ],
+    defaults: [100, 1],
+  },
+  wave: {
+    params: [
+      whole("generators", "filter.wave.generators", [1, 999]),
+      whole("wavelengthMin", "filter.wave.min", [1, 999], undefined, "filter.wave.wavelength"),
+      whole("wavelengthMax", "filter.wave.max", [1, 999], undefined, "filter.wave.wavelength"),
+      whole("amplitudeMin", "filter.wave.min", [1, 999], undefined, "filter.wave.amplitude"),
+      whole("amplitudeMax", "filter.wave.max", [1, 999], undefined, "filter.wave.amplitude"),
+      whole("scaleH", "filter.wave.horizontal", [1, 100], "filter.percent", "filter.wave.scale"),
+      whole("scaleV", "filter.wave.vertical", [1, 100], "filter.percent", "filter.wave.scale"),
+      {
+        kind: "choice",
+        key: "type",
+        label: "filter.wave.type",
+        options: ["filter.wave.sine", "filter.wave.triangle", "filter.wave.square"],
+      },
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.offset.edge",
+        options: ["filter.offset.wrap", "filter.offset.repeat"],
+      },
+      { kind: "seed", key: "seed", randomize: "filter.wave.randomize" },
+    ],
+    defaults: [5, 10, 120, 5, 35, 100, 100, 0, 1, 0],
+  },
+  zigZag: {
+    params: [
+      whole("amount", "filter.zigZag.amount", [-100, 100]),
+      whole("ridges", "filter.zigZag.ridges", [1, 20]),
+      {
+        kind: "choice",
+        key: "style",
+        label: "filter.zigZag.style",
+        options: [
+          "filter.zigZag.aroundCenter",
+          "filter.zigZag.outFromCenter",
+          "filter.zigZag.pondRipples",
+        ],
+      },
+    ],
+    defaults: [10, 5, 2],
+  },
   polarCoordinates: {
     params: [
       {
@@ -507,9 +596,12 @@ export function withNewSeeds(
   values: number[],
   random: () => number = Math.random,
 ): number[] {
-  return values.map((v, i) =>
-    FILTERS[filter].params[i]?.kind === "seed" ? Math.floor(random() * SEEDS) : v,
-  );
+  return values.map((v, i) => (FILTERS[filter].params[i]?.kind === "seed" ? newSeed(random) : v));
+}
+
+/** Another seed (Wave's Randomize): a whole number below `SEEDS`. */
+export function newSeed(random: () => number = Math.random): number {
+  return Math.floor(random() * SEEDS);
 }
 
 /** A slider position (0–1000) for value `v` of `param`. */
@@ -543,7 +635,10 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
       "surfaceBlur",
     ],
   },
-  { label: "menu.filter.distort", filters: ["pinch", "polarCoordinates", "spherize", "twirl"] },
+  {
+    label: "menu.filter.distort",
+    filters: ["pinch", "polarCoordinates", "ripple", "spherize", "twirl", "wave", "zigZag"],
+  },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
   { label: "menu.filter.pixelate", filters: ["mosaic"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
