@@ -1322,6 +1322,8 @@ export type AppInfo = {
   license: string;
   /** The project's page. */
   repository: string;
+  /** The bundled font's license (Inter, SIL Open Font License 1.1). */
+  fontLicense?: string;
 };
 
 /** A page of the project the Help menu opens (the engine knows the addresses). */

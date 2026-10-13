@@ -602,6 +602,8 @@ const en = {
   "about.tagline": "An open-source, non-destructive image editor.",
   "about.license": "License",
   "about.project": "Project",
+  "about.fonts": "Fonts",
+  "about.interFont": "Inter, SIL Open Font License 1.1",
 
   "document.untitled": "Untitled",
   "newDocument.title": "New",

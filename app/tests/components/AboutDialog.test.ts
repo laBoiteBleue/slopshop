@@ -25,6 +25,7 @@ function open() {
       version: "1.2.3",
       license: "GPL-3.0-only",
       repository: "https://github.com/example/slopshop",
+      fontLicense: "Copyright (c) 2016 The Inter Project Authors",
     },
     onclose,
   });
@@ -43,6 +44,12 @@ test("it shows the name, the version as built, the license and the project", () 
   expect(screen.getByText(/open-source/)).toBeInTheDocument();
   expect(definition("License")).toHaveTextContent("GPL-3.0-only");
   expect(definition("Project")).toHaveTextContent("github.com/example/slopshop");
+});
+
+test("the bundled font's license goes with it", async () => {
+  const { user } = open();
+  await user.click(screen.getByText("Inter, SIL Open Font License 1.1"));
+  expect(screen.getByText(/The Inter Project Authors/)).toBeVisible();
 });
 
 test("the project's link asks the engine to open its page, by name", async () => {

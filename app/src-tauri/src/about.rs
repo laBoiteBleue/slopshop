@@ -19,6 +19,8 @@ pub(crate) struct AppInfo {
     license: &'static str,
     /// The project's page.
     repository: &'static str,
+    /// The bundled font's license (Inter, SIL Open Font License), which must go with it.
+    font_license: &'static str,
 }
 
 #[tauri::command]
@@ -27,6 +29,7 @@ pub(crate) fn app_info(app: AppHandle) -> AppInfo {
         version: app.package_info().version.to_string(),
         license: env!("CARGO_PKG_LICENSE"),
         repository: REPOSITORY,
+        font_license: slopshop_text::INTER_LICENSE,
     }
 }
 

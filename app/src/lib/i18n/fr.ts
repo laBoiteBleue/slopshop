@@ -610,6 +610,8 @@ const fr: Messages = {
   "about.tagline": "Un éditeur d'images open source et non destructif.",
   "about.license": "Licence",
   "about.project": "Projet",
+  "about.fonts": "Polices",
+  "about.interFont": "Inter, licence SIL Open Font License 1.1",
 
   "document.untitled": "Sans titre",
   "newDocument.title": "Nouveau",
