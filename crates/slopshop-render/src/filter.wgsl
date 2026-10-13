@@ -11,7 +11,8 @@ struct Params {
     reach: u32,
     // What a pixel becomes from its blur: 0 the blur (Gaussian Blur), 1 Unsharp Mask, 2 High
     // Pass, 4 kept in `aux` for the next pass (Texture's fine blur), 5 Clarity and Texture from
-    // it and this blur. (`line_main`, Motion Blur, has its own entry point: `reach` is its
+    // it and this blur, 6 Shadows/Highlights from it (the shadows' blur) and this one (the
+    // highlights'), its settings in `weights` past the kernel's. (`line_main`, Motion Blur, has its own entry point: `reach` is its
     // samples' count, `weights` their offsets, x then y; so has `noise_main`, Add Noise:
     // `weights` is the crop's map to the document, a to f; and `median_main`, Dust & Scratches:
     // `reach` is its radius.)
@@ -95,6 +96,41 @@ fn clarity(original: vec4<f32>, fine: vec4<f32>, broad: vec4<f32>) -> vec4<f32> 
     return vec4<f32>(c * alpha, alpha);
 }
 
+// How much a neighbourhood `distance` from black (or white) is corrected for `tone`: from 1 down
+// to 0 at `tone`, smoothly (`filter::shadows_highlights`).
+fn tone_weight(distance: f32, tone: f32) -> f32 {
+    if tone <= 0.0 {
+        return 0.0;
+    }
+    let x = clamp(1.0 - distance / tone, 0.0, 1.0);
+    return x * x * (3.0 - 2.0 * x);
+}
+
+// Shadows/Highlights (`filter::shadows_highlights`) from the neighbourhoods' blurs: the luma
+// moved with its neighbourhood, Midtone's contrast, Color's saturation; alpha kept. Its settings
+// follow the kernel's weights: the shadows' amount and tone, the highlights', Color, Midtone (in
+// parts of 1), then `SHADOWS_LIFT`.
+fn shadows_highlights(original: vec4<f32>, dark: vec4<f32>, light: vec4<f32>) -> vec4<f32> {
+    let alpha = original.a;
+    if alpha <= 0.0 {
+        return original;
+    }
+    let s = 2u * params.reach + 1u;
+    let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let o = straight(original);
+    let y = dot(o, luma);
+    let lift = weights[s + 6u];
+    let up = weights[s] * tone_weight(max(dot(straight(dark), luma), 0.0), weights[s + 1u])
+        * weights[s + 1u] * lift;
+    let down = weights[s + 2u]
+        * tone_weight(max(1.0 - dot(straight(light), luma), 0.0), weights[s + 3u])
+        * weights[s + 3u] * lift;
+    let moved = clamp(y + up - down, 0.0, 1.0);
+    let aim = moved + weights[s + 5u] * (moved - 0.5) * 2.0 * moved * (1.0 - moved);
+    let gain = max(1.0 + 4.0 * weights[s + 4u] * abs(aim - y), 0.0);
+    return vec4<f32>((aim + (o - y) * gain) * alpha, alpha);
+}
+
 // A byte as the CPU rounds it: half away from zero, after clamping.
 fn byte(v: f32) -> u32 {
     return u32(floor(clamp(v, 0.0, 1.0) * 255.0 + 0.5));
@@ -120,6 +156,8 @@ fn columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     if params.mode == 5u {
         sum = clarity(premultiplied(packed[i]), rows[kept], sum);
+    } else if params.mode == 6u {
+        sum = shadows_highlights(premultiplied(packed[i]), rows[kept], sum);
     } else if params.mode != 0u {
         sum = finish(premultiplied(packed[i]), sum);
     }

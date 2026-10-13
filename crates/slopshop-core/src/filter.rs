@@ -167,7 +167,7 @@ pub const MAX_SHADOWS_COLOR: f32 = 100.0;
 
 /// How far Shadows/Highlights moves a neighbourhood at 100 %, in parts of its Tone: black lifted
 /// to half the Tone (white lowered by as much).
-const SHADOWS_LIFT: f64 = 0.5;
+pub const SHADOWS_LIFT: f64 = 0.5;
 
 /// Unsharp Mask's amount range, in percent (Photoshop's).
 pub const MIN_SHARPEN_AMOUNT: f32 = 1.0;
