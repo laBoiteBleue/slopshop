@@ -1462,6 +1462,11 @@ export type PaintRequest = {
     /** Smudge, by this strength in [0, 1]: the pixels pushed along the stroke. */
     smudge?: number;
   };
+  /**
+   * The Pattern Stamp (ADR 0042): pattern `source` (loaded for the document, `loadPattern`)
+   * repeated across the canvas, its texel (0, 0) at document point `origin`.
+   */
+  pattern?: { source: number; origin: [number, number] };
 };
 
 /** A request of a Move tool drag moving selected pixels (see `move_pixels::MovePixelsRequest`). */
@@ -2153,9 +2158,19 @@ export const engine = {
     color: [number, number, number] | null,
     opacity: number,
     stroke: StrokeRequest | null,
+    /** Fill > Pattern: a pattern loaded for the document (`loadPattern`), from its origin. */
+    pattern: number | null = null,
   ) =>
     serial(() =>
-      invoke<DocumentView>("fill", { documentId, layerId, target, color, opacity, stroke }),
+      invoke<DocumentView>("fill", {
+        documentId,
+        layerId,
+        target,
+        color,
+        opacity,
+        stroke,
+        pattern,
+      }),
     ),
   /**
    * The color picker's eyedropper: the color shown at a document point (every visible layer),

@@ -1,14 +1,34 @@
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import FillDialog from "../../src/lib/FillDialog.svelte";
+
+// The pattern's thumbnail asks the engine: a 1 × 1 one.
+beforeEach(() =>
+  mockIPC((cmd) =>
+    cmd === "pattern_thumbnail"
+      ? new Uint8Array([1, 0, 0, 0, 1, 0, 0, 0, 9, 9, 9, 255]).buffer
+      : null,
+  ),
+);
+afterEach(() => clearMocks());
 
 function open(color = "#336699") {
   const onpickcolor = vi.fn();
+  const onpickpattern = vi.fn();
   const onchoose = vi.fn();
   const onclose = vi.fn();
-  render(FillDialog, { color, onpickcolor, onchoose, onclose });
-  return { onpickcolor, onchoose, onclose, user: userEvent.setup() };
+  render(FillDialog, {
+    color,
+    pattern: "builtin:dots",
+    patternName: "Dots",
+    onpickcolor,
+    onpickpattern,
+    onchoose,
+    onclose,
+  });
+  return { onpickcolor, onpickpattern, onchoose, onclose, user: userEvent.setup() };
 }
 
 const contents = () => screen.getByRole("combobox", { name: "Contents:" });
@@ -52,6 +72,22 @@ test("Color… opens the color picker at once, and its swatch opens it again", a
   await user.click(swatch);
   expect(onpickcolor).toHaveBeenCalledTimes(2);
   expect(onchoose).not.toHaveBeenCalled();
+});
+
+test("Pattern shows the pattern painted, which a click changes, and applies", async () => {
+  const { onpickpattern, onchoose, onpickcolor, user } = open();
+  expect(screen.queryByRole("button", { name: "Pattern: Dots" })).not.toBeInTheDocument();
+  await user.clear(opacity());
+  await user.type(opacity(), "60");
+  await user.selectOptions(contents(), "pattern");
+  // Unlike Color…, a pattern is chosen already: no picker at once.
+  expect(onpickpattern).not.toHaveBeenCalled();
+  expect(onpickcolor).not.toHaveBeenCalled();
+  const swatch = screen.getByRole("button", { name: "Pattern: Dots" });
+  await user.click(swatch);
+  expect(onpickpattern).toHaveBeenCalledWith({ contents: "pattern", opacity: 0.6 });
+  await user.click(ok());
+  expect(onchoose).toHaveBeenCalledWith({ contents: "pattern", opacity: 0.6 });
 });
 
 test("Enter on the closed list applies, as in Photoshop", async () => {

@@ -119,7 +119,7 @@
   import PatternPicker from "./lib/PatternPicker.svelte";
   import DefinePatternDialog from "./lib/DefinePatternDialog.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
-  import { nextPatternName } from "./lib/patterns";
+  import { nextPatternName, patternName } from "./lib/patterns";
   import NewDocumentDialog, { type NewDocumentSettings } from "./lib/NewDocumentDialog.svelte";
   import ColorPickerDialog from "./lib/ColorPickerDialog.svelte";
   import RecentFiles from "./lib/RecentFiles.svelte";
@@ -865,6 +865,8 @@
     restore: boolean;
     /** The Clone Stamp's source. */
     clone?: PaintRequest["clone"];
+    /** The Pattern Stamp's pattern (set once it is loaded for the document). */
+    pattern?: PaintRequest["pattern"];
     sending: boolean;
     waiting: [number, number, number][];
     ended: boolean;
@@ -889,6 +891,36 @@
     aligned: true,
     sample: "layer" as "all" | "layer",
   });
+  /**
+   * The Pattern Stamp (S, with the Clone Stamp; ADR 0042): its brush, the library pattern it
+   * paints, and Aligned (the pattern anchored at the document's origin; else each stroke starts
+   * it again where it begins), as Photoshop's.
+   */
+  let patternStampOptions = $state({
+    size: 30,
+    hardness: 0.5,
+    opacity: 1,
+    flow: 1,
+    pressureSize: true,
+    pressureOpacity: false,
+    aligned: true,
+    pattern: { id: "builtin:checkers", name: "" } as PatternEntry,
+  });
+  /** Library patterns loaded for a document (`loadPattern`): their sources' ids, by `document:pattern`. */
+  const loadedPatterns = new Map<string, Promise<number>>();
+
+  /** Library pattern `entry` loaded for document `documentId` (once): its source's id. */
+  function loadedPattern(documentId: number, entry: PatternEntry): Promise<number> {
+    const key = `${documentId}:${entry.id}`;
+    let loading = loadedPatterns.get(key);
+    if (!loading) {
+      loading = engine.loadPattern(documentId, entry.id, patternName(entry, t));
+      loading.catch(() => loadedPatterns.delete(key));
+      loadedPatterns.set(key, loading);
+    }
+    return loading;
+  }
+
   /** Blur and Sharpen: a soft brush and their strength (Photoshop's 50 %). */
   let focusOptions = $state({
     size: 30,
@@ -933,6 +965,7 @@
     if (isToneTool(tool)) return toneOptions;
     if (isFocusTool(tool)) return focusOptions;
     if (tool === "cloneStamp") return cloneOptions;
+    if (tool === "patternStamp") return patternStampOptions;
     return tool === "healingBrush" ? healOptions : brushOptions;
   }
 
@@ -998,6 +1031,16 @@
         options.sample === "layer" ? (layersPanel?.selectedLayer()?.id ?? null) : null;
       clone = { offset, sourceLayer, heal: tool === "healingBrush" };
     }
+    // The Pattern Stamp: its pattern loaded for the document before the stroke is sent; Aligned
+    // anchors it at the document's origin, else at where the stroke starts.
+    let pattern: { loading: Promise<number>; origin: [number, number] } | null = null;
+    if (tool === "patternStamp" && (phase === "start" || phase === "line")) {
+      const { aligned, pattern: entry } = patternStampOptions;
+      pattern = {
+        loading: loadedPattern(doc.id, entry),
+        origin: aligned ? [0, 0] : [samples[0][0], samples[0][1]],
+      };
+    }
     if (phase === "start" || phase === "line") {
       commitTransform();
       const layer = layersPanel?.selectedLayer() ?? null;
@@ -1046,6 +1089,24 @@
       };
       const last = lastPaintPoint.get(doc.id);
       if (phase === "line" && last) samples = [last, ...samples];
+      if (pattern && paintRun) {
+        const run = paintRun;
+        const { origin } = pattern;
+        // Held until the pattern is there; the samples wait meanwhile.
+        run.sending = true;
+        pattern.loading
+          .then((source) => {
+            run.pattern = { source, origin };
+            run.sending = false;
+            sendPaint(run);
+          })
+          .catch((e) => {
+            run.failed = true;
+            run.sending = false;
+            if (paintRun === run) paintRun = null;
+            showError(String(e));
+          });
+      }
     }
     const run = paintRun;
     if (!run || run.ended || run.documentId !== doc.id) return;
@@ -1189,7 +1250,12 @@
    * layer `layer` (the Properties panel).
    */
   let patternPicker = $state<
-    { kind: "new" } | { kind: "replace"; layer: number } | { kind: "overlay" } | null
+    | { kind: "new" }
+    | { kind: "replace"; layer: number }
+    | { kind: "overlay" }
+    | { kind: "fill" }
+    | { kind: "stamp" }
+    | null
   >(null);
   /** Edit > Define Pattern's dialog, with the name it proposes. */
   let definingPattern = $state<{ documentId: number; name: string } | null>(null);
@@ -1199,6 +1265,14 @@
     const doc = active;
     const picker = patternPicker;
     patternPicker = null;
+    if (picker?.kind === "stamp") {
+      patternStampOptions.pattern = entry;
+      return;
+    }
+    if (picker?.kind === "fill") {
+      if (fillDialog) fillDialog = { ...fillDialog, pattern: entry, picking: false };
+      return;
+    }
     if (!doc || !picker) return;
     if (picker.kind === "overlay") {
       void overlayPattern(doc.id, entry, name);
@@ -1854,7 +1928,11 @@
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
-  let fillDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
+  let fillDialog = $state<
+    (PaintedLayer & { color: string; pattern: PatternEntry; picking: boolean }) | null
+  >(null);
+  /** Fill's pattern, chosen last (for the session); the first generated one at first. */
+  let fillPattern: PatternEntry = { id: "builtin:checkers", name: "" };
   /** Edit > Stroke is open, for this layer, with its color; hidden while the color is picked. */
   let strokeDialog = $state<(PaintedLayer & { color: string; picking: boolean }) | null>(null);
   /** A color picked for Fill or Stroke. */
@@ -1974,6 +2052,10 @@
     const target = fillDialog;
     fillDialog = null;
     if (!target) return;
+    if (contents === "pattern") {
+      void fillWithPattern(target, target.pattern, opacity);
+      return;
+    }
     const hex =
       contents === "color"
         ? target.color
@@ -1983,9 +2065,33 @@
     paintPixels(target, hex, opacity);
   }
 
+  /** Fill > Pattern (ADR 0042): the pattern loaded for the document, then painted. */
+  async function fillWithPattern(target: PaintedLayer, entry: PatternEntry, opacity: number) {
+    fillPattern = entry;
+    const kind = target.target ?? (target.mask ? "mask" : "layer");
+    let source: number;
+    try {
+      source = await loadedPattern(target.documentId, entry);
+    } catch (e) {
+      showError(String(e));
+      return;
+    }
+    await sync(engine.fill(target.documentId, target.layerId, kind, null, opacity, null, source));
+  }
+
   function openFill() {
     const target = paintedLayer();
-    if (target) fillDialog = { ...target, color: paintColors().foreground, picking: false };
+    if (target) {
+      const color = paintColors().foreground;
+      fillDialog = { ...target, color, pattern: fillPattern, picking: false };
+    }
+  }
+
+  /** Fill's pattern swatch: the pattern picker, then the Fill dialog again. */
+  function pickFillPattern() {
+    if (!fillDialog) return;
+    fillDialog = { ...fillDialog, picking: true };
+    patternPicker = { kind: "fill" };
   }
 
   /** Fill's Color…: the picker, then the Fill dialog again with the color chosen. */
@@ -2048,6 +2154,7 @@
         color: run.color,
         restore: run.restore,
         clone: run.clone,
+        pattern: run.pattern,
         samples,
         end,
       })
@@ -5736,6 +5843,9 @@
       bind:brush={brushOptions}
       bind:eraser={eraserOptions}
       bind:clone={cloneOptions}
+      bind:patternStamp={patternStampOptions}
+      patternName={patternName(patternStampOptions.pattern, t)}
+      onpickpattern={() => (patternPicker = { kind: "stamp" })}
       bind:heal={healOptions}
       bind:tone={toneOptions}
       bind:focus={focusOptions}
@@ -6368,7 +6478,10 @@
 {#if fillDialog && !fillDialog.picking}
   <FillDialog
     color={fillDialog.color}
+    pattern={fillDialog.pattern.id}
+    patternName={patternName(fillDialog.pattern, t)}
     onpickcolor={pickFillColor}
+    onpickpattern={pickFillPattern}
     onchoose={applyFill}
     onclose={() => (fillDialog = null)}
   />
@@ -6380,12 +6493,15 @@
         ? "menu.layer.newFill.pattern"
         : patternPicker.kind === "overlay"
           ? "style.patternOverlay"
-          : "patterns.replace",
+          : patternPicker.kind === "fill" || patternPicker.kind === "stamp"
+            ? "fillChoice.choosePattern"
+            : "patterns.replace",
     ).replace("…", "")}
     onpick={pickPattern}
     onclose={() => {
       patternPicker = null;
       if (styleDialog) styleDialog.picking = false;
+      if (fillDialog) fillDialog = { ...fillDialog, picking: false };
     }}
   />
 {/if}
