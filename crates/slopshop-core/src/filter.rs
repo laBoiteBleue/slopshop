@@ -55,6 +55,81 @@ pub const MAX_OFFSET: f32 = 30000.0;
 /// Twirl's angle range in degrees, either way (Photoshop's).
 pub const MAX_TWIRL: f32 = 999.0;
 
+/// Radial Blur's amount range (Photoshop's): Spin turns through as many degrees, Zoom reads along
+/// the line to the center up to [`ZOOM_SPAN`] of its distance at 100.
+pub const MIN_RADIAL_AMOUNT: f32 = 1.0;
+pub const MAX_RADIAL_AMOUNT: f32 = 100.0;
+
+/// The part of a pixel's distance to the center a Zoom of amount 100 reads along, half inward
+/// and half outward.
+pub const ZOOM_SPAN: f64 = 0.5;
+
+/// Surface Blur's radius range in whole pixels, and threshold range in levels (Photoshop's).
+pub const MIN_SURFACE_RADIUS: f32 = 1.0;
+pub const MAX_SURFACE_RADIUS: f32 = 100.0;
+pub const MIN_SURFACE_THRESHOLD: f32 = 2.0;
+pub const MAX_SURFACE_THRESHOLD: f32 = 255.0;
+
+/// A Surface Blur reads at most this many pixels on each side of a pixel along an axis: up to
+/// that radius every pixel of the square, beyond every few (the square's pixels evenly spaced),
+/// so that whatever the radius it costs about the same.
+pub const SURFACE_TAPS: usize = 8;
+
+/// Smart Blur's radius and threshold ranges (Photoshop's): the radius in pixels, the threshold
+/// in levels (of 8 bits).
+pub const MIN_SMART_RADIUS: f32 = 0.1;
+pub const MAX_SMART_RADIUS: f32 = 100.0;
+pub const MIN_SMART_THRESHOLD: f32 = 0.1;
+pub const MAX_SMART_THRESHOLD: f32 = 100.0;
+
+/// Smart Blur's Quality (Photoshop's Low, Medium, High): at most how many pixels it reads on each
+/// side of a pixel along an axis (beyond, the disk's pixels evenly spaced).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmartQuality {
+    Low,
+    Medium,
+    High,
+}
+
+impl SmartQuality {
+    fn taps(self) -> usize {
+        match self {
+            Self::Low => 4,
+            Self::Medium => 8,
+            Self::High => 12,
+        }
+    }
+}
+
+/// What Smart Blur shows (Photoshop's Mode): the blur, its edges white on black, or the blur with
+/// its edges white over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmartMode {
+    Normal,
+    EdgeOnly,
+    OverlayEdge,
+}
+
+/// A Radial Blur's sampling (Photoshop's Quality): Draft few samples (grainy), Good one per pixel
+/// of the path, Best two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialQuality {
+    Draft,
+    Good,
+    Best,
+}
+
+impl RadialQuality {
+    /// Samples per pixel of the path, and at most how many.
+    fn sampling(self) -> (f64, usize) {
+        match self {
+            Self::Draft => (0.25, 24),
+            Self::Good => (1.0, 96),
+            Self::Best => (2.0, 256),
+        }
+    }
+}
+
 /// What Offset brings in where the layer moved away (Photoshop's Undefined Areas).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetEdge {
@@ -179,6 +254,33 @@ pub enum Filter {
     /// Photoshop's Spherize (Normal): as if wrapped around a sphere filling the frame's
     /// inscribed ellipse, bulging (a positive `amount`, percent) or hollow (negative).
     Spherize { amount: f32 },
+    /// Photoshop's Radial Blur: each pixel the average of the layer along the arc through it
+    /// around `center` (Spin, `amount` degrees) or along the line to it (`zoom`, see
+    /// [`ZOOM_SPAN`]), centered on the pixel; `center` in percent of the frame (the selection's
+    /// box or the layer), `quality` how many samples.
+    RadialBlur {
+        amount: f32,
+        zoom: bool,
+        quality: RadialQuality,
+        center: [f32; 2],
+    },
+    /// Photoshop's Surface Blur: each pixel the average of the square of `radius` pixels around
+    /// it, channel by channel, each value weighted by how close it is to the pixel's (nothing
+    /// from `2.5 × threshold` levels apart): flat areas smoothed, edges kept.
+    SurfaceBlur { radius: f32, threshold: f32 },
+    /// Photoshop's Smart Blur: each pixel the average of the pixels of the disk of `radius`
+    /// around it that differ from it by less than `threshold` levels on every channel; `mode`
+    /// shows that, or the edges (pixels a neighbor differs from by `threshold` or more) white on
+    /// black, or white over the blur. `quality`: how many pixels of the disk it reads.
+    SmartBlur {
+        radius: f32,
+        threshold: f32,
+        quality: SmartQuality,
+        mode: SmartMode,
+    },
+    /// Photoshop's Average: the layer (the selection when there is one) filled with its average
+    /// color, each pixel keeping its own opacity.
+    Average,
     /// Photoshop's Polar Coordinates: rectangular to polar (`to_polar`: the frame's top edge at
     /// its center, its width around it) or back.
     PolarCoordinates { to_polar: bool },
@@ -195,10 +297,14 @@ pub enum Filter {
 
 impl Filter {
     /// Every filter's identifier, in menu order.
-    pub const IDS: [&'static str; 20] = [
+    pub const IDS: [&'static str; 24] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
+        "radialBlur",
+        "smartBlur",
+        "surfaceBlur",
+        "average",
         "unsharpMask",
         "addNoise",
         "dustAndScratches",
@@ -241,6 +347,10 @@ impl Filter {
             Self::Pinch { .. } => "pinch",
             Self::Spherize { .. } => "spherize",
             Self::PolarCoordinates { .. } => "polarCoordinates",
+            Self::RadialBlur { .. } => "radialBlur",
+            Self::SurfaceBlur { .. } => "surfaceBlur",
+            Self::SmartBlur { .. } => "smartBlur",
+            Self::Average => "average",
         }
     }
 
@@ -297,6 +407,43 @@ impl Filter {
             Self::Twirl { angle } => vec![angle],
             Self::Pinch { amount } | Self::Spherize { amount } => vec![amount],
             Self::PolarCoordinates { to_polar } => vec![f32::from(u8::from(to_polar))],
+            Self::RadialBlur {
+                amount,
+                zoom,
+                quality,
+                center,
+            } => vec![
+                amount,
+                f32::from(u8::from(zoom)),
+                match quality {
+                    RadialQuality::Draft => 0.0,
+                    RadialQuality::Good => 1.0,
+                    RadialQuality::Best => 2.0,
+                },
+                center[0],
+                center[1],
+            ],
+            Self::SurfaceBlur { radius, threshold } => vec![radius, threshold],
+            Self::SmartBlur {
+                radius,
+                threshold,
+                quality,
+                mode,
+            } => vec![
+                radius,
+                threshold,
+                match quality {
+                    SmartQuality::Low => 0.0,
+                    SmartQuality::Medium => 1.0,
+                    SmartQuality::High => 2.0,
+                },
+                match mode {
+                    SmartMode::Normal => 0.0,
+                    SmartMode::EdgeOnly => 1.0,
+                    SmartMode::OverlayEdge => 2.0,
+                },
+            ],
+            Self::Average => Vec::new(),
         }
     }
 
@@ -342,6 +489,39 @@ impl Filter {
                 1.0 => Some(Self::PolarCoordinates { to_polar: true }),
                 _ => None,
             },
+            ("radialBlur", &[amount, method, quality, x, y]) => Some(Self::RadialBlur {
+                amount,
+                zoom: match method {
+                    0.0 => false,
+                    1.0 => true,
+                    _ => return None,
+                },
+                quality: match quality {
+                    0.0 => RadialQuality::Draft,
+                    1.0 => RadialQuality::Good,
+                    2.0 => RadialQuality::Best,
+                    _ => return None,
+                },
+                center: [x, y],
+            }),
+            ("surfaceBlur", &[radius, threshold]) => Some(Self::SurfaceBlur { radius, threshold }),
+            ("smartBlur", &[radius, threshold, quality, mode]) => Some(Self::SmartBlur {
+                radius,
+                threshold,
+                quality: match quality {
+                    0.0 => SmartQuality::Low,
+                    1.0 => SmartQuality::Medium,
+                    2.0 => SmartQuality::High,
+                    _ => return None,
+                },
+                mode: match mode {
+                    0.0 => SmartMode::Normal,
+                    1.0 => SmartMode::EdgeOnly,
+                    2.0 => SmartMode::OverlayEdge,
+                    _ => return None,
+                },
+            }),
+            ("average", &[]) => Some(Self::Average),
             ("dustAndScratches", &[radius, threshold]) => {
                 Some(Self::DustAndScratches { radius, threshold })
             }
@@ -416,6 +596,23 @@ impl Filter {
             "pinch" => Some(Self::Pinch { amount: 50.0 }),
             "spherize" => Some(Self::Spherize { amount: 100.0 }),
             "polarCoordinates" => Some(Self::PolarCoordinates { to_polar: true }),
+            "radialBlur" => Some(Self::RadialBlur {
+                amount: 10.0,
+                zoom: false,
+                quality: RadialQuality::Good,
+                center: [50.0, 50.0],
+            }),
+            "surfaceBlur" => Some(Self::SurfaceBlur {
+                radius: 5.0,
+                threshold: 15.0,
+            }),
+            "smartBlur" => Some(Self::SmartBlur {
+                radius: 3.0,
+                threshold: 25.0,
+                quality: SmartQuality::Low,
+                mode: SmartMode::Normal,
+            }),
+            "average" => Some(Self::Average),
             _ => None,
         }
     }
@@ -496,7 +693,28 @@ impl Filter {
             Self::Pinch { amount } | Self::Spherize { amount } => {
                 amount.is_finite() && (-100.0..=100.0).contains(&amount)
             }
-            Self::PolarCoordinates { .. } => true,
+            Self::PolarCoordinates { .. } | Self::Average => true,
+            Self::RadialBlur { amount, center, .. } => {
+                amount.fract() == 0.0
+                    && (MIN_RADIAL_AMOUNT..=MAX_RADIAL_AMOUNT).contains(&amount)
+                    && center
+                        .iter()
+                        .all(|v| v.is_finite() && (0.0..=100.0).contains(v))
+            }
+            Self::SurfaceBlur { radius, threshold } => {
+                radius.fract() == 0.0
+                    && (MIN_SURFACE_RADIUS..=MAX_SURFACE_RADIUS).contains(&radius)
+                    && threshold.fract() == 0.0
+                    && (MIN_SURFACE_THRESHOLD..=MAX_SURFACE_THRESHOLD).contains(&threshold)
+            }
+            Self::SmartBlur {
+                radius, threshold, ..
+            } => {
+                radius.is_finite()
+                    && (MIN_SMART_RADIUS..=MAX_SMART_RADIUS).contains(&radius)
+                    && threshold.is_finite()
+                    && (MIN_SMART_THRESHOLD..=MAX_SMART_THRESHOLD).contains(&threshold)
+            }
         }
     }
 
@@ -522,7 +740,11 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
-            | Self::PolarCoordinates { .. } => None,
+            | Self::PolarCoordinates { .. }
+            | Self::RadialBlur { .. }
+            | Self::SurfaceBlur { .. }
+            | Self::SmartBlur { .. }
+            | Self::Average => None,
         }
     }
 
@@ -598,8 +820,27 @@ impl Filter {
             Self::Mosaic { cell } => Self::Mosaic {
                 cell: (cell / factor).max(1.0),
             },
-            // Mapped in the layer's own pixels whatever the level (see [`Self::source`]).
-            Self::Offset { .. }
+            Self::SurfaceBlur { radius, threshold } => Self::SurfaceBlur {
+                radius: (radius / factor).round().max(MIN_SURFACE_RADIUS),
+                threshold,
+            },
+            Self::SmartBlur {
+                radius,
+                threshold,
+                quality,
+                mode,
+            } => Self::SmartBlur {
+                radius: (radius / factor).max(MIN_SMART_RADIUS),
+                threshold,
+                quality,
+                mode,
+            },
+            // Of the whole layer whatever the level.
+            Self::Average => Self::Average,
+            // Mapped in the layer's own pixels whatever the level (see [`Self::source`] and
+            // [`Self::radial_samples`]).
+            Self::RadialBlur { .. }
+            | Self::Offset { .. }
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
@@ -631,8 +872,13 @@ impl Filter {
             Self::FindEdges => 2.0,
             Self::Emboss { height, .. } => f64::from(height) + 2.0,
             Self::Mosaic { cell } => f64::from(cell) + 2.0,
+            Self::SurfaceBlur { radius, .. } | Self::SmartBlur { radius, .. } => {
+                f64::from(radius).ceil() + 2.0
+            }
             // A pixel may read from anywhere in the layer.
-            Self::Offset { .. }
+            Self::RadialBlur { .. }
+            | Self::Average
+            | Self::Offset { .. }
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
@@ -707,8 +953,32 @@ impl Filter {
                 factor: 1,
                 kernel: Kernel::Cells(f64::from(cell)),
             },
-            // Sampled where [`Self::source`] says, not filtered by a kernel.
-            Self::Offset { .. }
+            Self::SurfaceBlur { radius, threshold } => Plan {
+                factor: 1,
+                kernel: Kernel::Surface {
+                    radius: radius as usize,
+                    threshold: f64::from(threshold) / 255.0,
+                },
+            },
+            Self::SmartBlur {
+                radius,
+                threshold,
+                quality,
+                mode,
+            } => Plan {
+                factor: 1,
+                kernel: Kernel::Smart {
+                    radius: f64::from(radius),
+                    threshold: f64::from(threshold) / 255.0,
+                    taps: quality.taps(),
+                    mode,
+                },
+            },
+            // Sampled where [`Self::source`] and [`Self::radial_samples`] say, or of the whole
+            // layer: not filtered by a kernel.
+            Self::RadialBlur { .. }
+            | Self::Average
+            | Self::Offset { .. }
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
@@ -735,6 +1005,72 @@ impl Filter {
                 | Self::Spherize { .. }
                 | Self::PolarCoordinates { .. }
         )
+    }
+
+    /// Whether the filter works within a frame (the selection's box or the layer): a distortion,
+    /// or Radial Blur around its center.
+    pub fn framed(&self) -> bool {
+        self.samples() || matches!(self, Self::RadialBlur { .. })
+    }
+
+    /// Radial Blur's samples for the pixel at layer point `p` (layer pixels) in `frame`
+    /// (`[left, top, right, bottom]`, as [`Self::source`]'s), each image pixel `pixel` layer
+    /// pixels (more on a reduced level): `each` called with each point to read (layer pixels),
+    /// evenly spread along the arc (or the line) centered on `p`, as many as the quality takes
+    /// for the path's length in image pixels; the number of points. Only `p` for another filter,
+    /// or a path shorter than half a pixel.
+    pub fn radial_samples(
+        &self,
+        p: [f64; 2],
+        frame: [f64; 4],
+        pixel: f64,
+        mut each: impl FnMut([f64; 2]),
+    ) -> usize {
+        let Self::RadialBlur {
+            amount,
+            zoom,
+            quality,
+            center,
+        } = *self
+        else {
+            each(p);
+            return 1;
+        };
+        let [left, top, right, bottom] = frame;
+        let c = [
+            left + (right - left) * f64::from(center[0]) / 100.0,
+            top + (bottom - top) * f64::from(center[1]) / 100.0,
+        ];
+        let v = [p[0] - c[0], p[1] - c[1]];
+        let d = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        let a = f64::from(amount);
+        // The whole path: a fraction of the distance (Zoom), or an arc of `amount` degrees.
+        let span = if zoom {
+            a / 100.0 * ZOOM_SPAN
+        } else {
+            a.to_radians()
+        };
+        let length = d * span / pixel.max(f64::MIN_POSITIVE);
+        if length < 0.5 {
+            each(p);
+            return 1;
+        }
+        let (density, most) = quality.sampling();
+        let n = ((length * density).ceil() as usize + 1).clamp(2, most);
+        for i in 0..n {
+            let t = (i as f64 / (n - 1) as f64 - 0.5) * span;
+            if zoom {
+                let s = 1.0 + t;
+                each([c[0] + v[0] * s, c[1] + v[1] * s]);
+            } else {
+                let (sin, cos) = t.sin_cos();
+                each([
+                    c[0] + v[0] * cos - v[1] * sin,
+                    c[1] + v[0] * sin + v[1] * cos,
+                ]);
+            }
+        }
+        n
     }
 
     /// Where the pixel at layer point `p` (layer pixels) is read from, for a distortion of
@@ -843,6 +1179,9 @@ impl Filter {
                 | Self::Pinch { .. }
                 | Self::Spherize { .. }
                 | Self::PolarCoordinates { .. }
+                | Self::RadialBlur { .. }
+                | Self::SurfaceBlur { .. }
+                | Self::SmartBlur { .. }
         )
     }
 
@@ -877,7 +1216,18 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
-            | Self::PolarCoordinates { .. } => blurred,
+            | Self::PolarCoordinates { .. }
+            | Self::RadialBlur { .. }
+            | Self::SurfaceBlur { .. }
+            | Self::SmartBlur { .. } => blurred,
+            // The average's color (premultiplied in `blurred`), the pixel's own opacity.
+            Self::Average => {
+                if blurred[3] <= 0.0 {
+                    return original;
+                }
+                let c = straight(blurred);
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
             Self::Solarize => color(&|o, _| if o > 0.5 { 1.0 - o } else { o }),
             // The kernel's gradient magnitude, per channel: dark lines on white, alpha kept.
             Self::FindEdges => {
@@ -1166,6 +1516,21 @@ pub(crate) enum Kernel {
     /// The average of the square cell of this side each pixel lies in, cells from the layer's
     /// origin (see [`Kernel::region_at`]).
     Cells(f64),
+    /// Surface Blur's average of the square of `radius` around each pixel, channel by channel,
+    /// each value weighted by `1 - |value - pixel's| / (2.5 threshold)` (none below 0).
+    Surface {
+        radius: usize,
+        threshold: f64,
+    },
+    /// Smart Blur's average of the pixels of the disk of `radius` around each pixel that differ
+    /// from it by less than `threshold` on every channel (at most `taps` read a side), or its
+    /// edges, as `mode` says (see [`Filter::SmartBlur`]).
+    Smart {
+        radius: f64,
+        threshold: f64,
+        taps: usize,
+        mode: SmartMode,
+    },
     Identity,
 }
 
@@ -1175,7 +1540,10 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.reach(),
             Self::Line(line) => line.reach(),
-            Self::Median(radius) | Self::Extreme { radius, .. } => *radius,
+            Self::Median(radius) | Self::Extreme { radius, .. } | Self::Surface { radius, .. } => {
+                *radius
+            }
+            Self::Smart { radius, .. } => radius.ceil() as usize + 1,
             Self::Sobel => 1,
             Self::Relief { offset } => offset[0].abs().max(offset[1].abs()).ceil() as usize + 1,
             Self::Cells(cell) => cell.ceil() as usize,
@@ -1217,6 +1585,15 @@ impl Kernel {
             Self::Sobel => sobel(region, width, height),
             &Self::Relief { offset } => relief(region, width, height, offset),
             &Self::Cells(cell) => cells(region, width, height, cell, [0, 0], [width, height]),
+            &Self::Surface { radius, threshold } => {
+                surface(region, width, height, radius, threshold);
+            }
+            &Self::Smart {
+                radius,
+                threshold,
+                taps,
+                mode,
+            } => smart(region, width, height, radius, threshold, taps, mode),
             Self::Identity => {}
         }
     }
@@ -1227,7 +1604,12 @@ impl Kernel {
             Self::Gaussian(blur) => blur.image(image, width, height),
             Self::Identity => image,
             // Never reduced (no plan of a factor above 1 takes them): one thread is enough.
-            Self::Extreme { .. } | Self::Sobel | Self::Relief { .. } | Self::Cells(_) => {
+            Self::Extreme { .. }
+            | Self::Sobel
+            | Self::Relief { .. }
+            | Self::Cells(_)
+            | Self::Surface { .. }
+            | Self::Smart { .. } => {
                 let mut image = image;
                 self.region(&mut image, width, height);
                 image
@@ -1378,6 +1760,110 @@ fn cells(
                 }
             }
             region[y * width + x] = sum.map(|v| (v / count) as f32);
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: Surface Blur's weighted average of the square of
+/// `radius` around each pixel ([`Kernel::Surface`]), the edges repeating outward. Beyond
+/// [`SURFACE_TAPS`] pixels a side, the square's pixels evenly spaced (every `step`).
+fn surface(region: &mut [[f32; 4]], width: usize, height: usize, radius: usize, threshold: f64) {
+    if width == 0 || height == 0 || radius == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let step = radius.div_ceil(SURFACE_TAPS).max(1);
+    let taps = (radius / step) as i64;
+    let step = step as i64;
+    // The weight falls by this much a unit of difference (2.5 thresholds: none).
+    let fall = (1.0 / (2.5 * threshold)) as f32;
+    let (w, h) = (width as i64, height as i64);
+    let mut columns = Vec::with_capacity(2 * taps as usize + 1);
+    for y in 0..h {
+        let rows: Vec<usize> = (-taps..=taps)
+            .map(|k| (y + k * step).clamp(0, h - 1) as usize * width)
+            .collect();
+        for x in 0..w {
+            columns.clear();
+            columns.extend((-taps..=taps).map(|k| (x + k * step).clamp(0, w - 1) as usize));
+            let center = source[y as usize * width + x as usize];
+            let mut sum = [0.0f32; 4];
+            let mut total = [0.0f32; 4];
+            for &row in &rows {
+                for &column in &columns {
+                    let px = source[row + column];
+                    for c in 0..4 {
+                        let weight = (1.0 - (px[c] - center[c]).abs() * fall).max(0.0);
+                        sum[c] += weight * px[c];
+                        total[c] += weight;
+                    }
+                }
+            }
+            // The pixel itself weighs 1: never nothing.
+            region[y as usize * width + x as usize] = std::array::from_fn(|c| sum[c] / total[c]);
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: Smart Blur ([`Kernel::Smart`]), the edges repeating
+/// outward. The disk's pixels at whole offsets, every `step` beyond `taps` a side.
+fn smart(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    radius: f64,
+    threshold: f64,
+    taps: usize,
+    mode: SmartMode,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let reach = radius.floor() as usize;
+    let step = reach.div_ceil(taps.max(1)).max(1);
+    let n = (reach / step) as i64;
+    let step = step as i64;
+    let offsets: Vec<[i64; 2]> = (-n..=n)
+        .flat_map(|j| (-n..=n).map(move |i| [i * step, j * step]))
+        .filter(|[x, y]| ((x * x + y * y) as f64) <= radius * radius)
+        .collect();
+    let level = threshold as f32;
+    let (w, h) = (width as i64, height as i64);
+    let at = |x: i64, y: i64| source[(y.clamp(0, h - 1) * w + x.clamp(0, w - 1)) as usize];
+    let close = |a: [f32; 4], b: [f32; 4]| (0..4).all(|c| (a[c] - b[c]).abs() < level);
+    for y in 0..h {
+        for x in 0..w {
+            let center = at(x, y);
+            let out = &mut region[(y * w + x) as usize];
+            // An edge: a neighbor differs by the threshold or more.
+            if mode != SmartMode::Normal {
+                let edge = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+                    .iter()
+                    .any(|[dx, dy]| !close(at(x + dx, y + dy), center));
+                let a = center[3];
+                if edge {
+                    *out = [a, a, a, a];
+                    continue;
+                }
+                if mode == SmartMode::EdgeOnly {
+                    *out = [0.0, 0.0, 0.0, a];
+                    continue;
+                }
+            }
+            let mut sum = [0.0f32; 4];
+            let mut count = 0.0f32;
+            for [dx, dy] in &offsets {
+                let px = at(x + dx, y + dy);
+                if close(px, center) {
+                    for c in 0..4 {
+                        sum[c] += px[c];
+                    }
+                    count += 1.0;
+                }
+            }
+            // The pixel itself is always close: never nothing.
+            *out = sum.map(|v| v / count);
         }
     }
 }
@@ -2622,5 +3108,208 @@ mod tests {
         assert_eq!(Filter::from_params("polarCoordinates", &[0.5]), None);
         assert!(twirl.samples() && !Filter::Mosaic { cell: 4.0 }.samples());
         assert_eq!(twirl.scaled(4.0), twirl, "mapped in the layer's own pixels");
+    }
+
+    #[test]
+    fn radial_blur_reads_along_its_arc_or_its_ray_around_its_center() {
+        let radial = |amount, zoom, quality| Filter::RadialBlur {
+            amount,
+            zoom,
+            quality,
+            center: [25.0, 50.0],
+        };
+        let spin = radial(30.0, false, RadialQuality::Good);
+        // A frame of 200 × 100 from (100, 0): the center at (150, 50).
+        let frame = [100.0, 0.0, 300.0, 100.0];
+        let c = [150.0, 50.0];
+        let distance = |q: [f64; 2]| (q[0] - c[0]).hypot(q[1] - c[1]);
+        let collect = |filter: Filter, p: [f64; 2], pixel: f64| {
+            let mut points = Vec::new();
+            let n = filter.radial_samples(p, frame, pixel, |q| points.push(q));
+            assert_eq!(n, points.len());
+            points
+        };
+        // Spin: on the circle through the pixel, 30 degrees of it centered on the pixel, about
+        // a sample a pixel of arc.
+        let p = [190.0, 50.0];
+        let points = collect(spin, p, 1.0);
+        let arc = 40.0 * 30f64.to_radians();
+        assert!((points.len() as f64 - arc).abs() <= 2.0, "{}", points.len());
+        for q in &points {
+            assert!((distance(*q) - 40.0).abs() < 1e-9, "{q:?}");
+        }
+        let (first, last) = (points[0], points[points.len() - 1]);
+        assert!((first[0] - last[0]).abs() < 1e-9 && (first[1] + last[1] - 100.0).abs() < 1e-9);
+        // Zoom: along the ray, a quarter of the distance either way at 100.
+        let zoom = radial(100.0, true, RadialQuality::Good);
+        let points = collect(zoom, p, 1.0);
+        assert!(points.iter().all(|q| (q[1] - 50.0).abs() < 1e-9));
+        assert!((points[0][0] - 180.0).abs() < 1e-9);
+        assert!((points[points.len() - 1][0] - 200.0).abs() < 1e-9);
+        // At the center nothing moves: the pixel alone.
+        assert_eq!(collect(spin, c, 1.0), vec![c]);
+        // Fewer samples on a reduced level, and for Draft; more for Best, never past its most.
+        let many = collect(
+            radial(100.0, false, RadialQuality::Best),
+            [300.0, 50.0],
+            1.0,
+        );
+        assert_eq!(many.len(), 256);
+        assert!(collect(spin, p, 4.0).len() < collect(spin, p, 1.0).len());
+        let draft = collect(radial(30.0, false, RadialQuality::Draft), p, 1.0);
+        assert!(draft.len() < collect(spin, p, 1.0).len());
+        // Settings.
+        assert!(spin.framed() && !spin.samples() && !spin.reads_original());
+        assert_eq!(spin.scaled(4.0), spin, "placed in the layer's own pixels");
+        assert!(!radial(0.0, false, RadialQuality::Good).is_valid());
+        assert!(!radial(10.5, false, RadialQuality::Good).is_valid());
+        assert!(!radial(101.0, true, RadialQuality::Good).is_valid());
+        assert!(
+            !Filter::RadialBlur {
+                amount: 30.0,
+                zoom: false,
+                quality: RadialQuality::Good,
+                center: [-1.0, 50.0],
+            }
+            .is_valid()
+        );
+        assert_eq!(
+            Filter::from_params("radialBlur", &[10.0, 2.0, 1.0, 50.0, 50.0]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("radialBlur", &[10.0, 1.0, 3.0, 50.0, 50.0]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("radialBlur", &[10.0, 1.0, 2.0, 20.0, 70.0]),
+            Some(Filter::RadialBlur {
+                amount: 10.0,
+                zoom: true,
+                quality: RadialQuality::Best,
+                center: [20.0, 70.0]
+            })
+        );
+    }
+
+    #[test]
+    fn surface_blur_weighs_each_value_by_its_closeness() {
+        // A row: 0.5 then a value 0.1 apart then one 0.5 apart, threshold 40 levels (2.5 × that
+        // is 0.39): the far one weighs nothing.
+        let threshold = 40.0 / 255.0;
+        let kernel = Kernel::Surface {
+            radius: 1,
+            threshold,
+        };
+        let gray = |v: f32| [v, v, v, 1.0];
+        let mut row = vec![gray(0.6), gray(0.5), gray(0.0)];
+        kernel.region(&mut row, 3, 1);
+        let near = 1.0 - 0.1 / (2.5 * threshold);
+        let expected = (0.5 + near * 0.6) / (1.0 + near);
+        assert!(
+            (f64::from(row[1][0]) - expected).abs() < 1e-5,
+            "{:?}",
+            row[1]
+        );
+        // Alpha alike: all opaque stays opaque.
+        assert!(row.iter().all(|px| (px[3] - 1.0).abs() < 1e-6));
+        // A large radius reads every few pixels, no farther than the radius.
+        let large = Kernel::Surface {
+            radius: 100,
+            threshold,
+        };
+        assert_eq!(large.reach(), 100);
+        let mut flat = vec![gray(0.3); 40 * 3];
+        large.region(&mut flat, 40, 3);
+        assert!(flat.iter().all(|px| (px[0] - 0.3).abs() < 1e-6));
+        // Settings: whole radii and thresholds, Photoshop's ranges.
+        let surface = |radius, threshold| Filter::SurfaceBlur { radius, threshold };
+        assert!(surface(1.0, 2.0).is_valid() && surface(100.0, 255.0).is_valid());
+        for wrong in [
+            surface(0.0, 15.0),
+            surface(101.0, 15.0),
+            surface(2.5, 15.0),
+            surface(5.0, 1.0),
+            surface(5.0, 256.0),
+            surface(5.0, 15.5),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(surface(40.0, 15.0).scaled(4.0), surface(10.0, 15.0));
+        assert_eq!(surface(40.0, 15.0).reach(), 42.0);
+    }
+
+    #[test]
+    fn average_gives_its_color_and_keeps_each_pixels_opacity() {
+        let average = Filter::Average;
+        // The average premultiplied: a red of half opacity is pure red.
+        let half = average.finish([0.0, 0.2, 0.0, 0.4], &[[0.5, 0.0, 0.0, 0.5]], [0, 0]);
+        assert!((half[0] - 0.4).abs() < 1e-12 && half[1] == 0.0 && half[3] == 0.4);
+        // Nothing to average (all transparent): the pixel as it was.
+        let pixel = [0.1, 0.2, 0.3, 0.5];
+        assert_eq!(average.finish(pixel, &[[0.0; 4]], [0, 0]), pixel);
+        assert!(average.reads_original() && average.reach().is_infinite());
+        assert_eq!(Filter::from_params("average", &[]), Some(average));
+        assert_eq!(Filter::from_params("average", &[1.0]), None);
+    }
+
+    #[test]
+    fn smart_blur_averages_what_is_close_and_shows_its_edges() {
+        let gray = |v: f32| [v, v, v, 1.0];
+        // A row: 0.5, 0.55 and 0.9 around a pixel of 0.5, a threshold of 25 levels (0.098).
+        let kernel = |mode| Kernel::Smart {
+            radius: 1.0,
+            threshold: 25.0 / 255.0,
+            taps: 4,
+            mode,
+        };
+        let row = || vec![gray(0.55), gray(0.5), gray(0.9)];
+        let mut normal = row();
+        kernel(SmartMode::Normal).region(&mut normal, 3, 1);
+        // The disk of 1 on a row of one: the pixel thrice (above, itself, below), its left one,
+        // not the far right one.
+        assert!(
+            (normal[1][0] - (3.0 * 0.5 + 0.55) / 4.0).abs() < 1e-6,
+            "{:?}",
+            normal[1]
+        );
+        let mut edges = row();
+        kernel(SmartMode::EdgeOnly).region(&mut edges, 3, 1);
+        assert_eq!(edges[1], gray(1.0), "next to 0.9: an edge, white");
+        let mut flat = vec![gray(0.3); 9];
+        kernel(SmartMode::EdgeOnly).region(&mut flat, 3, 3);
+        assert_eq!(flat[4], [0.0, 0.0, 0.0, 1.0], "no edge: black");
+        let mut overlay = vec![gray(0.3); 9];
+        kernel(SmartMode::OverlayEdge).region(&mut overlay, 3, 3);
+        assert!((overlay[4][0] - 0.3).abs() < 1e-6, "no edge: the blur");
+        // Settings: Photoshop's ranges, a radius in tenths.
+        let smart = |radius, threshold| Filter::SmartBlur {
+            radius,
+            threshold,
+            quality: SmartQuality::High,
+            mode: SmartMode::OverlayEdge,
+        };
+        assert!(smart(0.1, 0.1).is_valid() && smart(100.0, 100.0).is_valid());
+        for wrong in [
+            smart(0.0, 25.0),
+            smart(100.5, 25.0),
+            smart(3.0, 0.0),
+            smart(3.0, 101.0),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(smart(12.0, 25.0).scaled(4.0), smart(3.0, 25.0));
+        assert_eq!(
+            Filter::from_params("smartBlur", &[3.0, 25.0, 3.0, 0.0]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("smartBlur", &[3.0, 25.0, 0.0, 3.0]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("smartBlur", &[3.0, 25.0, 2.0, 2.0]),
+            Some(smart(3.0, 25.0))
+        );
     }
 }
