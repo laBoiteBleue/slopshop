@@ -1,7 +1,8 @@
 //! What the Clone Stamp paints from: a document as it shows (every visible layer, or one layer
 //! alone), taken when the stroke starts and composited tile by tile the first time a dab
 //! reaches it, in the working space (no 8-bit rounding). A stroke bakes what it took (ADR 0034,
-//! point 6): the source never follows later changes.
+//! point 6): the source never follows later changes. The Pattern Stamp and Edit > Fill >
+//! Pattern paint from a pattern repeated across the canvas ([`CloneSource::pattern`], ADR 0042).
 
 use std::sync::{Arc, OnceLock};
 
@@ -114,6 +115,47 @@ impl CloneSource {
             tiles,
             columns,
         }
+    }
+
+    /// A pattern (ADR 0042) repeated across a canvas of `size`, its texel (0, 0) at document
+    /// point `origin` (the Pattern Stamp's Aligned: the document's origin; otherwise where the
+    /// stroke starts), as a pattern fill layer would show it at 100 %, blending in
+    /// `blend_space`. The pattern's pixels are shared.
+    pub fn pattern(
+        size: crate::geom::Size,
+        blend_space: crate::blend::BlendSpace,
+        source: Arc<crate::source::Source>,
+        origin: [f64; 2],
+    ) -> Result<Self, crate::document::RestoreError> {
+        use crate::document::{Layer, LayerContent, LayerId};
+        let transform = if origin.iter().all(|v| v.is_finite()) {
+            crate::transform::Affine::translation(origin[0], origin[1]).into()
+        } else {
+            crate::transform::Projective::IDENTITY
+        };
+        let layer = Layer {
+            locks: Default::default(),
+            style: None,
+            id: LayerId::from_raw(1),
+            name: String::new(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: crate::blend::BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform,
+            content: LayerContent::PatternFill {
+                pattern: crate::pattern::PatternFill::new(source),
+            },
+        };
+        let document = Document::restore(
+            size,
+            crate::color::WORKING_SPACE,
+            blend_space,
+            vec![layer],
+            2,
+        )?;
+        Ok(Self::new(document))
     }
 
     /// This source seen through `filter`, before any tile is prepared.
@@ -381,6 +423,45 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         doc
+    }
+
+    #[test]
+    fn a_pattern_source_repeats_the_pattern_from_its_origin() {
+        // 2 × 2: red, green / blue, white (sRGB, opaque).
+        let bytes = [
+            255, 0, 0, 255, 0, 255, 0, 255, //
+            0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let image =
+            RasterImage::from_pixels(Size::new(2, 2), PixelFormat::RGBA8_SRGB, &bytes).unwrap();
+        let source = crate::source::Source::new(Arc::new(image), "four");
+        let working = |r, g, b| {
+            let c = crate::color::LinearRgba::from_srgb_encoded_to_working(r, g, b, 1.0);
+            [c.r, c.g, c.b, 1.0]
+        };
+        let (red, green, blue) = (
+            working(1.0, 0.0, 0.0),
+            working(0.0, 1.0, 0.0),
+            working(0.0, 0.0, 1.0),
+        );
+        let close = |got: [f32; 4], want: [f32; 4]| {
+            got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3)
+        };
+        let blend = crate::blend::BlendSpace::default();
+        let aligned =
+            CloneSource::pattern(Size::new(300, 40), blend, Arc::clone(&source), [0.0; 2])
+                .unwrap();
+        aligned.prepare([0.0, 0.0, 300.0, 40.0]);
+        for (x, y, want) in [(0.5, 0.5, red), (1.5, 0.5, green), (0.5, 1.5, blue)] {
+            assert!(close(aligned.at(x, y), want), "({x}, {y})");
+            // A period later, beyond the first tile too.
+            assert!(close(aligned.at(x + 260.0, y + 30.0), want), "({x}, {y}) + period");
+        }
+        // Started at (1, 0): texel (0, 0) there, and the column before shows the last one.
+        let moved = CloneSource::pattern(Size::new(8, 8), blend, source, [1.0, 0.0]).unwrap();
+        moved.prepare([0.0, 0.0, 8.0, 8.0]);
+        assert!(close(moved.at(1.5, 0.5), red));
+        assert!(close(moved.at(0.5, 0.5), green));
     }
 
     #[test]
