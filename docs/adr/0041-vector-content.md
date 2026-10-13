@@ -176,3 +176,44 @@ Status: accepted (2026-10-13, under the maintainer's delegation; to review).
 4. **Layers in perspective are refused** (a message): their handles would need the projective
    map, under which a Bézier is no longer a Bézier. Groups' and layers' affine transforms are
    composed to map the path to the document and back.
+
+## Amendment: text, part 1 (2026-10-13)
+
+Status: accepted (2026-10-13, under the maintainer's delegation; to review).
+
+1. **Where layout lives.** A new crate, `slopshop-text` (depends on core only), lays text out
+   with `parley` 0.12 and reads outlines with `skrifa` 0.44 (`harfrust`, `skrifa` and
+   `read-fonts` at the versions already in the tree; no duplicate built). Core stays without
+   fonts: a text source is a shape source that also holds its text, its shape being the glyph
+   outlines (a non-zero path filled with the text's color). Core, the renderer, export, PSD
+   (as pixels, like other vector layers) and the CLI draw it as a shape, so CPU and GPU agree
+   by construction and styles, linked copies and Bake to Pixels work unchanged. Only editing
+   lays text out again; the outlines are the layout cache (typing lays out the text once per
+   keystroke, well under a millisecond for a title).
+2. **`.slop` 0.33** keeps both, in the `shapes` table: `text` (the description) beside
+   `shape` (the outlines), instead of a separate `text` kind (point 6). A reader without the
+   fonts, or of an older schema, still draws the text exactly.
+3. **The text model of part 1**: one style for the whole text (family, weight 1–1000, italic,
+   size in pixels, color, tracking in thousandths of an em, leading in pixels or automatic at
+   120 %), point text only, aligned left, center or right on its anchor (the first baseline at
+   the alignment point). Spans (per-character styles) and box text come with part 2, as
+   compatible additions.
+4. **Sizes** are stored in pixels; the interface shows points through the document's
+   resolution (ADR 0028), as Photoshop does. Changing the resolution without resampling keeps
+   the text's pixels.
+5. **Fonts, v1** (answer 6 asked for a proposal): the font picker lists the system's fonts
+   (DirectWrite, CoreText, fontconfig loaded at run time through `fontique`) plus Inter, bundled
+   (variable, upright and italic, 1.8 MB, OFL-1.1 with its license next to it) as the default
+   family and the only font tests use. Styles are a family's weights (a variable font's named
+   weights, Thin to Black) and italics. `.slop` keeps the family's name and the style, no font
+   data. A missing family is drawn from the saved outlines; the options bar says it is
+   missing, and editing the text sets it in the default family. Embedding fonts whose `fsType`
+   allows it (answer 5) and downloading free fonts on demand (a curated list of OFL families
+   from a pinned manifest, as the AI models) are left for later: they need a font subsetter
+   and a download consent, and are proposed to the maintainer rather than decided here.
+6. **The Type tool (T)**: a click places point text (or edits the text layer under it, the
+   caret at its end); keys go to a hidden text field so that dead keys and input methods work;
+   the engine draws each keystroke live; Escape, Ctrl+Enter (Cmd+Enter), the keypad's Enter,
+   a click on the image or another tool commit; the session is one gesture, so one undo entry;
+   a text left empty removes its layer. A type layer is named after its text, and renamed as
+   it changes until the user renames it (Photoshop's behavior).

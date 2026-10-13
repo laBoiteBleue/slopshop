@@ -421,6 +421,14 @@ Raised on 2026-10-05, to schedule:
         an anchor; a live shape is turned into a regular path first
   - [ ] Selecting several anchors or paths (marquee, Shift), Path Selection (A); vector masks
   - [ ] Type
+    - [x] Part 1: text layers (a vector source laid out by parley into glyph outlines, drawn
+          as shapes; `.slop` 0.33 keeps the text and its outlines; Inter bundled), the Type
+          tool (T): point text placed or edited on the canvas, typed live with a caret, one
+          undo entry, font family, style, size in points, color and alignment in the options
+          bar
+    - [ ] Part 2: selecting characters (mouse, Shift+arrows), per-character styles, box
+          (paragraph) text, the Character and Paragraph panels, tracking and leading in the
+          options bar, a text's bounds for clicks and the Move tool, embedded fonts
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
         sampled with wrapping on the CPU and the GPU alike; `.slop` 0.31

@@ -39,6 +39,7 @@ exceptions = [
     { allow = ["GPL-3.0-only"], crate = "slopshop-cli" },
     { allow = ["GPL-3.0-only"], crate = "slopshop-raw" },
     { allow = ["GPL-3.0-only"], crate = "slopshop-ai" },
+    { allow = ["GPL-3.0-only"], crate = "slopshop-text" },
     { allow = ["GPL-3.0-only"], crate = "slopshop-app" },
     # jpeg-encoder is (MIT OR Apache-2.0) AND IJG: the IJG license only asks for an
     # acknowledgement in the documentation (ADR 0010). Allowed for this crate only.
