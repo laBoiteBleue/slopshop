@@ -1223,6 +1223,15 @@ fn push_style(blocks: &mut Vec<([u8; 4], Vec<u8>)>, style: &LayerStyle) {
     blocks.push((*b"iOpa", vec![fill, 0, 0, 0]));
 }
 
+/// Photoshop's protection flags (`lspf`) of a layer's locks (ADR 0046): bit 0 transparency,
+/// 1 image pixels ("composite"), 2 position, 31 all.
+fn protection_flags(locks: slopshop_core::LayerLocks) -> u32 {
+    u32::from(locks.transparency)
+        | u32::from(locks.pixels) << 1
+        | u32::from(locks.position) << 2
+        | u32::from(locks.all) << 31
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1266,13 +1275,4 @@ mod tests {
             BlendMode::ALL.iter().map(|&m| blend_key(m)).collect();
         assert_eq!(keys.len(), BlendMode::ALL.len());
     }
-}
-
-/// Photoshop's protection flags (`lspf`) of a layer's locks (ADR 0046): bit 0 transparency,
-/// 1 image pixels ("composite"), 2 position, 31 all.
-fn protection_flags(locks: slopshop_core::LayerLocks) -> u32 {
-    u32::from(locks.transparency)
-        | u32::from(locks.pixels) << 1
-        | u32::from(locks.position) << 2
-        | u32::from(locks.all) << 31
 }
