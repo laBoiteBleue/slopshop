@@ -819,32 +819,17 @@ impl Edit {
     /// clipping. A group's locks apply to the layers inside it. A batch is checked edit by edit
     /// as it applies.
     fn check_locks(&self, doc: &Document) -> Result<(), EditError> {
-        let locked = |id: LayerId, lock: Lock| Err(EditError::Locked { id, lock });
-        match self {
+        let refused = match self {
             Edit::SetLayerStack { id, .. }
             | Edit::SetShape { id, .. }
             | Edit::SetFillColor { id, .. }
             | Edit::SetGradientFill { id, .. }
-            | Edit::SetPatternFill { id, .. } => {
-                if doc.effective_locks(*id).locks_pixels() {
-                    return locked(*id, Lock::Pixels);
-                }
+            | Edit::SetPatternFill { id, .. }
+                if doc.effective_locks(*id).locks_pixels() =>
+            {
+                Some((*id, Lock::Pixels))
             }
-            Edit::SetLayerTransform { id, transform } => {
-                let Some(layer) = doc.layer(*id) else {
-                    return Ok(());
-                };
-                // Unchanged (a layer grown by a stroke keeps its place): nothing moves.
-                if layer.transform == *transform {
-                    return Ok(());
-                }
-                if doc.effective_locks(*id).locks_position() {
-                    return locked(*id, Lock::Position);
-                }
-                if let Some(inner) = layer.subtree().find(|l| l.locks.locks_position()) {
-                    return locked(inner.id, Lock::Position);
-                }
-            }
+            Edit::SetLayerTransform { id, transform } => moving_locked(doc, *id, transform),
             Edit::SetLayerOpacity { id, .. }
             | Edit::SetLayerBlendMode { id, .. }
             | Edit::SetLayerStyle { id, .. }
@@ -853,15 +838,35 @@ impl Edit {
             | Edit::SetMaskPaint { id, .. }
             | Edit::SetLayerClipped { id, .. }
             | Edit::SetGroupPassThrough { id, .. }
-            | Edit::SetAdjustment { id, .. } => {
-                if doc.effective_locks(*id).all {
-                    return locked(*id, Lock::All);
-                }
+            | Edit::SetAdjustment { id, .. }
+                if doc.effective_locks(*id).all =>
+            {
+                Some((*id, Lock::All))
             }
-            _ => {}
+            _ => None,
+        };
+        match refused {
+            Some((id, lock)) => Err(EditError::Locked { id, lock }),
+            None => Ok(()),
         }
-        Ok(())
     }
+}
+
+/// The position-locked layer that giving layer `id` `transform` would move (ADR 0046): itself
+/// (its own lock or a group's around it), or a layer inside it. `None` when it does not move.
+fn moving_locked(doc: &Document, id: LayerId, transform: &Projective) -> Option<(LayerId, Lock)> {
+    let layer = doc.layer(id)?;
+    // Unchanged (a layer grown by a stroke keeps its place): nothing moves.
+    if layer.transform == *transform {
+        return None;
+    }
+    if doc.effective_locks(id).locks_position() {
+        return Some((id, Lock::Position));
+    }
+    layer
+        .subtree()
+        .find(|l| l.locks.locks_position())
+        .map(|l| (l.id, Lock::Position))
 }
 
 /// The layers directly inside `parent` (`None`: the top level).
