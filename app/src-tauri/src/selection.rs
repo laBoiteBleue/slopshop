@@ -1150,6 +1150,65 @@ pub async fn select_layer_pixels(
     )
 }
 
+/// What Make Selection selects in `doc`: `path` (document pixels), else vector layer
+/// `layer_id`'s path where the layer is.
+fn path_selection(
+    doc: &Document,
+    path: Option<&crate::shape::GeometryDto>,
+    layer_id: Option<u64>,
+) -> Result<Shape, String> {
+    match (path, layer_id) {
+        (Some(path), _) => {
+            let geometry = path.geometry()?;
+            if !geometry.is_valid() {
+                return Err("invalid path".to_owned());
+            }
+            Ok(selection::path_shape(
+                &geometry,
+                slopshop_core::Projective::IDENTITY,
+            ))
+        }
+        (None, Some(id)) => selection::layer_path(doc, LayerId::from_raw(id))
+            .ok_or_else(|| "not a vector layer".to_owned()),
+        (None, None) => Err("no path to select".to_owned()),
+    }
+}
+
+/// Make Selection (Ctrl+Enter with the Pen, as Photoshop's): the area a path encloses,
+/// anti-aliased, replacing the selection; one undo entry, "Make Selection". The path is the
+/// one being drawn (`path`, document pixels) or, without it, vector layer `layer_id`'s, placed
+/// where the layer is.
+#[tauri::command]
+pub async fn make_selection(
+    state: State<'_, AppState>,
+    document_id: u64,
+    path: Option<crate::shape::GeometryDto>,
+    layer_id: Option<u64>,
+) -> Result<DocumentView, String> {
+    let (canvas, shape) = {
+        let mut documents = state.documents()?;
+        let doc = documents.get_mut(document_id)?.session.document();
+        (doc.size(), path_selection(doc, path.as_ref(), layer_id)?)
+    };
+    let image = on_worker(move || {
+        selection::select_shape(
+            canvas,
+            None,
+            &shape,
+            EdgeOptions::default(),
+            Combine::Replace,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await?;
+    set_selection(
+        &state,
+        document_id,
+        image,
+        HistoryLabel::new("makeSelection"),
+    )
+}
+
 /// A saved selection renamed (Selections panel), one undo entry.
 #[tauri::command]
 pub async fn rename_saved_selection(
@@ -1459,6 +1518,73 @@ pub async fn selection_outline(
 mod tests {
     use super::*;
     use slopshop_core::{LinearRgba, Session};
+
+    #[test]
+    fn make_selection_selects_the_path_drawn_or_a_vector_layers() {
+        let mut s = Session::new(Document::new(Size::new(200, 100)));
+        let path: crate::shape::GeometryDto = serde_json::from_str(
+            r#"{"kind":"path","rule":"nonzero","subpaths":[
+                {"start":[10,10],"segments":[[110,10],[10,60]],"closed":false}]}"#,
+        )
+        .unwrap();
+        let select = |shape: &Shape| {
+            selection::select_shape(
+                Size::new(200, 100),
+                None,
+                shape,
+                EdgeOptions::default(),
+                Combine::Replace,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let shape = path_selection(s.document(), Some(&path), None).unwrap();
+        // The triangle the open path encloses once joined.
+        assert_eq!(
+            selection::bounds(&select(&shape)),
+            Some(Rect::new(10, 10, 100, 50))
+        );
+        // A vector layer moved by 50: its path where it is.
+        let id = s.allocate_layer_id();
+        let dto: crate::shape::ShapeDto = serde_json::from_value(serde_json::json!({
+            "geometry": path, "fill": null, "stroke": null
+        }))
+        .unwrap();
+        s.perform(Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: slopshop_core::Layer {
+                style: None,
+                transform: slopshop_core::Affine::translation(50.0, 0.0).into(),
+                clipped: false,
+                id,
+                name: "Shape 1".into(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: slopshop_core::BlendMode::Normal,
+                mask: None,
+                content: LayerContent::vector(slopshop_core::shape::ShapeSource::new(
+                    dto.shape().unwrap(),
+                    "Shape 1",
+                )),
+            },
+        })
+        .unwrap();
+        let shape = path_selection(s.document(), None, Some(id.get())).unwrap();
+        assert_eq!(
+            selection::bounds(&select(&shape)),
+            Some(Rect::new(60, 10, 100, 50))
+        );
+        // No path, an unknown layer, or a path out of range: refused.
+        assert!(path_selection(s.document(), None, None).is_err());
+        assert!(path_selection(s.document(), None, Some(999)).is_err());
+        let far: crate::shape::GeometryDto = serde_json::from_str(
+            r#"{"kind":"path","rule":"nonzero","subpaths":[
+                {"start":[1e9,0],"segments":[[0,0]],"closed":false}]}"#,
+        )
+        .unwrap();
+        assert!(path_selection(s.document(), Some(&far), None).is_err());
+    }
 
     #[test]
     fn without_a_renderer_the_tools_composite_on_the_cpu() {
