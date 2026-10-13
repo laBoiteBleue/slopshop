@@ -863,6 +863,7 @@ mod tests {
         )
         .expect("a 20 x 10 image");
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: "small".into(),

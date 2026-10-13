@@ -165,6 +165,8 @@ pub struct LayerView {
     pub pass_through: bool,
     /// Clipped to the layer below it (ADR 0016).
     pub clipped: bool,
+    /// Its own locks (ADR 0046); those of the groups around it apply too.
+    pub locks: LocksView,
     /// From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`, a point
     /// `(x, y)` going to `(a·x + c·y + e, b·x + d·y + f)`; the identity for a layer in
     /// perspective, whose map is in `perspective`.
@@ -825,6 +827,7 @@ impl LayerView {
                 }
             ),
             clipped: layer.clipped,
+            locks: layer.locks.into(),
             // The affine part's six numbers; a layer in perspective has its nine in
             // `perspective` (ADR 0038).
             transform: layer.transform.as_affine().unwrap_or_default().to_array(),
@@ -941,6 +944,27 @@ impl AdjustmentView {
 
 /// Intervals of [`AdjustmentView::curve_samples`].
 const CURVE_SAMPLES: usize = 128;
+
+/// A layer's locks (ADR 0046), as the layers panel shows and sets them.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocksView {
+    pub transparency: bool,
+    pub pixels: bool,
+    pub position: bool,
+    pub all: bool,
+}
+
+impl From<slopshop_core::LayerLocks> for LocksView {
+    fn from(l: slopshop_core::LayerLocks) -> Self {
+        Self {
+            transparency: l.transparency,
+            pixels: l.pixels,
+            position: l.position,
+            all: l.all,
+        }
+    }
+}
 
 /// A layer's mask, as the layers panel shows it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1241,6 +1265,20 @@ pub enum EditRequest {
         id: u64,
         pass_through: bool,
     },
+    /// Set or clear locks of layers (ADR 0046): each lock given is set (`true`) or cleared on
+    /// every layer of `ids`, the others are left as they are (the Layers panel's buttons, Layer
+    /// > Lock Layers).
+    SetLayerLocks {
+        ids: Vec<u64>,
+        #[serde(default)]
+        transparency: Option<bool>,
+        #[serde(default)]
+        pixels: Option<bool>,
+        #[serde(default)]
+        position: Option<bool>,
+        #[serde(default)]
+        all: Option<bool>,
+    },
     /// Clip a layer to the one below it, or release it (ADR 0016).
     SetLayerClipped {
         id: u64,
@@ -1465,6 +1503,7 @@ impl EditRequest {
                     parent,
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
@@ -1519,6 +1558,7 @@ impl EditRequest {
                     parent,
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
@@ -1556,6 +1596,7 @@ impl EditRequest {
                     parent,
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
@@ -1619,6 +1660,7 @@ impl EditRequest {
                     parent: parent.map(LayerId::from_raw),
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
@@ -1688,6 +1730,7 @@ impl EditRequest {
                         parent,
                         index: index + 1,
                         layer: Layer {
+                            locks: Default::default(),
                             style: None,
                             transform: slopshop_core::Projective::IDENTITY,
                             clipped: true,
@@ -1792,6 +1835,7 @@ impl EditRequest {
                     parent: parent.map(LayerId::from_raw),
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
@@ -1849,6 +1893,7 @@ impl EditRequest {
                     parent: parent.map(LayerId::from_raw),
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Projective::IDENTITY,
                         clipped: false,
@@ -2053,6 +2098,29 @@ impl EditRequest {
                     None => Edit::Batch(Vec::new()),
                 }
             }
+            EditRequest::SetLayerLocks {
+                ids,
+                transparency,
+                pixels,
+                position,
+                all,
+            } => {
+                let doc = session.document();
+                let mut edits = Vec::with_capacity(ids.len());
+                for id in ids.into_iter().map(LayerId::from_raw) {
+                    let layer = doc.layer(id).ok_or(format!("unknown layer {id}"))?;
+                    let mut locks = layer.locks;
+                    let set = |value: &mut bool, to: Option<bool>| *value = to.unwrap_or(*value);
+                    set(&mut locks.transparency, transparency);
+                    set(&mut locks.pixels, pixels);
+                    set(&mut locks.position, position);
+                    set(&mut locks.all, all);
+                    if locks != layer.locks {
+                        edits.push(Edit::SetLayerLocks { id, locks });
+                    }
+                }
+                Edit::Batch(edits)
+            }
             EditRequest::SetLayerClipped { id, clipped } => Edit::SetLayerClipped {
                 id: LayerId::from_raw(id),
                 clipped,
@@ -2095,6 +2163,7 @@ impl EditRequest {
 /// Pass Through stays one choice away in the blend modes.
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
+        locks: Default::default(),
         style: None,
         transform: slopshop_core::Projective::IDENTITY,
         clipped: false,
@@ -3644,6 +3713,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "pixels".to_owned(),
                 visible: true,
@@ -3711,6 +3781,7 @@ mod tests {
                 parent: None,
                 index,
                 layer: Layer {
+                    locks: Default::default(),
                     id,
                     name: "pixels".to_owned(),
                     visible: true,
@@ -3775,6 +3846,83 @@ mod tests {
     }
 
     #[test]
+    fn locks_are_set_on_the_selected_layers_and_shown() {
+        let mut document = Document::new(slopshop_core::Size::new(4, 4));
+        let mut ids = Vec::new();
+        for index in 0..2 {
+            let id = document.allocate_layer_id();
+            ids.push(id);
+            Edit::InsertLayer {
+                parent: None,
+                index,
+                layer: Layer {
+                    locks: Default::default(),
+                    id,
+                    name: "fill".to_owned(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend_mode: BlendMode::Normal,
+                    content: LayerContent::Fill {
+                        color: slopshop_core::LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+                    },
+                    mask: None,
+                    clipped: false,
+                    transform: slopshop_core::Affine::IDENTITY.into(),
+                    style: None,
+                },
+            }
+            .apply(&mut document)
+            .unwrap();
+        }
+        let mut session = Session::new(document);
+        let meta = DocumentMeta { id: 1, name: None };
+        let perform = |session: &mut Session, json: String| {
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            let edit = request.into_edit(session).unwrap();
+            session.perform(edit)
+        };
+        let (a, b) = (ids[0].get(), ids[1].get());
+        // Position on both, then transparency on the first: the others are left alone.
+        perform(
+            &mut session,
+            format!(r#"{{"kind":"setLayerLocks","ids":[{a},{b}],"position":true}}"#),
+        )
+        .unwrap();
+        perform(
+            &mut session,
+            format!(r#"{{"kind":"setLayerLocks","ids":[{a}],"transparency":true}}"#),
+        )
+        .unwrap();
+        let view = DocumentView::new(&session, &meta, Vec::new());
+        let locks: Vec<_> = view.layers.iter().map(|l| l.locks).collect();
+        let lock = |transparency, position| LocksView {
+            transparency,
+            pixels: false,
+            position,
+            all: false,
+        };
+        assert_eq!(locks, [lock(true, true), lock(false, true)]);
+        assert_eq!(
+            serde_json::to_value(view.layers[0].locks).unwrap(),
+            serde_json::json!({"transparency":true,"pixels":false,"position":true,"all":false})
+        );
+        // A move is refused with a message the UI recognizes.
+        let refused = perform(
+            &mut session,
+            format!(r#"{{"kind":"translateLayers","ids":[{b}],"dx":1,"dy":0}}"#),
+        )
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("is locked: position"),
+            "{refused}"
+        );
+        // One undo entry each.
+        session.undo().unwrap();
+        let view = DocumentView::new(&session, &meta, Vec::new());
+        assert!(!view.layers[0].locks.transparency && view.layers[0].locks.position);
+    }
+
+    #[test]
     fn a_filter_is_applied_and_edited_from_the_ui() {
         use slopshop_core::color::PixelFormat;
         use slopshop_core::raster::RasterImage;
@@ -3787,6 +3935,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "pixels".to_owned(),
                 visible: true,

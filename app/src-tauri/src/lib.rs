@@ -607,6 +607,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
         parent: None,
         index: 0,
         layer: Layer {
+            locks: Default::default(),
             style: None,
             transform: slopshop_core::Projective::IDENTITY,
             clipped: false,
@@ -1037,6 +1038,7 @@ fn insert_image(
                 parent: None,
                 index: session.document().layers().len(),
                 layer: Layer {
+                    locks: Default::default(),
                     style: None,
                     transform: slopshop_core::Projective::IDENTITY,
                     clipped: false,
@@ -1814,6 +1816,7 @@ fn shape_thumbnail(
         parent: None,
         index: 0,
         layer: slopshop_core::Layer {
+            locks: Default::default(),
             style: None,
             transform: slopshop_core::Affine::translation(-x0, -y0)
                 .then(slopshop_core::Affine::scale(scale, scale))
@@ -2587,6 +2590,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
@@ -2789,6 +2793,7 @@ mod tests {
             let id = document.session.allocate_layer_id();
             let index = document.session.document().layers().len();
             let layer = Layer {
+                locks: Default::default(),
                 style: None,
                 id,
                 name: "small".into(),
@@ -2916,6 +2921,7 @@ mod tests {
                     parent: None,
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Affine::IDENTITY.into(),
                         clipped: false,
@@ -3001,6 +3007,7 @@ mod tests {
                     parent: None,
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: slopshop_core::Affine::IDENTITY.into(),
                         clipped: false,
@@ -3864,6 +3871,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    locks: Default::default(),
                     style: None,
                     transform: slopshop_core::Affine::IDENTITY.into(),
                     clipped: false,
@@ -3928,6 +3936,7 @@ mod tests {
         );
         let id = document.session.allocate_layer_id();
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             transform: slopshop_core::Affine::IDENTITY.into(),
             clipped: false,
@@ -4703,6 +4712,7 @@ mod tests {
             parent: None,
             index: 1,
             layer: slopshop_core::Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Projective::IDENTITY,
                 clipped: false,
@@ -4828,6 +4838,7 @@ mod tests {
             parent: None,
             index: 1,
             layer: slopshop_core::Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Projective::IDENTITY,
                 clipped: false,
@@ -5003,6 +5014,7 @@ mod tests {
             let document = documents.get_mut(doc.id).unwrap();
             let id = document.session.allocate_layer_id();
             let layer = Layer {
+                locks: Default::default(),
                 style: None,
                 id,
                 name: "photo".into(),
@@ -5163,6 +5175,7 @@ mod tests {
             let document = documents.get_mut(doc.id).unwrap();
             let id = document.session.allocate_layer_id();
             let layer = Layer {
+                locks: Default::default(),
                 style: None,
                 id,
                 name: "photo".into(),

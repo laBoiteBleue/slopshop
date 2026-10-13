@@ -116,6 +116,7 @@ pub async fn add_pattern_fill(
         parent: parent.map(LayerId::from_raw),
         index,
         layer: Layer {
+            locks: Default::default(),
             style: None,
             transform: Projective::IDENTITY,
             clipped: false,

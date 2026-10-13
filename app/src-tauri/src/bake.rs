@@ -85,6 +85,7 @@ fn start(session: &mut Session, request: BakeRequest, baked: Vec<Edit>) -> Resul
                 .cloned()
                 .collect();
             let group = Layer {
+                locks: Default::default(),
                 style: None,
                 id: LayerId::from_raw(1),
                 name,
@@ -380,6 +381,7 @@ mod tests {
         for pixels in [gradient, corner] {
             let image = RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &pixels).unwrap();
             let layer = Layer {
+                locks: Default::default(),
                 style: None,
                 id: s.allocate_layer_id(),
                 name: String::new(),
