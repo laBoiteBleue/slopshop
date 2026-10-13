@@ -38,6 +38,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
@@ -847,6 +848,7 @@ fn push_into(
             parent,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,

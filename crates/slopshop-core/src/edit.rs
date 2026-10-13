@@ -14,8 +14,8 @@ use std::sync::Arc;
 use crate::blend::{BlendMode, BlendSpace};
 use crate::color::LinearRgba;
 use crate::document::{
-    Document, Guide, GuideAxis, Layer, LayerContent, LayerId, LayerMask, MAX_GROUP_DEPTH,
-    SavedSelection, SavedSelectionId,
+    Document, Guide, GuideAxis, Layer, LayerContent, LayerId, LayerLocks, LayerMask,
+    MAX_GROUP_DEPTH, SavedSelection, SavedSelectionId,
 };
 use crate::geom::Size;
 use crate::raster::RasterImage;
@@ -183,8 +183,42 @@ pub enum Edit {
     SetGuides {
         guides: Vec<Guide>,
     },
+    /// A layer's own locks (ADR 0046). Never refused by locks.
+    SetLayerLocks {
+        id: LayerId,
+        locks: LayerLocks,
+    },
+    /// A change of the whole image (Image Size, Canvas Size, Crop, Image Rotation, ADR 0046):
+    /// applied whatever the layers' locks, as Photoshop resizes and turns locked layers with
+    /// the image. Its inverse is one too.
+    Image(Box<Edit>),
     /// Several edits applied in order as a single unit: all of them or none.
     Batch(Vec<Edit>),
+}
+
+/// What a lock refused (ADR 0046), for [`EditError::Locked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lock {
+    /// Lock Transparent Pixels: what would change the layer's alpha (the erasers).
+    Transparency,
+    /// Lock Image Pixels (or Lock All): the layer's pixels, shape or fill.
+    Pixels,
+    /// Lock Position (or Lock All): its placement.
+    Position,
+    /// Lock All: its opacity, blend mode, style, mask or clipping.
+    All,
+}
+
+impl Lock {
+    /// An identifier for the UI, which translates it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Lock::Transparency => "transparency",
+            Lock::Pixels => "pixels",
+            Lock::Position => "position",
+            Lock::All => "all",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -254,6 +288,12 @@ pub enum EditError {
     InvalidShape,
     /// A layer repointed to a source of other pixels than its own (ADR 0040).
     OtherPixels(LayerId),
+    /// The layer (or a group around it, or a layer inside it) is locked against the change
+    /// (ADR 0046).
+    Locked {
+        id: LayerId,
+        lock: Lock,
+    },
 }
 
 impl fmt::Display for EditError {
@@ -313,6 +353,8 @@ impl fmt::Display for EditError {
                 write!(f, "a transform must be finite and invertible")
             }
             EditError::EmptyCanvas => write!(f, "a canvas must have pixels"),
+            // The UI recognizes "is locked: <lock>" to say it in the user's language.
+            EditError::Locked { id, lock } => write!(f, "layer {id} is locked: {}", lock.id()),
             EditError::CanvasTooLarge { width, height } => {
                 write!(f, "a canvas of {width} × {height} pixels is too large")
             }
@@ -324,7 +366,17 @@ impl std::error::Error for EditError {}
 
 impl Edit {
     /// Apply the edit and return its inverse. On error the document content is unchanged.
+    /// Edits refused by the layers' locks (ADR 0046) fail with [`EditError::Locked`], unless
+    /// inside [`Edit::Image`].
     pub fn apply(self, doc: &mut Document) -> Result<Edit, EditError> {
+        self.apply_with(doc, true)
+    }
+
+    /// [`Self::apply`], checking the layers' locks or not.
+    fn apply_with(self, doc: &mut Document, check_locks: bool) -> Result<Edit, EditError> {
+        if check_locks {
+            self.check_locks(doc)?;
+        }
         let inverse = match self {
             Edit::InsertLayer {
                 parent,
@@ -725,15 +777,26 @@ impl Edit {
                     pass_through: previous,
                 }
             }
+            Edit::SetLayerLocks { id, locks } => {
+                let layer = doc
+                    .layer_mut_same_shape(id)
+                    .ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.locks, locks);
+                Edit::SetLayerLocks {
+                    id,
+                    locks: previous,
+                }
+            }
+            Edit::Image(edit) => Edit::Image(Box::new(edit.apply_with(doc, false)?)),
             Edit::Batch(edits) => {
                 let mut inverses = Vec::with_capacity(edits.len());
                 for edit in edits {
-                    match edit.apply(doc) {
+                    match edit.apply_with(doc, check_locks) {
                         Ok(inverse) => inverses.push(inverse),
                         Err(err) => {
                             for inverse in inverses.into_iter().rev() {
                                 // Exact inverses of edits that just succeeded cannot fail.
-                                let rolled_back = inverse.apply(doc);
+                                let rolled_back = inverse.apply_with(doc, false);
                                 debug_assert!(rolled_back.is_ok(), "rollback failed");
                             }
                             return Err(err);
@@ -746,6 +809,58 @@ impl Edit {
         };
         doc.bump_revision();
         Ok(inverse)
+    }
+}
+
+impl Edit {
+    /// Refuse what the layers' locks forbid (ADR 0046), as Photoshop does: Lock Image Pixels
+    /// the layer's pixels, shape and fill; Lock Position its placement (a group's, when a layer
+    /// inside it is locked too); Lock All these and its opacity, blend mode, style, mask and
+    /// clipping. A group's locks apply to the layers inside it. A batch is checked edit by edit
+    /// as it applies.
+    fn check_locks(&self, doc: &Document) -> Result<(), EditError> {
+        let locked = |id: LayerId, lock: Lock| Err(EditError::Locked { id, lock });
+        match self {
+            Edit::SetLayerStack { id, .. }
+            | Edit::SetShape { id, .. }
+            | Edit::SetFillColor { id, .. }
+            | Edit::SetGradientFill { id, .. }
+            | Edit::SetPatternFill { id, .. } => {
+                if doc.effective_locks(*id).locks_pixels() {
+                    return locked(*id, Lock::Pixels);
+                }
+            }
+            Edit::SetLayerTransform { id, transform } => {
+                let Some(layer) = doc.layer(*id) else {
+                    return Ok(());
+                };
+                // Unchanged (a layer grown by a stroke keeps its place): nothing moves.
+                if layer.transform == *transform {
+                    return Ok(());
+                }
+                if doc.effective_locks(*id).locks_position() {
+                    return locked(*id, Lock::Position);
+                }
+                if let Some(inner) = layer.subtree().find(|l| l.locks.locks_position()) {
+                    return locked(inner.id, Lock::Position);
+                }
+            }
+            Edit::SetLayerOpacity { id, .. }
+            | Edit::SetLayerBlendMode { id, .. }
+            | Edit::SetLayerStyle { id, .. }
+            | Edit::SetLayerMask { id, .. }
+            | Edit::SetLayerMaskEnabled { id, .. }
+            | Edit::SetMaskPaint { id, .. }
+            | Edit::SetLayerClipped { id, .. }
+            | Edit::SetGroupPassThrough { id, .. }
+            | Edit::SetAdjustment { id, .. } => {
+                if doc.effective_locks(*id).all {
+                    return locked(*id, Lock::All);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -1328,7 +1443,8 @@ impl Edit {
                 transform,
             });
         }
-        Ok(Edit::Batch(edits))
+        // Locked layers follow the image (ADR 0046).
+        Ok(Edit::Image(Box::new(Edit::Batch(edits))))
     }
 
     /// Quick Mask on, as Photoshop's: the selection becomes the mask painting tools paint
@@ -1853,6 +1969,7 @@ mod tests {
 
     fn fill_layer(doc: &mut Document, name: &str) -> Layer {
         Layer {
+            locks: Default::default(),
             style: None,
             transform: crate::transform::Projective::IDENTITY,
             clipped: false,
@@ -1983,6 +2100,7 @@ mod tests {
         let ids = stack(&mut doc, &["a"]);
         let id = doc.allocate_layer_id();
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id,
             name: "adjust".into(),
@@ -4261,5 +4379,286 @@ mod tests {
             .map(|_| ()),
             Err(EditError::NoSource(fill))
         );
+    }
+    fn locks(transparency: bool, pixels: bool, position: bool, all: bool) -> LayerLocks {
+        LayerLocks {
+            transparency,
+            pixels,
+            position,
+            all,
+        }
+    }
+
+    fn lock(doc: &mut Document, id: LayerId, locks: LayerLocks) -> Edit {
+        Edit::SetLayerLocks { id, locks }.apply(doc).unwrap()
+    }
+
+    #[test]
+    fn locks_are_set_undoably() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let id = stack(&mut doc, &["a"])[0];
+        let undo = lock(&mut doc, id, locks(true, false, true, false));
+        assert_eq!(
+            doc.layer(id).unwrap().locks,
+            locks(true, false, true, false)
+        );
+        assert_eq!(crate::session::HistoryLabel::of(&undo).kind, "locks");
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(id).unwrap().locks.is_none());
+        assert_round_trip(
+            &mut doc,
+            Edit::SetLayerLocks {
+                id,
+                locks: locks(false, false, false, true),
+            },
+        );
+    }
+
+    #[test]
+    fn lock_image_pixels_refuses_paint_and_fills_but_not_moves() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let original = image(size, false, 200);
+        let id = raster_layer(&mut doc, Arc::clone(&original));
+        let fill = fill_layer(&mut doc, "fill");
+        let fill_id = fill.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: fill,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        for layer in [id, fill_id] {
+            lock(&mut doc, layer, locks(false, true, false, false));
+        }
+        let revision = doc.revision();
+        let paint = Edit::SetLayerStack {
+            id,
+            stack: painted_stack(&original, 0.5),
+            shown: None,
+        };
+        assert_eq!(
+            paint.apply(&mut doc).map(|_| ()),
+            Err(EditError::Locked {
+                id,
+                lock: Lock::Pixels
+            })
+        );
+        assert_eq!(
+            Edit::SetFillColor {
+                id: fill_id,
+                color: LinearRgba::new(0.0, 1.0, 0.0, 1.0),
+            }
+            .apply(&mut doc)
+            .map(|_| ()),
+            Err(EditError::Locked {
+                id: fill_id,
+                lock: Lock::Pixels
+            })
+        );
+        assert_eq!(doc.revision(), revision, "nothing changed");
+        assert!(shown(&doc, id).1.is_none());
+        // Moving and opacity stay free.
+        Edit::SetLayerTransform {
+            id,
+            transform: Affine::translation(2.0, 0.0).into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::SetLayerOpacity { id, opacity: 0.5 }
+            .apply(&mut doc)
+            .unwrap();
+        // Unlocked, the paint applies.
+        lock(&mut doc, id, LayerLocks::NONE);
+        Edit::SetLayerStack {
+            id,
+            stack: painted_stack(&original, 0.5),
+            shown: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+
+    #[test]
+    fn lock_position_refuses_transforms_of_the_layer_and_of_groups_holding_it() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let inner = fill_layer(&mut doc, "inner");
+        let inner_id = inner.id;
+        let group = group_layer(&mut doc, "group", vec![inner]);
+        let group_id = group.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: group,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        lock(&mut doc, inner_id, locks(false, false, true, false));
+        let moved: Projective = Affine::translation(3.0, 1.0).into();
+        let refused = |id| {
+            Err(EditError::Locked {
+                id,
+                lock: Lock::Position,
+            })
+        };
+        assert_eq!(
+            Edit::SetLayerTransform {
+                id: inner_id,
+                transform: moved,
+            }
+            .apply(&mut doc)
+            .map(|_| ()),
+            refused(inner_id)
+        );
+        // The group would carry it along.
+        assert_eq!(
+            Edit::SetLayerTransform {
+                id: group_id,
+                transform: moved,
+            }
+            .apply(&mut doc)
+            .map(|_| ()),
+            refused(inner_id)
+        );
+        // Its own transform, unchanged, is no move (a stroke growing a layer keeps it).
+        Edit::SetLayerTransform {
+            id: inner_id,
+            transform: Projective::IDENTITY,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        // The image's own changes move it with the image, undoably.
+        let grown = Edit::canvas_size(&doc, Size::new(10, 8), (0.0, 0.0))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let cropped = Edit::crop(&doc, [1, 0, 9, 8])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(
+            doc.layer(group_id).unwrap().transform,
+            Affine::translation(-1.0, 0.0).into()
+        );
+        cropped.apply(&mut doc).unwrap();
+        grown.apply(&mut doc).unwrap();
+        assert_eq!(doc.size(), Size::new(8, 8));
+        assert_eq!(doc.layer(group_id).unwrap().transform, Projective::IDENTITY);
+    }
+
+    #[test]
+    fn a_groups_locks_apply_to_its_layers() {
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let original = image(size, false, 200);
+        let id = raster_layer(&mut doc, Arc::clone(&original));
+        let group = group_layer(&mut doc, "group", Vec::new());
+        let group_id = group.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 1,
+            layer: group,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::MoveLayer {
+            id,
+            parent: Some(group_id),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        lock(&mut doc, group_id, locks(false, false, false, true));
+        assert_eq!(doc.effective_locks(id), locks(false, false, false, true));
+        assert!(doc.layer(id).unwrap().locks.is_none());
+        let paint = Edit::SetLayerStack {
+            id,
+            stack: painted_stack(&original, 0.5),
+            shown: None,
+        };
+        assert_eq!(
+            paint.apply(&mut doc).map(|_| ()),
+            Err(EditError::Locked {
+                id,
+                lock: Lock::Pixels
+            })
+        );
+        assert_eq!(
+            Edit::SetLayerOpacity { id, opacity: 0.5 }
+                .apply(&mut doc)
+                .map(|_| ()),
+            Err(EditError::Locked {
+                id,
+                lock: Lock::All
+            })
+        );
+    }
+
+    #[test]
+    fn lock_all_leaves_visibility_name_order_and_deletion_free() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        let id = ids[0];
+        lock(&mut doc, id, locks(false, false, false, true));
+        let refused = Err(EditError::Locked {
+            id,
+            lock: Lock::All,
+        });
+        for edit in [
+            Edit::SetLayerOpacity { id, opacity: 0.5 },
+            Edit::SetLayerBlendMode {
+                id,
+                mode: BlendMode::Multiply,
+            },
+            Edit::SetLayerClipped { id, clipped: true },
+        ] {
+            assert_eq!(edit.apply(&mut doc).map(|_| ()), refused);
+        }
+        Edit::SetLayerVisible { id, visible: false }
+            .apply(&mut doc)
+            .unwrap();
+        Edit::RenameLayer {
+            id,
+            name: "renamed".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Edit::MoveLayer {
+            id,
+            parent: None,
+            index: 1,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let undo = Edit::RemoveLayer { id }.apply(&mut doc).unwrap();
+        // Deleted then brought back, still locked.
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(id).unwrap().locks.all);
+    }
+
+    #[test]
+    fn a_batch_refused_by_a_lock_changes_nothing() {
+        let mut doc = Document::new(Size::new(8, 8));
+        let ids = stack(&mut doc, &["a", "b"]);
+        lock(&mut doc, ids[1], locks(false, false, true, false));
+        let before = doc.layers().to_vec();
+        let moved: Projective = Affine::translation(1.0, 0.0).into();
+        let batch = Edit::Batch(
+            ids.iter()
+                .map(|&id| Edit::SetLayerTransform {
+                    id,
+                    transform: moved,
+                })
+                .collect(),
+        );
+        assert!(matches!(
+            batch.apply(&mut doc),
+            Err(EditError::Locked {
+                lock: Lock::Position,
+                ..
+            })
+        ));
+        assert_eq!(doc.layers(), before.as_slice());
     }
 }

@@ -262,6 +262,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: source.name().to_owned(),
                 visible: true,
@@ -451,6 +452,7 @@ mod tests {
         let bad = ShapeSource::new(rectangle([10.0, 0.0, 0.0, 16.0], Some(RED), None), "");
         let id = doc.allocate_layer_id();
         let layer = Layer {
+            locks: Default::default(),
             id,
             name: "bad".into(),
             visible: true,

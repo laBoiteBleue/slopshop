@@ -73,6 +73,7 @@ fn push_layer(
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: transform.into(),
                 clipped: false,

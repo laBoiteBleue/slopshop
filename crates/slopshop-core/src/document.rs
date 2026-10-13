@@ -322,6 +322,64 @@ pub struct Layer {
     pub transform: crate::transform::Projective,
     /// Effects drawn from its shape, and its Fill Opacity (ADR 0032).
     pub style: Option<crate::style::Style>,
+    /// What edits may not change (ADR 0046); a group's apply to the layers inside it.
+    pub locks: LayerLocks,
+}
+
+/// Photoshop's layer locks (ADR 0046): what edits refuse to change on a layer (and, for a
+/// group, on every layer inside it).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct LayerLocks {
+    /// Lock Transparent Pixels: painting keeps the layer's alpha (it reaches only where pixels
+    /// already are).
+    pub transparency: bool,
+    /// Lock Image Pixels: the layer's pixels (paint, fills, filters, adjustments, Liquify), its
+    /// shape or its fill do not change.
+    pub pixels: bool,
+    /// Lock Position: the layer does not move nor transform.
+    pub position: bool,
+    /// Lock All: all of the above, and its opacity, blend mode, style, mask and clipping. It
+    /// can still be shown or hidden, renamed, moved in the stack and deleted.
+    pub all: bool,
+}
+
+impl LayerLocks {
+    pub const NONE: Self = Self {
+        transparency: false,
+        pixels: false,
+        position: false,
+        all: false,
+    };
+
+    /// Whether nothing is locked.
+    pub fn is_none(self) -> bool {
+        self == Self::NONE
+    }
+
+    /// Both sets of locks: a layer's own and those of the groups around it.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            transparency: self.transparency || other.transparency,
+            pixels: self.pixels || other.pixels,
+            position: self.position || other.position,
+            all: self.all || other.all,
+        }
+    }
+
+    /// Its pixels (shape, fill) may not change.
+    pub fn locks_pixels(self) -> bool {
+        self.pixels || self.all
+    }
+
+    /// It may not move nor transform.
+    pub fn locks_position(self) -> bool {
+        self.position || self.all
+    }
+
+    /// Painting keeps its alpha.
+    pub fn locks_transparency(self) -> bool {
+        self.transparency || self.all
+    }
 }
 
 /// A layer mask (ADR 0014): a gray raster at the document origin whose samples are the layer's
@@ -843,6 +901,20 @@ impl Document {
         transform
     }
 
+    /// The locks that apply to layer `id` (ADR 0046): its own and those of the groups around
+    /// it. None for an unknown layer.
+    pub fn effective_locks(&self, id: LayerId) -> LayerLocks {
+        let mut locks = self.layer(id).map_or(LayerLocks::NONE, |l| l.locks);
+        let mut parent = self.locate(id).and_then(|(parent, _)| parent);
+        while let Some(group) = parent {
+            if let Some(layer) = self.layer(group) {
+                locks = locks.union(layer.locks);
+            }
+            parent = self.locate(group).and_then(|(parent, _)| parent);
+        }
+        locks
+    }
+
     pub fn depth(&self, id: LayerId) -> Option<usize> {
         let mut depth = 0;
         let (mut parent, _) = self.locate(id)?;
@@ -1114,6 +1186,7 @@ mod tests {
 
     fn fill(id: u64, opacity: f32) -> Layer {
         Layer {
+            locks: Default::default(),
             style: None,
             transform: crate::transform::Projective::IDENTITY,
             clipped: false,

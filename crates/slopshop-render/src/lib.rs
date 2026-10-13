@@ -2754,6 +2754,7 @@ mod tests {
             RasterImage::from_pixels(Size::new(16, 16), format, &[240, 120, 30, 128].repeat(256))
                 .expect("16 × 16 RGBA8 pixels");
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             transform: Affine::IDENTITY.into(),
             clipped: false,
@@ -2806,6 +2807,7 @@ mod tests {
         let image = RasterImage::from_pixels(Size::new(16, 16), format, &[200; 16 * 16 * 4])
             .expect("16 × 16 RGBA8 pixels");
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             transform: Affine::translation(8.0, 8.0).into(),
             clipped: false,
@@ -2847,6 +2849,7 @@ mod tests {
         let image = RasterImage::from_pixels(Size::new(600, 300), format, &[90; 600 * 300 * 4])
             .expect("600 × 300 RGBA8 pixels");
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             transform: Affine::IDENTITY.into(),
             clipped: false,

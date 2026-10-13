@@ -64,6 +64,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        locks: Default::default(),
         style: None,
         transform: slopshop_core::Affine::IDENTITY.into(),
         clipped: false,
@@ -181,7 +182,7 @@ fn sample_document() -> Document {
     }
     .apply(&mut doc)
     .unwrap();
-    push(
+    let tint = push(
         &mut doc,
         "teinte HDR",
         LayerContent::Fill {
@@ -189,6 +190,26 @@ fn sample_document() -> Document {
         },
         0.3,
     );
+    // Locks round-trip (schema 0.33, ADR 0046).
+    Edit::SetLayerLocks {
+        id: slopshop_core::LayerId::from_raw(tint),
+        locks: slopshop_core::LayerLocks {
+            transparency: true,
+            position: true,
+            ..slopshop_core::LayerLocks::NONE
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
+    Edit::SetLayerLocks {
+        id: slopshop_core::LayerId::from_raw(hidden),
+        locks: slopshop_core::LayerLocks {
+            pixels: true,
+            ..slopshop_core::LayerLocks::NONE
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
     // A removed layer: its id is never reused.
     let removed = push(
         &mut doc,
@@ -302,6 +323,7 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
     for (x, y) in a.iter().zip(b) {
         assert_eq!((x.id, &x.name, x.visible), (y.id, &y.name, y.visible));
         assert_eq!(x.clipped, y.clipped, "{}", x.name);
+        assert_eq!(x.locks, y.locks, "{}", x.name);
         assert_eq!(x.transform, y.transform, "{}", x.name);
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
@@ -859,6 +881,7 @@ fn golden_document_v0_9() -> Document {
         parent: None,
         index,
         layer: Layer {
+            locks: Default::default(),
             style: None,
             id,
             name: "Curves".into(),
@@ -893,6 +916,7 @@ fn golden_document_v0_8() -> Document {
         parent: None,
         index,
         layer: Layer {
+            locks: Default::default(),
             style: None,
             id,
             name: "Channel Mixer".into(),
@@ -927,6 +951,7 @@ fn golden_document_v0_7() -> Document {
         parent: None,
         index,
         layer: Layer {
+            locks: Default::default(),
             style: None,
             id,
             name: "Hue/Saturation".into(),
@@ -995,6 +1020,7 @@ fn golden_document_v0_4() -> Document {
     let folder = doc.allocate_layer_id();
     let inner = doc.allocate_layer_id();
     let group = |id, name: &str, pass_through, mode, opacity, mask| Layer {
+        locks: Default::default(),
         style: None,
         transform: slopshop_core::Affine::IDENTITY.into(),
         clipped: false,
@@ -1237,6 +1263,25 @@ fn saved_selections_round_trip_with_their_names_order_and_ids() {
     SlopFile::create(&path, &plain).unwrap();
     let (loaded, _) = SlopFile::open(&path).unwrap();
     assert!(loaded.saved_selections().is_empty());
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn lock_all_round_trips() {
+    let path = temp_path("locks.slop");
+    let mut doc = sample_document();
+    let id = doc.layers()[0].id;
+    let all = slopshop_core::LayerLocks {
+        all: true,
+        ..slopshop_core::LayerLocks::NONE
+    };
+    Edit::SetLayerLocks { id, locks: all }
+        .apply(&mut doc)
+        .unwrap();
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    assert_eq!(loaded.layer(id).unwrap().locks, all);
     fs::remove_file(&path).ok();
 }
 

@@ -191,6 +191,7 @@ mod tests {
 
     fn push(doc: &mut Document, content: LayerContent) {
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: "l".into(),
@@ -244,6 +245,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 id: opaque.allocate_layer_id(),
                 name: "fill".into(),

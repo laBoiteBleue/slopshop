@@ -1366,6 +1366,7 @@ fn effect_layer(
     transform: Projective,
 ) -> Layer {
     Layer {
+        locks: Default::default(),
         id: LayerId::from_raw(0),
         name: String::new(),
         visible: true,
@@ -1677,6 +1678,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "alpha".into(),
                 visible: true,
@@ -1733,6 +1735,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "box".into(),
                 visible: true,
@@ -1928,6 +1931,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "box".into(),
                 visible: true,
@@ -1996,6 +2000,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "box".into(),
                 visible: true,
@@ -2187,6 +2192,7 @@ mod tests {
         Edit::group_layers(
             &doc,
             Layer {
+                locks: Default::default(),
                 id: group,
                 name: "group".into(),
                 visible: true,
@@ -2389,6 +2395,7 @@ mod tests {
         Edit::group_layers(
             &doc,
             Layer {
+                locks: Default::default(),
                 id: group,
                 name: "group".into(),
                 visible: true,

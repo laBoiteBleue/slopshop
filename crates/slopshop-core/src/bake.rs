@@ -301,6 +301,7 @@ pub fn merge_preview(
         None => Projective::IDENTITY,
     };
     let group = Layer {
+        locks: Default::default(),
         style: None,
         id: group,
         name,
@@ -449,6 +450,7 @@ mod tests {
 
     fn plain(doc: &mut Document, name: &str, content: LayerContent) -> Layer {
         Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: name.into(),

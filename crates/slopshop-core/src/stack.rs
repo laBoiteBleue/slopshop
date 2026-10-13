@@ -2220,6 +2220,16 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// The alpha of `below`, a pixel of the result's format, as the paint of `math` reads it.
+    fn alpha_of(&self, math: &PaintPixels, below: &[u8]) -> f64 {
+        if blends_as_stored(self.format, math.blender.space()) {
+            read_stored(below)[3]
+        } else {
+            math.blender
+                .encode_premultiplied(&self.pixels.read(&self.target, below))[3]
+        }
+    }
+
     /// Pixel `i` of the paint (`color`, `keep`: `P` and `k` tiles of `math`'s format) over
     /// `below` (a pixel of the result's format), into `out`.
     fn paint_pixel(
@@ -4060,6 +4070,8 @@ pub struct TopPaint {
     shown: Option<Arc<RasterImage>>,
     /// Tiles of what is below the paint, evaluated once each for the whole stroke.
     cache: HashMap<TileCoord, Arc<[u8]>>,
+    /// The paint keeps the alpha the layer shows (Lock Transparent Pixels, ADR 0046).
+    keep_alpha: bool,
 }
 
 impl TopPaint {
@@ -4126,7 +4138,16 @@ impl TopPaint {
             format,
             shown,
             cache,
+            keep_alpha: false,
         }
+    }
+
+    /// The paint keeps the alpha the layer showed when it started (Lock Transparent Pixels,
+    /// ADR 0046): each pixel's color moves towards the paint, its alpha stays. Exact as `P +
+    /// k·B`: the paint's color is laid premultiplied by the alpha shown, `k` as usual. Not for
+    /// the Eraser, which lowers alpha.
+    pub fn keep_alpha(&mut self) {
+        self.keep_alpha = true;
     }
 
     /// The format of the tiles shown while painting.
@@ -4237,6 +4258,7 @@ impl TopPaint {
                 work.push((index, y0 + n * BAND_ROWS, pr, kr, xr));
             }
         }
+        let keep_alpha = self.keep_alpha;
         let erased = parallel_for_each(&mut work, |(index, first, pr, kr, xr)| {
             let (coord, area, _) = dirty[*index];
             let (p0, k0, _) = starts[*index];
@@ -4261,6 +4283,12 @@ impl TopPaint {
                     }
                     if a > 0.0 {
                         let (pv, kv) = math.read(pr, kr, local);
+                        // The alpha shown before the paint: the color is laid at it.
+                        if keep_alpha {
+                            let under = evaluator.alpha_of(&math, &below[i * sb..(i + 1) * sb]);
+                            let shown = (pv[3] + kv * under).clamp(0.0, 1.0);
+                            color = color.map(|c| c.map(|v| v * shown));
+                        }
                         let (pv, kv) = lay(op, color, a.min(1.0), pv, kv);
                         math.write(pv, kv, pr, kr, local);
                         erased = erased || op == PaintOp::Erase || math.lowers_alpha(pr, kr, local);

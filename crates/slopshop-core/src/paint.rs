@@ -162,6 +162,8 @@ pub enum PaintError {
     Stack(crate::stack::StackError),
     /// [`Paint::Restore`] on pixels that have no stack.
     NeedsStack,
+    /// The Eraser or the Restore Eraser on a layer whose transparency is locked (ADR 0046).
+    AlphaLocked,
 }
 
 impl fmt::Display for PaintError {
@@ -174,6 +176,8 @@ impl fmt::Display for PaintError {
             PaintError::Raster(e) => write!(f, "{e}"),
             PaintError::Stack(e) => write!(f, "{e}"),
             PaintError::NeedsStack => write!(f, "only a layer's paint can be restored"),
+            // The UI recognizes "is locked: <lock>" (see `EditError::Locked`).
+            PaintError::AlphaLocked => write!(f, "the layer is locked: transparency"),
         }
     }
 }
@@ -607,6 +611,22 @@ impl Stroke {
         }
         stroke.top = Some(top);
         Ok(stroke)
+    }
+
+    /// The stroke keeps the alpha of the layer it paints (Lock Transparent Pixels, ADR 0046):
+    /// it reaches only where pixels are, and does not change their transparency. Refused for
+    /// the erasers ([`PaintError::AlphaLocked`]); nothing to do on an image without a stack.
+    pub fn keeping_alpha(mut self) -> Result<Self, PaintError> {
+        match &mut self.top {
+            Some(OnStack::Top(_, PaintOp::Erase) | OnStack::Restore(_)) => {
+                Err(PaintError::AlphaLocked)
+            }
+            Some(OnStack::Top(top, _)) => {
+                top.keep_alpha();
+                Ok(self)
+            }
+            None => Ok(self),
+        }
     }
 
     /// Continue the stroke through `samples`: dabs every spacing along the path (the first
@@ -1494,6 +1514,60 @@ mod tests {
         for x in 0..128 {
             assert_eq!(pixel(&painted, x, 64), pixel(&reference, x, 64), "x {x}");
         }
+    }
+
+    #[test]
+    fn a_stroke_keeping_alpha_paints_only_where_pixels_are() {
+        let size = Size::new(64, 64);
+        // Opaque on the left, half transparent in the middle, transparent on the right.
+        let alpha = |x: usize| match x {
+            0..24 => 255,
+            24..40 => 128,
+            _ => 0,
+        };
+        let bytes: Vec<u8> = (0..64 * 64)
+            .flat_map(|i| [40, 160, 220, alpha(i % 64)])
+            .collect();
+        let original = Arc::new(RasterImage::from_pixels(size, rgba8(), &bytes).unwrap());
+        let stack = LayerStack::new(Arc::clone(&original));
+        let shown = stack.evaluate().unwrap();
+        let brush = Brush {
+            diameter: 200.0,
+            ..Brush::default()
+        };
+        let start = |paint| {
+            Stroke::on_stack(
+                &stack,
+                Arc::clone(&shown),
+                Affine::IDENTITY.into(),
+                None,
+                BlendSpace::Perceptual,
+                brush,
+                paint,
+            )
+            .unwrap()
+        };
+        let mut s = start(red()).keeping_alpha().unwrap();
+        s.add(&[sample(32.0, 32.0)]);
+        let (painted, image) = s.finish_stack().unwrap().unwrap();
+        let red_where = |image: &RasterImage, x: u32| {
+            let p = pixel(image, x, 32);
+            (p[0], p[3])
+        };
+        assert_eq!(red_where(&image, 10), (255, 255));
+        assert_eq!(red_where(&image, 30).1, 128, "alpha kept");
+        assert!(red_where(&image, 30).0 >= 254, "painted red");
+        assert_eq!(red_where(&image, 50).1, 0, "nothing where nothing was");
+        // The stack evaluates to the same pixels.
+        let evaluated = painted.evaluate().unwrap();
+        for x in [10, 30, 50] {
+            assert_eq!(red_where(&evaluated, x), red_where(&image, x));
+        }
+        // The erasers would lower alpha.
+        assert_eq!(
+            start(Paint::Erase).keeping_alpha().map(|_| ()),
+            Err(PaintError::AlphaLocked)
+        );
     }
 
     #[test]

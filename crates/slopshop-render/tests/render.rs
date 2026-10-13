@@ -33,6 +33,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
@@ -228,6 +229,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
         parent: None,
         index: 0,
         layer: Layer {
+            locks: Default::default(),
             style: None,
             transform: slopshop_core::Affine::IDENTITY.into(),
             clipped: false,
@@ -359,6 +361,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
