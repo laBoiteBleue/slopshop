@@ -33,7 +33,7 @@ test("a letter picks its slot, as typed", () => {
   );
   assert.deepEqual(
     slotForLetter("s")?.tools.map((tool) => tool.id),
-    ["cloneStamp"],
+    ["cloneStamp", "patternStamp"],
   );
   assert.deepEqual(
     slotForLetter("j")?.tools.map((tool) => tool.id),
@@ -53,6 +53,7 @@ test("a letter picks its slot, as typed", () => {
 test("tool kinds", () => {
   assert.ok(isPaintTool("brush") && isPaintTool("eraser") && isPaintTool("restoreEraser"));
   assert.ok(isPaintTool("cloneStamp") && !isEraser("cloneStamp"));
+  assert.ok(isPaintTool("patternStamp") && !isEraser("patternStamp"));
   assert.ok(isCloneTool("cloneStamp") && isCloneTool("healingBrush") && !isCloneTool("brush"));
   assert.ok(isEraser("restoreEraser") && !isEraser("brush"));
   assert.ok(isSelectionTool("wand") && isSelectionTool("polygonalLasso"));

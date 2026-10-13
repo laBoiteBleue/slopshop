@@ -444,18 +444,19 @@ mod tests {
             working(0.0, 1.0, 0.0),
             working(0.0, 0.0, 1.0),
         );
-        let close = |got: [f32; 4], want: [f32; 4]| {
-            got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3)
-        };
+        let close =
+            |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3);
         let blend = crate::blend::BlendSpace::default();
         let aligned =
-            CloneSource::pattern(Size::new(300, 40), blend, Arc::clone(&source), [0.0; 2])
-                .unwrap();
+            CloneSource::pattern(Size::new(300, 40), blend, Arc::clone(&source), [0.0; 2]).unwrap();
         aligned.prepare([0.0, 0.0, 300.0, 40.0]);
         for (x, y, want) in [(0.5, 0.5, red), (1.5, 0.5, green), (0.5, 1.5, blue)] {
             assert!(close(aligned.at(x, y), want), "({x}, {y})");
             // A period later, beyond the first tile too.
-            assert!(close(aligned.at(x + 260.0, y + 30.0), want), "({x}, {y}) + period");
+            assert!(
+                close(aligned.at(x + 260.0, y + 30.0), want),
+                "({x}, {y}) + period"
+            );
         }
         // Started at (1, 0): texel (0, 0) there, and the column before shows the last one.
         let moved = CloneSource::pattern(Size::new(8, 8), blend, source, [1.0, 0.0]).unwrap();
