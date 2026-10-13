@@ -3090,7 +3090,75 @@ mod tests {
             ),
             (Filter::Twirl { angle: 200.0 }, 2),
             (Filter::Pinch { amount: 60.0 }, 2),
-            (Filter::Spherize { amount: -70.0 }, 2),
+            (
+                Filter::Spherize {
+                    amount: -70.0,
+                    mode: slopshop_core::filter::SpherizeMode::Normal,
+                },
+                2,
+            ),
+            (
+                Filter::Spherize {
+                    amount: 80.0,
+                    mode: slopshop_core::filter::SpherizeMode::VerticalOnly,
+                },
+                2,
+            ),
+            (
+                Filter::Ripple {
+                    amount: 400.0,
+                    size: slopshop_core::filter::RippleSize::Large,
+                },
+                2,
+            ),
+            (
+                Filter::Wave {
+                    generators: 5.0,
+                    wavelength: [120.0, 10.0],
+                    amplitude: [5.0, 35.0],
+                    scale: [100.0, 60.0],
+                    kind: slopshop_core::filter::WaveType::Sine,
+                    wrap: true,
+                    seed: 4321,
+                },
+                2,
+            ),
+            (
+                Filter::Wave {
+                    generators: 3.0,
+                    wavelength: [30.0, 90.0],
+                    amplitude: [10.0, 20.0],
+                    scale: [100.0, 100.0],
+                    kind: slopshop_core::filter::WaveType::Triangle,
+                    wrap: false,
+                    seed: 99,
+                },
+                2,
+            ),
+            (
+                Filter::ZigZag {
+                    amount: 60.0,
+                    ridges: 7.0,
+                    style: slopshop_core::filter::ZigZagStyle::AroundCenter,
+                },
+                2,
+            ),
+            (
+                Filter::ZigZag {
+                    amount: -80.0,
+                    ridges: 4.0,
+                    style: slopshop_core::filter::ZigZagStyle::OutFromCenter,
+                },
+                2,
+            ),
+            (
+                Filter::ZigZag {
+                    amount: 50.0,
+                    ridges: 5.0,
+                    style: slopshop_core::filter::ZigZagStyle::PondRipples,
+                },
+                2,
+            ),
             (Filter::PolarCoordinates { to_polar: true }, 2),
             (Filter::PolarCoordinates { to_polar: false }, 2),
             // The CPU's broad blur is three boxes: a little off the GPU's exact one.

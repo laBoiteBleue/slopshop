@@ -10,7 +10,7 @@ use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::{ChannelLayout, PixelFormat};
 use slopshop_core::filter::{
     BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, OffsetEdge, SHADOWS_LIFT,
-    line_offsets,
+    SpherizeMode, WaveType, ZigZagStyle, line_offsets,
 };
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
@@ -552,6 +552,9 @@ impl Pass {
             | Filter::Twirl { .. }
             | Filter::Pinch { .. }
             | Filter::Spherize { .. }
+            | Filter::Ripple { .. }
+            | Filter::Wave { .. }
+            | Filter::ZigZag { .. }
             | Filter::PolarCoordinates { .. } => {
                 // A layer without transparency can't take Offset's transparent edge: the CPU
                 // writes what it becomes there.
@@ -584,7 +587,54 @@ impl Pass {
                     ),
                     Filter::Twirl { angle } => (1.0, [angle, 0.0, 0.0]),
                     Filter::Pinch { amount } => (2.0, [amount, 0.0, 0.0]),
-                    Filter::Spherize { amount } => (3.0, [amount, 0.0, 0.0]),
+                    Filter::Spherize { amount, mode } => (
+                        3.0,
+                        [
+                            amount,
+                            match mode {
+                                SpherizeMode::Normal => 0.0,
+                                SpherizeMode::HorizontalOnly => 1.0,
+                                SpherizeMode::VerticalOnly => 2.0,
+                            },
+                            0.0,
+                        ],
+                    ),
+                    Filter::Ripple { amount, size } => {
+                        (5.0, [amount, size.wavelength() as f32, 0.0])
+                    }
+                    Filter::ZigZag {
+                        amount,
+                        ridges,
+                        style,
+                    } => (
+                        6.0,
+                        [
+                            amount,
+                            ridges,
+                            match style {
+                                ZigZagStyle::AroundCenter => 0.0,
+                                ZigZagStyle::OutFromCenter => 1.0,
+                                ZigZagStyle::PondRipples => 2.0,
+                            },
+                        ],
+                    ),
+                    Filter::Wave {
+                        generators,
+                        kind,
+                        wrap,
+                        ..
+                    } => (
+                        7.0,
+                        [
+                            generators,
+                            match kind {
+                                WaveType::Sine => 0.0,
+                                WaveType::Triangle => 1.0,
+                                WaveType::Square => 2.0,
+                            },
+                            f32::from(u8::from(wrap)),
+                        ],
+                    ),
                     Filter::PolarCoordinates { to_polar } => {
                         (4.0, [f32::from(u8::from(to_polar)), 0.0, 0.0])
                     }
@@ -593,23 +643,46 @@ impl Pass {
                 // Without a selection, the frame is the whole layer (`stack::frame_box`).
                 let factor = job.factor as f32;
                 let (w, h) = (job.layer.width as f32, job.layer.height as f32);
+                // Wave's ranges, scales and seed after the rest (a seed below 2^24: exact).
+                let wave = match filter {
+                    Filter::Wave {
+                        wavelength,
+                        amplitude,
+                        scale,
+                        seed,
+                        ..
+                    } => vec![
+                        wavelength[0],
+                        wavelength[1],
+                        amplitude[0],
+                        amplitude[1],
+                        scale[0],
+                        scale[1],
+                        seed as f32,
+                    ],
+                    _ => Vec::new(),
+                };
                 return Some(vec![Self {
                     kind: Kind::Sample,
-                    weights: vec![
-                        kind,
-                        settings[0],
-                        settings[1],
-                        settings[2],
-                        0.0,
-                        0.0,
-                        w,
-                        h,
-                        w,
-                        h,
-                        job.origin[0] as f32 * factor,
-                        job.origin[1] as f32 * factor,
-                        factor,
-                    ],
+                    weights: [
+                        vec![
+                            kind,
+                            settings[0],
+                            settings[1],
+                            settings[2],
+                            0.0,
+                            0.0,
+                            w,
+                            h,
+                            w,
+                            h,
+                            job.origin[0] as f32 * factor,
+                            job.origin[1] as f32 * factor,
+                            factor,
+                        ],
+                        wave,
+                    ]
+                    .concat(),
                     ..none
                 }]);
             }

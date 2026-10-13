@@ -119,6 +119,86 @@ pub enum RadialQuality {
     Best,
 }
 
+/// Ripple's amount range in percent, either way (Photoshop's).
+pub const MAX_RIPPLE_AMOUNT: f32 = 999.0;
+
+/// How far Ripple moves a pixel at an amount of 100 %, in parts of its ripples' wavelength.
+pub const RIPPLE_STRENGTH: f64 = 0.125;
+
+/// Ripple's Size (Photoshop's Small, Medium, Large): its ripples' wavelength.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RippleSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl RippleSize {
+    /// The ripples' wavelength in the layer's pixels.
+    pub fn wavelength(self) -> f64 {
+        match self {
+            Self::Small => 8.0,
+            Self::Medium => 16.0,
+            Self::Large => 32.0,
+        }
+    }
+}
+
+/// Wave's ranges (Photoshop's): generators, wavelengths and amplitudes (pixels) from 1 to 999,
+/// scales from 1 to 100 %.
+pub const MAX_WAVE_SETTING: f32 = 999.0;
+
+/// Wave's Type (Photoshop's): the shape of its waves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaveType {
+    Sine,
+    Triangle,
+    Square,
+}
+
+impl WaveType {
+    /// The wave at `t` periods: from -1 to 1, 0 at 0, rising.
+    pub fn shape(self, t: f64) -> f64 {
+        match self {
+            Self::Sine => (std::f64::consts::TAU * t).sin(),
+            Self::Triangle => 1.0 - 4.0 * ((t + 0.25).rem_euclid(1.0) - 0.5).abs(),
+            Self::Square => {
+                if t.rem_euclid(1.0) < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+        }
+    }
+}
+
+/// ZigZag's ranges (Photoshop's): the amount in percent either way, ridges from 1 to 20.
+pub const MAX_ZIGZAG_AMOUNT: f32 = 100.0;
+pub const MAX_ZIGZAG_RIDGES: f32 = 20.0;
+
+/// How far ZigZag turns a pixel around the center at an amount of 100 % (Around Center), in
+/// radians.
+pub const ZIGZAG_TURN: f64 = 1.0;
+
+/// ZigZag's Style (Photoshop's): ridges turning around the center, pushing out from it, or
+/// moving pixels toward the upper left and the lower right (Pond Ripples).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZigZagStyle {
+    AroundCenter,
+    OutFromCenter,
+    PondRipples,
+}
+
+/// Spherize's Mode (Photoshop's): around a sphere, or a cylinder standing (Horizontal Only) or
+/// lying (Vertical Only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpherizeMode {
+    Normal,
+    HorizontalOnly,
+    VerticalOnly,
+}
+
 impl RadialQuality {
     /// Samples per pixel of the path, and at most how many.
     fn sampling(self) -> (f64, usize) {
@@ -262,9 +342,34 @@ pub enum Filter {
     /// Photoshop's Pinch: squeezed toward the frame's center (a positive `amount`, percent) or
     /// pushed out from it (negative), within the frame's inscribed circle.
     Pinch { amount: f32 },
-    /// Photoshop's Spherize (Normal): as if wrapped around a sphere filling the frame's
-    /// inscribed ellipse, bulging (a positive `amount`, percent) or hollow (negative).
-    Spherize { amount: f32 },
+    /// Photoshop's Spherize: as if wrapped around a sphere filling the frame's inscribed
+    /// ellipse, bulging (a positive `amount`, percent) or hollow (negative); `mode` a cylinder
+    /// instead, across the width or the height only.
+    Spherize { amount: f32, mode: SpherizeMode },
+    /// Photoshop's Ripple: each pixel moved along a wave across the other axis, `amount` percent
+    /// (either way) of [`RIPPLE_STRENGTH`] of the wavelength of `size`.
+    Ripple { amount: f32, size: RippleSize },
+    /// Photoshop's Wave: each pixel moved by the average of `generators` waves of `kind`, each of
+    /// a wavelength and an amplitude (pixels) drawn from `seed` within `wavelength` and
+    /// `amplitude` (min and max, either order), horizontally across the height and vertically
+    /// across the width, by `scale` percent (horizontal, vertical); `wrap`: what goes beyond the
+    /// frame comes back on the other side (else the edges repeat).
+    Wave {
+        generators: f32,
+        wavelength: [f32; 2],
+        amplitude: [f32; 2],
+        scale: [f32; 2],
+        kind: WaveType,
+        wrap: bool,
+        seed: u32,
+    },
+    /// Photoshop's ZigZag: `ridges` circular ridges within the frame's inscribed circle, fading
+    /// out to it, moving pixels as `style` says by `amount` percent (either way).
+    ZigZag {
+        amount: f32,
+        ridges: f32,
+        style: ZigZagStyle,
+    },
     /// Photoshop's Radial Blur: each pixel the average of the layer along the arc through it
     /// around `center` (Spin, `amount` degrees) or along the line to it (`zoom`, see
     /// [`ZOOM_SPAN`]), centered on the pixel; `center` in percent of the frame (the selection's
@@ -322,7 +427,7 @@ pub enum Filter {
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 25] = [
+    pub const IDS: [&'static str; 28] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -347,6 +452,9 @@ impl Filter {
         "pinch",
         "spherize",
         "polarCoordinates",
+        "ripple",
+        "wave",
+        "zigZag",
         "shadowsHighlights",
     ];
 
@@ -373,6 +481,9 @@ impl Filter {
             Self::Pinch { .. } => "pinch",
             Self::Spherize { .. } => "spherize",
             Self::PolarCoordinates { .. } => "polarCoordinates",
+            Self::Ripple { .. } => "ripple",
+            Self::Wave { .. } => "wave",
+            Self::ZigZag { .. } => "zigZag",
             Self::RadialBlur { .. } => "radialBlur",
             Self::SurfaceBlur { .. } => "surfaceBlur",
             Self::SmartBlur { .. } => "smartBlur",
@@ -432,7 +543,60 @@ impl Filter {
                 },
             ],
             Self::Twirl { angle } => vec![angle],
-            Self::Pinch { amount } | Self::Spherize { amount } => vec![amount],
+            Self::Pinch { amount } => vec![amount],
+            Self::Spherize { amount, mode } => vec![
+                amount,
+                match mode {
+                    SpherizeMode::Normal => 0.0,
+                    SpherizeMode::HorizontalOnly => 1.0,
+                    SpherizeMode::VerticalOnly => 2.0,
+                },
+            ],
+            Self::Ripple { amount, size } => vec![
+                amount,
+                match size {
+                    RippleSize::Small => 0.0,
+                    RippleSize::Medium => 1.0,
+                    RippleSize::Large => 2.0,
+                },
+            ],
+            Self::Wave {
+                generators,
+                wavelength,
+                amplitude,
+                scale,
+                kind,
+                wrap,
+                seed,
+            } => vec![
+                generators,
+                wavelength[0],
+                wavelength[1],
+                amplitude[0],
+                amplitude[1],
+                scale[0],
+                scale[1],
+                match kind {
+                    WaveType::Sine => 0.0,
+                    WaveType::Triangle => 1.0,
+                    WaveType::Square => 2.0,
+                },
+                if wrap { 0.0 } else { 1.0 },
+                seed as f32,
+            ],
+            Self::ZigZag {
+                amount,
+                ridges,
+                style,
+            } => vec![
+                amount,
+                ridges,
+                match style {
+                    ZigZagStyle::AroundCenter => 0.0,
+                    ZigZagStyle::OutFromCenter => 1.0,
+                    ZigZagStyle::PondRipples => 2.0,
+                },
+            ],
             Self::PolarCoordinates { to_polar } => vec![f32::from(u8::from(to_polar))],
             Self::RadialBlur {
                 amount,
@@ -517,7 +681,60 @@ impl Filter {
             }),
             ("twirl", &[angle]) => Some(Self::Twirl { angle }),
             ("pinch", &[amount]) => Some(Self::Pinch { amount }),
-            ("spherize", &[amount]) => Some(Self::Spherize { amount }),
+            // Without a mode (written before it existed): Normal.
+            ("spherize", &[amount]) => Some(Self::Spherize {
+                amount,
+                mode: SpherizeMode::Normal,
+            }),
+            ("spherize", &[amount, mode]) => Some(Self::Spherize {
+                amount,
+                mode: match mode {
+                    0.0 => SpherizeMode::Normal,
+                    1.0 => SpherizeMode::HorizontalOnly,
+                    2.0 => SpherizeMode::VerticalOnly,
+                    _ => return None,
+                },
+            }),
+            ("ripple", &[amount, size]) => Some(Self::Ripple {
+                amount,
+                size: match size {
+                    0.0 => RippleSize::Small,
+                    1.0 => RippleSize::Medium,
+                    2.0 => RippleSize::Large,
+                    _ => return None,
+                },
+            }),
+            ("wave", &[generators, w0, w1, a0, a1, sx, sy, kind, edge, seed]) => {
+                let whole = seed.fract() == 0.0 && (0.0..NOISE_SEEDS as f32).contains(&seed);
+                Some(Self::Wave {
+                    generators,
+                    wavelength: [w0, w1],
+                    amplitude: [a0, a1],
+                    scale: [sx, sy],
+                    kind: match kind {
+                        0.0 => WaveType::Sine,
+                        1.0 => WaveType::Triangle,
+                        2.0 => WaveType::Square,
+                        _ => return None,
+                    },
+                    wrap: match edge {
+                        0.0 => true,
+                        1.0 => false,
+                        _ => return None,
+                    },
+                    seed: whole.then_some(seed as u32)?,
+                })
+            }
+            ("zigZag", &[amount, ridges, style]) => Some(Self::ZigZag {
+                amount,
+                ridges,
+                style: match style {
+                    0.0 => ZigZagStyle::AroundCenter,
+                    1.0 => ZigZagStyle::OutFromCenter,
+                    2.0 => ZigZagStyle::PondRipples,
+                    _ => return None,
+                },
+            }),
             ("polarCoordinates", &[to_polar]) => match to_polar {
                 0.0 => Some(Self::PolarCoordinates { to_polar: false }),
                 1.0 => Some(Self::PolarCoordinates { to_polar: true }),
@@ -637,7 +854,28 @@ impl Filter {
             }),
             "twirl" => Some(Self::Twirl { angle: 50.0 }),
             "pinch" => Some(Self::Pinch { amount: 50.0 }),
-            "spherize" => Some(Self::Spherize { amount: 100.0 }),
+            "spherize" => Some(Self::Spherize {
+                amount: 100.0,
+                mode: SpherizeMode::Normal,
+            }),
+            "ripple" => Some(Self::Ripple {
+                amount: 100.0,
+                size: RippleSize::Medium,
+            }),
+            "wave" => Some(Self::Wave {
+                generators: 5.0,
+                wavelength: [10.0, 120.0],
+                amplitude: [5.0, 35.0],
+                scale: [100.0, 100.0],
+                kind: WaveType::Sine,
+                wrap: false,
+                seed: 0,
+            }),
+            "zigZag" => Some(Self::ZigZag {
+                amount: 10.0,
+                ridges: 5.0,
+                style: ZigZagStyle::PondRipples,
+            }),
             "polarCoordinates" => Some(Self::PolarCoordinates { to_polar: true }),
             "radialBlur" => Some(Self::RadialBlur {
                 amount: 10.0,
@@ -762,8 +1000,33 @@ impl Filter {
                 .iter()
                 .all(|v| v.fract() == 0.0 && (-MAX_OFFSET..=MAX_OFFSET).contains(v)),
             Self::Twirl { angle } => angle.is_finite() && (-MAX_TWIRL..=MAX_TWIRL).contains(&angle),
-            Self::Pinch { amount } | Self::Spherize { amount } => {
+            Self::Pinch { amount } | Self::Spherize { amount, .. } => {
                 amount.is_finite() && (-100.0..=100.0).contains(&amount)
+            }
+            Self::Ripple { amount, .. } => {
+                amount.fract() == 0.0 && (-MAX_RIPPLE_AMOUNT..=MAX_RIPPLE_AMOUNT).contains(&amount)
+            }
+            Self::Wave {
+                generators,
+                wavelength,
+                amplitude,
+                scale,
+                seed,
+                ..
+            } => {
+                let setting = |v: &f32| v.fract() == 0.0 && (1.0..=MAX_WAVE_SETTING).contains(v);
+                setting(&generators)
+                    && wavelength.iter().chain(&amplitude).all(setting)
+                    && scale
+                        .iter()
+                        .all(|v| v.fract() == 0.0 && (1.0..=100.0).contains(v))
+                    && seed < NOISE_SEEDS
+            }
+            Self::ZigZag { amount, ridges, .. } => {
+                amount.fract() == 0.0
+                    && (-MAX_ZIGZAG_AMOUNT..=MAX_ZIGZAG_AMOUNT).contains(&amount)
+                    && ridges.fract() == 0.0
+                    && (1.0..=MAX_ZIGZAG_RIDGES).contains(&ridges)
             }
             Self::PolarCoordinates { .. } | Self::Average => true,
             Self::RadialBlur { amount, center, .. } => {
@@ -813,6 +1076,9 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
+            | Self::Ripple { .. }
+            | Self::Wave { .. }
+            | Self::ZigZag { .. }
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
@@ -931,6 +1197,9 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
+            | Self::Ripple { .. }
+            | Self::Wave { .. }
+            | Self::ZigZag { .. }
             | Self::PolarCoordinates { .. } => *self,
             Self::ClarityTexture {
                 texture,
@@ -982,6 +1251,9 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
+            | Self::Ripple { .. }
+            | Self::Wave { .. }
+            | Self::ZigZag { .. }
             | Self::PolarCoordinates { .. } => f64::INFINITY,
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
@@ -1091,6 +1363,9 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
+            | Self::Ripple { .. }
+            | Self::Wave { .. }
+            | Self::ZigZag { .. }
             | Self::PolarCoordinates { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
@@ -1112,6 +1387,9 @@ impl Filter {
                 | Self::Twirl { .. }
                 | Self::Pinch { .. }
                 | Self::Spherize { .. }
+                | Self::Ripple { .. }
+                | Self::Wave { .. }
+                | Self::ZigZag { .. }
                 | Self::PolarCoordinates { .. }
         )
     }
@@ -1232,12 +1510,21 @@ impl Filter {
                     .powf(-f64::from(amount) / 100.0);
                 Some([c[0] + v[0] * k, c[1] + v[1] * k])
             }
-            Self::Spherize { amount } => {
+            Self::Spherize { amount, mode } => {
                 let half = [w / 2.0, h / 2.0];
                 if half[0] <= 0.0 || half[1] <= 0.0 {
                     return Some(p);
                 }
-                let u = [v[0] / half[0], v[1] / half[1]];
+                // A cylinder: the other axis left as it is.
+                let (across, down) = match mode {
+                    SpherizeMode::Normal => (true, true),
+                    SpherizeMode::HorizontalOnly => (true, false),
+                    SpherizeMode::VerticalOnly => (false, true),
+                };
+                let u = [
+                    if across { v[0] / half[0] } else { 0.0 },
+                    if down { v[1] / half[1] } else { 0.0 },
+                ];
                 let r = (u[0] * u[0] + u[1] * u[1]).sqrt();
                 if r >= 1.0 || r == 0.0 {
                     return Some(p);
@@ -1250,7 +1537,97 @@ impl Filter {
                     (1.0 - (1.0 - r).powi(2)).sqrt()
                 };
                 let s = (r + a.abs() * (target - r)) / r;
-                Some([c[0] + u[0] * s * half[0], c[1] + u[1] * s * half[1]])
+                Some([
+                    if across {
+                        c[0] + u[0] * s * half[0]
+                    } else {
+                        p[0]
+                    },
+                    if down {
+                        c[1] + u[1] * s * half[1]
+                    } else {
+                        p[1]
+                    },
+                ])
+            }
+            Self::Ripple { amount, size } => {
+                let lambda = size.wavelength();
+                let a = f64::from(amount) / 100.0 * RIPPLE_STRENGTH * lambda;
+                let k = std::f64::consts::TAU / lambda;
+                Some([p[0] + a * (k * p[1]).sin(), p[1] + a * (k * p[0]).sin()])
+            }
+            Self::Wave {
+                generators,
+                wavelength,
+                amplitude,
+                scale,
+                kind,
+                wrap,
+                seed,
+            } => {
+                let n = generators as u32;
+                let range = |[a, b]: [f32; 2]| (f64::from(a.min(b)), f64::from(a.max(b)));
+                let ((w0, w1), (a0, a1)) = (range(wavelength), range(amplitude));
+                let mut shift = [0.0; 2];
+                for i in 0..n {
+                    // Three draws per direction: amplitude, wavelength, phase.
+                    let draw = |k: u32| {
+                        f64::from(hash(seed ^ hash(i * 8 + k)) >> 8) / f64::from(1u32 << 24)
+                    };
+                    for (axis, across) in [(0, p[1]), (1, p[0])] {
+                        let k = axis as u32 * 3;
+                        let amp = a0 + (a1 - a0) * draw(k);
+                        let lambda = w0 + (w1 - w0) * draw(k + 1);
+                        shift[axis] += amp * kind.shape(across / lambda + draw(k + 2));
+                    }
+                }
+                let q = [0, 1]
+                    .map(|i| p[i] + shift[i] / f64::from(n.max(1)) * f64::from(scale[i]) / 100.0);
+                Some(if wrap && w > 0.0 && h > 0.0 {
+                    [
+                        left + (q[0] - left).rem_euclid(w),
+                        top + (q[1] - top).rem_euclid(h),
+                    ]
+                } else {
+                    q
+                })
+            }
+            Self::ZigZag {
+                amount,
+                ridges,
+                style,
+            } => {
+                if d >= radius || radius <= 0.0 {
+                    return Some(p);
+                }
+                let r = d / radius;
+                let ridges = f64::from(ridges);
+                // Most near the center, nothing on the circle.
+                let wave = f64::from(amount) / 100.0
+                    * (std::f64::consts::TAU * ridges * r).sin()
+                    * (1.0 - r);
+                // Half a ridge's spacing at 100 %.
+                let push = wave * radius / ridges / 2.0;
+                match style {
+                    ZigZagStyle::AroundCenter => {
+                        let (sin, cos) = (wave * ZIGZAG_TURN).sin_cos();
+                        Some([
+                            c[0] + v[0] * cos - v[1] * sin,
+                            c[1] + v[0] * sin + v[1] * cos,
+                        ])
+                    }
+                    ZigZagStyle::OutFromCenter => {
+                        if d == 0.0 {
+                            return Some(p);
+                        }
+                        let k = (d + push) / d;
+                        Some([c[0] + v[0] * k, c[1] + v[1] * k])
+                    }
+                    ZigZagStyle::PondRipples => {
+                        let s = push * std::f64::consts::FRAC_1_SQRT_2;
+                        Some([p[0] + s, p[1] + s])
+                    }
+                }
             }
             Self::PolarCoordinates { to_polar } => {
                 let tau = std::f64::consts::TAU;
@@ -1287,6 +1664,9 @@ impl Filter {
                 | Self::Twirl { .. }
                 | Self::Pinch { .. }
                 | Self::Spherize { .. }
+                | Self::Ripple { .. }
+                | Self::Wave { .. }
+                | Self::ZigZag { .. }
                 | Self::PolarCoordinates { .. }
                 | Self::RadialBlur { .. }
                 | Self::SurfaceBlur { .. }
@@ -1325,6 +1705,9 @@ impl Filter {
             | Self::Twirl { .. }
             | Self::Pinch { .. }
             | Self::Spherize { .. }
+            | Self::Ripple { .. }
+            | Self::Wave { .. }
+            | Self::ZigZag { .. }
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
@@ -3279,6 +3662,169 @@ mod tests {
     }
 
     #[test]
+    fn ripple_wave_zigzag_and_spherize_modes_move_pixels_as_photoshop() {
+        let frame = [0.0, 0.0, 200.0, 100.0];
+        let layer = [200.0, 100.0];
+        let center = [100.0, 50.0];
+        let close =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        // Ripple: along a wave across the other axis, up to its strength, the other way below 0.
+        let ripple = |amount| Filter::Ripple {
+            amount,
+            size: RippleSize::Medium,
+        };
+        let most = RIPPLE_STRENGTH * RippleSize::Medium.wavelength();
+        // A quarter wavelength down (y = 4): the most to the right.
+        let q = ripple(100.0).source([0.0, 4.0], frame, layer).unwrap();
+        assert!(
+            (q[0] - most).abs() < 1e-9 && (q[1] - 4.0).abs() < 1e-9,
+            "{q:?}"
+        );
+        let q = ripple(-200.0).source([0.0, 4.0], frame, layer).unwrap();
+        assert!((q[0] + 2.0 * most).abs() < 1e-9, "{q:?}");
+        assert!(close(
+            ripple(0.0).source([33.0, 7.0], frame, layer).unwrap(),
+            [33.0, 7.0]
+        ));
+        // Wave: the same seed, the same waves; another seed, others; within the amplitudes;
+        // wrapped within the frame, or read beyond it (the edge repeating).
+        let wave = |seed, wrap| Filter::Wave {
+            generators: 5.0,
+            wavelength: [10.0, 120.0],
+            amplitude: [5.0, 35.0],
+            scale: [100.0, 100.0],
+            kind: WaveType::Sine,
+            wrap,
+            seed,
+        };
+        let points = [[3.0, 4.0], [150.0, 20.0], [77.0, 99.0], [199.0, 0.0]];
+        let moved = |f: Filter| points.map(|p| f.source(p, frame, layer).unwrap());
+        assert_eq!(moved(wave(7, false)), moved(wave(7, false)));
+        assert_ne!(moved(wave(7, false)), moved(wave(8, false)));
+        for (p, q) in points.iter().zip(moved(wave(7, false))) {
+            assert!((q[0] - p[0]).abs() <= 35.0 && (q[1] - p[1]).abs() <= 35.0);
+        }
+        for q in moved(wave(7, true)) {
+            assert!(
+                (0.0..200.0).contains(&q[0]) && (0.0..100.0).contains(&q[1]),
+                "{q:?}"
+            );
+        }
+        // Min and max either way round: the same range.
+        let mut swapped = wave(7, false);
+        if let Filter::Wave {
+            wavelength,
+            amplitude,
+            ..
+        } = &mut swapped
+        {
+            wavelength.reverse();
+            amplitude.reverse();
+        }
+        assert!(swapped.is_valid());
+        assert_eq!(moved(swapped), moved(wave(7, false)));
+        // A scale of 1 % barely moves; the shapes keep within -1 and 1.
+        let mut flat = wave(7, false);
+        if let Filter::Wave { scale, .. } = &mut flat {
+            *scale = [1.0, 1.0];
+        }
+        for (p, q) in points.iter().zip(moved(flat)) {
+            assert!((q[0] - p[0]).abs() <= 0.35 && (q[1] - p[1]).abs() <= 0.35);
+        }
+        for kind in [WaveType::Sine, WaveType::Triangle, WaveType::Square] {
+            assert!((kind.shape(0.25) - 1.0).abs() < 1e-9, "{kind:?}");
+            assert!((kind.shape(0.75) + 1.0).abs() < 1e-9, "{kind:?}");
+            assert!((0..100).all(|i| kind.shape(f64::from(i) / 37.0).abs() <= 1.0));
+        }
+        // ZigZag: nothing beyond the inscribed circle; around the center keeps the distance,
+        // out from it keeps the direction, pond ripples move along the diagonal.
+        let zigzag = |style| Filter::ZigZag {
+            amount: 100.0,
+            ridges: 5.0,
+            style,
+        };
+        let distance =
+            |a: [f64; 2]| ((a[0] - center[0]).powi(2) + (a[1] - center[1]).powi(2)).sqrt();
+        // A twentieth of the radius out: a quarter of the first ridge, the most there.
+        let p = [102.5, 50.0];
+        for style in [
+            ZigZagStyle::AroundCenter,
+            ZigZagStyle::OutFromCenter,
+            ZigZagStyle::PondRipples,
+        ] {
+            let f = zigzag(style);
+            assert!(close(
+                f.source([10.0, 5.0], frame, layer).unwrap(),
+                [10.0, 5.0]
+            ));
+            assert!(!close(f.source(p, frame, layer).unwrap(), p), "{style:?}");
+        }
+        let q = zigzag(ZigZagStyle::AroundCenter)
+            .source(p, frame, layer)
+            .unwrap();
+        assert!((distance(q) - 2.5).abs() < 1e-9 && q[1] != 50.0);
+        let q = zigzag(ZigZagStyle::OutFromCenter)
+            .source(p, frame, layer)
+            .unwrap();
+        assert!(q[1] == 50.0 && q[0] > 102.5);
+        let q = zigzag(ZigZagStyle::PondRipples)
+            .source(p, frame, layer)
+            .unwrap();
+        assert!((q[0] - 102.5 - (q[1] - 50.0)).abs() < 1e-9 && q[1] > 50.0);
+        // Spherize Horizontal Only: across only, the same everywhere down the frame.
+        let sphere = |mode| Filter::Spherize {
+            amount: 100.0,
+            mode,
+        };
+        let q = sphere(SpherizeMode::HorizontalOnly)
+            .source([140.0, 20.0], frame, layer)
+            .unwrap();
+        let r = sphere(SpherizeMode::HorizontalOnly)
+            .source([140.0, 90.0], frame, layer)
+            .unwrap();
+        assert!(q[1] == 20.0 && r[1] == 90.0 && q[0] < 140.0 && q[0] > 100.0 && q[0] == r[0]);
+        let q = sphere(SpherizeMode::VerticalOnly)
+            .source([140.0, 70.0], frame, layer)
+            .unwrap();
+        assert!(q[0] == 140.0 && q[1] < 70.0 && q[1] > 50.0);
+        // Their settings, Photoshop's ranges; Spherize written without its mode is Normal.
+        assert_eq!(
+            Filter::from_params("spherize", &[40.0]),
+            Some(Filter::Spherize {
+                amount: 40.0,
+                mode: SpherizeMode::Normal
+            })
+        );
+        assert_eq!(Filter::from_params("spherize", &[40.0, 3.0]), None);
+        assert!(ripple(999.0).is_valid() && !ripple(1000.0).is_valid() && !ripple(1.5).is_valid());
+        let mut many = wave(7, false);
+        if let Filter::Wave { generators, .. } = &mut many {
+            *generators = 1000.0;
+        }
+        assert!(!many.is_valid());
+        assert!(
+            !Filter::ZigZag {
+                amount: 10.0,
+                ridges: 21.0,
+                style: ZigZagStyle::PondRipples
+            }
+            .is_valid()
+        );
+        assert_eq!(
+            Filter::from_params(
+                "wave",
+                &[5.0, 10.0, 120.0, 5.0, 35.0, 100.0, 100.0, 0.0, 1.0, 0.5]
+            ),
+            None
+        );
+        for id in ["ripple", "wave", "zigZag", "spherize"] {
+            let f = Filter::defaults(id).unwrap();
+            assert!(f.is_valid() && f.samples() && f.scaled(4.0) == f, "{id}");
+            assert_eq!(Filter::from_params(id, &f.params()), Some(f));
+        }
+    }
+
+    #[test]
     fn distortions_read_from_where_they_move_pixels() {
         let frame = [0.0, 0.0, 200.0, 100.0];
         let layer = [200.0, 100.0];
@@ -3303,9 +3849,15 @@ mod tests {
         let push = Filter::Pinch { amount: -50.0 };
         assert!(distance(push.source(p, frame, layer).unwrap()) < 20.0);
         // Spherize: a bulge reads closer to the center; a hollow farther.
-        let bulge = Filter::Spherize { amount: 100.0 };
+        let bulge = Filter::Spherize {
+            amount: 100.0,
+            mode: SpherizeMode::Normal,
+        };
         assert!(distance(bulge.source(p, frame, layer).unwrap()) < 20.0);
-        let hollow = Filter::Spherize { amount: -100.0 };
+        let hollow = Filter::Spherize {
+            amount: -100.0,
+            mode: SpherizeMode::Normal,
+        };
         assert!(distance(hollow.source(p, frame, layer).unwrap()) > 20.0);
         // Polar coordinates there and back again: where it was.
         let (to, from) = (

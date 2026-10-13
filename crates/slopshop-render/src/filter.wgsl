@@ -431,9 +431,10 @@ fn cells_columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 // The distortions (`Filter::source` on the CPU): where the pixel at layer point `p` (layer
 // pixels) is read from; `z` is 0 where nothing is (Offset's transparent edge). `weights`: the
-// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates), its three settings, the
-// frame's box (left, top, right, bottom), the layer's size, the crop's first pixel on the layer
-// and its pixels' size there (layer pixels).
+// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates, 5 Ripple, 6 ZigZag, 7 Wave),
+// its three settings, the frame's box (left, top, right, bottom), the layer's size, the crop's
+// first pixel on the layer and its pixels' size there (layer pixels); then Wave's wavelengths,
+// amplitudes, scales and seed.
 fn distortion_source(p: vec2<f32>) -> vec3<f32> {
     let kind = u32(weights[0]);
     let a = weights[1];
@@ -481,7 +482,9 @@ fn distortion_source(p: vec2<f32>) -> vec3<f32> {
         if half.x <= 0.0 || half.y <= 0.0 {
             return vec3<f32>(p, 1.0);
         }
-        let u = v / half;
+        // Horizontal Only, Vertical Only: a cylinder, the other axis left as it is.
+        let axes = vec2<f32>(select(1.0, 0.0, b == 2.0), select(1.0, 0.0, b == 1.0));
+        let u = v / half * axes;
         let r = length(u);
         if r >= 1.0 || r == 0.0 {
             return vec3<f32>(p, 1.0);
@@ -492,7 +495,35 @@ fn distortion_source(p: vec2<f32>) -> vec3<f32> {
             goal = 1.0 - sqrt(1.0 - r * r);
         }
         let s = (r + abs(amount) * (goal - r)) / r;
-        return vec3<f32>(c + u * s * half, 1.0);
+        return vec3<f32>(mix(p, c + u * s * half, axes), 1.0);
+    }
+    if kind == 5u {
+        let amount = a / 100.0 * 0.125 * b;
+        let k = 6.2831853 / b;
+        return vec3<f32>(p.x + amount * sin(k * p.y), p.y + amount * sin(k * p.x), 1.0);
+    }
+    if kind == 6u {
+        if d >= radius || radius <= 0.0 {
+            return vec3<f32>(p, 1.0);
+        }
+        let r = d / radius;
+        let wave = a / 100.0 * sin(6.2831853 * b * r) * (1.0 - r);
+        let push = wave * radius / b / 2.0;
+        if e == 0.0 {
+            let s = sin(wave);
+            let k = cos(wave);
+            return vec3<f32>(c.x + v.x * k - v.y * s, c.y + v.x * s + v.y * k, 1.0);
+        }
+        if e == 1.0 {
+            if d == 0.0 {
+                return vec3<f32>(p, 1.0);
+            }
+            return vec3<f32>(c + v * ((d + push) / d), 1.0);
+        }
+        return vec3<f32>(p + vec2<f32>(push * 0.70710678), 1.0);
+    }
+    if kind == 7u {
+        return vec3<f32>(wave_source(p, u32(a), b, e == 1.0, vec4<f32>(left, top, w, h)), 1.0);
     }
     // Polar Coordinates.
     let tau = 6.2831853;
@@ -507,6 +538,45 @@ fn distortion_source(p: vec2<f32>) -> vec3<f32> {
     let phi = (p.x - left) / w * tau;
     let rho = (p.y - top) / h * radius;
     return vec3<f32>(c.x + rho * sin(phi), c.y - rho * cos(phi), 1.0);
+}
+
+// Wave's wave of `kind` (0 sine, 1 triangle, 2 square) at `t` periods (`WaveType::shape`).
+fn wave_shape(kind: f32, t: f32) -> f32 {
+    if kind == 1.0 {
+        let f = t + 0.25;
+        return 1.0 - 4.0 * abs(f - floor(f) - 0.5);
+    }
+    if kind == 2.0 {
+        return select(-1.0, 1.0, t - floor(t) < 0.5);
+    }
+    return sin(6.2831853 * t);
+}
+
+// Wave's source for `p` (`Filter::source`): `n` generators of `kind`, wrapped within `frame`
+// (left, top, width, height) when `wrap`; its ranges, scales and seed in `weights[13..20]`.
+fn wave_source(p: vec2<f32>, n: u32, kind: f32, wrap: bool, frame: vec4<f32>) -> vec2<f32> {
+    let w0 = min(weights[13], weights[14]);
+    let w1 = max(weights[13], weights[14]);
+    let a0 = min(weights[15], weights[16]);
+    let a1 = max(weights[15], weights[16]);
+    let seed = u32(weights[19]);
+    var shift = vec2<f32>(0.0);
+    for (var i = 0u; i < n; i++) {
+        for (var axis = 0u; axis < 2u; axis++) {
+            let k = axis * 3u;
+            let amp = a0 + (a1 - a0) * f32(hash(seed ^ hash(i * 8u + k)) >> 8u) / 16777216.0;
+            let lambda = w0 + (w1 - w0) * f32(hash(seed ^ hash(i * 8u + k + 1u)) >> 8u) / 16777216.0;
+            let phase = f32(hash(seed ^ hash(i * 8u + k + 2u)) >> 8u) / 16777216.0;
+            let across = select(p.x, p.y, axis == 0u);
+            shift[axis] += amp * wave_shape(kind, across / lambda + phase);
+        }
+    }
+    let q = p + shift / f32(max(n, 1u)) * vec2<f32>(weights[17], weights[18]) / 100.0;
+    if wrap && frame.z > 0.0 && frame.w > 0.0 {
+        let o = q - frame.xy;
+        return frame.xy + o - floor(o / frame.zw) * frame.zw;
+    }
+    return q;
 }
 
 @compute @workgroup_size(16, 16)
