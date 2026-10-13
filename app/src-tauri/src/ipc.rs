@@ -1707,6 +1707,7 @@ impl EditRequest {
                         mask: None,
                         content: LayerContent::vector(source),
                         locks: Default::default(),
+                        warp: None,
                     },
                 }
             }

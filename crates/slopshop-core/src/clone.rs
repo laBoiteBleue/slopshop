@@ -147,6 +147,7 @@ impl CloneSource {
             content: LayerContent::PatternFill {
                 pattern: crate::pattern::PatternFill::new(source),
             },
+            warp: None,
         };
         let document = Document::restore(
             size,
