@@ -1568,6 +1568,7 @@ mod tests {
                     dto.shape().unwrap(),
                     "Shape 1",
                 )),
+                warp: None,
             },
         })
         .unwrap();
@@ -1616,6 +1617,7 @@ mod tests {
             content: LayerContent::Fill {
                 color: LinearRgba::new(0.8, 0.1, 0.1, 1.0),
             },
+            warp: None,
         };
         s.perform(Edit::InsertLayer {
             parent: None,
@@ -1688,6 +1690,7 @@ mod tests {
                 clipped: false,
                 transform: Projective::IDENTITY,
                 style: None,
+                warp: None,
             },
         }
         .apply(&mut doc)

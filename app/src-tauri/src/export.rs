@@ -507,6 +507,7 @@ mod tests {
                     stack: None,
                     image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                 },
+                warp: None,
             },
         }
         .apply(&mut document)

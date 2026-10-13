@@ -188,6 +188,7 @@ fn raster_layer(name: String, image: Arc<RasterImage>, transform: Affine) -> Lay
         mask: None,
         clipped: false,
         transform: transform.into(),
+        warp: None,
     }
 }
 
@@ -200,6 +201,7 @@ fn selected_pixels(
 ) -> Result<Option<Layer>, String> {
     let selection = document.selection().ok_or("nothing is selected")?;
     let layer = document.layer(layer_id).ok_or("the layer is gone")?;
+    crate::paint::unwarped(layer)?;
     let image = match (target, &layer.content) {
         (PaintTarget::Mask, _) => Arc::clone(&layer.mask.as_ref().ok_or("no mask")?.image),
         (PaintTarget::Layer, LayerContent::Raster { image, .. }) => image.get(),

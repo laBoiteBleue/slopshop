@@ -91,7 +91,8 @@ zstd = "0.14.0"
 # - the JSON manifest, through explicit DTOs (never derives on core types). Both are already in
 #   the tree through Tauri.
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+# `float_roundtrip`: numbers read back to the bit (a warp's control points, ADR 0044).
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 # Zip archives opened like several files (collection module): reading stored and deflate entries
 # only, through flate2 (already in the tree, pure Rust backend); the other methods and
 # encryption are left out. MIT.

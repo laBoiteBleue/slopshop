@@ -154,6 +154,10 @@ fn overlaps(a: Area, b: Area) -> bool {
 /// resampled one the points whose filter reads any of its texels.
 fn plan_reach(plan: &RasterPlan<'_>) -> Option<Area> {
     let size = plan.image.size();
+    // Warped (ADR 0044): its triangles' box.
+    if let Some(m) = plan.mesh() {
+        return Some(m.document_reach());
+    }
     match plan.resampling() {
         None => {
             let [x, y] = plan.offset().map(f64::from);
@@ -310,9 +314,12 @@ impl Missing<'_> {
             .plans
             .iter()
             .flatten()
-            .map(|plan| match plan.resampling() {
-                Some(_) => RESAMPLED_COST,
-                None => 1,
+            .map(|plan| {
+                if plan.is_resampled() {
+                    RESAMPLED_COST
+                } else {
+                    1
+                }
             })
             .sum();
         (self.steps.len() as u32).saturating_add(rasters).max(1)
@@ -821,7 +828,7 @@ fn step_key(
     plans: [Option<RasterPlan<'_>>; 2],
     blend_space: BlendSpace,
 ) -> ContentKey {
-    let nowhere = plans.map(|plan| {
+    let nowhere = plans.clone().map(|plan| {
         plan.map(|plan| RasterPlan {
             area: [0.0; 4],
             ..plan
@@ -871,6 +878,7 @@ fn fitted_plans<'a>(
         .flat_map(|&i| {
             [2 * i, 2 * i + 1].map(|p| {
                 plans[p]
+                    .clone()
                     .map(|plan| RasterPlan { area, ..plan })
                     .filter(|plan| !plan.range().is_empty())
             })
@@ -982,8 +990,8 @@ impl<'a, 's> LevelPlan<'a, 's> {
             .iter()
             .flat_map(|step| {
                 step_rasters(step).map(|raster| {
-                    let (image, transform, wrap) = raster?;
-                    RasterPlan::new(image, scene.visible?, transform, factor, wrap)
+                    let (image, transform, wrap, warp) = raster?;
+                    RasterPlan::new(image, scene.visible?, transform, factor, wrap, warp)
                 })
             })
             .collect();
@@ -1005,7 +1013,7 @@ impl<'a, 's> LevelPlan<'a, 's> {
             .map(|(i, step)| {
                 step_key(
                     step,
-                    [plans[2 * i], plans[2 * i + 1]],
+                    [plans[2 * i].clone(), plans[2 * i + 1].clone()],
                     scene.document.blend_space(),
                 )
             })
@@ -1218,6 +1226,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask: None,
             content,
+            warp: None,
         }
     }
 

@@ -119,6 +119,7 @@ fn lift(doc: &Document, target: Target, copy: bool) -> Result<Floating, String> 
         Target::QuickMask => return Err("Quick Mask's pixels do not move".to_owned()),
     };
     let layer = doc.layer(id).ok_or("the moved layer is gone")?;
+    crate::paint::unwarped(layer)?;
     let transform = lifted.as_ref().map_or(layer.transform, |g| g.transform);
     let mode = if copy { MoveMode::Copy } else { MoveMode::Cut };
     let moving = PixelMove::new(
@@ -435,6 +436,7 @@ fn lift_edit(
     let LayerContent::Raster { image, .. } = &layer.content else {
         return Err("only a raster layer's pixels float".to_owned());
     };
+    crate::paint::unwarped(layer)?;
     let parent = doc.parent_transform(id);
     let moving = PixelMove::new(
         image.get(),
@@ -473,6 +475,7 @@ fn lift_edit(
         mask: None,
         clipped,
         transform: Projective::from(extracted.to_document).then(to_parent),
+        warp: None,
     };
     // The hole: the selected pixels erased, as Cut does.
     let erase = crate::paint::PaintRequest {
@@ -543,6 +546,7 @@ mod tests {
             mask: None,
             clipped: false,
             transform: Affine::translation(4.0, 2.0).into(),
+            warp: None,
         };
         let document = Document::restore(
             CANVAS,

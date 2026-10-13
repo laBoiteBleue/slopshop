@@ -432,7 +432,24 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
     var uv = vec2<f32>(dot(layer.resample_u.xyz, point), dot(layer.resample_v.xyz, point));
     var extent = vec2<f32>(layer.resample_u.w, layer.resample_v.w);
     var q = layer.resample_q.xyz;
-    if u32(layer.resample_q.w) == RESAMPLE_PERSPECTIVE {
+    if u32(layer.resample_q.w) == RESAMPLE_MESH {
+        // Warped (ADR 0044): through the triangle under `p` (nothing outside the mesh).
+        let found = mesh_triangle(u32(layer.resample_u.x), p);
+        if found.index < 0 {
+            return result;
+        }
+        // The triangle's map to the content, then to the planned level's texels.
+        let m = mesh_map(u32(layer.resample_u.x), u32(found.index));
+        let linear = m.a / layer.level_scale;
+        let offset = m.b / layer.level_scale;
+        uv = vec2<f32>(
+            linear.x * p.x + linear.z * p.y + offset.x,
+            linear.y * p.x + linear.w * p.y + offset.y,
+        );
+        let ellipse = ewa_ellipse(linear * layer.resample_u.w);
+        q = ellipse.q;
+        extent = ellipse.extent;
+    } else if u32(layer.resample_q.w) == RESAMPLE_PERSPECTIVE {
         // In perspective (ADR 0038): divided by the third row; nothing beyond the horizon line.
         let w = dot(layer.resample_q.xyz, point);
         if w <= 0.0 {
@@ -505,6 +522,77 @@ fn resample(layer: Layer, p: vec2<f32>, unbounded: bool) -> Resampled {
 struct Ellipse {
     q: vec3<f32>,
     extent: vec2<f32>,
+}
+
+// A warp's mesh in the tile table, from `base` (`mesh_words` in lib.rs): the bins' origin and
+// cell size, their columns and rows, where the triangles and the items start, each bin's first
+// item, the items, then 12 floats a triangle (corners, then its map to the content).
+fn table_f32(i: u32) -> f32 {
+    return bitcast<f32>(tile_table[i]);
+}
+
+struct MeshHit {
+    // The triangle under the point, -1 for none.
+    index: i32,
+}
+
+// The triangle under document point `p`: the last of its bin's list that contains it, as
+// slopshop_core::warp::PlacedMesh::find (edges included, either orientation).
+fn mesh_triangle(base: u32, p: vec2<f32>) -> MeshHit {
+    var hit = MeshHit(-1);
+    let origin = vec2<f32>(table_f32(base), table_f32(base + 1u));
+    let cell = vec2<f32>(table_f32(base + 2u), table_f32(base + 3u));
+    let columns = tile_table[base + 4u];
+    let rows = tile_table[base + 5u];
+    let triangles = base + tile_table[base + 6u];
+    let items = base + tile_table[base + 7u];
+    let f = (p - origin) / cell;
+    if !(f.x >= 0.0 && f.y >= 0.0) {
+        return hit;
+    }
+    var col = u32(floor(f.x));
+    var row = u32(floor(f.y));
+    // The far edge belongs to the last bin.
+    if col == columns && f.x <= f32(columns) {
+        col = columns - 1u;
+    }
+    if row == rows && f.y <= f32(rows) {
+        row = rows - 1u;
+    }
+    if col >= columns || row >= rows {
+        return hit;
+    }
+    let bin = row * columns + col;
+    let first = tile_table[base + 8u + bin];
+    let last = tile_table[base + 8u + bin + 1u];
+    for (var k = first; k < last; k++) {
+        let t = tile_table[items + k];
+        let at = triangles + t * 12u;
+        let a = vec2<f32>(table_f32(at), table_f32(at + 1u));
+        let b = vec2<f32>(table_f32(at + 2u), table_f32(at + 3u));
+        let c = vec2<f32>(table_f32(at + 4u), table_f32(at + 5u));
+        let e0 = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        let e1 = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
+        let e2 = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
+        if (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0) || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0) {
+            hit.index = i32(t);
+        }
+    }
+    return hit;
+}
+
+// An affine map: `a` = (a, b, c, d) of `(x, y) ↦ (a·x + c·y + e, b·x + d·y + f)`, `b` = (e, f).
+struct MeshMap {
+    a: vec4<f32>,
+    b: vec2<f32>,
+}
+
+fn mesh_map(base: u32, index: u32) -> MeshMap {
+    let at = base + tile_table[base + 6u] + index * 12u + 6u;
+    return MeshMap(
+        vec4<f32>(table_f32(at), table_f32(at + 1u), table_f32(at + 2u), table_f32(at + 3u)),
+        vec2<f32>(table_f32(at + 4u), table_f32(at + 5u)),
+    );
 }
 
 // The EWA ellipse of an output pixel whose steps map to texel steps by `j` (`[∂u/∂x, ∂v/∂x,

@@ -21,6 +21,7 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::adjust::Adjustment;
 use crate::blend::{BlendMode, Blender, dissolve};
@@ -29,9 +30,10 @@ use crate::color::{IDENTITY, Mat3, mat_vec};
 use crate::document::{Document, Layer, LayerContent, LayerMask};
 use crate::geom::{Rect, Size};
 use crate::raster::{Codec, MAX_FINITE_SAMPLE, RasterImage, RasterLevel, TILE_SIZE};
-use crate::resample::{Resampling, TABLE_SIZE, weight_table};
+use crate::resample::{MeshResampling, Resampling, TABLE_SIZE, weight_table};
 use crate::tile::TileCoord;
 use crate::transform::Projective;
+use crate::warp::Warp;
 
 /// Lossy events of a composite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -258,6 +260,9 @@ fn placed_area(layer: &Layer, parent: Projective, canvas: Size) -> Option<Area> 
     let LayerContent::Raster { image, .. } = &layer.content else {
         return None;
     };
+    if layer.warp.is_some() {
+        return None;
+    }
     let (x, y) = layer.transform.then(parent).integer_translation()?;
     let size = image.size();
     Some(intersect(
@@ -433,6 +438,9 @@ fn push_layer<'a>(
             ..
         } = &layer.content
         && image.ready_image().is_none()
+        // A warped layer (ADR 0044) shows what it showed before until its pixels are ready:
+        // the display's stack steps are not warped.
+        && layer.warp.is_none()
         // A filter is not evaluated by the display (ADR 0034): its quick look stands in for
         // it, the entries above evaluated over it; without one, what the layer showed before.
         && !(stack.has_shown_filter()
@@ -666,8 +674,12 @@ enum Op<'a> {
 }
 
 /// A mask image, read as coverage, placed by `transform`.
-fn mask_source(mask: &LayerMask, transform: Projective) -> Option<MaskSource<'_>> {
-    let (level, placement) = placement(&mask.image, transform)?;
+fn mask_source<'a>(
+    mask: &'a LayerMask,
+    transform: Projective,
+    warp: Option<&Arc<Warp>>,
+) -> Option<MaskSource<'a>> {
+    let (level, placement) = placement(&mask.image, transform, warp)?;
     Some(MaskSource {
         level,
         codec: Codec::new(mask.image.stored_format()),
@@ -680,19 +692,64 @@ fn mask_source(mask: &LayerMask, transform: Projective) -> Option<MaskSource<'_>
 enum Placement {
     /// A whole-pixel offset: level-0 texels are document pixels.
     Offset(i64, i64),
-    /// Any other transform: resampled (boxed: much larger than an offset).
-    Resampled(Box<Resampling>),
+    /// Any other transform, or a warp: resampled (boxed: much larger than an offset).
+    Resampled(Box<Resampler>),
+}
+
+/// How a resampled raster is read: through its transform, or through a warp's triangles (ADR
+/// 0044).
+// Boxed where it is kept (`Placement::Resampled`).
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+enum Resampler {
+    Plain(Resampling),
+    Mesh(MeshResampling),
+}
+
+impl Resampler {
+    fn reaches(&self, p: (f64, f64), width: u32, height: u32) -> bool {
+        match self {
+            Resampler::Plain(r) => r.reaches(p, width, height),
+            Resampler::Mesh(r) => r.reaches(p, width, height),
+        }
+    }
+
+    fn sample(
+        &self,
+        table: &[f32; TABLE_SIZE],
+        p: (f64, f64),
+        fetch: impl FnMut(i64, i64) -> Option<[f64; 4]>,
+    ) -> ([f64; 4], f64) {
+        match self {
+            Resampler::Plain(r) => r.sample(table, p, fetch),
+            Resampler::Mesh(r) => r.sample(table, p, fetch),
+        }
+    }
 }
 
 /// How `image`, placed by `transform`, is sampled: the level read and the placement. `None`
 /// for a transform that is not invertible (edits refuse them).
-fn placement(image: &RasterImage, transform: Projective) -> Option<(&RasterLevel, Placement)> {
+fn placement<'a>(
+    image: &'a RasterImage,
+    transform: Projective,
+    warp: Option<&Arc<Warp>>,
+) -> Option<(&'a RasterLevel, Placement)> {
     let levels = image.levels();
+    if let Some(warp) = warp {
+        let r = MeshResampling::new(Arc::clone(warp), transform, 1.0, levels.len())?;
+        return Some((
+            levels.get(r.level)?,
+            Placement::Resampled(Box::new(Resampler::Mesh(r))),
+        ));
+    }
     match transform.integer_translation() {
         Some((x, y)) => Some((levels.first()?, Placement::Offset(x, y))),
         None => {
             let r = Resampling::placed(transform, 1.0, levels.len(), image.size())?;
-            Some((levels.get(r.level)?, Placement::Resampled(Box::new(r))))
+            Some((
+                levels.get(r.level)?,
+                Placement::Resampled(Box::new(Resampler::Plain(r))),
+            ))
         }
     }
 }
@@ -788,7 +845,7 @@ fn source(
             // Evaluated by `composite_region_on` before compositing.
             let image = image.ready_image()?.as_ref();
             let matrix = image.matrix_to(&WORKING_SPACE);
-            let (level, placement) = placement(image, transform)?;
+            let (level, placement) = placement(image, transform, layer.warp.as_ref())?;
             SourceContent::Raster {
                 level,
                 codec: Codec::new(image.stored_format()),
@@ -807,7 +864,7 @@ fn source(
         atop,
         content,
         replaces_alpha,
-        mask: enabled(layer).and_then(|m| mask_source(m, transform)),
+        mask: enabled(layer).and_then(|m| mask_source(m, transform, layer.warp.as_ref())),
     })
 }
 
@@ -1023,7 +1080,7 @@ fn ops(document: &Document) -> Vec<Op<'_>> {
             } => Some(Op::Adjust {
                 adjustment: adjustment.prepare(),
                 opacity: f64::from(opacity),
-                mask: enabled(layer).and_then(|m| mask_source(m, transform)),
+                mask: enabled(layer).and_then(|m| mask_source(m, transform, None)),
             }),
             Step::Begin { isolated } => Some(Op::Begin { isolated }),
             Step::End {
@@ -1036,7 +1093,7 @@ fn ops(document: &Document) -> Vec<Op<'_>> {
             } => Some(Op::End {
                 mode,
                 opacity: f64::from(opacity),
-                mask: mask.and_then(|m| mask_source(m, mask_transform)),
+                mask: mask.and_then(|m| mask_source(m, mask_transform, None)),
                 isolated,
                 atop,
             }),
@@ -1445,6 +1502,7 @@ mod tests {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content,
+                warp: None,
             },
         }
         .apply(doc)
@@ -2075,6 +2133,7 @@ mod tests {
             blend_mode: mode,
             mask: None,
             content,
+            warp: None,
         }
     }
 
@@ -2697,6 +2756,72 @@ mod tests {
         // The left edge runs through pixel 2: half covered.
         let edge = at(2, 7)[3];
         assert!(edge > 0.2 && edge < 0.8, "{edge}");
+    }
+
+    /// A 40 × 20 layer, left half red and right half blue, at (10, 10) of a 60 × 40 canvas.
+    fn halves(doc: &mut Document) -> Layer {
+        let size = Size::new(40, 20);
+        let pixels: Vec<[f32; 4]> = (0..size.pixel_count())
+            .map(|i| {
+                if i % 40 < 20 {
+                    [1.0, 0.0, 0.0, 1.0]
+                } else {
+                    [0.0, 0.0, 1.0, 1.0]
+                }
+            })
+            .collect();
+        let mut layer = new_layer(doc, float_raster(size, &pixels), BlendMode::Normal, 1.0);
+        layer.transform = Affine::translation(10.0, 10.0).into();
+        layer
+    }
+
+    #[test]
+    fn a_plain_warp_shows_the_layer_as_it_is() {
+        let mut plain = Document::new(Size::new(60, 40));
+        let layer = halves(&mut plain);
+        push(&mut plain, layer);
+        let mut warped = Document::new(Size::new(60, 40));
+        let mut layer = halves(&mut warped);
+        layer.warp = Some(Arc::new(
+            crate::warp::Warp::identity([0.0, 0.0, 40.0, 20.0], 3, 3).unwrap(),
+        ));
+        push(&mut warped, layer);
+        let (a, b) = (all(&plain), all(&warped));
+        // Away from the edges and from where the halves meet (the warp's path resamples, the
+        // plain layer's copies texels): the same.
+        for (x, y) in [(5, 5), (15, 15), (24, 22), (45, 15), (55, 35)] {
+            let i = (y * 60 + x) * 4;
+            for c in 0..4 {
+                assert!((a[i + c] - b[i + c]).abs() < 1e-4, "{x} {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_warped_layer_shows_its_pixels_moved_by_the_grid() {
+        let mut doc = Document::new(Size::new(60, 40));
+        let mut layer = halves(&mut doc);
+        let frame = [0.0, 0.0, 40.0, 20.0];
+        let preset = crate::warp::WarpPreset {
+            style: crate::warp::WarpStyle::Arc,
+            bend: 0.5,
+            vertical: false,
+        };
+        let warp = crate::warp::Warp::from_preset(frame, preset).unwrap();
+        // The arc keeps its top edge's middle where it was; its corners drop down and out.
+        let (cx, cy) = warp.eval(0.0, 0.0);
+        assert!(cx < -1.0 && cy > 5.0, "{cx} {cy}");
+        layer.warp = Some(Arc::new(warp));
+        push(&mut doc, layer);
+        let out = all(&doc);
+        let at = |x: usize, y: usize| &out[(y * 60 + x) * 4..][..4];
+        assert!(at(30, 12)[3] > 0.99, "{:?}", at(30, 12));
+        // Near the box's top-left corner: nothing any more.
+        assert_eq!(at(12, 11), [0.0; 4]);
+        // Below the box's left part, where the left side went.
+        assert!(at(12, 24)[3] > 0.99, "{:?}", at(12, 24));
+        // The halves stay on their sides of the middle.
+        assert!(at(20, 15)[0] > 0.9 && at(40, 15)[2] > 0.9);
     }
 
     #[test]

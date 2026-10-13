@@ -23,8 +23,9 @@ use super::manifest::{
     NODE_VERSION, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
     NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
     NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NodeDto, PYRAMID_ALGORITHM,
-    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto, Writer,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_WARP, NodeDto,
+    PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto,
+    Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -534,6 +535,26 @@ fn numbers(transform: slopshop_core::Projective) -> Vec<f64> {
     }
 }
 
+/// A layer's warp as written (node version 18, ADR 0044).
+fn warp_json(warp: &slopshop_core::warp::Warp) -> Value {
+    let points: Vec<f64> = warp.points().iter().flat_map(|&(x, y)| [x, y]).collect();
+    let mut value = json!({
+        "kind": "grid",
+        "frame": warp.frame(),
+        "columns": warp.columns(),
+        "rows": warp.rows(),
+        "points": points,
+    });
+    if let Some(preset) = warp.preset() {
+        value["preset"] = json!({
+            "style": preset.style.id(),
+            "bend": preset.bend,
+            "vertical": preset.vertical,
+        });
+    }
+    value
+}
+
 /// Whether `layer` or a step of its stack is placed by a projective map (node version 11).
 fn in_perspective(layer: &slopshop_core::Layer) -> bool {
     let projective = |t: slopshop_core::Projective| !t.is_affine();
@@ -754,6 +775,9 @@ fn build_manifest(
                 Value::from(numbers(layer.transform)),
             );
         }
+        if let Some(warp) = &layer.warp {
+            params.insert("warp".to_owned(), warp_json(warp));
+        }
         if let Some(mask) = &layer.mask {
             let key = key_of(&mask.image).map(Hash::to_key).unwrap_or_default();
             let mut value = json!({
@@ -770,7 +794,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer
+                version: if layer.warp.is_some() {
+                    NODE_VERSION_WARP
+                } else if layer
                     .style
                     .as_ref()
                     .is_some_and(|s| s.settings().pattern_overlay.is_some())

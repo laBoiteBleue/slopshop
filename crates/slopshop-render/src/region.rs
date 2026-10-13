@@ -6,11 +6,12 @@
 //! tiles do not fit in the tile cache or its pixels in the chunk budget; the result is the same.
 
 use std::collections::HashSet;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use slopshop_core::composite::{Step, steps};
 use slopshop_core::raster::{ImageId, TILE_SIZE};
-use slopshop_core::resample::Resampling;
+use slopshop_core::resample::{MeshResampling, Resampling};
+use slopshop_core::warp::Warp;
 use slopshop_core::{BlendSpace, Document, Projective, RasterImage, Rect};
 
 use crate::tiles::{GpuTileFormat, TileCache, TileKey};
@@ -487,9 +488,11 @@ fn chunk_plans<'a>(layers: &[Step<'a>], chunk: Rect) -> Vec<Option<RasterPlan<'a
         .flat_map(|step| {
             step_rasters(step).map(|raster| {
                 raster
-                    .filter(|&(image, transform, wrap)| wrap || covers(image, transform, chunk))
-                    .and_then(|(image, transform, wrap)| {
-                        RasterPlan::full_resolution(image, area, transform, wrap)
+                    .filter(|&(image, transform, wrap, warp)| {
+                        wrap || covers(image, transform, warp, chunk)
+                    })
+                    .and_then(|(image, transform, wrap, warp)| {
+                        RasterPlan::full_resolution(image, area, transform, wrap, warp)
                     })
             })
         })
@@ -519,18 +522,31 @@ fn raster_images(layers: &[Step<'_>], region: Rect, format: GpuTileFormat) -> Ha
     layers
         .iter()
         .flat_map(|step| step_rasters(step).into_iter().flatten())
-        .filter(|&(image, transform, wrap)| {
+        .filter(|&(image, transform, wrap, warp)| {
             GpuTileFormat::for_sample(image.stored_format().sample) == format
-                && (wrap || covers(image, transform, region))
+                && (wrap || covers(image, transform, warp, region))
         })
-        .map(|(image, _, _)| image.id())
+        .map(|(image, _, _, _)| image.id())
         .collect()
 }
 
 /// Whether a raster placed by `transform` has pixels read within `area` (for a resampled one,
 /// within the filter's reach).
-fn covers(image: &RasterImage, transform: Projective, area: Rect) -> bool {
+fn covers(
+    image: &RasterImage,
+    transform: Projective,
+    warp: Option<&Arc<Warp>>,
+    area: Rect,
+) -> bool {
     let size = image.size();
+    // Warped (ADR 0044): where its triangles reach.
+    if let Some(warp) = warp {
+        let Some(r) = MeshResampling::new(Arc::clone(warp), transform, 1.0, 1) else {
+            return false;
+        };
+        let [x0, y0, x1, y1] = r.source_area(document_area(area));
+        return x1 > 0.0 && y1 > 0.0 && x0 < f64::from(size.width) && y0 < f64::from(size.height);
+    }
     if let Some((x, y)) = transform.integer_translation() {
         return x < area.right() as i64
             && y < area.bottom() as i64

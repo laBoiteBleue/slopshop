@@ -75,6 +75,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
         blend_mode: BlendMode::Normal,
         mask: None,
         content,
+        warp: None,
     };
     Edit::InsertLayer {
         parent: None,
@@ -328,6 +329,7 @@ fn assert_same_layers(a: &[Layer], b: &[Layer]) {
         assert_eq!(x.opacity.to_bits(), y.opacity.to_bits(), "{}", x.name);
         assert_eq!(x.blend_mode, y.blend_mode, "{}", x.name);
         assert_eq!(x.style, y.style, "{}", x.name);
+        assert_eq!(x.warp, y.warp, "{}", x.name);
         match (&x.mask, &y.mask) {
             (None, None) => {}
             (Some(m), Some(n)) => {
@@ -899,6 +901,7 @@ fn golden_document_v0_9() -> Document {
                     blue: Curve::new(&[[20, 0], [255, 255]]).unwrap(),
                 },
             },
+            warp: None,
         },
     }
     .apply(&mut doc)
@@ -934,6 +937,7 @@ fn golden_document_v0_8() -> Document {
                     monochrome: false,
                 },
             },
+            warp: None,
         },
     }
     .apply(&mut doc)
@@ -968,6 +972,7 @@ fn golden_document_v0_7() -> Document {
                     lightness: 10.0,
                 },
             },
+            warp: None,
         },
     }
     .apply(&mut doc)
@@ -1034,6 +1039,7 @@ fn golden_document_v0_4() -> Document {
             children: Vec::new(),
             pass_through,
         },
+        warp: None,
     };
     Edit::Batch(vec![
         Edit::InsertLayer {
@@ -1478,6 +1484,16 @@ fn damaged_layer_trees_are_refused() {
     // Nine numbers (a perspective, ADR 0038) need node version 11.
     assert_eq!(
         read(&moved("[1,0,0,1,0,0,0.001,0,1]"), "[1]"),
+        Err("corrupt")
+    );
+    // A warp (ADR 0044) needs node version 18, on a raster node.
+    assert_eq!(
+        read(
+            &moved(
+                r#"[1,0,0,1,0,0],"warp":{"kind":"grid","frame":[0,0,1,1],"columns":1,"rows":1,"points":[]}"#
+            ),
+            "[1]"
+        ),
         Err("corrupt")
     );
 
@@ -1970,6 +1986,38 @@ fn layers_in_perspective_round_trip_at_node_version_11() {
         panic!("an effect entry");
     };
     assert!(!effect.steps()[0].to_document.is_affine());
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn warped_layers_round_trip_at_node_version_18() {
+    use slopshop_core::warp::{Warp, WarpPreset, WarpStyle};
+    let mut doc = golden_document();
+    let (id, size) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { image, .. } => Some((l.id, image.size())),
+            _ => None,
+        })
+        .expect("a pixel layer");
+    let frame = [0.0, 0.0, f64::from(size.width), f64::from(size.height)];
+    let preset = WarpPreset {
+        style: WarpStyle::Wave,
+        bend: -0.35,
+        vertical: true,
+    };
+    let warp = std::sync::Arc::new(Warp::from_preset(frame, preset).unwrap());
+    Edit::SetLayerWarp {
+        id,
+        warp: Some(std::sync::Arc::clone(&warp)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("warp.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    assert_eq!(loaded.layer(id).unwrap().warp.as_ref(), Some(&warp));
     fs::remove_file(&path).ok();
 }
 

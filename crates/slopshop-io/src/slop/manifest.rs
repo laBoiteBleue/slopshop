@@ -99,8 +99,12 @@ pub(crate) const NODE_VERSION_PATTERN: u32 = 16;
 /// Version of the nodes, of any type but adjustments, whose style has a Pattern Overlay
 /// (schema 0.32, ADR 0042): `params.style.pattern_overlay` names its pattern in the document's
 /// sources. Written only for those, so that older readers refuse them instead of dropping the
-/// effect. The newest node version this code reads.
+/// effect.
 pub(crate) const NODE_VERSION_PATTERN_OVERLAY: u32 = 17;
+/// Version of the raster nodes with a warp (schema 0.34, ADR 0044): `params.warp`, a grid of
+/// Bézier patches (see `warp_json`). Written only for those, so that older readers refuse them
+/// instead of showing them unwarped. The newest node version this code reads.
+pub(crate) const NODE_VERSION_WARP: u32 = 18;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

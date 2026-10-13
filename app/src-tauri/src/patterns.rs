@@ -129,6 +129,7 @@ pub async fn add_pattern_fill(
             content: LayerContent::PatternFill {
                 pattern: PatternFill::new(source),
             },
+            warp: None,
         },
     };
     document

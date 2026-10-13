@@ -1377,6 +1377,7 @@ fn effect_layer(
         clipped: false,
         transform,
         style: None,
+        warp: None,
     }
 }
 
@@ -1689,6 +1690,7 @@ mod tests {
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 content: LayerContent::raster(Arc::new(image)),
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -1746,6 +1748,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -1815,6 +1818,37 @@ mod tests {
         // The overlay: blue within the shape, nothing outside it.
         assert_eq!(at(&doc, 25, 25), [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(at(&doc, 40, 40)[3], 0.0);
+    }
+
+    #[test]
+    fn effects_are_drawn_from_the_warped_shape() {
+        let (mut doc, id) = document();
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                stroke: Some(Stroke::default()),
+                color_overlay: Some(ColorOverlay {
+                    color: LinearRgba::new(0.0, 0.0, 1.0, 1.0),
+                    ..ColorOverlay::default()
+                }),
+                ..LayerStyle::default()
+            },
+        );
+        // Above the box: nothing yet.
+        assert_eq!(at(&doc, 25, 16)[3], 0.0);
+        let preset = crate::warp::WarpPreset {
+            style: crate::warp::WarpStyle::Bulge,
+            bend: 1.0,
+            vertical: false,
+        };
+        Edit::warp_layer(&doc, id, Some(preset))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // The top edge bulges up in the middle: the overlay fills it, the stroke bands it.
+        assert_eq!(at(&doc, 25, 19), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(at(&doc, 25, 16), [0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -1942,6 +1976,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -2011,6 +2046,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -2206,6 +2242,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
+                warp: None,
             },
             &[id],
         )
@@ -2409,6 +2446,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
+                warp: None,
             },
             &[id],
         )

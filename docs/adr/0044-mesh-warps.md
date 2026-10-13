@@ -76,3 +76,39 @@ draw the same triangles exactly.
 4. Painting on a warped layer refused at first, as on layers in perspective (point 4 then
    applies later).
 5. Order: Warp, Perspective Warp, Puppet Warp.
+
+## Implementation of Warp, part 1 (2026-10-13)
+
+Status: accepted (2026-10-13, under the maintainer's delegation; to review).
+
+- **Model**: `Layer::warp: Option<Arc<Warp>>`, a grid of `columns × rows` bicubic Bézier patches
+  (1 to 16 each way) over a `frame` of the content: the box of the layer's visible pixels when
+  the warp is made (Photoshop warps what shows), kept afterwards. Content outside the frame is
+  not drawn while the layer is warped. The grid remembers the style it was made from (`None`
+  once edited point by point, Photoshop's Custom).
+- **Styles**: each is a deformation of the frame (Arc: the center line bent into an arc of
+  `bend × 180°`, its length kept, the other lines concentric; Bulge: the top and bottom edges
+  pushed out in the middle; Flag: one period of a sine; Wave: a sine whose phase shifts from
+  top to bottom; Twist: turned about the center, the more the closer to it), applied to the
+  control points of a plain 3 × 3 grid; Vertical swaps the axes. The grid is an approximation
+  of the deformation, then the only truth (it is what is drawn and saved).
+- **Mesh**: each patch cut into 12 × 12 cells, two triangles each; the border extended by the
+  resampling filter's reach (the border patches extrapolated, at most a quarter of a patch) so
+  that the layer's edges are antialiased as an unwarped layer's are. Bins over the document
+  find the triangle under a pixel; where the warp folds over itself, the last triangle listed
+  wins (CPU and GPU alike).
+- **Resampling**: one pyramid level for the whole layer, the finest any triangle needs; each
+  sample's ellipse from its triangle's affine map (ADR 0018). The GPU reads the mesh from the
+  tile table, as it reads adjustments' lookup tables: no new binding.
+- **Display**: a warped layer whose stack is being evaluated shows what it showed before, warped,
+  rather than the display's stack steps (not warped).
+- **Refused at first**: painting, moving, copying or floating a warped layer's pixels (and its
+  mask's), with a message; Rasterize bakes the warp into the pixels when the layer has no mask
+  (with one, the mask would need warping too: later).
+- **Editing**: Edit > Transform > Warp shows the grid in Free Transform's place (not combined
+  with the box's handles yet) and the options bar's Warp (None and the five styles),
+  orientation and Bend (-100 to 100 %, 50 % when a style is first chosen, as in Photoshop);
+  each change is live, Enter applies (one undo entry), Esc or undo cancels. Dragging the grid's
+  points and handles, and grid sizes, come next.
+- **`.slop`**: node version 18 (schema 0.33); serde_json reads numbers back to the bit
+  (`float_roundtrip`), so that a grid survives a save exactly.

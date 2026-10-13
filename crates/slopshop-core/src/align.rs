@@ -246,6 +246,7 @@ mod tests {
                         clipped: false,
                         transform: crate::transform::Projective::IDENTITY,
                         content: LayerContent::raster(Arc::new(image)),
+                        warp: None,
                     },
                 }
                 .apply(&mut doc)

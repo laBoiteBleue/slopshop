@@ -84,7 +84,7 @@ Menu,Edit > Transform > Rotate,,done,"Free Transform (Ctrl+T), non-destructive"
 Menu,Edit > Transform > Skew,,done,"Free Transform: side handles with Ctrl, or the Skew field"
 Menu,Edit > Transform > Distort,,done,"pixel layers, non-destructive (ADR 0038); groups are open"
 Menu,Edit > Transform > Perspective,,done,"pixel layers, non-destructive (ADR 0038); groups are open"
-Menu,Edit > Transform > Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
+Menu,Edit > Transform > Warp,,partial,"ADR 0044: a Bézier grid on pixel layers, non-destructive, CPU and GPU; styles Arc, Bulge, Flag, Wave and Twist with Bend and orientation; dragging the grid's points, finer grids and other layer kinds are open"
 Menu,Edit > Transform > Rotate 180°,,done,
 Menu,Edit > Transform > Rotate 90° Clockwise,,done,
 Menu,Edit > Transform > Rotate 90° Counter Clockwise,,done,

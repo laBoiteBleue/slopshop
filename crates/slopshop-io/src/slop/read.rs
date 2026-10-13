@@ -30,7 +30,7 @@ use super::manifest::{
     NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_PATTERN, NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE,
     NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
-    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
+    NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -451,7 +451,9 @@ pub(super) fn read_node(
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
     // A Pattern Overlay (v17) on any node type but adjustments.
     let overlaid = node.version == NODE_VERSION_PATTERN_OVERLAY;
-    let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version) || overlaid;
+    let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version)
+        || overlaid
+        || node.version == NODE_VERSION_WARP;
     // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill = known_version
         || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version)
@@ -553,6 +555,7 @@ pub(super) fn read_node(
         ),
         Some(_) => return Err(corrupt("a style needs node version 8")),
     };
+    let warp = node_warp(node)?;
     if !node.extra.is_empty() {
         residue.nodes.insert(id, node.extra.clone());
     }
@@ -568,6 +571,7 @@ pub(super) fn read_node(
         blend_mode,
         mask,
         content,
+        warp,
     })
 }
 
@@ -608,6 +612,74 @@ fn node_locks(node: &NodeDto) -> Result<slopshop_core::LayerLocks, FileError> {
         }
     }
     Ok(locks)
+}
+
+/// A raster node's warp (version 18, ADR 0044): `{ kind: "grid", frame: [x0, y0, x1, y1],
+/// columns, rows, points: [x, y, …], preset?: { style, bend, vertical } }`.
+fn node_warp(
+    node: &NodeDto,
+) -> Result<Option<std::sync::Arc<slopshop_core::warp::Warp>>, FileError> {
+    use slopshop_core::warp::{Warp, WarpPreset, WarpStyle};
+    let value = match node.params.get("warp") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Object(value))
+            if node.version >= NODE_VERSION_WARP && node.kind == NODE_RASTER =>
+        {
+            value
+        }
+        Some(_) => return Err(corrupt("a warp needs a raster node of version 18")),
+    };
+    let invalid = || corrupt("invalid warp");
+    if value.get("kind").and_then(Value::as_str) != Some("grid") {
+        // A kind this version does not know comes from a newer SlopShop.
+        return Err(FileError::UnknownNodeType(format!(
+            "{}@{} warp",
+            node.kind, node.version
+        )));
+    }
+    let numbers = |key: &str| -> Option<Vec<f64>> {
+        value
+            .get(key)?
+            .as_array()?
+            .iter()
+            .map(Value::as_f64)
+            .collect()
+    };
+    let count =
+        |key: &str| -> Option<u32> { value.get(key)?.as_u64().and_then(|v| u32::try_from(v).ok()) };
+    let frame: [f64; 4] = numbers("frame")
+        .and_then(|f| f.try_into().ok())
+        .ok_or_else(invalid)?;
+    let (columns, rows) = (
+        count("columns").ok_or_else(invalid)?,
+        count("rows").ok_or_else(invalid)?,
+    );
+    let flat = numbers("points").ok_or_else(invalid)?;
+    if flat.len() % 2 != 0 {
+        return Err(invalid());
+    }
+    let points = flat
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[x, y]| (x, y))
+        .collect();
+    let preset = match value.get("preset") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(p)) => Some(WarpPreset {
+            style: p
+                .get("style")
+                .and_then(Value::as_str)
+                .and_then(WarpStyle::from_id)
+                .ok_or_else(invalid)?,
+            bend: p.get("bend").and_then(Value::as_f64).ok_or_else(invalid)?,
+            vertical: p.get("vertical").and_then(Value::as_bool).unwrap_or(false),
+        }),
+        Some(_) => return Err(invalid()),
+    };
+    Warp::new(frame, columns, rows, points, preset)
+        .map(|w| Some(std::sync::Arc::new(w)))
+        .map_err(|_| invalid())
 }
 
 /// A node's transform (version 5; the identity before): finite and invertible (ADR 0018).

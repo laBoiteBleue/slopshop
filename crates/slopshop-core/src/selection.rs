@@ -3871,6 +3871,7 @@ mod tests {
                 transform: crate::transform::Projective::translation(100.5, 50.0),
                 style: None,
                 locks: Default::default(),
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -4336,6 +4337,7 @@ mod tests {
                 mask: None,
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -5413,6 +5415,7 @@ mod tests {
             clipped: false,
             transform: Affine::translation(10.0, 0.0).into(),
             content: LayerContent::raster(Arc::new(image)),
+            warp: None,
         };
         let id = layer.id;
         Edit::InsertLayer {

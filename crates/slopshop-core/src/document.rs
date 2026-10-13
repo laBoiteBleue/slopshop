@@ -324,6 +324,8 @@ pub struct Layer {
     pub style: Option<crate::style::Style>,
     /// What edits may not change (ADR 0046); a group's apply to the layers inside it.
     pub locks: LayerLocks,
+    /// A warp applied in the content's space before `transform` (ADR 0044): pixel layers only.
+    pub warp: Option<Arc<crate::warp::Warp>>,
 }
 
 /// Photoshop's layer locks (ADR 0046): what edits refuse to change on a layer (and, for a
@@ -1199,6 +1201,7 @@ mod tests {
             content: LayerContent::Fill {
                 color: LinearRgba::new(0.1, 0.2, 0.3, 1.0),
             },
+            warp: None,
         }
     }
 

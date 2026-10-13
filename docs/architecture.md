@@ -56,6 +56,10 @@ and `io` do not depend on each other: export receives its pixel source as a clos
 - `resample`: how a transformed layer is sampled ([ADR 0018](adr/0018-resampling.md)): EWA
   with a Jinc-windowed Jinc kernel and anti-ringing, from the pyramid level matching the scale;
   computed per layer once, shared by the CPU compositor and the GPU (same kernel table).
+- `warp`: Edit > Transform > Warp ([ADR 0044](adr/0044-mesh-warps.md)), a Bézier patch grid
+  placing a pixel layer's content before its transform, drawn as triangles each sampled through
+  its own affine map; the CPU compositor and the GPU find the triangle under a pixel through
+  the same bins.
 - `thumbnail`: small previews of rasters for the UI, read from the coarsest pyramid level
   that is large enough and converted like an 8-bit sRGB export.
 - `blend`: blend modes and blend spaces ([ADR 0012](adr/0012-blend-modes.md)), the reference

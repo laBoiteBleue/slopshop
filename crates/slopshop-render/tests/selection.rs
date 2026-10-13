@@ -84,6 +84,7 @@ fn push_layer(
                 blend_mode,
                 mask: None,
                 content,
+                warp: None,
             },
         })
         .unwrap();

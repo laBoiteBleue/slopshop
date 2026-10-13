@@ -5,6 +5,7 @@ use crate::document::{Document, Layer, LayerContent, LayerId};
 use crate::geom::Rect;
 use crate::raster::RasterImage;
 use crate::transform::Projective;
+use crate::warp::Warp;
 
 /// A rectangle in document pixels, `[left, right) × [top, bottom)`; it may extend past the
 /// canvas.
@@ -163,9 +164,10 @@ fn covers(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
             let image = image.get();
             // A mask made from the layer's transparency replaces its alpha (ADR 0014).
             let replaced = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
-            let alpha = sample_alpha(&image, transform, x, y);
+            let warp = layer.warp.as_deref();
+            let alpha = sample_alpha(&image, transform, warp, x, y);
             if replaced {
-                inside(&image, transform, x, y)
+                inside(&image, transform, warp, x, y)
             } else {
                 alpha >= PICK_COVERAGE
             }
@@ -195,36 +197,62 @@ fn covers(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
 fn mask_shows(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
     match layer.mask.as_ref().filter(|m| m.enabled) {
         None => true,
-        Some(mask) => sample_alpha_gray(&mask.image, transform, x, y) >= PICK_COVERAGE,
+        Some(mask) => {
+            sample_alpha_gray(&mask.image, transform, layer.warp.as_deref(), x, y) >= PICK_COVERAGE
+        }
     }
 }
 
 /// The image's pixel under the center of document pixel (`x`, `y`), in its own coordinates.
-fn local(image: &RasterImage, transform: Projective, x: i64, y: i64) -> Option<(u32, u32)> {
-    let inverse = transform.inverse()?;
+/// A warped layer's (ADR 0044) through its warp's triangles.
+fn local(
+    image: &RasterImage,
+    transform: Projective,
+    warp: Option<&Warp>,
+    x: i64,
+    y: i64,
+) -> Option<(u32, u32)> {
     let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-    // Beyond the horizon line of a layer in perspective, nothing of it shows (ADR 0038).
-    if inverse.w(px, py) <= 0.0 {
-        return None;
-    }
-    let (u, v) = inverse.apply(px, py);
+    let (u, v) = match warp {
+        Some(warp) => crate::warp::content_point(warp, transform, px, py)?,
+        None => {
+            let inverse = transform.inverse()?;
+            // Beyond the horizon line of a layer in perspective, nothing of it shows (ADR 0038).
+            if inverse.w(px, py) <= 0.0 {
+                return None;
+            }
+            inverse.apply(px, py)
+        }
+    };
     let (lx, ly) = (u.floor(), v.floor());
     let size = image.size();
     (lx >= 0.0 && ly >= 0.0 && lx < f64::from(size.width) && ly < f64::from(size.height))
         .then_some((lx as u32, ly as u32))
 }
 
-fn inside(image: &RasterImage, transform: Projective, x: i64, y: i64) -> bool {
-    local(image, transform, x, y).is_some()
+fn inside(image: &RasterImage, transform: Projective, warp: Option<&Warp>, x: i64, y: i64) -> bool {
+    local(image, transform, warp, x, y).is_some()
 }
 
-fn sample_alpha(image: &RasterImage, transform: Projective, x: i64, y: i64) -> f32 {
-    local(image, transform, x, y).map_or(0.0, |(lx, ly)| image.alpha_at(lx, ly))
+fn sample_alpha(
+    image: &RasterImage,
+    transform: Projective,
+    warp: Option<&Warp>,
+    x: i64,
+    y: i64,
+) -> f32 {
+    local(image, transform, warp, x, y).map_or(0.0, |(lx, ly)| image.alpha_at(lx, ly))
 }
 
 /// A mask's coverage: its gray value (masks have no alpha, `alpha_at` reads 1 for them).
-fn sample_alpha_gray(mask: &RasterImage, transform: Projective, x: i64, y: i64) -> f32 {
-    local(mask, transform, x, y).map_or(0.0, |(lx, ly)| mask.gray_at(lx, ly))
+fn sample_alpha_gray(
+    mask: &RasterImage,
+    transform: Projective,
+    warp: Option<&Warp>,
+    x: i64,
+    y: i64,
+) -> f32 {
+    local(mask, transform, warp, x, y).map_or(0.0, |(lx, ly)| mask.gray_at(lx, ly))
 }
 
 /// Where the pixels of each visible layer (not a group, not a fill: they have no edges) are in
@@ -242,7 +270,9 @@ fn collect_bounds(layers: &[Layer], parent: Projective, out: &mut Vec<(LayerId, 
         match &layer.content {
             LayerContent::Group { children, .. } => collect_bounds(children, transform, out),
             LayerContent::Raster { image, .. } => {
-                if let Some(rect) = image.get().content_bounds() {
+                if let Some(warp) = &layer.warp {
+                    out.push((layer.id, Bounds::placed_box(warp.bounds(), transform)));
+                } else if let Some(rect) = image.get().content_bounds() {
                     out.push((layer.id, Bounds::placed(rect, transform)));
                 }
             }
@@ -348,20 +378,24 @@ fn layer_extent(layer: &Layer, transform: Projective) -> Extent {
             } else {
                 image.get().content_bounds()
             };
-            rect.map_or(Extent::default(), |r| {
-                Extent::within(Bounds::placed(r, transform))
-            })
+            match &layer.warp {
+                // Its grid's control points bound the warped content (ADR 0044), its edges'
+                // antialiasing around them.
+                Some(warp) => Extent::within(Bounds::placed_box(warp.drawn_bounds(), transform)),
+                None => rect.map_or(Extent::default(), |r| {
+                    Extent::within(Bounds::placed(r, transform))
+                }),
+            }
         }
     };
     let Some(mask) = mask else {
         return own;
     };
     // Outside its image, a mask hides the layer.
-    let Some(shows) = mask
-        .image
-        .coverage_bounds()
-        .map(|r| Bounds::placed(r, transform))
-    else {
+    let Some(shows) = mask.image.coverage_bounds().map(|r| match &layer.warp {
+        Some(warp) => Bounds::placed_box(warp.drawn_bounds(), transform),
+        None => Bounds::placed(r, transform),
+    }) else {
         return Extent::default();
     };
     if own.everywhere {
@@ -437,6 +471,7 @@ mod tests {
                 blend_mode: crate::blend::BlendMode::Normal,
                 mask: None,
                 content: LayerContent::raster(Arc::new(image)),
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -466,6 +501,7 @@ mod tests {
             clipped: false,
             transform: crate::transform::Projective::IDENTITY,
             content,
+            warp: None,
         }
     }
 

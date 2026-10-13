@@ -619,6 +619,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
             blend_mode: BlendMode::Normal,
             mask: None,
             content,
+            warp: None,
         },
     };
     // Invariant: a fresh id at index 0 of an empty document with valid content is accepted.
@@ -1053,6 +1054,7 @@ fn insert_image(
                         Arc::new(image),
                         layer_name,
                     )),
+                    warp: None,
                 },
             };
             session
@@ -1609,6 +1611,51 @@ async fn move_snap_targets(
     .map_err(|e| e.to_string())
 }
 
+/// What Free Transform's overlay shows of a layer's warp (ADR 0044): the style its grid was
+/// made from (none for a layer without a warp, or a grid edited point by point), and the grid's
+/// lines in document pixels.
+#[derive(Debug, Clone, Serialize)]
+struct WarpGridDto {
+    style: Option<&'static str>,
+    bend: f64,
+    vertical: bool,
+    lines: Vec<Vec<[f64; 2]>>,
+}
+
+/// The warp grid of pixel layer `layer_id` (a plain 3 × 3 grid over its pixels when it has no
+/// warp); `None` for other layers.
+#[tauri::command]
+async fn warp_grid(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_id: u64,
+) -> Result<Option<WarpGridDto>, String> {
+    let document = state
+        .documents()?
+        .get_mut(document_id)?
+        .session
+        .document()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = LayerId::from_raw(layer_id);
+        let layer = document.layer(id)?;
+        let to_document = layer.transform.then(document.parent_transform(id));
+        let lines = slopshop_core::warp::document_lines(layer, to_document, 24)?;
+        let preset = layer.warp.as_ref().and_then(|w| w.preset());
+        Some(WarpGridDto {
+            style: preset.map(|p| p.style.id()),
+            bend: preset.map_or(0.0, |p| p.bend),
+            vertical: preset.is_some_and(|p| p.vertical),
+            lines: lines
+                .into_iter()
+                .map(|line| line.into_iter().map(|(x, y)| [x, y]).collect())
+                .collect(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Add a mask made from the transparency of a raster layer (ADR 0014), undoable. Copying the
 /// alpha channel of a large image takes a while: done on a worker, outside the document lock.
 #[tauri::command]
@@ -1830,6 +1877,7 @@ fn shape_thumbnail(
             blend_mode: slopshop_core::BlendMode::Normal,
             mask: None,
             content: LayerContent::vector(Arc::clone(shape)),
+            warp: None,
         },
     }
     .apply(&mut doc)
@@ -2456,6 +2504,7 @@ pub fn run() {
             patterns::load_pattern,
             paint::patch_selection,
             move_snap_targets,
+            warp_grid,
             clipboard::paste,
             clipboard::copy,
             bake::bake_layers,
@@ -2613,6 +2662,7 @@ mod tests {
                     image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
                 },
                 mask: Some(mask),
+                warp: None,
             },
         })
         .unwrap();
@@ -2814,6 +2864,7 @@ mod tests {
                 clipped: false,
                 transform: slopshop_core::Affine::translation(1000.0, 1000.0).into(),
                 content: LayerContent::raster(Arc::clone(&small)),
+                warp: None,
             };
             document
                 .session
@@ -2944,6 +2995,7 @@ mod tests {
                         blend_mode: BlendMode::Normal,
                         content: LayerContent::raster(Arc::clone(&pixels)),
                         mask: None,
+                        warp: None,
                     },
                 })
                 .unwrap();
@@ -3034,6 +3086,7 @@ mod tests {
                             image: slopshop_core::stack::Pixels::ready(Arc::clone(&pixels)),
                         },
                         mask: Some(mask),
+                        warp: None,
                     },
                 })
                 .unwrap();
@@ -3896,6 +3949,7 @@ mod tests {
                     content: LayerContent::Fill {
                         color: slopshop_core::LinearRgba::new(0.0, 1.0, 0.0, 1.0),
                     },
+                    warp: None,
                 },
             })
             .unwrap();
@@ -3961,6 +4015,7 @@ mod tests {
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
+            warp: None,
         };
         let index = document.session.document().layers().len();
         document
@@ -4595,6 +4650,38 @@ mod tests {
     }
 
     #[test]
+    fn a_warp_request_warps_a_pixel_layer_and_painting_it_is_refused() {
+        let mut s = super::blank_session(Size::new(40, 40), None, "Layer").unwrap();
+        let id = s.document().layers()[0].id.get();
+        let json = format!(
+            r#"{{"kind":"warpLayer","id":{id},"style":"flag","bend":0.5,"vertical":false}}"#
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(request.history_label(), Some(HistoryLabel::new("warp")));
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert!(view.layers[0].warped);
+        let layer = s.document().layers()[0].clone();
+        let preset = layer.warp.as_ref().unwrap().preset().unwrap();
+        assert_eq!(preset.style, slopshop_core::warp::WarpStyle::Flag);
+        assert_eq!(
+            crate::paint::unwarped(&layer),
+            Err(crate::paint::WARPED.to_owned())
+        );
+        // No style: the warp is taken away.
+        let json = format!(r#"{{"kind":"warpLayer","id":{id}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        assert!(s.document().layers()[0].warp.is_none());
+        // An unknown style is refused.
+        let json = format!(r#"{{"kind":"warpLayer","id":{id},"style":"spiral","bend":0.5}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
     fn layers_are_put_in_perspective_by_a_matrix_of_nine_numbers() {
         // A transparent pixel layer: fills are not put in perspective.
         let mut s = super::blank_session(Size::new(40, 40), None, "Layer").unwrap();
@@ -4838,6 +4925,7 @@ mod tests {
                 content: LayerContent::PatternFill {
                     pattern: PatternFill::new(Arc::clone(&source)),
                 },
+                warp: None,
             },
         })
         .unwrap();
@@ -4962,6 +5050,7 @@ mod tests {
                 blend_mode: slopshop_core::BlendMode::Normal,
                 mask: None,
                 content: LayerContent::raster(slopshop_io::patterns::built_in("dots").unwrap()),
+                warp: None,
             },
         })
         .unwrap();
@@ -5138,6 +5227,7 @@ mod tests {
                 clipped: false,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(image),
+                warp: None,
             };
             document
                 .session
@@ -5299,6 +5389,7 @@ mod tests {
                 clipped: false,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(image),
+                warp: None,
             };
             let insert = Edit::InsertLayer {
                 parent: None,

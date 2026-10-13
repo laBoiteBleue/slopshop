@@ -32,6 +32,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
         blend_mode: BlendMode::Normal,
         mask: None,
         content,
+        warp: None,
     };
     Edit::InsertLayer {
         parent: None,
@@ -1258,6 +1259,7 @@ fn layered_document() -> Document {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content,
+                warp: None,
             },
         }
         .apply(doc)
@@ -1659,6 +1661,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content: LayerContent::Adjustment { adjustment },
+                warp: None,
             },
         }
         .apply(&mut doc)
@@ -3440,6 +3443,7 @@ fn vector_layers_are_written_to_a_layered_psd_as_their_pixels() {
             clipped: false,
             transform: slopshop_core::Projective::IDENTITY,
             style: None,
+            warp: None,
         },
     }
     .apply(&mut doc)

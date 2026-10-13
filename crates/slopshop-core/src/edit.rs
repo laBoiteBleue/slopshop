@@ -89,6 +89,11 @@ pub enum Edit {
         id: LayerId,
         transform: Projective,
     },
+    /// Warp a pixel layer's content before its transform (ADR 0044), or take its warp away.
+    SetLayerWarp {
+        id: LayerId,
+        warp: Option<Arc<crate::warp::Warp>>,
+    },
     /// Give a raster layer `stack` (ADR 0029): its original (grown, for a layer painted beyond
     /// its bounds) and what is applied to it. The layer shows the stack's result: `shown` when
     /// given (what a stroke computed, of the stack's size and format), else evaluated again
@@ -672,6 +677,15 @@ impl Edit {
                     transform: previous,
                 }
             }
+            Edit::SetLayerWarp { id, warp } => {
+                let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+                validate_warp(layer, warp.as_deref(), layer.transform)?;
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.warp, warp);
+                // Its shape changed: its style's effects are drawn again.
+                layer.redraw_styles();
+                Edit::SetLayerWarp { id, warp: previous }
+            }
             Edit::SetFillColor { id, color } => {
                 if !color.is_finite() {
                     return Err(EditError::InvalidColor);
@@ -996,6 +1010,27 @@ impl Edit {
     /// [`Document::allocate_layer_id`]), as one unit: Photoshop's Layer > Group Layers. The group
     /// takes the place of the topmost of the layers, which keep their stacking order; a layer
     /// inside another of `ids` moves with it.
+    /// Edit > Transform > Warp with a style (ADR 0044): pixel layer `id` warped by the grid
+    /// `preset` gives over [`crate::warp::frame_of`] (its current warp's frame, else its pixels'
+    /// box); `None` takes its warp away.
+    pub fn warp_layer(
+        doc: &Document,
+        id: LayerId,
+        preset: Option<crate::warp::WarpPreset>,
+    ) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let warp = match preset {
+            None => None,
+            Some(preset) => {
+                let frame = crate::warp::frame_of(layer).ok_or(EditError::NotRaster(id))?;
+                let warp = crate::warp::Warp::from_preset(frame, preset)
+                    .map_err(|_| EditError::InvalidTransform)?;
+                Some(Arc::new(warp))
+            }
+        };
+        Ok(Edit::SetLayerWarp { id, warp })
+    }
+
     pub fn group_layers(doc: &Document, group: Layer, ids: &[LayerId]) -> Result<Edit, EditError> {
         if group.children().is_none_or(|children| !children.is_empty()) {
             return Err(EditError::NotAGroup(group.id));
@@ -2012,11 +2047,37 @@ fn swap_paint(
 /// Transforms `layer` may have: finite and invertible (ADR 0018); projective only for a pixel
 /// layer, its pixels and its mask's all on the near side of the horizon line (ADR 0038).
 pub(crate) fn validate_transform(layer: &Layer, transform: Projective) -> Result<(), EditError> {
+    if layer.warp.is_some() {
+        return validate_warp(layer, layer.warp.as_deref(), transform);
+    }
     let valid = match transform.as_affine() {
         Some(t) => t.is_valid_layer_transform(),
         None => projected_bounds(layer).is_some_and(|b| transform.is_valid_layer_transform(b)),
     };
     if valid {
+        Ok(())
+    } else {
+        Err(EditError::InvalidTransform)
+    }
+}
+
+/// A warp (ADR 0044) is given to pixel layers only, and refused where `transform` sends the
+/// warped content beyond its horizon line (ADR 0038).
+pub(crate) fn validate_warp(
+    layer: &Layer,
+    warp: Option<&crate::warp::Warp>,
+    transform: Projective,
+) -> Result<(), EditError> {
+    let Some(warp) = warp else {
+        return Ok(());
+    };
+    if !matches!(layer.content, LayerContent::Raster { .. }) {
+        return Err(EditError::NotRaster(layer.id));
+    }
+    let affine_ok = transform
+        .as_affine()
+        .is_none_or(|t| t.is_valid_layer_transform());
+    if affine_ok && crate::warp::PlacedMesh::new(warp, transform, 0.0).is_some() {
         Ok(())
     } else {
         Err(EditError::InvalidTransform)
@@ -2078,6 +2139,7 @@ mod tests {
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
+            warp: None,
         }
     }
 
@@ -2209,6 +2271,7 @@ mod tests {
             content: LayerContent::Adjustment {
                 adjustment: Adjustment::DEFAULTS[0],
             },
+            warp: None,
         };
         Edit::InsertLayer {
             parent: None,
@@ -2326,6 +2389,55 @@ mod tests {
         let (_, y) = transform.apply(20.0, 0.0);
         let (_, y0) = transform.apply(0.0, 0.0);
         assert!(y < y0);
+    }
+
+    #[test]
+    fn a_warp_is_set_undone_and_refused_where_it_cannot_apply() {
+        let mut doc = Document::new(Size::new(10, 10));
+        let id = raster_layer(&mut doc, image(Size::new(4, 4), false, 255));
+        let preset = crate::warp::WarpPreset {
+            style: crate::warp::WarpStyle::Bulge,
+            bend: 0.3,
+            vertical: true,
+        };
+        let warp = Arc::new(crate::warp::Warp::from_preset([0.0, 0.0, 4.0, 4.0], preset).unwrap());
+        let undo = Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::clone(&warp)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.layer(id).unwrap().warp.as_ref(), Some(&warp));
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(id).unwrap().warp.is_none());
+        // Not a pixel layer: refused.
+        let fill = stack(&mut doc, &["fill"])[0];
+        assert!(matches!(
+            Edit::SetLayerWarp {
+                id: fill,
+                warp: Some(Arc::clone(&warp)),
+            }
+            .apply(&mut doc),
+            Err(EditError::NotRaster(_))
+        ));
+        // A perspective sending the warped content beyond the horizon: refused, as is that
+        // perspective on the warped layer.
+        Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::clone(&warp)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let beyond =
+            Projective::from_array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0, -0.3, 0.0, 1.0]).unwrap();
+        assert_eq!(
+            Edit::SetLayerTransform {
+                id,
+                transform: beyond,
+            }
+            .apply(&mut doc),
+            Err(EditError::InvalidTransform)
+        );
     }
 
     #[test]

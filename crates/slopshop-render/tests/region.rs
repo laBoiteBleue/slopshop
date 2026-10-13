@@ -49,6 +49,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content,
+                warp: None,
             },
         })
         .unwrap();
@@ -859,6 +860,7 @@ fn push_into(
                 blend_mode: mode,
                 mask: None,
                 content,
+                warp: None,
             },
         })
         .unwrap();
@@ -1194,6 +1196,79 @@ fn gpu_layers_in_perspective_match_the_cpu_reference_compositor() {
         s.perform(Edit::SetLayerTransform { id, transform: to })
             .unwrap();
         let what = format!("{quad:?}");
+        assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        assert_matches_cpu(&r, s.document(), Rect::new(61, 47, 130, 90), &what);
+    }
+}
+
+#[test]
+fn gpu_warped_layers_match_the_cpu_reference_compositor() {
+    use slopshop_core::Projective;
+    use slopshop_core::warp::{Warp, WarpPreset, WarpStyle};
+    use std::sync::Arc;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 260);
+    let photo = image(Size::new(256, 192), PixelFormat::RGBA8_SRGB, pattern);
+    let frame = [0.0, 0.0, 256.0, 192.0];
+    for (style, bend, vertical, masked, placed) in [
+        // Arched, at whole pixels.
+        (
+            WarpStyle::Arc,
+            0.4,
+            false,
+            false,
+            Affine::translation(22.0, 40.0),
+        ),
+        // A flag, turned and reduced, masked by its own alpha (the mask follows the warp).
+        (
+            WarpStyle::Flag,
+            -0.6,
+            true,
+            true,
+            Affine::scale(0.7, 0.7)
+                .then(Affine::rotation(0.25))
+                .then(Affine::translation(90.0, 20.0)),
+        ),
+        // Twisted and enlarged.
+        (
+            WarpStyle::Twist,
+            0.8,
+            false,
+            false,
+            Affine::scale(1.3, 1.2).then(Affine::translation(-20.0, -10.0)),
+        ),
+    ] {
+        let mut s = Session::new(Document::new(size));
+        let bg = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![(x % 256) as u8, (y % 256) as u8, 60, 255]
+        });
+        push_into(&mut s, None, raster(&bg), BlendMode::Normal, 1.0);
+        let id = push_into(&mut s, None, raster(&photo), BlendMode::Normal, 0.9);
+        if masked {
+            let mask = slopshop_core::LayerMask::from_transparency(&photo).unwrap();
+            s.perform(Edit::SetLayerMask {
+                id,
+                mask: Some(mask),
+            })
+            .unwrap();
+        }
+        s.perform(Edit::SetLayerTransform {
+            id,
+            transform: Projective::from(placed),
+        })
+        .unwrap();
+        let preset = WarpPreset {
+            style,
+            bend,
+            vertical,
+        };
+        let warp = Warp::from_preset(frame, preset).unwrap();
+        s.perform(Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::new(warp)),
+        })
+        .unwrap();
+        let what = format!("{style:?}");
         assert_matches_cpu(&r, s.document(), size.bounds(), &what);
         assert_matches_cpu(&r, s.document(), Rect::new(61, 47, 130, 90), &what);
     }

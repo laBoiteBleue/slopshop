@@ -352,6 +352,19 @@ pub(crate) fn affine_placement(transform: Projective) -> Result<Affine, String> 
     })
 }
 
+/// A warped layer (ADR 0044) is not painted, moved or copied from yet: its pixels lie under its
+/// warp's grid, which strokes and moves do not go through. Rasterize bakes the warp first.
+pub(crate) const WARPED: &str =
+    "a warped layer's pixels are not painted, moved or copied yet: rasterize it first";
+
+/// Refuses what works in a layer's pixels on a warped layer (see [`WARPED`]).
+pub(crate) fn unwarped(layer: &slopshop_core::Layer) -> Result<(), String> {
+    match layer.warp {
+        Some(_) => Err(WARPED.to_owned()),
+        None => Ok(()),
+    }
+}
+
 /// What `stroke` painted on `target` so far: a layer's stack and what it shows, or an image.
 fn painted_so_far(target: Target, stroke: &mut Stroke) -> Result<Painted, String> {
     let image = stroke.image().map_err(|e| e.to_string())?;
@@ -379,6 +392,7 @@ pub(crate) fn grow(
     let LayerContent::Raster { image, .. } = &layer.content else {
         return Err("only raster layers can be painted".to_owned());
     };
+    unwarped(layer)?;
     let stack = layer
         .content
         .stack()
@@ -595,6 +609,7 @@ fn start(
                 return Err(locked(id, Lock::All));
             }
             let layer = doc.layer(id).ok_or("the painted layer is gone")?;
+            unwarped(layer)?;
             let mask = layer.mask.as_ref().ok_or("the layer has no mask")?;
             let to_document = layer.transform.then(doc.parent_transform(id));
             (Arc::clone(&mask.image), to_document, None, gray, selection)
@@ -1416,6 +1431,7 @@ mod tests {
             mask: None,
             clipped: false,
             transform: Affine::IDENTITY.into(),
+            warp: None,
         };
         let mut session = Session::new(
             Document::restore(
