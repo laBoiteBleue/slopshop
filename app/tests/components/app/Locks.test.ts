@@ -60,12 +60,16 @@ test("/ toggles Lock Transparent Pixels, Ctrl+/ opens Lock Layers", async () => 
   expect(await screen.findByRole("dialog", { name: "Lock Layers" })).toBeInTheDocument();
 });
 
-test("an edit a lock refuses is said in the interface's language", async () => {
+test("an edit a lock refuses is said in the interface's language, once", async () => {
   const user = open(documentView(1, "cat.jpg", [layer(1, "Background"), layer(2, "Cat")]));
   await vi.waitFor(() => expect(layerNames()).toEqual(["Cat", "Background"]));
   await user.click(row("Background"));
   await user.keyboard("{Control>}]{/Control}");
-  expect(
-    await screen.findByText("Could not move: the layer's position is locked."),
-  ).toBeInTheDocument();
+  const message = "Could not move: the layer's position is locked.";
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  // Refused again: still one message.
+  await user.keyboard("{Control>}]{/Control}");
+  await vi.waitFor(() => expect(sent("perform")).toHaveLength(2));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getAllByText(message)).toHaveLength(1);
 });
