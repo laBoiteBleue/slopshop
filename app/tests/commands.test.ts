@@ -175,3 +175,12 @@ test("View: Ctrl+H hides the extras and F11 is full screen; Window: Tab hides th
   assert.equal(formatShortcut("tab", names, true), "⇥");
   assert.equal(formatShortcut("f11", names, false), "F11");
 });
+
+test("/ toggles Lock Transparent Pixels and Ctrl+/ opens Lock Layers, Shift or not (AZERTY)", () => {
+  assert.equal(commandAt(press("/"), false), "lockTransparency");
+  assert.equal(commandAt(press("/", ctrl), false), "lockLayers");
+  // AZERTY types / with Shift (on the : key).
+  assert.equal(commandAt(press("/", { shiftKey: true }), false), "lockTransparency");
+  assert.equal(commandAt(press("/", { ...ctrl, shiftKey: true }), false), "lockLayers");
+  assert.equal(commandAt(press("/", cmd), true), "lockLayers");
+});

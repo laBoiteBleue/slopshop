@@ -71,6 +71,9 @@ export const SHORTCUTS = {
   // Merge Down with one layer, Merge Layers with several (Layer > Bake to Pixels).
   mergeLayers: ["mod+e"],
   mergeVisible: ["shift+mod+e"],
+  // Photoshop's: / toggles Lock Transparent Pixels, Ctrl+/ opens Lock Layers (ADR 0046).
+  lockTransparency: ["/"],
+  lockLayers: ["mod+/"],
   renameLayer: ["f2"],
   deleteLayers: ["delete", "backspace"],
   // Select
@@ -140,8 +143,11 @@ export function shortcutLetter(e: Pick<KeyPress, "key" | "code">): string | null
   return physical ? physical[1].toLowerCase() : null;
 }
 
-/** Keys typed with Shift on some layouts ("+" on QWERTY, digits on AZERTY): Shift is ignored. */
-const SHIFT_FREE = /^[0-9+\-,]$/;
+/**
+ * Keys typed with Shift on some layouts ("+" on QWERTY, digits and "/" on AZERTY): Shift is
+ * ignored.
+ */
+const SHIFT_FREE = /^[0-9+\-,/]$/;
 
 /** Whether `press` is `shortcut`, on macOS when `mac`. */
 export function matches(shortcut: Shortcut, press: KeyPress, mac: boolean): boolean {

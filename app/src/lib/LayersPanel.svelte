@@ -10,7 +10,7 @@
     type StackEntryView,
   } from "./engine";
   import ContextMenu from "./ContextMenu.svelte";
-  import Icon from "./Icon.svelte";
+  import Icon, { type IconName } from "./Icon.svelte";
   import type { MenuItem } from "./MenuBar.svelte";
   import LayerThumbnail from "./LayerThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
@@ -73,6 +73,14 @@
   import { editableEntry } from "./stackEntries";
   import type { GradientFill } from "./gradientFill";
   import { LayersUi } from "./layersUi.svelte";
+  import {
+    effectiveLocks,
+    LOCK_KINDS,
+    lockMark,
+    lockState,
+    lockToggle,
+    type LockKind,
+  } from "./locks";
 
   let {
     doc,
@@ -384,6 +392,20 @@
   export function toggleClippingSelected() {
     send(clippingToggle(selection));
   }
+
+  /** A lock's button (ADR 0046): set it on the selected layers, or clear it from all. */
+  export function toggleLockSelected(kind: LockKind) {
+    send(lockToggle(selection, kind));
+  }
+
+  const LOCK_ICONS: Record<LockKind, IconName> = {
+    transparency: "lockTransparency",
+    pixels: "brush",
+    position: "lockPosition",
+    all: "lock",
+  };
+  /** Lock All applies to a selected layer (its own or a group's): its options are grayed. */
+  let lockedAll = $derived(selection.some((l) => effectiveLocks(tree, l).all));
 
   const ARROWS: Record<string, [number, number]> = {
     ArrowLeft: [-1, 0],
@@ -953,7 +975,7 @@
       value={selected?.kind === "group" && selected.passThrough
         ? "passThrough"
         : (selected?.blendMode ?? "normal")}
-      disabled={!selected || selected.kind === "adjustment"}
+      disabled={!selected || selected.kind === "adjustment" || lockedAll}
       onchange={(e) => onBlendModeChange(e.currentTarget.value)}
     >
       {#if selected?.kind === "group"}
@@ -976,7 +998,7 @@
       max="100"
       value={shownOpacity}
       style:--fill="{shownOpacity}%"
-      disabled={!selected}
+      disabled={!selected || lockedAll}
       aria-label={t("layers.opacity")}
       onpointerdown={onOpacitySliderPointerDown}
       oninput={(e) => onOpacitySliderInput(e.currentTarget.value)}
@@ -990,7 +1012,7 @@
       max="100"
       autocomplete="off"
       value={shownOpacity}
-      disabled={!selected}
+      disabled={!selected || lockedAll}
       onfocus={() => {
         opacityFieldLayers = [...selectedIds];
         opacityFieldActive = activeId;
@@ -999,6 +1021,24 @@
       onchange={(e) => onOpacityFieldChange(e.currentTarget)}
     />
     <span class="unit">%</span>
+  </div>
+  <!-- Photoshop's "Lock:" buttons, for the selected layers (ADR 0046). -->
+  <div class="options locks" role="group" aria-label={t("layers.locks")}>
+    <span class="locks-label">{t("layers.locks")}</span>
+    {#each LOCK_KINDS as kind (kind)}
+      {@const state = lockState(selection, kind)}
+      <button
+        class="icon-btn lock"
+        class:on={state !== "off"}
+        title={t(`layers.lock.${kind}`)}
+        aria-label={t(`layers.lock.${kind}`)}
+        aria-pressed={state === "mixed" ? "mixed" : state === "on"}
+        disabled={selection.length === 0}
+        onclick={() => toggleLockSelected(kind)}
+      >
+        <Icon name={LOCK_ICONS[kind]} size={14} />
+      </button>
+    {/each}
   </div>
   <!-- Fill Opacity (ADR 0032): the content's opacity, its effects untouched. -->
   {#if showsFill}
@@ -1181,6 +1221,22 @@
               aria-label={t("layers.linked", { n: layer.linked ?? 0 })}
             >
               <Icon name="link" size={12} />
+            </span>
+          {/if}
+          <!-- Photoshop's padlock: full for Lock All, partial otherwise; dimmed from a group. -->
+          {@const mark = lockMark(tree, layer)}
+          {#if mark}
+            {@const label = mark.inherited
+              ? t("layers.locked.inherited")
+              : t(mark.kind === "full" ? "layers.locked.full" : "layers.locked.partial")}
+            <span
+              class="painted lock-mark"
+              class:inherited={mark.inherited}
+              data-lock={mark.kind}
+              title={label}
+              aria-label={label}
+            >
+              <Icon name={mark.kind === "full" ? "lockFull" : "lock"} size={12} />
             </span>
           {/if}
           {#if layer.entries.length > 0 || effectsOf(layer.style).length > 0}
@@ -1693,6 +1749,20 @@
   }
 
   /* Paint on the layer (ADR 0027): its original is kept, Delete Paint brings it back. */
+  .locks-label {
+    margin-right: 2px;
+    color: var(--text-muted);
+  }
+
+  .lock.on {
+    background: var(--overlay-active);
+    color: var(--text);
+  }
+
+  .lock-mark.inherited {
+    opacity: 0.5;
+  }
+
   .painted {
     display: grid;
     place-items: center;

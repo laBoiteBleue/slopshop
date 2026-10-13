@@ -147,6 +147,8 @@ export type LayerView = {
   passThrough: boolean;
   /** Clipped to the layer below it (ADR 0016). */
   clipped: boolean;
+  /** Its own locks (ADR 0046); a group's apply to the layers inside it too. */
+  locks: { transparency: boolean; pixels: boolean; position: boolean; all: boolean };
   /** From the layer's content to its parent (ADR 0017): `[a, b, c, d, e, f]`. */
   transform: [number, number, number, number, number, number];
   /** A layer in perspective (ADR 0038): its projective map, nine numbers. Absent: none. */
@@ -682,6 +684,15 @@ export type EditRequest =
     }
   | { kind: "setGroupPassThrough"; id: number; passThrough: boolean }
   | { kind: "setLayerClipped"; id: number; clipped: boolean }
+  /** Set (`true`) or clear the locks given on every layer of `ids` (ADR 0046). */
+  | {
+      kind: "setLayerLocks";
+      ids: number[];
+      transparency?: boolean;
+      pixels?: boolean;
+      position?: boolean;
+      all?: boolean;
+    }
   /** Move layers by whole document pixels (a group moves whole). */
   | { kind: "translateLayers"; ids: number[]; dx: number; dy: number }
   /** Apply `matrix` ([a, b, c, d, e, f], in document pixels) to layers (Free Transform). */

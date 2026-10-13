@@ -27,6 +27,7 @@ function layer(id: number, name: string, changes: Partial<LayerView> = {}): Laye
     children: [],
     passThrough: false,
     clipped: false,
+    locks: { transparency: false, pixels: false, position: false, all: false },
     transform: [1, 0, 0, 1, 0, 0],
     painted: false,
     entries: [],
@@ -501,4 +502,74 @@ test("Ctrl+click on a thumbnail loads the layer's pixels as the selection, the l
   await user.keyboard("[/ControlLeft]");
   // The layers selected are as they were: Masked, the top one.
   expect(selectedNames()).toEqual(["Masked"]);
+});
+
+const LOCKED = { transparency: false, pixels: false, position: false, all: false };
+
+test("the lock buttons set a lock on the selected layers, or clear it from all", async () => {
+  const layers = [
+    layer(1, "Background", { locks: { ...LOCKED, position: true } }),
+    layer(5, "Text"),
+  ];
+  const { user, onedit } = open(layers);
+  // Text alone: Lock Position is off, a click sets it.
+  const position = screen.getByRole("button", { name: "Lock position" });
+  expect(position).toHaveAttribute("aria-pressed", "false");
+  await user.click(position);
+  expect(onedit).toHaveBeenLastCalledWith(1, { kind: "setLayerLocks", ids: [5], position: true });
+  // Both selected: Background has it, Text not: mixed, and a click sets it on both.
+  await user.keyboard("[ControlLeft>]");
+  await user.click(row("Background"));
+  await user.keyboard("[/ControlLeft]");
+  expect(position).toHaveAttribute("aria-pressed", "mixed");
+  await user.click(position);
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerLocks",
+    ids: [1, 5],
+    position: true,
+  });
+  // Background alone, where it is set: a click clears it.
+  await user.click(row("Background"));
+  expect(position).toHaveAttribute("aria-pressed", "true");
+  await user.click(position);
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerLocks",
+    ids: [1],
+    position: false,
+  });
+  for (const name of ["Lock transparent pixels", "Lock image pixels", "Lock all"]) {
+    expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "false");
+  }
+});
+
+test("locked rows show Photoshop's padlock, a group's dimmed on its layers", () => {
+  open([
+    layer(1, "Background", { locks: { ...LOCKED, all: true } }),
+    layer(2, "Group", {
+      kind: "group",
+      locks: { ...LOCKED, pixels: true },
+      children: [layer(3, "Sky")],
+    }),
+    layer(5, "Text"),
+  ]);
+  const mark = (name: string) => row(name).querySelector(".lock-mark");
+  expect(mark("Background")).toHaveAttribute("data-lock", "full");
+  expect(mark("Background")).toHaveAttribute("title", "Fully locked");
+  expect(mark("Group")).toHaveAttribute("data-lock", "partial");
+  expect(mark("Group")).not.toHaveClass("inherited");
+  expect(mark("Sky")).toHaveClass("inherited");
+  expect(mark("Sky")).toHaveAttribute("title", "Locked by its group");
+  expect(mark("Text")).toBeNull();
+});
+
+test("Lock All grays the blend mode and the opacity of the selected layer", async () => {
+  const { user } = open([
+    layer(1, "Background", { locks: { ...LOCKED, all: true } }),
+    layer(5, "Text"),
+  ]);
+  const blend = screen.getByRole("combobox", { name: "Blend mode" });
+  expect(blend).toBeEnabled();
+  await user.click(row("Background"));
+  expect(blend).toBeDisabled();
+  expect(screen.getByRole("slider", { name: "Opacity" })).toBeDisabled();
 });

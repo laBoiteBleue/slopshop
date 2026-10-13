@@ -38,6 +38,7 @@ export function layer(id: number, name: string): LayerView {
     children: [],
     passThrough: false,
     clipped: false,
+    locks: { transparency: false, pixels: false, position: false, all: false },
     transform: [1, 0, 0, 1, 0, 0],
     painted: false,
     entries: [],
