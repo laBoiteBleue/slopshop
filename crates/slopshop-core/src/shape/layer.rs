@@ -690,4 +690,84 @@ world"
         assert_eq!(crate::pick::layer_at(&doc, 11, 20), Some(shape));
         assert_eq!(crate::pick::layer_at(&doc, 25, 20), Some(id));
     }
+
+    fn scale_then_move(sx: f64, sy: f64, dx: f64) -> crate::transform::Affine {
+        crate::transform::Affine {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            e: dx,
+            f: 0.0,
+        }
+    }
+
+    #[test]
+    fn free_transform_reshapes_a_vector_layer_so_its_stroke_keeps_its_width() {
+        let mut doc = document();
+        let source = ShapeSource::new(
+            rectangle([0.0, 0.0, 16.0, 16.0], None, Some(centered(BLUE, 2.0))),
+            "",
+        );
+        let id = add_vector(&mut doc, source, Projective::IDENTITY);
+        let geometry_of = |doc: &Document| match &doc.layer(id).unwrap().content {
+            LayerContent::Vector { source, .. } => source.shape().geometry.clone(),
+            _ => unreachable!("a vector layer"),
+        };
+        let undo = Edit::transform_layers(&doc, &[id], scale_then_move(2.0, 2.0, 0.0).into())
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // The rectangle doubled, the layer not: its stroke stays 2 pixels wide.
+        assert_eq!(doc.layer(id).unwrap().transform, Projective::IDENTITY);
+        assert_eq!(
+            geometry_of(&doc),
+            Geometry::Rectangle {
+                rect: [0.0, 0.0, 32.0, 32.0],
+                radii: [0.0; 4],
+            }
+        );
+        assert!(close(at(&doc, 32, 16), [0.0, 0.0, 1.0, 1.0]));
+        assert!(close(at(&doc, 30, 16), [0.0; 4]), "{:?}", at(&doc, 30, 16));
+        undo.apply(&mut doc).unwrap();
+        // Turned, a rectangle would no longer be one: the layer takes the transform.
+        let turn = crate::transform::Affine::rotation(0.3);
+        Edit::transform_layers(&doc, &[id], turn.into())
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_ne!(doc.layer(id).unwrap().transform, Projective::IDENTITY);
+        assert_eq!(
+            geometry_of(&doc),
+            Geometry::Rectangle {
+                rect: [0.0, 0.0, 16.0, 16.0],
+                radii: [0.0; 4],
+            }
+        );
+    }
+
+    #[test]
+    fn linked_copies_and_locked_layers_take_free_transform_as_a_transform() {
+        let mut doc = document();
+        let source = ShapeSource::new(rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None), "");
+        let a = add_vector(&mut doc, Arc::clone(&source), Projective::IDENTITY);
+        let b = add_vector(&mut doc, source, Projective::IDENTITY);
+        let moved: Projective = scale_then_move(2.0, 1.0, 3.0).into();
+        // Each linked copy is placed by its own transform: the other one stays.
+        Edit::transform_layers(&doc, &[a], moved)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.layer(a).unwrap().transform, moved);
+        assert_eq!(doc.layer(b).unwrap().transform, Projective::IDENTITY);
+        // Its pixels locked: not reshaped, transformed.
+        let source = ShapeSource::new(rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None), "");
+        let c = add_vector(&mut doc, source, Projective::IDENTITY);
+        doc.layer_mut(c).unwrap().locks.pixels = true;
+        Edit::transform_layers(&doc, &[c], moved)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.layer(c).unwrap().transform, moved);
+    }
 }

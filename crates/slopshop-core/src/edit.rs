@@ -855,6 +855,47 @@ impl Edit {
     }
 }
 
+/// What Free Transform giving vector layer `layer` `transform` makes of its shape instead, as
+/// Photoshop transforms a shape's path so that its stroke keeps its width (ADR 0041): the shape
+/// with the geometry moved, the layer's transform kept. `None` (the layer takes the transform)
+/// when either transform is projective, when the geometry would not stay what it is
+/// ([`Geometry::transformed`](crate::shape::Geometry::transformed)), when a mask must follow
+/// the layer, when a lock refuses moving or reshaping it, or when other layers show the same
+/// shape (linked copies are each placed by their own transform, as Photoshop's instances).
+fn reshaped_vector(
+    doc: &Document,
+    layer: &Layer,
+    transform: Projective,
+) -> Option<crate::shape::Shape> {
+    let LayerContent::Vector { source, .. } = &layer.content else {
+        return None;
+    };
+    let locks = doc.effective_locks(layer.id);
+    if layer.mask.is_some()
+        || transform == layer.transform
+        || locks.locks_pixels()
+        || locks.locks_position()
+    {
+        return None;
+    }
+    let linked = doc.all_layers().any(|l| {
+        l.id != layer.id
+            && matches!(&l.content, LayerContent::Vector { source: s, .. } if Arc::ptr_eq(s, source))
+    });
+    if linked {
+        return None;
+    }
+    let before = layer.transform.as_affine()?;
+    // In the layer's own space: what the new transform does before the old one.
+    let delta = transform.as_affine()?.then(before.inverse()?);
+    let shape = source.shape();
+    Some(crate::shape::Shape {
+        geometry: shape.geometry.transformed(delta)?,
+        fill: shape.fill,
+        stroke: shape.stroke.clone(),
+    })
+}
+
 /// The position-locked layer that giving layer `id` `transform` would move (ADR 0046): itself
 /// (its own lock or a group's around it), or a layer inside it. `None` when it does not move.
 fn moving_locked(doc: &Document, id: LayerId, transform: &Projective) -> Option<(LayerId, Lock)> {
@@ -1440,6 +1481,10 @@ impl Edit {
             let back = parent.inverse().ok_or(EditError::InvalidTransform)?;
             let transform = layer.transform.then(parent).then(by).then(back).snapped();
             validate_transform(layer, transform)?;
+            if let Some(shape) = reshaped_vector(doc, layer, transform) {
+                edits.push(Edit::reshape(doc, id, shape)?);
+                continue;
+            }
             edits.push(Edit::SetLayerTransform { id, transform });
         }
         Ok(Edit::Batch(edits))

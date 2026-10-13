@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::color::LinearRgba;
 use crate::source::SourceId;
+use crate::transform::Affine;
 
 /// The largest coordinate or length a shape takes, in pixels (as transforms, ADR 0018).
 pub const MAX_COORDINATE: f64 = 1e7;
@@ -180,6 +181,95 @@ impl Geometry {
         }
     }
 
+    /// The geometry `by` maps this one to, when it stays what it is, so that Free Transform
+    /// reshapes a vector layer rather than scaling its stroke (Photoshop's): a line and a path
+    /// always; a rectangle and an ellipse when `by` neither rotates nor skews (a rectangle's
+    /// corners stay round: their radii scale as its shorter side does); a polygon when `by`
+    /// keeps its proportions (a rotation, a uniform scale, no mirroring). `None` otherwise, or
+    /// for a map that collapses or overflows.
+    pub fn transformed(&self, by: Affine) -> Option<Geometry> {
+        const EPSILON: f64 = 1e-9;
+        if !by.is_finite() || by.determinant().abs() < EPSILON {
+            return None;
+        }
+        let map = |[x, y]: [f64; 2]| {
+            let (x, y) = by.apply(x, y);
+            [x, y]
+        };
+        let aligned = by.b.abs() < EPSILON && by.c.abs() < EPSILON;
+        let geometry = match self {
+            &Self::Rectangle { rect, radii } if aligned => {
+                let [l, t, r, b] = rect;
+                let ([x0, y0], [x1, y1]) = (map([l, t]), map([r, b]));
+                // Mirrored, the corners trade places.
+                let [mut tl, mut tr, mut br, mut bl] = radii;
+                if by.a < 0.0 {
+                    (tl, tr, br, bl) = (tr, tl, bl, br);
+                }
+                if by.d < 0.0 {
+                    (tl, tr, br, bl) = (bl, br, tr, tl);
+                }
+                let scale = by.a.abs().min(by.d.abs());
+                Self::Rectangle {
+                    rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
+                    radii: [tl, tr, br, bl].map(|v| v * scale),
+                }
+            }
+            &Self::Ellipse { center, radii } if aligned => Self::Ellipse {
+                center: map(center),
+                radii: [radii[0] * by.a.abs(), radii[1] * by.d.abs()],
+            },
+            &Self::Polygon {
+                center,
+                radius,
+                sides,
+                star,
+                rotation,
+            } => {
+                let similar = (by.a - by.d).abs() < EPSILON
+                    && (by.b + by.c).abs() < EPSILON
+                    && by.determinant() > 0.0;
+                if !similar {
+                    return None;
+                }
+                // Turned clockwise on screen by `turn` degrees: its corners' angles
+                // (counterclockwise) go down as much.
+                let turn = by.b.atan2(by.a).to_degrees();
+                Self::Polygon {
+                    center: map(center),
+                    radius: radius * by.a.hypot(by.b),
+                    sides,
+                    star,
+                    rotation: rotation - turn,
+                }
+            }
+            &Self::Line { from, to } => Self::Line {
+                from: map(from),
+                to: map(to),
+            },
+            Self::Path { subpaths, rule } => Self::Path {
+                subpaths: subpaths
+                    .iter()
+                    .map(|s| Subpath {
+                        start: map(s.start),
+                        segments: s
+                            .segments
+                            .iter()
+                            .map(|seg| match *seg {
+                                Segment::Line(p) => Segment::Line(map(p)),
+                                Segment::Cubic(a, b, p) => Segment::Cubic(map(a), map(b), map(p)),
+                            })
+                            .collect(),
+                        closed: s.closed,
+                    })
+                    .collect(),
+                rule: *rule,
+            },
+            _ => return None,
+        };
+        geometry.is_valid().then_some(geometry)
+    }
+
     /// Whether a fill covers its inside: everything but a line. An open path is filled as if
     /// its ends were joined, as Photoshop fills one.
     pub fn is_fillable(&self) -> bool {
@@ -302,6 +392,142 @@ impl ShapeSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scaling(sx: f64, sy: f64) -> Affine {
+        Affine {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    #[test]
+    fn rectangles_and_ellipses_take_maps_that_keep_them() {
+        // Scaled and moved, the corners' radii as the shorter side.
+        let rounded = Geometry::Rectangle {
+            rect: [10.0, 10.0, 50.0, 30.0],
+            radii: [1.0, 2.0, 3.0, 4.0],
+        };
+        let by = Affine {
+            e: 5.0,
+            ..scaling(2.0, 3.0)
+        };
+        assert_eq!(
+            rounded.transformed(by),
+            Some(Geometry::Rectangle {
+                rect: [25.0, 30.0, 105.0, 90.0],
+                radii: [2.0, 4.0, 6.0, 8.0],
+            })
+        );
+        // Mirrored, its corners with it.
+        assert_eq!(
+            rounded.transformed(scaling(-1.0, 1.0)),
+            Some(Geometry::Rectangle {
+                rect: [-50.0, 10.0, -10.0, 30.0],
+                radii: [2.0, 1.0, 4.0, 3.0],
+            })
+        );
+        assert_eq!(
+            rounded.transformed(scaling(1.0, -1.0)),
+            Some(Geometry::Rectangle {
+                rect: [10.0, -30.0, 50.0, -10.0],
+                radii: [4.0, 3.0, 2.0, 1.0],
+            })
+        );
+        // Turned, it would no longer be one.
+        assert_eq!(rounded.transformed(Affine::rotation(0.5)), None);
+        let ellipse = Geometry::Ellipse {
+            center: [10.0, 0.0],
+            radii: [4.0, 2.0],
+        };
+        assert_eq!(
+            ellipse.transformed(scaling(-2.0, 0.5)),
+            Some(Geometry::Ellipse {
+                center: [-20.0, 0.0],
+                radii: [8.0, 1.0],
+            })
+        );
+        assert_eq!(ellipse.transformed(Affine::rotation(0.1)), None);
+    }
+
+    #[test]
+    fn polygons_take_rotations_and_uniform_scales() {
+        let polygon = Geometry::Polygon {
+            center: [10.0, 0.0],
+            radius: 5.0,
+            sides: 6,
+            star: Some(0.5),
+            rotation: 90.0,
+        };
+        // A quarter turn clockwise on screen, doubled.
+        let by = Affine::rotation(std::f64::consts::FRAC_PI_2).then(scaling(2.0, 2.0));
+        let Some(Geometry::Polygon {
+            center,
+            radius,
+            sides,
+            star,
+            rotation,
+        }) = polygon.transformed(by)
+        else {
+            panic!("a similarity keeps a polygon one");
+        };
+        let (cx, cy) = by.apply(10.0, 0.0);
+        assert!((center[0] - cx).abs() < 1e-9 && (center[1] - cy).abs() < 1e-9);
+        assert!((radius - 10.0).abs() < 1e-9);
+        assert_eq!((sides, star), (6, Some(0.5)));
+        assert!(rotation.abs() < 1e-9, "{rotation}");
+        assert_eq!(polygon.transformed(scaling(2.0, 1.0)), None);
+        assert_eq!(polygon.transformed(scaling(-1.0, 1.0)), None);
+    }
+
+    #[test]
+    fn lines_and_paths_take_any_map() {
+        let skew = Affine {
+            c: 0.5,
+            ..scaling(1.0, 2.0)
+        };
+        let line = Geometry::Line {
+            from: [0.0, 2.0],
+            to: [4.0, 0.0],
+        };
+        assert_eq!(
+            line.transformed(skew),
+            Some(Geometry::Line {
+                from: [1.0, 4.0],
+                to: [4.0, 0.0],
+            })
+        );
+        let path = Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [0.0, 0.0],
+                segments: vec![
+                    Segment::Line([2.0, 0.0]),
+                    Segment::Cubic([2.0, 2.0], [0.0, 2.0], [0.0, 0.0]),
+                ],
+                closed: true,
+            }],
+            rule: FillRule::EvenOdd,
+        };
+        assert_eq!(
+            path.transformed(skew),
+            Some(Geometry::Path {
+                subpaths: vec![Subpath {
+                    start: [0.0, 0.0],
+                    segments: vec![
+                        Segment::Line([2.0, 0.0]),
+                        Segment::Cubic([3.0, 4.0], [1.0, 4.0], [0.0, 0.0]),
+                    ],
+                    closed: true,
+                }],
+                rule: FillRule::EvenOdd,
+            })
+        );
+        // A map that collapses everything onto a line keeps nothing.
+        assert_eq!(path.transformed(scaling(1.0, 0.0)), None);
+    }
 
     fn rect() -> Geometry {
         Geometry::Rectangle {
