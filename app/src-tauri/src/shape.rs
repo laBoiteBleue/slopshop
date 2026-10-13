@@ -93,6 +93,35 @@ impl SubpathDto {
 }
 
 impl GeometryDto {
+    /// `geometry` as the UI sees it.
+    pub fn of(geometry: &Geometry) -> Self {
+        match geometry {
+            &Geometry::Rectangle { rect, radii } => GeometryDto::Rectangle { rect, radii },
+            &Geometry::Ellipse { center, radii } => GeometryDto::Ellipse { center, radii },
+            &Geometry::Polygon {
+                center,
+                radius,
+                sides,
+                star,
+                rotation,
+            } => GeometryDto::Polygon {
+                center,
+                radius,
+                sides,
+                star,
+                rotation,
+            },
+            &Geometry::Line { from, to } => GeometryDto::Line { from, to },
+            Geometry::Path { subpaths, rule } => GeometryDto::Path {
+                subpaths: subpaths.iter().map(SubpathDto::of).collect(),
+                rule: match rule {
+                    FillRule::NonZero => RuleDto::Nonzero,
+                    FillRule::EvenOdd => RuleDto::Evenodd,
+                },
+            },
+        }
+    }
+
     /// The geometry it describes (not validated: see [`ShapeDto::shape`]).
     pub fn geometry(&self) -> Result<Geometry, String> {
         Ok(match self {
@@ -225,31 +254,7 @@ impl ShapeDto {
 
     /// `shape` as the UI sees it.
     pub fn of(shape: &Shape) -> Self {
-        let geometry = match &shape.geometry {
-            &Geometry::Rectangle { rect, radii } => GeometryDto::Rectangle { rect, radii },
-            &Geometry::Ellipse { center, radii } => GeometryDto::Ellipse { center, radii },
-            &Geometry::Polygon {
-                center,
-                radius,
-                sides,
-                star,
-                rotation,
-            } => GeometryDto::Polygon {
-                center,
-                radius,
-                sides,
-                star,
-                rotation,
-            },
-            &Geometry::Line { from, to } => GeometryDto::Line { from, to },
-            Geometry::Path { subpaths, rule } => GeometryDto::Path {
-                subpaths: subpaths.iter().map(SubpathDto::of).collect(),
-                rule: match rule {
-                    FillRule::NonZero => RuleDto::Nonzero,
-                    FillRule::EvenOdd => RuleDto::Evenodd,
-                },
-            },
-        };
+        let geometry = GeometryDto::of(&shape.geometry);
         Self {
             geometry,
             fill: shape.fill.map(color),
