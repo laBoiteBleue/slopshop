@@ -1,3 +1,8 @@
+<script lang="ts" module>
+  // Show More Options as it was left last, for the session (Photoshop keeps it).
+  let moreOptions = false;
+</script>
+
 <script lang="ts">
   // A filter's dialog (Filter > …, ADR 0034), laid out as Photoshop's: its settings on the left,
   // each a number with its unit and a slider below it; OK, Cancel and Preview on the right.
@@ -11,6 +16,7 @@
     FILTERS,
     centerAt,
     nudgedCenter,
+    shownParams,
     sliderPosition,
     sliderValue,
     validValues,
@@ -39,6 +45,19 @@
   } = $props();
 
   const params = $derived(FILTERS[filter].params);
+  // Show More Options (Shadows/Highlights): the settings marked `more` shown too.
+  let more = $state(moreOptions);
+  const shown = $derived(new Set(shownParams(filter, more)));
+  // A heading above the first setting shown of each group.
+  const headed = $derived(
+    new Set(
+      [...shown].filter((i, n, all) => {
+        const group = (p: (typeof params)[number] | undefined) =>
+          p?.kind === "number" ? p.group : undefined;
+        return group(params[i]) !== undefined && group(params[i]) !== group(params[all[n - 1]]);
+      }),
+    ),
+  );
   let current = $state<number[]>(untrack(() => [...values]));
   const valid = $derived(validValues(filter, current));
 
@@ -98,7 +117,9 @@
   <form onsubmit={submit}>
     <div class="settings">
       {#each params as param, i (param.key)}
-        {#if param.kind === "choice"}
+        {#if !shown.has(i)}
+          <!-- Hidden without Show More Options. -->
+        {:else if param.kind === "choice"}
           <fieldset>
             <legend>{t(param.label)}</legend>
             {#each param.options as option, n (option)}
@@ -164,6 +185,9 @@
             </div>
           {/if}
         {:else if param.kind === "number"}
+          {#if param.group && headed.has(i)}
+            <div class="group">{t(param.group)}</div>
+          {/if}
           <div class="row">
             <label for="filter-{param.key}">{t(param.label)}</label>
             <!-- svelte-ignore a11y_autofocus -->
@@ -202,6 +226,19 @@
         />
         {t("adjustDialog.preview")}
       </label>
+      {#if FILTERS[filter].more}
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={more}
+            onchange={(e) => {
+              more = (e.currentTarget as HTMLInputElement).checked;
+              moreOptions = more;
+            }}
+          />
+          {t("filter.moreOptions")}
+        </label>
+      {/if}
     </div>
   </form>
 </dialog>
@@ -256,6 +293,12 @@
 
   .slider {
     width: 100%;
+  }
+
+  /* A group's heading (Shadows/Highlights' Shadows, Highlights, Adjustments). */
+  .group {
+    margin-top: 4px;
+    font-weight: 600;
   }
 
   fieldset {

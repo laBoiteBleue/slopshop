@@ -1,9 +1,13 @@
 import { expect, test } from "vitest";
 import type { LayerView, StackEntryView } from "../src/lib/engine";
 import {
+  ADJUSTMENT_FILTERS,
   FILTERS,
   FILTER_MENU,
   applyFilterEdit,
+  applyFiltersEdit,
+  isAdjustmentFilter,
+  shownParams,
   centerAt,
   filterEntryEdit,
   filterSteps,
@@ -117,10 +121,12 @@ test("High Pass takes a radius of 0.1 to 1000 pixels, 10 at first", () => {
   expect(validValues("highPass", [0])).toBe(false);
 });
 
-test("every filter's defaults are valid, and every filter is in a submenu once", () => {
+test("every filter's defaults are valid, and every filter is in a submenu or Image > Adjustments once", () => {
   const ids = Object.keys(FILTERS) as (keyof typeof FILTERS)[];
   for (const id of ids) expect(validValues(id, FILTERS[id].defaults)).toBe(true);
-  expect(FILTER_MENU.flatMap((menu) => menu.filters).sort()).toEqual([...ids].sort());
+  expect([...FILTER_MENU.flatMap((menu) => menu.filters), ...ADJUSTMENT_FILTERS].sort()).toEqual(
+    [...ids].sort(),
+  );
 });
 
 test("sliders: a radius moves by ratios, an amount or a threshold evenly", () => {
@@ -334,4 +340,37 @@ test("Smart Blur: radius and threshold of 0.1 to 100, Low to High, Normal or its
   ]) {
     expect(validValues("smartBlur", values)).toBe(false);
   }
+});
+
+test("Shadows/Highlights: Photoshop's settings and defaults, the basic ones without More Options", () => {
+  expect(FILTERS.shadowsHighlights.defaults).toEqual([35, 50, 30, 0, 50, 30, 20, 0]);
+  expect(validValues("shadowsHighlights", [100, 100, 2500, 0, 0, 0, -100, 100])).toBe(true);
+  for (const values of [
+    [101, 50, 30, 0, 50, 30, 20, 0],
+    [35, 50, 2501, 0, 50, 30, 20, 0],
+    [35, 50, 30, 0, -1, 30, 20, 0],
+    [35, 50, 30, 0, 50, 30, 20, 101],
+    [35, 50, 30.5, 0, 50, 30, 20, 0],
+  ]) {
+    expect(validValues("shadowsHighlights", values)).toBe(false);
+  }
+  // Shadows' and Highlights' Amounts only, then everything.
+  expect(shownParams("shadowsHighlights", false)).toEqual([0, 3]);
+  expect(shownParams("shadowsHighlights", true)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  expect(shownParams("unsharpMask", false)).toEqual([0, 1, 2]);
+  expect(FILTERS.shadowsHighlights.more).toBe(true);
+  // In Image > Adjustments, not in the Filter menu.
+  expect(isAdjustmentFilter("shadowsHighlights")).toBe(true);
+  expect(isAdjustmentFilter("gaussianBlur")).toBe(false);
+  expect(ADJUSTMENT_FILTERS).toEqual(["shadowsHighlights"]);
+  expect(FILTER_MENU.some((m) => m.filters.includes("shadowsHighlights"))).toBe(false);
+});
+
+test("an adjustment filter is applied to every layer given, in one batch", () => {
+  const settings = { filter: "shadowsHighlights" as const, values: [35, 50, 30, 0, 50, 30, 20, 0] };
+  expect(applyFiltersEdit([4], settings)).toEqual(applyFilterEdit(4, settings));
+  expect(applyFiltersEdit([4, 7], settings)).toEqual({
+    kind: "batch",
+    edits: [applyFilterEdit(4, settings), applyFilterEdit(7, settings)],
+  });
 });

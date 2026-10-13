@@ -170,6 +170,8 @@
     hasSettings,
     withNewSeeds,
     applyFilterEdit,
+    applyFiltersEdit,
+    isAdjustmentFilter,
     filterEntryEdit,
     filterSteps,
     filterable,
@@ -1535,6 +1537,7 @@
       filterDialog = {
         documentId: doc.id,
         layerId: layer.id,
+        layerIds: [layer.id],
         filter: entry.filter,
         preview: true,
         values: settings[step].values,
@@ -1618,6 +1621,9 @@
   let filterDialog = $state<{
     documentId: number;
     layerId: number;
+    /** The layers it applies to when new: the active one, or every pixel layer shown for an
+     * Image > Adjustments filter (Shadows/Highlights). */
+    layerIds: number[];
     filter: FilterId;
     preview: boolean;
     /** The settings shown (of the step edited). */
@@ -1656,10 +1662,34 @@
     filterDialog = {
       documentId: doc.id,
       layerId: layer.id,
+      layerIds: [layer.id],
       filter,
       preview: true,
       // Applied anew: another grain for the filters that draw one.
       values: withNewSeeds(filter, values),
+      entry: null,
+    };
+  }
+
+  /**
+   * Image > Adjustments > Shadows/Highlights…: a filter (it reads neighbours) through its
+   * dialog, applied to every pixel layer shown as the other adjustments are, an entry of each
+   * one's stack.
+   */
+  function openAdjustFilter(filter: FilterId) {
+    commitTransform();
+    const doc = active;
+    const ids = adjustTargets();
+    if (!doc || ids.length === 0 || filterDialog || adjustDialog || entryDialog || liquifyDialog) {
+      return;
+    }
+    filterDialog = {
+      documentId: doc.id,
+      layerId: ids[0],
+      layerIds: ids,
+      filter,
+      preview: true,
+      values: filterValues[filter] ?? FILTERS[filter].defaults,
       entry: null,
     };
   }
@@ -1676,7 +1706,7 @@
         filterEntryEdit(dialog.layerId, index, settings, !dialog.preview),
       );
     } else if (dialog.preview) {
-      const request = applyFilterEdit(dialog.layerId, {
+      const request = applyFiltersEdit(dialog.layerIds, {
         filter: dialog.filter,
         values: dialog.values,
       });
@@ -1718,11 +1748,12 @@
     if (!dialog.entry) {
       const settings = { filter: dialog.filter, values };
       filterValues[dialog.filter] = values;
-      lastFilter = settings;
+      // Filter > Repeat repeats the Filter menu's filters only.
+      if (!isAdjustmentFilter(dialog.filter)) lastFilter = settings;
       void (shown
         ? endGesture(dialog.documentId)
         : sync(
-            engine.replaceGesture(dialog.documentId, applyFilterEdit(dialog.layerId, settings)),
+            engine.replaceGesture(dialog.documentId, applyFiltersEdit(dialog.layerIds, settings)),
           ));
       return;
     }
@@ -5096,6 +5127,13 @@
                 dialog("threshold"),
                 dialog("gradientMap"),
                 dialog("selectiveColor"),
+                separator,
+                cmd(
+                  `${t("filter.shadowsHighlights")}…`,
+                  () => openAdjustFilter("shadowsHighlights"),
+                  undefined,
+                  !adjustable,
+                ),
               ];
             })(),
           },
