@@ -981,6 +981,11 @@ const en = {
   "sources.delete.message.other":
     '{count} layers show "{name}": they will be deleted with the source.',
   "sources.delete.action": "Delete",
+  "pen.livePath.title": "Turn into a Path",
+  "pen.livePath.message":
+    "This operation will turn the live shape into a regular path: its anchors can then be edited, its Properties no longer.",
+  "pen.livePath.action": "Turn into a Path",
+  "pen.edit.perspective": "The path of a layer in perspective cannot be edited.",
   "histogram.title": "Histogram",
   "histogram.channel": "Channel",
   "histogram.colors": "Colors",
