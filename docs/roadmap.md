@@ -412,8 +412,10 @@ Raised on 2026-10-05, to schedule:
   - [x] The Pen (P): a vector layer whose geometry is a path (corner and smooth anchors, Alt
         frees a handle, Shift at 45°, Enter, Esc, Backspace; an open path filled as if
         closed); Ctrl+Enter makes a selection of the path drawn or of the active vector layer
-  - [ ] Editing a path's anchors and handles afterwards (add, delete, convert, move), Path
-        Selection; vector masks
+  - [x] Editing a vector layer's path with the Pen: Ctrl-drag an anchor, a handle or the
+        whole path; a click adds or deletes an anchor, or continues an open path; Alt converts
+        an anchor; a live shape is turned into a regular path first
+  - [ ] Selecting several anchors or paths (marquee, Shift), Path Selection (A); vector masks
   - [ ] Type
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,

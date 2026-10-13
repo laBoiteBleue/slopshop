@@ -644,18 +644,18 @@ Tool,Tools panel > Blur > Smudge,,done,"as paint in the layer's stack, the origi
 Tool,Tools panel > Dodge/Burn > Dodge,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Burn,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Sponge,,open,Dodge and Burn exist; good next tone tool
-Tool,Tools panel > Pen > Pen,,done,"P: a vector layer whose geometry is a path (ADR 0041); click a corner, drag a smooth anchor (Alt frees the handle), Shift at 45° steps, Enter, Esc, Backspace; Ctrl+Enter makes a selection; editing anchors afterwards is open"
+Tool,Tools panel > Pen > Pen,,done,"P: a vector layer whose geometry is a path (ADR 0041); click a corner, drag a smooth anchor (Alt frees the handle), Shift at 45° steps, Enter, Esc, Backspace; Ctrl+Enter makes a selection; a vector layer's anchors and handles are edited with the Pen (Ctrl and Alt, as Photoshop's)"
 Tool,Tools panel > Pen > Freeform Pen,,open,the Pen exists (one simplified Pen: toolbar decision)
 Tool,Tools panel > Pen > Curvature Pen,,open,the Pen exists (one simplified Pen: toolbar decision)
-Tool,Tools panel > Pen > Add Anchor Point,,open,the Pen draws paths; editing them is next (planned as Pen gestures)
-Tool,Tools panel > Pen > Delete Anchor Point,,open,the Pen draws paths; editing them is next (planned as Pen gestures)
-Tool,Tools panel > Pen > Convert Point,,open,the Pen draws paths; editing them is next (planned as Pen gestures)
+Tool,Tools panel > Pen > Add Anchor Point,,done,"a Pen gesture, as Photoshop's auto add: a click on the active vector layer's path (ADR 0041)"
+Tool,Tools panel > Pen > Delete Anchor Point,,done,"a Pen gesture, as Photoshop's auto delete: a click on an anchor (ADR 0041)"
+Tool,Tools panel > Pen > Convert Point,,done,"a Pen gesture: Alt+click makes a corner, Alt-drag pulls smooth handles or moves one handle alone (ADR 0041)"
 Tool,Tools panel > Type > Horizontal Type,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type,,open,text layers are not started
 Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started
-Tool,Tools panel > Path > Path Selection,,open,the Pen draws paths as vector layers; selecting and moving them is open
-Tool,Tools panel > Path > Direct Selection,,open,the Pen draws paths as vector layers; editing anchors is open
+Tool,Tools panel > Path > Path Selection,,open,"Ctrl-drag on a segment with the Pen moves the whole path; selecting several paths, aligning and combining them are open"
+Tool,Tools panel > Path > Direct Selection,,done,"Ctrl with the Pen, no tool of its own: drag an anchor or a handle of the active vector layer, a live shape turned into a path first (ADR 0041)"
 Tool,Tools panel > Shape > Rectangle,,done,"U: a vector layer (ADR 0041); fill, stroke (inside, center, outside), corner radius"
 Tool,Tools panel > Shape > Ellipse,,done,U: a vector layer (ADR 0041)
 Tool,Tools panel > Shape > Triangle,,partial,the Polygon tool with three sides
