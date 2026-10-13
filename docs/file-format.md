@@ -260,7 +260,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   `radius`, absent: a polygon), "rotation" (degrees counterclockwise from the right, of its
   first corner) } }`, `{ "line": { "from", "to" } }` (stroke only) or
   `{ "path": { "rule": "nonzero" | "evenodd", "subpaths": [{ "start": [x, y],
-  "segments": [[x, y] (a line) | [ax, ay, bx, by, x, y] (a cubic Bézier)], "closed" }] } }`;
+  "segments": [[x, y] (a line) | [ax, ay, bx, by, x, y] (a cubic Bézier)], "closed" }] } }`
+  (a fill covers an open subpath as if its ends were joined; its stroke is centered);
   `fill` `{ "solid": [r, g, b, a] }` (linear working-space RGB, as a fill node's color), absent
   without one; `stroke` `{ "paint", "width" (pixels, up to 10 000), "align" ("inside",
   "center", "outside"), "cap" ("butt", "round", "square"), "join" ("miter", "round",

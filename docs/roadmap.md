@@ -402,7 +402,11 @@ Raised on 2026-10-05, to schedule:
   - [x] Shape tools (U): Rectangle, Ellipse, Polygon (and stars), Line; fill and stroke in the
         options bar
   - [x] A vector layer's fill, stroke, corner radius, sides and star in the Properties panel
-  - [ ] Pen and paths, vector masks
+  - [x] The Pen (P): a vector layer whose geometry is a path (corner and smooth anchors, Alt
+        frees a handle, Shift at 45°, Enter, Esc, Backspace; an open path filled as if
+        closed); Ctrl+Enter makes a selection of the path drawn or of the active vector layer
+  - [ ] Editing a path's anchors and handles afterwards (add, delete, convert, move), Path
+        Selection; vector masks
   - [ ] Type
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
