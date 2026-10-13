@@ -18,3 +18,4 @@ pub use model::{
     FillRule, Geometry, Paint, Segment, Shape, ShapeSource, ShapeStroke, StrokeAlign, StrokeCap,
     StrokeJoin, Subpath,
 };
+pub use path::selection_rings;

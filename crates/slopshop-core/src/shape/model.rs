@@ -180,7 +180,14 @@ impl Geometry {
         }
     }
 
-    /// Whether it has an inside to fill (a line has none).
+    /// Whether a fill covers its inside: everything but a line. An open path is filled as if
+    /// its ends were joined, as Photoshop fills one.
+    pub fn is_fillable(&self) -> bool {
+        !matches!(self, Self::Line { .. })
+    }
+
+    /// Whether its outline is closed (a stroke can lie inside or outside of it): a line's and an
+    /// open path's are not.
     pub fn is_closed(&self) -> bool {
         match self {
             Self::Line { .. } => false,
@@ -351,6 +358,22 @@ mod tests {
             .is_closed()
         );
         assert!(rect().is_closed());
+        let open = Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [0.0, 0.0],
+                segments: vec![Segment::Line([10.0, 0.0]), Segment::Line([10.0, 10.0])],
+                closed: false,
+            }],
+            rule: FillRule::NonZero,
+        };
+        assert!(open.is_fillable() && !open.is_closed());
+        assert!(
+            !Geometry::Line {
+                from: [0.0, 0.0],
+                to: [1.0, 1.0]
+            }
+            .is_fillable()
+        );
     }
 
     #[test]

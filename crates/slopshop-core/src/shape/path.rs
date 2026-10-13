@@ -6,7 +6,7 @@ use kurbo::{
     StrokeOpts,
 };
 
-use super::model::{Geometry, Segment, ShapeStroke, StrokeCap, StrokeJoin};
+use super::model::{FillRule, Geometry, Segment, ShapeStroke, StrokeCap, StrokeJoin};
 use crate::transform::Projective;
 
 /// How far a flattened curve strays from the true one, in pixels of where it is drawn.
@@ -14,6 +14,16 @@ pub const TOLERANCE: f64 = 0.1;
 
 /// The outline of `geometry` in its layer's space, curves within `tolerance`.
 pub fn outline(geometry: &Geometry, tolerance: f64) -> BezPath {
+    outline_with(geometry, tolerance, false)
+}
+
+/// The outline a fill covers: [`outline`], with every open subpath of a path closed (an open
+/// path is filled as if its ends were joined, as in Photoshop).
+pub fn fill_outline(geometry: &Geometry, tolerance: f64) -> BezPath {
+    outline_with(geometry, tolerance, true)
+}
+
+fn outline_with(geometry: &Geometry, tolerance: f64, close_all: bool) -> BezPath {
     match geometry {
         &Geometry::Rectangle { rect, radii } => {
             let [l, t, r, b] = rect;
@@ -70,7 +80,7 @@ pub fn outline(geometry: &Geometry, tolerance: f64) -> BezPath {
                         }
                     }
                 }
-                if subpath.closed {
+                if subpath.closed || (close_all && !subpath.segments.is_empty()) {
                     path.close_path();
                 }
             }
@@ -143,18 +153,54 @@ pub fn placed(path: &BezPath, transform: Projective, tolerance: f64) -> BezPath 
     out
 }
 
+/// How far the polygons Make Selection fills stray from the curves, in document pixels.
+pub const SELECTION_TOLERANCE: f64 = 0.01;
+
+/// The area `geometry` encloses, placed by `transform`, as closed polygons in the document
+/// (curves within [`SELECTION_TOLERANCE`]), with its fill rule: what Make Selection selects.
+/// An open subpath is joined as a fill joins it; a line encloses nothing (no polygons).
+pub fn selection_rings(
+    geometry: &Geometry,
+    transform: Projective,
+) -> (Vec<Vec<[f64; 2]>>, FillRule) {
+    let rule = match geometry {
+        Geometry::Path { rule, .. } => *rule,
+        _ => FillRule::NonZero,
+    };
+    if !geometry.is_fillable() {
+        return (Vec::new(), rule);
+    }
+    let local =
+        SELECTION_TOLERANCE / scale_at(transform, outline(geometry, 1.0).bounding_box().center());
+    let path = placed(&fill_outline(geometry, local), transform, local);
+    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    kurbo::flatten(path.iter(), SELECTION_TOLERANCE, |el| match el {
+        PathEl::MoveTo(p) => rings.push(vec![[p.x, p.y]]),
+        PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => {
+            if let Some(ring) = rings.last_mut() {
+                ring.push([p.x, p.y]);
+            }
+        }
+        PathEl::ClosePath => {}
+    });
+    rings.retain(|r| r.len() >= 3);
+    (rings, rule)
+}
+
 /// The box of what `shape` covers in its own space (its outline, and its stroke's), `None`
 /// when it covers nothing.
 pub fn shape_bounds(shape: &super::model::Shape) -> Option<[f64; 4]> {
     use kurbo::Shape as _;
     let own = outline(&shape.geometry, TOLERANCE);
-    let mut b = (shape.fill.is_some() && shape.geometry.is_closed()).then(|| own.bounding_box());
+    let mut b = (shape.fill.is_some() && shape.geometry.is_fillable())
+        .then(|| fill_outline(&shape.geometry, TOLERANCE).bounding_box());
     if let Some(stroke) = &shape.stroke {
-        let widen = if stroke.align == super::model::StrokeAlign::Center {
-            1.0
-        } else {
-            2.0
-        };
+        let widen =
+            if stroke.align == super::model::StrokeAlign::Center || !shape.geometry.is_closed() {
+                1.0
+            } else {
+                2.0
+            };
         let s = stroke_outline(&own, stroke, widen, TOLERANCE).bounding_box();
         b = Some(b.map_or(s, |b| b.union(s)));
     }
@@ -181,7 +227,10 @@ pub fn shape_covers(shape: &super::model::Shape, p: [f64; 2]) -> bool {
     };
     let closed = shape.geometry.is_closed();
     let inside = closed && inside_by(&own, rule);
-    if shape.fill.is_some() && inside {
+    if shape.fill.is_some()
+        && shape.geometry.is_fillable()
+        && inside_by(&fill_outline(&shape.geometry, TOLERANCE), rule)
+    {
         return true;
     }
     shape.stroke.as_ref().is_some_and(|stroke| {
@@ -315,6 +364,49 @@ mod tests {
             (b.x0 - 0.0).abs() < 1e-6 && (b.x1 - 100.0).abs() < 1e-6,
             "{b:?}"
         );
+    }
+
+    #[test]
+    fn a_geometry_gives_the_polygons_make_selection_fills() {
+        // A circle of radius 10 as four cubic arcs (the Pen's smooth anchors), left open: the
+        // rings close it; placed twice as large and moved.
+        let k = 0.552_284_75 * 10.0;
+        let circle = Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [10.0, 0.0],
+                segments: vec![
+                    Segment::Cubic([10.0, k], [k, 10.0], [0.0, 10.0]),
+                    Segment::Cubic([-k, 10.0], [-10.0, k], [-10.0, 0.0]),
+                    Segment::Cubic([-10.0, -k], [-k, -10.0], [0.0, -10.0]),
+                    Segment::Cubic([k, -10.0], [10.0, -k], [10.0, 0.0]),
+                ],
+                closed: false,
+            }],
+            rule: FillRule::EvenOdd,
+        };
+        let at = Affine::from_array([2.0, 0.0, 0.0, 2.0, 50.0, 40.0]).into();
+        let (rings, rule) = selection_rings(&circle, at);
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_eq!(rings.len(), 1);
+        let ring = &rings[0];
+        // Shoelace area: about π 20².
+        let area: f64 = (0..ring.len())
+            .map(|i| {
+                let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum::<f64>()
+            .abs()
+            / 2.0;
+        let expected = std::f64::consts::PI * 400.0;
+        assert!((area - expected).abs() / expected < 1e-3, "{area}");
+        assert!(ring.iter().all(|p| (p[0] - 50.0).hypot(p[1] - 40.0) < 20.2));
+        // A line encloses nothing.
+        let line = Geometry::Line {
+            from: [0.0, 0.0],
+            to: [10.0, 10.0],
+        };
+        assert!(selection_rings(&line, Projective::IDENTITY).0.is_empty());
     }
 
     #[test]
