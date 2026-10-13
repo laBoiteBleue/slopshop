@@ -344,6 +344,10 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       (Radius and Threshold 0.1 to 100, Quality Low/Medium/High, Mode Normal, Edge Only or Overlay
       Edge) and Average (no dialog: the layer or the selection filled with its average color, each
       pixel keeping its opacity); on the CPU (their looks too)
+- [x] Image > Adjustments > Shadows/Highlights: a filter entry of each visible pixel layer's
+      stack (it reads neighbours through two blurs), Photoshop's dialog with Show More Options
+      (Shadows and Highlights Amount, Tone and Radius, Color, Midtone), not repeated by Ctrl+F;
+      CPU and GPU (looks). Not yet: Black Clip and White Clip (a histogram of the result)
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
