@@ -171,10 +171,20 @@ fn covers(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
             }
         }
         LayerContent::Group { children, .. } => hit(children, transform, x, y).is_some(),
-        // Its outline, at the pixel's center.
+        // Its outline, at the pixel's center; a text by the box around its letters, as
+        // Photoshop picks type layers (the gaps between letters count), a tenth of its size
+        // around.
         LayerContent::Vector { source, .. } => transform.inverse().is_some_and(|to_layer| {
             let (lx, ly) = to_layer.apply(x as f64 + 0.5, y as f64 + 0.5);
-            crate::shape::path::shape_covers(source.shape(), [lx, ly])
+            match source.text_of() {
+                Some(text) => crate::shape::path::shape_bounds(source.shape()).is_some_and(
+                    |[left, top, right, bottom]| {
+                        let m = text.size / 10.0;
+                        (left - m..=right + m).contains(&lx) && (top - m..=bottom + m).contains(&ly)
+                    },
+                ),
+                None => crate::shape::path::shape_covers(source.shape(), [lx, ly]),
+            }
         }),
         // No pixels of its own: never what is under the pointer.
         LayerContent::Adjustment { .. } => false,
