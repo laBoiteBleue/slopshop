@@ -3,9 +3,10 @@
   // layer clicked; what is typed goes to a hidden text field (so that dead keys and input
   // methods work), and the engine draws the text as it is typed, a caret blinking where the
   // field's caret is. Escape, Ctrl+Enter or the keypad's Enter commit (Photoshop's keys); Enter
-  // starts a new line. A click on the image while a text is typed commits it.
+  // starts a new line. A click in the text being typed moves the caret there; a click outside
+  // it commits it.
   import { t } from "./i18n/index.svelte";
-  import { caretAt, commitsText, type Caret } from "./typeText";
+  import { caretAt, caretIndexAt, commitsText, type Caret } from "./typeText";
   import type { ViewMapping } from "./Viewport.svelte";
 
   let {
@@ -17,8 +18,11 @@
     oncommit,
   }: {
     mapping: ViewMapping;
-    /** The text being typed: its string, and the engine's carets for it (document pixels). */
-    editing: { key: number; content: string; carets: Caret[] } | null;
+    /**
+     * The text being typed: its string, the engine's carets for it (document pixels), and
+     * where the caret starts (UTF-16 units; absent: at the end).
+     */
+    editing: { key: number; content: string; carets: Caret[]; start?: number } | null;
     mac: boolean;
     /** A click on the image (document pixels) while nothing is typed. */
     onplace: (point: [number, number]) => void;
@@ -31,8 +35,7 @@
   /** The field's caret, in UTF-16 units. */
   let caret = $state(0);
 
-  // A new text being typed: the field takes the keys, its caret at the end (Photoshop's, for
-  // a text clicked; the place clicked comes with selecting characters).
+  // A new text being typed: the field takes the keys, its caret where the text was clicked.
   let started: number | null = null;
   $effect(() => {
     const key = editing?.key ?? null;
@@ -40,19 +43,29 @@
     started = key;
     if (key === null || !field) return;
     field.value = editing?.content ?? "";
-    caret = field.value.length;
-    field.setSelectionRange(caret, caret);
+    moveCaret(editing?.start ?? field.value.length);
     field.focus({ preventScroll: true });
   });
+
+  function moveCaret(index: number) {
+    if (!field) return;
+    caret = Math.min(Math.max(index, 0), field.value.length);
+    field.setSelectionRange(caret, caret);
+  }
 
   function press(e: PointerEvent) {
     if (e.button !== 0 || mapping.hand) return;
     e.preventDefault();
+    const point = mapping.toDocument(e.clientX, e.clientY);
     if (editing) {
-      oncommit();
+      // Within a line's height of the text: in it.
+      const slack = Math.max(0, ...editing.carets.map(([, y0, , y1]) => Math.abs(y1 - y0)));
+      const index = caretIndexAt(editing.carets, point, slack);
+      if (index === null) oncommit();
+      else moveCaret(index);
       return;
     }
-    onplace(mapping.toDocument(e.clientX, e.clientY));
+    onplace(point);
   }
 
   function keydown(e: KeyboardEvent) {

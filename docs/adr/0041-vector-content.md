@@ -211,9 +211,11 @@ Status: accepted (2026-10-13, under the maintainer's delegation; to review).
    allows it (answer 5) and downloading free fonts on demand (a curated list of OFL families
    from a pinned manifest, as the AI models) are left for later: they need a font subsetter
    and a download consent, and are proposed to the maintainer rather than decided here.
-6. **The Type tool (T)**: a click places point text (or edits the text layer under it, the
-   caret at its end); keys go to a hidden text field so that dead keys and input methods work;
-   the engine draws each keystroke live; Escape, Ctrl+Enter (Cmd+Enter), the keypad's Enter,
-   a click on the image or another tool commit; the session is one gesture, so one undo entry;
+6. **The Type tool (T)**: a click places point text, or edits the text layer under it (picked
+   by the box around its letters, as Photoshop does, also for the Move tool), the caret where
+   it was clicked; a click in the text moves the caret. Keys go to a hidden text field so that
+   dead keys and input methods work; the engine draws each keystroke live; Escape, Ctrl+Enter
+   (Cmd+Enter), the keypad's Enter, a click outside the text or another tool commit; the
+   session is one gesture, so one undo entry;
    a text left empty removes its layer. A type layer is named after its text, and renamed as
    it changes until the user renames it (Photoshop's behavior).

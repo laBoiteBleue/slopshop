@@ -166,3 +166,32 @@ export function commitsText(
   if (e.key !== "Enter") return false;
   return e.code === "NumpadEnter" || (mac ? e.metaKey : e.ctrlKey);
 }
+
+/**
+ * The place in the text nearest to `point` (document pixels): the caret closest to it. `null`
+ * when the point is farther than `slack` pixels from every caret: outside the text.
+ */
+export function caretIndexAt(
+  carets: readonly Caret[],
+  point: [number, number],
+  slack: number,
+): number | null {
+  let best: number | null = null;
+  let nearest = Infinity;
+  carets.forEach(([x0, y0, x1, y1], i) => {
+    // The distance to the caret's segment.
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const length = dx * dx + dy * dy;
+    const along =
+      length > 0
+        ? Math.min(Math.max(((point[0] - x0) * dx + (point[1] - y0) * dy) / length, 0), 1)
+        : 0;
+    const d = Math.hypot(point[0] - (x0 + along * dx), point[1] - (y0 + along * dy));
+    if (d < nearest) {
+      nearest = d;
+      best = i;
+    }
+  });
+  return nearest <= slack ? best : null;
+}

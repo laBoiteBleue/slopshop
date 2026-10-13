@@ -132,17 +132,25 @@ test("a text committed empty leaves nothing: its gesture is taken back", async (
   expect(liveEdits()).toHaveLength(1);
 });
 
-test("a click on a text layer edits it, the caret at its end; Ctrl+Enter commits", async () => {
+test("a click on a text layer edits it where clicked; a click in it moves the caret", async () => {
   hit = 2;
   const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), textLayer(2, "Title")]));
   await screen.findByText("cat.jpg");
   await user.keyboard("t");
-  await click(user, [35, 38]);
+  // Carets every 7 px from x = 30: after "Ti".
+  await click(user, [44, 38]);
   const field = await screen.findByRole("textbox", { name: "Horizontal Type Tool" });
   await waitFor(() => expect(field).toHaveFocus());
   await user.keyboard("!");
   await waitFor(() =>
-    expect(liveEdits().at(-1)).toEqual({ kind: "setText", id: 2, text: text("Title!") }),
+    expect(liveEdits().at(-1)).toEqual({ kind: "setText", id: 2, text: text("Ti!tle") }),
+  );
+  // At the end now, by a click right of the text: still typing, nothing committed.
+  await click(user, [80, 38]);
+  expect(sent("end_gesture")).toHaveLength(0);
+  await user.keyboard("?");
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toEqual({ kind: "setText", id: 2, text: text("Ti!tle?") }),
   );
   expect(liveEdits().some((e) => e.kind === "addText")).toBe(false);
   await user.keyboard("{Control>}{Enter}{/Control}");
