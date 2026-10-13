@@ -14,6 +14,7 @@
   <PropertiesPanel
     documentId={app.doc.id}
     {layer}
+    layers={app.doc.layers}
     size={app.doc}
     onfillcolor={app.pickFillColor}
     onshapecolor={app.pickShapeColor}

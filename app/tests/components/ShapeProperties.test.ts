@@ -168,3 +168,106 @@ test("a path drawn with the Pen: its fill and stroke, its geometry kept", async 
   await user.click(screen.getByRole("checkbox", { name: "Fill" }));
   expect(sentShape(onedit)).toEqual({ geometry, fill: null, stroke: null });
 });
+
+test("W, H, X and Y: the shape's bounds in the document, a typed value reshapes it", async () => {
+  const { onedit, user } = open({
+    ...RECTANGLE,
+    geometry: { ...RECTANGLE.geometry, radii: [4, 4, 4, 4] },
+  });
+  const field = (name: string) => screen.getByRole("spinbutton", { name });
+  expect(field("W")).toHaveValue(100);
+  expect(field("H")).toHaveValue(40);
+  expect(field("X")).toHaveValue(0);
+  expect(field("Y")).toHaveValue(0);
+  await user.clear(field("W"));
+  await user.type(field("W"), "50");
+  await user.tab();
+  expect(sentShape(onedit).geometry).toEqual({
+    kind: "rectangle",
+    rect: [0, 0, 50, 40],
+    radii: [4, 4, 4, 4],
+  });
+  await user.clear(field("X"));
+  await user.type(field("X"), "12");
+  await user.tab();
+  expect(sentShape(onedit).geometry).toEqual({
+    kind: "rectangle",
+    rect: [12, 0, 112, 40],
+    radii: [4, 4, 4, 4],
+  });
+  // A size of zero changes nothing.
+  const sent = onedit.mock.calls.length;
+  await user.clear(field("H"));
+  await user.type(field("H"), "0");
+  await user.tab();
+  expect(onedit).toHaveBeenCalledTimes(sent);
+});
+
+test("the bounds through the layer's groups, none for a rotated layer", () => {
+  const onedit = vi.fn();
+  const layer = vectorLayer(RECTANGLE);
+  const group: LayerView = {
+    ...vectorLayer(RECTANGLE),
+    id: 3,
+    kind: "group",
+    shape: null,
+    transform: [1, 0, 0, 1, 30, 5],
+    children: [layer],
+  };
+  const { unmount } = render(PropertiesPanel, {
+    documentId: 1,
+    layer,
+    layers: [group],
+    onedit,
+    onlive: vi.fn(),
+    ongestureend: vi.fn(),
+  });
+  expect(screen.getByRole("spinbutton", { name: "X" })).toHaveValue(30);
+  expect(screen.getByRole("spinbutton", { name: "Y" })).toHaveValue(5);
+  unmount();
+  render(PropertiesPanel, {
+    documentId: 1,
+    layer: { ...layer, transform: [0, 1, -1, 0, 0, 0] },
+    onedit,
+    onlive: vi.fn(),
+    ongestureend: vi.fn(),
+  });
+  expect(screen.queryByRole("spinbutton", { name: "W" })).toBeNull();
+});
+
+test("a rectangle's corners unlinked, each its own radius, linked again", async () => {
+  const { onedit, user } = open(RECTANGLE);
+  const link = screen.getByRole("button", { name: "Link corner radii" });
+  expect(link).toHaveAttribute("aria-pressed", "true");
+  await user.click(link);
+  expect(link).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByRole("spinbutton", { name: "Radius:" })).toBeNull();
+  const corner = screen.getByRole("spinbutton", { name: "Bottom right radius" });
+  await user.clear(corner);
+  await user.type(corner, "8");
+  await user.tab();
+  expect(sentShape(onedit).geometry).toEqual({
+    kind: "rectangle",
+    rect: [0, 0, 100, 40],
+    radii: [0, 0, 8, 0],
+  });
+});
+
+test("corners rounded differently show each radius; linking gives them the first one's", async () => {
+  const { onedit, user } = open({
+    ...RECTANGLE,
+    geometry: { ...RECTANGLE.geometry, radii: [6, 2, 3, 4] },
+  });
+  expect(screen.getByRole("spinbutton", { name: "Top left radius" })).toHaveValue(6);
+  expect(screen.getByRole("spinbutton", { name: "Top right radius" })).toHaveValue(2);
+  expect(screen.getByRole("spinbutton", { name: "Bottom right radius" })).toHaveValue(3);
+  expect(screen.getByRole("spinbutton", { name: "Bottom left radius" })).toHaveValue(4);
+  const link = screen.getByRole("button", { name: "Link corner radii" });
+  expect(link).toHaveAttribute("aria-pressed", "false");
+  await user.click(link);
+  expect(sentShape(onedit).geometry).toEqual({
+    kind: "rectangle",
+    rect: [0, 0, 100, 40],
+    radii: [6, 6, 6, 6],
+  });
+});

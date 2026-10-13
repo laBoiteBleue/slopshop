@@ -11,6 +11,7 @@
   import GradientEditor from "./GradientEditor.svelte";
   import ShapeProperties from "./ShapeProperties.svelte";
   import LayerThumbnail from "./LayerThumbnail.svelte";
+  import { layerToDocument } from "./pathEdit";
   import {
     fillPlacement,
     placed,
@@ -23,6 +24,7 @@
   let {
     documentId,
     layer,
+    layers,
     size = { width: 1, height: 1 },
     onedit,
     onlive,
@@ -34,6 +36,8 @@
     documentId: number;
     /** An adjustment or a fill layer. */
     layer: LayerView;
+    /** The document's layers, where a vector layer's groups place it; absent: at the top. */
+    layers?: LayerView[];
     /** The document's size, where a gradient fill's angle and scale are measured. */
     size?: { width: number; height: number };
     /** The fill layer's swatch was clicked: the app lets its color be chosen. */
@@ -48,6 +52,10 @@
   } = $props();
 
   const adjustment = $derived(layer.adjustment);
+  /** A vector layer's map to the document (W, H, X and Y are the document's). */
+  const shapeMatrix = $derived(
+    layers ? layerToDocument(layers, layer.id) : layer.perspective ? null : layer.transform,
+  );
   let fields = $state<AdjustmentFields | null>(null);
 
   /** The edit with these settings (Gradient Map: its stops, these or the layer's). */
@@ -176,7 +184,14 @@
     </div>
   </section>
 {:else if layer.kind === "vector" && layer.shape}
-  <ShapeProperties {documentId} {layer} shape={layer.shape} {onedit} onpickcolor={onshapecolor} />
+  <ShapeProperties
+    {documentId}
+    {layer}
+    shape={layer.shape}
+    matrix={shapeMatrix}
+    {onedit}
+    onpickcolor={onshapecolor}
+  />
 {:else if layer.kind === "gradientFill" && fill && placement}
   <section class="panel" aria-label={t("properties.title")}>
     <div class="title">

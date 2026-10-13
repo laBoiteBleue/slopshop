@@ -324,7 +324,10 @@ export type ShapeChange = {
   stroke?: string | null;
   strokeWidth?: number;
   strokeAlign?: StrokeAlign;
+  /** A rectangle's corners all rounded alike. */
   radius?: number;
+  /** A rectangle's corners each rounded: top left first, clockwise. */
+  radii?: [number, number, number, number];
   sides?: number;
   /** A star's indent, a share of the radius; null: a plain polygon. */
   star?: number | null;
@@ -365,6 +368,12 @@ export function changedShape(shape: Shape, change: ShapeChange): Shape {
     const [l, t, r, b] = geometry.rect;
     const radius = Math.min(Math.max(change.radius, 0), (r - l) / 2, (b - t) / 2);
     geometry = { ...geometry, radii: [radius, radius, radius, radius] };
+  }
+  if (geometry.kind === "rectangle" && change.radii !== undefined) {
+    const [l, t, r, b] = geometry.rect;
+    const most = Math.min((r - l) / 2, (b - t) / 2);
+    const radii = change.radii.map((v) => Math.min(Math.max(v, 0), most));
+    geometry = { ...geometry, radii: radii as [number, number, number, number] };
   }
   if (geometry.kind === "polygon") {
     if (change.sides !== undefined) {
