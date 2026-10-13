@@ -138,7 +138,7 @@ Menu,Image > Adjustments > Posterize,,done,"an editable entry of the layer's sta
 Menu,Image > Adjustments > Threshold,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
 Menu,Image > Adjustments > Gradient Map,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
 Menu,Image > Adjustments > Selective Color,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
-Menu,Image > Adjustments > Shadows/Highlights,,open,as an adjustment layer
+Menu,Image > Adjustments > Shadows/Highlights,,partial,"an editable filter entry of each visible pixel layer's stack (ADR 0034; it reads neighbours), Show More Options; not yet Black Clip and White Clip, nor as an adjustment layer"
 Menu,Image > Adjustments > HDR Toning,,wont,dated; a tone-mapping node instead
 Menu,Image > Adjustments > Desaturate,,covered,Hue/Saturation or Black & White adjustment layers
 Menu,Image > Adjustments > Match Color,,open,as an adjustment layer
