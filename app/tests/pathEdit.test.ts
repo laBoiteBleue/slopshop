@@ -56,7 +56,16 @@ describe("paths as anchors", () => {
     const square: PathGeometry = {
       kind: "path",
       rule: "evenodd",
-      subpaths: [{ start: [0, 0], segments: [[10, 0], [10, 10]], closed: true }],
+      subpaths: [
+        {
+          start: [0, 0],
+          segments: [
+            [10, 0],
+            [10, 10],
+          ],
+          closed: true,
+        },
+      ],
     };
     const [p] = pathsOf(square);
     expect(p.anchors).toHaveLength(3);
