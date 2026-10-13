@@ -4320,6 +4320,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 id,
                 name: "colors".into(),
@@ -5395,6 +5396,7 @@ mod tests {
         let mask = RasterImage::from_pixels(Size::new(40, 20), gray, &mask_pixels).unwrap();
         let mut doc = Document::new(Size::new(60, 20));
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: "l".into(),

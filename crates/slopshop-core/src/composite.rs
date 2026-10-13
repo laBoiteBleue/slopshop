@@ -1434,6 +1434,7 @@ mod tests {
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: crate::transform::Projective::IDENTITY,
                 clipped: false,
@@ -2063,6 +2064,7 @@ mod tests {
     ) -> Layer {
         let id = doc.allocate_layer_id();
         Layer {
+            locks: Default::default(),
             style: None,
             transform: crate::transform::Projective::IDENTITY,
             clipped: false,

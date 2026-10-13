@@ -425,7 +425,14 @@ impl Writer<'_, '_> {
             clipped: layer.clipped,
             hidden: !layer.visible,
             mask: None,
-            blocks: Vec::new(),
+            blocks: if layer.locks.is_none() {
+                Vec::new()
+            } else {
+                vec![(
+                    *b"lspf",
+                    protection_flags(layer.locks).to_be_bytes().to_vec(),
+                )]
+            },
         }
     }
 
@@ -498,6 +505,7 @@ impl Writer<'_, '_> {
             .transform
             .then(self.document.parent_transform(layer.id));
         let coverage = Layer {
+            locks: Default::default(),
             style: None,
             id: LayerId::from_raw(1),
             name: String::new(),
@@ -1258,4 +1266,13 @@ mod tests {
             BlendMode::ALL.iter().map(|&m| blend_key(m)).collect();
         assert_eq!(keys.len(), BlendMode::ALL.len());
     }
+}
+
+/// Photoshop's protection flags (`lspf`) of a layer's locks (ADR 0046): bit 0 transparency,
+/// 1 image pixels ("composite"), 2 position, 31 all.
+fn protection_flags(locks: slopshop_core::LayerLocks) -> u32 {
+    u32::from(locks.transparency)
+        | u32::from(locks.pixels) << 1
+        | u32::from(locks.position) << 2
+        | u32::from(locks.all) << 31
 }

@@ -537,6 +537,7 @@ pub(super) fn read_node(
             .get("clipped")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+    let locks = node_locks(node)?;
     let transform = node_transform(node)?;
     let style = match node.params.get("style") {
         None | Some(Value::Null) => None,
@@ -554,6 +555,7 @@ pub(super) fn read_node(
         style,
         transform,
         clipped,
+        locks,
         id: LayerId::from_raw(id),
         name: node.name.clone(),
         visible: node.visible,
@@ -562,6 +564,45 @@ pub(super) fn read_node(
         mask,
         content,
     })
+}
+
+/// The identifiers of a layer's locks (schema 0.33, ADR 0046), in this order.
+const LOCKS: [&str; 4] = ["transparency", "pixels", "position", "all"];
+
+/// A layer's locks as written: the identifiers of those set (see [`LOCKS`]).
+pub(crate) fn locks_to_json(locks: slopshop_core::LayerLocks) -> Value {
+    let set = [locks.transparency, locks.pixels, locks.position, locks.all];
+    Value::from(
+        LOCKS
+            .iter()
+            .zip(set)
+            .filter(|(_, on)| *on)
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// A node's locks (schema 0.33, ADR 0046; none before, any node version: a reader that does
+/// not know them opens the layer unlocked, which loses nothing of what it shows). Unknown
+/// identifiers are ignored, so that later locks open as the ones known.
+fn node_locks(node: &NodeDto) -> Result<slopshop_core::LayerLocks, FileError> {
+    let mut locks = slopshop_core::LayerLocks::NONE;
+    let values = match node.params.get("locks") {
+        None | Some(Value::Null) => return Ok(locks),
+        Some(Value::Array(values)) => values,
+        Some(_) => return Err(corrupt("invalid locks")),
+    };
+    for value in values {
+        match value.as_str() {
+            Some("transparency") => locks.transparency = true,
+            Some("pixels") => locks.pixels = true,
+            Some("position") => locks.position = true,
+            Some("all") => locks.all = true,
+            Some(_) => {}
+            None => return Err(corrupt("invalid locks")),
+        }
+    }
+    Ok(locks)
 }
 
 /// A node's transform (version 5; the identity before): finite and invertible (ADR 0018).
@@ -1187,4 +1228,38 @@ fn positional_read(file: &Source<'_>, buffer: &mut [u8], offset: u64) -> io::Res
 #[cfg(unix)]
 fn positional_read(file: &Source<'_>, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
     std::os::unix::fs::FileExt::read_at(file.file, buffer, offset)
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    fn node(locks: Value) -> NodeDto {
+        serde_json::from_value(serde_json::json!({
+            "type": "slopshop.fill",
+            "version": 3,
+            "name": "n",
+            "visible": true,
+            "opacity": 1.0,
+            "params": { "locks": locks },
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn locks_read_known_identifiers_and_ignore_later_ones() {
+        let locks = node_locks(&node(serde_json::json!(["position", "artboard", "all"]))).unwrap();
+        assert_eq!(
+            locks,
+            slopshop_core::LayerLocks {
+                position: true,
+                all: true,
+                ..slopshop_core::LayerLocks::NONE
+            }
+        );
+        let written = locks_to_json(locks);
+        assert_eq!(written, serde_json::json!(["position", "all"]));
+        assert!(node_locks(&node(serde_json::json!("all"))).is_err());
+        assert!(node_locks(&node(serde_json::json!([1]))).is_err());
+    }
 }

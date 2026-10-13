@@ -1207,6 +1207,7 @@ mod tests {
 
     fn new_layer(document: &mut Document, content: LayerContent) -> Layer {
         Layer {
+            locks: Default::default(),
             style: None,
             transform: Affine::IDENTITY.into(),
             clipped: false,

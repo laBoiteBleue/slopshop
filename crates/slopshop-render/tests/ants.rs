@@ -42,6 +42,7 @@ fn document(size: Size) -> Session {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: Affine::IDENTITY.into(),
                 clipped: false,

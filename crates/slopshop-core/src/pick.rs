@@ -416,6 +416,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: Projective::from_rect_to_quad([0.0, 0.0, 40.0, 20.0], quad).unwrap(),
                 clipped: false,
@@ -444,6 +445,7 @@ mod tests {
 
     fn layer(doc: &mut Document, content: LayerContent) -> Layer {
         Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: "l".into(),

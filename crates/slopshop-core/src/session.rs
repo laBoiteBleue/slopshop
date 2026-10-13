@@ -75,6 +75,8 @@ impl HistoryLabel {
             Edit::RemoveSavedSelection { .. } => "deleteSavedSelection",
             Edit::RenameSavedSelection { .. } => "renameSavedSelection",
             Edit::SetSavedSelection { .. } => "replaceSavedSelection",
+            Edit::SetLayerLocks { .. } => "locks",
+            Edit::Image(edit) => return Self::of(edit),
             Edit::Batch(edits) => return edits.first().map_or(Self::new("edit"), Self::of),
         };
         Self::new(kind)
@@ -319,6 +321,7 @@ impl Session {
                     parent: None,
                     index: base,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         transform: crate::transform::Projective::IDENTITY,
                         clipped: false,
@@ -639,6 +642,7 @@ mod tests {
                 parent: None,
                 index,
                 layer: Layer {
+                    locks: Default::default(),
                     style: None,
                     transform: crate::transform::Projective::IDENTITY,
                     clipped: false,
@@ -925,6 +929,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    locks: Default::default(),
                     style: None,
                     transform: crate::transform::Projective::IDENTITY,
                     clipped: false,
@@ -1041,6 +1046,7 @@ mod tests {
                 parent: None,
                 index: 1,
                 layer: Layer {
+                    locks: Default::default(),
                     style: None,
                     transform: crate::transform::Projective::IDENTITY,
                     clipped: false,

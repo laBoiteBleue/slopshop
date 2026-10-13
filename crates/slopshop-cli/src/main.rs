@@ -218,6 +218,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                 parent: None,
                 index,
                 layer: Layer {
+                    locks: Default::default(),
                     style: None,
                     transform: slopshop_core::Projective::IDENTITY,
                     clipped: false,

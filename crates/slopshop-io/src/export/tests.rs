@@ -21,6 +21,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
     let id = doc.allocate_layer_id();
     let index = doc.layers().len();
     let layer = Layer {
+        locks: Default::default(),
         style: None,
         transform: slopshop_core::Affine::IDENTITY.into(),
         clipped: false,
@@ -1246,6 +1247,7 @@ fn layered_document() -> Document {
             parent,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
@@ -1487,6 +1489,25 @@ fn layered_psd_round_trips_through_the_importer() {
         .flat_map(|large| cases.map(|case| (large, case)))
     {
         let mut doc = layered_document();
+        // Locks travel as Photoshop's protection flags (ADR 0046).
+        let ids: Vec<_> = doc.all_layers().map(|l| l.id).collect();
+        let none = slopshop_core::LayerLocks::NONE;
+        for (id, locks) in ids.iter().zip([
+            slopshop_core::LayerLocks {
+                transparency: true,
+                pixels: true,
+                ..none
+            },
+            slopshop_core::LayerLocks { all: true, ..none },
+            slopshop_core::LayerLocks {
+                position: true,
+                ..none
+            },
+        ]) {
+            Edit::SetLayerLocks { id: *id, locks }
+                .apply(&mut doc)
+                .unwrap();
+        }
         if transparent {
             // Without the opaque background, the merged composite (stored over white) has
             // transparency.
@@ -1525,7 +1546,16 @@ fn layered_psd_round_trips_through_the_importer() {
         };
         let back = &opened.document;
         // The same tree: names, visibility, opacity, modes, clipping, masks.
-        type Summary = (String, bool, u8, BlendMode, bool, bool, bool);
+        type Summary = (
+            String,
+            bool,
+            u8,
+            BlendMode,
+            bool,
+            bool,
+            bool,
+            slopshop_core::LayerLocks,
+        );
         let summary = |d: &Document| -> Vec<Summary> {
             d.all_layers()
                 .map(|l| {
@@ -1537,6 +1567,7 @@ fn layered_psd_round_trips_through_the_importer() {
                         l.clipped,
                         l.mask.is_some(),
                         l.children().is_some(),
+                        l.locks,
                     )
                 })
                 .collect()
@@ -1617,6 +1648,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
             parent: None,
             index,
             layer: Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 clipped: false,
@@ -3386,6 +3418,7 @@ fn vector_layers_are_written_to_a_layered_psd_as_their_pixels() {
         parent: None,
         index: 1,
         layer: Layer {
+            locks: Default::default(),
             id,
             name: "Ellipse 1".into(),
             visible: true,

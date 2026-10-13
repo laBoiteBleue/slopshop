@@ -361,6 +361,7 @@ mod tests {
             RasterImage::from_pixels(Size::new(300, 20), PixelFormat::RGBA8_SRGB, &pixels).unwrap();
         let mut doc = Document::new(Size::new(300, 20));
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: "red".into(),
@@ -513,6 +514,7 @@ mod tests {
         );
         let mut doc = Document::new(Size::new(300, 20));
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: "l".into(),

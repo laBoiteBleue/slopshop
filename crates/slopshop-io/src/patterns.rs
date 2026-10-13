@@ -141,6 +141,7 @@ fn write_png(path: &Path, image: Arc<RasterImage>) -> Result<(), String> {
         parent: None,
         index: 0,
         layer: Layer {
+            locks: Default::default(),
             id,
             name: String::new(),
             visible: true,

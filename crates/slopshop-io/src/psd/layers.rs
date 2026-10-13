@@ -163,6 +163,8 @@ struct Record {
     fill: u8,
     clipping: bool,
     hidden: bool,
+    /// The protection flags (`lspf`): Photoshop's layer locks (ADR 0046).
+    locks: slopshop_core::LayerLocks,
     /// The channel holding the mask and its placement.
     mask: Option<(i16, Mask)>,
     name: String,
@@ -465,6 +467,7 @@ fn read_layer_info<R: Read + Seek>(
             style: (style != LayerStyle::default()).then(|| Style::new(style)),
             transform: slopshop_core::Projective::IDENTITY,
             clipped: record.clipping,
+            locks: record.locks,
             id,
             name: record.name.clone(),
             visible: !record.hidden,
@@ -555,6 +558,7 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
         opacity,
         fill: 255,
         clipping: clipping != 0,
+        locks: slopshop_core::LayerLocks::NONE,
         hidden: flags & 2 != 0,
         mask: None,
         name: pascal_name,
@@ -601,6 +605,10 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
                 }
             }
             b"iOpa" if !block.is_empty() => record.fill = block[0],
+            b"lspf" if block.len() >= 4 => {
+                record.locks =
+                    locks_of_flags(u32::from_be_bytes([block[0], block[1], block[2], block[3]]));
+            }
             // `lmfx` holds every effect (several of one kind too); `lfx2` the first of each.
             key if STYLE_KEYS.contains(&key) => {
                 if key == b"lmfx" || record.effects.is_none() {
@@ -1627,4 +1635,15 @@ fn check_layers_budget(
         return Err(too_large());
     }
     Ok(())
+}
+
+/// Photoshop's protection flags (`lspf`, ADR 0046): bit 0 transparency, 1 image pixels
+/// ("composite"), 2 position, 31 all. Other bits (artboard nesting) are ignored.
+fn locks_of_flags(flags: u32) -> slopshop_core::LayerLocks {
+    slopshop_core::LayerLocks {
+        transparency: flags & 1 != 0,
+        pixels: flags & 2 != 0,
+        position: flags & 4 != 0,
+        all: flags & 0x8000_0000 != 0,
+    }
 }

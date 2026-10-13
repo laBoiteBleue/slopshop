@@ -684,6 +684,7 @@ pub fn show_floating(
     let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?.clone();
     let (parent, index) = doc.locate(id).ok_or(EditError::UnknownLayer(id))?;
     let part = |id: LayerId, image: &Arc<RasterImage>, transform: Projective| Layer {
+        locks: Default::default(),
         style: None,
         id,
         name: String::new(),
@@ -1077,6 +1078,7 @@ mod tests {
         let canvas = Size::new(300, 200);
         let mut doc = Document::new(canvas);
         let fill = |doc: &mut Document, color: LinearRgba, clipped: bool| Layer {
+            locks: Default::default(),
             style: None,
             id: doc.allocate_layer_id(),
             name: String::new(),
@@ -1111,6 +1113,7 @@ mod tests {
             .unwrap();
         let id = doc.allocate_layer_id();
         let layer = Layer {
+            locks: Default::default(),
             style: None,
             id,
             name: "L".into(),

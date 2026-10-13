@@ -235,6 +235,7 @@ mod tests {
                     parent: None,
                     index,
                     layer: Layer {
+                        locks: Default::default(),
                         style: None,
                         id,
                         name: "box".into(),

@@ -141,6 +141,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id,
                 name: "Pattern 1".into(),
                 visible: true,
@@ -182,6 +183,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id: raster,
                 name: "image".into(),
                 visible: true,
@@ -311,6 +313,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: Layer {
+                locks: Default::default(),
                 id: boxed,
                 name: "box".into(),
                 visible: true,
@@ -368,6 +371,7 @@ mod tests {
             parent: None,
             index: 1,
             layer: Layer {
+                locks: Default::default(),
                 id: boxed,
                 name: "box".into(),
                 visible: true,

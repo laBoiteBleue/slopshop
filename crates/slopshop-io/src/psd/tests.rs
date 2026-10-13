@@ -1354,3 +1354,38 @@ fn adjustments_of_many_settings_are_imported() {
         .collect();
     assert_eq!(approximated, [true, false, false, false, false]);
 }
+
+#[test]
+fn protection_flags_become_layer_locks() {
+    let full = |name: &'static str, flags: u32| {
+        let mut layer = TestLayer::new(
+            name,
+            [0, 0, 16, 16],
+            (-1..3).map(|c| (c, plane8(16, 16, |_, _| 100))).collect(),
+        );
+        layer.blocks.push((*b"lspf", flags.to_be_bytes().to_vec()));
+        layer
+    };
+    let mut doc = Doc::new(3, 8, 16, 16, rgb8_planes(16, 16).0);
+    // Transparency and position; all (with the artboard bit, ignored); none.
+    doc.layers = vec![
+        full("partial", 0b101),
+        full("all", 0x8000_0008),
+        full("free", 0),
+    ];
+    let opened = open_layers("locks.psd", &doc);
+    let locks: Vec<_> = opened.document.layers().iter().map(|l| l.locks).collect();
+    let none = slopshop_core::LayerLocks::NONE;
+    assert_eq!(
+        locks,
+        [
+            slopshop_core::LayerLocks {
+                transparency: true,
+                position: true,
+                ..none
+            },
+            slopshop_core::LayerLocks { all: true, ..none },
+            none,
+        ]
+    );
+}

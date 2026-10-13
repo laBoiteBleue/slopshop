@@ -745,6 +745,9 @@ fn build_manifest(
         if layer.clipped {
             params.insert("clipped".to_owned(), Value::from(true));
         }
+        if !layer.locks.is_none() {
+            params.insert("locks".to_owned(), super::read::locks_to_json(layer.locks));
+        }
         if !layer.transform.is_identity() {
             params.insert(
                 "transform".to_owned(),

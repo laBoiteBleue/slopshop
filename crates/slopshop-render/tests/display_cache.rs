@@ -59,6 +59,7 @@ fn gray_mask(size: Size, value: impl Fn(u32, u32) -> u8) -> Arc<RasterImage> {
 
 fn layer(s: &mut Session, content: LayerContent) -> Layer {
     Layer {
+        locks: Default::default(),
         style: None,
         transform: Affine::IDENTITY.into(),
         clipped: false,
