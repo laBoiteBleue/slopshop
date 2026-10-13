@@ -117,3 +117,42 @@ test("a vector layer's colors are changed in Properties, its shape kept", async 
     },
   });
 });
+
+test("a vector layer in a moved group: W, H, X and Y in the document, X typed moves its shape", async () => {
+  const ellipse = {
+    ...layer(3, "Ellipse 1"),
+    kind: "vector" as const,
+    shape: {
+      geometry: { kind: "ellipse", center: [20, 10], radii: [20, 10] },
+      fill: [0, 0, 0, 1],
+      stroke: null,
+    },
+  } as LayerView;
+  const group = {
+    ...layer(2, "Group 1"),
+    kind: "group" as const,
+    transform: [1, 0, 0, 1, 100, 50],
+    children: [ellipse],
+  } as LayerView;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), group]));
+  await waitFor(() => expect(row("Ellipse 1")).toBeInTheDocument());
+  await user.click(row("Ellipse 1"));
+  const panel = screen.getByRole("tabpanel", { name: "Properties" });
+  const field = (name: string) => within(panel).getByRole("spinbutton", { name });
+  expect(field("W")).toHaveValue(40);
+  expect(field("H")).toHaveValue(20);
+  expect(field("X")).toHaveValue(100);
+  expect(field("Y")).toHaveValue(50);
+  await user.clear(field("X"));
+  await user.type(field("X"), "110");
+  await user.tab();
+  await waitFor(() => expect(sent("perform")).toHaveLength(1));
+  expect(sent("perform")[0]).toMatchObject({
+    documentId: 1,
+    edit: {
+      kind: "setShape",
+      id: 3,
+      shape: { geometry: { kind: "ellipse", center: [30, 10], radii: [20, 10] } },
+    },
+  });
+});
