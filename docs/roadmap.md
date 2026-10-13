@@ -348,6 +348,12 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       stack (it reads neighbours through two blurs), Photoshop's dialog with Show More Options
       (Shadows and Highlights Amount, Tone and Radius, Color, Midtone), not repeated by Ctrl+F;
       CPU and GPU (looks). Not yet: Black Clip and White Clip (a histogram of the result)
+- [x] Distort > Ripple (Amount -999 to 999 %, Size Small/Medium/Large), Wave (Number of
+      Generators, Wavelength and Amplitude Min/Max, Scale, Type Sine/Triangle/Square, Undefined
+      Areas Wrap Around/Repeat Edge Pixels, Randomize: a new seed), ZigZag (Amount -100 to 100,
+      Ridges 1 to 20, Around Center/Out From Center/Pond Ripples) and Spherize's Horizontal Only and
+      Vertical Only modes, sampled as the distortions are; CPU and GPU (looks). Not yet: Shear and
+      Displace
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
