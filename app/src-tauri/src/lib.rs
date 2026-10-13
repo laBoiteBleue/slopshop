@@ -4703,6 +4703,40 @@ mod tests {
     }
 
     #[test]
+    fn a_live_shape_shows_its_path_and_turns_into_it() {
+        let mut s = blank_session();
+        let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[0.0,0.0,0.0,0.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
+        let json = format!(r#"{{"kind":"addShape","name":"Rectangle 1","shape":{shape}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        // The Pen's anchors of the rectangle: its corners, closed.
+        let path = serde_json::to_value(&layer.live_path).unwrap();
+        assert_eq!(
+            path,
+            serde_json::json!({"kind":"path","rule":"nonzero","subpaths":[{"start":[10.0,20.0],
+                "segments":[[110.0,20.0],[110.0,70.0],[10.0,70.0],[10.0,20.0]],"closed":true}]})
+        );
+        // Turned into that path (the UI's setShape): a path has no live path.
+        let json = format!(
+            r#"{{"kind":"setShape","id":{},"shape":{{"geometry":{path},"fill":[1.0,0.0,0.0,1.0],"stroke":null}}}}"#,
+            layer.id
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert!(layer.live_path.is_none());
+        assert_eq!(
+            serde_json::to_value(&layer.shape).unwrap()["geometry"],
+            path
+        );
+    }
+
+    #[test]
     fn a_pattern_fills_scale_and_angle_are_set_its_pattern_kept() {
         use slopshop_core::pattern::PatternFill;
         let mut s = blank_session();

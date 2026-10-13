@@ -249,6 +249,111 @@ pub fn shape_covers(shape: &super::model::Shape, p: [f64; 2]) -> bool {
     })
 }
 
+/// How far a quarter circle's handles reach, as a share of its radius (the usual cubic
+/// approximation, within 0.03% of the radius).
+const KAPPA: f64 = 0.552_284_749_830_793_4;
+
+/// `geometry` as a regular path of anchors and handles, drawn the same (Photoshop's "turn a live
+/// shape into a regular path", before editing its anchors): a rectangle's four corners (two
+/// anchors for a rounded one), an ellipse's four anchors at its top, right, bottom and left, a
+/// polygon's corners, a line's two ends. A closed subpath ends with its closing segment back to
+/// its start, as the Pen draws one. A path stays as it is.
+pub fn as_path(geometry: &Geometry) -> Geometry {
+    use super::model::Subpath;
+    /// A subpath in the making: segments ending where the last one ended are left out.
+    struct Run {
+        start: [f64; 2],
+        at: [f64; 2],
+        segments: Vec<Segment>,
+    }
+    impl Run {
+        fn new(start: [f64; 2]) -> Self {
+            Run {
+                start,
+                at: start,
+                segments: Vec::new(),
+            }
+        }
+        fn line(&mut self, p: [f64; 2]) {
+            if p != self.at {
+                self.segments.push(Segment::Line(p));
+                self.at = p;
+            }
+        }
+        fn cubic(&mut self, a: [f64; 2], b: [f64; 2], p: [f64; 2]) {
+            if p != self.at {
+                self.segments.push(Segment::Cubic(a, b, p));
+                self.at = p;
+            }
+        }
+        fn done(self, closed: bool) -> Geometry {
+            Geometry::Path {
+                subpaths: vec![Subpath {
+                    start: self.start,
+                    segments: self.segments,
+                    closed,
+                }],
+                rule: FillRule::NonZero,
+            }
+        }
+    }
+    match geometry {
+        &Geometry::Rectangle { rect, radii } => {
+            let [l, t, r, b] = rect;
+            // No corner rounds past half the side, as `outline`.
+            let most = ((r - l) / 2.0).min((b - t) / 2.0).max(0.0);
+            let [tl, tr, br, bl] = radii.map(|v| v.min(most));
+            let k = KAPPA;
+            let mut run = Run::new([l + tl, t]);
+            run.line([r - tr, t]);
+            run.cubic([r - tr + k * tr, t], [r, t + tr - k * tr], [r, t + tr]);
+            run.line([r, b - br]);
+            run.cubic([r, b - br + k * br], [r - br + k * br, b], [r - br, b]);
+            run.line([l + bl, b]);
+            run.cubic([l + bl - k * bl, b], [l, b - bl + k * bl], [l, b - bl]);
+            run.line([l, t + tl]);
+            run.cubic([l, t + tl - k * tl], [l + tl - k * tl, t], [l + tl, t]);
+            run.done(true)
+        }
+        &Geometry::Ellipse { center, radii } => {
+            let [cx, cy] = center;
+            let [rx, ry] = radii;
+            let (kx, ky) = (KAPPA * rx, KAPPA * ry);
+            let mut run = Run::new([cx, cy - ry]);
+            run.cubic([cx + kx, cy - ry], [cx + rx, cy - ky], [cx + rx, cy]);
+            run.cubic([cx + rx, cy + ky], [cx + kx, cy + ry], [cx, cy + ry]);
+            run.cubic([cx - kx, cy + ry], [cx - rx, cy + ky], [cx - rx, cy]);
+            run.cubic([cx - rx, cy - ky], [cx - kx, cy - ry], [cx, cy - ry]);
+            run.done(true)
+        }
+        Geometry::Polygon { .. } => {
+            let corners: Vec<[f64; 2]> = outline(geometry, TOLERANCE)
+                .elements()
+                .iter()
+                .filter_map(|el| match *el {
+                    PathEl::MoveTo(p) | PathEl::LineTo(p) => Some([p.x, p.y]),
+                    _ => None,
+                })
+                .collect();
+            let Some((&first, rest)) = corners.split_first() else {
+                return geometry.clone();
+            };
+            let mut run = Run::new(first);
+            for &p in rest {
+                run.line(p);
+            }
+            run.line(first);
+            run.done(true)
+        }
+        &Geometry::Line { from, to } => {
+            let mut run = Run::new(from);
+            run.line(to);
+            run.done(false)
+        }
+        Geometry::Path { .. } => geometry.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +563,75 @@ mod tests {
             stroke: None,
         };
         assert_eq!(shape_bounds(&nothing), None);
+    }
+
+    #[test]
+    fn live_shapes_turn_into_paths_drawn_the_same() {
+        use kurbo::Shape as _;
+        let segments = |g: &Geometry| match g {
+            Geometry::Path { subpaths, .. } => {
+                assert_eq!(subpaths.len(), 1);
+                let s = &subpaths[0];
+                let ends: Vec<[f64; 2]> = s
+                    .segments
+                    .iter()
+                    .map(|seg| match *seg {
+                        Segment::Line(p) | Segment::Cubic(_, _, p) => p,
+                    })
+                    .collect();
+                (s.start, ends, s.closed)
+            }
+            _ => panic!("not a path: {g:?}"),
+        };
+        let shapes = [
+            Geometry::Rectangle {
+                rect: [10.0, 20.0, 110.0, 70.0],
+                radii: [0.0; 4],
+            },
+            Geometry::Rectangle {
+                rect: [10.0, 20.0, 110.0, 70.0],
+                radii: [10.0, 0.0, 40.0, 5.0],
+            },
+            Geometry::Ellipse {
+                center: [50.0, 40.0],
+                radii: [30.0, 20.0],
+            },
+            Geometry::Polygon {
+                center: [50.0, 50.0],
+                radius: 40.0,
+                sides: 5,
+                star: Some(0.5),
+                rotation: 90.0,
+            },
+        ];
+        // Anchors: corners, two per rounded corner (the 40 px radius is clamped to 25), the
+        // ellipse's four, the star's ten; each closed, its last segment back to its start.
+        for (shape, anchors) in shapes.iter().zip([4, 7, 4, 10]) {
+            let path = as_path(shape);
+            let (start, ends, closed) = segments(&path);
+            assert!(closed);
+            assert_eq!(ends.len(), anchors, "{shape:?}");
+            assert_eq!(ends.last(), Some(&start));
+            let (a, b) = (outline(shape, 0.01).area(), outline(&path, 0.01).area());
+            assert!((a - b).abs() < a.abs() * 1e-3, "{shape:?}: {a} vs {b}");
+        }
+        let rect = segments(&as_path(&shapes[0]));
+        assert_eq!(rect.0, [10.0, 20.0]);
+        assert_eq!(
+            rect.1,
+            [[110.0, 20.0], [110.0, 70.0], [10.0, 70.0], [10.0, 20.0]]
+        );
+        let ellipse = segments(&as_path(&shapes[2]));
+        assert_eq!(ellipse.0, [50.0, 20.0]);
+        let line = Geometry::Line {
+            from: [1.0, 2.0],
+            to: [3.0, 4.0],
+        };
+        assert_eq!(
+            segments(&as_path(&line)),
+            ([1.0, 2.0], vec![[3.0, 4.0]], false)
+        );
+        let path = as_path(&line);
+        assert_eq!(as_path(&path), path);
     }
 }

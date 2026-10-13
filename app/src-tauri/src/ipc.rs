@@ -157,6 +157,9 @@ pub struct LayerView {
     pub gradient_fill: Option<crate::paint::GradientDto>,
     /// A vector layer's shape (ADR 0041), for the Properties panel.
     pub shape: Option<crate::shape::ShapeDto>,
+    /// A live shape's outline as a regular path (`shape::path::as_path`): the anchors the Pen
+    /// shows and edits once the shape is turned into a path. None for a path and other layers.
+    pub live_path: Option<crate::shape::GeometryDto>,
     /// A pattern fill layer's pattern (ADR 0042), for the Properties panel.
     pub pattern: Option<PatternView>,
     /// A group's layers, bottom to top (ADR 0015); empty for other layers.
@@ -809,6 +812,19 @@ impl LayerView {
             shape: match &layer.content {
                 LayerContent::Vector { source, .. } => {
                     Some(crate::shape::ShapeDto::of(source.shape()))
+                }
+                _ => None,
+            },
+            live_path: match &layer.content {
+                LayerContent::Vector { source, .. }
+                    if !matches!(
+                        source.shape().geometry,
+                        slopshop_core::shape::Geometry::Path { .. }
+                    ) =>
+                {
+                    Some(crate::shape::GeometryDto::of(
+                        &slopshop_core::shape::path::as_path(&source.shape().geometry),
+                    ))
                 }
                 _ => None,
             },
