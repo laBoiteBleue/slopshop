@@ -9,7 +9,8 @@ use std::sync::mpsc;
 use slopshop_core::blend::BlendSpace;
 use slopshop_core::color::{ChannelLayout, PixelFormat};
 use slopshop_core::filter::{
-    BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, OffsetEdge, line_offsets,
+    BOX_UP_TO, CLARITY_STRENGTH, Filter, LINE_UP_TO, MEDIAN_UP_TO, OffsetEdge, SHADOWS_LIFT,
+    line_offsets,
 };
 use slopshop_core::raster::{RasterImage, TILE_SIZE};
 use slopshop_core::stack::{FilterStep, LookJob};
@@ -395,6 +396,9 @@ enum Kind {
 /// The mode of a separable pass whose blur is kept for the next one (filter.wgsl).
 const KEEP: u32 = 4;
 
+/// The mode of Shadows/Highlights' second pass, from the kept blur and its own (filter.wgsl).
+const SHADOWS: u32 = 6;
+
 /// A pass as the shader runs it (`Params` in filter.wgsl); a step is one or two.
 struct Pass {
     kind: Kind,
@@ -636,6 +640,31 @@ impl Pass {
                     ..Self::separable(broad, 5)?
                 };
                 return Some(vec![Self::separable(fine, KEEP)?, clarity]);
+            }
+            // The shadows' blur kept, then the highlights' and the pixel from both; its
+            // settings past the kernel's weights.
+            Filter::ShadowsHighlights {
+                shadows,
+                highlights,
+                color,
+                midtone,
+                ..
+            } => {
+                let [dark, light] = filter.shadows_radii()?;
+                let mut second = Self::separable(light, SHADOWS)?;
+                second.weights.extend(
+                    [
+                        shadows[0],
+                        shadows[1],
+                        highlights[0],
+                        highlights[1],
+                        color,
+                        midtone,
+                    ]
+                    .map(|v| v / 100.0),
+                );
+                second.weights.push(SHADOWS_LIFT as f32);
+                return Some(vec![Self::separable(dark, KEEP)?, second]);
             }
             _ => {}
         }

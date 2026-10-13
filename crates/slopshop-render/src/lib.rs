@@ -3099,6 +3099,16 @@ mod tests {
                 },
                 3,
             ),
+            (
+                Filter::ShadowsHighlights {
+                    shadows: [80.0, 60.0, 6.0],
+                    highlights: [70.0, 40.0, 4.0],
+                    color: 50.0,
+                    midtone: 30.0,
+                    scale: 1.0,
+                },
+                3,
+            ),
         ];
         for (image, (filter, most)) in [&original, &rgb]
             .into_iter()
