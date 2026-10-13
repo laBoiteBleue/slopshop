@@ -15,6 +15,7 @@
   import {
     FILTERS,
     centerAt,
+    newSeed,
     nudgedCenter,
     shownParams,
     sliderPosition,
@@ -143,6 +144,13 @@
             />
             {t(param.label)}
           </label>
+        {:else if param.kind === "seed"}
+          {#if param.randomize}
+            <!-- Another seed: other waves, shown live. -->
+            <button type="button" class="btn" onclick={() => (current[i] = newSeed())}>
+              {t(param.randomize)}
+            </button>
+          {/if}
         {:else if param.kind === "center"}
           {#if param.axis === "x"}
             <div class="center-setting">

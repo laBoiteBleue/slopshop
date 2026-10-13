@@ -143,3 +143,25 @@ test("filters without More Options have no such box", () => {
   open([1]);
   expect(screen.queryByRole("checkbox", { name: "Show More Options" })).not.toBeInTheDocument();
 });
+
+test("Wave: its settings under Photoshop's headings, Randomize draws other waves, shown live", async () => {
+  const values = [5, 10, 120, 5, 35, 100, 100, 0, 1, 77];
+  const { onlive, onok, user } = open(values, { filter: "wave" });
+  expect(screen.getByRole("dialog", { name: "Wave" })).toBeInTheDocument();
+  for (const heading of ["Wavelength", "Amplitude", "Scale"]) {
+    expect(screen.getByText(heading)).toBeInTheDocument();
+  }
+  expect(screen.getAllByRole("spinbutton", { name: "Min." })).toHaveLength(2);
+  expect(screen.getByRole("radio", { name: "Sine" })).toBeChecked();
+  expect(screen.getByRole("radio", { name: "Repeat Edge Pixels" })).toBeChecked();
+  expect(onlive).toHaveBeenLastCalledWith(values);
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+  await user.click(screen.getByRole("button", { name: "Randomize" }));
+  random.mockRestore();
+  const randomized = [...values.slice(0, 9), 2 ** 23];
+  expect(onlive).toHaveBeenLastCalledWith(randomized);
+  await user.click(screen.getByRole("radio", { name: "Square" }));
+  await user.click(screen.getByRole("radio", { name: "Wrap Around" }));
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  expect(onok).toHaveBeenCalledWith([5, 10, 120, 5, 35, 100, 100, 2, 0, 2 ** 23]);
+});

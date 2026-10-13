@@ -303,6 +303,70 @@ test("Distort > Twirl: an angle sent with the filter", async () => {
   );
 });
 
+/** Filter > Distort > `name`…: its dialog on a pixel layer. */
+async function distortDialog(name: string) {
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: `${name}…` }));
+  return { user, dialog: await screen.findByRole("dialog", { name }) };
+}
+
+test("Distort > Ripple: an amount and a size", async () => {
+  const { user, dialog } = await distortDialog("Ripple");
+  expect(within(dialog).getByRole("radio", { name: "Medium" })).toBeChecked();
+  const amount = within(dialog).getByRole("spinbutton", { name: "Amount" });
+  await user.clear(amount);
+  await user.type(amount, "-450");
+  await user.click(within(dialog).getByRole("radio", { name: "Large" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "ripple", values: [-450, 2] }),
+  );
+});
+
+test("Distort > Wave: Photoshop's defaults, Triangle, a seed drawn anew by Randomize", async () => {
+  const { user, dialog } = await distortDialog("Wave");
+  const generators = within(dialog).getByRole("spinbutton", { name: "Number of Generators" });
+  expect(generators).toHaveValue(5);
+  await user.click(within(dialog).getByRole("radio", { name: "Triangle" }));
+  await user.click(within(dialog).getByRole("button", { name: "Randomize" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ kind: "applyFilter", filter: "wave" }));
+  const { values } = applied() as { values: number[] };
+  expect(values.slice(0, 9)).toEqual([5, 10, 120, 5, 35, 100, 100, 1, 1]);
+  expect(Number.isInteger(values[9])).toBe(true);
+});
+
+test("Distort > ZigZag and Spherize's modes", async () => {
+  const { user, dialog } = await distortDialog("ZigZag");
+  expect(within(dialog).getByRole("radio", { name: "Pond Ripples" })).toBeChecked();
+  const ridges = within(dialog).getByRole("spinbutton", { name: "Ridges" });
+  await user.clear(ridges);
+  await user.type(ridges, "12");
+  await user.click(within(dialog).getByRole("radio", { name: "Out From Center" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "zigZag",
+      values: [10, 12, 1],
+    }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Spherize…" }));
+  const sphere = await screen.findByRole("dialog", { name: "Spherize" });
+  expect(within(sphere).getByRole("radio", { name: "Normal" })).toBeChecked();
+  await user.click(within(sphere).getByRole("radio", { name: "Vertical Only" }));
+  await user.click(within(sphere).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "spherize", values: [100, 2] }),
+  );
+});
+
 test("Blur > Average applies at once, without a dialog", async () => {
   const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
   await screen.findByText("Photo", { selector: "li .name" });

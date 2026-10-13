@@ -4,6 +4,7 @@ import {
   ADJUSTMENT_FILTERS,
   FILTERS,
   FILTER_MENU,
+  SEEDS,
   applyFilterEdit,
   applyFiltersEdit,
   isAdjustmentFilter,
@@ -13,6 +14,7 @@ import {
   filterSteps,
   filterable,
   hasSettings,
+  newSeed,
   nudgedCenter,
   sliderPosition,
   sliderValue,
@@ -241,10 +243,11 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
   expect(FILTERS.twirl.defaults).toEqual([50]);
   expect(validValues("twirl", [-999])).toBe(true);
   expect(validValues("twirl", [1000])).toBe(false);
-  for (const filter of ["pinch", "spherize"] as const) {
-    expect(validValues(filter, [-100])).toBe(true);
-    expect(validValues(filter, [101])).toBe(false);
-  }
+  expect(validValues("pinch", [-100])).toBe(true);
+  expect(validValues("pinch", [101])).toBe(false);
+  expect(validValues("spherize", [-100, 2])).toBe(true);
+  expect(validValues("spherize", [101, 0])).toBe(false);
+  expect(validValues("spherize", [50, 3])).toBe(false);
   expect(FILTERS.polarCoordinates.defaults).toEqual([1]);
   expect(validValues("polarCoordinates", [2])).toBe(false);
   expect(FILTERS.offset.defaults).toEqual([0, 0, 2]);
@@ -254,9 +257,47 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
   expect(FILTER_MENU.find((m) => m.label === "menu.filter.distort")?.filters).toEqual([
     "pinch",
     "polarCoordinates",
+    "ripple",
     "spherize",
     "twirl",
+    "wave",
+    "zigZag",
   ]);
+});
+
+test("Ripple, Wave and ZigZag: Photoshop's settings, ranges and defaults", () => {
+  expect(FILTERS.spherize.defaults).toEqual([100, 0]);
+  expect(FILTERS.ripple.defaults).toEqual([100, 1]);
+  expect(validValues("ripple", [-999, 0])).toBe(true);
+  expect(validValues("ripple", [1000, 1])).toBe(false);
+  expect(validValues("ripple", [10.5, 1])).toBe(false);
+  expect(validValues("ripple", [10, 3])).toBe(false);
+  expect(FILTERS.wave.params.map((p) => p.key)).toEqual([
+    "generators",
+    "wavelengthMin",
+    "wavelengthMax",
+    "amplitudeMin",
+    "amplitudeMax",
+    "scaleH",
+    "scaleV",
+    "type",
+    "edge",
+    "seed",
+  ]);
+  expect(FILTERS.wave.defaults).toEqual([5, 10, 120, 5, 35, 100, 100, 0, 1, 0]);
+  // Min above max is taken the other way round, as the engine does.
+  expect(validValues("wave", [999, 120, 10, 35, 5, 1, 100, 2, 0, SEEDS - 1])).toBe(true);
+  expect(validValues("wave", [0, 10, 120, 5, 35, 100, 100, 0, 1, 0])).toBe(false);
+  expect(validValues("wave", [5, 10, 120, 5, 35, 101, 100, 0, 1, 0])).toBe(false);
+  expect(validValues("wave", [5, 10, 120, 5, 35, 100, 100, 0, 2, 0])).toBe(false);
+  // Its seed drawn anew when applied, and by Randomize.
+  const again = withNewSeeds("wave", FILTERS.wave.defaults, () => 0.5);
+  expect(again).toEqual([5, 10, 120, 5, 35, 100, 100, 0, 1, SEEDS / 2]);
+  expect(newSeed(() => 0.25)).toBe(SEEDS / 4);
+  expect(FILTERS.zigZag.defaults).toEqual([10, 5, 2]);
+  expect(validValues("zigZag", [-100, 20, 0])).toBe(true);
+  expect(validValues("zigZag", [10, 21, 0])).toBe(false);
+  expect(validValues("zigZag", [101, 5, 0])).toBe(false);
 });
 
 test("the Blur menu: Photoshop's order, Average applied at once", () => {
