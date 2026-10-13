@@ -5742,6 +5742,34 @@ mod tests {
     }
 
     #[test]
+    fn shadows_highlights_lifts_the_dark_half_of_a_layer_only() {
+        let filter = Filter::ShadowsHighlights {
+            shadows: [100.0, 50.0, 5.0],
+            highlights: [0.0, 50.0, 5.0],
+            color: 0.0,
+            midtone: 0.0,
+            scale: 1.0,
+        };
+        let filtered = LayerStack::new(halves())
+            .with_filter(
+                FilterStep {
+                    filter,
+                    ..blur(1.0, None)
+                },
+                None,
+            )
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        // Far from the edge, black lifted to a quarter (in the perceptual space), white kept;
+        // near it, the black neighbourhood is lighter: lifted less.
+        let far = pixel(&filtered, 20, 20);
+        assert!((far[0] as i32 - 64).abs() <= 1 && far[3] == 255, "{far:?}");
+        assert_eq!(pixel(&filtered, 280, 20), vec![255, 255, 255, 255]);
+        assert!(pixel(&filtered, 148, 20)[0] < far[0]);
+    }
+
+    #[test]
     fn rows_are_read_as_pixels_are_the_edges_repeating() {
         let original = gradient(true);
         let reader = PremulPixels::new(&original, BlendSpace::Perceptual);
