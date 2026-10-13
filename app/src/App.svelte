@@ -203,6 +203,8 @@
   import { LENGTH_UNITS, type LengthUnit } from "./lib/units";
   import RotateDialog from "./lib/RotateDialog.svelte";
   import TrimDialog from "./lib/TrimDialog.svelte";
+  import LockLayersDialog from "./lib/LockLayersDialog.svelte";
+  import { commonLocks, locksEdit, lockRefusalKey, type Locks } from "./lib/locks";
   import { MAX_FEATHER, MAX_MODIFY, stepBrush } from "./lib/selection";
   import { latestWins } from "./lib/latest";
   import { combinedRows, loadedRows, type Combination } from "./lib/savedSelections";
@@ -3554,6 +3556,21 @@
     if (active) void edit(active.id, { kind: "revealAll" });
   }
 
+  // Layer > Lock Layers (ADR 0046): the selected layers when it opened get the locks chosen.
+  let lockDialog = $state<{ document: number; layers: LayerView[] } | null>(null);
+
+  function openLockDialog() {
+    const layers = layersPanel?.selectedLayers() ?? [];
+    if (active && layers.length > 0) lockDialog = { document: active.id, layers };
+  }
+
+  function applyLocks(locks: Locks) {
+    const dialog = lockDialog;
+    lockDialog = null;
+    const request = dialog && locksEdit(dialog.layers, locks);
+    if (dialog && request) void edit(dialog.document, request);
+  }
+
   /** A thumbnail of the dragged layers following the pointer. */
   let dragGhost = $state<{ document: number; ids: number[]; x: number; y: number } | null>(null);
 
@@ -4003,7 +4020,13 @@
   }
 
   function showError(title: string) {
-    showToast(null, { title, lines: [], kind: "error" });
+    // A lock's refusal (ADR 0046) said in the interface's language.
+    const refusal = lockRefusalKey(title);
+    showToast(null, {
+      title: refusal ? t(refusal as MessageKey) : title,
+      lines: [],
+      kind: "error",
+    });
   }
 
   function dismissToast(key: string) {
@@ -4592,6 +4615,16 @@
           if (name) bake({ kind: "visible", name });
         },
         disabled: !doc,
+      },
+      lockLayers: {
+        label: t("menu.layer.lockLayers"),
+        run: openLockDialog,
+        disabled: selectedCount === 0,
+      },
+      lockTransparency: {
+        label: t("menu.layer.lockTransparency"),
+        run: () => layersPanel?.toggleLockSelected("transparency"),
+        disabled: selectedCount === 0,
       },
       renameLayer: {
         label: t("menu.layer.rename"),
@@ -5205,6 +5238,7 @@
             disabled: !layersPanel?.canDistributeSelected(),
             items: DISTRIBUTES.map((d) => cmd(t(d.label), () => distributeSelected(d.id))),
           },
+          item("lockLayers"),
           separator,
           item("newLayerFromVisible"),
           {
@@ -6385,6 +6419,13 @@
   />
 {/if}
 
+{#if lockDialog}
+  <LockLayersDialog
+    locks={commonLocks(lockDialog.layers)}
+    onapply={applyLocks}
+    onclose={() => (lockDialog = null)}
+  />
+{/if}
 {#if trimDialog}
   <TrimDialog settings={trimLast} onapply={applyTrim} onclose={() => (trimDialog = null)} />
 {/if}

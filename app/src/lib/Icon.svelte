@@ -1,6 +1,12 @@
 <script lang="ts" module>
   // Minimal stroke icons (24×24 grid). Add paths here rather than pulling an icon library.
   const paths = {
+    // Layer locks (ADR 0046): a padlock (Lock All, a row's partial lock), filled across its
+    // body for a row's full lock; a checkerboard (transparency); arrows (position).
+    lock: "M6 11h12v9H6Z M8.5 11V8a3.5 3.5 0 0 1 7 0v3",
+    lockFull: "M6 11h12v9H6Z M8.5 11V8a3.5 3.5 0 0 1 7 0v3 M6 14h12 M6 17h12",
+    lockTransparency: "M4 4h16v16H4Z M4 12h16 M12 4v16 M4 8h4 M8 4v8 M16 12v8 M12 16h8",
+    lockPosition: "M12 3v18 M3 12h18 M9 6l3-3 3 3 M9 18l3 3 3-3 M6 9l-3 3 3 3 M18 9l3 3-3 3",
     eye: "M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6Z",
     plus: "M12 5v14 M5 12h14",
     trash: "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v5 M14 11v5",
