@@ -151,3 +151,28 @@ Photoshop's six tools. Its first step:
 
 Later steps: editing anchors and handles after the fact (adding, deleting, converting and
 moving them as Pen gestures, Photoshop's Ctrl and Alt), selecting a path (A), vector masks.
+
+## Amendment: editing paths with the Pen (2026-10-13)
+
+Status: accepted (2026-10-13, under the maintainer's delegation; to review).
+
+1. **The Pen edits the active vector layer's path**, with Photoshop's Pen and Direct Selection
+   gestures and no tool of its own: its anchors and handles show; Ctrl-drag moves an anchor
+   (its handles with it), a handle (a smooth anchor stays smooth: the other handle turns,
+   keeping its length) or a segment (the whole path); a click on a segment adds an anchor
+   without changing the curve, on an anchor deletes it (two stay at least), on an open path's
+   end continues the path from there; Alt+click makes an anchor a corner, Alt-drag pulls new
+   smooth handles out of it, Alt-drag on a handle moves it alone. A press away from the path
+   starts a new path (a new layer), as before.
+2. **One gesture, one edit**: the release sends the whole new geometry as `SetShape`
+   (`Edit::reshape`: linked copies follow, ADR 0040). The overlay previews the drag; the layer
+   is redrawn on release.
+3. **A live shape is turned into a regular path first**, after a confirmation as in
+   Photoshop: `shape::path::as_path` gives a rectangle's corners (two anchors per rounded
+   corner), an ellipse's four anchors (top, right, bottom, left, the usual cubic quarter
+   arcs), a polygon's corners and a line's ends; the UI receives it as `LayerView.livePath`
+   to show the anchors, and the conversion is an ordinary `SetShape` (one undo entry). The
+   shape's Properties (corner radius, sides) no longer apply afterwards.
+4. **Layers in perspective are refused** (a message): their handles would need the projective
+   map, under which a Bézier is no longer a Bézier. Groups' and layers' affine transforms are
+   composed to map the path to the document and back.
