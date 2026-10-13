@@ -25,6 +25,7 @@ mod refine;
 mod segment;
 mod selection;
 mod shape;
+mod text;
 mod update;
 mod vector;
 
@@ -2274,6 +2275,9 @@ pub fn run() {
                     window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)))?;
                 }
             }
+            // The system's fonts listed off the UI thread, before the Type tool needs them
+            // (text edits lay out under the document lock).
+            std::thread::spawn(|| drop(text::fonts()));
             // The AI helper stops when unused for a while, freeing its memory.
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -2346,6 +2350,9 @@ pub fn run() {
             open_failures,
             open_images,
             vector::vector_info,
+            text::font_families,
+            text::font_styles,
+            text::text_layout,
             vector::vector_thumbnail,
             vector::close_vector,
             vector::open_vector_pages,
@@ -4654,6 +4661,73 @@ mod tests {
         let json = format!(r#"{{"kind":"addGradientFill","name":"Flat","gradient":{flat}}}"#);
         let request: EditRequest = serde_json::from_str(&json).unwrap();
         assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn a_text_is_added_typed_and_named_after_what_it_says() {
+        let mut s = blank_session();
+        let text = |content: &str| {
+            format!(
+                r#"{{"content":"{content}","family":"{}","weight":400,"italic":false,"size":40,"color":[1,0,0,1],"align":"left","position":[20,60]}}"#,
+                slopshop_text::DEFAULT_FAMILY
+            )
+        };
+        // The Type tool's click: an empty text layer, in one gesture with what is typed.
+        let json = format!(r#"{{"kind":"addText","text":{}}}"#, text(""));
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(request.history_label().map(|l| l.kind), Some("newText"));
+        let label = request.history_label();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.with_label(label, |s| s.perform_in_gesture(edit)).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert_eq!((layer.kind, layer.name.as_str()), ("vector", ""));
+        assert_eq!(layer.text.as_ref().unwrap().content, "");
+        assert!(layer.shape.is_none(), "not edited as a shape");
+        let id = layer.id;
+        let carets = text::text_layout_of(s.document(), LayerId::from_raw(id)).unwrap();
+        assert_eq!(carets.carets.len(), 1);
+        assert!(!carets.missing_font);
+
+        // The new line as JSON escapes it.
+        for typed in ["H", "Hi", r"Hi\nthere"] {
+            let json = format!(r#"{{"kind":"setText","id":{id},"text":{}}}"#, text(typed));
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            let edit = request.into_edit(&mut s).unwrap();
+            s.perform_in_gesture(edit).unwrap();
+        }
+        s.end_gesture();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert_eq!(layer.name, "Hi there");
+        assert_eq!(layer.text.as_ref().unwrap().content, "Hi\nthere");
+        for (a, b) in layer.swatch.iter().zip([1.0, 0.0, 0.0, 1.0]) {
+            assert!((a - b).abs() < 1e-5, "{:?}", layer.swatch);
+        }
+        let layout = text::text_layout_of(s.document(), LayerId::from_raw(id)).unwrap();
+        assert_eq!(layout.carets.len(), "Hi\nthere".len() + 1);
+        // The first caret at the anchor, across the baseline.
+        let [x, top, _, bottom] = layout.carets[0];
+        assert!((x - 20.0).abs() < 1e-6 && top < 60.0 && bottom > 60.0);
+        // One history entry, named for the new text.
+        let (history, done) = s.history();
+        assert_eq!(history[done - 1].kind, "newText");
+        s.undo().unwrap();
+        assert_eq!(s.document().layers().len(), 1);
+
+        // A text that is not valid, or for a layer that is not text, is refused.
+        let bad = text("x").replace(r#""size":40"#, r#""size":0"#);
+        let json = format!(r#"{{"kind":"addText","text":{bad}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+        let background = s.document().layers()[0].id.get();
+        let json = format!(
+            r#"{{"kind":"setText","id":{background},"text":{}}}"#,
+            text("x")
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+        assert!(text::text_layout_of(s.document(), LayerId::from_raw(background)).is_err());
     }
 
     #[test]
