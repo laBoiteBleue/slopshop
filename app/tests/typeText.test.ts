@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   caretAt,
+  caretIndexAt,
   clampSizePt,
   commitsText,
   defaultTypeOptions,
@@ -94,6 +95,25 @@ test("the caret stands at its place, or at the last one while the layout catches
   expect(caretAt(carets, 1)).toEqual([5, 0, 5, 10]);
   expect(caretAt(carets, 7)).toEqual([5, 0, 5, 10]);
   expect(caretAt([], 0)).toBeNull();
+});
+
+test("a click finds the nearest place in the text, none outside it", () => {
+  // Two lines: "ab" then "c", 10 px apart, carets 8 px tall.
+  const carets: Caret[] = [
+    [0, 0, 0, 8],
+    [5, 0, 5, 8],
+    [10, 0, 10, 8],
+    [0, 10, 0, 18],
+    [6, 10, 6, 18],
+  ];
+  expect(caretIndexAt(carets, [4, 4], 8)).toBe(1);
+  expect(caretIndexAt(carets, [9, 4], 8)).toBe(2);
+  // Right of the short second line: its end.
+  expect(caretIndexAt(carets, [12, 14], 8)).toBe(4);
+  expect(caretIndexAt(carets, [1, 15], 8)).toBe(3);
+  // Far away: outside.
+  expect(caretIndexAt(carets, [40, 4], 8)).toBeNull();
+  expect(caretIndexAt([], [0, 0], 8)).toBeNull();
 });
 
 test("Escape, Ctrl+Enter and the keypad's Enter commit; Enter alone is a new line", () => {

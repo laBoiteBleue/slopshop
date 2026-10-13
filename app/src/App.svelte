@@ -226,6 +226,7 @@
   import { editablePath } from "./lib/pathEdit";
   import TypeTool from "./lib/TypeTool.svelte";
   import {
+    caretIndexAt,
     defaultTypeOptions,
     newText,
     optionsOf,
@@ -1238,6 +1239,8 @@
     created: boolean;
     text: TextDto;
     carets: Caret[];
+    /** Where the caret starts (UTF-16 units); absent: at the end. */
+    start?: number;
   } | null>(null);
   let typingKey = 0;
 
@@ -1341,15 +1344,18 @@
     const hitLayer = hit === null ? null : findLayer(doc.layers, hit);
     if (hitLayer?.text) {
       layersPanel?.selectOnly(hitLayer.id);
+      // The caret where the text was clicked.
+      const layout = await engine.textLayout(doc.id, hitLayer.id).catch(() => null);
+      const carets = layout?.carets ?? [];
       typing = {
         key: ++typingKey,
         documentId: doc.id,
         layerId: hitLayer.id,
         created: false,
         text: hitLayer.text,
-        carets: [],
+        carets,
+        start: caretIndexAt(carets, point, Infinity) ?? undefined,
       };
-      await refreshCarets(doc.id, hitLayer.id);
       return;
     }
     const options = { ...typeOptions, color: colors.foreground };
@@ -6351,7 +6357,12 @@
                     {mapping}
                     mac={isMac}
                     editing={typing && typing.documentId === active?.id
-                      ? { key: typing.key, content: typing.text.content, carets: typing.carets }
+                      ? {
+                          key: typing.key,
+                          content: typing.text.content,
+                          carets: typing.carets,
+                          start: typing.start,
+                        }
                       : null}
                     onplace={(point) => void placeText(point)}
                     oninput={typeText}
