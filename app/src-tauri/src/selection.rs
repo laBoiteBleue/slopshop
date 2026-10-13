@@ -1554,6 +1554,7 @@ mod tests {
             parent: None,
             index: 0,
             layer: slopshop_core::Layer {
+                locks: Default::default(),
                 style: None,
                 transform: slopshop_core::Affine::translation(50.0, 0.0).into(),
                 clipped: false,
