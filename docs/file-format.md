@@ -404,7 +404,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     pattern fill's), `link` (the pattern moves with the layer; else it is placed in the
     document's space), `mode` and `opacity`. The pattern is drawn as a pattern fill within the
     layer's shape, under the Gradient and Color Overlays. Only those nodes are written at v17.
-  - v18 (schema 0.34, [ADR 0044](adr/0044-mesh-warps.md)) is a raster node with a warp (Edit >
+  - v18 (schema 0.35, [ADR 0044](adr/0044-mesh-warps.md)) is a raster node with a warp (Edit >
     Transform > Warp), applied in the layer's content space before its `transform`:
     `params.warp` is `{"kind": "grid", "frame": [x0, y0, x1, y1], "columns", "rows", "points",
     "preset"}`, a grid of `columns × rows` bicubic Bézier patches (1 to 16 each way) over

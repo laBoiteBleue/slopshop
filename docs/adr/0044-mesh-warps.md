@@ -110,5 +110,5 @@ Status: accepted (2026-10-13, under the maintainer's delegation; to review).
   orientation and Bend (-100 to 100 %, 50 % when a style is first chosen, as in Photoshop);
   each change is live, Enter applies (one undo entry), Esc or undo cancels. Dragging the grid's
   points and handles, and grid sizes, come next.
-- **`.slop`**: node version 18 (schema 0.33); serde_json reads numbers back to the bit
+- **`.slop`**: node version 18 (schema 0.35); serde_json reads numbers back to the bit
   (`float_roundtrip`), so that a grid survives a save exactly.
