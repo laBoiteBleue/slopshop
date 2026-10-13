@@ -24,6 +24,16 @@
     shapeKindOf,
     type ShapeOptions,
   } from "./shapes";
+  import {
+    defaultTypeOptions,
+    MAX_SIZE_PT,
+    MIN_SIZE_PT,
+    styleKey,
+    styleOfKey,
+    weightName,
+    type TypeOptions,
+  } from "./typeText";
+  import type { FontsView } from "./engine";
 
   let {
     tool,
@@ -113,6 +123,11 @@
     ondistribute,
     shape = $bindable(defaultShapeOptions("#000000")),
     onpickcolor,
+    type = $bindable(defaultTypeOptions("#000000")),
+    fonts = null,
+    typeStyles = [],
+    missingFont = null,
+    onpicktypecolor,
   }: {
     tool: ToolId;
     /** Free Transform under way: its fields replace the tool's options, as in Photoshop. */
@@ -129,6 +144,16 @@
     shape?: ShapeOptions;
     /** Shape tools: a swatch was clicked; the color picker sets `shape.fill` or `shape.stroke`. */
     onpickcolor?: (which: "fill" | "stroke") => void;
+    /** Type tool (ADR 0041): the next text's settings, or the active text layer's. */
+    type?: TypeOptions;
+    /** Type tool: the families to choose from (none while they are listed). */
+    fonts?: FontsView | null;
+    /** Type tool: the styles of the family chosen. */
+    typeStyles?: { weight: number; italic: boolean }[];
+    /** Type tool: the active text layer's family, not installed. */
+    missingFont?: string | null;
+    /** Type tool: the color swatch was clicked. */
+    onpicktypecolor?: () => void;
     /** Selection tools: how a new shape combines with the selection (keys override it). */
     selectionMode: SelectionMode;
     /** Selection tools: Gaussian softening of the edge, in pixels. */
@@ -216,6 +241,12 @@
   );
 
   const current = $derived(toolInfo(tool));
+
+  /** A font style's name: its weight's, italic or not. */
+  function styleName(style: { weight: number; italic: boolean }): string {
+    const name = t(`options.type.weight.${weightName(style.weight)}`);
+    return style.italic ? t("options.type.italic", { style: name }) : name;
+  }
 
   /** Crop's choice: free, a preset ratio (`w:h`), the canvas's, a ratio typed, or a size. */
   function cropPreset(aspect: CropAspect): string {
@@ -395,6 +426,79 @@
       <input type="checkbox" bind:checked={gradient.reverse} />
       {t("options.gradient.reverse")}
     </label>
+  {:else if tool === "type"}
+    {@const family = type.family || fonts?.defaultFamily || ""}
+    <select
+      class="font-family"
+      aria-label={t("options.type.family")}
+      title={t("options.type.family")}
+      value={family}
+      onchange={(e) => (type.family = e.currentTarget.value)}
+    >
+      {#if fonts && !fonts.families.includes(family)}
+        <option value={family}>{family}</option>
+      {/if}
+      {#each fonts?.families ?? [] as name (name)}
+        <option value={name}>{name}</option>
+      {/each}
+    </select>
+    <select
+      aria-label={t("options.type.style")}
+      title={t("options.type.style")}
+      value={styleKey(type)}
+      onchange={(e) => {
+        const style = styleOfKey(e.currentTarget.value);
+        type.weight = style.weight;
+        type.italic = style.italic;
+      }}
+    >
+      {#if !typeStyles.some((s) => styleKey(s) === styleKey(type))}
+        <option value={styleKey(type)}>{styleName(type)}</option>
+      {/if}
+      {#each typeStyles as style (styleKey(style))}
+        <option value={styleKey(style)}>{styleName(style)}</option>
+      {/each}
+    </select>
+    <SliderField
+      label={t("options.type.size")}
+      bind:value={type.sizePt}
+      min={MIN_SIZE_PT}
+      max={MAX_SIZE_PT}
+      step={0.01}
+      unit="pt"
+      log
+    />
+    <span class="divider"></span>
+    {#each [{ align: "left", icon: "textLeft" }, { align: "center", icon: "textCenter" }, { align: "right", icon: "textRight" }] as const as entry (entry.align)}
+      <button
+        class="icon-btn"
+        class:on={type.align === entry.align}
+        aria-pressed={type.align === entry.align}
+        onmousedown={keepFocus}
+        title={t(`options.type.align.${entry.align}`)}
+        aria-label={t(`options.type.align.${entry.align}`)}
+        onclick={() => (type.align = entry.align)}
+      >
+        <Icon name={entry.icon} />
+      </button>
+    {/each}
+    <span class="divider"></span>
+    <button
+      class="swatch"
+      style:background={type.color}
+      onmousedown={keepFocus}
+      title={t("options.type.color")}
+      aria-label={t("options.type.color")}
+      onclick={() => onpicktypecolor?.()}
+    ></button>
+    {#if missingFont}
+      <span class="warning" role="status">
+        {t("options.type.missingFont", {
+          family: missingFont,
+          fallback: fonts?.defaultFamily ?? "",
+        })}
+      </span>
+    {/if}
   {:else if shapeKindOf(tool) || tool === "pen"}
     <!-- The Pen's paths are filled and stroked as the shape tools' shapes. -->
     {@const kind = shapeKindOf(tool)}
@@ -767,6 +871,15 @@
   }
 
   /* A shape's fill or stroke color; faded while the shape has none. */
+  .font-family {
+    max-width: 180px;
+  }
+
+  .warning {
+    color: var(--warning, #f59e0b);
+    font-size: 12px;
+  }
+
   .swatch {
     width: 22px;
     height: 18px;

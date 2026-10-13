@@ -181,6 +181,8 @@ export type LayerView = {
   shape?: Shape | null;
   /** A live shape's outline as a regular path (the Pen shows and edits its anchors). */
   livePath?: ShapeGeometry | null;
+  /** A text layer's text (a vector layer, ADR 0041). Absent: not one. */
+  text?: TextDto | null;
   /** How many other layers are linked to this one (the same source or shape, ADR 0040). */
   linked?: number;
   /** A pattern fill layer's pattern (ADR 0042): its source, scale and angle (degrees). */
@@ -526,6 +528,38 @@ export type SelectionViewMode = "ants" | "overlay" | "onBlack" | "onWhite" | "ma
 export type SavedSelectionView = { id: number; name: string };
 
 /** A shape to select, in document pixels. */
+export type TextAlign = "left" | "center" | "right";
+
+/**
+ * A text layer's text (ADR 0041): sizes in pixels (the options bar shows points), the color
+ * sRGB-encoded RGBA in [0, 1], the anchor (first baseline at the alignment point) in the
+ * layer's own space.
+ */
+export type TextDto = {
+  content: string;
+  family: string;
+  weight: number;
+  italic: boolean;
+  size: number;
+  color: [number, number, number, number];
+  /** Thousandths of an em. */
+  tracking: number;
+  /** Pixels; null: automatic (120 %). */
+  leading: number | null;
+  align: TextAlign;
+  position: [number, number];
+};
+
+/** The fonts to choose from, and the default (bundled) family. */
+export type FontsView = { families: string[]; defaultFamily: string };
+
+/** Where the caret can stand in a text layer: one per UTF-16 place, in document pixels. */
+export type TextLayoutView = {
+  carets: [number, number, number, number][];
+  /** The layer's font is not installed: edited, it is set in the default family. */
+  missingFont: boolean;
+};
+
 export type SelectionShape =
   | { kind: "rectangle" | "ellipse"; left: number; top: number; right: number; bottom: number }
   | { kind: "polygon"; points: [number, number][] };
@@ -587,6 +621,10 @@ export type EditRequest =
     }
   /** A vector layer's shape. */
   | { kind: "setShape"; id: number; shape: Shape }
+  /** A text layer saying `text` (the Type tool), named after it, placed as `addFillLayer`. */
+  | { kind: "addText"; text: TextDto; parent?: number | null; index?: number }
+  /** A text layer's text, on every linked copy. */
+  | { kind: "setText"; id: number; text: TextDto }
   /** A pattern fill layer's scale (layer pixels per pattern pixel) and angle (degrees). */
   | { kind: "setPatternFill"; id: number; scale: number; angle: number }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
@@ -1546,6 +1584,14 @@ export const engine = {
    * until `openVectorPages` or `closeVector`. Rejects if the file cannot be read.
    */
   vectorInfo: (path: string) => invoke<VectorInfo>("vector_info", { path }),
+  /** The font families to choose from (the system's and the bundled ones). */
+  fontFamilies: () => invoke<FontsView>("font_families"),
+  /** The styles a family offers, upright first, lightest first. */
+  fontStyles: (family: string) =>
+    invoke<{ weight: number; italic: boolean }[]>("font_styles", { family }),
+  /** Where the caret can stand in text layer `id`. */
+  textLayout: (documentId: number, id: number) =>
+    invoke<TextLayoutView>("text_layout", { documentId, id }),
   /** A page (from 0), at most `maxSide` pixels on its longer side (RGBA8 sRGB, straight). */
   vectorThumbnail: async (path: string, page: number, maxSide: number) => {
     const buffer = await invoke<ArrayBuffer>("vector_thumbnail", { path, page, maxSide });

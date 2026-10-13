@@ -35,7 +35,9 @@
     type EditRequest,
     type Guide,
     type LayerStyle,
+    type FontsView,
     type LayerView,
+    type TextDto,
     type LayerMaskKind,
     type SelectionModify,
     type SelectionMode,
@@ -155,7 +157,7 @@
     pixelTarget as movedPixels,
     type PixelTarget,
   } from "./lib/moveTool";
-  import { findLayer, visibleRasters, walk } from "./lib/layerTree";
+  import { findLayer, insertionPoint, layerTree, visibleRasters, walk } from "./lib/layerTree";
   import {
     editableEntry,
     entryEdit,
@@ -222,6 +224,15 @@
   import ShapeTool from "./lib/ShapeTool.svelte";
   import PenTool from "./lib/PenTool.svelte";
   import { editablePath } from "./lib/pathEdit";
+  import TypeTool from "./lib/TypeTool.svelte";
+  import {
+    defaultTypeOptions,
+    newText,
+    optionsOf,
+    withOptions,
+    type Caret,
+    type TypeOptions,
+  } from "./lib/typeText";
   import {
     changedShape,
     defaultShapeOptions,
@@ -1203,6 +1214,203 @@
     commitTransform();
     const shape = shapeOf(geometry, shapeOptions);
     if (shape) layersPanel?.addShape(shape);
+  }
+
+  // --- The Type tool (T, ADR 0041) ------------------------------------------------------------
+
+  /** The Type tool's options: the next text's settings, or the active text layer's. */
+  let typeOptions = $state<TypeOptions>(defaultTypeOptions("#000000"));
+  /** The font families, listed once the Type tool is first chosen. */
+  let fonts = $state<FontsView | null>(null);
+  /** The styles of the family the options bar shows. */
+  let typeStyles = $state<{ weight: number; italic: boolean }[]>([]);
+  /** The active text layer's font is not installed (its family), for the options bar. */
+  let missingFont = $state<string | null>(null);
+
+  /**
+   * A text being typed: one gesture, so one undo entry (Photoshop's), from the click to the
+   * commit. `created`: the click made the layer (an empty text then leaves no trace).
+   */
+  let typing = $state<{
+    key: number;
+    documentId: number;
+    layerId: number;
+    created: boolean;
+    text: TextDto;
+    carets: Caret[];
+  } | null>(null);
+  let typingKey = 0;
+
+  const defaultFamily = () => fonts?.defaultFamily ?? "Inter Variable";
+
+  /** The active layer's text, when it is a text layer. */
+  const activeText = $derived(activeLayer?.text ?? null);
+
+  $effect(() => {
+    if (tool !== "type" || fonts) return;
+    void engine
+      .fontFamilies()
+      .then((f) => (fonts = f))
+      .catch((e) => showError(String(e)));
+  });
+
+  // The styles of the family shown.
+  $effect(() => {
+    if (tool !== "type") return;
+    const family = typeOptions.family || defaultFamily();
+    void engine
+      .fontStyles(family)
+      .then((styles) => {
+        if ((typeOptions.family || defaultFamily()) === family) typeStyles = styles;
+      })
+      .catch(() => (typeStyles = []));
+  });
+
+  // The options bar shows the active text layer's settings (Photoshop's), else the next text's
+  // in the foreground color.
+  $effect(() => {
+    if (tool !== "type" || !active) return;
+    const text = activeText;
+    const ppi = active.resolution;
+    const foreground = colors.foreground;
+    untrack(() => {
+      if (text) typeOptions = optionsOf(text, ppi);
+      else typeOptions = { ...typeOptions, color: foreground };
+    });
+  });
+
+  // Whether the active text layer's font is installed.
+  $effect(() => {
+    const layer = tool === "type" && activeText ? activeLayer : null;
+    const doc = active;
+    if (!layer || !doc) {
+      missingFont = null;
+      return;
+    }
+    const family = layer.text?.family ?? "";
+    void engine
+      .textLayout(doc.id, layer.id)
+      .then((layout) => (missingFont = layout.missingFont ? family : null))
+      .catch(() => (missingFont = null));
+  });
+
+  // The options bar changed: the active text layer follows (live while it is typed).
+  $effect(() => {
+    const options = $state.snapshot(typeOptions) as TypeOptions;
+    untrack(() => {
+      if (tool !== "type" || !active) return;
+      const layer = activeLayer;
+      const text = typing?.layerId === layer?.id ? typing?.text : layer?.text;
+      if (!layer || !text) return;
+      const ppi = active.resolution;
+      const shown = optionsOf(text, ppi);
+      const same = (Object.keys(shown) as (keyof TypeOptions)[]).every(
+        (k) => shown[k] === options[k] || (k === "family" && !options.family),
+      );
+      if (same) return;
+      const changed = withOptions(text, options, ppi, defaultFamily());
+      if (typing && typing.layerId === layer.id) {
+        typing.text = changed;
+        void sendTyped(typing.documentId, layer.id, changed);
+      } else {
+        void edit(active.id, { kind: "setText", id: layer.id, text: changed });
+      }
+    });
+  });
+
+  /** The new text's layout: where the caret can stand. */
+  async function refreshCarets(documentId: number, layerId: number) {
+    const layout = await engine.textLayout(documentId, layerId).catch(() => null);
+    if (layout && typing?.layerId === layerId) typing.carets = layout.carets;
+  }
+
+  /** What is typed, sent live (the whole text: a newer one replaces one still waiting). */
+  async function sendTyped(documentId: number, layerId: number, text: TextDto) {
+    await live(documentId, { kind: "setText", id: layerId, text });
+    await refreshCarets(documentId, layerId);
+  }
+
+  /** A click with the Type tool: the text layer under it is edited, else a text starts there. */
+  async function placeText(point: [number, number]) {
+    const doc = active;
+    if (!doc || typing) return;
+    commitTransform();
+    const hit = await engine
+      .layerAt(doc.id, Math.floor(point[0]), Math.floor(point[1]))
+      .catch(() => null);
+    const hitLayer = hit === null ? null : findLayer(doc.layers, hit);
+    if (hitLayer?.text) {
+      layersPanel?.selectOnly(hitLayer.id);
+      typing = {
+        key: ++typingKey,
+        documentId: doc.id,
+        layerId: hitLayer.id,
+        created: false,
+        text: hitLayer.text,
+        carets: [],
+      };
+      await refreshCarets(doc.id, hitLayer.id);
+      return;
+    }
+    const options = { ...typeOptions, color: colors.foreground };
+    const text = newText(options, point, doc.resolution, defaultFamily());
+    const { parent, index } = insertionPoint(layerTree(doc.layers), activeLayer?.id ?? null);
+    const before = new Set(walk(doc.layers).map((l) => l.id));
+    await live(doc.id, { kind: "addText", text, parent, index });
+    const now = tabs.find((d) => d.id === doc.id);
+    const added = now ? walk(now.layers).find((l) => !before.has(l.id)) : undefined;
+    if (!added) return;
+    layersPanel?.selectOnly(added.id);
+    typing = {
+      key: ++typingKey,
+      documentId: doc.id,
+      layerId: added.id,
+      created: true,
+      text,
+      carets: [],
+    };
+    await refreshCarets(doc.id, added.id);
+  }
+
+  function typeText(content: string) {
+    if (!typing) return;
+    typing.text = { ...typing.text, content };
+    void sendTyped(typing.documentId, typing.layerId, typing.text);
+  }
+
+  /**
+   * The text typed committed (Escape, Ctrl+Enter, the keypad's Enter, a click on the image,
+   * another tool or document): one undo entry; an empty text removes its layer, a text just
+   * placed leaving no entry.
+   */
+  function commitText() {
+    const current = typing;
+    if (!current) return;
+    typing = null;
+    if (current.text.content !== "") {
+      void endGesture(current.documentId);
+    } else if (current.created) {
+      void cancelGesture(current.documentId);
+    } else {
+      void live(current.documentId, { kind: "removeLayer", id: current.layerId }).then(() =>
+        endGesture(current.documentId),
+      );
+    }
+  }
+
+  // Another tool or document commits the text typed.
+  $effect(() => {
+    const leaving = typing && (tool !== "type" || activeId !== typing.documentId);
+    if (leaving) untrack(commitText);
+  });
+
+  /** The Type tool's swatch: the text's color (the active text layer's, or the next one's). */
+  function pickTypeColor() {
+    pickColor = {
+      title: t("options.type.color"),
+      color: typeOptions.color,
+      apply: (hex) => (typeOptions = { ...typeOptions, color: hex }),
+    };
   }
 
   /**
@@ -5854,6 +6062,11 @@
       bind:gradient={gradientOptions}
       bind:shape={shapeOptions}
       onpickcolor={pickShapeColor}
+      bind:type={typeOptions}
+      {fonts}
+      {typeStyles}
+      {missingFont}
+      onpicktypecolor={pickTypeColor}
       bind:crop={cropAspect}
       bind:straighten={straightening}
       canvasSize={active ?? undefined}
@@ -6132,6 +6345,17 @@
                       if (active) turningIntoPath = { documentId: active.id, layerId };
                     }}
                     onrefused={() => showError(t("pen.edit.perspective"))}
+                  />
+                {:else if tool === "type"}
+                  <TypeTool
+                    {mapping}
+                    mac={isMac}
+                    editing={typing && typing.documentId === active?.id
+                      ? { key: typing.key, content: typing.text.content, carets: typing.carets }
+                      : null}
+                    onplace={(point) => void placeText(point)}
+                    oninput={typeText}
+                    oncommit={commitText}
                   />
                 {:else if shapeKindOf(tool)}
                   <ShapeTool

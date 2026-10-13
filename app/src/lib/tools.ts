@@ -34,7 +34,8 @@ export type ToolId =
   | "shapeRectangle"
   | "shapeEllipse"
   | "shapePolygon"
-  | "shapeLine";
+  | "shapeLine"
+  | "type";
 
 export type Tool = {
   id: ToolId;
@@ -120,6 +121,9 @@ export const SLOTS: readonly ToolSlot[] = [
   },
   // Vector shapes (ADR 0041): each draws a vector layer. One Pen, not Photoshop's six tools.
   { key: "P", tools: [{ id: "pen", icon: "pen", name: "tools.pen" }] },
+  // Text (ADR 0041): a click places a text layer, or edits the one clicked.
+  { key: "T", tools: [{ id: "type", icon: "type", name: "tools.type" }] },
+  // Vector shapes (ADR 0041): each draws a vector layer.
   {
     key: "U",
     tools: [
