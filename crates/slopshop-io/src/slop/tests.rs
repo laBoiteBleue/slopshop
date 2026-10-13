@@ -2442,6 +2442,94 @@ fn vector_layers_round_trip_with_their_shapes_shared_and_placed() {
 }
 
 #[test]
+fn text_layers_round_trip_with_their_text_and_outlines() {
+    use slopshop_core::LayerId;
+    use slopshop_core::shape::{
+        FillRule, Geometry, Paint, Segment, Shape, ShapeSource, Subpath, Text, TextAlign,
+    };
+    let color = LinearRgba::new(0.2, 0.4, 0.6, 1.0);
+    // Outlines as the layout gives them (a path), with the text they come from.
+    let outlines = Shape {
+        geometry: Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [10.0, 30.0],
+                segments: vec![
+                    Segment::Line([20.0, 10.0]),
+                    Segment::Cubic([25.0, 12.5], [28.0, 20.0], [30.0, 30.0]),
+                ],
+                closed: true,
+            }],
+            rule: FillRule::NonZero,
+        },
+        fill: Some(Paint::Solid(color)),
+        stroke: None,
+    };
+    let text = |leading, align| Text {
+        content: "A été\nsecond 😀".to_owned(),
+        family: "Some Family".to_owned(),
+        weight: 650.0,
+        italic: true,
+        size: 24.5,
+        color,
+        tracking: -25.0,
+        leading,
+        align,
+        position: [10.0, 30.0],
+    };
+    let mut doc = Document::new(Size::new(64, 48));
+    let a = push(
+        &mut doc,
+        "A été second",
+        LayerContent::vector(ShapeSource::text(
+            text(None, TextAlign::Left),
+            outlines.clone(),
+            "",
+        )),
+        1.0,
+    );
+    let b = push(
+        &mut doc,
+        "b",
+        LayerContent::vector(ShapeSource::text(
+            text(Some(30.0), TextAlign::Center),
+            outlines.clone(),
+            "",
+        )),
+        1.0,
+    );
+    let path = temp_path("text.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    let source = |doc: &Document, id| match &doc.layer(LayerId::from_raw(id)).unwrap().content {
+        LayerContent::Vector { source, .. } => Arc::clone(source),
+        _ => panic!("not a vector layer"),
+    };
+    for id in [a, b] {
+        let (before, after) = (source(&doc, id), source(&loaded, id));
+        assert_eq!(after.shape(), before.shape());
+        assert_eq!(after.text_of(), before.text_of());
+        assert!(after.text_of().is_some());
+    }
+    assert_eq!(
+        loaded.layer(LayerId::from_raw(a)).unwrap().name,
+        "A été second"
+    );
+    fs::remove_file(&path).ok();
+
+    // A text that is not valid is refused (a corrupt file).
+    let mut value = super::shape::text_to_json(&text(None, TextAlign::Right));
+    assert_eq!(
+        super::shape::text_from_json(&value),
+        Some(text(None, TextAlign::Right))
+    );
+    value["size"] = serde_json::json!(-1.0);
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["size"] = serde_json::json!(12.0);
+    value["align"] = serde_json::json!("justify");
+    assert!(super::shape::text_from_json(&value).is_none());
+}
+
+#[test]
 fn pattern_fills_round_trip_with_their_source_shared() {
     use slopshop_core::LayerId;
     use slopshop_core::pattern::PatternFill;
