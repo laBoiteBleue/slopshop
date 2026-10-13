@@ -17,7 +17,7 @@
 //! cubic Bézier). Coordinates are in the layer's own space; colors are linear working-space RGBA,
 //! as a fill node's. No fill or no stroke: absent. A shape that is not valid is a corrupt file.
 //!
-//! A text source (schema 0.33) is a shape entry with a `text` besides its `shape`, which then
+//! A text source (schema 0.34) is a shape entry with a `text` besides its `shape`, which then
 //! holds its glyph outlines (a path), so that a reader without the fonts, or an older one, still
 //! draws it:
 //!

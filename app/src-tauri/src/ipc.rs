@@ -811,8 +811,9 @@ impl LayerView {
                 }),
                 _ => None,
             },
+            // A text's outlines are not edited as a shape (and would weigh on every view).
             shape: match &layer.content {
-                LayerContent::Vector { source, .. } => {
+                LayerContent::Vector { source, .. } if source.text_of().is_none() => {
                     Some(crate::shape::ShapeDto::of(source.shape()))
                 }
                 _ => None,
@@ -1685,6 +1686,7 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content: LayerContent::vector(source),
+                        locks: Default::default(),
                     },
                 }
             }

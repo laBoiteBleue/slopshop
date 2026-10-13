@@ -1569,6 +1569,7 @@ mod tests {
                     dto.shape().unwrap(),
                     "Shape 1",
                 )),
+                locks: Default::default(),
             },
         })
         .unwrap();
