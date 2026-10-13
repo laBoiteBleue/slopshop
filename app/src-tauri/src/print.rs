@@ -38,6 +38,7 @@ fn on_paper(doc: &Document) -> Result<Document, String> {
         content: LayerContent::Fill {
             color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
         },
+        warp: None,
     };
     Edit::InsertLayer {
         parent: None,

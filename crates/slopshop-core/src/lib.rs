@@ -26,6 +26,8 @@
 //! - [`bake`]: Layer > Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten (ADR 0031).
 //! - [`trim`]: Image > Trim, the canvas reduced to the image without its uniform margins.
 //! - [`auto`]: Image > Auto Tone, Auto Contrast and Auto Color, Levels computed from the image.
+//! - [`warp`]: Edit > Transform > Warp, a Bézier grid placing a layer before its transform
+//!   (ADR 0044), drawn as triangles.
 
 pub mod adjust;
 pub mod align;
@@ -67,6 +69,7 @@ pub mod tile;
 pub mod transform;
 pub mod trim;
 pub mod view;
+pub mod warp;
 
 pub use blend::{BlendMode, BlendSpace};
 pub use color::{ColorSpace, LinearRgba};

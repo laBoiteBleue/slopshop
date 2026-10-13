@@ -68,6 +68,8 @@ impl BakePlan {
         let mut baked = layer.clone();
         baked.content = LayerContent::raster(image);
         baked.transform = shifted(layer.transform, self.shift);
+        // A warp is baked into the pixels (ADR 0044).
+        baked.warp = None;
         baked.mask = match &layer.mask {
             Some(mask) => Some(grown_mask(mask, self.shift)?),
             None => None,
@@ -132,9 +134,15 @@ pub fn can_rasterize(layer: &Layer) -> bool {
         | LayerContent::PatternFill { .. }
         | LayerContent::Group { .. }
         | LayerContent::Vector { .. } => true,
-        LayerContent::Raster { .. } => layer.is_painted(),
+        LayerContent::Raster { .. } => layer.is_painted() || bakes_warp(layer),
         LayerContent::Adjustment { .. } => false,
     }
+}
+
+/// A warped pixel layer (ADR 0044) without a mask: Rasterize resamples it into its pixels, its
+/// warp gone. (With a mask, the mask would have to be warped alike: left for later.)
+fn bakes_warp(layer: &Layer) -> bool {
+    layer.warp.is_some() && layer.mask.is_none()
 }
 
 /// Rasterize, for the pixel layers among `ids` (outermost) that carry a stack or a painted
@@ -144,7 +152,10 @@ pub fn rasterize_in_place(doc: &Document, ids: &[LayerId]) -> Result<Vec<Edit>, 
     let mut edits = Vec::new();
     for id in doc.outermost(ids) {
         let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
-        if !matches!(layer.content, LayerContent::Raster { .. }) || !layer.is_painted() {
+        if !matches!(layer.content, LayerContent::Raster { .. })
+            || !layer.is_painted()
+            || bakes_warp(layer)
+        {
             continue;
         }
         let mut baked = layer.clone();
@@ -185,6 +196,17 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
             }],
             // Its layers, in the group's content space, composited on their own.
             LayerContent::Group { children, .. } => children.clone(),
+            // Warped (ADR 0044): the warped pixels, in the layer's content space.
+            LayerContent::Raster { .. } if bakes_warp(layer) => vec![Layer {
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                clipped: false,
+                transform: Projective::IDENTITY,
+                style: None,
+                ..layer.clone()
+            }],
             _ => continue,
         };
         // Where the content shows, in the layer's content space: a fill wherever the canvas
@@ -195,12 +217,22 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
             .map(|to_content| canvas_bounds(doc, to_content))
             .ok_or(EditError::InvalidTransform)?;
         // Nothing shows (hidden or empty layers): a transparent pixel.
-        let region = content_bounds(doc, &content, canvas)?.unwrap_or(Bounds {
+        let mut region = content_bounds(doc, &content, canvas)?.unwrap_or(Bounds {
             left: 0,
             top: 0,
             right: 1,
             bottom: 1,
         });
+        // A warp's edges are antialiased by the resampling filter, beyond its pixels' box.
+        if matches!(layer.content, LayerContent::Raster { .. }) {
+            let m = crate::resample::RADIUS.ceil() as i64 + 1;
+            region = Bounds {
+                left: region.left - m,
+                top: region.top - m,
+                right: region.right + m,
+                bottom: region.bottom + m,
+            };
+        }
         // Whole tiles before the origin when the content starts before it.
         let tiles = |v: i64| (v.min(0).unsigned_abs()).div_ceil(u64::from(TILE_SIZE)) as u32;
         let shift = (tiles(region.left), tiles(region.top));
@@ -315,6 +347,7 @@ pub fn merge_preview(
             children: Vec::new(),
             pass_through: false,
         },
+        warp: None,
     };
     let mut edits = vec![Edit::group_layers(doc, group, &removed)?];
     for &id in &removed {
@@ -461,6 +494,7 @@ mod tests {
             clipped: false,
             transform: crate::transform::Projective::IDENTITY,
             content,
+            warp: None,
         }
     }
 
@@ -802,6 +836,53 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!(worst < 0.01, "differ by {worst}");
         assert!(after.iter().any(|&v| v > 0.0));
+    }
+
+    #[test]
+    fn rasterizing_a_warped_layer_bakes_its_warp() {
+        use crate::warp::{Warp, WarpPreset, WarpStyle};
+        let mut doc = Document::new(Size::new(100, 100));
+        let pixels: Vec<u8> = (0..40 * 30)
+            .flat_map(|i| [(i % 40 * 6) as u8, (i / 40 * 8) as u8, 90, 255])
+            .collect();
+        let image = Arc::new(
+            RasterImage::from_pixels(
+                Size::new(40, 30),
+                crate::color::PixelFormat::RGBA8_SRGB,
+                &pixels,
+            )
+            .unwrap(),
+        );
+        let mut layer = plain(&mut doc, "photo", LayerContent::raster(image));
+        layer.transform = Affine::translation(20.0, 30.0).into();
+        let preset = WarpPreset {
+            style: WarpStyle::Bulge,
+            bend: 0.6,
+            vertical: false,
+        };
+        layer.warp = Some(Arc::new(
+            Warp::from_preset([0.0, 0.0, 40.0, 30.0], preset).unwrap(),
+        ));
+        let id = push(&mut doc, layer);
+        // The bulge shows above the layer's box: hit there.
+        assert_eq!(shown(&doc, 40, 27), Some("photo".to_owned()));
+        assert_eq!(shown(&doc, 21, 27), None);
+        let region = Rect::new(0, 0, 100, 100);
+        let mut before = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut before).unwrap();
+        assert!(can_rasterize(doc.layer(id).unwrap()));
+        let plans = rasterize_plans(&doc, &[id]).unwrap();
+        assert_eq!(plans.len(), 1);
+        bake(&mut doc, plans.into_iter().next().unwrap());
+        assert!(doc.layer(id).unwrap().warp.is_none());
+        let mut after = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut after).unwrap();
+        let worst = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "differ by {worst}");
     }
 
     #[test]

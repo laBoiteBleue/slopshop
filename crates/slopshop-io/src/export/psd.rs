@@ -521,6 +521,7 @@ impl Writer<'_, '_> {
             content: LayerContent::Fill {
                 color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
             },
+            warp: None,
         };
         let area = self.document.size().bounds();
         let alone = self.single(coverage);

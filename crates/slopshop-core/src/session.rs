@@ -55,6 +55,7 @@ impl HistoryLabel {
             Edit::SetLayerMaskEnabled { .. } => "maskEnabled",
             Edit::MoveLayer { .. } => "arrange",
             Edit::SetLayerTransform { .. } => "transform",
+            Edit::SetLayerWarp { .. } => "warp",
             Edit::SetLayerStack { .. } => "pixels",
             Edit::SetMaskPaint { .. } => "maskPixels",
             Edit::Repoint { .. } => "makeUnique",
@@ -336,6 +337,7 @@ impl Session {
                             children: copies,
                             pass_through: false,
                         },
+                        warp: None,
                     },
                 };
                 (Some(id), edit)
@@ -655,6 +657,7 @@ mod tests {
                     content: LayerContent::Fill {
                         color: LinearRgba::new(0.0, 0.0, 1.0, 1.0),
                     },
+                    warp: None,
                 },
             })
             .unwrap();
@@ -944,6 +947,7 @@ mod tests {
                         stack: None,
                         image: crate::stack::Pixels::ready(image.clone()),
                     },
+                    warp: None,
                 },
             })
             .unwrap();
@@ -1060,6 +1064,7 @@ mod tests {
                         children: Vec::new(),
                         pass_through: true,
                     },
+                    warp: None,
                 },
             })
             .unwrap();

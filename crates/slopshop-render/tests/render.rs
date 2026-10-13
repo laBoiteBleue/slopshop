@@ -44,6 +44,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
                 blend_mode: BlendMode::Normal,
                 mask: None,
                 content: LayerContent::Fill { color },
+                warp: None,
             },
         })
         .unwrap();
@@ -244,6 +245,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
             },
+            warp: None,
         },
     })
     .unwrap();
@@ -376,6 +378,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
                     stack: None,
                     image: slopshop_core::stack::Pixels::ready(image.clone()),
                 },
+                warp: None,
             },
         })
         .unwrap();
@@ -976,5 +979,66 @@ fn quick_mask_tints_what_its_mask_leaves_out() {
         s.perform(Edit::SetSelection { selection: None }).unwrap();
         let none = render_overlays(&r, s.document(), view(SelectionView::OnBlack), size);
         assert_eq!(pixel(&none, 10, 10), [0, 0, 0, 255]);
+    }
+}
+
+#[test]
+fn a_warp_that_is_an_affine_map_shows_as_that_transform() {
+    use slopshop_core::warp::Warp;
+    use std::sync::Arc;
+    let size = Size::new(240, 200);
+    let affine = slopshop_core::Affine::scale(0.6, 0.45)
+        .then(slopshop_core::Affine::rotation(0.3))
+        .then(slopshop_core::Affine::translation(70.0, 20.0));
+    let transformed = {
+        let mut s = raster_session(size, pattern);
+        let id = s.document().layers()[0].id;
+        s.perform(Edit::SetLayerTransform {
+            id,
+            transform: affine.into(),
+        })
+        .unwrap();
+        s
+    };
+    let warped = {
+        let mut s = raster_session(size, pattern);
+        let id = s.document().layers()[0].id;
+        let frame = [0.0, 0.0, 240.0, 200.0];
+        let plain = Warp::identity(frame, 3, 3).unwrap();
+        let points = plain
+            .points()
+            .iter()
+            .map(|&(x, y)| affine.apply(x, y))
+            .collect();
+        let warp = Warp::new(frame, 3, 3, points, None).unwrap();
+        s.perform(Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::new(warp)),
+        })
+        .unwrap();
+        s
+    };
+    for cached in [false, true] {
+        let Some(r) = renderer() else { return };
+        let r = r.with_display_cache(cached);
+        for view in [
+            identity(),
+            ViewTransform {
+                origin: [0.0, 0.0],
+                scale: 2.0,
+            },
+        ] {
+            let a = r.render_view(transformed.document(), view, Size::new(120, 100));
+            let b = r.render_view(warped.document(), view, Size::new(120, 100));
+            let (a, b) = (a.unwrap(), b.unwrap());
+            let worst = a
+                .data
+                .iter()
+                .zip(&b.data)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(worst <= 2, "cached {cached}, {view:?}: {worst}");
+        }
     }
 }

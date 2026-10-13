@@ -475,14 +475,18 @@ Raised on 2026-10-05, to schedule:
 
 ## Open to contributors: advanced transforms
 
-None of these exist yet, and none has a menu entry until it works (Edit > Transform lists only
-what is implemented). Each must stay non-destructive and editable: parameters kept on the layer,
+Warp exists in part (below); none of the others has a menu entry until it works (Edit >
+Transform lists only what is implemented). Each must stay non-destructive and editable: parameters kept on the layer,
 pixels never resampled into it (as [ADR 0017](adr/0017-non-destructive-transforms.md) does for
 affine transforms), rendered identically on the CPU and the GPU. Discuss the model in an ADR
 first.
 
-- [ ] **Warp / mesh deformation** (Edit > Transform > Warp once it works): a grid of control
-      points and handles over the layer, editable again at any time.
+- [ ] **Warp / mesh deformation** (Edit > Transform > Warp, [ADR 0044](adr/0044-mesh-warps.md)):
+      a grid of Bézier patches kept on the layer, drawn as triangles on the CPU and the GPU.
+      Done: pixel layers, the styles Arc, Bulge, Flag, Wave and Twist (Bend, orientation) in
+      the options bar, the grid drawn, Enter and Esc, `.slop`, Rasterize. Open: dragging the
+      grid's points and handles, grid sizes, the other styles, other layer kinds, a warped
+      layer's mask baked by Rasterize, painting through the warp.
 - [ ] **Puppet Warp**: a mesh over the layer's content with pins, fixed or moved, for organic
       deformations; pins and mesh kept, editable again.
 - [ ] **Perspective Warp**: quadrilateral planes drawn on the image, connected, then moved

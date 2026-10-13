@@ -143,6 +143,7 @@ fn document(stack: &LayerStack, ready: bool) -> Document {
             blend_mode: BlendMode::Normal,
             mask: None,
             content: LayerContent::raster(Arc::clone(stack.original())),
+            warp: None,
         },
     }
     .apply(&mut doc)

@@ -159,6 +159,8 @@ export type LayerView = {
   perspective?: number[] | null;
   /** Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it. */
   painted: boolean;
+  /** A pixel layer with a warp (Edit > Transform > Warp, ADR 0044). Absent: false. */
+  warped?: boolean;
   /** What was applied to a raster layer's pixels (ADR 0029), bottom to top. */
   entries: StackEntryView[];
   /** Its style (ADR 0032), if it has one. Absent: none. */
@@ -387,6 +389,20 @@ export type Bounds = { left: number; top: number; right: number; bottom: number 
 
 /** What moving layers can snap to (SnapTargets in lib.rs). */
 export type SnapTargets = { moving: Bounds | null; others: Bounds[] };
+
+/** Warp's styles (slopshop_core::warp::WarpStyle, ADR 0044). */
+export type WarpStyle = "arc" | "bulge" | "flag" | "wave" | "twist";
+
+/**
+ * A layer's warp grid as Free Transform's overlay draws it: the style it was made from (null
+ * without one), its bend (-1 to 1) and orientation, and its lines in document pixels.
+ */
+export type WarpGrid = {
+  style: WarpStyle | null;
+  bend: number;
+  vertical: boolean;
+  lines: [number, number][][];
+};
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
 export type BlendModeId =
@@ -742,6 +758,11 @@ export type EditRequest =
   /** Apply `matrix` ([a, b, c, d, e, f], in document pixels) to layers (Free Transform). */
   /** A map of the document's space: six numbers, or nine for a perspective (ADR 0038). */
   | { kind: "transformLayers"; ids: number[]; matrix: Matrix | Homography }
+  /**
+   * Edit > Transform > Warp (ADR 0044): a pixel layer warped by a style's grid, `bend` from -1
+   * to 1; no `style` takes its warp away.
+   */
+  | { kind: "warpLayer"; id: number; style?: WarpStyle; bend?: number; vertical?: boolean }
   /** Image > Image Size: the whole image resampled to this size. */
   | { kind: "resizeImage"; width: number; height: number; resolution?: number }
   /** Image > Canvas Size: `anchor` [x, y] in [0, 1] keeps the image there (0.5: centered). */
@@ -1768,6 +1789,9 @@ export const engine = {
   /** What moving `ids` can snap to (bounds in document pixels). */
   moveSnapTargets: (documentId: number, ids: number[]) =>
     invoke<SnapTargets>("move_snap_targets", { documentId, ids }),
+  /** A pixel layer's warp grid (a plain 3 × 3 one without a warp); null for other layers. */
+  warpGrid: (documentId: number, layerId: number) =>
+    invoke<WarpGrid | null>("warp_grid", { documentId, layerId }),
   /**
    * Layer > Bake to Pixels and New Layer from Visible (ADR 0031): resolves with what shows at
    * once; the pixels follow (`onDocumentUpdated`), in the same undo entry.

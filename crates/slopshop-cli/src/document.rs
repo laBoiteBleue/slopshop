@@ -65,6 +65,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
                 Arc::new(image),
                 layer_name(input),
             )),
+            warp: None,
         };
         Edit::InsertLayer {
             parent: None,

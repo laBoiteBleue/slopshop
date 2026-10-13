@@ -414,6 +414,7 @@ mod tests {
             clipped: false,
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::new(image)),
+            warp: None,
         };
         crate::edit::Edit::InsertLayer {
             parent: None,
@@ -607,6 +608,7 @@ mod tests {
             clipped: false,
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::clone(&image)),
+            warp: None,
         };
         crate::edit::Edit::InsertLayer {
             parent: None,

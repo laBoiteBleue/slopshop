@@ -229,6 +229,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                     blend_mode: BlendMode::Normal,
                     mask: None,
                     content: LayerContent::Fill { color },
+                    warp: None,
                 },
             })
             .map_err(|e| e.to_string())?;

@@ -15,10 +15,11 @@
 //! Coordinates: texel (i, j) of a level covers `[i, i + 1) × [j, j + 1)` in that level's texel
 //! space, its center is at (i + ½, j + ½); document pixel (x, y) is sampled at its center too.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::geom::Size;
 use crate::transform::{Affine, Projective};
+use crate::warp::{PlacedMesh, Warp};
 
 /// Radius of the kernel, in texels (of an unstretched ellipse): the third zero of Jinc.
 pub const RADIUS: f64 = 3.238_315_484_166_236;
@@ -315,59 +316,182 @@ impl Resampling {
         &self,
         table: &[f32; TABLE_SIZE],
         (x, y): (f64, f64),
-        mut fetch: impl FnMut(i64, i64) -> Option<[f64; 4]>,
+        fetch: impl FnMut(i64, i64) -> Option<[f64; 4]>,
     ) -> ([f64; 4], f64) {
         let Some(((u, v), filter)) = self.at(x, y) else {
             return ([0.0; 4], 0.0);
         };
-        let Filter::Ewa { q, extent } = filter else {
-            return match fetch(u.floor() as i64, v.floor() as i64) {
-                Some(color) => (color, 1.0),
-                None => ([0.0; 4], 0.0),
-            };
+        filtered(table, (u, v), filter, fetch)
+    }
+}
+
+/// A warped layer (ADR 0044): each sample read through the triangle of the warp's mesh under it,
+/// with the ellipse of that triangle's affine map. One level for the whole layer, the finest any
+/// triangle needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshResampling {
+    /// The pyramid level read.
+    pub level: usize,
+    /// Document pixels per output pixel, at least 1.
+    scale: f64,
+    warp: Arc<Warp>,
+    transform: Projective,
+    /// The warp placed by the transform, its border extended by the filter's reach.
+    mesh: Arc<PlacedMesh>,
+}
+
+impl MeshResampling {
+    /// Sampling an image of `levels` pyramid levels warped by `warp` then placed by `transform`,
+    /// for output pixels of `scale` document pixels. `None` where the transform sends the warped
+    /// content beyond its horizon line.
+    pub fn new(warp: Arc<Warp>, transform: Projective, scale: f64, levels: usize) -> Option<Self> {
+        let scale = at_least_one(scale);
+        let plain = PlacedMesh::new(&warp, transform, 0.0)?;
+        let minor = plain
+            .triangles()
+            .iter()
+            .map(|t| axes(t.to_content, scale).1)
+            .fold(f64::INFINITY, f64::min);
+        let coarsest = levels.saturating_sub(1);
+        let level = if minor > 1.0 && minor.is_finite() {
+            (minor.log2().floor() as usize).min(coarsest)
+        } else {
+            0
         };
-        let radius2 = RADIUS * RADIUS;
-        let (i0, i1) = ((u - 0.5 - extent[0]).ceil(), (u - 0.5 + extent[0]).floor());
-        let (j0, j1) = ((v - 0.5 - extent[1]).ceil(), (v - 0.5 + extent[1]).floor());
-        let mut sum = [0.0; 4];
-        let (mut total, mut inside) = (0.0, 0.0);
-        let (mut lo, mut hi) = ([f64::INFINITY; 4], [f64::NEG_INFINITY; 4]);
-        let mut j = j0;
-        while j <= j1 {
-            let dv = j + 0.5 - v;
-            let mut i = i0;
-            while i <= i1 {
-                let du = i + 0.5 - u;
-                let r2 = q[0] * du * du + q[1] * du * dv + q[2] * dv * dv;
-                if r2 < radius2 {
-                    let w = table_weight(table, r2);
-                    let texel = fetch(i as i64, j as i64);
-                    let color = texel.unwrap_or([0.0; 4]);
-                    if texel.is_some() {
-                        inside += w;
-                    }
+        Self::build(warp, transform, scale, level)
+    }
+
+    fn build(warp: Arc<Warp>, transform: Projective, scale: f64, level: usize) -> Option<Self> {
+        let factor = f64::from(1u32 << level.min(31));
+        let mesh = PlacedMesh::new(&warp, transform, (RADIUS + 1.0) * factor)?;
+        Some(Self {
+            level,
+            scale,
+            warp,
+            transform,
+            mesh: Arc::new(mesh),
+        })
+    }
+
+    /// The same sampling from another pyramid level.
+    pub fn at_level(&self, level: usize) -> Option<Self> {
+        if level == self.level {
+            return Some(self.clone());
+        }
+        Self::build(Arc::clone(&self.warp), self.transform, self.scale, level)
+    }
+
+    /// The triangles sampled through.
+    pub fn mesh(&self) -> &PlacedMesh {
+        &self.mesh
+    }
+
+    /// Document pixels per output pixel (at least 1).
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    /// Document point → texel of the level read, through the triangle there, and its filter.
+    fn at(&self, x: f64, y: f64) -> Option<((f64, f64), Filter)> {
+        let t = self.mesh.find(x, y)?;
+        let factor = f64::from(1u32 << self.level.min(31));
+        let to_texel = t.to_content.then(Affine::scale(1.0 / factor, 1.0 / factor));
+        Some((to_texel.apply(x, y), ewa(to_texel, self.scale)))
+    }
+
+    /// The document area where samples read any texel: the mesh's.
+    pub fn document_reach(&self) -> [f64; 4] {
+        self.mesh.bounds()
+    }
+
+    /// The part of the image (level-0 pixels) that samples within the document `area` read.
+    pub fn source_area(&self, area: [f64; 4]) -> [f64; 4] {
+        let factor = f64::from(1u32 << self.level.min(31));
+        let [x0, y0, x1, y1] = self.mesh.source_area(area);
+        let m = (MAX_EXTENT + 1.0) * factor;
+        [x0 - m, y0 - m, x1 + m, y1 + m]
+    }
+
+    /// Whether sampling at document point `(x, y)` reads any texel of a level of `width` ×
+    /// `height` texels.
+    pub fn reaches(&self, (x, y): (f64, f64), width: u32, height: u32) -> bool {
+        let Some(((u, v), Filter::Ewa { extent, .. })) = self.at(x, y) else {
+            return false;
+        };
+        let [eu, ev] = extent;
+        u + eu > 0.0 && v + ev > 0.0 && u - eu < f64::from(width) && v - ev < f64::from(height)
+    }
+
+    /// Premultiplied color at document point `(x, y)`, and the share of the filter's weight
+    /// inside the image (see [`Resampling::sample`]); transparent outside the mesh.
+    pub fn sample(
+        &self,
+        table: &[f32; TABLE_SIZE],
+        (x, y): (f64, f64),
+        fetch: impl FnMut(i64, i64) -> Option<[f64; 4]>,
+    ) -> ([f64; 4], f64) {
+        match self.at(x, y) {
+            Some((uv, filter)) => filtered(table, uv, filter, fetch),
+            None => ([0.0; 4], 0.0),
+        }
+    }
+}
+
+/// Premultiplied color at texel point `(u, v)` through `filter`, and the share of its weight
+/// inside the image (see [`Resampling::sample`]).
+fn filtered(
+    table: &[f32; TABLE_SIZE],
+    (u, v): (f64, f64),
+    filter: Filter,
+    mut fetch: impl FnMut(i64, i64) -> Option<[f64; 4]>,
+) -> ([f64; 4], f64) {
+    let Filter::Ewa { q, extent } = filter else {
+        return match fetch(u.floor() as i64, v.floor() as i64) {
+            Some(color) => (color, 1.0),
+            None => ([0.0; 4], 0.0),
+        };
+    };
+    let radius2 = RADIUS * RADIUS;
+    let (i0, i1) = ((u - 0.5 - extent[0]).ceil(), (u - 0.5 + extent[0]).floor());
+    let (j0, j1) = ((v - 0.5 - extent[1]).ceil(), (v - 0.5 + extent[1]).floor());
+    let mut sum = [0.0; 4];
+    let (mut total, mut inside) = (0.0, 0.0);
+    let (mut lo, mut hi) = ([f64::INFINITY; 4], [f64::NEG_INFINITY; 4]);
+    let mut j = j0;
+    while j <= j1 {
+        let dv = j + 0.5 - v;
+        let mut i = i0;
+        while i <= i1 {
+            let du = i + 0.5 - u;
+            let r2 = q[0] * du * du + q[1] * du * dv + q[2] * dv * dv;
+            if r2 < radius2 {
+                let w = table_weight(table, r2);
+                let texel = fetch(i as i64, j as i64);
+                let color = texel.unwrap_or([0.0; 4]);
+                if texel.is_some() {
+                    inside += w;
+                }
+                for c in 0..4 {
+                    sum[c] += w * color[c];
+                }
+                total += w;
+                if r2 <= ANTIRING_R2 {
                     for c in 0..4 {
-                        sum[c] += w * color[c];
-                    }
-                    total += w;
-                    if r2 <= ANTIRING_R2 {
-                        for c in 0..4 {
-                            lo[c] = lo[c].min(color[c]);
-                            hi[c] = hi[c].max(color[c]);
-                        }
+                        lo[c] = lo[c].min(color[c]);
+                        hi[c] = hi[c].max(color[c]);
                     }
                 }
-                i += 1.0;
             }
-            j += 1.0;
+            i += 1.0;
         }
-        if total.is_nan() || total <= 1e-12 {
-            return ([0.0; 4], 0.0);
-        }
-        // The nearest texel center is within r² ≤ ½: `lo` and `hi` are set.
-        let color = std::array::from_fn(|c| (sum[c] / total).clamp(lo[c], hi[c]));
-        (color, (inside / total).clamp(0.0, 1.0))
+        j += 1.0;
     }
+    if total.is_nan() || total <= 1e-12 {
+        return ([0.0; 4], 0.0);
+    }
+    // The nearest texel center is within r² ≤ ½: `lo` and `hi` are set.
+    let color = std::array::from_fn(|c| (sum[c] / total).clamp(lo[c], hi[c]));
+    (color, (inside / total).clamp(0.0, 1.0))
 }
 
 /// `scale`, at least 1 (NaN: 1).

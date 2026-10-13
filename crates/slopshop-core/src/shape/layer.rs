@@ -279,6 +279,7 @@ mod tests {
                 clipped: false,
                 transform,
                 style: None,
+                warp: None,
             },
         }
         .apply(doc)
@@ -511,6 +512,7 @@ mod tests {
             clipped: false,
             transform: Projective::IDENTITY,
             style: None,
+            warp: None,
         };
         assert_eq!(
             Edit::InsertLayer {

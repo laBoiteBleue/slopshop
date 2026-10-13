@@ -261,6 +261,9 @@
   import { SNAP_CSS_PX, snapGuide, type SmartGuide, type SnapTarget } from "./lib/snap";
   import FreeTransform from "./lib/FreeTransform.svelte";
   import TransformFields from "./lib/TransformFields.svelte";
+  import WarpFields from "./lib/WarpFields.svelte";
+  import WarpOverlay from "./lib/WarpOverlay.svelte";
+  import { sameWarp, settingsOf, warpRequest, type WarpSettings } from "./lib/warp";
   import ContextMenu from "./lib/ContextMenu.svelte";
   import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
@@ -591,7 +594,8 @@
   const cancelGesture = (id: number) => sync(engine.cancelGesture(id));
   // Undo during a Free Transform cancels it (the transform is not applied yet).
   const undo = () => {
-    if (transforming) cancelTransform();
+    if (warping) cancelWarp();
+    else if (transforming) cancelTransform();
     else if (active) void sync(engine.undo(active.id));
   };
   const redo = () => {
@@ -3611,6 +3615,8 @@
   }
 
   function commitTransform() {
+    // Another edit applies a warp under way first, as it does a Free Transform.
+    commitWarp();
     const current = transforming;
     if (!current) return;
     transforming = null;
@@ -3734,6 +3740,71 @@
     }
   }
 
+  // Edit > Transform > Warp (ADR 0044): the active pixel layer's warp grid over the image, which
+  // the options bar's style, orientation and bend change live, as one gesture replaced at each
+  // step; Enter applies it (one undo entry), Esc or undo cancels it. Another edit, another tab
+  // or Free Transform applies it first. Dragging the grid's points comes later.
+  type Warping = {
+    document: number;
+    id: number;
+    /** The settings when the warp began: unchanged, Enter changes nothing. */
+    start: WarpSettings;
+    settings: WarpSettings;
+    /** The grid's lines, in document pixels. */
+    lines: [number, number][][];
+  };
+  let warping = $state<Warping | null>(null);
+  /** The latest grid asked for: older answers are dropped. */
+  let warpGridAsked = 0;
+
+  async function startWarp() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    if (warping || transforming) return;
+    const layer = layersPanel?.selectedLayer() ?? null;
+    if (!layer || layer.kind !== "raster") return;
+    if (tool === "crop") tool = "move";
+    const grid = await engine.warpGrid(doc.id, layer.id).catch((e) => {
+      showError(String(e));
+      return null;
+    });
+    if (!grid || active?.id !== doc.id || warping || transforming) return;
+    const settings = settingsOf(grid);
+    warping = { document: doc.id, id: layer.id, start: settings, settings, lines: grid.lines };
+  }
+
+  function onWarpChange(settings: WarpSettings) {
+    const current = warping;
+    if (!current) return;
+    current.settings = settings;
+    const request = warpRequest(current.id, settings);
+    void sync(engine.performLive(current.document, request, true)).then(() =>
+      refreshWarpGrid(current),
+    );
+  }
+
+  async function refreshWarpGrid(current: Warping) {
+    const asked = ++warpGridAsked;
+    const grid = await engine.warpGrid(current.document, current.id).catch(() => null);
+    if (grid && warping === current && asked === warpGridAsked) current.lines = grid.lines;
+  }
+
+  function commitWarp() {
+    const current = warping;
+    if (!current) return;
+    warping = null;
+    if (sameWarp(current.settings, current.start)) void cancelGesture(current.document);
+    else void endGesture(current.document);
+  }
+
+  function cancelWarp() {
+    const current = warping;
+    if (!current) return;
+    warping = null;
+    void cancelGesture(current.document);
+  }
+
   /** Esc: the layers as they were; layers just placed are taken back, as in Photoshop. */
   function cancelTransform() {
     const current = transforming;
@@ -3775,6 +3846,9 @@
 
   $effect(() => {
     if (transforming && transforming.document !== activeId) commitTransform();
+  });
+  $effect(() => {
+    if (warping && warping.document !== activeId) commitWarp();
   });
 
   /**
@@ -4820,7 +4894,7 @@
       undo: {
         label: t("menu.edit.undo"),
         run: undo,
-        disabled: !transforming && !doc?.canUndo,
+        disabled: !transforming && !warping && !doc?.canUndo,
         repeats: true,
       },
       redo: { label: t("menu.edit.redo"), run: redo, disabled: !doc?.canRedo, repeats: true },
@@ -5412,6 +5486,14 @@
                 () => void startFreeTransform(null, false, "perspective"),
                 undefined,
                 !distortable(activeLayer),
+              ),
+              // Pixel layers only, for now (ADR 0044): the grid over the image, a style in the
+              // options bar.
+              cmd(
+                t("menu.edit.transform.warp"),
+                () => void startWarp(),
+                undefined,
+                activeLayer?.kind !== "raster",
               ),
               separator,
               cmd(
@@ -6076,7 +6158,7 @@
       bind:crop={cropAspect}
       bind:straighten={straightening}
       canvasSize={active ?? undefined}
-      transform={transforming ? transformBar : undefined}
+      transform={transforming ? transformBar : warping ? warpBar : undefined}
       quickMask={active?.quickMask ?? false}
       bind:quickMaskOpacity
       alignable={(layersPanel?.selectedLayers().length ?? 0) > 0}
@@ -6085,6 +6167,11 @@
       ondistribute={distributeSelected}
     />
   </div>
+  {#snippet warpBar()}
+    {#if warping}
+      <WarpFields settings={warping.settings} onchange={onWarpChange} />
+    {/if}
+  {/snippet}
   {#snippet transformBar()}
     {#if transforming}
       <TransformFields
@@ -6231,7 +6318,7 @@
               quickMaskOpacity={active.quickMaskOpacity}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
-              onmove={tool === "move" && !transforming && !overlayTakesPointer
+              onmove={tool === "move" && !transforming && !warping && !overlayTakesPointer
                 ? onMoveDrag
                 : undefined}
               onmoveend={onMoveEnd}
@@ -6304,6 +6391,13 @@
                     onchange={onTransformChange}
                     oncommit={commitTransform}
                     oncancel={cancelTransform}
+                  />
+                {:else if warping && warping.document === active?.id}
+                  <WarpOverlay
+                    {mapping}
+                    lines={warping.lines}
+                    oncommit={commitWarp}
+                    oncancel={cancelWarp}
                   />
                 {:else if refining?.document === active?.id && refineSettings.brush.on}
                   <!-- Select and Mask's refine-edge brush: strokes mark where the model decides. -->

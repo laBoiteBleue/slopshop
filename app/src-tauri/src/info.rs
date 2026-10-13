@@ -209,6 +209,7 @@ mod tests {
             blend_mode: BlendMode::Normal,
             mask,
             content,
+            warp: None,
         }
     }
 

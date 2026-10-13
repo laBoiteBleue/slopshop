@@ -182,6 +182,9 @@ pub struct LayerView {
     pub perspective: Option<[f64; 9]>,
     /// Its pixels or its mask carry paint (ADR 0027): Layer > Delete Paint removes it.
     pub painted: bool,
+    /// A pixel layer with a warp (Edit > Transform > Warp, ADR 0044).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub warped: bool,
     /// What was applied to a raster layer's pixels (ADR 0029), bottom to top.
     pub entries: Vec<EntryView>,
     /// Its style (ADR 0032), if it has one.
@@ -860,6 +863,7 @@ impl LayerView {
             transform: layer.transform.as_affine().unwrap_or_default().to_array(),
             perspective: (!layer.transform.is_affine()).then(|| layer.transform.to_array()),
             painted: layer.is_painted(),
+            warped: layer.warp.is_some(),
             entries: match &layer.content {
                 LayerContent::Raster {
                     stack: Some(stack), ..
@@ -1340,6 +1344,18 @@ pub enum EditRequest {
         /// `[a, b, c, d, e, f, g, h, i]` (projective: Distort and Perspective, ADR 0038).
         matrix: Vec<f64>,
     },
+    /// Edit > Transform > Warp (ADR 0044): pixel layer `id` warped by a style's grid (`style`
+    /// one of `arc`, `bulge`, `flag`, `wave`, `twist`; `bend` from -1 to 1), or its warp taken
+    /// away (no `style`).
+    WarpLayer {
+        id: u64,
+        #[serde(default)]
+        style: Option<String>,
+        #[serde(default)]
+        bend: f64,
+        #[serde(default)]
+        vertical: bool,
+    },
     /// Image > Image Size: the whole image resampled to `width` × `height` (ADR 0018).
     ResizeImage {
         width: u32,
@@ -1496,6 +1512,7 @@ impl EditRequest {
             Self::DuplicateTransformLayers { .. } => HistoryLabel::new("transformAgain"),
             Self::TranslateLayers { .. } => HistoryLabel::new("move"),
             Self::TransformLayers { .. } => HistoryLabel::new("transform"),
+            Self::WarpLayer { .. } => HistoryLabel::new("warp"),
             Self::ResizeImage { .. } => HistoryLabel::new("imageSize"),
             Self::CanvasSize { .. } => HistoryLabel::new("canvasSize"),
             Self::Crop { .. } => HistoryLabel::new("crop"),
@@ -1560,6 +1577,7 @@ impl EditRequest {
                         content: LayerContent::Fill {
                             color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                         },
+                        warp: None,
                     },
                 }
             }
@@ -1613,6 +1631,7 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content: LayerContent::GradientFill { field },
+                        warp: None,
                     },
                 }
             }
@@ -1651,6 +1670,7 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content: LayerContent::vector(source),
+                        warp: None,
                     },
                 }
             }
@@ -1757,6 +1777,7 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content: LayerContent::blank(std::sync::Arc::new(image)),
+                        warp: None,
                     },
                 }
             }
@@ -1827,6 +1848,7 @@ impl EditRequest {
                             blend_mode: BlendMode::Normal,
                             mask: mask.clone(),
                             content: LayerContent::Adjustment { adjustment },
+                            warp: None,
                         },
                     });
                 }
@@ -1932,6 +1954,7 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content,
+                        warp: None,
                     },
                 }
             }
@@ -1990,6 +2013,7 @@ impl EditRequest {
                         blend_mode: BlendMode::Normal,
                         mask: None,
                         content: LayerContent::Adjustment { adjustment },
+                        warp: None,
                     },
                 }
             }
@@ -2106,6 +2130,24 @@ impl EditRequest {
             EditRequest::TransformLayers { ids, matrix } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::transform_layers(session.document(), &ids, matrix_of(&matrix)?)
+                    .map_err(|e| e.to_string())?
+            }
+            EditRequest::WarpLayer {
+                id,
+                style,
+                bend,
+                vertical,
+            } => {
+                let preset = match style {
+                    None => None,
+                    Some(style) => Some(slopshop_core::warp::WarpPreset {
+                        style: slopshop_core::warp::WarpStyle::from_id(&style)
+                            .ok_or_else(|| format!("unknown warp style {style}"))?,
+                        bend,
+                        vertical,
+                    }),
+                };
+                Edit::warp_layer(session.document(), LayerId::from_raw(id), preset)
                     .map_err(|e| e.to_string())?
             }
             EditRequest::ResizeImage {
@@ -2263,6 +2305,7 @@ fn new_group(session: &mut Session, name: String) -> Layer {
             children: Vec::new(),
             pass_through: false,
         },
+        warp: None,
     }
 }
 
@@ -3810,6 +3853,7 @@ mod tests {
                 clipped: false,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 style: None,
+                warp: None,
             },
         }
         .apply(&mut document)
@@ -3878,6 +3922,7 @@ mod tests {
                     clipped: false,
                     transform: slopshop_core::Affine::IDENTITY.into(),
                     style: None,
+                    warp: None,
                 },
             }
             .apply(&mut document)
@@ -3955,6 +4000,7 @@ mod tests {
                     clipped: false,
                     transform: slopshop_core::Affine::IDENTITY.into(),
                     style: None,
+                    warp: None,
                 },
             }
             .apply(&mut document)
@@ -4032,6 +4078,7 @@ mod tests {
                 clipped: false,
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 style: None,
+                warp: None,
             },
         }
         .apply(&mut document)

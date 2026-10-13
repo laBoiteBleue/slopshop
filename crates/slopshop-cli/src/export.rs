@@ -1213,6 +1213,7 @@ pub(crate) fn single_layer_document(image: RasterImage, name: &str) -> Result<Do
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
             },
+            warp: None,
         },
     };
     // Initial content: applied directly, there is no history to record it in.

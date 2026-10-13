@@ -55,6 +55,7 @@ fn document(size: Size) -> Session {
                 content: LayerContent::Fill {
                     color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
                 },
+                warp: None,
             },
         })
         .unwrap();

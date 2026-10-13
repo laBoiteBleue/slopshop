@@ -31,10 +31,11 @@ use slopshop_core::color::{
 use slopshop_core::composite::{Step, display_plan_with, display_steps_with};
 use slopshop_core::document::MAX_GROUP_DEPTH;
 use slopshop_core::raster::TILE_SIZE;
-use slopshop_core::resample::{self, Filter, Resampling};
+use slopshop_core::resample::{self, Filter, MeshResampling, Resampling};
 use slopshop_core::stack::{LookFilter, Looks};
 use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
+use slopshop_core::warp::{PlacedMesh, Warp};
 use slopshop_core::{
     Affine, BlendMode, BlendSpace, Document, Layer, LayerContent, Projective, RasterImage, Rect,
     Size,
@@ -374,6 +375,8 @@ const RESAMPLE_NEAREST: u32 = 1;
 const RESAMPLE_EWA: u32 = 2;
 /// EWA in perspective (ADR 0038): the ellipse computed at each sample from the map's Jacobian.
 const RESAMPLE_PERSPECTIVE: u32 = 3;
+/// Through a warp's triangles (ADR 0044): the mesh read from the tile table.
+const RESAMPLE_MESH: u32 = 4;
 
 const WORKGROUP_SIZE: u32 = 8;
 const OUTPUT_FORMAT: PixelFormat = PixelFormat::RGBA8_SRGB;
@@ -1163,6 +1166,7 @@ impl Renderer {
                     placed_by.into(),
                     frame.view.scale,
                     false,
+                    None,
                 )
             })
         });
@@ -1327,8 +1331,8 @@ impl Renderer {
             .iter()
             .flat_map(|step| {
                 step_rasters(step).map(|raster| {
-                    let (image, transform, wrap) = raster?;
-                    RasterPlan::new(image, visible_doc?, transform, view.scale, wrap)
+                    let (image, transform, wrap, warp) = raster?;
+                    RasterPlan::new(image, visible_doc?, transform, view.scale, wrap, warp)
                         .filter(|plan| !plan.range().is_empty())
                 })
             })
@@ -1516,7 +1520,11 @@ fn gather_looks(
 
 /// The rasters a step samples, with their transforms to the document: a raster layer's image,
 /// then its (or a group's) enabled mask.
-fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective, bool)>; 2] {
+/// A raster a step samples: its image, its transform, whether it repeats (a pattern), and its
+/// layer's warp (ADR 0044).
+type StepRaster<'a> = (&'a RasterImage, Projective, bool, Option<&'a Arc<Warp>>);
+
+fn step_rasters<'a>(step: &Step<'a>) -> [Option<StepRaster<'a>>; 2] {
     match step {
         Step::Layer {
             layer,
@@ -1530,29 +1538,30 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective, bo
                 LayerContent::Raster {
                     stack: Some(layer_stack),
                     ..
-                } if *stack => Some((layer_stack.original().as_ref(), *transform, false)),
+                } if *stack => Some((layer_stack.original().as_ref(), *transform, false, None)),
                 // Its pixels, or what the layer showed before while they are evaluated.
                 LayerContent::Raster { image, .. } => image
                     .shown()
-                    .map(|image| (image.as_ref(), *transform, false)),
+                    .map(|image| (image.as_ref(), *transform, false, layer.warp.as_ref())),
                 // Repeated across the plane (ADR 0042), scaled and turned in the layer's space.
                 LayerContent::PatternFill { pattern } => Some((
                     pattern.source.image().as_ref(),
                     Projective::from(pattern.to_content()).then(*transform),
                     true,
+                    None,
                 )),
                 _ => None,
             };
             [
                 content,
-                enabled_mask(layer).map(|image| (image, *transform, false)),
+                enabled_mask(layer).map(|image| (image, *transform, false, layer.warp.as_ref())),
             ]
         }
         Step::Adjust {
             layer, transform, ..
         } => [
             None,
-            enabled_mask(layer).map(|image| (image, *transform, false)),
+            enabled_mask(layer).map(|image| (image, *transform, false, None)),
         ],
         Step::Begin { .. } => [None, None],
         Step::End {
@@ -1561,17 +1570,17 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective, bo
             ..
         } => [
             None,
-            mask.map(|m| (m.image.as_ref(), *mask_transform, false)),
+            mask.map(|m| (m.image.as_ref(), *mask_transform, false, None)),
         ],
         Step::StackOriginal {
             original,
             transform,
-        } => [Some((*original, *transform, false)), None],
+        } => [Some((*original, *transform, false, None)), None],
         // `P`, then `k` read as a mask: both in the layer's pixels.
         Step::StackPaint { paint, transform } => match paint.image_refs() {
             Some((color, keep)) => [
-                Some((color.as_ref(), *transform, false)),
-                Some((keep.as_ref(), *transform, false)),
+                Some((color.as_ref(), *transform, false, None)),
+                Some((keep.as_ref(), *transform, false, None)),
             ],
             None => [None, None],
         },
@@ -1581,7 +1590,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<(&'a RasterImage, Projective, bo
             None,
             effect.selection.as_ref().and_then(|selection| {
                 let placed = effect.to_document.inverse()?.then(*transform);
-                Some((selection.image().as_ref(), placed, false))
+                Some((selection.image().as_ref(), placed, false, None))
             }),
         ],
     }
@@ -1872,7 +1881,8 @@ fn set_raster_fields(
     slots: Vec<u32>,
 ) {
     fields.offset = plan.offset();
-    fields.resample = resample_fields(plan);
+    // Before the tile slots: a warp's mesh goes into the table first.
+    fields.resample = resample_fields(plan, tile_table);
     let range = plan.range();
     let size = plan.image.levels()[plan.level].size();
     fields.level_scale = plan.factor() as f32;
@@ -1987,13 +1997,14 @@ fn set_mask_fields(
     let range = mask.range();
     let size = mask.image.levels()[mask.level].size();
     fields.mask_level_scale = mask.factor() as f32;
+    // Before the tile slots: a warp's mesh goes into the table first.
+    fields.mask_resample = resample_fields(mask, tile_table);
     fields.mask_table_offset = tile_table.len() as u32;
     fields.mask_tile_origin = [range.x, range.y];
     fields.mask_tile_count = [range.width, range.height];
     fields.mask_level_size = [size.width, size.height];
     fields.mask_format = mask.format.index() as u32;
     fields.mask_offset = mask.offset();
-    fields.mask_resample = resample_fields(mask);
     tile_table.extend(slots);
 }
 
@@ -2002,7 +2013,19 @@ fn set_mask_fields(
 /// in the first two rows, the ellipse's quadratic form and the filter in the third. In
 /// perspective (ADR 0038), the three rows of the projective map, the output scale in the
 /// first's `w` (the shader computes each sample's ellipse).
-fn resample_fields(plan: &RasterPlan<'_>) -> [[f32; 4]; 3] {
+///
+/// A warp (ADR 0044): its mesh appended to `tile_table` (see `mesh_words`), where it starts in
+/// the first row's `x`, the output scale in its `w`.
+fn resample_fields(plan: &RasterPlan<'_>, tile_table: &mut Vec<u32>) -> [[f32; 4]; 3] {
+    if let Some(m) = plan.mesh() {
+        let start = tile_table.len();
+        tile_table.extend(mesh_words(m.mesh()));
+        return [
+            [start as f32, 0.0, 0.0, m.scale() as f32],
+            [0.0; 4],
+            [0.0, 0.0, 0.0, RESAMPLE_MESH as f32],
+        ];
+    }
     let Some(r) = plan.resampling() else {
         return [[0.0; 4]; 3];
     };
@@ -2024,6 +2047,39 @@ fn resample_fields(plan: &RasterPlan<'_>) -> [[f32; 4]; 3] {
         [t.b as f32, t.d as f32, t.f as f32, extent[1] as f32],
         [q[0] as f32, q[1] as f32, q[2] as f32, filter as f32],
     ]
+}
+
+/// A warp's placed mesh as composite.wgsl reads it from the tile table (`mesh_sample`): the
+/// bins' origin and cell size (f32 bits), their columns and rows, where the triangles and the
+/// bins' lists start (from the mesh's start), each bin's first item (one more than bins), the
+/// items (triangle numbers), then each triangle's corners and map to the content (12 f32).
+fn mesh_words(mesh: &PlacedMesh) -> Vec<u32> {
+    let bins = mesh.bins();
+    let f = |v: f64| (v as f32).to_bits();
+    let header = 8;
+    let items_at = header + bins.start.len();
+    let triangles_at = items_at + bins.items.len();
+    let mut words = Vec::with_capacity(triangles_at + mesh.triangles().len() * 12);
+    words.extend([
+        f(bins.origin.0),
+        f(bins.origin.1),
+        f(bins.cell.0),
+        f(bins.cell.1),
+        bins.columns,
+        bins.rows,
+        triangles_at as u32,
+        items_at as u32,
+    ]);
+    words.extend(&bins.start);
+    words.extend(&bins.items);
+    for t in mesh.triangles() {
+        for (x, y) in t.corners {
+            words.extend([f(x), f(y)]);
+        }
+        let m = t.to_content;
+        words.extend([m.a, m.b, m.c, m.d, m.e, m.f].map(f));
+    }
+    words
 }
 
 /// Layer and tile table buffers bound for one dispatch.
@@ -2098,7 +2154,7 @@ impl Renderer {
 }
 
 /// How one visible raster layer is sampled in a frame.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RasterPlan<'a> {
     image: &'a RasterImage,
     format: GpuTileFormat,
@@ -2114,12 +2170,14 @@ struct RasterPlan<'a> {
 /// Where a planned raster is in the document.
 // A few plans per frame, copied freely: a perspective's numbers inline cost less than a box.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Place {
     /// A whole-pixel offset (ADR 0017), clamped to the shader's `i32`.
     Offset([i32; 2]),
     /// Any other transform: resampled (ADR 0018), from the plan's level.
     Resampled(Resampling),
+    /// A warp (ADR 0044): resampled through its triangles, from the plan's level.
+    Mesh(Arc<MeshResampling>),
 }
 
 impl<'a> RasterPlan<'a> {
@@ -2133,8 +2191,20 @@ impl<'a> RasterPlan<'a> {
         transform: Projective,
         scale: f64,
         wrap: bool,
+        warp: Option<&Arc<Warp>>,
     ) -> Option<Self> {
         let coarsest = image.levels().len() - 1;
+        if let Some(warp) = warp {
+            let r = MeshResampling::new(Arc::clone(warp), transform, scale, image.levels().len())?;
+            return Some(Self {
+                image,
+                format: GpuTileFormat::for_sample(image.stored_format().sample),
+                area,
+                level: r.level,
+                place: Place::Mesh(Arc::new(r)),
+                wrap,
+            });
+        }
         // A pattern is always resampled: its texels wrap, which the whole-pixel path ignores.
         let offset = transform.integer_translation().filter(|_| !wrap);
         let levels = if wrap {
@@ -2173,24 +2243,39 @@ impl<'a> RasterPlan<'a> {
         area: [f64; 4],
         transform: Projective,
         wrap: bool,
+        warp: Option<&Arc<Warp>>,
     ) -> Option<Self> {
-        Self::new(image, area, transform, 1.0, wrap)
+        Self::new(image, area, transform, 1.0, wrap, warp)
     }
 
     /// The whole-pixel offset; zero when resampled.
     fn offset(&self) -> [i32; 2] {
         match self.place {
             Place::Offset(offset) => offset,
-            Place::Resampled(_) => [0, 0],
+            Place::Resampled(_) | Place::Mesh(_) => [0, 0],
         }
     }
 
     /// The resampling from the planned level, when resampled.
     fn resampling(&self) -> Option<Resampling> {
         match self.place {
-            Place::Offset(_) => None,
+            Place::Offset(_) | Place::Mesh(_) => None,
             Place::Resampled(r) => Some(r.at_level(self.level)),
         }
+    }
+
+    /// The warp's resampling from the planned level, when warped (ADR 0044).
+    fn mesh(&self) -> Option<Arc<MeshResampling>> {
+        match &self.place {
+            Place::Mesh(r) if r.level == self.level => Some(Arc::clone(r)),
+            Place::Mesh(r) => r.at_level(self.level).map(Arc::new),
+            _ => None,
+        }
+    }
+
+    /// Whether it is resampled (through a transform or a warp), not copied at an offset.
+    fn is_resampled(&self) -> bool {
+        !matches!(self.place, Place::Offset(_))
     }
 
     /// Document pixels per pixel of the planned level.
@@ -2221,9 +2306,10 @@ impl<'a> RasterPlan<'a> {
             return Rect::new(0, 0, grid.columns(), grid.rows());
         }
         // The image's area (level-0 pixels) that the document area reads.
-        let visible = match self.resampling() {
-            Some(r) => r.source_area(area),
-            None => shifted(area, self.offset()),
+        let visible = match (self.resampling(), self.mesh()) {
+            (Some(r), _) => r.source_area(area),
+            (None, Some(m)) => m.source_area(area),
+            (None, None) => shifted(area, self.offset()),
         };
         tile_range(visible, self.factor(), grid.columns(), grid.rows())
     }
@@ -2395,6 +2481,7 @@ fn shader_source() -> String {
     constants += &format!("const RESAMPLE_NEAREST: u32 = {RESAMPLE_NEAREST}u;\n");
     constants += &format!("const RESAMPLE_EWA: u32 = {RESAMPLE_EWA}u;\n");
     constants += &format!("const RESAMPLE_PERSPECTIVE: u32 = {RESAMPLE_PERSPECTIVE}u;\n");
+    constants += &format!("const RESAMPLE_MESH: u32 = {RESAMPLE_MESH}u;\n");
     constants += &format!(
         "const EWA_MAX_EXTENT: f32 = {:?};\n",
         resample::MAX_EXTENT as f32
@@ -2769,6 +2856,7 @@ mod tests {
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
+            warp: None,
         };
         slopshop_core::Edit::InsertLayer {
             parent: None,
@@ -2822,6 +2910,7 @@ mod tests {
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
+            warp: None,
         };
         slopshop_core::Edit::InsertLayer {
             parent: None,
@@ -2864,6 +2953,7 @@ mod tests {
                 stack: None,
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
+            warp: None,
         };
         slopshop_core::Edit::InsertLayer {
             parent: None,

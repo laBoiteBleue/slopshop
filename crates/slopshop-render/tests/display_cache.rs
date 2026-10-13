@@ -70,6 +70,7 @@ fn layer(s: &mut Session, content: LayerContent) -> Layer {
         blend_mode: BlendMode::Normal,
         mask: None,
         content,
+        warp: None,
     }
 }
 
