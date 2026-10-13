@@ -644,24 +644,24 @@ Tool,Tools panel > Blur > Smudge,,done,"as paint in the layer's stack, the origi
 Tool,Tools panel > Dodge/Burn > Dodge,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Burn,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Sponge,,open,Dodge and Burn exist; good next tone tool
-Tool,Tools panel > Pen > Pen,,open,paths are not started
-Tool,Tools panel > Pen > Freeform Pen,,open,paths are not started
-Tool,Tools panel > Pen > Curvature Pen,,open,paths are not started
-Tool,Tools panel > Pen > Add Anchor Point,,open,paths are not started
-Tool,Tools panel > Pen > Delete Anchor Point,,open,paths are not started
-Tool,Tools panel > Pen > Convert Point,,open,paths are not started
+Tool,Tools panel > Pen > Pen,,done,"P: a vector layer whose geometry is a path (ADR 0041); click a corner, drag a smooth anchor (Alt frees the handle), Shift at 45° steps, Enter, Esc, Backspace; Ctrl+Enter makes a selection; editing anchors afterwards is open"
+Tool,Tools panel > Pen > Freeform Pen,,open,the Pen exists (one simplified Pen: toolbar decision)
+Tool,Tools panel > Pen > Curvature Pen,,open,the Pen exists (one simplified Pen: toolbar decision)
+Tool,Tools panel > Pen > Add Anchor Point,,open,the Pen draws paths; editing them is next (planned as Pen gestures)
+Tool,Tools panel > Pen > Delete Anchor Point,,open,the Pen draws paths; editing them is next (planned as Pen gestures)
+Tool,Tools panel > Pen > Convert Point,,open,the Pen draws paths; editing them is next (planned as Pen gestures)
 Tool,Tools panel > Type > Horizontal Type,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type,,open,text layers are not started
 Tool,Tools panel > Type > Horizontal Type Mask,,open,text layers are not started
 Tool,Tools panel > Type > Vertical Type Mask,,open,text layers are not started
-Tool,Tools panel > Path > Path Selection,,open,paths are not started
-Tool,Tools panel > Path > Direct Selection,,open,paths are not started
+Tool,Tools panel > Path > Path Selection,,open,the Pen draws paths as vector layers; selecting and moving them is open
+Tool,Tools panel > Path > Direct Selection,,open,the Pen draws paths as vector layers; editing anchors is open
 Tool,Tools panel > Shape > Rectangle,,done,"U: a vector layer (ADR 0041); fill, stroke (inside, center, outside), corner radius"
 Tool,Tools panel > Shape > Ellipse,,done,U: a vector layer (ADR 0041)
 Tool,Tools panel > Shape > Triangle,,partial,the Polygon tool with three sides
 Tool,Tools panel > Shape > Polygon,,done,"U: sides, star with its indent"
 Tool,Tools panel > Shape > Line,,done,"U: stroke only, Shift at 45° steps"
-Tool,Tools panel > Shape > Custom Shape,,open,"vector layers exist (ADR 0041); waits for paths"
+Tool,Tools panel > Shape > Custom Shape,,open,"vector layers and paths exist (ADR 0041); a shape library is open"
 Tool,Tools panel > Navigation > Hand,,partial,"Space+drag, middle button or wheel; no tool button"
 Tool,Tools panel > Navigation > Rotate View,,open,"a view rotation, not a document change"
 Tool,Tools panel > Navigation > Zoom,,partial,Ctrl+wheel and the zoom slider; no tool button

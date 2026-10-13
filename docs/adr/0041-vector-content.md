@@ -120,3 +120,34 @@ tenth of a pixel of coverage along curved edges.
 11. PSD's editable text: later, its pixels kept meanwhile.
 
 Order of work: shapes, then the Pen and paths (and vector masks), then text, then PSD.
+
+## Amendment: the Pen (2026-10-13)
+
+Status: accepted (2026-10-13, under the maintainer's delegation; to review).
+
+The toolbar decision (2026-10-05) asked for one simplified, ergonomic Pen rather than
+Photoshop's six tools. Its first step:
+
+1. **One Pen (P)** builds one path: a click adds a corner anchor, a drag a smooth one with
+   opposite handles (Alt during the drag moves the outgoing handle alone), Shift keeps the next
+   anchor or the handle on 45° steps, a line follows the pointer to the next anchor. A click on
+   the first anchor closes the path (a drag there shapes its handles); Enter finishes an open
+   path; Backspace removes the last anchor; Esc drops the path.
+2. **A finished path is a vector layer** (the shape tools' `AddShape`, one undo entry, named
+   "Shape n" as Photoshop's), filled and stroked as the options bar says. There is no Path
+   mode, work path or Paths panel yet: a path lives in a vector layer.
+3. **An open path is filled as if its ends were joined** (as Photoshop fills one); its stroke
+   follows the open outline and is centered whatever its alignment (an open outline has no
+   inside). `Geometry::is_fillable` (everything but a line) now says what a fill covers;
+   `is_closed` keeps saying whether a stroke can lie inside or outside.
+4. **Make Selection (Ctrl+Enter)**: the area a path encloses (open subpaths joined, its fill
+   rule kept), anti-aliased, replacing the selection, one undo entry "Make Selection". With a
+   path being drawn, that path (it is then dropped: no layer); otherwise the active vector
+   layer's geometry, placed by its transform and its groups'. Curves are flattened within a
+   hundredth of a pixel and covered by the selection rasterizer (the lasso's, now taking
+   several polygons and the even-odd rule).
+5. Over the IPC, paths travel as `.slop` writes them (segments of 2 or 6 coordinates); the
+   Properties panel shows a path layer's fill and stroke.
+
+Later steps: editing anchors and handles after the fact (adding, deleting, converting and
+moving them as Pen gestures, Photoshop's Ctrl and Alt), selecting a path (A), vector masks.
