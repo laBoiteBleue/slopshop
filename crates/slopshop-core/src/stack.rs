@@ -1040,7 +1040,7 @@ fn filtered(
 ) -> Result<RasterImage, StackError> {
     let size = input.size();
     // Where the filter's frame (a distortion's box) lies, in the layer's pixels.
-    let frame_box = step.filter.samples().then(|| frame_box(step, frame));
+    let frame_box = step.filter.framed().then(|| frame_box(step, frame));
     // The input's first pixel and size in its own pixels, from the layer's origin.
     let offset = frame.origin.map(|v| (v / frame.factor).round() as i64);
     let layer_pixels = frame.layer.map(|v| (v / frame.factor).ceil() as usize);
@@ -1064,6 +1064,11 @@ fn filtered(
         let image = s.image().as_ref();
         (image, Codec::new(image.stored_format()))
     });
+    // Average: the layer's (the selection's) average, every pixel's.
+    let average = match filter {
+        Filter::Average => Some(average(step, input, &pixels, selection.as_ref())?),
+        _ => None,
+    };
     let mut tiles: Vec<(TileCoord, Option<Arc<[u8]>>)> =
         grid_coords(size).map(|coord| (coord, None)).collect();
     parallel_for_each(&mut tiles, |(coord, out)| {
@@ -1130,19 +1135,35 @@ fn filtered(
                         (None, None) => [0.0; 4],
                     };
                 }
-                // A distortion: the layer read where the filter says, between its pixels.
+                // A distortion: the layer read where the filter says, between its pixels; a
+                // Radial Blur: the average of what it reads along its path.
                 if let Some(area) = frame_box {
                     let p = [
                         frame.origin[0] + ((x0 + x) as f64 + 0.5) * frame.factor,
                         frame.origin[1] + ((y0 + y) as f64 + 0.5) * frame.factor,
                     ];
-                    blurs[0] = filter.source(p, area, frame.layer).map_or([0.0; 4], |q| {
+                    let read = |q: [f64; 2]| {
                         bilinear(
                             &pixels,
                             (q[0] - frame.origin[0]) / frame.factor - 0.5,
                             (q[1] - frame.origin[1]) / frame.factor - 0.5,
                         )
-                    });
+                    };
+                    blurs[0] = if filter.samples() {
+                        filter.source(p, area, frame.layer).map_or([0.0; 4], read)
+                    } else {
+                        let mut sum = [0.0f64; 4];
+                        let n = filter.radial_samples(p, area, frame.factor, |q| {
+                            let v = read(q);
+                            for c in 0..4 {
+                                sum[c] += v[c];
+                            }
+                        });
+                        sum.map(|v| v / n as f64)
+                    };
+                }
+                if let Some(average) = average {
+                    blurs[0] = average;
                 }
                 let blurs = &blurs[..plans.len()];
                 let px = &mut bytes[(y * t + x) * bpp..][..bpp];
@@ -1176,6 +1197,69 @@ fn filtered(
         RasterImage::from_level0_tiles(size, format, tiles)?
     } else {
         RasterImage::from_level0_tiles_only(size, format, tiles)?
+    })
+}
+
+/// The average of `input`'s pixels (`pixels`, premultiplied), within `selection` (each pixel
+/// weighted by its coverage) when there is one: Average's color. Tile by tile, on every core.
+/// All zero when nothing is covered.
+fn average(
+    step: &FilterStep,
+    input: &RasterImage,
+    pixels: &PremulPixels<'_>,
+    selection: Option<&(&RasterImage, Codec)>,
+) -> Result<[f64; 4], StackError> {
+    let size = input.size();
+    let level = &input.levels()[0];
+    let bpp = pixels.codec.bytes_per_pixel;
+    let t = TILE_SIZE as usize;
+    let mut sums: Vec<(TileCoord, [f64; 4], f64)> = grid_coords(size)
+        .map(|coord| (coord, [0.0; 4], 0.0))
+        .collect();
+    parallel_for_each(&mut sums, |(coord, sum, weight)| {
+        if !crate::raster::wanted() {
+            return;
+        }
+        let (w, h) = valid_area(size, *coord);
+        let (x0, y0) = (coord.col as usize * t, coord.row as usize * t);
+        let tile = level.tile(*coord);
+        for y in 0..h {
+            for x in 0..w {
+                let coverage = match selection {
+                    Some((image, codec)) => {
+                        let (dx, dy) = step
+                            .to_document
+                            .apply((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
+                        f64::from(MaskReader { image, codec }.at(dx.floor(), dy.floor())).min(1.0)
+                    }
+                    None => 1.0,
+                };
+                if coverage <= 0.0 {
+                    continue;
+                }
+                // A tile not stored is transparent: it weighs, with nothing.
+                if let Some(tile) = tile {
+                    let v = pixels.read(&tile[(y * t + x) * bpp..][..bpp]);
+                    for c in 0..4 {
+                        sum[c] += v[c] * coverage;
+                    }
+                }
+                *weight += coverage;
+            }
+        }
+    });
+    if !crate::raster::wanted() {
+        return Err(StackError::Cancelled);
+    }
+    let (sum, weight) = sums
+        .iter()
+        .fold(([0.0f64; 4], 0.0), |(s, w), (_, sum, weight)| {
+            (std::array::from_fn(|c| s[c] + sum[c]), w + weight)
+        });
+    Ok(if weight > 0.0 {
+        sum.map(|v| v / weight)
+    } else {
+        [0.0; 4]
     })
 }
 
@@ -6588,5 +6672,101 @@ mod tests {
             at(&look, w / 2 + 20, h / 2),
             at(&reduced, w / 2 + 20, h / 2)
         );
+    }
+
+    #[test]
+    fn average_fills_the_layer_or_the_selection_with_its_average_color() {
+        // Black then white at x = 150 of 300: middle gray everywhere (perceptual values).
+        let original = halves();
+        let stack = applied(&original, Filter::Average);
+        let averaged = stack.evaluate().unwrap();
+        let gray = pixel(&averaged, 0, 0);
+        assert!((126..=129).contains(&gray[0]), "{gray:?}");
+        assert_eq!(gray[3], 255, "its own opacity");
+        for (x, y) in [(149, 3), (150, 100), (299, 259)] {
+            assert_eq!(pixel(&averaged, x, y), gray, "({x}, {y})");
+        }
+        // A look of part of the layer: the whole layer's average still (fails with a crop's).
+        let job = stack
+            .look_job([T as f64 + 10.0, 0.0, W as f64, 100.0], 0)
+            .expect("a look");
+        let look = job.run().unwrap().image;
+        assert_eq!(pixel(&look, 20, 5), gray);
+        // Within a selection of 150 black and 50 white columns: a quarter of the way, there only.
+        let step = FilterStep {
+            filter: Filter::Average,
+            ..blur(1.0, Some(selection(|x, _| x < 200)))
+        };
+        let selected = LayerStack::new(Arc::clone(&original))
+            .with_filter(step, None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        let quarter = pixel(&selected, 10, 10);
+        assert!((62..=66).contains(&quarter[0]), "{quarter:?}");
+        assert_eq!(pixel(&selected, 199, 259), quarter);
+        assert_eq!(pixel(&selected, 200, 10), pixel(&original, 200, 10));
+    }
+
+    #[test]
+    fn radial_blur_spins_along_circles_and_zooms_along_rays() {
+        // Rings around the layer's center (150, 130): a spin keeps them, a zoom blurs them.
+        let rings = image(PixelFormat::RGBA8_SRGB, |x, y| {
+            let d = (f64::from(x) + 0.5 - 150.0).hypot(f64::from(y) + 0.5 - 130.0);
+            let v = (127.5 + 127.5 * (d / 6.0).sin()).round() as u8;
+            vec![v, v, v, 255]
+        });
+        let radial = |zoom| Filter::RadialBlur {
+            amount: 50.0,
+            zoom,
+            quality: crate::filter::RadialQuality::Good,
+            center: [50.0, 50.0],
+        };
+        let spun = applied(&rings, radial(false)).evaluate().unwrap();
+        // Within the layer's inscribed circle (beyond, arcs leave the layer).
+        let mut most = 0;
+        for y in 0..H {
+            for x in 0..W {
+                let d = (f64::from(x) + 0.5 - 150.0).hypot(f64::from(y) + 0.5 - 130.0);
+                if (5.0..125.0).contains(&d) {
+                    most = most.max(pixel(&spun, x, y)[0].abs_diff(pixel(&rings, x, y)[0]));
+                }
+            }
+        }
+        assert!(most <= 6, "{most}");
+        let zoomed = applied(&rings, radial(true)).evaluate().unwrap();
+        assert!(difference(&zoomed, &rings) > 40);
+        // A gradient spun: changed, but not at its center.
+        let original = gradient(true);
+        let spun = applied(&original, radial(false)).evaluate().unwrap();
+        assert!(difference(&spun, &original) > 20);
+        assert_eq!(pixel(&spun, 150, 130), pixel(&original, 150, 130));
+    }
+
+    #[test]
+    fn surface_blur_smooths_flat_areas_and_keeps_edges() {
+        // Fine noise of ±6 levels on black and white halves: smoothed, the edge kept sharp.
+        let noisy = image(PixelFormat::RGBA8_SRGB, |x, y| {
+            let base: i32 = if x < 150 { 40 } else { 220 };
+            let v = (base + if (x + y) % 2 == 0 { 6 } else { -6 }) as u8;
+            vec![v, v, v, 255]
+        });
+        let smoothed = applied(
+            &noisy,
+            Filter::SurfaceBlur {
+                radius: 3.0,
+                threshold: 15.0,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        for (x, y) in [(20, 20), (100, 255), (147, 3)] {
+            let v = pixel(&smoothed, x, y)[0];
+            assert!(v.abs_diff(40) <= 2, "({x}, {y}): {v}");
+        }
+        for (x, y) in [(150, 20), (290, 259)] {
+            let v = pixel(&smoothed, x, y)[0];
+            assert!(v.abs_diff(220) <= 2, "({x}, {y}): {v}");
+        }
     }
 }
