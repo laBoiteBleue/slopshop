@@ -24,12 +24,13 @@
 //! ```json
 //! { "content": "Hello\nworld", "family": "Inter Variable", "weight": 400, "italic": false,
 //!   "size": 50, "color": [r, g, b, a], "tracking": 0, "leading": 60, "align": "left",
-//!   "position": [x, y] }
+//!   "position": [x, y], "frame": [width, height] }
 //! ```
 //!
 //! `size` and `leading` in pixels (`leading` absent: automatic), `tracking` in thousandths of an
 //! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
-//! alignment point) in the layer's own space.
+//! alignment point) in the layer's own space; paragraph text (schema 0.36) has a `frame`, its
+//! box's size, and `position` is then the box's top left corner.
 
 use serde_json::{Value, json};
 use slopshop_core::color::LinearRgba;
@@ -59,6 +60,9 @@ pub(super) fn text_to_json(text: &Text) -> Value {
     if let Some(leading) = text.leading {
         value["leading"] = json!(leading);
     }
+    if let Some(frame) = text.frame {
+        value["frame"] = json!(frame);
+    }
     value
 }
 
@@ -84,6 +88,10 @@ pub(super) fn text_from_json(value: &Value) -> Option<Text> {
             _ => return None,
         },
         position: numbers::<2>(value.get("position"))?,
+        frame: match value.get("frame") {
+            None => None,
+            Some(v) => Some(numbers::<2>(Some(v))?),
+        },
     };
     text.is_valid().then_some(text)
 }

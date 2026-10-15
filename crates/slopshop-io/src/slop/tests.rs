@@ -2630,6 +2630,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         leading,
         align,
         position: [10.0, 30.0],
+        frame: None,
     };
     let mut doc = Document::new(Size::new(64, 48));
     let a = push(
@@ -2652,6 +2653,20 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         )),
         1.0,
     );
+    // Paragraph text (schema 0.36): its box.
+    let c = push(
+        &mut doc,
+        "c",
+        LayerContent::vector(ShapeSource::text(
+            Text {
+                frame: Some([120.5, 40.0]),
+                ..text(None, TextAlign::Right)
+            },
+            outlines.clone(),
+            "",
+        )),
+        1.0,
+    );
     let path = temp_path("text.slop");
     SlopFile::create(&path, &doc).unwrap();
     let (loaded, _) = SlopFile::open(&path).unwrap();
@@ -2659,7 +2674,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         LayerContent::Vector { source, .. } => Arc::clone(source),
         _ => panic!("not a vector layer"),
     };
-    for id in [a, b] {
+    for id in [a, b, c] {
         let (before, after) = (source(&doc, id), source(&loaded, id));
         assert_eq!(after.shape(), before.shape());
         assert_eq!(after.text_of(), before.text_of());
@@ -2681,6 +2696,11 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
     assert!(super::shape::text_from_json(&value).is_none());
     value["size"] = serde_json::json!(12.0);
     value["align"] = serde_json::json!("justify");
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["align"] = serde_json::json!("left");
+    value["frame"] = serde_json::json!([0.0, 10.0]);
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["frame"] = serde_json::json!([10.0]);
     assert!(super::shape::text_from_json(&value).is_none());
 }
 
