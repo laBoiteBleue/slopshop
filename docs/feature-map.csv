@@ -84,7 +84,7 @@ Menu,Edit > Transform > Rotate,,done,"Free Transform (Ctrl+T), non-destructive"
 Menu,Edit > Transform > Skew,,done,"Free Transform: side handles with Ctrl, or the Skew field"
 Menu,Edit > Transform > Distort,,done,"pixel layers, non-destructive (ADR 0038); groups are open"
 Menu,Edit > Transform > Perspective,,done,"pixel layers, non-destructive (ADR 0038); groups are open"
-Menu,Edit > Transform > Warp,,partial,"ADR 0044: a Bézier grid on pixel layers, non-destructive, CPU and GPU, editable again; anchors, handles and patches dragged on the canvas (Custom), grid sizes Default/4 × 4/5 × 5, Split Warp crosswise/vertically/horizontally; styles Arc, Bulge, Flag, Wave and Twist with Bend and orientation; the other styles and other layer kinds are open"
+Menu,Edit > Transform > Warp,,partial,"ADR 0044: a Bézier grid on pixel layers, non-destructive, CPU and GPU, editable again; anchors, handles and patches dragged on the canvas (Custom), grid sizes Default/4 × 4/5 × 5, Split Warp crosswise/vertically/horizontally; Photoshop's fifteen styles (Arc to Twist) with Bend and orientation; other layer kinds are open"
 Menu,Edit > Transform > Rotate 180°,,done,
 Menu,Edit > Transform > Rotate 90° Clockwise,,done,
 Menu,Edit > Transform > Rotate 90° Counter Clockwise,,done,

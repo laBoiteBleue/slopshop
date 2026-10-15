@@ -1396,7 +1396,7 @@ pub enum EditRequest {
         matrix: Vec<f64>,
     },
     /// Edit > Transform > Warp (ADR 0044): pixel layer `id` warped by a style's grid (`style`
-    /// one of `arc`, `bulge`, `flag`, `wave`, `twist`; `bend` from -1 to 1), by a grid edited
+    /// a `slopshop_core::warp::WarpStyle` identifier; `bend` from -1 to 1), by a grid edited
     /// point by point (`grid`, Photoshop's Custom), or its warp taken away (neither).
     WarpLayer {
         id: u64,
