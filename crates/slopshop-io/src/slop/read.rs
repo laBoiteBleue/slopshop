@@ -370,10 +370,16 @@ impl Sources {
             .map(|dto| {
                 let shape = super::shape::from_json(&dto.shape)
                     .ok_or_else(|| corrupt("a shape that is not valid"))?;
+                let paints = dto
+                    .paints
+                    .iter()
+                    .map(super::shape::from_json)
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| corrupt("a text's paint that is not valid"))?;
                 match &dto.text {
                     None => Ok(ShapeSource::new(shape, dto.name.clone())),
                     Some(text) => super::shape::text_from_json(text)
-                        .map(|text| ShapeSource::text(text, shape, dto.name.clone()))
+                        .map(|text| ShapeSource::text(text, shape, paints, dto.name.clone()))
                         .ok_or_else(|| corrupt("a text that is not valid")),
                 }
             })
