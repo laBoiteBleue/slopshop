@@ -10,12 +10,10 @@ const isFill = (l: LayerView) =>
 
 /**
  * Rasterize applies to a fill, a vector layer, a group, a pixel layer carrying paint or effects,
- * or a warped pixel layer without a mask (its warp baked, ADR 0044).
+ * or a warped pixel layer (its warp baked, its mask warped alike: ADR 0044).
  */
 export function canRasterize(layers: LayerView[]): boolean {
-  return layers.some(
-    (l) => isFill(l) || l.kind === "group" || l.painted || (l.warped === true && !l.mask),
-  );
+  return layers.some((l) => isFill(l) || l.kind === "group" || l.painted || l.warped === true);
 }
 
 /**

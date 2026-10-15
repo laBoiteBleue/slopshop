@@ -121,9 +121,28 @@ fn start(session: &mut Session, request: BakeRequest, baked: Vec<Edit>) -> Resul
     Ok(Pending { plans, joins })
 }
 
-/// A plan's scratch document composited whole, as an image in [`MERGED_FORMAT`]. Blocking.
-fn composited(renderer: Option<&Renderer>, plan: &BakePlan) -> Result<Arc<RasterImage>, String> {
-    let scratch = &plan.scratch;
+/// What a plan bakes, composited: its scratch document, and a warped layer's mask (ADR 0044).
+struct Composite {
+    plan: BakePlan,
+    image: Arc<RasterImage>,
+    mask: Option<Arc<RasterImage>>,
+}
+
+/// A plan's scratch documents composited whole. Blocking.
+fn composited(renderer: Option<&Renderer>, plan: BakePlan) -> Result<Composite, String> {
+    let image = composited_whole(renderer, &plan.scratch)?;
+    let mask = match &plan.mask_scratch {
+        Some(scratch) => Some(composited_whole(renderer, scratch)?),
+        None => None,
+    };
+    Ok(Composite { plan, image, mask })
+}
+
+/// A scratch document composited whole, as an image in [`MERGED_FORMAT`]. Blocking.
+fn composited_whole(
+    renderer: Option<&Renderer>,
+    scratch: &Document,
+) -> Result<Arc<RasterImage>, String> {
     let size = scratch.size();
     let rows = Rows::merged(size.width, scratch.blend_space()).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
@@ -146,13 +165,13 @@ fn composited(renderer: Option<&Renderer>, plan: &BakePlan) -> Result<Arc<Raster
 /// undone or changed meanwhile.
 fn land(
     session: &mut Session,
-    composites: Vec<(BakePlan, Arc<RasterImage>)>,
+    composites: Vec<Composite>,
     joins: Option<u64>,
 ) -> Result<(), String> {
     let mut edits = Vec::new();
-    for (plan, image) in composites {
+    for Composite { plan, image, mask } in composites {
         if let Some(edit) = plan
-            .finish(session.document(), image)
+            .finish(session.document(), image, mask)
             .map_err(|e| e.to_string())?
         {
             edits.push(edit);
@@ -264,7 +283,7 @@ async fn finish(app: AppHandle, document_id: u64, pending: Pending) -> Result<()
         let renderer = state.renderer().ok();
         plans
             .into_iter()
-            .map(|plan| composited(renderer, &plan).map(|image| (plan, image)))
+            .map(|plan| composited(renderer, plan))
             .collect::<Result<Vec<_>, String>>()
     })
     .await;
@@ -305,14 +324,11 @@ mod tests {
     }
 
     /// `pending`'s composites made on the CPU.
-    fn composites(pending: Pending) -> (Vec<(BakePlan, Arc<RasterImage>)>, Option<u64>) {
+    fn composites(pending: Pending) -> (Vec<Composite>, Option<u64>) {
         let composites = pending
             .plans
             .into_iter()
-            .map(|plan| {
-                let image = composited(None, &plan).unwrap();
-                (plan, image)
-            })
+            .map(|plan| composited(None, plan).unwrap())
             .collect();
         (composites, pending.joins)
     }
@@ -459,6 +475,76 @@ mod tests {
         let layer = &s.document().layers()[0];
         assert_eq!((layer.name.as_str(), layer.id.get()), ("a", ids[0]));
         assert!(is_raster(layer));
+    }
+
+    #[test]
+    fn rasterize_bakes_a_warped_layer_with_its_mask() {
+        // An opaque pixel layer, warped, its mask hiding its right half.
+        let mut s = Session::new(Document::new(Size::new(32, 32)));
+        let size = Size::new(32, 32);
+        let pixels = [90u8, 160, 40, 255].repeat(32 * 32);
+        let image =
+            RasterImage::from_pixels(size, slopshop_core::color::PixelFormat::RGBA8_SRGB, &pixels)
+                .unwrap();
+        let id = s.allocate_layer_id();
+        let layer = Layer {
+            locks: Default::default(),
+            style: None,
+            id,
+            name: "Layer".into(),
+            visible: true,
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            mask: None,
+            clipped: false,
+            transform: slopshop_core::Affine::IDENTITY.into(),
+            content: LayerContent::raster(Arc::new(image)),
+            warp: None,
+        };
+        s.perform(Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        })
+        .unwrap();
+        let json = format!(
+            r#"{{"kind":"warpLayer","id":{},"style":"bulge","bend":0.5}}"#,
+            id.get()
+        );
+        let request: crate::ipc::EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let gray = slopshop_core::color::PixelFormat {
+            layout: slopshop_core::color::ChannelLayout::Gray,
+            sample: slopshop_core::color::SampleType::U8,
+            color_space: slopshop_core::color::ColorSpace::LINEAR_SRGB,
+            alpha: slopshop_core::color::AlphaMode::Straight,
+        };
+        let coverage: Vec<u8> = (0..32 * 32)
+            .map(|i| if i % 32 < 16 { 255 } else { 0 })
+            .collect();
+        let image = RasterImage::from_pixels(size, gray, &coverage).unwrap();
+        s.perform(Edit::SetLayerMask {
+            id,
+            mask: Some(slopshop_core::LayerMask {
+                image: Arc::new(image),
+                enabled: true,
+                replaces_alpha: false,
+                original: None,
+            }),
+        })
+        .unwrap();
+        apply(
+            &mut s,
+            &format!(r#"{{"kind":"rasterize","ids":[{}]}}"#, id.get()),
+        );
+        let layer = &s.document().layers()[0];
+        assert!(layer.warp.is_none());
+        let mask = layer.mask.as_ref().expect("the mask, warped");
+        assert!(mask.enabled);
+        // The baked mask still hides the right half.
+        assert_eq!(slopshop_core::pick::layer_at(s.document(), 8, 16), Some(id));
+        assert_eq!(slopshop_core::pick::layer_at(s.document(), 24, 16), None);
     }
 
     #[test]
