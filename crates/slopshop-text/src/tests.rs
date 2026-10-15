@@ -1,4 +1,5 @@
 use slopshop_core::color::LinearRgba;
+use slopshop_core::shape::CharStyle;
 use slopshop_core::shape::path::shape_bounds;
 
 use super::*;
@@ -16,6 +17,7 @@ fn text(content: &str) -> Text {
         align: TextAlign::Left,
         position: [100.0, 200.0],
         frame: None,
+        spans: Vec::new(),
     }
 }
 
@@ -265,4 +267,74 @@ fn a_word_longer_than_the_box_is_broken() {
     for line in &geometry.lines {
         assert!(line.right <= 220.0 + 1e-3, "{line:?}");
     }
+}
+
+#[test]
+fn spans_set_their_characters_otherwise() {
+    let mut fonts = Fonts::bundled();
+    let plain = text("mmmm");
+    let bold = plain.styled(
+        Some(0..2),
+        &CharStyle {
+            weight: Some(800.0),
+            ..CharStyle::default()
+        },
+    );
+    let [l, _, r, _] = bounds(&fonts.lay_out(&plain));
+    let [bl, _, br, _] = bounds(&fonts.lay_out(&bold));
+    assert!(br - bl > r - l + 2.0, "{} {}", br - bl, r - l);
+    // A span twice as large: its line taller, the text wider.
+    let big = plain.styled(
+        Some(3..4),
+        &CharStyle {
+            size: Some(100.0),
+            ..CharStyle::default()
+        },
+    );
+    let geometry = fonts.geometry(&big);
+    let line = geometry.lines[0];
+    assert!(line.bottom - line.top > 100.0, "{line:?}");
+    assert!(bounds(&fonts.lay_out(&big))[2] > r + 20.0);
+}
+
+#[test]
+fn spans_in_other_colors_give_the_glyphs_by_color() {
+    let mut fonts = Fonts::bundled();
+    let one = fonts.lay_out(&text("ab"));
+    assert!(one.paints.is_empty(), "one color: the outlines are drawn");
+    let blue = LinearRgba::new(0.0, 0.0, 1.0, 1.0);
+    let two = text("ab").styled(
+        Some(1..2),
+        &CharStyle {
+            color: Some(blue),
+            ..CharStyle::default()
+        },
+    );
+    let laid = fonts.lay_out(&two);
+    assert_eq!(laid.paints.len(), 2);
+    assert_eq!(
+        laid.paints[0].fill,
+        Some(Paint::Solid(LinearRgba::new(1.0, 0.0, 0.0, 1.0)))
+    );
+    assert_eq!(laid.paints[1].fill, Some(Paint::Solid(blue)));
+    // "b" right of "a"; all the glyphs in the outlines, as one color.
+    let [_, _, a_right, _] = shape_bounds(&laid.paints[0]).unwrap();
+    let [b_left, _, _, _] = shape_bounds(&laid.paints[1]).unwrap();
+    assert!(b_left >= a_right - 1.0, "{a_right} {b_left}");
+    assert_eq!(laid.outlines, one.outlines);
+}
+
+#[test]
+fn a_span_in_a_missing_family_is_set_in_the_default_one() {
+    let mut fonts = Fonts::bundled();
+    let gone = text("ab").styled(
+        Some(0..1),
+        &CharStyle {
+            family: Some("No Such Font".to_owned()),
+            ..CharStyle::default()
+        },
+    );
+    let laid = fonts.lay_out(&gone);
+    assert!(laid.missing_font);
+    assert_eq!(laid.outlines, fonts.lay_out(&text("ab")).outlines);
 }
