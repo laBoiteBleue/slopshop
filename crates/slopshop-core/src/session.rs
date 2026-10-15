@@ -72,6 +72,7 @@ impl HistoryLabel {
             Edit::SetSelection { .. } => "selection",
             Edit::SetQuickMask { .. } => "quickMask",
             Edit::SetGuides { .. } => "guides",
+            Edit::SetGlobalLight { .. } => "globalLight",
             Edit::InsertSavedSelection { .. } => "saveSelection",
             Edit::RemoveSavedSelection { .. } => "deleteSavedSelection",
             Edit::RenameSavedSelection { .. } => "renameSavedSelection",

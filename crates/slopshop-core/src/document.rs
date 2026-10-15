@@ -15,6 +15,7 @@ use crate::blend::{BlendMode, BlendSpace};
 use crate::color::{ColorSpace, LinearRgba, WORKING_SPACE};
 use crate::geom::Size;
 use crate::raster::RasterImage;
+use crate::style::GlobalLight;
 
 /// Stable identifier of a layer within a document. Never reused, even after undo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -434,6 +435,22 @@ impl Layer {
         }
     }
 
+    /// Its style's effects (and those of the layers inside it) that use the global light lit by
+    /// `light`: only the styles it changes are drawn again.
+    pub(crate) fn light_styles(&mut self, light: GlobalLight) {
+        if let Some(style) = &mut self.style {
+            let lit = style.settings().lit(light);
+            if lit != *style.settings() {
+                *style = style.restyled(lit);
+            }
+        }
+        if let LayerContent::Group { children, .. } = &mut self.content {
+            for child in children {
+                child.light_styles(light);
+            }
+        }
+    }
+
     /// Its style's effects (and those of the layers inside it) follow it: the layer moved, its
     /// shape did not change.
     fn move_styles(&mut self) {
@@ -630,6 +647,9 @@ pub struct Document {
     next_saved_selection_id: u64,
     /// The guides, in the order they were placed; saved with the document.
     guides: Vec<Guide>,
+    /// Layer > Layer Style > Global Light (ADR 0032): the light of the effects that use it;
+    /// saved with the document.
+    global_light: GlobalLight,
     next_layer_id: u64,
     revision: u64,
 }
@@ -682,6 +702,7 @@ impl Document {
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
             guides: Vec::new(),
+            global_light: GlobalLight::default(),
             next_layer_id: 1,
             revision: 0,
         }
@@ -715,6 +736,7 @@ impl Document {
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
             guides: Vec::new(),
+            global_light: GlobalLight::default(),
             next_layer_id,
             revision: 0,
         })
@@ -770,6 +792,21 @@ impl Document {
     /// The guides, in the order they were placed.
     pub fn guides(&self) -> &[Guide] {
         &self.guides
+    }
+
+    /// The document with the global light of a file: the effects that use it are lit by it.
+    pub fn with_global_light(mut self, light: GlobalLight) -> Result<Self, RestoreError> {
+        if !light.is_valid() {
+            return Err(RestoreError::InvalidGlobalLight);
+        }
+        self.set_global_light(light);
+        Ok(self)
+    }
+
+    /// Layer > Layer Style > Global Light: the angle and altitude shared by the effects that
+    /// use it (Drop Shadow, Inner Shadow, Bevel and Emboss).
+    pub fn global_light(&self) -> GlobalLight {
+        self.global_light
     }
 
     /// Quick Mask's image while it is on (`None`: off).
@@ -988,6 +1025,15 @@ impl Document {
         &mut self.saved_selections
     }
 
+    /// Put `light` in place of the document's global light, every effect using it lit by it;
+    /// the previous light.
+    pub(crate) fn set_global_light(&mut self, light: GlobalLight) -> GlobalLight {
+        for layer in &mut self.layers {
+            layer.light_styles(light);
+        }
+        std::mem::replace(&mut self.global_light, light)
+    }
+
     /// Put `guides` in place of the document's, returning those.
     pub(crate) fn replace_guides(&mut self, guides: Vec<Guide>) -> Vec<Guide> {
         std::mem::replace(&mut self.guides, guides)
@@ -1138,6 +1184,8 @@ pub enum RestoreError {
     InvalidPaint(LayerId),
     /// A resolution that is not a finite number of pixels per inch in range (ADR 0028).
     InvalidResolution,
+    /// A global light whose angle is not finite or whose altitude is not 0 to 90 degrees.
+    InvalidGlobalLight,
     /// A saved selection whose id is 0, repeated or not below the counter, or whose mask is
     /// not gray.
     InvalidSavedSelection(SavedSelectionId),
@@ -1149,6 +1197,7 @@ impl fmt::Display for RestoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RestoreError::InvalidGuides => write!(f, "invalid guides"),
+            RestoreError::InvalidGlobalLight => write!(f, "invalid global light"),
             RestoreError::InvalidResolution => write!(f, "invalid resolution"),
             RestoreError::InvalidSavedSelection(id) => write!(f, "{id} is invalid"),
             RestoreError::UnsupportedWorkingSpace(space) => {

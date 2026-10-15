@@ -184,6 +184,11 @@ pub enum Edit {
         id: SavedSelectionId,
         selection: crate::selection::Selection,
     },
+    /// Layer > Layer Style > Global Light (ADR 0032): the document's light, every effect using
+    /// it lit by it. Never refused by locks: a setting of the document.
+    SetGlobalLight {
+        light: crate::style::GlobalLight,
+    },
     /// The document's guides, all of them: one placed, moved or removed, or all cleared.
     SetGuides {
         guides: Vec<Guide>,
@@ -393,9 +398,12 @@ impl Edit {
             } => {
                 validate_new_layer(doc, parent, index, &layer)?;
                 let id = layer.id;
+                let light = doc.global_light();
                 siblings_mut(doc, parent)?.insert(index, layer);
-                // Its effects drawn again where it lands.
-                doc.layer_mut(id);
+                // Its effects drawn again where it lands, lit by its global light.
+                if let Some(layer) = doc.layer_mut(id) {
+                    layer.light_styles(light);
+                }
                 Edit::RemoveLayer { id }
             }
             Edit::RemoveLayer { id } => {
@@ -500,6 +508,14 @@ impl Edit {
                 let saved = saved_selection_mut(doc, id)?;
                 let selection = std::mem::replace(&mut saved.selection, selection);
                 Edit::SetSavedSelection { id, selection }
+            }
+            Edit::SetGlobalLight { light } => {
+                if !light.is_valid() {
+                    return Err(EditError::InvalidStyle);
+                }
+                Edit::SetGlobalLight {
+                    light: doc.set_global_light(light),
+                }
             }
             Edit::SetGuides { guides } => {
                 if !crate::document::valid_guides(&guides) {
@@ -751,6 +767,7 @@ impl Edit {
                 if style.as_ref().is_some_and(|s| !s.is_valid()) {
                     return Err(EditError::InvalidStyle);
                 }
+                let light = doc.global_light();
                 let layer = doc
                     .layer_mut_same_shape(id)
                     .ok_or(EditError::UnknownLayer(id))?;
@@ -758,10 +775,12 @@ impl Edit {
                 if matches!(layer.content, LayerContent::Adjustment { .. }) {
                     return Err(EditError::InvalidStyle);
                 }
+                // Effects using the global light are lit by the document's.
+                let style = style.map(|s| s.lit(light));
                 // The same shape: what it gave the previous style serves the new one.
                 let style = style.map(|s| match &layer.style {
-                    Some(previous) => previous.restyled(*s),
-                    None => Style::new(*s),
+                    Some(previous) => previous.restyled(s),
+                    None => Style::new(s),
                 });
                 let previous = std::mem::replace(&mut layer.style, style);
                 Edit::SetLayerStyle {
