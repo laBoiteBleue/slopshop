@@ -38,6 +38,7 @@ mod blue_noise;
 pub mod clone;
 pub mod color;
 pub mod composite;
+pub mod contour;
 pub mod convert;
 pub mod copy;
 pub mod curve;
