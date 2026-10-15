@@ -145,3 +145,20 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
   document's resolution (ADR 0041, the text engine), not from pixels the mesh can resample;
   warping them means warping their outlines (Photoshop converts a shape's path; Warp Text is a
   text property of its own), a change to their drawing path rather than to the warp.
+
+## Implementation of Warp, part 3: the other styles (2026-10-15)
+
+Status: accepted (2026-10-15, under the maintainer's delegation; to review).
+
+- Photoshop's other ten styles join the five, in its menu's order: Arc, Arc Lower, Arc Upper,
+  Arch, Bulge, Shell Lower, Shell Upper, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze,
+  Twist. As the first five, each is SlopShop's own approximation, a deformation of the frame
+  applied to a plain 3 × 3 grid's control points (in `slopshop_core::warp`, documented there):
+  Arc Lower and Upper bend one edge, the other straight; Arch raises every line alike; the
+  Shells are the Arcs with the far edge drawn in; Fish waves the top and bottom edges in
+  opposite ways; Rise lifts the lines from one side to the other; Fisheye pushes out from the
+  center, the corners staying; Inflate pushes every edge out in its middle; Squeeze draws the
+  sides in and stretches along the middle.
+- `.slop`: the new identifiers are written in `preset.style` (schema 0.35 is not released yet);
+  a style a reader does not know now reads as none (the grid edited point by point), the points
+  being what is drawn, rather than refusing the file.

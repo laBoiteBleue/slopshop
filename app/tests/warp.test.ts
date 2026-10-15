@@ -100,8 +100,27 @@ test("None is None whatever its bend; styles differ by every setting", () => {
   assert.ok(!sameWarp(custom, arc));
 });
 
-test("Photoshop's five styles, in order", () => {
-  assert.deepEqual([...WARP_STYLES], ["arc", "bulge", "flag", "wave", "twist"]);
+test("Photoshop's fifteen styles, in its order", () => {
+  assert.deepEqual(
+    [...WARP_STYLES],
+    [
+      "arc",
+      "arcLower",
+      "arcUpper",
+      "arch",
+      "bulge",
+      "shellLower",
+      "shellUpper",
+      "flag",
+      "wave",
+      "fish",
+      "rise",
+      "fisheye",
+      "inflate",
+      "squeeze",
+      "twist",
+    ],
+  );
 });
 
 test("a line is drawn through its points mapped to the viewport", () => {
