@@ -749,6 +749,52 @@ world"
     }
 
     #[test]
+    fn free_transform_places_a_text_layer_and_keeps_its_text() {
+        use crate::shape::model::{Segment, Subpath};
+        let mut doc = document();
+        let text = crate::shape::Text {
+            content: "Hi".to_owned(),
+            family: "Inter".to_owned(),
+            weight: 400.0,
+            italic: false,
+            size: 12.0,
+            color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+            tracking: 0.0,
+            leading: None,
+            align: crate::shape::TextAlign::Left,
+            position: [0.0, 10.0],
+        };
+        // Its outlines, a path (glyphs are paths).
+        let mut outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
+        outlines.geometry = Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [0.0, 0.0],
+                segments: vec![
+                    Segment::Line([8.0, 0.0]),
+                    Segment::Line([8.0, 8.0]),
+                    Segment::Line([0.0, 8.0]),
+                ],
+                closed: true,
+            }],
+            rule: FillRule::NonZero,
+        };
+        let source = ShapeSource::text(text.clone(), outlines.clone(), "");
+        let id = add_vector(&mut doc, source, Projective::IDENTITY);
+        let moved: Projective = scale_then_move(2.0, 2.0, 3.0).into();
+        Edit::transform_layers(&doc, &[id], moved)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        // The layer takes the transform; its text and outlines stay what they were.
+        assert_eq!(doc.layer(id).unwrap().transform, moved);
+        let LayerContent::Vector { source, .. } = &doc.layer(id).unwrap().content else {
+            unreachable!("a vector layer");
+        };
+        assert_eq!(source.text_of(), Some(&text));
+        assert_eq!(source.shape(), &outlines);
+    }
+
+    #[test]
     fn linked_copies_and_locked_layers_take_free_transform_as_a_transform() {
         let mut doc = document();
         let source = ShapeSource::new(rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None), "");
