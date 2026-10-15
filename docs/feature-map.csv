@@ -410,15 +410,15 @@ Menu,Filter > Sharpen > Sharpen Edges,,wont,dated fixed kernels; Unsharp Mask an
 Menu,Filter > Sharpen > Sharpen More,,wont,dated fixed kernels; Unsharp Mask and Smart Sharpen cover them
 Menu,Filter > Sharpen > Smart Sharpen,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Sharpen > Unsharp Mask,,done,"an editable entry of the layer's stack, CPU and GPU (ADR 0034, ADR 0035)"
-Menu,Filter > Stylize > Diffuse,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Diffuse,,done,"an editable entry of the layer's stack: Normal, Darken Only, Lighten Only or Anisotropic, each pixel one of its neighbours drawn from a seed; on the CPU"
 Menu,Filter > Stylize > Emboss,,done,"an editable entry of the layer's stack (angle, height, amount); CPU and GPU (looks)"
 Menu,Filter > Stylize > Extrude,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
 Menu,Filter > Stylize > Find Edges,,done,"an editable entry of the layer's stack (a Sobel gradient per channel), applied at once; CPU and GPU (looks)"
-Menu,Filter > Stylize > Oil Paint,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Oil Paint,,done,"an editable entry of the layer's stack: Stylization, Cleanliness, Scale, Bristle Detail, Lighting (Angle, Shine): strokes from a Kuwahara filter, their relief lit; on the CPU"
 Menu,Filter > Stylize > Solarize,,done,"an editable entry of the layer's stack, applied at once; CPU and GPU (looks)"
-Menu,Filter > Stylize > Tiles,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Stylize > Trace Contour,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
-Menu,Filter > Stylize > Wind,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
+Menu,Filter > Stylize > Tiles,,done,"an editable entry of the layer's stack: Number of Tiles, Maximum Offset, the gaps filled with the background or foreground color of the moment, the image inverted or unaltered; on the CPU"
+Menu,Filter > Stylize > Trace Contour,,done,"an editable entry of the layer's stack: Level, Lower or Upper, each channel's contour on white; on the CPU"
+Menu,Filter > Stylize > Wind,,done,"an editable entry of the layer's stack: Wind, Blast or Stagger, from the right or the left, streaks blown from the edges; on the CPU"
 Menu,Filter > Video > De-Interlace,,wont,video editing is out of scope for now
 Menu,Filter > Video > NTSC Colors,,wont,video editing is out of scope for now
 Menu,Filter > Other > Custom,,open,"as an editable filter in the layer's stack, like Gaussian Blur"
