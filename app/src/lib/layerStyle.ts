@@ -2,7 +2,7 @@
 // changes the Layer Style dialog, the layers panel and the Layer menu make to a style. The
 // engine draws the effects; these rules only build the style it is sent.
 
-import type { EditRequest, LayerStyle, LayerView } from "./engine";
+import type { EditRequest, LayerStyle, LayerView, StyleShadow } from "./engine";
 import type { MessageKey } from "./i18n/en";
 
 /** A color of an effect the color picker sets: most have one; Bevel and Emboss two. */
@@ -61,6 +61,7 @@ export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<Lay
     mode: "multiply",
     opacity: 0.75,
     angle: 120,
+    useGlobalLight: true,
     distance: 5,
     spread: 0,
     size: 5,
@@ -89,6 +90,7 @@ export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<Lay
       soften: 0,
       angle: 120,
       altitude: 30,
+      useGlobalLight: true,
       highlightColor: [1, 1, 1],
       highlightMode: "screen",
       highlightOpacity: 0.75,
@@ -250,3 +252,42 @@ export function allEffectsCommand(layers: LayerView[]): "hide" | "show" | null {
 
 /** Scale Effects' range, percent (Photoshop's; `MIN_EFFECTS_SCALE` in style.rs). */
 export const EFFECTS_SCALE = { min: 1, max: 1000 } as const;
+
+/** The document's global light: `[angle, altitude]`, degrees (`DocumentView.globalLight`). */
+export type GlobalLight = [number, number];
+
+/** Photoshop's global light, a document's until it is set: from 120°, 30° high. */
+export const DEFAULT_LIGHT: GlobalLight = [120, 30];
+
+/** `style` with the effects using the global light lit by `light`, as the engine lights them. */
+export function litStyle(style: LayerStyle, [angle, altitude]: GlobalLight): LayerStyle {
+  const shadow = (s: StyleShadow | null) => (s?.useGlobalLight ? { ...s, angle } : s);
+  const lit: LayerStyle = {
+    ...style,
+    dropShadow: shadow(style.dropShadow),
+    innerShadow: shadow(style.innerShadow),
+  };
+  if (style.bevel?.useGlobalLight) lit.bevel = { ...style.bevel, angle, altitude };
+  return lit;
+}
+
+/**
+ * The global light `style` sets, the Layer Style dialog's `light` before: an effect using it
+ * with another angle (a bevel another altitude) moved it, for every effect using it, as in
+ * Photoshop; `light` when none did.
+ */
+export function lightOf(style: LayerStyle, light: GlobalLight): GlobalLight {
+  for (const s of [style.dropShadow, style.innerShadow]) {
+    if (s?.useGlobalLight && s.angle !== light[0]) return [s.angle, light[1]];
+  }
+  const b = style.bevel;
+  if (b?.useGlobalLight && (b.angle !== light[0] || b.altitude !== light[1])) {
+    return [b.angle, b.altitude];
+  }
+  return light;
+}
+
+/** Whether two global lights are the same. */
+export function sameLight(a: GlobalLight, b: GlobalLight): boolean {
+  return a[0] === b[0] && a[1] === b[1];
+}

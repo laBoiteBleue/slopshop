@@ -2,8 +2,9 @@
   // The settings of a shadow (Drop Shadow, Inner Shadow) or a glow (Outer Glow, Inner Glow) in
   // the Layer Style dialog (ADR 0032): blend mode, color, opacity, then for a shadow its angle
   // and distance, then Spread (Choke inside) and Size; every number with a slider. They edit the
-  // effect in place.
+  // effect in place. A shadow may use the document's global light (its angle then follows it).
   import { BLEND_MODE_GROUPS, type StyleGlow, type StyleShadow } from "./engine";
+  import type { GlobalLight } from "./layerStyle";
   import { srgbToHex } from "./color";
   import SliderField from "./SliderField.svelte";
   import { t } from "./i18n/index.svelte";
@@ -11,13 +12,22 @@
   let {
     effect = $bindable(),
     inside,
+    light,
     onpickcolor,
   }: {
     effect: StyleShadow | StyleGlow;
     /** An inner effect: Spread reads Choke. */
     inside: boolean;
+    /** The document's global light, which a shadow's Use Global Light takes. */
+    light: GlobalLight;
     onpickcolor: () => void;
   } = $props();
+
+  /** Use Global Light on: the shadow's angle becomes the global light's. */
+  function useGlobalLight(shadow: StyleShadow, on: boolean) {
+    shadow.useGlobalLight = on;
+    if (on) shadow.angle = light[0];
+  }
 </script>
 
 <label class="field">
@@ -52,6 +62,14 @@
 />
 {#if "angle" in effect}
   <SliderField label={t("style.angle")} bind:value={effect.angle} min={-180} max={180} unit="°" />
+  <label class="check">
+    <input
+      type="checkbox"
+      checked={effect.useGlobalLight ?? false}
+      onchange={(e) => useGlobalLight(effect as StyleShadow, e.currentTarget.checked)}
+    />
+    {t("style.useGlobalLight")}
+  </label>
   <SliderField
     label={t("style.distance")}
     bind:value={effect.distance}

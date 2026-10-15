@@ -71,6 +71,8 @@ pub struct DocumentView {
     pub saved_selections: Vec<SavedSelectionView>,
     /// The guides (View > Rulers), in the order they were placed.
     pub guides: Vec<GuideView>,
+    /// Layer > Layer Style > Global Light: `[angle, altitude]`, degrees.
+    pub global_light: [f64; 2],
     /// What the pixel layers show (ADR 0040), in the order the layers first show them: the
     /// Sources panel.
     pub sources: Vec<SourceView>,
@@ -262,6 +264,10 @@ pub struct BevelDto {
     pub soften: f64,
     pub angle: f64,
     pub altitude: f64,
+    /// Its angle and altitude are the document's global light's. Absent from requests of
+    /// before: not.
+    #[serde(default)]
+    pub use_global_light: bool,
     pub highlight_color: [f32; 3],
     pub highlight_mode: String,
     pub highlight_opacity: f32,
@@ -317,6 +323,9 @@ pub struct DropShadowDto {
     pub mode: String,
     pub opacity: f32,
     pub angle: f64,
+    /// Its angle is the document's global light's. Absent from requests of before: not.
+    #[serde(default)]
+    pub use_global_light: bool,
     pub distance: f64,
     pub spread: f64,
     pub size: f64,
@@ -378,6 +387,7 @@ impl StyleDto {
             mode: s.mode.id().to_owned(),
             opacity: s.opacity,
             angle: s.angle,
+            use_global_light: s.use_global_light,
             distance: s.distance,
             spread: s.spread,
             size: s.size,
@@ -416,6 +426,7 @@ impl StyleDto {
                 soften: b.soften,
                 angle: b.angle,
                 altitude: b.altitude,
+                use_global_light: b.use_global_light,
                 highlight_color: srgb(b.highlight_color),
                 highlight_mode: b.highlight_mode.id().to_owned(),
                 highlight_opacity: b.highlight_opacity,
@@ -491,6 +502,7 @@ impl StyleDto {
                     mode: mode(&s.mode)?,
                     opacity: s.opacity,
                     angle: s.angle,
+                    use_global_light: s.use_global_light,
                     distance: s.distance,
                     spread: s.spread,
                     size: s.size,
@@ -541,6 +553,7 @@ impl StyleDto {
                     soften: b.soften,
                     angle: b.angle,
                     altitude: b.altitude,
+                    use_global_light: b.use_global_light,
                     highlight_color: working(b.highlight_color),
                     highlight_mode: mode(&b.highlight_mode)?,
                     highlight_opacity: b.highlight_opacity,
@@ -677,6 +690,7 @@ impl DocumentView {
                 })
                 .collect(),
             guides: doc.guides().iter().map(GuideView::from).collect(),
+            global_light: [doc.global_light().angle, doc.global_light().altitude],
             sources: doc
                 .sources()
                 .into_iter()
@@ -1216,6 +1230,12 @@ pub enum EditRequest {
     /// styled layer's, but those under Lock All. One undo entry.
     SetAllEffectsVisible {
         visible: bool,
+    },
+    /// Layer > Layer Style > Global Light: the document's light (degrees), every effect using
+    /// it lit by it. Live while its dialog is open.
+    SetGlobalLight {
+        angle: f64,
+        altitude: f64,
     },
     /// A new layer showing source `source` (`SourceView::id`; the Sources panel), at `index`
     /// among the layers of `parent` (absent: the top level).
@@ -1934,6 +1954,9 @@ impl EditRequest {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::scale_effects(session.document(), &ids, scale).map_err(|e| e.to_string())?
             }
+            EditRequest::SetGlobalLight { angle, altitude } => Edit::SetGlobalLight {
+                light: slopshop_core::style::GlobalLight { angle, altitude },
+            },
             EditRequest::SetAllEffectsVisible { visible } => {
                 Edit::all_effects_visible(session.document(), visible).map_err(|e| e.to_string())?
             }
