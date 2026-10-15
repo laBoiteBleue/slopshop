@@ -15,6 +15,7 @@ fn text(content: &str) -> Text {
         leading: None,
         align: TextAlign::Left,
         position: [100.0, 200.0],
+        frame: None,
     }
 }
 
@@ -188,4 +189,80 @@ fn lines_give_their_places_and_boxes() {
     assert!((lines[1].top - lines[0].top - 60.0).abs() < 0.01);
     // The last caret of the first line stands at its end, before the break.
     assert!((geometry.carets[2].top[0] - lines[0].right).abs() < 1.0);
+}
+
+/// Paragraph text in a box at (100, 200), `width` by `height`.
+fn boxed(content: &str, width: f64, height: f64) -> Text {
+    Text {
+        frame: Some([width, height]),
+        ..text(content)
+    }
+}
+
+#[test]
+fn paragraph_text_wraps_in_its_box_from_its_top_left() {
+    let mut fonts = Fonts::bundled();
+    let content = "one two three four five six";
+    let point = fonts.geometry(&text(content));
+    assert_eq!(point.lines.len(), 1);
+    let geometry = fonts.geometry(&boxed(content, 200.0, 1000.0));
+    assert!(geometry.lines.len() >= 3, "{:?}", geometry.lines);
+    assert!(!geometry.overflow);
+    // The lines start at the box's left edge, the first one from its top, and none is wider
+    // than the box but for the space it wrapped at (which hangs past it).
+    // (Inter's letters reach a little above a 120 % line box.)
+    let top = geometry.lines[0].top;
+    assert!((195.0..=200.0).contains(&top), "{top}");
+    for line in &geometry.lines {
+        assert!((line.left - 100.0).abs() < 1e-6, "{line:?}");
+        assert!(line.right <= 320.0, "{line:?}");
+    }
+    let [l, t, r, _] = bounds(&fonts.lay_out(&boxed(content, 200.0, 1000.0)));
+    assert!(l >= 100.0 && r <= 300.0 && t >= 195.0, "{l} {t} {r}");
+}
+
+#[test]
+fn paragraph_text_is_aligned_in_its_box() {
+    let mut fonts = Fonts::bundled();
+    let centered = Text {
+        align: TextAlign::Center,
+        ..boxed("Hi", 400.0, 100.0)
+    };
+    let [l, _, r, _] = bounds(&fonts.lay_out(&centered));
+    assert!(((l + r) / 2.0 - 300.0).abs() < 3.0, "{l} {r}");
+    let right = Text {
+        align: TextAlign::Right,
+        ..boxed("Hi", 400.0, 100.0)
+    };
+    let [_, _, r, _] = bounds(&fonts.lay_out(&right));
+    assert!((490.0..=500.0).contains(&r), "{r}");
+}
+
+#[test]
+fn lines_past_the_box_are_hidden() {
+    let mut fonts = Fonts::bundled();
+    // Lines 60 px apart (50 px type): two fit in 130 px, not the third.
+    let full = boxed("a\nb\nc", 300.0, 1000.0);
+    let cut = boxed("a\nb\nc", 300.0, 130.0);
+    let geometry = fonts.geometry(&cut);
+    assert!(geometry.overflow);
+    assert_eq!(geometry.lines.len(), 3, "hidden lines still take the caret");
+    let [_, _, _, bottom] = bounds(&fonts.lay_out(&cut));
+    assert!(bottom <= 330.0, "{bottom}");
+    assert!(bounds(&fonts.lay_out(&full))[3] > 330.0);
+    assert!(!fonts.geometry(&full).overflow);
+    assert!(
+        !fonts.geometry(&text("a\nb\nc")).overflow,
+        "point text never overflows"
+    );
+}
+
+#[test]
+fn a_word_longer_than_the_box_is_broken() {
+    let mut fonts = Fonts::bundled();
+    let geometry = fonts.geometry(&boxed("Supercalifragilistic", 120.0, 1000.0));
+    assert!(geometry.lines.len() >= 2, "{:?}", geometry.lines);
+    for line in &geometry.lines {
+        assert!(line.right <= 220.0 + 1e-3, "{line:?}");
+    }
 }

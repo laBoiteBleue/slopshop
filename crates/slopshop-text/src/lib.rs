@@ -13,7 +13,8 @@ use std::sync::Arc;
 use fontique::{Blob, Collection, CollectionOptions, FontInfo, SourceCache};
 use parley::{
     Affinity, Alignment, AlignmentOptions, BreakReason, Cursor, FontContext, FontFamily, FontStyle,
-    FontWeight, Layout, LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
+    FontWeight, Layout, LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem,
+    StyleProperty,
 };
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};
@@ -70,6 +71,8 @@ pub struct LineBox {
 pub struct TextGeometry {
     pub carets: Vec<Caret>,
     pub lines: Vec<LineBox>,
+    /// Paragraph text whose last lines do not fit in its box (hidden).
+    pub overflow: bool,
 }
 
 /// What laying out a text gives.
@@ -203,8 +206,10 @@ impl Fonts {
         builder.push_default(StyleProperty::LetterSpacing(
             (text.tracking / 1000.0 * text.size) as f32,
         ));
+        // Paragraph text breaks a word longer than its box's width, as Photoshop does.
+        builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
         let mut layout: Layout<()> = builder.build(&text.content);
-        layout.break_all_lines(None);
+        layout.break_all_lines(text.frame.map(|[width, _]| width as f32));
         let alignment = match text.align {
             TextAlign::Left => Alignment::Left,
             TextAlign::Center => Alignment::Center,
@@ -214,9 +219,13 @@ impl Fonts {
         (layout, missing_font)
     }
 
-    /// Where the layout's origin (its top left) lies in the layer's space: the anchor is the
-    /// first baseline at the alignment point.
+    /// Where the layout's origin (its top left) lies in the layer's space: point text's anchor
+    /// is the first baseline at the alignment point; paragraph text's position, its box's top
+    /// left (parley aligns the lines in the box's width).
     fn origin(text: &Text, layout: &Layout<()>) -> [f64; 2] {
+        if text.frame.is_some() {
+            return text.position;
+        }
         let width = f64::from(layout.width());
         let dx = match text.align {
             TextAlign::Left => 0.0,
@@ -232,7 +241,7 @@ impl Fonts {
         let (layout, missing_font) = self.build(text);
         let [ox, oy] = Self::origin(text, &layout);
         let mut pen = Outlines::default();
-        for line in layout.lines() {
+        for line in layout.lines().filter(|line| fits(text, line)) {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyphs) = item else {
                     continue;
@@ -326,8 +335,21 @@ impl Fonts {
                 }
             })
             .collect();
-        TextGeometry { carets, lines }
+        let overflow = layout.lines().any(|line| !fits(text, &line));
+        TextGeometry {
+            carets,
+            lines,
+            overflow,
+        }
     }
+}
+
+/// Whether `line` shows: paragraph text hides the lines whose letters do not fit in its box's
+/// height (the bottom of their descenders), as Photoshop does.
+fn fits(text: &Text, line: &parley::Line<'_, ()>) -> bool {
+    text.frame.is_none_or(|[_, height]| {
+        f64::from(line.metrics().content_block_max_coord) <= height + 1e-3
+    })
 }
 
 /// The weight range of a variable font.
