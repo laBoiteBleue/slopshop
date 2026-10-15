@@ -8,7 +8,9 @@
   // whole text), Shift+click extends the selection; the arrows, Home and End follow the lines
   // as they are drawn; Ctrl+A selects everything, Ctrl+C, Ctrl+X and Ctrl+V copy, cut and
   // paste. A click outside the text commits it. The selection is drawn from the engine's
-  // layout (parley's carets and lines).
+  // layout (parley's carets and lines). A drag on the image draws a box for paragraph text;
+  // while it is edited, its box shows with eight handles that resize it (a plus in the bottom
+  // right one when lines do not fit, as in Photoshop).
   import { t } from "./i18n/index.svelte";
   import { hasShortcutModifier, shortcutLetter } from "./platform";
   import {
@@ -21,6 +23,17 @@
     type TextCommand,
     type TextLayout,
   } from "./textEditing";
+  import {
+    DRAG_THRESHOLD,
+    HANDLES,
+    frameOfDrag,
+    handlePoint,
+    inFrame,
+    resizeFrame,
+    type Corners,
+    type Frame,
+    type Point,
+  } from "./textFrame";
   import { caretAt, caretIndexAt, commitsText } from "./typeText";
   import type { ViewMapping } from "./Viewport.svelte";
 
@@ -34,16 +47,30 @@
     onselect,
     oncopy,
     onpaste,
+    onbox,
+    onresize,
   }: {
     mapping: ViewMapping;
     /**
      * The text being typed: its string, the engine's layout for it (document pixels), and
      * where the caret starts (UTF-16 units; absent: at the end).
      */
-    editing: { key: number; content: string; layout: TextLayout; start?: number } | null;
+    editing: {
+      key: number;
+      content: string;
+      layout: TextLayout;
+      start?: number;
+      /** Paragraph text: its box (layer space), its corners (document pixels), whether lines
+       * do not fit in it. */
+      box?: { frame: Frame; corners: Corners; overflow: boolean } | null;
+    } | null;
     mac: boolean;
     /** A click on the image (document pixels) while nothing is typed. */
     onplace: (point: [number, number]) => void;
+    /** A box drawn on the image while nothing is typed (document pixels): paragraph text. */
+    onbox: (frame: Frame) => void;
+    /** The box of the paragraph text typed resized by a handle (layer space), live. */
+    onresize: (frame: Frame) => void;
     /** The text typed changed. */
     oninput: (content: string) => void;
     oncommit: () => void;
@@ -63,8 +90,12 @@
   let goal: number | null = null;
   /** The presses counted for double and triple clicks. */
   let clicks: Clicks | null = null;
-  /** A drag selecting from `anchor` (its pointer). */
-  let dragging: number | null = null;
+  /** What a drag does: select from `anchor`, draw a new box, or resize the box by a handle. */
+  type Drag =
+    | { kind: "select"; pointer: number }
+    | { kind: "box"; pointer: number; start: Point; screen: Point; end: Point | null }
+    | { kind: "resize"; pointer: number; handle: number; start: Frame; corners: Corners };
+  let drag = $state<Drag | null>(null);
 
   // A new text being typed: the field takes the keys, its caret where the text was clicked.
   let started: number | null = null;
@@ -121,17 +152,52 @@
     return mapping.toDocument(e.clientX, e.clientY);
   }
 
+  /** Where `e` is in the viewport (the space the handles are drawn in). */
+  function viewportPoint(e: PointerEvent): Point {
+    const [x, y] = mapping.toDocument(e.clientX, e.clientY);
+    return mapping.toViewport(x, y);
+  }
+
+  /** The handle of the box under `e`, if any (within a few screen pixels). */
+  function handleAt(e: PointerEvent, corners: Corners): number | null {
+    const [px, py] = viewportPoint(e);
+    for (let i = 0; i < HANDLES; i++) {
+      const [x, y] = handlePoint(corners, i);
+      const [vx, vy] = mapping.toViewport(x, y);
+      if (Math.abs(px - vx) <= 6 && Math.abs(py - vy) <= 6) return i;
+    }
+    return null;
+  }
+
+  function capture(e: PointerEvent) {
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+  }
+
   function press(e: PointerEvent) {
     if (e.button !== 0 || mapping.hand) return;
     e.preventDefault();
     const point = pointAt(e);
     if (!editing) {
-      onplace(point);
+      // A click places point text, a drag draws a box: known on release.
+      const screen: Point = [e.clientX, e.clientY];
+      drag = { kind: "box", pointer: e.pointerId, start: point, screen, end: null };
+      capture(e);
+      return;
+    }
+    const box = editing.box;
+    const handle = box ? handleAt(e, box.corners) : null;
+    if (box && handle !== null) {
+      const { frame: start, corners } = box;
+      drag = { kind: "resize", pointer: e.pointerId, handle, start, corners };
+      capture(e);
       return;
     }
     const { carets } = editing.layout;
-    // Within a line's height of the text: in it.
-    const slack = Math.max(0, ...carets.map(([, y0, , y1]) => Math.abs(y1 - y0)));
+    // In the box, or within a line's height of the text: in it.
+    const slack =
+      box && inFrame(box.corners, box.frame.size, point)
+        ? Infinity
+        : Math.max(0, ...carets.map(([, y0, , y1]) => Math.abs(y1 - y0)));
     const index = caretIndexAt(carets, point, slack);
     if (index === null) {
       clicks = null;
@@ -149,18 +215,38 @@
       select(from, to);
       if (clicks.count > 1) return;
     }
-    dragging = e.pointerId;
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    drag = { kind: "select", pointer: e.pointerId };
+    capture(e);
   }
 
   function move(e: PointerEvent) {
-    if (dragging !== e.pointerId || !editing) return;
-    const index = caretIndexAt(editing.layout.carets, pointAt(e), Infinity);
-    if (index !== null && index !== focus) select(anchor, index);
+    if (drag?.pointer !== e.pointerId) return;
+    const point = pointAt(e);
+    switch (drag.kind) {
+      case "select": {
+        if (!editing) return;
+        const index = caretIndexAt(editing.layout.carets, point, Infinity);
+        if (index !== null && index !== focus) select(anchor, index);
+        return;
+      }
+      case "box": {
+        const moved = Math.hypot(e.clientX - drag.screen[0], e.clientY - drag.screen[1]);
+        if (drag.end || moved >= DRAG_THRESHOLD) drag = { ...drag, end: point };
+        return;
+      }
+      case "resize":
+        onresize(resizeFrame(drag.start, drag.corners, drag.handle, point));
+        return;
+    }
   }
 
   function release(e: PointerEvent) {
-    if (dragging === e.pointerId) dragging = null;
+    if (drag?.pointer !== e.pointerId) return;
+    const ended = drag;
+    drag = null;
+    if (ended.kind !== "box" || e.type === "pointercancel") return;
+    if (ended.end) onbox(frameOfDrag(ended.start, ended.end));
+    else onplace(ended.start);
   }
 
   /** The selected characters. */
@@ -261,6 +347,39 @@
     return { x0, y0, x1, y1 };
   });
 
+  /** Document points as an SVG polygon's, in viewport pixels. */
+  const polygon = (points: readonly Point[]) =>
+    points.map(([x, y]) => toView(x, y).join(",")).join(" ");
+
+  /** The box being drawn. */
+  const drawn = $derived.by(() => {
+    if (drag?.kind !== "box" || !drag.end) return null;
+    const {
+      position: [x, y],
+      size: [w, h],
+    } = frameOfDrag(drag.start, drag.end);
+    return polygon([
+      [x, y],
+      [x + w, y],
+      [x + w, y + h],
+      [x, y + h],
+    ]);
+  });
+
+  /** The box of the paragraph text typed, and its handles, in viewport pixels. */
+  const box = $derived.by(() => {
+    const shown = editing?.box;
+    if (!shown) return null;
+    return {
+      outline: polygon(shown.corners),
+      handles: Array.from({ length: HANDLES }, (_, i) => {
+        const [x, y] = handlePoint(shown.corners, i);
+        return toView(x, y);
+      }),
+      overflow: shown.overflow,
+    };
+  });
+
   /** The selection's highlight, one polygon per line, in viewport pixels. */
   const highlight = $derived.by(() => {
     if (!editing || collapsed) return [];
@@ -280,6 +399,18 @@
   onpointerup={release}
   onpointercancel={release}
 >
+  {#if drawn}
+    <polygon class="frame" points={drawn} />
+  {/if}
+  {#if box}
+    <polygon class="frame" points={box.outline} />
+    {#each box.handles as [x, y], i (i)}
+      <rect class="handle" x={x - 3.5} y={y - 3.5} width="7" height="7" />
+      {#if i === 4 && box.overflow}
+        <path class="overflow" d={`M${x - 2.5},${y}H${x + 2.5}M${x},${y - 2.5}V${y + 2.5}`} />
+      {/if}
+    {/each}
+  {/if}
   {#each highlight as points, i (i)}
     <polygon class="selected" {points} />
   {/each}
@@ -322,6 +453,29 @@
     stroke: var(--accent, #3b82f6);
     stroke-width: 1.5;
     animation: blink 1s steps(1) infinite;
+    pointer-events: none;
+  }
+
+  /* Paragraph text's box: a thin dashed outline, square handles. */
+  .frame {
+    fill: none;
+    stroke: var(--accent, #3b82f6);
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+    pointer-events: none;
+  }
+
+  .handle {
+    fill: #fff;
+    stroke: var(--accent, #3b82f6);
+    stroke-width: 1;
+    pointer-events: none;
+  }
+
+  /* Lines that do not fit: a plus in the bottom right handle (Photoshop's overflow sign). */
+  .overflow {
+    stroke: var(--danger-fg, #dc2626);
+    stroke-width: 1.5;
     pointer-events: none;
   }
 

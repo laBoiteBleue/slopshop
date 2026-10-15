@@ -234,6 +234,7 @@
   import { editablePath } from "./lib/pathEdit";
   import TypeTool from "./lib/TypeTool.svelte";
   import type { TextLayout } from "./lib/textEditing";
+  import type { Corners, Frame } from "./lib/textFrame";
   import {
     caretIndexAt,
     defaultTypeOptions,
@@ -1252,6 +1253,9 @@
     text: TextDto;
     /** The engine's layout of the text: its carets and lines. */
     layout: TextLayout;
+    /** Paragraph text's box as the engine places it: its corners in document pixels, and
+     * whether lines do not fit in it. */
+    box: { corners: Corners; overflow: boolean } | null;
     /** Where the caret starts (UTF-16 units); absent: at the end. */
     start?: number;
     /** The characters selected (UTF-16 units). */
@@ -1343,8 +1347,10 @@
   /** The new text's layout: where the caret can stand, its lines. */
   async function refreshCarets(documentId: number, layerId: number) {
     const layout = await engine.textLayout(documentId, layerId).catch(() => null);
-    if (layout && typing?.layerId === layerId)
+    if (layout && typing?.layerId === layerId) {
       typing.layout = { carets: layout.carets, lines: layout.lines };
+      typing.box = layout.frame ? { corners: layout.frame, overflow: layout.overflow } : null;
+    }
   }
 
   /** What is typed, sent live (the whole text: a newer one replaces one still waiting). */
@@ -1353,14 +1359,17 @@
     await refreshCarets(documentId, layerId);
   }
 
-  /** A click with the Type tool: the text layer under it is edited, else a text starts there. */
-  async function placeText(point: [number, number]) {
+  /**
+   * A click with the Type tool: the text layer under it is edited, else point text starts
+   * there. A box drawn (`box`, document pixels): paragraph text starts in it.
+   */
+  async function placeText(point: [number, number], box: Frame | null = null) {
     const doc = active;
     if (!doc || typing) return;
     commitTransform();
-    const hit = await engine
-      .layerAt(doc.id, Math.floor(point[0]), Math.floor(point[1]))
-      .catch(() => null);
+    const hit = box
+      ? null
+      : await engine.layerAt(doc.id, Math.floor(point[0]), Math.floor(point[1])).catch(() => null);
     const hitLayer = hit === null ? null : findLayer(doc.layers, hit);
     if (hitLayer?.text) {
       layersPanel?.selectOnly(hitLayer.id);
@@ -1375,13 +1384,15 @@
         created: false,
         text: hitLayer.text,
         layout: layout ? { carets, lines: layout.lines } : NO_LAYOUT,
+        box: layout?.frame ? { corners: layout.frame, overflow: layout.overflow } : null,
         start,
         selection: [start, start],
       };
       return;
     }
     const options = { ...typeOptions, color: colors.foreground };
-    const text = newText(options, point, doc.resolution, defaultFamily());
+    const placed = newText(options, box?.position ?? point, doc.resolution, defaultFamily());
+    const text = box ? { ...placed, frame: box.size } : placed;
     const { parent, index } = insertionPoint(layerTree(doc.layers), activeLayer?.id ?? null);
     const before = new Set(walk(doc.layers).map((l) => l.id));
     await live(doc.id, { kind: "addText", text, parent, index });
@@ -1396,9 +1407,17 @@
       created: true,
       text,
       layout: NO_LAYOUT,
+      box: null,
       selection: [0, 0],
     };
     await refreshCarets(doc.id, added.id);
+  }
+
+  /** The box of the paragraph text typed resized by a handle, live. */
+  function resizeText(frame: Frame) {
+    if (!typing) return;
+    typing.text = { ...typing.text, position: frame.position, frame: frame.size };
+    void sendTyped(typing.documentId, typing.layerId, typing.text);
   }
 
   function typeText(content: string) {
@@ -6632,10 +6651,22 @@
                           content: typing.text.content,
                           layout: typing.layout,
                           start: typing.start,
+                          box:
+                            typing.text.frame && typing.box
+                              ? {
+                                  frame: {
+                                    position: typing.text.position,
+                                    size: typing.text.frame,
+                                  },
+                                  ...typing.box,
+                                }
+                              : null,
                         }
                       : null}
                     bind:this={typeTool}
                     onplace={(point) => void placeText(point)}
+                    onbox={(frame) => void placeText(frame.position, frame)}
+                    onresize={resizeText}
                     oninput={typeText}
                     oncommit={commitText}
                     onselect={(start, end) => {
