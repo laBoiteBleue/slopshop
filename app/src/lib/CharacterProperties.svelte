@@ -4,6 +4,7 @@
   // tracking, color, and the paragraph's alignment. While the text is typed they show and set
   // the characters selected, else (nothing selected, or not typed) the whole text. A setting
   // the characters do not share shows empty (`textStyle.ts`).
+  import { untrack } from "svelte";
   import type { CharStyleDto, FontsView, TextAlign, TextDto } from "./engine";
   import { styleName } from "./fontStyleName";
   import Icon from "./Icon.svelte";
@@ -51,13 +52,15 @@
   const settings = $derived(shown.settings);
   const mixed = $derived(new Set(shown.mixed));
 
+  /** The family shown (a value: typing does not ask its styles again). */
+  const family = $derived(settings.family);
   /** The styles of the family shown. */
   let styles = $state<{ weight: number; italic: boolean }[]>([]);
   $effect(() => {
-    const family = settings.family;
-    void stylesOf(family)
+    const asked = family;
+    void untrack(() => stylesOf(asked))
       .then((found) => {
-        if (settings.family === family) styles = found;
+        if (family === asked) styles = found;
       })
       .catch(() => (styles = []));
   });
