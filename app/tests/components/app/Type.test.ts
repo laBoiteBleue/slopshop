@@ -1,6 +1,12 @@
-import { fireEvent, screen, waitFor } from "@testing-library/svelte";
+import { fireEvent, screen, waitFor, within } from "@testing-library/svelte";
 import { expect, test } from "vitest";
-import type { EditRequest, LayerView, TextDto, TextLineView } from "../../../src/lib/engine";
+import type {
+  DocumentView,
+  EditRequest,
+  LayerView,
+  TextDto,
+  TextLineView,
+} from "../../../src/lib/engine";
 import { documentView, layer, open, respond, row, sent } from "./harness";
 
 // The Type tool (T, ADR 0041): a click places a text layer and types into it, live, until the
@@ -93,6 +99,31 @@ respond("text_layout", (args, doc) => {
   };
 });
 respond("layer_at", () => hit);
+/**
+ * A text edit as the mock engine applies it: setText keeps the layer's spans; styleText sets
+ * the whole text's own settings, or adds a span (the tests style apart ranges).
+ */
+function applyText(doc: DocumentView, edit: EditRequest) {
+  if (edit.kind === "setText") {
+    doc.layers = doc.layers.map((l) =>
+      l.id === edit.id ? { ...l, text: { ...edit.text, spans: l.text?.spans ?? [] } } : l,
+    );
+  } else if (edit.kind === "styleText") {
+    doc.layers = doc.layers.map((l) => {
+      if (l.id !== edit.id || !l.text) return l;
+      if (edit.range === null) return { ...l, text: { ...l.text, ...edit.style } as TextDto };
+      const [start, end] = edit.range;
+      const spans = [...(l.text.spans ?? []), { start, end, style: edit.style }];
+      return { ...l, text: { ...l.text, spans } };
+    });
+  }
+}
+
+respond("perform", (args, doc) => {
+  applyText(doc, args.edit as EditRequest);
+  return { ...doc, revision: doc.revision + 1 };
+});
+
 // Live edits: a text layer added, or its text changed.
 respond("perform_live", (args, doc) => {
   const edit = args.edit as EditRequest;
@@ -100,8 +131,8 @@ respond("perform_live", (args, doc) => {
     // Ids from 9 on.
     const id = Math.max(8, ...doc.layers.map((l) => l.id)) + 1;
     doc.layers = [...doc.layers, { ...textLayer(id, edit.text.content), text: edit.text }];
-  } else if (edit.kind === "setText") {
-    doc.layers = doc.layers.map((l) => (l.id === edit.id ? { ...l, text: edit.text } : l));
+  } else if (edit.kind === "setText" || edit.kind === "styleText") {
+    applyText(doc, edit);
   } else if (edit.kind === "removeLayer") {
     doc.layers = doc.layers.filter((l) => l.id !== edit.id);
   }
@@ -223,20 +254,25 @@ test("the options bar sets the active text layer's font, style, size and alignme
   await waitFor(() => expect(row("Title")).toBeInTheDocument());
   await user.click(row("Title"));
   await user.keyboard("t");
-  const family = await screen.findByRole("combobox", { name: "Font family" });
+  const bar = within(screen.getByRole("toolbar", { name: "Tool options" }));
+  const family = await bar.findByRole("combobox", { name: "Font family" });
   await waitFor(() => expect(family).toHaveValue(FAMILY));
   await user.selectOptions(family, "Arial");
   await waitFor(() => expect(sent("perform")).toHaveLength(1));
-  expect(sent("perform")[0]).toMatchObject({
+  // The whole text: a style without a range.
+  expect(sent("perform")[0]).toEqual({
     documentId: 1,
-    edit: { kind: "setText", id: 2, text: { ...text("Title"), family: "Arial" } },
+    edit: { kind: "styleText", id: 2, range: null, style: { family: "Arial" } },
   });
-  await user.selectOptions(screen.getByRole("combobox", { name: "Font style" }), "Bold");
+  await user.selectOptions(bar.getByRole("combobox", { name: "Font style" }), "Bold");
   await waitFor(() => expect(sent("perform")).toHaveLength(2));
-  expect(sent("perform")[1]).toMatchObject({ edit: { text: { weight: 700, italic: false } } });
-  await user.click(screen.getByRole("button", { name: "Center text" }));
+  expect(sent("perform")[1]).toMatchObject({ edit: { style: { weight: 700 } } });
+  expect((sent("perform")[1].edit as { style: object }).style).toEqual({ weight: 700 });
+  await user.click(bar.getByRole("button", { name: "Center text" }));
   await waitFor(() => expect(sent("perform")).toHaveLength(3));
-  expect(sent("perform")[2]).toMatchObject({ edit: { text: { align: "center" } } });
+  expect(sent("perform")[2]).toMatchObject({
+    edit: { kind: "setText", text: { align: "center", family: "Arial", weight: 700 } },
+  });
 });
 
 test("a text layer whose font is not installed says so in the options bar", async () => {
@@ -460,4 +496,63 @@ test("a box too small for its lines shows a plus in its bottom right handle", as
   await screen.findByRole("textbox", { name: "Horizontal Type Tool" });
   await waitFor(() => expect(document.querySelectorAll("rect.handle")).toHaveLength(8));
   expect(document.querySelector("path.overflow")).not.toBeNull();
+});
+
+// Character settings (spans): the characters selected while typed, else the whole text.
+
+test("the Character settings style the characters selected while typed, else the whole text", async () => {
+  const { user } = await editText("Hello");
+  const character = within(await screen.findByRole("region", { name: "Character" }));
+  // All selected: Bold on them, live in the typing's undo entry.
+  await user.keyboard("{Control>}a{/Control}");
+  await waitFor(() =>
+    expect(character.getByRole("combobox", { name: "Font style" })).toHaveValue("400"),
+  );
+  await user.selectOptions(character.getByRole("combobox", { name: "Font style" }), "Bold");
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toEqual({
+      kind: "styleText",
+      id: 2,
+      range: [0, 5],
+      style: { weight: 700, italic: false },
+    }),
+  );
+  // The options bar sets the selection too.
+  const bar = within(screen.getByRole("toolbar", { name: "Tool options" }));
+  await user.click(bar.getByRole("button", { name: "Center text" }));
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toMatchObject({ kind: "setText", text: { align: "center" } }),
+  );
+  // A caret, nothing selected: the whole text.
+  await click(user, place(5));
+  const size = character.getByRole("spinbutton", { name: "Font size" });
+  await user.clear(size);
+  await user.type(size, "20");
+  await user.tab();
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toEqual({
+      kind: "styleText",
+      id: 2,
+      range: null,
+      style: { size: 20 },
+    }),
+  );
+  expect(sent("perform")).toHaveLength(0);
+  expect(sent("end_gesture")).toHaveLength(0);
+});
+
+test("outside typing, the Character settings style the whole text layer, one undo entry each", async () => {
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), textLayer(2, "Title")]));
+  await waitFor(() => expect(row("Title")).toBeInTheDocument());
+  await user.click(row("Title"));
+  const character = within(await screen.findByRole("region", { name: "Character" }));
+  await user.selectOptions(character.getByRole("combobox", { name: "Font family" }), "Arial");
+  await waitFor(() => expect(sent("perform")).toHaveLength(1));
+  expect(sent("perform")[0]).toEqual({
+    documentId: 1,
+    edit: { kind: "styleText", id: 2, range: null, style: { family: "Arial" } },
+  });
+  // The color, from the color picker.
+  await user.click(character.getByRole("button", { name: "Text color" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
 });
