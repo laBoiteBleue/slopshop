@@ -349,10 +349,17 @@ fn bilinear(x: f32, y: f32) -> vec4<f32> {
     return top * (1.0 - b) + bottom * b;
 }
 
+// Whether each channel of premultiplied `p` is above `level` (Trace Contour's sides).
+fn above_level(p: vec4<f32>, level: f32) -> vec3<bool> {
+    return select(vec3<bool>(false), straight(p) > vec3<f32>(level), p.a > 0.0);
+}
+
 // Stylize (`Filter::finish` on the CPU), by `mode`: 0 Solarize (colors above the middle
 // inverted), 1 Find Edges (each channel's Sobel gradient, dark lines on white), 2 Emboss (middle
 // gray moved by the difference of the pixels `weights[0..2]` after and before, `amount`
-// percent); the pixel's alpha kept.
+// percent), 3 Trace Contour (`Kernel::Contour`: a channel on the side outlined, above
+// `threshold` with flag 1, else at or below it, with one of its four neighbours on the other
+// side is 0, every other one white); the pixel's alpha kept.
 @compute @workgroup_size(16, 16)
 fn stylize_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.width || id.y >= params.height {
@@ -376,6 +383,15 @@ fn stylize_main(@builtin(global_invocation_id) id: vec3<u32>) {
             let g = sqrt(gx * gx + gy * gy) / 4.0;
             let c = vec3<f32>(1.0) - clamp(g.rgb / alpha, vec3<f32>(0.0), vec3<f32>(1.0));
             result = vec4<f32>(c * alpha, alpha);
+        } else if params.mode == 3u {
+            let level = params.threshold;
+            let side = above_level(original, level);
+            let crossed = (above_level(input(x - 1, y), level) != side)
+                | (above_level(input(x + 1, y), level) != side)
+                | (above_level(input(x, y - 1), level) != side)
+                | (above_level(input(x, y + 1), level) != side);
+            let outlined = (side == vec3<bool>((params.flags & 1u) != 0u)) & crossed;
+            result = vec4<f32>(select(vec3<f32>(alpha), vec3<f32>(0.0), outlined), alpha);
         } else {
             let fx = f32(x);
             let fy = f32(y);

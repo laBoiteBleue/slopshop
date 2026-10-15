@@ -364,8 +364,8 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Empty Area With Background/Foreground Color, Inverse or Unaltered Image: sampled as the
       distortions are), Trace Contour (Level, Lower/Upper) and Oil Paint (Stylization,
       Cleanliness, Scale, Bristle Detail, Lighting, Angle, Shine: Kuwahara strokes, their relief
-      lit); random ones with a seed drawn at each application; on the CPU (their looks too). Not
-      yet: Extrude
+      lit); random ones with a seed drawn at each application; on the CPU (their looks too), Trace
+      Contour's looks on the GPU too. Not yet: Extrude
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
