@@ -874,8 +874,10 @@ impl Edit {
 /// with the geometry moved, the layer's transform kept. `None` (the layer takes the transform)
 /// when either transform is projective, when the geometry would not stay what it is
 /// ([`Geometry::transformed`](crate::shape::Geometry::transformed)), when a mask must follow
-/// the layer, when a lock refuses moving or reshaping it, or when other layers show the same
-/// shape (linked copies are each placed by their own transform, as Photoshop's instances).
+/// the layer, when a lock refuses moving or reshaping it, when other layers show the same
+/// shape (linked copies are each placed by their own transform, as Photoshop's instances), or
+/// for text: its outlines are laid out from what it says, which a reshaped path would lose
+/// (Photoshop transforms type layers and keeps them editable).
 fn reshaped_vector(
     doc: &Document,
     layer: &Layer,
@@ -884,6 +886,9 @@ fn reshaped_vector(
     let LayerContent::Vector { source, .. } = &layer.content else {
         return None;
     };
+    if source.text_of().is_some() {
+        return None;
+    }
     let locks = doc.effective_locks(layer.id);
     if layer.mask.is_some()
         || transform == layer.transform

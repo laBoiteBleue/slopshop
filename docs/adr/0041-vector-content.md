@@ -251,5 +251,6 @@ then Free Transform changing a vector layer's geometry so that its stroke keeps 
    longer a Bézier under them, ADR 0038), a layer with a mask (the mask lives in the layer's
    space and must follow it), a layer whose pixels or position are locked (ADR 0046), and
    **linked copies**: each copy is placed by its own transform, as Photoshop's instances, so
-   that transforming one does not move the others.
+   that transforming one does not move the others; and **text layers**, whose outlines are
+   laid out from what they say (Photoshop transforms type layers and keeps them editable).
 
