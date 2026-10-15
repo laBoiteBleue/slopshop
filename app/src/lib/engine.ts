@@ -112,7 +112,12 @@ export type FilterId =
   | "average"
   | "clouds"
   | "differenceClouds"
-  | "fibers";
+  | "fibers"
+  | "diffuse"
+  | "wind"
+  | "tiles"
+  | "traceContour"
+  | "oilPaint";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {

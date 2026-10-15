@@ -464,3 +464,53 @@ test("a drawing filter takes the colors of the moment, packed, and a new seed", 
   expect(withColors("gaussianBlur", [4], colors)).toEqual([4]);
   expect(withNewSeeds("clouds", [1, 2, 7], () => 0.5)).toEqual([1, 2, 2 ** 23]);
 });
+
+test("Stylize: Photoshop's order, Diffuse's and Wind's choices, Tiles, Trace Contour, Oil Paint", () => {
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.stylize")?.filters).toEqual([
+    "diffuse",
+    "emboss",
+    "findEdges",
+    "oilPaint",
+    "solarize",
+    "tiles",
+    "traceContour",
+    "wind",
+  ]);
+  expect(FILTERS.diffuse.defaults).toEqual([0, 0]);
+  expect(validValues("diffuse", [3, 5])).toBe(true);
+  expect(validValues("diffuse", [4, 5])).toBe(false);
+  expect(FILTERS.wind.defaults).toEqual([0, 0, 0]);
+  expect(validValues("wind", [2, 1, 0])).toBe(true);
+  expect(validValues("wind", [3, 0, 0])).toBe(false);
+  // Tiles: 10 tiles, 10 %, the background color by default; the colors of the moment.
+  expect(FILTERS.tiles.defaults).toEqual([10, 10, 0, 0, 0xffffff, 0]);
+  expect(validValues("tiles", [99, 1, 3, 0, 0, 0])).toBe(true);
+  for (const values of [
+    [0, 10, 0, 0, 0, 0],
+    [10, 100, 0, 0, 0, 0],
+    [10, 10, 4, 0, 0, 0],
+  ]) {
+    expect(validValues("tiles", values)).toBe(false);
+  }
+  const colors = { foreground: "#102030", background: "#405060" };
+  expect(withColors("tiles", FILTERS.tiles.defaults, colors)).toEqual([
+    10, 10, 0, 0x102030, 0x405060, 0,
+  ]);
+  expect(FILTERS.traceContour.defaults).toEqual([128, 1]);
+  expect(validValues("traceContour", [255, 0])).toBe(true);
+  expect(validValues("traceContour", [256, 0])).toBe(false);
+  // Oil Paint: Stylization and Scale from 0.1, the others from 0, to 10; Lighting a check box.
+  expect(FILTERS.oilPaint.defaults).toEqual([4, 5, 1, 2, 1, -60, 1]);
+  expect(validValues("oilPaint", [0.1, 0, 0.1, 0, 0, -180, 0])).toBe(true);
+  for (const values of [
+    [0, 5, 1, 2, 1, -60, 1],
+    [4, 10.5, 1, 2, 1, -60, 1],
+    [4, 5, 1, 2, 2, -60, 1],
+    [4, 5, 1, 2, 1, 181, 1],
+  ]) {
+    expect(validValues("oilPaint", values)).toBe(false);
+  }
+  for (const filter of ["diffuse", "wind", "tiles", "traceContour", "oilPaint"] as const) {
+    expect(hasSettings(filter)).toBe(true);
+  }
+});
