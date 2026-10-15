@@ -29,7 +29,7 @@
 //!
 //! `size` and `leading` in pixels (`leading` absent: automatic), `tracking` in thousandths of an
 //! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
-//! alignment point) in the layer's own space; paragraph text (schema 0.36) has a `frame`, its
+//! alignment point) in the layer's own space; paragraph text (schema 0.37) has a `frame`, its
 //! box's size, and `position` is then the box's top left corner.
 
 use serde_json::{Value, json};
