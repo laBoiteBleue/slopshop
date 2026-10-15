@@ -260,6 +260,8 @@ export type LayerStyle = {
   satin?: StyleSatin | null;
   /** Absent: none. */
   bevel?: StyleBevel | null;
+  /** The effects shown (the panel's "Effects" eye; Hide All Effects). Absent: true. */
+  effectsVisible?: boolean;
   stroke: {
     enabled: boolean;
     size: number;
@@ -652,6 +654,10 @@ export type EditRequest =
   | { kind: "deletePaint"; ids: number[] }
   /** Layer > Make Unique: each of `ids` sharing its source gets one of its own (ADR 0040). */
   | { kind: "makeUnique"; ids: number[] }
+  /** Layer > Layer Style > Scale Effects: every size of the styles of `ids` by `scale` %. */
+  | { kind: "scaleLayerStyle"; ids: number[]; scale: number }
+  /** Layer > Layer Style > Hide All Effects (`visible` false) or Show All Effects. */
+  | { kind: "setAllEffectsVisible"; visible: boolean }
   /** Delete source `source` and the layers showing it (the Sources panel, ADR 0040). */
   | { kind: "deleteSource"; source: number }
   /** A new layer showing source `source` (the Sources panel), at `index` in `parent`. */
@@ -1744,6 +1750,12 @@ export const engine = {
   /** A library pattern loaded for a document (a Pattern Overlay's): its source's id. */
   loadPattern: (documentId: number, pattern: string, sourceName: string) =>
     serial(() => invoke<number>("load_pattern", { documentId, pattern, sourceName })),
+  /** Layer > Layer Style > Copy Layer Style: the layer's style kept by the app (for any tab). */
+  copyLayerStyle: (documentId: number, layerId: number) =>
+    serial(() => invoke<void>("copy_layer_style", { documentId, layerId })),
+  /** Layer > Layer Style > Paste Layer Style onto layers `ids`, one undo entry. */
+  pasteLayerStyle: (documentId: number, ids: number[]) =>
+    serial(() => invoke<DocumentView>("paste_layer_style", { documentId, ids })),
   /** Another library pattern for a pattern fill layer, its scale and angle kept. */
   replacePattern: (documentId: number, layerId: number, pattern: string, sourceName: string) =>
     serial(() =>

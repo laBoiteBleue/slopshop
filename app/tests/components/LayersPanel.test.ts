@@ -341,6 +341,55 @@ test("a styled layer shows fx; its effects unfold below it, each eye turns one o
   });
 });
 
+test("the Effects row's eye hides every effect, each keeping its own; hidden, they are dimmed", async () => {
+  const style = withEffect(withEffect(null, "stroke", true), "dropShadow", true);
+  const { onedit, user, rerender, props } = open([layer(1, "Logo", { style })]);
+  await user.click(within(row("Logo")).getByRole("button", { expanded: false }));
+  const effects = screen.getByText("Effects").closest("li")!;
+  await user.click(within(effects).getByRole("button", { name: "Hide the effects" }));
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerStyle",
+    id: 1,
+    style: { ...style, effectsVisible: false },
+  });
+  // Hidden: the eye offers to show them, every effect dimmed, the fx mark kept.
+  const hidden = { ...style, effectsVisible: false };
+  await rerender({ ...props, doc: documentOf([layer(1, "Logo", { style: hidden })]) });
+  const eye = within(screen.getByText("Effects").closest("li")!).getByRole("button", {
+    name: "Show the effects",
+  });
+  expect(eye).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByText("Stroke").closest("li")).toHaveClass("off");
+  expect(within(row("Logo")).getByText("fx")).toBeInTheDocument();
+  await user.click(eye);
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setLayerStyle",
+    id: 1,
+    style: { ...style, effectsVisible: true },
+  });
+});
+
+test("a right-click on the fx mark or the Effects row opens the layer style's menu", async () => {
+  const style = withEffect(null, "stroke", true);
+  const run = vi.fn();
+  const { user, rerender, props } = open([layer(1, "Background"), layer(2, "Logo", { style })]);
+  await rerender({
+    ...props,
+    contextMenu: [{ kind: "command", label: "Duplicate Layer", run: vi.fn() }],
+    styleContextMenu: [{ kind: "command", label: "Copy Layer Style", run }],
+  });
+  await user.click(row("Background"));
+  await fireEvent.contextMenu(within(row("Logo")).getByText("fx"));
+  // The layer becomes the selection, as a right-click on its row does.
+  expect(selectedNames()).toEqual(["Logo"]);
+  expect(screen.queryByText("Duplicate Layer")).not.toBeInTheDocument();
+  await user.click(screen.getByText("Copy Layer Style"));
+  expect(run).toHaveBeenCalledOnce();
+  await user.click(within(row("Logo")).getByRole("button", { expanded: false }));
+  await fireEvent.contextMenu(screen.getByText("Effects"));
+  expect(screen.getByText("Copy Layer Style")).toBeInTheDocument();
+});
+
 test("a layer's stack unfolds below it: each entry has an eye, an edit icon when it has settings", async () => {
   const levels = {
     id: "levels" as const,

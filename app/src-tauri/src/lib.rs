@@ -15,6 +15,7 @@ mod clipboard;
 mod export;
 mod info;
 mod ipc;
+mod layer_style;
 mod liquify;
 mod move_pixels;
 mod paint;
@@ -480,6 +481,8 @@ struct AppState {
     exports: ExportJobs,
     /// What Edit > Copy took (see the `clipboard` module).
     layer_clipboard: Mutex<Option<clipboard::Copied>>,
+    /// What Layer > Layer Style > Copy Layer Style took (see the `layer_style` module).
+    style_clipboard: Mutex<Option<slopshop_core::style::LayerStyle>>,
     /// The file the Import PDF / SVG dialog shows (see the `vector` module).
     vector: Arc<vector::VectorCache>,
     /// AI components being installed (see the `ai` module).
@@ -511,6 +514,7 @@ impl AppState {
             surface_size: Mutex::new(None),
             exports: ExportJobs::default(),
             layer_clipboard: Mutex::new(None),
+            style_clipboard: Mutex::new(None),
             vector: Arc::default(),
             ai: ai::AiState::default(),
             segment: segment::SegmentState::default(),
@@ -2506,6 +2510,8 @@ pub fn run() {
             move_snap_targets,
             warp_grid,
             clipboard::paste,
+            layer_style::copy_layer_style,
+            layer_style::paste_layer_style,
             clipboard::copy,
             bake::bake_layers,
             clipboard::clipboard_size,
