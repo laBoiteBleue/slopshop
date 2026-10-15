@@ -254,3 +254,24 @@ then Free Transform changing a vector layer's geometry so that its stroke keeps 
    that transforming one does not move the others; and **text layers**, whose outlines are
    laid out from what they say (Photoshop transforms type layers and keeps them editable).
 
+
+## Amendment: text, part 2 (2026-10-15)
+
+Status: accepted (2026-10-15, under the maintainer's delegation; to review).
+
+1. **Editing comfort** (no format change): characters are selected with the mouse (drag,
+   Shift+click, two to five clicks for a word, a line, a paragraph and the whole text, as in
+   Photoshop) and the keys (Shift+arrows, Ctrl+A); Up, Down, Home and End follow the lines as
+   drawn; Cut, Copy and Paste act on characters while a text is typed (the keys and the Edit
+   menu, through the system clipboard's text). The selection is drawn from the engine's
+   layout: `text_layout` gives parley's carets and, besides, its lines (their places, whether a
+   line break ends them, their boxes), in document pixels.
+2. **Paragraph text** (`.slop` 0.36): a text may have a `frame`, its box's width and height in
+   the layer's own space, its `position` then being the box's top left corner (point text
+   keeps its anchor). parley breaks the lines at the box's width (a word longer than the box
+   is broken, as Photoshop does) and aligns them in it; lines whose letters (to the bottom of
+   their descenders) pass the box's height are hidden, as in Photoshop, and the Type tool
+   shows the overflow with a plus in the box's bottom right handle. A drag with the Type tool
+   draws a new box; while the text is edited, its box shows with eight handles that resize it,
+   live, within the typing's undo entry. A file of an older reader draws paragraph text from
+   its outlines and, edited, takes it as point text.
