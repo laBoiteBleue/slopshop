@@ -456,8 +456,12 @@ Raised on 2026-10-05, to schedule:
     - [x] Part 2b, paragraph text: a box drawn with the Type tool, lines wrapped and
           aligned in it, those past its height hidden (a plus in its handle), resized by its
           handles while it is edited; `.slop` 0.38
-    - [ ] Part 2c: per-character styles, the Character settings in Properties (family,
-          style, size, tracking, leading, color, alignment), embedded fonts
+    - [x] Part 2c, character settings: spans (per-character styles kept with the characters
+          as they are typed, several colors drawn by color), the Character settings in
+          Properties (family, style, size, leading, tracking, color, alignment) and the options
+          bar on the characters selected while typing, else the whole text; `.slop` 0.39
+    - [ ] Next: Photoshop's pending style at a caret, Type > Convert to Point/Paragraph Text,
+          justified paragraphs, embedded fonts, PSD editable text
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
         sampled with wrapping on the CPU and the GPU alike; `.slop` 0.31

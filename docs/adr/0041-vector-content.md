@@ -275,3 +275,24 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
    draws a new box; while the text is edited, its box shows with eight handles that resize it,
    live, within the typing's undo entry. A file of an older reader draws paragraph text from
    its outlines and, edited, takes it as point text.
+3. **Per-character styles** (`.slop` 0.39): a text keeps its own settings and **spans**,
+   sorted and apart, in UTF-8 bytes of its content, each setting only what differs (family,
+   weight, italic, size, color, tracking, leading, automatic leading included), as Photoshop's
+   character attributes. Core keeps them with the characters: typed characters take the style
+   of the character before them (of the first one replaced, of the first one at the start); a
+   style on a range splits the spans at its ends; a style on the whole text changes its own
+   settings and clears the spans of what it sets; spans setting what the text sets vanish and
+   neighbors set alike merge. parley lays the spans out (sizes, fonts, leading per line,
+   tracking from each span's size). A text in several colors keeps its glyphs by color
+   (`paints`, each a path filled with its color) beside its outlines in one color: they are
+   drawn instead, as one more paint of the layer, on the CPU and the GPU alike; the outlines
+   still serve bounds, picking and selections, and readers that know one color.
+4. **Editing protocol**: `setText` sends the content and the text's own settings and keeps
+   the layer's spans, following the content's change (the interface never sends spans);
+   `styleText` applies a style to a range (UTF-16 units) or to the whole text. While a text is
+   typed, a style is a live edit that is never merged into another, so that each applies to
+   what the ones before it made. The **Character settings** in the Properties panel (family,
+   style, size and leading in points, tracking, color, alignment) and the options bar apply to
+   the characters selected while a text is typed, else to the whole text (a caret with nothing
+   selected included: Photoshop's pending style for the next characters typed is left out);
+   settings the characters do not share show empty.
