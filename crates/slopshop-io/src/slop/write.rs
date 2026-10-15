@@ -908,6 +908,10 @@ fn build_manifest(
                 })
                 .collect(),
             next_selection_id: Some(document.next_saved_selection_id()),
+            global_light: Some({
+                let light = document.global_light();
+                [light.angle, light.altitude]
+            }),
             guides: document
                 .guides()
                 .iter()

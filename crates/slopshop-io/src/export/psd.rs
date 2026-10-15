@@ -154,7 +154,12 @@ pub fn export_psd(
     header(&mut head, size, options.depth, format);
     // Color mode data: none for RGB.
     head.extend(0u32.to_be_bytes());
-    image_resources(&mut head, &profile, document.resolution());
+    image_resources(
+        &mut head,
+        &profile,
+        document.resolution(),
+        document.global_light(),
+    );
     out.write_all(&head)?;
     layer_and_mask_info(&mut out, &records, options.depth, format, &mut spill)?;
     merged_image(&mut out, &composite, format, &mut spill)?;
@@ -1031,8 +1036,14 @@ fn header(out: &mut Vec<u8>, size: Size, depth: PsdDepth, format: Format) {
     out.extend(3u16.to_be_bytes());
 }
 
-/// Image resources: the resolution (ResolutionInfo, 1005; ADR 0028) and the ICC profile (1039).
-fn image_resources(out: &mut Vec<u8>, profile: &[u8], ppi: f64) {
+/// Image resources: the resolution (ResolutionInfo, 1005; ADR 0028), the global light's angle
+/// (1037) and altitude (1049), whole degrees, and the ICC profile (1039).
+fn image_resources(
+    out: &mut Vec<u8>,
+    profile: &[u8],
+    ppi: f64,
+    light: slopshop_core::style::GlobalLight,
+) {
     let mut resources = Vec::new();
     // Horizontal then vertical: pixels per inch in 16.16 fixed point, shown in pixels per
     // inch (1), sizes shown in inches (1).
@@ -1045,6 +1056,13 @@ fn image_resources(out: &mut Vec<u8>, profile: &[u8], ppi: f64) {
         resources.extend(fixed);
         resources.extend(1u16.to_be_bytes());
         resources.extend(1u16.to_be_bytes());
+    }
+    for (id, degrees) in [(1037u16, light.angle), (1049, light.altitude)] {
+        resources.extend(b"8BIM");
+        resources.extend(id.to_be_bytes());
+        resources.extend([0, 0]);
+        resources.extend(4u32.to_be_bytes());
+        resources.extend((degrees.round() as i32).to_be_bytes());
     }
     resources.extend(b"8BIM");
     resources.extend(1039u16.to_be_bytes());

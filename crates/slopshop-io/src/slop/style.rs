@@ -29,6 +29,8 @@
 //! (schema 0.28), one with a Bevel and Emboss at 14 (schema 0.29). From schema 0.36,
 //! `"effects_visible": false` hides every effect (Photoshop's eye on the "Effects" row), each
 //! keeping its own `enabled`; absent, they show (an older reader shows them, losing nothing).
+//! From schema 0.37, `"use_global_light": true` in a shadow or a bevel: its angle (and a
+//! bevel's altitude) follow the document's `global_light`; absent, its own.
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
@@ -73,7 +75,7 @@ pub(super) fn to_json(
         value.insert("effects_visible".into(), json!(false));
     }
     let shadow = |s: DropShadow| {
-        json!({
+        let mut value = json!({
             "enabled": s.enabled,
             "color": color(s.color),
             "mode": s.mode.id(),
@@ -82,7 +84,11 @@ pub(super) fn to_json(
             "distance": s.distance,
             "spread": s.spread,
             "size": s.size,
-        })
+        });
+        if s.use_global_light {
+            value["use_global_light"] = json!(true);
+        }
+        value
     };
     let glow = |g: Glow| {
         json!({
@@ -172,9 +178,7 @@ pub(super) fn to_json(
         );
     }
     if let Some(b) = style.bevel {
-        value.insert(
-            "bevel".into(),
-            json!({
+        let mut bevel = json!({
                 "enabled": b.enabled,
                 "style": bevel_style_id(b.style),
                 "depth": b.depth,
@@ -193,8 +197,11 @@ pub(super) fn to_json(
                     "mode": b.shadow_mode.id(),
                     "opacity": b.shadow_opacity,
                 },
-            }),
-        );
+        });
+        if b.use_global_light {
+            bevel["use_global_light"] = json!(true);
+        }
+        value.insert("bevel".into(), bevel);
     }
     if let Some(s) = style.stroke {
         value.insert(
@@ -226,6 +233,14 @@ impl Fields<'_> {
 
     fn enabled(&self) -> Option<bool> {
         self.0.get("enabled")?.as_bool()
+    }
+
+    /// Whether it uses the global light: absent, not (schema 0.37).
+    fn global_light(&self) -> Option<bool> {
+        match self.0.get("use_global_light") {
+            None => Some(false),
+            Some(value) => value.as_bool(),
+        }
     }
 
     fn mode(&self) -> Option<BlendMode> {
@@ -271,6 +286,7 @@ pub(super) fn from_json(
             mode: f.mode()?,
             opacity: f.opacity()?,
             angle: f.number("angle")?,
+            use_global_light: f.global_light()?,
             distance: f.number("distance")?,
             spread: f.number("spread")?,
             size: f.number("size")?,
@@ -382,6 +398,7 @@ pub(super) fn from_json(
             soften: f.number("soften")?,
             angle: f.number("angle")?,
             altitude: f.number("altitude")?,
+            use_global_light: f.global_light()?,
             highlight_color,
             highlight_mode,
             highlight_opacity,

@@ -32,7 +32,7 @@ use slopshop_core::color::{
     AlphaMode, ChannelLayout, ColorSpace, PixelFormat, SampleType, WORKING_SPACE,
 };
 use slopshop_core::curve::Curve;
-use slopshop_core::style::{LayerStyle, Style};
+use slopshop_core::style::{GlobalLight, LayerStyle, Style};
 use slopshop_core::{
     BlendMode, BlendSpace, Document, Layer, LayerContent, LayerId, LayerMask, LinearRgba,
     RasterImage, Rect, Size,
@@ -49,8 +49,6 @@ const LONG_KEYS: [&[u8; 4]; 13] = [
     b"LMsk", b"Lr16", b"Lr32", b"Layr", b"Mt16", b"Mt32", b"Mtrn", b"Alph", b"FMsk", b"lnk2",
     b"FEid", b"FXid", b"PxSD",
 ];
-/// Photoshop's global light angle when a document does not say (degrees).
-const GLOBAL_ANGLE: f64 = 120.0;
 /// Layer styles (effects).
 const STYLE_KEYS: [&[u8; 4]; 2] = [b"lfx2", b"lmfx"];
 /// Layers whose pixels Photoshop renders from other data: text, smart objects, vector shapes
@@ -408,7 +406,7 @@ fn read_layer_info<R: Read + Seek>(
         let mut style = LayerStyle::default();
         let mut ignored = record.styles || !known_mode || fill_differs;
         if let Some(block) = &record.effects {
-            match effects::read(block, header.global_angle.unwrap_or(GLOBAL_ANGLE)) {
+            match effects::read(block, global_light(header)) {
                 Some(read) if styleable => {
                     if read.approximated {
                         notes.push(ImportWarning::LayerStylesApproximated);
@@ -501,6 +499,7 @@ fn read_layer_info<R: Read + Seek>(
         layers,
         next_id,
     )
+    .and_then(|document| document.with_global_light(global_light(header)))
     .map_err(|e| corrupt(&format!("layers: {e:?}")))?;
     let layer_warnings = document
         .all_layers()
@@ -511,6 +510,22 @@ fn read_layer_info<R: Read + Seek>(
         warnings,
         layer_warnings,
     }))
+}
+
+/// The document's global light (image resources 1037 and 1049), Photoshop's (120°, 30°)
+/// where it does not say; an altitude out of range is clamped.
+fn global_light(header: &Header) -> GlobalLight {
+    let light = GlobalLight::default();
+    GlobalLight {
+        angle: header
+            .global_angle
+            .filter(|a| a.is_finite())
+            .unwrap_or(light.angle),
+        altitude: header
+            .global_altitude
+            .unwrap_or(light.altitude)
+            .clamp(0.0, 90.0),
+    }
 }
 
 /// One layer record. Its tagged blocks tell groups, adjustments and what was rendered.

@@ -44,6 +44,8 @@ const RESOURCE_ICC: u16 = 1039;
 const RESOURCE_RESOLUTION: u16 = 1005;
 /// The global light's angle (layer effects), a 4-byte number of degrees.
 const RESOURCE_GLOBAL_ANGLE: u16 = 1037;
+/// The global light's altitude (layer effects), a 4-byte number of degrees.
+const RESOURCE_GLOBAL_ALTITUDE: u16 = 1049;
 const RESOURCE_TRANSPARENCY_INDEX: u16 = 1047;
 const RESOURCE_VERSION_INFO: u16 = 1057;
 
@@ -132,6 +134,8 @@ struct Header {
     resolution: Option<f64>,
     /// The global light's angle, degrees (layer effects that use it).
     global_angle: Option<f64>,
+    /// The global light's altitude, degrees.
+    global_altitude: Option<f64>,
     /// The composite is real (else Photoshop wrote a blank one: "Maximize Compatibility" off).
     real_merged_data: bool,
 }
@@ -258,6 +262,7 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
         transparent_index: None,
         resolution: None,
         global_angle: None,
+        global_altitude: None,
         real_merged_data: true,
     };
     if channels < header.color_channels() {
@@ -273,6 +278,10 @@ fn read_header<R: Read + Seek>(input: &mut Input<R>) -> Result<Header, ImportErr
             RESOURCE_GLOBAL_ANGLE if data.len() >= 4 => {
                 let angle = i32::from_be_bytes([data[0], data[1], data[2], data[3]]);
                 header.global_angle = Some(f64::from(angle));
+            }
+            RESOURCE_GLOBAL_ALTITUDE if data.len() >= 4 => {
+                let altitude = i32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                header.global_altitude = Some(f64::from(altitude));
             }
             RESOURCE_TRANSPARENCY_INDEX if data.len() >= 2 => {
                 header.transparent_index = Some(u16::from_be_bytes([data[0], data[1]]));

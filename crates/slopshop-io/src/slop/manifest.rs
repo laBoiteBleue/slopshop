@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 36;
+pub(crate) const SCHEMA_MINOR: u32 = 37;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -174,6 +174,10 @@ pub(crate) struct DocumentDto {
     /// Absent: none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shapes: Vec<ShapeDto>,
+    /// Layer > Layer Style > Global Light (schema 0.37): `[angle, altitude]`, degrees. Absent:
+    /// Photoshop's, 120 and 30.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_light: Option<[f64; 2]>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
