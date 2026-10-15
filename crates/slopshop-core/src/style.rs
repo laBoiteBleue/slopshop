@@ -658,6 +658,33 @@ fn grown(canvas: Size, margin: u32) -> Size {
     )
 }
 
+/// The document's light (Photoshop's Global Light): where the light of Drop Shadow, Inner Shadow
+/// and Bevel and Emboss comes from when they use it, so that they agree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlobalLight {
+    /// Degrees counterclockwise from the right.
+    pub angle: f64,
+    /// Degrees above the plane (0 to 90): Bevel and Emboss's.
+    pub altitude: f64,
+}
+
+impl Default for GlobalLight {
+    /// Photoshop's: from 120°, 30° high.
+    fn default() -> Self {
+        Self {
+            angle: 120.0,
+            altitude: 30.0,
+        }
+    }
+}
+
+impl GlobalLight {
+    /// A finite angle, an altitude of 0 to 90 degrees.
+    pub fn is_valid(&self) -> bool {
+        self.angle.is_finite() && (0.0..=90.0).contains(&self.altitude)
+    }
+}
+
 /// A shadow behind the layer, offset from it (Photoshop's Drop Shadow).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DropShadow {
@@ -667,8 +694,10 @@ pub struct DropShadow {
     pub mode: BlendMode,
     pub opacity: f32,
     /// Where the light comes from, degrees counterclockwise from the right: the shadow goes the
-    /// other way.
+    /// other way. The document's global light's when `use_global_light`.
     pub angle: f64,
+    /// Lit by the document's global light (Photoshop's Use Global Light): `angle` follows it.
+    pub use_global_light: bool,
     /// How far the shadow is offset, pixels.
     pub distance: f64,
     /// How much of `size` hardens the shape before it is blurred, percent.
@@ -678,7 +707,8 @@ pub struct DropShadow {
 }
 
 impl Default for DropShadow {
-    /// Photoshop's: black, Multiply, 75 %, light from 120°, 5 pixels away and wide.
+    /// Photoshop's: black, Multiply, 75 %, the global light (from 120°), 5 pixels away and
+    /// wide.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -686,6 +716,7 @@ impl Default for DropShadow {
             mode: BlendMode::Multiply,
             opacity: 0.75,
             angle: 120.0,
+            use_global_light: true,
             distance: 5.0,
             spread: 0.0,
             size: 5.0,
@@ -910,6 +941,9 @@ pub struct BevelEmboss {
     pub angle: f64,
     /// Degrees above the plane (0 to 90).
     pub altitude: f64,
+    /// Lit by the document's global light (Photoshop's Use Global Light): `angle` and
+    /// `altitude` follow it.
+    pub use_global_light: bool,
     pub highlight_color: LinearRgba,
     pub highlight_mode: BlendMode,
     pub highlight_opacity: f32,
@@ -931,6 +965,7 @@ impl Default for BevelEmboss {
             soften: 0.0,
             angle: 120.0,
             altitude: 30.0,
+            use_global_light: true,
             highlight_color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
             highlight_mode: BlendMode::Screen,
             highlight_opacity: 0.75,
@@ -1129,6 +1164,31 @@ impl LayerStyle {
             || self.satin.is_some_and(|s| s.enabled)
             || self.bevel.is_some_and(|b| b.enabled)
             || self.stroke.is_some_and(|s| s.enabled)
+    }
+
+    /// The style with the effects that use the global light lit by `light`: their angle (and
+    /// Bevel and Emboss's altitude) its.
+    pub fn lit(&self, light: GlobalLight) -> LayerStyle {
+        let mut style = self.clone();
+        for s in [&mut style.drop_shadow, &mut style.inner_shadow]
+            .into_iter()
+            .flatten()
+            .filter(|s| s.use_global_light)
+        {
+            s.angle = light.angle;
+        }
+        if let Some(b) = style.bevel.as_mut().filter(|b| b.use_global_light) {
+            b.angle = light.angle;
+            b.altitude = light.altitude;
+        }
+        style
+    }
+
+    /// Whether an effect uses the global light.
+    pub fn uses_global_light(&self) -> bool {
+        self.drop_shadow.is_some_and(|s| s.use_global_light)
+            || self.inner_shadow.is_some_and(|s| s.use_global_light)
+            || self.bevel.is_some_and(|b| b.use_global_light)
     }
 
     /// Layer > Layer Style > Scale Effects (Photoshop's): every size and distance of its effects
@@ -2202,6 +2262,102 @@ mod tests {
         );
         assert_eq!(at(&doc, 25, 25)[3], 0.0);
         assert_eq!(at(&doc, 31, 25), [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn the_global_light_lights_the_effects_that_use_it_and_goes_with_undo() {
+        let (mut doc, id) = document();
+        let settings = |doc: &Document| {
+            let style = doc.layer(id).unwrap().style.as_ref().unwrap();
+            style.settings().clone()
+        };
+        // A shadow on the global light, an inner shadow and a bevel on their own.
+        let style = LayerStyle {
+            drop_shadow: Some(DropShadow {
+                angle: 10.0,
+                ..DropShadow::default()
+            }),
+            inner_shadow: Some(DropShadow {
+                angle: 10.0,
+                use_global_light: false,
+                ..DropShadow::default()
+            }),
+            bevel: Some(BevelEmboss {
+                angle: 10.0,
+                altitude: 60.0,
+                use_global_light: false,
+                ..BevelEmboss::default()
+            }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, style);
+        // Set, a style takes the document's light where it uses it.
+        assert_eq!(settings(&doc).drop_shadow.unwrap().angle, 120.0);
+        assert_eq!(settings(&doc).inner_shadow.unwrap().angle, 10.0);
+        // Under Lock All too: the light is the document's.
+        Edit::SetLayerLocks {
+            id,
+            locks: crate::document::LayerLocks {
+                all: true,
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let light = GlobalLight {
+            angle: -45.0,
+            altitude: 70.0,
+        };
+        let undo = Edit::SetGlobalLight { light }.apply(&mut doc).unwrap();
+        assert_eq!(doc.global_light(), light);
+        assert_eq!(settings(&doc).drop_shadow.unwrap().angle, -45.0);
+        assert_eq!(settings(&doc).inner_shadow.unwrap().angle, 10.0);
+        let bevel = settings(&doc).bevel.unwrap();
+        assert_eq!((bevel.angle, bevel.altitude), (10.0, 60.0));
+        // The bevel on the global light: its angle and altitude.
+        let mut lit = settings(&doc);
+        lit.bevel.as_mut().unwrap().use_global_light = true;
+        let lit = lit.lit(light);
+        let bevel = lit.bevel.unwrap();
+        assert_eq!((bevel.angle, bevel.altitude), (-45.0, 70.0));
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.global_light(), GlobalLight::default());
+        assert_eq!(settings(&doc).drop_shadow.unwrap().angle, 120.0);
+        let bad = GlobalLight {
+            angle: 0.0,
+            altitude: 91.0,
+        };
+        assert_eq!(
+            Edit::SetGlobalLight { light: bad }.apply(&mut doc),
+            Err(EditError::InvalidStyle)
+        );
+    }
+
+    #[test]
+    fn a_layer_inserted_takes_its_document_s_global_light() {
+        let (mut doc, id) = document();
+        styled(&mut doc, id, shadow_and_stroke());
+        let mut layer = doc.layer(id).unwrap().clone();
+        let mut other = Document::new(doc.size());
+        let light = GlobalLight {
+            angle: 30.0,
+            altitude: 30.0,
+        };
+        Edit::SetGlobalLight { light }.apply(&mut other).unwrap();
+        layer.id = other.allocate_layer_id();
+        let new_id = layer.id;
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer,
+        }
+        .apply(&mut other)
+        .unwrap();
+        let style = other.layer(new_id).unwrap().style.as_ref().unwrap();
+        assert_eq!(style.settings().drop_shadow.unwrap().angle, 30.0);
+        // The document it came from keeps its own.
+        let style = doc.layer(id).unwrap().style.as_ref().unwrap();
+        assert_eq!(style.settings().drop_shadow.unwrap().angle, 120.0);
     }
 
     #[test]
