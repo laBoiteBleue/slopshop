@@ -354,6 +354,11 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Ridges 1 to 20, Around Center/Out From Center/Pond Ripples) and Spherize's Horizontal Only and
       Vertical Only modes, sampled as the distortions are; CPU and GPU (looks). Not yet: Shear and
       Displace
+- [x] Filter > Render > Clouds and Difference Clouds (no dialog: soft fractal noise between the
+      foreground and background colors of when they were applied, kept by the entry with a seed;
+      Difference Clouds blended in Difference, each pixel keeping its opacity) and Fibers
+      (Variance and Strength 1 to 64, Randomize), drawn in the layer's pixels; on the CPU (their
+      looks too). Not yet: Lens Flare, Lighting Effects, Flame, Picture Frame, Tree
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze

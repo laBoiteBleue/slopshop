@@ -418,7 +418,9 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier
     (`gaussianBlur`), `values` its parameters (Gaussian Blur: the radius, the standard deviation
-    in the layer's pixels, 0.1 to 1000), the others as an effect step's. A filter reads around
+    in the layer's pixels, 0.1 to 1000; a color a filter keeps, as Clouds' foreground and
+    background, is one value, the sRGB-encoded `0xRRGGBB` as a whole number), the others as an
+    effect step's. A filter reads around
     each pixel: the result of the entries below it is filtered whole (the layer's edges
     repeating outward, in premultiplied values of `space`), mixed with what it was by the
     selection's coverage, and rounded to the original's format. Older readers refuse such an
