@@ -1492,7 +1492,7 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
-    /// The edit that makes text layer `id` say `text`, laid out into `outlines`, and every layer
+    /// The edit that makes text layer `id` say `text`, laid out into `outlines` (and `paints`, its glyphs by color when it has several), and every layer
     /// linked to it (ADR 0040): one new source, shared as the old one was. A layer still named
     /// after its old text, as Photoshop names type layers, is named after the new one (an empty
     /// text keeps the old name).
@@ -1501,6 +1501,7 @@ impl Edit {
         id: LayerId,
         text: crate::shape::Text,
         outlines: crate::shape::Shape,
+        paints: Vec<crate::shape::Shape>,
     ) -> Result<Edit, EditError> {
         let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
         let LayerContent::Vector { source, .. } = &layer.content else {
@@ -1509,12 +1510,12 @@ impl Edit {
         let Some(old) = source.text_of() else {
             return Err(EditError::NotText(id));
         };
-        if !text.is_valid() || !outlines.is_valid() {
+        if !text.is_valid() || !outlines.is_valid() || !paints.iter().all(|p| p.is_valid()) {
             return Err(EditError::InvalidShape);
         }
         let old_name = crate::shape::text::layer_name(&old.content);
         let new_name = crate::shape::text::layer_name(&text.content);
-        let new = crate::shape::ShapeSource::text(text, outlines, source.name());
+        let new = crate::shape::ShapeSource::text(text, outlines, paints, source.name());
         let mut edits = Vec::new();
         for l in doc.all_layers() {
             if !matches!(&l.content, LayerContent::Vector { source: s, .. } if Arc::ptr_eq(s, source))

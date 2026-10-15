@@ -14,6 +14,7 @@ pub mod layer;
 pub mod mask;
 pub mod model;
 pub mod path;
+pub mod spans;
 pub mod text;
 
 pub use draw::{COVERAGE_FORMAT, coverage};
@@ -24,4 +25,5 @@ pub use model::{
     StrokeJoin, Subpath,
 };
 pub use path::selection_rings;
+pub use spans::{CharStyle, Resolved, TextSpan};
 pub use text::{Text, TextAlign};

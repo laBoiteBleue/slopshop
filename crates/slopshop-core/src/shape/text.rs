@@ -32,7 +32,7 @@ pub enum TextAlign {
 }
 
 /// A text layer's text: point text, or paragraph text wrapped in a box (Photoshop's two kinds);
-/// one style for the whole string (per-character styles come later).
+/// its own settings, and spans of characters set otherwise (see [`super::spans`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Text {
     /// The string; `\n` breaks lines.
@@ -59,6 +59,8 @@ pub struct Text {
     /// width and are aligned in it; lines that do not fit in its height are hidden, as in
     /// Photoshop. `None`: point text.
     pub frame: Option<[f64; 2]>,
+    /// Characters set otherwise than the text, sorted and apart (see [`super::spans`]).
+    pub spans: Vec<super::spans::TextSpan>,
 }
 
 impl Text {
@@ -86,6 +88,7 @@ impl Text {
                 f.iter()
                     .all(|v| v.is_finite() && *v > 0.0 && *v <= super::model::MAX_COORDINATE)
             })
+            && self.spans_are_valid()
     }
 
     /// The distance between baselines, in pixels.
@@ -124,6 +127,7 @@ mod tests {
             align: TextAlign::Left,
             position: [10.0, 60.0],
             frame: None,
+            spans: Vec::new(),
         }
     }
 
