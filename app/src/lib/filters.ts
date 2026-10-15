@@ -31,19 +31,41 @@ export type NumberParam = {
 /**
  * One setting of a filter's dialog: a number; one of `options` (their index); a check box (0 or
  * 1); a seed, drawn anew each time the filter is applied (`withNewSeeds`), not shown or, with
- * `randomize`, a button drawing another (Wave's Randomize); or a coordinate of a center in
+ * `randomize`, a button drawing another (Wave's Randomize); a coordinate of a center in
  * percent of the frame (0 to 100), picked in a square: the `x` one shows the square for itself
- * and the `y` one that follows it.
+ * and the `y` one that follows it; or the foreground or background color, not shown, taken
+ * each time the filter is applied (`withColors`) and kept by its entry (Clouds').
  */
 export type FilterParam =
   | NumberParam
   | { kind: "choice"; key: string; label: MessageKey; options: MessageKey[] }
   | { kind: "check"; key: string; label: MessageKey }
   | { kind: "seed"; key: string; randomize?: MessageKey }
-  | { kind: "center"; key: string; label: MessageKey; axis: "x" | "y" };
+  | { kind: "center"; key: string; label: MessageKey; axis: "x" | "y" }
+  | { kind: "color"; key: string; color: "foreground" | "background" };
 
 /** The seeds a filter takes: whole numbers below 2^24 (the engine's `NOISE_SEEDS`). */
 export const SEEDS = 2 ** 24;
+
+/** The colors a filter keeps: sRGB `0xRRGGBB`, below 2^24 (the engine's `PACKED_COLORS`). */
+export const PACKED_COLORS = 2 ** 24;
+
+/** The drawing colors a filter takes (Clouds', Fibers'), foreground then background. */
+const drawingColors: FilterParam[] = [
+  { kind: "color", key: "foreground", color: "foreground" },
+  { kind: "color", key: "background", color: "background" },
+];
+
+/** A Fibers setting from 1 to 64 (Photoshop's). */
+const fibersSetting = (key: string, label: MessageKey): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  min: 1,
+  max: 64,
+  decimals: 0,
+  scale: "linear",
+});
 
 /** A radius in pixels, Photoshop's: a Gaussian's standard deviation, 0.1 to 1000. */
 const radius = (label: MessageKey): NumberParam => ({
@@ -402,6 +424,21 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
     defaults: [3, 25, 0, 0],
   },
   average: { params: [], defaults: [] },
+  // Photoshop's default colors, black and white, until applied with the current ones.
+  clouds: { params: [...drawingColors, { kind: "seed", key: "seed" }], defaults: [0, 0xffffff, 0] },
+  differenceClouds: {
+    params: [...drawingColors, { kind: "seed", key: "seed" }],
+    defaults: [0, 0xffffff, 0],
+  },
+  fibers: {
+    params: [
+      fibersSetting("variance", "filter.fibers.variance"),
+      fibersSetting("strength", "filter.fibers.strength"),
+      ...drawingColors,
+      { kind: "seed", key: "seed", randomize: "filter.fibers.randomize" },
+    ],
+    defaults: [16, 4, 0, 0xffffff, 0],
+  },
   pinch: { params: [percent("filter.pinch.amount")], defaults: [50] },
   spherize: {
     params: [
@@ -584,10 +621,30 @@ export function shownParams(filter: FilterId, more: boolean): number[] {
   );
 }
 
-/** Whether `filter` has settings: those without (Average, Find Edges, Solarize) apply at once,
- * as in Photoshop, with no dialog and nothing to edit again. */
+/** Whether `filter` has settings to show: those without (Average, Find Edges, Clouds) apply at
+ * once, as in Photoshop, with no dialog and nothing to edit again. */
 export function hasSettings(filter: FilterId): boolean {
-  return FILTERS[filter].params.length > 0;
+  return FILTERS[filter].params.some(
+    (param) => param.kind !== "color" && (param.kind !== "seed" || param.randomize),
+  );
+}
+
+/** `values` of `filter` with its colors the current drawing colors (`#rrggbb`): the filter
+ * applied anew, with the colors of the moment, as in Photoshop. */
+export function withColors(
+  filter: FilterId,
+  values: number[],
+  colors: { foreground: string; background: string },
+): number[] {
+  return values.map((v, i) => {
+    const param = FILTERS[filter].params[i];
+    return param?.kind === "color" ? packColor(colors[param.color]) : v;
+  });
+}
+
+/** `#rrggbb` as a filter keeps it (see `PACKED_COLORS`). */
+export function packColor(hex: string): number {
+  return parseInt(hex.slice(1, 7), 16);
 }
 
 /** `values` of `filter` with each seed drawn anew: the filter applied again, another grain. */
@@ -641,6 +698,7 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
   { label: "menu.filter.pixelate", filters: ["mosaic"] },
+  { label: "menu.filter.render", filters: ["clouds", "differenceClouds", "fibers"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
   { label: "menu.filter.stylize", filters: ["emboss", "findEdges", "solarize"] },
   { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum", "offset"] },
@@ -670,6 +728,8 @@ function validValue(param: FilterParam, v: number): boolean {
       return Number.isInteger(v) && v >= 0 && v < SEEDS;
     case "center":
       return Number.isFinite(v) && v >= 0 && v <= 100;
+    case "color":
+      return Number.isInteger(v) && v >= 0 && v < PACKED_COLORS;
   }
 }
 

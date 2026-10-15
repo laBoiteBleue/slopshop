@@ -109,7 +109,10 @@ export type FilterId =
   | "radialBlur"
   | "surfaceBlur"
   | "smartBlur"
-  | "average";
+  | "average"
+  | "clouds"
+  | "differenceClouds"
+  | "fibers";
 
 /** An adjustment and its settings (an adjustment layer's, or a step of a stack's entry). */
 export type AdjustmentView = {
