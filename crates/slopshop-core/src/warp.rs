@@ -210,31 +210,6 @@ impl Warp {
         )
     }
 
-    /// The grid's lines (the patches' edges), each sampled along its length, in content pixels:
-    /// what Free Transform's overlay draws.
-    pub fn lines(&self, samples: u32) -> Vec<Vec<(f64, f64)>> {
-        let samples = samples.max(1);
-        let (cols, rows) = (f64::from(self.columns), f64::from(self.rows));
-        let mut lines = Vec::new();
-        for r in 0..=self.rows {
-            let t = f64::from(r);
-            lines.push(
-                (0..=samples)
-                    .map(|k| self.eval(cols * f64::from(k) / f64::from(samples), t))
-                    .collect(),
-            );
-        }
-        for c in 0..=self.columns {
-            let s = f64::from(c);
-            lines.push(
-                (0..=samples)
-                    .map(|k| self.eval(s, rows * f64::from(k) / f64::from(samples)))
-                    .collect(),
-            );
-        }
-        lines
-    }
-
     /// [`Self::bounds`] with the reach of the resampling filter around it: where the warped
     /// content's antialiased edges can show.
     pub fn drawn_bounds(&self) -> [f64; 4] {
@@ -517,28 +492,13 @@ pub fn frame_of(layer: &crate::document::Layer) -> Option<[f64; 4]> {
     Some([x, y, x + f64::from(r.width), y + f64::from(r.height)])
 }
 
-/// The grid Free Transform's overlay draws for a pixel layer placed in the document by
-/// `to_document`: its warp's lines, or a plain 3 × 3 grid over [`frame_of`] when it has none;
-/// each line sampled `samples` times, in document pixels. `None` for the other layers.
-pub fn document_lines(
-    layer: &crate::document::Layer,
-    to_document: Projective,
-    samples: u32,
-) -> Option<Vec<Vec<(f64, f64)>>> {
-    let lines = match &layer.warp {
-        Some(warp) => warp.lines(samples),
-        None => Warp::identity(frame_of(layer)?, 3, 3).ok()?.lines(samples),
-    };
-    Some(
-        lines
-            .into_iter()
-            .map(|line| {
-                line.into_iter()
-                    .map(|(x, y)| to_document.apply(x, y))
-                    .collect()
-            })
-            .collect(),
-    )
+/// The grid Edit > Transform > Warp shows for a pixel layer: its warp, or a plain 3 × 3 grid over
+/// [`frame_of`] when it has none. `None` for the other layers.
+pub fn grid_of(layer: &crate::document::Layer) -> Option<Warp> {
+    match &layer.warp {
+        Some(warp) => Some(Warp::clone(warp)),
+        None => Warp::identity(frame_of(layer)?, 3, 3).ok(),
+    }
 }
 
 /// The content point (pixels) under document point `(x, y)` of a layer warped by `warp` then

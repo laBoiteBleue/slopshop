@@ -2059,6 +2059,19 @@ fn warped_layers_round_trip_at_node_version_18() {
     let (loaded, _) = SlopFile::open(&path).unwrap();
     assert_same(&doc, &loaded);
     assert_eq!(loaded.layer(id).unwrap().warp.as_ref(), Some(&warp));
+    // A grid edited point by point (Custom: no style), of another size.
+    let mut points = Warp::identity(frame, 5, 2).unwrap().points().to_vec();
+    points[7] = (0.1 + points[7].0, -1.0 / 3.0);
+    let custom = std::sync::Arc::new(Warp::new(frame, 5, 2, points, None).unwrap());
+    Edit::SetLayerWarp {
+        id,
+        warp: Some(std::sync::Arc::clone(&custom)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_eq!(loaded.layer(id).unwrap().warp.as_ref(), Some(&custom));
     fs::remove_file(&path).ok();
 }
 
