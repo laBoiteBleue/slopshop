@@ -112,3 +112,36 @@ Status: accepted (2026-10-13, under the maintainer's delegation; to review).
   points and handles, and grid sizes, come next.
 - **`.slop`**: node version 18 (schema 0.35); serde_json reads numbers back to the bit
   (`float_roundtrip`), so that a grid survives a save exactly.
+
+## Implementation of Warp, part 2: editing the grid (2026-10-15)
+
+Status: accepted (2026-10-15, under the maintainer's delegation; to review).
+
+- **On the canvas**, as in Photoshop: the grid shows its anchors (the patches' corners) and
+  their handles (the other control points on the patches' edges). Dragging an anchor moves it
+  with its handles; dragging a handle moves it alone; dragging inside a patch (or on a line
+  between anchors) bends it: the patch's corners stay and its handles move the least they can
+  (each by its weight at the point grabbed, a least-norm solution), so that the point under
+  the pointer follows it exactly. The grid then is Custom (no style).
+- **The points inside a patch** are not shown: when the edges move, they follow as a Coons
+  patch of the edges does (bilinearly blended), by the change only, so that a style's grid
+  does not jump when first edited and an affine move of the edges moves them alike.
+- **Grid size** (options bar: Default 3 × 3, 4 × 4, 5 × 5; any other grid shows Custom): a
+  warped grid is refitted at the new size, each new patch interpolating the old surface at
+  4 × 4 points (exact for whole subdivisions and plain grids); without a warp, a plain grid of
+  that size. Choosing a style makes a 3 × 3 grid again, as Photoshop's styles ignore the grid.
+- **Split Warp** Crosswise, Vertically, Horizontally (options bar buttons): the next click on
+  the grid cuts the patches it crosses there (de Casteljau, the shape unchanged), one split per
+  click, up to 16 patches a side. Removing a split, and moving several points at once, are not
+  done yet.
+- **The UI edits, the engine validates**: as Free Transform computes its matrix in the UI, the
+  grid's edits are geometry on its control points (`app/src/lib/warpGrid.ts`); each step sends
+  the whole grid (`warpLayer` with `grid`), replacing the gesture's previous step, so that
+  Enter makes one undo entry. `warp_grid` answers the layer's control points, frame and
+  placement (the overlay draws the grid from them; the engine's styles still make their
+  grids). Edit > Transform > Warp on a warped layer shows its current grid, Custom or a style,
+  editable again.
+- **Vector and text layers**: not warped yet. They are drawn from their geometry at the
+  document's resolution (ADR 0041, the text engine), not from pixels the mesh can resample;
+  warping them means warping their outlines (Photoshop converts a shape's path; Warp Text is a
+  text property of its own), a change to their drawing path rather than to the warp.
