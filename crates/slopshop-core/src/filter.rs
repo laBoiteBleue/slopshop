@@ -1830,7 +1830,7 @@ impl Filter {
             Self::TraceContour { level, upper } => Plan {
                 factor: 1,
                 kernel: Kernel::Contour {
-                    level: f64::from(level) / 255.0,
+                    level: contour_level(level),
                     upper,
                 },
             },
@@ -2526,6 +2526,13 @@ fn unpacked(v: f32) -> Option<[u8; 3]> {
     })
 }
 
+/// Trace Contour's `level` (of 8 bits) as the value a channel is above when its 8-bit level is:
+/// halfway to the next level, so that a value at the level is never taken for one above it
+/// whatever the rounding (the GPU's is the same).
+pub fn contour_level(level: f32) -> f64 {
+    (f64::from(level) + 0.5) / 255.0
+}
+
 /// A flag parameter back: 0 or 1.
 fn flag(v: f32) -> Option<bool> {
     (v == 0.0 || v == 1.0).then_some(v == 1.0)
@@ -2881,8 +2888,8 @@ pub(crate) enum Kernel {
         from_left: bool,
         seed: u32,
     },
-    /// Trace Contour's lines where a channel crosses `level` (0 to 1), on the pixels above it
-    /// (`upper`) or below, white elsewhere.
+    /// Trace Contour's lines where a channel crosses `level` (0 to 1, see [`contour_level`]),
+    /// on the pixels above it (`upper`) or below, white elsewhere.
     Contour {
         level: f64,
         upper: bool,

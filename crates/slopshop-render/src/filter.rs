@@ -384,7 +384,8 @@ enum Kind {
     Median,
     /// Maximum (flag 1) or Minimum of the square of `reach`, rows then columns.
     Extreme,
-    /// Solarize, Find Edges or Emboss (`mode` 0, 1, 2), each pixel from those around it.
+    /// Solarize, Find Edges, Emboss or Trace Contour (`mode` 0 to 3), each pixel from those
+    /// around it.
     Stylize,
     /// Mosaic's cells (`weights`: the cell, the crop's place on the layer), rows then columns.
     Cells,
@@ -513,6 +514,15 @@ impl Pass {
                 return Some(vec![Self {
                     kind: Kind::Stylize,
                     mode: 1,
+                    ..none
+                }]);
+            }
+            Filter::TraceContour { level, upper } => {
+                return Some(vec![Self {
+                    kind: Kind::Stylize,
+                    mode: 3,
+                    threshold: slopshop_core::filter::contour_level(level) as f32,
+                    flags: u32::from(upper),
                     ..none
                 }]);
             }

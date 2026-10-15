@@ -3154,6 +3154,20 @@ mod tests {
             (Filter::Solarize, 1),
             (Filter::FindEdges, 1),
             (
+                Filter::TraceContour {
+                    level: 128.0,
+                    upper: true,
+                },
+                0,
+            ),
+            (
+                Filter::TraceContour {
+                    level: 60.0,
+                    upper: false,
+                },
+                0,
+            ),
+            (
                 Filter::Emboss {
                     angle: 135.0,
                     height: 3.0,
