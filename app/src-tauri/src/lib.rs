@@ -2510,6 +2510,8 @@ pub fn run() {
             bake::bake_layers,
             clipboard::clipboard_size,
             clipboard::clipboard_contents,
+            clipboard::copy_text,
+            clipboard::paste_text,
             save_document,
             quit,
             export::export_defaults,
@@ -4796,6 +4798,14 @@ mod tests {
         // The first caret at the anchor, across the baseline.
         let [x, top, _, bottom] = layout.carets[0];
         assert!((x - 20.0).abs() < 1e-6 && top < 60.0 && bottom > 60.0);
+        // Two lines, in document pixels, the first holding its line break.
+        let lines: Vec<_> = layout.lines.iter().map(|l| (l.start, l.end)).collect();
+        assert_eq!(lines, [(0, 3), (3, 8)]);
+        assert!(layout.lines[0].hard_break);
+        let [top_left, _, _, bottom_left] = layout.lines[0].corners;
+        assert!(
+            (top_left[0] - 20.0).abs() < 1e-6 && top_left[1] <= top && bottom_left[1] >= bottom
+        );
         // One history entry, named for the new text.
         let (history, done) = s.history();
         assert_eq!(history[done - 1].kind, "newText");

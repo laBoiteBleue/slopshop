@@ -157,12 +157,29 @@ pub struct TextLayoutView {
     /// One caret per place in the text, counted in UTF-16 code units as the UI's strings are:
     /// `[top x, top y, bottom x, bottom y]` in document pixels.
     pub carets: Vec<[f64; 4]>,
+    /// The lines, in order (see [`TextLineView`]).
+    pub lines: Vec<TextLineView>,
     /// The layer's font is not installed: it is drawn as saved, and set in the default family
     /// if it is edited.
     pub missing_font: bool,
 }
 
-/// The carets of text layer `id` (see [`TextLayoutView`]).
+/// A line of a text, for drawing the selection and moving the caret by lines.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLineView {
+    /// Its first place and the place after its last character (UTF-16 code units); a line
+    /// ended by a line break holds it.
+    pub start: usize,
+    pub end: usize,
+    /// It ends at a line break, not where the text wrapped.
+    pub hard_break: bool,
+    /// Its box's corners in document pixels: top left, top right, bottom right, bottom left
+    /// (the start and end of its content, the top and bottom of its line).
+    pub corners: [[f64; 2]; 4],
+}
+
+/// The carets and lines of text layer `id` (see [`TextLayoutView`]).
 pub fn text_layout_of(document: &Document, id: LayerId) -> Result<TextLayoutView, String> {
     let layer = document.layer(id).ok_or("unknown layer")?;
     let LayerContent::Vector { source, .. } = &layer.content else {
@@ -173,17 +190,38 @@ pub fn text_layout_of(document: &Document, id: LayerId) -> Result<TextLayoutView
     let to_document = layer.transform.then(document.parent_transform(id));
     let mut fonts = fonts()?;
     let missing_font = !fonts.has_family(&text.family);
-    let carets = fonts
-        .carets(text)
+    let geometry = fonts.geometry(text);
+    let point = |x: f64, y: f64| {
+        let (x, y) = to_document.apply(x, y);
+        [x, y]
+    };
+    let carets = geometry
+        .carets
         .into_iter()
         .map(|c| {
-            let (tx, ty) = to_document.apply(c.top[0], c.top[1]);
-            let (bx, by) = to_document.apply(c.bottom[0], c.bottom[1]);
+            let [tx, ty] = point(c.top[0], c.top[1]);
+            let [bx, by] = point(c.bottom[0], c.bottom[1]);
             [tx, ty, bx, by]
+        })
+        .collect();
+    let lines = geometry
+        .lines
+        .into_iter()
+        .map(|l| TextLineView {
+            start: l.start,
+            end: l.end,
+            hard_break: l.hard_break,
+            corners: [
+                point(l.left, l.top),
+                point(l.right, l.top),
+                point(l.right, l.bottom),
+                point(l.left, l.bottom),
+            ],
         })
         .collect();
     Ok(TextLayoutView {
         carets,
+        lines,
         missing_font,
     })
 }
