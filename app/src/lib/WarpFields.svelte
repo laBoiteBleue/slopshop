@@ -1,7 +1,7 @@
 <script lang="ts">
   // Warp's settings in the options bar, as in Photoshop: the split modes (a click on the grid
   // then splits it there), the grid's size (Default, 4 × 4, 5 × 5), the style (None, Custom,
-  // Arc, Bulge, Flag, Wave, Twist), its orientation and its bend (-100 to 100 %). Each change
+  // and Photoshop's fifteen styles from Arc to Twist), its orientation and its bend (-100 to 100 %). Each change
   // warps the layer live (ADR 0044).
   import Icon from "./Icon.svelte";
   import { t } from "./i18n/index.svelte";

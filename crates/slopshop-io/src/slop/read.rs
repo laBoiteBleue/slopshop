@@ -676,15 +676,17 @@ fn node_warp(
         .collect();
     let preset = match value.get("preset") {
         None | Some(Value::Null) => None,
-        Some(Value::Object(p)) => Some(WarpPreset {
-            style: p
-                .get("style")
-                .and_then(Value::as_str)
-                .and_then(WarpStyle::from_id)
-                .ok_or_else(invalid)?,
-            bend: p.get("bend").and_then(Value::as_f64).ok_or_else(invalid)?,
-            vertical: p.get("vertical").and_then(Value::as_bool).unwrap_or(false),
-        }),
+        Some(Value::Object(p)) => {
+            let style = p.get("style").and_then(Value::as_str).ok_or_else(invalid)?;
+            let bend = p.get("bend").and_then(Value::as_f64).ok_or_else(invalid)?;
+            // A style this version does not know (a newer SlopShop's): the grid is drawn all
+            // the same, as edited point by point.
+            WarpStyle::from_id(style).map(|style| WarpPreset {
+                style,
+                bend,
+                vertical: p.get("vertical").and_then(Value::as_bool).unwrap_or(false),
+            })
+        }
         Some(_) => return Err(invalid()),
     };
     Warp::new(frame, columns, rows, points, preset)
@@ -1348,5 +1350,41 @@ mod lock_tests {
         assert_eq!(written, serde_json::json!(["position", "all"]));
         assert!(node_locks(&node(serde_json::json!("all"))).is_err());
         assert!(node_locks(&node(serde_json::json!([1]))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod warp_tests {
+    use super::*;
+
+    fn node(style: &str) -> NodeDto {
+        serde_json::from_value(serde_json::json!({
+            "type": NODE_RASTER,
+            "version": NODE_VERSION_WARP,
+            "name": "n",
+            "visible": true,
+            "opacity": 1.0,
+            "params": { "warp": {
+                "kind": "grid",
+                "frame": [0, 0, 3, 3],
+                "columns": 1,
+                "rows": 1,
+                "points": (0..16).flat_map(|k| [f64::from(k % 4), f64::from(k / 4)]).collect::<Vec<_>>(),
+                "preset": { "style": style, "bend": 0.25, "vertical": true },
+            } },
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_warp_style_this_version_does_not_know_reads_as_none() {
+        let warp = node_warp(&node("shellLower")).unwrap().unwrap();
+        let preset = warp.preset().unwrap();
+        assert_eq!(preset.style, slopshop_core::warp::WarpStyle::ShellLower);
+        assert_eq!((preset.bend, preset.vertical), (0.25, true));
+        // A newer SlopShop's style: the grid all the same, without its style.
+        let warp = node_warp(&node("spiral")).unwrap().unwrap();
+        assert_eq!(warp.preset(), None);
+        assert_eq!(warp.points().len(), 16);
     }
 }
