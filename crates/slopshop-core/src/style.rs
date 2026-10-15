@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::blend::{BlendMode, BlendSpace};
 use crate::color::{LinearRgba, WORKING_SPACE};
 use crate::composite::composite_region;
+use crate::contour::{Contour, ContourPreset, Shaping, through};
 use crate::document::{Document, Layer, LayerContent, LayerId, LayerMask};
 use crate::geom::{Rect, Size};
 use crate::gradient::{Gradient, GradientField, GradientShape, GradientStop};
@@ -36,6 +37,9 @@ pub const MAX_DISTANCE: f64 = 30_000.0;
 pub const MAX_SIZE: f64 = 250.0;
 /// The widest Stroke, in pixels: Edit > Stroke's.
 pub const MAX_STROKE_SIZE: f64 = MAX_MODIFY;
+/// A contour's Range, percent (Photoshop's: Outer and Inner Glow, Bevel and Emboss's Contour).
+pub const MIN_CONTOUR_RANGE: f64 = 1.0;
+pub const MAX_CONTOUR_RANGE: f64 = 100.0;
 /// Scale Effects' range, percent (Photoshop's).
 pub const MIN_EFFECTS_SCALE: f64 = 1.0;
 pub const MAX_EFFECTS_SCALE: f64 = 1000.0;
@@ -94,10 +98,16 @@ pub struct Glow {
     pub spread: f64,
     /// How far the glow spreads and blurs, pixels.
     pub size: f64,
+    /// What the glow's fade is drawn through (Photoshop's Quality > Contour).
+    pub contour: Contour,
+    pub anti_aliased: bool,
+    /// The part of the fade the contour spans, percent ([`MIN_CONTOUR_RANGE`] to
+    /// [`MAX_CONTOUR_RANGE`]): lower, the glow is denser.
+    pub range: f64,
 }
 
 impl Default for Glow {
-    /// Photoshop's: pale yellow (sRGB #ffffbe), Screen, 75 %, 5 pixels.
+    /// Photoshop's: pale yellow (sRGB #ffffbe), Screen, 75 %, 5 pixels, linear over 50 %.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -106,6 +116,9 @@ impl Default for Glow {
             opacity: 0.75,
             spread: 0.0,
             size: 5.0,
+            contour: Contour::LINEAR,
+            anti_aliased: false,
+            range: 50.0,
         }
     }
 }
@@ -370,22 +383,24 @@ const SLOTS: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum MaskKey {
     /// The shape (inverted when `inside`: what is outside it, to draw inward from the edge)
-    /// expanded by `hard` pixels, blurred by a Gaussian of `sigma`, offset.
+    /// expanded by `hard` pixels, blurred by a Gaussian of `sigma`, offset, through `shaping`.
     Blurred {
         hard: f64,
         sigma: f64,
         offset: (f64, f64),
         inside: bool,
+        shaping: Shaping,
     },
     /// The band along the outline.
     Band { size: f64, position: StrokeLocation },
     /// Satin's: the shape blurred by a Gaussian of `sigma`, minus itself moved by `offset`
     /// (whole pixels, the two copies `offset` apart), the difference's magnitude, inverted with
-    /// `invert`.
+    /// `invert`; the blurred shape through `shaping` first.
     Satin {
         sigma: f64,
         offset: (f64, f64),
         invert: bool,
+        shaping: Shaping,
     },
     /// Bevel and Emboss's highlight (`highlight`) or shadow from its geometry and light.
     Bevel {
@@ -397,12 +412,16 @@ enum MaskKey {
         /// Toward the light, x and y (y down), and the light's height: a unit vector.
         light: [f64; 3],
         highlight: bool,
+        /// The height through it (its Contour, when on).
+        contour: Option<Shaping>,
+        /// How much the surface faces the light, through it (its Gloss Contour).
+        gloss: Shaping,
     },
 }
 
 impl MaskKey {
     /// From `size` and `spread` (the percent of it hardening the shape), as Photoshop's.
-    fn blurred(size: f64, spread: f64, offset: (f64, f64), inside: bool) -> Self {
+    fn blurred(size: f64, spread: f64, offset: (f64, f64), inside: bool, shaping: Shaping) -> Self {
         let hard = size * spread / 100.0;
         let soft = (size - hard).min(MAX_FEATHER);
         // A Gaussian reaches about three standard deviations; Photoshop's size is about two.
@@ -411,6 +430,7 @@ impl MaskKey {
             sigma: soft / 2.0,
             offset,
             inside,
+            shaping,
         }
     }
 
@@ -421,12 +441,17 @@ impl MaskKey {
             (-radians.cos() * s.distance).round(),
             (radians.sin() * s.distance).round(),
         );
-        Self::blurred(s.size, s.spread, offset, inside)
+        let shaping = Shaping::new(s.contour, s.anti_aliased);
+        Self::blurred(s.size, s.spread, offset, inside, shaping)
     }
 
     /// A glow's: where the shape is.
     fn glow(g: Glow, inside: bool) -> Self {
-        Self::blurred(g.size, g.spread, (0.0, 0.0), inside)
+        let shaping = Shaping {
+            range: g.range,
+            ..Shaping::new(g.contour, g.anti_aliased)
+        };
+        Self::blurred(g.size, g.spread, (0.0, 0.0), inside, shaping)
     }
 
     /// How far beyond the shape the mask reaches, pixels.
@@ -463,6 +488,11 @@ impl MaskKey {
                 altitude.sin(),
             ],
             highlight,
+            contour: b.contour_enabled.then_some(Shaping {
+                range: b.contour_range,
+                ..Shaping::new(b.contour, b.contour_anti_aliased)
+            }),
+            gloss: Shaping::new(b.gloss_contour, b.gloss_anti_aliased),
         }
     }
 
@@ -476,6 +506,7 @@ impl MaskKey {
                 (-radians.sin() * s.distance).round(),
             ),
             invert: s.invert,
+            shaping: Shaping::new(s.contour, s.anti_aliased),
         }
     }
 
@@ -501,10 +532,19 @@ impl MaskKey {
                 sigma,
                 offset: (dx, dy),
                 inside,
+                shaping,
             } => {
+                let at = Projective::translation(x + dx, y + dy);
+                // Through its contour; outward, what is around the shape stays clear.
+                let contoured = |mask: Arc<RasterImage>| -> Option<Placed> {
+                    if shaping.is_identity() {
+                        return Some((mask, at));
+                    }
+                    Some((Arc::new(shaped(&mask, &shaping.table(!inside))?), at))
+                };
                 // Blurred as it is: the blur may be another effect's.
                 if !inside && hard == 0.0 && sigma > 0.0 {
-                    return Some((feathered(sigma)?, Projective::translation(x + dx, y + dy)));
+                    return contoured(feathered(sigma)?);
                 }
                 let mut shape = Arc::clone(shape);
                 if inside {
@@ -517,7 +557,7 @@ impl MaskKey {
                     shape =
                         Arc::new(selection::modify(size, &shape, Modify::Feather(sigma)).ok()??);
                 }
-                Some((shape, Projective::translation(x + dx, y + dy)))
+                contoured(shape)
             }
             MaskKey::Band {
                 size: width,
@@ -530,13 +570,15 @@ impl MaskKey {
                 sigma,
                 offset,
                 invert,
+                shaping,
             } => {
                 let blurred = if sigma > 0.0 {
                     feathered(sigma)?
                 } else {
                     Arc::clone(shape)
                 };
-                let satin = satin_mask(&blurred, offset, invert)?;
+                let table = (!shaping.is_identity()).then(|| shaping.table(false));
+                let satin = satin_mask(&blurred, offset, invert, table.as_deref())?;
                 Some((Arc::new(satin), Projective::translation(x, y)))
             }
             MaskKey::Bevel {
@@ -546,18 +588,26 @@ impl MaskKey {
                 soften,
                 light,
                 highlight,
+                contour,
+                gloss,
             } => {
                 let blurred = if bevel > 0.0 {
                     feathered(bevel / 2.0)?
                 } else {
                     Arc::clone(shape)
                 };
+                let contour = contour.filter(|c| !c.is_identity()).map(|c| c.table(false));
+                let gloss = (!gloss.is_identity()).then(|| gloss.table(false));
                 let mut shading = Arc::new(bevel_mask(
                     &blurred,
                     style,
                     slope * bevel.max(1.0),
                     light,
                     highlight,
+                    Contours {
+                        height: contour.as_deref(),
+                        gloss: gloss.as_deref(),
+                    },
                 )?);
                 if soften > 0.0 {
                     shading = Arc::new(
@@ -704,6 +754,9 @@ pub struct DropShadow {
     pub spread: f64,
     /// How far the shadow spreads and blurs, pixels.
     pub size: f64,
+    /// What the shadow's fade is drawn through (Photoshop's Quality > Contour).
+    pub contour: Contour,
+    pub anti_aliased: bool,
 }
 
 impl Default for DropShadow {
@@ -720,6 +773,8 @@ impl Default for DropShadow {
             distance: 5.0,
             spread: 0.0,
             size: 5.0,
+            contour: Contour::LINEAR,
+            anti_aliased: false,
         }
     }
 }
@@ -874,8 +929,8 @@ pub const MAX_SATIN_DISTANCE: f64 = 250.0;
 
 /// Shading inside the shape that follows its edges (Photoshop's Satin): the shape blurred by
 /// `size`, two copies of it `distance` apart along `angle`, their difference, inverted with
-/// `invert` (Photoshop's default), drawn in `color`. A linear contour (Photoshop's default is
-/// Gaussian).
+/// `invert` (Photoshop's default), drawn in `color`. The blurred shape goes through `contour`
+/// before the difference.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Satin {
     pub enabled: bool,
@@ -887,10 +942,13 @@ pub struct Satin {
     pub distance: f64,
     pub size: f64,
     pub invert: bool,
+    pub contour: Contour,
+    pub anti_aliased: bool,
 }
 
 impl Default for Satin {
-    /// Photoshop's: black, Multiply, 50 %, 19°, 11 pixels apart, 14 pixels, inverted.
+    /// Photoshop's: black, Multiply, 50 %, 19°, 11 pixels apart, 14 pixels, inverted, Gaussian
+    /// anti-aliased.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -901,6 +959,8 @@ impl Default for Satin {
             distance: 11.0,
             size: 14.0,
             invert: true,
+            contour: ContourPreset::Gaussian.contour(),
+            anti_aliased: true,
         }
     }
 }
@@ -925,7 +985,8 @@ pub enum BevelStyle {
 
 /// The shape lit as if raised (Photoshop's Bevel and Emboss, Smooth technique): a height made
 /// from the shape blurred by `size`, steep by `depth`, lit from `angle` at `altitude`; where it
-/// faces the light, the highlight; where it faces away, the shadow. A linear gloss contour.
+/// faces the light, the highlight; where it faces away, the shadow. Its Contour (when
+/// `contour_enabled`) reshapes the height; its Gloss Contour, the lighting.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BevelEmboss {
     pub enabled: bool,
@@ -950,11 +1011,23 @@ pub struct BevelEmboss {
     pub shadow_color: LinearRgba,
     pub shadow_mode: BlendMode,
     pub shadow_opacity: f32,
+    /// What the lighting goes through: how much the surface faces the light, through it
+    /// (Photoshop's Gloss Contour).
+    pub gloss_contour: Contour,
+    pub gloss_anti_aliased: bool,
+    /// The bevel's profile reshaped (Photoshop's Contour element, its checkbox).
+    pub contour_enabled: bool,
+    /// The height from the edge across the bevel, through it.
+    pub contour: Contour,
+    pub contour_anti_aliased: bool,
+    /// The part of the height the contour spans, percent ([`MIN_CONTOUR_RANGE`] to
+    /// [`MAX_CONTOUR_RANGE`]).
+    pub contour_range: f64,
 }
 
 impl Default for BevelEmboss {
     /// Photoshop's: Inner Bevel, 100 % up, 5 pixels, lit from 120° at 30°, white Screen and
-    /// black Multiply at 75 %.
+    /// black Multiply at 75 %, linear contours (its Contour off, over 50 %).
     fn default() -> Self {
         Self {
             enabled: true,
@@ -972,6 +1045,12 @@ impl Default for BevelEmboss {
             shadow_color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
             shadow_mode: BlendMode::Multiply,
             shadow_opacity: 0.75,
+            gloss_contour: Contour::LINEAR,
+            gloss_anti_aliased: false,
+            contour_enabled: false,
+            contour: Contour::LINEAR,
+            contour_anti_aliased: false,
+            contour_range: 50.0,
         }
     }
 }
@@ -1089,6 +1168,7 @@ impl LayerStyle {
                 && color_ok(g.color)
                 && (0.0..=100.0).contains(&g.spread)
                 && (0.0..=MAX_SIZE).contains(&g.size)
+                && (MIN_CONTOUR_RANGE..=MAX_CONTOUR_RANGE).contains(&g.range)
         };
         opacity_ok(self.fill_opacity)
             && self.drop_shadow.is_none_or(shadow_ok)
@@ -1108,6 +1188,7 @@ impl LayerStyle {
                     && (0.0..=MAX_BEVEL_SOFTEN).contains(&b.soften)
                     && b.angle.is_finite()
                     && (0.0..=90.0).contains(&b.altitude)
+                    && (MIN_CONTOUR_RANGE..=MAX_CONTOUR_RANGE).contains(&b.contour_range)
             })
             && self.satin.is_none_or(|s| {
                 opacity_ok(s.opacity)
@@ -1689,27 +1770,33 @@ pub(crate) fn colored(
 /// (`blurred`, a gray coverage, 0.5 on the edge): the height `style` makes of it, `slope` steep
 /// (a full rise per pixel at 1, negative sunk), lit along `light`. Where the surface faces the
 /// light more than the flat plane does, the highlight, as much as it does up to facing it
-/// fully; where it faces it less, the shadow, down to facing away.
+/// fully; where it faces it less, the shadow, down to facing away. `contours` reshape the
+/// height and how much the surface faces the light (the flat plane's too, so that it stays
+/// unshaded).
 fn bevel_mask(
     blurred: &RasterImage,
     style: BevelStyle,
     slope: f64,
     light: [f64; 3],
     highlight: bool,
+    contours: Contours,
 ) -> Option<RasterImage> {
     let height = |v: f32| {
         let v = f64::from(v);
-        match style {
+        let h = match style {
             BevelStyle::InnerBevel => (2.0 * v - 1.0).clamp(0.0, 1.0),
             BevelStyle::OuterBevel => (2.0 * v).clamp(0.0, 1.0),
             BevelStyle::Emboss => v,
             BevelStyle::PillowEmboss => (2.0 * v - 1.0).abs(),
-        }
+        };
+        contours.height.map_or(h, |table| through(table, h))
     };
-    let flat = light[2];
+    let glossed = move |lit: f64| contours.gloss.map_or(lit, |table| through(table, lit));
+    let flat = glossed(light[2]);
     let full = f64::from(u16::MAX);
     // How much of the light the surface turns away (`lit` against the flat plane's).
     let shade = move |lit: f64| {
+        let lit = glossed(lit);
         let v = if highlight {
             if flat < 1.0 {
                 ((lit - flat) / (1.0 - flat)).clamp(0.0, 1.0)
@@ -1728,7 +1815,7 @@ fn bevel_mask(
         blurred,
         1,
         None,
-        |_| shade(flat),
+        |_| shade(light[2]),
         |read, x, y| {
             let at = |x, y| height(read(x, y));
             // The surface's normal from the height's slope (central differences).
@@ -1741,9 +1828,15 @@ fn bevel_mask(
 }
 
 /// Satin's mask from the blurred shape `blurred` (a gray coverage): at each pixel, the
-/// difference of the shape half `offset` before and after it, inverted with `invert`; nothing
-/// where the shape is not (the effect is drawn within it).
-fn satin_mask(blurred: &RasterImage, offset: (f64, f64), invert: bool) -> Option<RasterImage> {
+/// difference of the shape half `offset` before and after it (through `contour`, a
+/// [`Shaping::table`], first), inverted with `invert`; nothing where the shape is not (the effect
+/// is drawn within it).
+fn satin_mask(
+    blurred: &RasterImage,
+    offset: (f64, f64),
+    invert: bool,
+    contour: Option<&[u16]>,
+) -> Option<RasterImage> {
     // Half the distance either way, in whole pixels.
     let (hx, hy) = (
         (offset.0 / 2.0).round() as i64,
@@ -1760,8 +1853,27 @@ fn satin_mask(blurred: &RasterImage, offset: (f64, f64), invert: bool) -> Option
         hx.unsigned_abs().max(hy.unsigned_abs()) as usize,
         Some(0.0),
         |_| value(0.0),
-        |read, x, y| value((read(x - hx, y - hy) - read(x + hx, y + hy)).abs().min(1.0)),
+        |read, x, y| {
+            let at = |x, y| {
+                let v = read(x, y);
+                contour.map_or(v, |table| through(table, f64::from(v)) as f32)
+            };
+            value((at(x - hx, y - hy) - at(x + hx, y + hy)).abs().min(1.0))
+        },
     )
+}
+
+/// Bevel and Emboss's contours as tables ([`Shaping::table`]): none, linear.
+#[derive(Clone, Copy)]
+struct Contours<'a> {
+    height: Option<&'a [u16]>,
+    gloss: Option<&'a [u16]>,
+}
+
+/// `mask` (a gray coverage) through `table` ([`Shaping::table`]).
+fn shaped(mask: &RasterImage, table: &[u16]) -> Option<RasterImage> {
+    let at = |v: f32| table[(f64::from(v) * f64::from(u16::MAX)).round() as usize];
+    selection::neighbourhood_map(mask, 0, None, at, |read, x, y| at(read(x, y)))
 }
 
 /// The box of `layer`'s pixels in its own space, its hidden children aside (a group: theirs
@@ -2569,6 +2681,119 @@ mod tests {
     }
 
     #[test]
+    fn contours_reshape_shadows_and_glows_and_range_spans_part_of_the_glow() {
+        let (mut doc, id) = document();
+        let shadow = |contour: Contour| LayerStyle {
+            drop_shadow: Some(DropShadow {
+                mode: BlendMode::Normal,
+                opacity: 1.0,
+                distance: 0.0,
+                size: 8.0,
+                contour,
+                anti_aliased: true,
+                ..DropShadow::default()
+            }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, shadow(Contour::LINEAR));
+        // Linear: about half on the edge, fading out.
+        let (edge, out) = (at(&doc, 30, 25)[3], at(&doc, 32, 25)[3]);
+        assert!(edge > 0.3 && out < edge, "{edge} {out}");
+        // Cone - Inverted: none where the fade is half, full where it is none or whole, but
+        // around the shape it fades out (the edge hidden): the canvas is not filled.
+        styled(&mut doc, id, shadow(ContourPreset::ConeInverted.contour()));
+        let (edge_v, out_v) = (at(&doc, 30, 25)[3], at(&doc, 32, 25)[3]);
+        assert!(
+            edge_v < edge * 0.85 && out_v > out,
+            "{edge_v} {out_v} {edge} {out}"
+        );
+        assert_eq!(at(&doc, 60, 60)[3], 0.0);
+        assert_eq!(at(&doc, 25, 25), [1.0, 1.0, 1.0, 1.0]);
+        // Glows: Range 50 (Photoshop's) is denser than over the whole fade.
+        let glow = |range| LayerStyle {
+            outer_glow: Some(Glow {
+                mode: BlendMode::Normal,
+                opacity: 1.0,
+                range,
+                ..Glow::default()
+            }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, glow(100.0));
+        let whole = at(&doc, 32, 25)[3];
+        styled(&mut doc, id, glow(50.0));
+        let half = at(&doc, 32, 25)[3];
+        assert!(half > whole * 1.5 && whole > 0.05, "{half} {whole}");
+        assert!(!glow(0.0).is_valid() && !glow(101.0).is_valid());
+    }
+
+    #[test]
+    fn satin_and_bevel_contours_reshape_their_shading() {
+        let (mut doc, id) = document_with(128);
+        let plain = at(&doc, 25, 25);
+        // The pixels of the box and around it.
+        let pixels = |doc: &Document| -> Vec<[f32; 4]> {
+            (15..35)
+                .flat_map(|y| (15..35).map(move |x| (x, y)))
+                .map(|(x, y)| at(doc, x, y))
+                .collect()
+        };
+        let satin = |contour| LayerStyle {
+            satin: Some(Satin {
+                distance: 4.0,
+                size: 4.0,
+                contour,
+                ..Satin::default()
+            }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, satin(Contour::LINEAR));
+        let linear = pixels(&doc);
+        styled(&mut doc, id, satin(ContourPreset::Gaussian.contour()));
+        assert_ne!(pixels(&doc), linear);
+        let bevel = |b: BevelEmboss| LayerStyle {
+            bevel: Some(BevelEmboss { size: 2.0, ..b }),
+            ..LayerStyle::default()
+        };
+        styled(&mut doc, id, bevel(BevelEmboss::default()));
+        let linear = pixels(&doc);
+        // The gloss contour relights the edges; the flat middle stays as it was.
+        styled(
+            &mut doc,
+            id,
+            bevel(BevelEmboss {
+                gloss_contour: ContourPreset::Cone.contour(),
+                ..BevelEmboss::default()
+            }),
+        );
+        assert_ne!(pixels(&doc), linear);
+        assert_eq!(at(&doc, 25, 25), plain);
+        // The Contour element reshapes the profile, only when on.
+        let ring = BevelEmboss {
+            contour: ContourPreset::Ring.contour(),
+            ..BevelEmboss::default()
+        };
+        styled(&mut doc, id, bevel(ring));
+        assert_eq!(pixels(&doc), linear);
+        styled(
+            &mut doc,
+            id,
+            bevel(BevelEmboss {
+                contour_enabled: true,
+                ..ring
+            }),
+        );
+        assert_ne!(pixels(&doc), linear);
+        assert!(
+            !bevel(BevelEmboss {
+                contour_range: 0.5,
+                ..BevelEmboss::default()
+            })
+            .is_valid()
+        );
+    }
+
+    #[test]
     fn inner_effects_stay_within_the_shape_from_its_edge() {
         let (mut doc, id) = document_with(128);
         let plain = at(&doc, 25, 25);
@@ -3028,7 +3253,7 @@ mod tests {
                 })
                 .collect();
             assert_eq!(
-                gray(&satin_mask(&blurred, offset, invert).unwrap()),
+                gray(&satin_mask(&blurred, offset, invert, None).unwrap()),
                 expected
             );
         }
@@ -3061,7 +3286,11 @@ mod tests {
                         (v * 65535.0).round() as u16
                     })
                     .collect();
-                let mask = bevel_mask(&blurred, style, 12.0, light, highlight).unwrap();
+                let none = Contours {
+                    height: None,
+                    gloss: None,
+                };
+                let mask = bevel_mask(&blurred, style, 12.0, light, highlight, none).unwrap();
                 assert_eq!(gray(&mask), expected, "{style:?} {highlight}");
             }
         }

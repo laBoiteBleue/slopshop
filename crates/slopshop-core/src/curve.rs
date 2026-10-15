@@ -85,13 +85,14 @@ pub fn lookup(lut: &[f32], v: f64) -> f64 {
 }
 
 /// A natural cubic spline: the points, and the second derivative at each.
-struct Spline {
+pub(crate) struct Spline {
     points: Vec<(f64, f64)>,
     second: Vec<f64>,
 }
 
 impl Spline {
-    fn new(points: Vec<(f64, f64)>) -> Spline {
+    /// The spline through `points` (2 or more, inputs strictly increasing, on `[0, 1]`).
+    pub(crate) fn new(points: Vec<(f64, f64)>) -> Spline {
         let n = points.len();
         let mut second = vec![0.0; n];
         if n > 2 {
@@ -121,7 +122,8 @@ impl Spline {
         Spline { points, second }
     }
 
-    fn value(&self, x: f64) -> f64 {
+    /// Its value at `x`: flat outside its points, clamped to `[0, 1]`.
+    pub(crate) fn value(&self, x: f64) -> f64 {
         let p = &self.points;
         let (first, last) = (p[0], p[p.len() - 1]);
         if x <= first.0 {
