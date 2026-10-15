@@ -408,14 +408,21 @@ export type SnapTargets = { moving: Bounds | null; others: Bounds[] };
 export type WarpStyle = "arc" | "bulge" | "flag" | "wave" | "twist";
 
 /**
- * A layer's warp grid as Free Transform's overlay draws it: the style it was made from (null
- * without one), its bend (-1 to 1) and orientation, and its lines in document pixels.
+ * A layer's warp grid (WarpGridDto in lib.rs): the style it was made from (null without one, or
+ * for a grid edited point by point: `warped` tells them apart), its bend (-1 to 1) and
+ * orientation; its patches and control points (content pixels, row-major: see warpGrid.ts), the
+ * frame of the content they warp, and the map placing the content in the document.
  */
 export type WarpGrid = {
   style: WarpStyle | null;
   bend: number;
   vertical: boolean;
-  lines: [number, number][][];
+  warped: boolean;
+  columns: number;
+  rows: number;
+  frame: [number, number, number, number];
+  points: [number, number][];
+  toDocument: [number, number, number, number, number, number, number, number, number];
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
@@ -801,7 +808,15 @@ export type EditRequest =
    * Edit > Transform > Warp (ADR 0044): a pixel layer warped by a style's grid, `bend` from -1
    * to 1; no `style` takes its warp away.
    */
-  | { kind: "warpLayer"; id: number; style?: WarpStyle; bend?: number; vertical?: boolean }
+  | {
+      kind: "warpLayer";
+      id: number;
+      style?: WarpStyle;
+      bend?: number;
+      vertical?: boolean;
+      /** A grid edited point by point (Custom), instead of a style. */
+      grid?: { columns: number; rows: number; points: [number, number][] };
+    }
   /** Image > Image Size: the whole image resampled to this size. */
   | { kind: "resizeImage"; width: number; height: number; resolution?: number }
   /** Image > Canvas Size: `anchor` [x, y] in [0, 1] keeps the image there (0.5: centered). */

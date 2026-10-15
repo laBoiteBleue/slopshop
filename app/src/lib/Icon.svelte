@@ -124,6 +124,10 @@
     // View.
     fitScreen: "M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
     actualPixels: "M4.5 8.5l3-2.5v12 M12 9v1.5 M12 14v1.5 M16.5 8.5l3-2.5v12",
+    // Split Warp (ADR 0044): a grid cell cut across, top to bottom, or left to right.
+    splitCrosswise: "M4 4h16v16H4Z M12 4v16 M4 12h16",
+    splitVertical: "M4 4h16v16H4Z M12 4v16",
+    splitHorizontal: "M4 4h16v16H4Z M4 12h16",
   } as const;
 
   export type IconName = keyof typeof paths;

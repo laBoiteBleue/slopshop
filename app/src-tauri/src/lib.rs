@@ -1615,15 +1615,22 @@ async fn move_snap_targets(
     .map_err(|e| e.to_string())
 }
 
-/// What Free Transform's overlay shows of a layer's warp (ADR 0044): the style its grid was
-/// made from (none for a layer without a warp, or a grid edited point by point), and the grid's
-/// lines in document pixels.
+/// A layer's warp grid for Edit > Transform > Warp (ADR 0044): the style it was made from (none
+/// for a layer without a warp, or a grid edited point by point: `warped` tells them apart), its
+/// patches and control points (content pixels, row-major), the frame of the content they warp,
+/// and the map from the content to the document (nine numbers, ADR 0038) that places them.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WarpGridDto {
     style: Option<&'static str>,
     bend: f64,
     vertical: bool,
-    lines: Vec<Vec<[f64; 2]>>,
+    warped: bool,
+    columns: u32,
+    rows: u32,
+    frame: [f64; 4],
+    points: Vec<[f64; 2]>,
+    to_document: [f64; 9],
 }
 
 /// The warp grid of pixel layer `layer_id` (a plain 3 × 3 grid over its pixels when it has no
@@ -1641,23 +1648,30 @@ async fn warp_grid(
         .document()
         .clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let id = LayerId::from_raw(layer_id);
-        let layer = document.layer(id)?;
-        let to_document = layer.transform.then(document.parent_transform(id));
-        let lines = slopshop_core::warp::document_lines(layer, to_document, 24)?;
-        let preset = layer.warp.as_ref().and_then(|w| w.preset());
-        Some(WarpGridDto {
-            style: preset.map(|p| p.style.id()),
-            bend: preset.map_or(0.0, |p| p.bend),
-            vertical: preset.is_some_and(|p| p.vertical),
-            lines: lines
-                .into_iter()
-                .map(|line| line.into_iter().map(|(x, y)| [x, y]).collect())
-                .collect(),
-        })
+        warp_grid_of(&document, LayerId::from_raw(layer_id))
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+fn warp_grid_of(document: &Document, id: LayerId) -> Option<WarpGridDto> {
+    let layer = document.layer(id)?;
+    let grid = slopshop_core::warp::grid_of(layer)?;
+    let preset = layer.warp.as_ref().and_then(|w| w.preset());
+    Some(WarpGridDto {
+        style: preset.map(|p| p.style.id()),
+        bend: preset.map_or(0.0, |p| p.bend),
+        vertical: preset.is_some_and(|p| p.vertical),
+        warped: layer.warp.is_some(),
+        columns: grid.columns(),
+        rows: grid.rows(),
+        frame: grid.frame(),
+        points: grid.points().iter().map(|&(x, y)| [x, y]).collect(),
+        to_document: layer
+            .transform
+            .then(document.parent_transform(id))
+            .to_array(),
+    })
 }
 
 /// Add a mask made from the transparency of a raster layer (ADR 0014), undoable. Copying the
@@ -4686,6 +4700,53 @@ mod tests {
         // An unknown style is refused.
         let json = format!(r#"{{"kind":"warpLayer","id":{id},"style":"spiral","bend":0.5}}"#);
         let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn a_warp_grid_is_shown_then_edited_point_by_point() {
+        let mut s = super::blank_session(Size::new(40, 20), None, "Layer").unwrap();
+        let layer = s.document().layers()[0].id;
+        // No warp yet: a plain 3 × 3 grid over the layer, placed where it is.
+        let grid = super::warp_grid_of(s.document(), layer).unwrap();
+        assert!(!grid.warped);
+        assert_eq!((grid.columns, grid.rows, grid.style), (3, 3, None));
+        assert_eq!(grid.frame, [0.0, 0.0, 40.0, 20.0]);
+        assert_eq!(grid.points.len(), 100);
+        assert_eq!(grid.points[99], [40.0, 20.0]);
+        assert_eq!(
+            grid.to_document,
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        // A 4 × 2 grid with its first corner moved, sent point by point.
+        let mut points: Vec<[f64; 2]> = slopshop_core::warp::Warp::identity(grid.frame, 4, 2)
+            .unwrap()
+            .points()
+            .iter()
+            .map(|&(x, y)| [x, y])
+            .collect();
+        points[0] = [-5.0, -2.0];
+        let request = serde_json::json!({
+            "kind": "warpLayer",
+            "id": layer.get(),
+            "grid": { "columns": 4, "rows": 2, "points": points },
+        });
+        let request: EditRequest = serde_json::from_value(request).unwrap();
+        assert_eq!(request.history_label(), Some(HistoryLabel::new("warp")));
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let grid = super::warp_grid_of(s.document(), layer).unwrap();
+        assert!(grid.warped);
+        assert_eq!((grid.columns, grid.rows, grid.style), (4, 2, None));
+        assert_eq!(grid.points, points);
+        // Points that do not match the grid: refused.
+        points.pop();
+        let request = serde_json::json!({
+            "kind": "warpLayer",
+            "id": layer.get(),
+            "grid": { "columns": 4, "rows": 2, "points": points },
+        });
+        let request: EditRequest = serde_json::from_value(request).unwrap();
         assert!(request.into_edit(&mut s).is_err());
     }
 
