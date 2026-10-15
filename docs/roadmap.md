@@ -497,9 +497,10 @@ first.
 - [ ] **Warp / mesh deformation** (Edit > Transform > Warp, [ADR 0044](adr/0044-mesh-warps.md)):
       a grid of Bézier patches kept on the layer, drawn as triangles on the CPU and the GPU.
       Done: pixel layers, the styles Arc, Bulge, Flag, Wave and Twist (Bend, orientation) in
-      the options bar, the grid drawn, Enter and Esc, `.slop`, Rasterize. Open: dragging the
-      grid's points and handles, grid sizes, the other styles, other layer kinds, a warped
-      layer's mask baked by Rasterize, painting through the warp.
+      the options bar, the grid edited on the canvas (anchors, handles, inside a patch: Custom),
+      grid sizes (Default, 4 × 4, 5 × 5), Split Warp, Enter and Esc, editable again, `.slop`,
+      Rasterize. Open: the other styles, other layer kinds, a warped layer's mask baked by
+      Rasterize, painting through the warp, removing a split, several points moved at once.
 - [ ] **Puppet Warp**: a mesh over the layer's content with pins, fixed or moved, for organic
       deformations; pins and mesh kept, editable again.
 - [ ] **Perspective Warp**: quadrilateral planes drawn on the image, connected, then moved
