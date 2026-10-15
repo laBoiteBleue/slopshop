@@ -24,19 +24,24 @@
 //! ```json
 //! { "content": "Hello\nworld", "family": "Inter Variable", "weight": 400, "italic": false,
 //!   "size": 50, "color": [r, g, b, a], "tracking": 0, "leading": 60, "align": "left",
-//!   "position": [x, y], "frame": [width, height] }
+//!   "position": [x, y], "frame": [width, height],
+//!   "spans": [{ "start": 0, "end": 5, "weight": 700, "color": [r, g, b, a], "leading": null }] }
 //! ```
 //!
 //! `size` and `leading` in pixels (`leading` absent: automatic), `tracking` in thousandths of an
 //! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
 //! alignment point) in the layer's own space; paragraph text (schema 0.38) has a `frame`, its
-//! box's size, and `position` is then the box's top left corner.
+//! box's size, and `position` is then the box's top left corner. `spans` (schema 0.39) set
+//! characters otherwise: `start` and `end` in UTF-8 bytes of `content` (on character
+//! boundaries, sorted, apart), and what they set (`family`, `weight`, `italic`, `size`,
+//! `color`, `tracking`, `leading`, null for automatic leading); absent: the text's. A text in
+//! several colors also has `paints` beside its `shape`: its glyphs by color.
 
 use serde_json::{Value, json};
 use slopshop_core::color::LinearRgba;
 use slopshop_core::shape::{
-    FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
-    Subpath, Text, TextAlign,
+    CharStyle, FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap,
+    StrokeJoin, Subpath, Text, TextAlign, TextSpan,
 };
 
 /// A text source's description.
@@ -63,7 +68,81 @@ pub(super) fn text_to_json(text: &Text) -> Value {
     if let Some(frame) = text.frame {
         value["frame"] = json!(frame);
     }
+    if !text.spans.is_empty() {
+        value["spans"] = text.spans.iter().map(span_to_json).collect();
+    }
     value
+}
+
+fn span_to_json(span: &TextSpan) -> Value {
+    let s = &span.style;
+    let mut value = json!({ "start": span.start, "end": span.end });
+    if let Some(family) = &s.family {
+        value["family"] = json!(family);
+    }
+    if let Some(weight) = s.weight {
+        value["weight"] = json!(weight);
+    }
+    if let Some(italic) = s.italic {
+        value["italic"] = json!(italic);
+    }
+    if let Some(size) = s.size {
+        value["size"] = json!(size);
+    }
+    if let Some(c) = s.color {
+        value["color"] = json!([c.r, c.g, c.b, c.a]);
+    }
+    if let Some(tracking) = s.tracking {
+        value["tracking"] = json!(tracking);
+    }
+    if let Some(leading) = s.leading {
+        value["leading"] = json!(leading);
+    }
+    value
+}
+
+/// A span, `None` when it is not one (its validity is the text's to check).
+fn span_from_json(value: &Value) -> Option<TextSpan> {
+    let index = |key| usize::try_from(value.get(key)?.as_u64()?).ok();
+    let style = CharStyle {
+        family: match value.get("family") {
+            None => None,
+            Some(v) => Some(v.as_str()?.to_owned()),
+        },
+        weight: match value.get("weight") {
+            None => None,
+            Some(v) => Some(v.as_f64()? as f32),
+        },
+        italic: match value.get("italic") {
+            None => None,
+            Some(v) => Some(v.as_bool()?),
+        },
+        size: match value.get("size") {
+            None => None,
+            Some(v) => Some(v.as_f64()?),
+        },
+        color: match value.get("color") {
+            None => None,
+            Some(v) => {
+                let [r, g, b, a] = numbers::<4>(Some(v))?;
+                Some(LinearRgba::new(r as f32, g as f32, b as f32, a as f32))
+            }
+        },
+        tracking: match value.get("tracking") {
+            None => None,
+            Some(v) => Some(v.as_f64()?),
+        },
+        leading: match value.get("leading") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(v) => Some(Some(v.as_f64()?)),
+        },
+    };
+    Some(TextSpan {
+        start: index("start")?,
+        end: index("end")?,
+        style,
+    })
 }
 
 /// A text source's description, `None` when it is not one or not valid.
@@ -91,6 +170,14 @@ pub(super) fn text_from_json(value: &Value) -> Option<Text> {
         frame: match value.get("frame") {
             None => None,
             Some(v) => Some(numbers::<2>(Some(v))?),
+        },
+        spans: match value.get("spans") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()?
+                .iter()
+                .map(span_from_json)
+                .collect::<Option<_>>()?,
         },
     };
     text.is_valid().then_some(text)
