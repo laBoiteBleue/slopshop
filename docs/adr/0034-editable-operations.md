@@ -81,6 +81,10 @@ and the shader's stack evaluation are pointwise, in one pass per tile).
    Distort, Pixelate, Stylize as each works. Not reproduced: Convert for Smart Filters, Filter
    Gallery, Camera Raw Filter (its tools as native operations), Neural Filters (AI features go
    where their intention is), render generators (fill layers instead).
+   *Amended 2026-10-15 (under the maintainer's delegation; to review)*: Render > Clouds,
+   Difference Clouds and Fibers are filter entries after all, as in Photoshop: Difference Clouds
+   reads the layer, and all three apply within a selection and are repeated by Ctrl+F; the
+   drawing colors of when they were applied are kept by the entry, with a seed.
 10. **Liquify** is a stack entry holding a displacement field, edited again in its own
     workspace; later, with no menu entry before it works. Not a filter layer.
 11. **`.slop`**: effect steps gain the filter kinds and their parameters, entries an `enabled`
