@@ -495,3 +495,74 @@ test("Image > Adjustments > Shadows/Highlights: on every pixel layer shown, More
     "true",
   );
 });
+
+test("Render > Clouds applies at once with the colors of the moment; Ctrl+F draws other clouds", async () => {
+  localStorage.clear();
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  // White in front, black behind.
+  await user.keyboard("x");
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Render", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Clouds" }));
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toMatchObject({
+      kind: "applyFilter",
+      id: 1,
+      filter: "clouds",
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  const first = (sent("perform").at(-1)?.edit as { values: number[] }).values;
+  expect(first.slice(0, 2)).toEqual([0xffffff, 0x000000]);
+  expect(Number.isInteger(first[2])).toBe(true);
+  // Repeated with the colors of the moment (black in front again) and a seed of its own.
+  await user.keyboard("x");
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+  await user.keyboard("{Control>}f{/Control}");
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "clouds",
+      values: [0x000000, 0xffffff, 2 ** 22],
+    }),
+  );
+  random.mockRestore();
+});
+
+test("Render > Difference Clouds applies at once; Fibers: Variance, Strength, Randomize", async () => {
+  localStorage.clear();
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Render", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Difference Clouds" }));
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toMatchObject({
+      kind: "applyFilter",
+      filter: "differenceClouds",
+    }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Render", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Fibers…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Fibers" });
+  expect(within(dialog).getByRole("spinbutton", { name: "Variance" })).toHaveValue(16);
+  const strength = within(dialog).getByRole("spinbutton", { name: "Strength" });
+  expect(strength).toHaveValue(4);
+  await user.clear(strength);
+  await user.type(strength, "20");
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+  await user.click(within(dialog).getByRole("button", { name: "Randomize" }));
+  random.mockRestore();
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "fibers",
+      values: [16, 20, 0x000000, 0xffffff, 2 ** 23],
+    }),
+  );
+});

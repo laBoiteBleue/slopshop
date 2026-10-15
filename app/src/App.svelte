@@ -170,6 +170,7 @@
     FILTERS,
     FILTER_MENU,
     hasSettings,
+    withColors,
     withNewSeeds,
     applyFilterEdit,
     applyFiltersEdit,
@@ -1974,9 +1975,10 @@
     const doc = active;
     const layer = filterLayer();
     if (!doc || !layer || filterDialog || adjustDialog || entryDialog) return;
-    // Nothing to set (Find Edges, Solarize): applied at once, as in Photoshop.
+    // Nothing to set (Find Edges, Clouds): applied at once, as in Photoshop, with a seed of
+    // its own and the colors of the moment.
     if (!hasSettings(filter)) {
-      lastFilter = { filter, values: [] };
+      lastFilter = { filter, values: fresh(filter, FILTERS[filter].defaults) };
       void edit(doc.id, applyFilterEdit(layer.id, lastFilter));
       return;
     }
@@ -1986,10 +1988,15 @@
       layerIds: [layer.id],
       filter,
       preview: true,
-      // Applied anew: another grain for the filters that draw one.
-      values: withNewSeeds(filter, values),
+      // Applied anew: another grain for the filters that draw one, the colors of the moment.
+      values: fresh(filter, values),
       entry: null,
     };
+  }
+
+  /** `values` of `filter` applied anew: new seeds, the current drawing colors. */
+  function fresh(filter: FilterId, values: number[]): number[] {
+    return withColors(filter, withNewSeeds(filter, values), colors);
   }
 
   /**
@@ -2142,7 +2149,7 @@
     const layer = filterLayer();
     if (!doc || !layer || !lastFilter) return;
     const { filter, values } = lastFilter;
-    void edit(doc.id, applyFilterEdit(layer.id, { filter, values: withNewSeeds(filter, values) }));
+    void edit(doc.id, applyFilterEdit(layer.id, { filter, values: fresh(filter, values) }));
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */

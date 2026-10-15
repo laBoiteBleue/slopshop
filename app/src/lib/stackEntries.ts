@@ -2,13 +2,14 @@
 // settings of each step of an entry as edits send them, and the edit that sets an entry.
 
 import type { AdjustmentSettings, AdjustmentView, EditRequest, StackEntryView } from "./engine";
+import { hasSettings } from "./filters";
 
 /**
- * Whether `entry` has settings to edit again: a filter with settings (not Find Edges nor
- * Solarize), Liquify, or an adjustment other than Invert.
+ * Whether `entry` has settings to edit again: a filter with settings shown (not Find Edges,
+ * Solarize nor Clouds), Liquify, or an adjustment other than Invert.
  */
 export function editableEntry(entry: StackEntryView): boolean {
-  if (entry.kind === "filter") return entry.filterSteps.some((step) => step.values.length > 0);
+  if (entry.kind === "filter") return entry.filterSteps.some((step) => hasSettings(step.id));
   // Its field is edited again in its own workspace (ADR 0037).
   if (entry.kind === "liquify") return true;
   return entry.kind === "effect" && entry.steps.length > 0 && entry.adjustment !== "invert";

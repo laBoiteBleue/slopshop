@@ -19,7 +19,9 @@ import {
   sliderPosition,
   sliderValue,
   validValues,
+  withColors,
   withNewSeeds,
+  packColor,
   type NumberParam,
 } from "../src/lib/filters";
 import { editableEntry } from "../src/lib/stackEntries";
@@ -414,4 +416,51 @@ test("an adjustment filter is applied to every layer given, in one batch", () =>
     kind: "batch",
     edits: [applyFilterEdit(4, settings), applyFilterEdit(7, settings)],
   });
+});
+
+test("Render: Clouds and Difference Clouds apply at once; Fibers' Variance and Strength", () => {
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.render")?.filters).toEqual([
+    "clouds",
+    "differenceClouds",
+    "fibers",
+  ]);
+  // Black and white at first; the colors and a seed hidden.
+  expect(FILTERS.clouds.defaults).toEqual([0, 0xffffff, 0]);
+  expect(FILTERS.differenceClouds.defaults).toEqual([0, 0xffffff, 0]);
+  expect(FILTERS.fibers.defaults).toEqual([16, 4, 0, 0xffffff, 0]);
+  expect(hasSettings("clouds")).toBe(false);
+  expect(hasSettings("differenceClouds")).toBe(false);
+  expect(hasSettings("fibers")).toBe(true);
+  expect(validValues("fibers", [1, 64, 0xffffff, 0, SEEDS - 1])).toBe(true);
+  for (const values of [
+    [0, 4, 0, 0, 0],
+    [16, 65, 0, 0, 0],
+    [16, 4.5, 0, 0, 0],
+    [16, 4, 2 ** 24, 0, 0],
+    [16, 4, -1, 0, 0],
+    [16, 4, 0.5, 0, 0],
+  ]) {
+    expect(validValues("fibers", values)).toBe(false);
+  }
+  const entry = (filter: "clouds" | "fibers", values: number[]): StackEntryView => ({
+    kind: "filter",
+    adjustment: null,
+    count: 1,
+    hidden: false,
+    steps: [],
+    filter,
+    filterSteps: [{ id: filter, values }],
+  });
+  expect(editableEntry(entry("clouds", [0, 0xffffff, 3]))).toBe(false);
+  expect(editableEntry(entry("fibers", FILTERS.fibers.defaults))).toBe(true);
+});
+
+test("a drawing filter takes the colors of the moment, packed, and a new seed", () => {
+  expect(packColor("#123456")).toBe(0x123456);
+  const colors = { foreground: "#ff0000", background: "#0000ff" };
+  expect(withColors("clouds", [0, 0xffffff, 7], colors)).toEqual([0xff0000, 0x0000ff, 7]);
+  expect(withColors("fibers", [20, 8, 0, 0, 7], colors)).toEqual([20, 8, 0xff0000, 0x0000ff, 7]);
+  // A filter without colors keeps its values.
+  expect(withColors("gaussianBlur", [4], colors)).toEqual([4]);
+  expect(withNewSeeds("clouds", [1, 2, 7], () => 0.5)).toEqual([1, 2, 2 ** 23]);
 });
