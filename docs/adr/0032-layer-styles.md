@@ -99,3 +99,25 @@ Stroke effect positions).
    a double-click on the layer, the fx button or Layer > Layer Style.
 3. **Fill Opacity**: a second field next to Opacity in the layers panel, as Photoshop's "Fill".
 4. **First effects**: Drop Shadow, Stroke and Color Overlay, then the glows and Inner Shadow.
+
+## Amendment (2026-10-15): commands on styles
+
+Status: accepted (2026-10-15, under the maintainer's delegation; to review).
+
+- **The effects' master switch**: `LayerStyle::effects_visible` (Photoshop's eye on the
+  "Effects" row, `masterFXSwitch` in PSD): hidden, no effect is drawn and each keeps its own
+  `enabled`; Fill Opacity still applies. Layer > Layer Style > Hide All Effects and Show All
+  Effects set it on every styled layer (those under Lock All left as they are), one undo entry;
+  the menu offers Show once every layer's effects are hidden, as Photoshop's single command.
+  `.slop` 0.36 writes `"effects_visible": false` only when hidden (an older reader shows the
+  effects, losing nothing). PSD import keeps each effect's own setting under the switch instead
+  of turning them all off.
+- **Copy and Paste Layer Style**: the style (effects, Fill Opacity, the switch) is kept by the
+  app, not by a document, so that it pastes into any open tab, a Pattern Overlay's source with
+  it. Paste gives it to every selected layer but adjustment layers, one undo entry. Unlike
+  Photoshop, the copied layer's opacity and blend mode are not pasted: they are the layer's,
+  not its style's, in SlopShop's Blending Options.
+- **Scale Effects** (1 to 1000 %): every size and distance of the selected styles scaled to
+  whole pixels within its range (a Stroke at least 1 pixel), the Gradient and Pattern Overlays'
+  scale with them; angles, spread and choke unchanged. Live, one undo entry.
+- The fx mark's and the "Effects" row's right-click menu is Layer > Layer Style's.

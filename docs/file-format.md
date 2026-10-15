@@ -353,6 +353,10 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `center` or `outside`), `color`, `mode` and `opacity`. What the effects draw is not stored:
     readers draw it. Only styled nodes are written at v8 (a styled fill or group too: they skip
     v6 and v7); a style out of range is refused. A group's effects are drawn from what it holds.
+    From schema 0.36, a style may have `"effects_visible": false`: none of its effects is
+    drawn (Photoshop's eye on the "Effects" row, Hide All Effects), each keeping its own
+    `enabled`; Fill Opacity still applies. Absent: shown. Written at the node's version
+    otherwise; a reader that does not know it shows the effects, which loses nothing.
   - v9 (schema 0.18) is v8 with `outer_glow`, `inner_shadow` or `inner_glow` in the style: only
     those nodes are written at v9, so that readers of v8 refuse them rather than drop these
     effects.
