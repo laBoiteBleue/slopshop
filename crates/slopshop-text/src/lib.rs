@@ -20,7 +20,37 @@ use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};
 use skrifa::raw::types::F2Dot14;
 use skrifa::{GlyphId, MetadataProvider};
-use slopshop_core::shape::{FillRule, Geometry, Paint, Segment, Shape, Subpath, Text, TextAlign};
+use slopshop_core::color::LinearRgba;
+use slopshop_core::shape::{
+    CharStyle, FillRule, Geometry, Paint, Resolved, Segment, Shape, Subpath, Text, TextAlign,
+};
+
+/// A character set as its text.
+const NO_STYLE: CharStyle = CharStyle {
+    family: None,
+    weight: None,
+    italic: None,
+    size: None,
+    color: None,
+    tracking: None,
+    leading: None,
+};
+
+/// What parley sets characters in: `resolved`'s settings in `family` (an installed one).
+fn properties<'a>(resolved: &Resolved<'_>, family: &'a str) -> [StyleProperty<'a, u16>; 6] {
+    [
+        StyleProperty::FontFamily(FontFamily::named(family)),
+        StyleProperty::FontSize(resolved.size as f32),
+        StyleProperty::FontWeight(FontWeight::new(resolved.weight)),
+        StyleProperty::FontStyle(if resolved.italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        }),
+        StyleProperty::LineHeight(LineHeight::Absolute(resolved.line_spacing as f32)),
+        StyleProperty::LetterSpacing((resolved.tracking / 1000.0 * resolved.size) as f32),
+    ]
+}
 
 /// The bundled default family's name.
 pub const DEFAULT_FAMILY: &str = "Inter Variable";
@@ -80,6 +110,9 @@ pub struct TextGeometry {
 pub struct Laid {
     /// The glyph outlines, filled by the text's color, in the layer's own space.
     pub outlines: Shape,
+    /// When characters are set in other colors: the glyphs by color, each filled with it (the
+    /// text's own color first), to be drawn instead of `outlines`. Empty otherwise.
+    pub paints: Vec<Shape>,
     /// The family was not found: the text was set in the default family.
     pub missing_font: bool,
 }
@@ -88,7 +121,7 @@ pub struct Laid {
 /// threads: callers keep one behind a lock.
 pub struct Fonts {
     fonts: FontContext,
-    layout: LayoutContext<()>,
+    layout: LayoutContext<u16>,
 }
 
 impl std::fmt::Debug for Fonts {
@@ -182,33 +215,54 @@ impl Fonts {
         styles
     }
 
-    fn build(&mut self, text: &Text) -> (Layout<()>, bool) {
-        let missing_font = !self.has_family(&text.family);
-        let family = if missing_font {
-            DEFAULT_FAMILY
-        } else {
-            text.family.as_str()
+    /// `text` laid out, whether a family was missing (set in the default family instead), and
+    /// its colors: each glyph's brush is its color's index there, the text's own first.
+    fn build(&mut self, text: &Text) -> (Layout<u16>, bool, Vec<LinearRgba>) {
+        let mut missing_font = false;
+        let mut family_of = |fonts: &mut Self, family: &str| {
+            if fonts.has_family(family) {
+                family.to_owned()
+            } else {
+                missing_font = true;
+                DEFAULT_FAMILY.to_owned()
+            }
         };
+        let family = family_of(self, &text.family);
+        let mut colors = vec![text.color];
+        // Each span's settings, resolved over the text's, and its color's index.
+        let spans: Vec<(std::ops::Range<usize>, Resolved<'_>, String, u16)> = text
+            .spans
+            .iter()
+            .map(|span| {
+                let resolved = text.resolved(&span.style);
+                let family = family_of(self, resolved.family);
+                let color = match colors.iter().position(|c| *c == resolved.color) {
+                    Some(i) => i,
+                    None => {
+                        colors.push(resolved.color);
+                        colors.len() - 1
+                    }
+                };
+                let color = u16::try_from(color).unwrap_or(u16::MAX);
+                (span.start..span.end, resolved, family, color)
+            })
+            .collect();
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, &text.content, 1.0, false);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::named(family)));
-        builder.push_default(StyleProperty::FontSize(text.size as f32));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(text.weight)));
-        builder.push_default(StyleProperty::FontStyle(if text.italic {
-            FontStyle::Italic
-        } else {
-            FontStyle::Normal
-        }));
-        builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(
-            text.line_spacing() as f32,
-        )));
-        builder.push_default(StyleProperty::LetterSpacing(
-            (text.tracking / 1000.0 * text.size) as f32,
-        ));
+        let own = text.resolved(&NO_STYLE);
+        for property in properties(&own, &family) {
+            builder.push_default(property);
+        }
         // Paragraph text breaks a word longer than its box's width, as Photoshop does.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
-        let mut layout: Layout<()> = builder.build(&text.content);
+        for (range, resolved, family, color) in &spans {
+            for property in properties(resolved, family) {
+                builder.push(property, range.clone());
+            }
+            builder.push(StyleProperty::Brush(*color), range.clone());
+        }
+        let mut layout: Layout<u16> = builder.build(&text.content);
         layout.break_all_lines(text.frame.map(|[width, _]| width as f32));
         let alignment = match text.align {
             TextAlign::Left => Alignment::Left,
@@ -216,13 +270,13 @@ impl Fonts {
             TextAlign::Right => Alignment::Right,
         };
         layout.align(alignment, AlignmentOptions::default());
-        (layout, missing_font)
+        (layout, missing_font, colors)
     }
 
     /// Where the layout's origin (its top left) lies in the layer's space: point text's anchor
     /// is the first baseline at the alignment point; paragraph text's position, its box's top
     /// left (parley aligns the lines in the box's width).
-    fn origin(text: &Text, layout: &Layout<()>) -> [f64; 2] {
+    fn origin(text: &Text, layout: &Layout<u16>) -> [f64; 2] {
         if text.frame.is_some() {
             return text.position;
         }
@@ -238,9 +292,10 @@ impl Fonts {
 
     /// `text` laid out into its glyph outlines.
     pub fn lay_out(&mut self, text: &Text) -> Laid {
-        let (layout, missing_font) = self.build(text);
+        let (layout, missing_font, colors) = self.build(text);
         let [ox, oy] = Self::origin(text, &layout);
-        let mut pen = Outlines::default();
+        // A pen per color.
+        let mut pens: Vec<Outlines> = colors.iter().map(|_| Outlines::default()).collect();
         for line in layout.lines().filter(|line| fits(text, line)) {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyphs) = item else {
@@ -264,6 +319,10 @@ impl Fonts {
                     .synthesis()
                     .skew()
                     .map_or(0.0, |deg| f64::from(deg).to_radians().tan());
+                let brush = usize::from(glyphs.style().brush);
+                let Some(pen) = pens.get_mut(brush) else {
+                    continue;
+                };
                 for glyph in glyphs.positioned_glyphs() {
                     let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
                         continue;
@@ -271,27 +330,40 @@ impl Fonts {
                     pen.place = [ox + f64::from(glyph.x), oy + f64::from(glyph.y), skew];
                     let settings = DrawSettings::unhinted(size, LocationRef::new(&coords));
                     // A glyph that cannot be drawn is left out, as a missing glyph would be.
-                    let _ = outline.draw(settings, &mut pen);
+                    let _ = outline.draw(settings, &mut *pen);
                     pen.finish();
                 }
             }
         }
-        Laid {
-            outlines: Shape {
-                geometry: Geometry::Path {
-                    subpaths: pen.subpaths,
-                    rule: FillRule::NonZero,
-                },
-                fill: Some(Paint::Solid(text.color)),
-                stroke: None,
+        let path = |subpaths: Vec<Subpath>, color: LinearRgba| Shape {
+            geometry: Geometry::Path {
+                subpaths,
+                rule: FillRule::NonZero,
             },
+            fill: Some(Paint::Solid(color)),
+            stroke: None,
+        };
+        let several = pens.iter().skip(1).any(|p| !p.subpaths.is_empty());
+        let paints = if several {
+            pens.iter()
+                .zip(&colors)
+                .filter(|(p, _)| !p.subpaths.is_empty())
+                .map(|(p, &color)| path(p.subpaths.clone(), color))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let all = pens.into_iter().flat_map(|p| p.subpaths).collect();
+        Laid {
+            outlines: path(all, text.color),
+            paints,
             missing_font,
         }
     }
 
     /// Where a caret can stand in `text` and its lines, for editing it (see [`TextGeometry`]).
     pub fn geometry(&mut self, text: &Text) -> TextGeometry {
-        let (layout, _) = self.build(text);
+        let (layout, ..) = self.build(text);
         let [ox, oy] = Self::origin(text, &layout);
         // UTF-16 places of byte indices: the interface's strings count in UTF-16 units.
         // parley counts a place past the end in an empty text's line: clamped.
@@ -346,7 +418,7 @@ impl Fonts {
 
 /// Whether `line` shows: paragraph text hides the lines whose letters do not fit in its box's
 /// height (the bottom of their descenders), as Photoshop does.
-fn fits(text: &Text, line: &parley::Line<'_, ()>) -> bool {
+fn fits(text: &Text, line: &parley::Line<'_, u16>) -> bool {
     text.frame.is_none_or(|[_, height]| {
         f64::from(line.metrics().content_block_max_coord) <= height + 1e-3
     })
