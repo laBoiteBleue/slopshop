@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use slopshop_core::document::{Document, LayerContent};
-use slopshop_core::shape::{Shape, Text, TextAlign};
+use slopshop_core::shape::{CharStyle, Shape, Text, TextAlign, TextSpan};
 use slopshop_core::{LayerId, LinearRgba};
 use slopshop_text::Fonts;
 use tauri::State;
@@ -54,6 +54,115 @@ pub struct TextDto {
     /// Paragraph text: its box's width and height; none: point text.
     #[serde(default)]
     pub frame: Option<[f64; 2]>,
+    /// Characters set otherwise, in UTF-16 code units of `content`. Views give them; `setText`
+    /// keeps the layer's own, following the content's change, and `styleText` changes them.
+    #[serde(default)]
+    pub spans: Vec<SpanDto>,
+}
+
+/// What characters set otherwise than their text: absent fields are the text's. The color is
+/// sRGB-encoded RGBA in `[0, 1]`, sizes and leading in pixels (`leading` null: automatic),
+/// tracking in thousandths of an em.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharStyleDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "present_or_null"
+    )]
+    pub leading: Option<Option<f64>>,
+}
+
+/// A field that is absent (`None`), null (`Some(None)`) or a value.
+mod present_or_null {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &Option<Option<f64>>, s: S) -> Result<S::Ok, S::Error> {
+        value.flatten().serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<f64>>, D::Error> {
+        Option::<f64>::deserialize(d).map(Some)
+    }
+}
+
+/// Characters `start..end` (UTF-16 code units) set in `style`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpanDto {
+    pub start: usize,
+    pub end: usize,
+    pub style: CharStyleDto,
+}
+
+impl CharStyleDto {
+    /// The style it describes, validated.
+    pub fn style(&self) -> Result<CharStyle, String> {
+        let style = CharStyle {
+            family: self.family.clone(),
+            weight: self.weight,
+            italic: self.italic,
+            size: self.size,
+            color: self
+                .color
+                .map(|[r, g, b, a]| LinearRgba::from_srgb_encoded_to_working(r, g, b, a)),
+            tracking: self.tracking,
+            leading: self.leading,
+        };
+        if style.is_valid() {
+            Ok(style)
+        } else {
+            Err("invalid character style".to_owned())
+        }
+    }
+
+    pub fn of(style: &CharStyle) -> Self {
+        Self {
+            family: style.family.clone(),
+            weight: style.weight,
+            italic: style.italic,
+            size: style.size,
+            color: style.color.map(|c| c.working_to_srgb_encoded()),
+            tracking: style.tracking,
+            leading: style.leading,
+        }
+    }
+}
+
+/// The byte offset of UTF-16 place `index` in `content`; `None` past its end or inside a
+/// character.
+pub fn byte_of(content: &str, index: usize) -> Option<usize> {
+    let mut units = 0;
+    for (byte, c) in content.char_indices() {
+        if units == index {
+            return Some(byte);
+        }
+        units += c.len_utf16();
+        if units > index {
+            return None;
+        }
+    }
+    (units == index).then_some(content.len())
+}
+
+/// The UTF-16 place of byte offset `byte` in `content`.
+fn utf16_of(content: &str, byte: usize) -> usize {
+    content
+        .get(..byte.min(content.len()))
+        .map_or(0, |s| s.encode_utf16().count())
 }
 
 impl TextDto {
@@ -76,6 +185,17 @@ impl TextDto {
             },
             position: self.position,
             frame: self.frame,
+            spans: self
+                .spans
+                .iter()
+                .map(|s| {
+                    Ok(TextSpan {
+                        start: byte_of(&self.content, s.start).ok_or("a span out of the text")?,
+                        end: byte_of(&self.content, s.end).ok_or("a span out of the text")?,
+                        style: s.style.style()?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
         };
         if text.is_valid() {
             Ok(text)
@@ -102,13 +222,52 @@ impl TextDto {
             },
             position: text.position,
             frame: text.frame,
+            spans: text
+                .spans
+                .iter()
+                .map(|s| SpanDto {
+                    start: utf16_of(&text.content, s.start),
+                    end: utf16_of(&text.content, s.end),
+                    style: CharStyleDto::of(&s.style),
+                })
+                .collect(),
         }
     }
 }
 
-/// `text` laid out: its outlines. Blocking (see [`fonts`]).
-pub fn lay_out(text: &Text) -> Result<Shape, String> {
-    Ok(fonts()?.lay_out(text).outlines)
+/// `text` laid out: its outlines, and its glyphs by color when it has several. Blocking (see
+/// [`fonts`]).
+pub fn lay_out(text: &Text) -> Result<(Shape, Vec<Shape>), String> {
+    let laid = fonts()?.lay_out(text);
+    Ok((laid.outlines, laid.paints))
+}
+
+/// The text of text layer `id` in `document`.
+pub fn text_of(document: &Document, id: LayerId) -> Result<&Text, String> {
+    let layer = document.layer(id).ok_or("unknown layer")?;
+    let LayerContent::Vector { source, .. } = &layer.content else {
+        return Err("not a text layer".to_owned());
+    };
+    source
+        .text_of()
+        .ok_or_else(|| "not a text layer".to_owned())
+}
+
+/// The characters of UTF-16 range `range` of `text` in bytes, or `None` for the whole text;
+/// an empty range or one out of the text is refused.
+pub fn byte_range(
+    text: &Text,
+    range: Option<[usize; 2]>,
+) -> Result<Option<std::ops::Range<usize>>, String> {
+    let Some([start, end]) = range else {
+        return Ok(None);
+    };
+    let start = byte_of(&text.content, start).ok_or("a range out of the text")?;
+    let end = byte_of(&text.content, end).ok_or("a range out of the text")?;
+    if start >= end {
+        return Err("an empty range".to_owned());
+    }
+    Ok(Some(start..end))
 }
 
 /// One style of a family, for the options bar.
