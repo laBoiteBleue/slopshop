@@ -76,6 +76,7 @@ fn push(doc: &mut Document, name: &str, content: LayerContent, opacity: f32) -> 
         mask: None,
         content,
         warp: None,
+        vector_mask: None,
     };
     Edit::InsertLayer {
         parent: None,
@@ -902,6 +903,7 @@ fn golden_document_v0_9() -> Document {
                 },
             },
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut doc)
@@ -938,6 +940,7 @@ fn golden_document_v0_8() -> Document {
                 },
             },
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut doc)
@@ -973,6 +976,7 @@ fn golden_document_v0_7() -> Document {
                 },
             },
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut doc)
@@ -1040,6 +1044,7 @@ fn golden_document_v0_4() -> Document {
             pass_through,
         },
         warp: None,
+        vector_mask: None,
     };
     Edit::Batch(vec![
         Edit::InsertLayer {
@@ -2211,6 +2216,68 @@ fn warped_layers_round_trip_at_node_version_18() {
     SlopFile::create(&path, &doc).unwrap();
     let (loaded, _) = SlopFile::open(&path).unwrap();
     assert_eq!(loaded.layer(id).unwrap().warp.as_ref(), Some(&custom));
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn vector_masks_round_trip_at_node_version_19() {
+    use slopshop_core::shape::{FillRule, Geometry, Segment, Subpath, VectorMask};
+    let mut doc = golden_document();
+    let ids: Vec<_> = doc
+        .all_layers()
+        .map(|l| l.id)
+        .filter(|&id| !doc.effective_locks(id).all)
+        .collect();
+    assert!(ids.len() >= 3, "a few layers to mask");
+    let path_geometry = Geometry::Path {
+        subpaths: vec![Subpath {
+            start: [1.0, 2.0],
+            segments: vec![
+                Segment::Line([20.5, 2.0]),
+                Segment::Cubic([25.0, 10.0], [10.0, 18.0], [1.0, 2.0]),
+            ],
+            closed: true,
+        }],
+        rule: FillRule::EvenOdd,
+    };
+    for (i, &id) in ids.iter().enumerate() {
+        let mut mask = match i % 3 {
+            0 => VectorMask::new(path_geometry.clone(), false).unwrap(),
+            1 => VectorMask::reveal_all()
+                .with_geometry(Geometry::Ellipse {
+                    center: [10.0, 8.0],
+                    radii: [6.0, 4.0],
+                })
+                .unwrap(),
+            _ => VectorMask::hide_all(),
+        }
+        .with_feather(i as f64 * 1.5)
+        .unwrap();
+        mask.enabled = i % 4 != 3;
+        Edit::SetVectorMask {
+            id,
+            mask: Some(mask),
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let path = temp_path("vector-masks.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    for &id in &ids {
+        assert_eq!(
+            loaded.layer(id).unwrap().vector_mask,
+            doc.layer(id).unwrap().vector_mask
+        );
+    }
+    let size = doc.size();
+    let region = slopshop_core::geom::Rect::new(0, 0, size.width, size.height);
+    let mut before = vec![0.0f32; size.pixel_count() as usize * 4];
+    let mut after = before.clone();
+    slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
+    slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();
+    assert_eq!(before, after);
     fs::remove_file(&path).ok();
 }
 
