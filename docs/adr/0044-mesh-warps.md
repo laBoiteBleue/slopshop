@@ -162,3 +162,15 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
 - `.slop`: the new identifiers are written in `preset.style` (schema 0.35 is not released yet);
   a style a reader does not know now reads as none (the grid edited point by point), the points
   being what is drawn, rather than refusing the file.
+
+## Rasterize of a warped layer with a mask (2026-10-15)
+
+Status: accepted (2026-10-15, under the maintainer's delegation; to review).
+
+Rasterize now bakes a warped layer that has a mask: its mask is warped alike, into the new
+content space of the baked pixels. The plan composites a second scratch document: a layer
+showing the mask as its alpha (the mask as its pixels and its mask, its own alpha ignored),
+warped by the same grid, both grown by a tile each way so that the layer is opaque past the
+warp's edges and only the mask's own edges fade, as on screen. The composite's alpha is the new
+mask (`RasterImage::alpha_mask`); the mask keeps whether it is enabled and replaces the layer's
+alpha. Tested against the display: the same pixels before and after.
