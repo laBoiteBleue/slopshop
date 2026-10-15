@@ -103,8 +103,13 @@ pub(crate) const NODE_VERSION_PATTERN: u32 = 16;
 pub(crate) const NODE_VERSION_PATTERN_OVERLAY: u32 = 17;
 /// Version of the raster nodes with a warp (schema 0.35, ADR 0044): `params.warp`, a grid of
 /// Bézier patches (see `warp_json`). Written only for those, so that older readers refuse them
-/// instead of showing them unwarped. The newest node version this code reads.
+/// instead of showing them unwarped.
 pub(crate) const NODE_VERSION_WARP: u32 = 18;
+/// Version of the nodes, of any type, with a vector mask (schema 0.36, ADR 0041):
+/// `params.vector_mask` (see `slop::shape`). Written only for those, so that older readers
+/// refuse them instead of showing them unmasked. It reads every parameter of the versions
+/// before it. The newest node version this code reads.
+pub(crate) const NODE_VERSION_VECTOR_MASK: u32 = 19;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

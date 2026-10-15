@@ -30,13 +30,43 @@
 //! `size` and `leading` in pixels (`leading` absent: automatic), `tracking` in thousandths of an
 //! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
 //! alignment point) in the layer's own space.
+//!
+//! A vector mask (schema 0.36, node version 19) is a node's `params.vector_mask`, its geometry
+//! written as a shape's, in the layer's own space:
+//!
+//! ```json
+//! { "geometry": { "path": { … } }, "inverted": false, "feather": 0, "enabled": true }
+//! ```
+//!
+//! `inverted`: the path hides what it encloses (Reveal All); `feather` in pixels (0 to 250).
 
 use serde_json::{Value, json};
 use slopshop_core::color::LinearRgba;
 use slopshop_core::shape::{
     FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap, StrokeJoin,
-    Subpath, Text, TextAlign,
+    Subpath, Text, TextAlign, VectorMask,
 };
+
+/// A vector mask as the manifest writes it.
+pub(super) fn vector_mask_to_json(mask: &VectorMask) -> Value {
+    json!({
+        "geometry": geometry(mask.geometry()),
+        "inverted": mask.inverted(),
+        "feather": mask.feather(),
+        "enabled": mask.enabled,
+    })
+}
+
+/// A vector mask read back; `None` when it is not one, or not valid.
+pub(super) fn vector_mask_from_json(value: &Value) -> Option<VectorMask> {
+    let mut mask = VectorMask::new(
+        geometry_of(value.get("geometry")?)?,
+        value.get("inverted")?.as_bool()?,
+    )?
+    .with_feather(number(value, "feather")?)?;
+    mask.enabled = value.get("enabled")?.as_bool()?;
+    Some(mask)
+}
 
 /// A text source's description.
 pub(super) fn text_to_json(text: &Text) -> Value {

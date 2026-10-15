@@ -23,9 +23,9 @@ use super::manifest::{
     NODE_VERSION, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
     NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
     NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_WARP, NodeDto,
-    PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto,
-    Writer,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK,
+    NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto,
+    Schema, ShapeDto, SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -790,11 +790,19 @@ fn build_manifest(
             }
             params.insert("mask".to_owned(), value);
         }
+        if let Some(mask) = &layer.vector_mask {
+            params.insert(
+                "vector_mask".to_owned(),
+                super::shape::vector_mask_to_json(mask),
+            );
+        }
         nodes.insert(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer.warp.is_some() {
+                version: if layer.vector_mask.is_some() {
+                    NODE_VERSION_VECTOR_MASK
+                } else if layer.warp.is_some() {
                     NODE_VERSION_WARP
                 } else if layer
                     .style
