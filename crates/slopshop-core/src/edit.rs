@@ -1011,10 +1011,6 @@ fn check_depth(doc: &Document, parent: Option<LayerId>, height: usize) -> Result
 }
 
 impl Edit {
-    /// The edit that puts `ids` into `group`, a new empty group layer (its id from
-    /// [`Document::allocate_layer_id`]), as one unit: Photoshop's Layer > Group Layers. The group
-    /// takes the place of the topmost of the layers, which keep their stacking order; a layer
-    /// inside another of `ids` moves with it.
     /// Edit > Transform > Warp with a style (ADR 0044): pixel layer `id` warped by the grid
     /// `preset` gives over [`crate::warp::frame_of`] (its current warp's frame, else its pixels'
     /// box); `None` takes its warp away.
@@ -1036,6 +1032,30 @@ impl Edit {
         Ok(Edit::SetLayerWarp { id, warp })
     }
 
+    /// Edit > Transform > Warp edited point by point (ADR 0044, Photoshop's Custom): pixel layer
+    /// `id` warped by `columns × rows` patches with these control points (content pixels,
+    /// row-major) over [`crate::warp::frame_of`].
+    pub fn warp_layer_grid(
+        doc: &Document,
+        id: LayerId,
+        columns: u32,
+        rows: u32,
+        points: Vec<(f64, f64)>,
+    ) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let frame = crate::warp::frame_of(layer).ok_or(EditError::NotRaster(id))?;
+        let warp = crate::warp::Warp::new(frame, columns, rows, points, None)
+            .map_err(|_| EditError::InvalidTransform)?;
+        Ok(Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::new(warp)),
+        })
+    }
+
+    /// The edit that puts `ids` into `group`, a new empty group layer (its id from
+    /// [`Document::allocate_layer_id`]), as one unit: Photoshop's Layer > Group Layers. The group
+    /// takes the place of the topmost of the layers, which keep their stacking order; a layer
+    /// inside another of `ids` moves with it.
     pub fn group_layers(doc: &Document, group: Layer, ids: &[LayerId]) -> Result<Edit, EditError> {
         if group.children().is_none_or(|children| !children.is_empty()) {
             return Err(EditError::NotAGroup(group.id));
@@ -2442,6 +2462,35 @@ mod tests {
             }
             .apply(&mut doc),
             Err(EditError::InvalidTransform)
+        );
+    }
+
+    #[test]
+    fn a_grid_edited_point_by_point_warps_over_the_layer_frame() {
+        let mut doc = Document::new(Size::new(10, 10));
+        let id = raster_layer(&mut doc, image(Size::new(4, 4), false, 255));
+        let plain = crate::warp::Warp::identity([0.0, 0.0, 4.0, 4.0], 4, 2).unwrap();
+        let mut points = plain.points().to_vec();
+        points[0] = (-1.0, -0.5);
+        Edit::warp_layer_grid(&doc, id, 4, 2, points.clone())
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let warp = doc.layer(id).unwrap().warp.clone().unwrap();
+        assert_eq!((warp.columns(), warp.rows()), (4, 2));
+        assert_eq!(warp.frame(), [0.0, 0.0, 4.0, 4.0]);
+        assert_eq!(warp.points(), &points[..]);
+        // Custom: no style.
+        assert_eq!(warp.preset(), None);
+        // Points that do not match the grid's size: refused.
+        assert_eq!(
+            Edit::warp_layer_grid(&doc, id, 3, 3, points),
+            Err(EditError::InvalidTransform)
+        );
+        let fill = stack(&mut doc, &["fill"])[0];
+        assert_eq!(
+            Edit::warp_layer_grid(&doc, fill, 4, 2, plain.points().to_vec()),
+            Err(EditError::NotRaster(fill))
         );
     }
 
