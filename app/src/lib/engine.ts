@@ -581,7 +581,27 @@ export type TextDto = {
   position: [number, number];
   /** Paragraph text: its box's width and height (layer pixels); absent or null: point text. */
   frame?: [number, number] | null;
+  /** Characters set otherwise, sorted and apart (UTF-16 units of `content`). */
+  spans?: SpanDto[];
 };
+
+/**
+ * What characters set otherwise than their text (absent: the text's): sizes and leading in
+ * pixels (`leading` null: automatic), the color sRGB-encoded RGBA in [0, 1], tracking in
+ * thousandths of an em.
+ */
+export type CharStyleDto = {
+  family?: string;
+  weight?: number;
+  italic?: boolean;
+  size?: number;
+  color?: [number, number, number, number];
+  tracking?: number;
+  leading?: number | null;
+};
+
+/** Characters `start` to `end` (UTF-16 units) set in `style`. */
+export type SpanDto = { start: number; end: number; style: CharStyleDto };
 
 /** The fonts to choose from, and the default (bundled) family. */
 export type FontsView = { families: string[]; defaultFamily: string };
@@ -678,8 +698,17 @@ export type EditRequest =
   | { kind: "setShape"; id: number; shape: Shape }
   /** A text layer saying `text` (the Type tool), named after it, placed as `addFillLayer`. */
   | { kind: "addText"; text: TextDto; parent?: number | null; index?: number }
-  /** A text layer's text, on every linked copy. */
+  /**
+   * A text layer's text, on every linked copy: its content and settings; its spans are the
+   * layer's, following the content's change (`text.spans` is not taken).
+   */
   | { kind: "setText"; id: number; text: TextDto }
+  /**
+   * Characters of a text layer set otherwise (the Character settings): those of `range`
+   * (UTF-16 units), or with none the whole text (its own settings change, its spans stop
+   * setting what `style` sets).
+   */
+  | { kind: "styleText"; id: number; range: [number, number] | null; style: CharStyleDto }
   /** A pattern fill layer's scale (layer pixels per pattern pixel) and angle (degrees). */
   | { kind: "setPatternFill"; id: number; scale: number; angle: number }
   /** A canvas-sized, transparent 8-bit sRGB layer to paint on (ADR 0027). */
@@ -2360,6 +2389,15 @@ export const engine = {
         replace: slot.replace,
       });
     });
+  },
+  /**
+   * A live edit that is relative (a style on characters): never merged into one waiting nor
+   * replaced by a later one, and the edits after it wait their turn, so that each applies to
+   * what the ones before it made.
+   */
+  performLiveInOrder: (documentId: number, edit: EditRequest): Promise<DocumentView> => {
+    waitingLive = null;
+    return serial(() => invoke<DocumentView>("perform_live", { documentId, edit, replace: false }));
   },
   endGesture: (documentId: number) =>
     serial(() => invoke<DocumentView>("end_gesture", { documentId })),

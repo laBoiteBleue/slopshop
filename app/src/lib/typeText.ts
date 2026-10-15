@@ -2,7 +2,8 @@
 // alignment), the text a click starts, how options change a text, and where the caret stands.
 // The engine lays text out; the UI keeps the string being typed and the caret's place in it.
 import { hexToSrgb, srgbToHex } from "./color";
-import type { TextAlign, TextDto } from "./engine";
+import type { CharStyleDto, TextAlign, TextDto } from "./engine";
+import { charSettings, styleAt } from "./textStyle";
 
 /** Photoshop's defaults: 12 pt, left aligned. */
 export const DEFAULT_SIZE_PT = 12;
@@ -97,17 +98,45 @@ export function withOptions(
   };
 }
 
-/** The options a text layer shows in the options bar. */
-export function optionsOf(text: TextDto, ppi: number): TypeOptions {
+/**
+ * The options a text layer shows in the options bar: the characters of `range` (UTF-16 units,
+ * the first one's settings), else the text's own.
+ */
+export function optionsOf(text: TextDto, ppi: number, range?: [number, number]): TypeOptions {
+  const s = range ? styleAt(text, range[0], range[1]).settings : charSettings(text);
   return {
-    family: text.family,
-    weight: text.weight,
-    italic: text.italic,
+    family: s.family,
+    weight: s.weight,
+    italic: s.italic,
     // Hundredths of a point, as Photoshop shows them.
-    sizePt: Math.round(pixelsToPoints(text.size, ppi) * 100) / 100,
-    color: srgbToHex(text.color),
+    sizePt: Math.round(pixelsToPoints(s.size, ppi) * 100) / 100,
+    color: srgbToHex(s.color),
     align: text.align,
   };
+}
+
+/**
+ * The character settings `options` change from `shown` (the options bar's, before and after):
+ * the style to apply. The alignment is the paragraph's, not a character setting.
+ */
+export function styleChange(
+  shown: TypeOptions,
+  options: TypeOptions,
+  ppi: number,
+  defaultFamily: string,
+): CharStyleDto {
+  const change: CharStyleDto = {};
+  const family = options.family || defaultFamily;
+  if (family !== (shown.family || defaultFamily)) change.family = family;
+  if (options.weight !== shown.weight) change.weight = options.weight;
+  if (options.italic !== shown.italic) change.italic = options.italic;
+  if (options.sizePt !== shown.sizePt) {
+    change.size = pointsToPixels(clampSizePt(options.sizePt, ppi), ppi);
+  }
+  if (options.color.toLowerCase() !== shown.color.toLowerCase()) {
+    change.color = [...hexToSrgb(options.color), 1];
+  }
+  return change;
 }
 
 /** The weights' names, Photoshop's, by hundreds. */

@@ -4,8 +4,17 @@
   // applies live, one undo entry per drag; Reset puts the neutral values back. For a fill
   // layer, its color: a swatch that opens the color picker. For a gradient fill layer, its
   // gradient, style, angle and scale (`gradientFill.ts`), and Reverse. For a vector layer, its
-  // shape's fill and stroke (`ShapeProperties`).
-  import type { EditRequest, LayerView } from "./engine";
+  // shape's fill and stroke (`ShapeProperties`). For a text layer, its Character settings
+  // (`CharacterProperties`).
+  import type {
+    CharStyleDto,
+    EditRequest,
+    FontsView,
+    LayerView,
+    TextAlign,
+    TextDto,
+  } from "./engine";
+  import CharacterProperties from "./CharacterProperties.svelte";
   import { fillHex } from "./layerEdits";
   import AdjustmentFields from "./AdjustmentFields.svelte";
   import GradientEditor from "./GradientEditor.svelte";
@@ -32,6 +41,13 @@
     onfillcolor,
     onshapecolor,
     onpattern,
+    typedText = null,
+    ppi = 72,
+    fonts = null,
+    stylesOf = () => Promise.resolve([]),
+    onstyletext,
+    onaligntext,
+    ontextcolor,
   }: {
     documentId: number;
     /** An adjustment or a fill layer. */
@@ -46,6 +62,20 @@
     onshapecolor?: (layer: LayerView, which: "fill" | "stroke") => void;
     /** A pattern fill layer's pattern was clicked: the app lets another be chosen (ADR 0042). */
     onpattern?: (layer: LayerView) => void;
+    /** The text layer shown is being typed: its text as typed, and the characters selected. */
+    typedText?: { text: TextDto; selection: [number, number] } | null;
+    /** The document's resolution (type sizes in points). */
+    ppi?: number;
+    /** The fonts to choose from, once listed. */
+    fonts?: FontsView | null;
+    /** The styles a font family offers. */
+    stylesOf?: (family: string) => Promise<{ weight: number; italic: boolean }[]>;
+    /** A style on the characters selected, or on the whole text layer (ADR 0041). */
+    onstyletext?: (change: CharStyleDto) => void;
+    /** The text layer's alignment. */
+    onaligntext?: (align: TextAlign) => void;
+    /** The text's color swatch was clicked: the app lets a color be chosen. */
+    ontextcolor?: () => void;
     onedit: (documentId: number, edit: EditRequest) => void;
     onlive: (documentId: number, edit: EditRequest) => void;
     ongestureend: (documentId: number) => void;
@@ -183,6 +213,18 @@
       <span class="unit">°</span>
     </div>
   </section>
+{:else if layer.kind === "vector" && layer.text}
+  {@const typed = typedText}
+  <CharacterProperties
+    text={typed?.text ?? layer.text}
+    range={typed && typed.selection[0] !== typed.selection[1] ? typed.selection : null}
+    {ppi}
+    {fonts}
+    {stylesOf}
+    onstyle={(change) => onstyletext?.(change)}
+    onalign={(align) => onaligntext?.(align)}
+    onpickcolor={() => ontextcolor?.()}
+  />
 {:else if layer.kind === "vector" && layer.shape}
   <ShapeProperties
     {documentId}

@@ -151,7 +151,7 @@ export function hasProperties(layer: LayerView | null): layer is LayerView {
     layer?.kind === "fill" ||
     layer?.kind === "gradientFill" ||
     (layer?.kind === "patternFill" && layer.pattern != null) ||
-    (layer?.kind === "vector" && layer.shape != null)
+    (layer?.kind === "vector" && (layer.shape != null || layer.text != null))
   );
 }
 

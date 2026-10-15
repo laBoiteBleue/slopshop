@@ -37,6 +37,8 @@
     type LayerStyle,
     type FontsView,
     type LayerView,
+    type CharStyleDto,
+    type TextAlign,
     type TextDto,
     type LayerMaskKind,
     type SelectionModify,
@@ -240,9 +242,10 @@
     defaultTypeOptions,
     newText,
     optionsOf,
-    withOptions,
+    styleChange,
     type TypeOptions,
   } from "./lib/typeText";
+  import { charSettings, isEmptyStyle, styleAt, withOwnStyle } from "./lib/textStyle";
   import {
     changedShape,
     defaultShapeOptions,
@@ -367,6 +370,16 @@
     pickFillColor: (layer) => pickFillLayerColor(layer),
     pickShapeColor: (layer, which) => pickShapeLayerColor(layer, which),
     pickPattern: (layer) => (patternPicker = { kind: "replace", layer: layer.id }),
+    get typedText() {
+      return typedText;
+    },
+    get fonts() {
+      return fonts;
+    },
+    fontStyles: (family) => engine.fontStyles(family),
+    styleText: (change) => styleText(change),
+    alignText: (align) => alignText(align),
+    pickTextColor: () => pickTextColor(),
     deleteSource: (source, name) => askDeleteSource(source, name),
     saveSelection: () => openSaveSelection(),
     loadSelection: (id, mode) => void loadSavedSelection(id, mode),
@@ -1272,8 +1285,9 @@
   /** The active layer's text, when it is a text layer. */
   const activeText = $derived(activeLayer?.text ?? null);
 
+  // The fonts, listed once the Type tool or a text layer's Character settings show.
   $effect(() => {
-    if (tool !== "type" || fonts) return;
+    if ((tool !== "type" && !activeText) || fonts) return;
     void engine
       .fontFamilies()
       .then((f) => (fonts = f))
@@ -1292,15 +1306,28 @@
       .catch(() => (typeStyles = []));
   });
 
-  // The options bar shows the active text layer's settings (Photoshop's), else the next text's
+  /** The active text layer as it is typed: its text and the characters selected. */
+  const typedText = $derived(
+    typing && typing.documentId === active?.id && typing.layerId === activeLayer?.id
+      ? { text: typing.text, selection: typing.selection }
+      : null,
+  );
+
+  /** The characters the settings apply to: those selected while typing; null: the whole text. */
+  const styledRange = (typed: typeof typedText): [number, number] | undefined =>
+    typed && typed.selection[0] !== typed.selection[1] ? typed.selection : undefined;
+
+  // The options bar shows the active text layer's settings (Photoshop's): the characters
+  // selected while it is typed, else the whole text's own; with no text layer, the next text's
   // in the foreground color.
   $effect(() => {
     if (tool !== "type" || !active) return;
-    const text = activeText;
+    const typed = typedText;
+    const text = typed?.text ?? activeText;
     const ppi = active.resolution;
     const foreground = colors.foreground;
     untrack(() => {
-      if (text) typeOptions = optionsOf(text, ppi);
+      if (text) typeOptions = optionsOf(text, ppi, styledRange(typed));
       else typeOptions = { ...typeOptions, color: foreground };
     });
   });
@@ -1320,29 +1347,78 @@
       .catch(() => (missingFont = null));
   });
 
-  // The options bar changed: the active text layer follows (live while it is typed).
+  // The options bar changed: the characters selected, or the active text layer, follow (live
+  // while it is typed).
   $effect(() => {
     const options = $state.snapshot(typeOptions) as TypeOptions;
     untrack(() => {
       if (tool !== "type" || !active) return;
-      const layer = activeLayer;
-      const text = typing?.layerId === layer?.id ? typing?.text : layer?.text;
-      if (!layer || !text) return;
-      const ppi = active.resolution;
-      const shown = optionsOf(text, ppi);
-      const same = (Object.keys(shown) as (keyof TypeOptions)[]).every(
-        (k) => shown[k] === options[k] || (k === "family" && !options.family),
-      );
-      if (same) return;
-      const changed = withOptions(text, options, ppi, defaultFamily());
-      if (typing && typing.layerId === layer.id) {
-        typing.text = changed;
-        void sendTyped(typing.documentId, layer.id, changed);
-      } else {
-        void edit(active.id, { kind: "setText", id: layer.id, text: changed });
-      }
+      const typed = typedText;
+      const text = typed?.text ?? activeText;
+      if (!text) return;
+      const shown = optionsOf(text, active.resolution, styledRange(typed));
+      const change = styleChange(shown, options, active.resolution, defaultFamily());
+      if (!isEmptyStyle(change)) styleText(change);
+      if (options.align !== text.align) alignText(options.align);
     });
   });
+
+  /**
+   * A style on the characters selected while the active text layer is typed (live, in the
+   * typing's undo entry), else on the whole text (one undo entry).
+   */
+  function styleText(change: CharStyleDto) {
+    const doc = active;
+    const layer = activeLayer;
+    if (!doc || !layer?.text) return;
+    const typed = typedText ? typing : null;
+    if (!typed) {
+      void edit(doc.id, { kind: "styleText", id: layer.id, range: null, style: change });
+      return;
+    }
+    const range = styledRange(typedText) ?? null;
+    // The text's own settings change at once, so that what is typed next keeps them.
+    if (!range) typed.text = withOwnStyle(typed.text, change);
+    const request: EditRequest = { kind: "styleText", id: layer.id, range, style: change };
+    commitTransform();
+    void sync(engine.performLiveInOrder(doc.id, request)).then(() => syncSpans(doc.id, layer.id));
+  }
+
+  /** The active text layer's alignment (a paragraph setting). */
+  function alignText(align: TextAlign) {
+    const doc = active;
+    const layer = activeLayer;
+    if (!doc || !layer?.text) return;
+    if (typedText && typing) {
+      typing.text = { ...typing.text, align };
+      void sendTyped(typing.documentId, typing.layerId, typing.text);
+    } else {
+      const { spans: _, ...settings } = layer.text;
+      void edit(doc.id, { kind: "setText", id: layer.id, text: { ...settings, align } });
+    }
+  }
+
+  /** The color of the characters selected (or of the whole text), from the color picker. */
+  function pickTextColor() {
+    const text = typedText?.text ?? activeText;
+    if (!text) return;
+    const range = styledRange(typedText);
+    const shown = range ? styleAt(text, range[0], range[1]).settings : charSettings(text);
+    pickColor = {
+      title: t("options.type.color"),
+      color: srgbToHex(shown.color),
+      apply: (hex) => styleText({ color: [...hexToSrgb(hex), 1] }),
+    };
+  }
+
+  /** The spans the engine keeps, into the text typed once the engine applied what was sent. */
+  function syncSpans(documentId: number, layerId: number) {
+    const doc = tabs.find((d) => d.id === documentId);
+    const found = doc ? findLayer(doc.layers, layerId) : null;
+    if (found?.text && typing?.layerId === layerId && found.text.content === typing.text.content) {
+      typing.text = { ...typing.text, spans: found.text.spans ?? [] };
+    }
+  }
 
   /** The new text's layout: where the caret can stand, its lines. */
   async function refreshCarets(documentId: number, layerId: number) {
@@ -1355,7 +1431,10 @@
 
   /** What is typed, sent live (the whole text: a newer one replaces one still waiting). */
   async function sendTyped(documentId: number, layerId: number, text: TextDto) {
-    await live(documentId, { kind: "setText", id: layerId, text });
+    // The spans are the engine's (setText keeps them).
+    const { spans: _, ...settings } = text;
+    await live(documentId, { kind: "setText", id: layerId, text: settings });
+    syncSpans(documentId, layerId);
     await refreshCarets(documentId, layerId);
   }
 
