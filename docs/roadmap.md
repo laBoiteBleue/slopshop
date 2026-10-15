@@ -436,9 +436,13 @@ Raised on 2026-10-05, to schedule:
           tool (T): point text placed or edited on the canvas, typed live with a caret, one
           undo entry, font family, style, size in points, color and alignment in the options
           bar
-    - [ ] Part 2: selecting characters (mouse, Shift+arrows), per-character styles, box
-          (paragraph) text, the Character and Paragraph panels, tracking and leading in the
-          options bar, a text's bounds for clicks and the Move tool, embedded fonts
+    - [x] Part 2a, editing comfort: characters selected by a drag, Shift+click, a double
+          (word), triple (line), quadruple (paragraph) or fifth click (all), Shift+arrows and
+          Ctrl+A, drawn from the engine's layout (parley's carets and lines); Up, Down, Home
+          and End by the lines drawn; Cut, Copy and Paste of characters (keys and Edit menu)
+    - [ ] Part 2b: box (paragraph) text, per-character styles, the Character settings in
+          Properties (family, style, size, tracking, leading, color, alignment), embedded
+          fonts
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
         sampled with wrapping on the CPU and the GPU alike; `.slop` 0.31
